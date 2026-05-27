@@ -1,15 +1,15 @@
 # ADR-Index
 
 > Vertiefung zu „ADR-Liste in `docs/adr/`" aus `../ARCHITECTURE.md`. Diese
-> Datei ist die navigations-freundliche Sicht auf alle 37 Architecture
+> Datei ist die navigations-freundliche Sicht auf alle 38 Architecture
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0037-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0038-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** alle 37 ADRs sind im Stand v1.0-RC **akzeptiert**.
+**Status-Konvention:** alle 38 ADRs sind im Stand v1.0-RC **akzeptiert**.
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
 (Beispiel: ADR-0035-Amendment 2026-05-24, SQLCipher-PBKDF2 statt
 Argon2id-Raw-Key).
@@ -57,6 +57,7 @@ Argon2id-Raw-Key).
 | 0035 | Verschlüsselung at Rest + Passphrase = App-Login | SQLCipher | `security.md` §2 |
 | 0036 | Factory Reset (vollständiges Zurücksetzen) | Factory Reset | `security.md` §6 + `gobd.md` §7 |
 | 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/) + §6 (scheduler/drop_folder) |
+| 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) | Release / Build | `build-and-release.md` (G4.3) |
 
 ---
 

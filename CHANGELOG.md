@@ -3,6 +3,43 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.5.0] — v1.0 GA, 2026-05-27 (Release-Tag `v2026.5.0` gesetzt, Block G4.4)
+
+Erster veröffentlichter Release. Inhalt = Stand auf `main` nach G4.3
+(Release-Pipeline-Härtung); G4.4 hat ausschließlich den annotierten
+Tag `v2026.5.0` auf den HEAD von `main` gesetzt und damit den
+Windows-Release-Workflow (`.github/workflows/release.yml`) automatisch
+ausgelöst, der den unsignierten NSIS-Installer plus `SHA256SUMS.txt`
+als Draft-Release veröffentlicht. Der Release-Notes-Body trägt den
+SmartScreen-Hinweis und die SHA-256-Anleitung.
+
+### Changed
+
+- **Release-Bundle nur noch NSIS, MSI verworfen** (ADR 0038, Block G4.3).
+  Hintergrund: Windows-Installer `ProductVersion` darf im `MAJOR`-Feld
+  maximal 255 sein, CalVer-Jahr `2026` sprengt das. Tauri 2 hat keinen
+  offiziellen Override-Hebel; eigene WiX-Templates wären Bürokratie für
+  ein Format, das im §19-Kleinunternehmer-Use-Case keinen Mehrwert hat
+  (MSI ist primär Active-Directory-/GPO-Massendeployment). NSIS deckt den
+  Single-User-Install-Pfad voll ab. `tauri.conf.json::bundle.targets` ist
+  jetzt `["nsis"]` statt `"all"`; der Release-Workflow sammelt SHA-256-
+  Summen nur über `.exe`.
+
+### Internal (Release-Pipeline-Härtung beim Dry-Run G4.3)
+
+- `.github/workflows/release.yml` `workflow_dispatch`-Default-Tag von
+  `v0.1.0` auf `v2026.5.0-rc1` gehoben.
+- `src-tauri/about.toml::targets` als String-Liste statt Inline-Table-
+  Form geschrieben (cargo-about 0.6 lehnt die `{ triple = "…" }`-Form
+  ab).
+- `src-tauri/Cargo.toml` mit `publish = false` markiert, damit
+  `cargo about generate` die Eigen-Crate aus der Drittanbieter-Lizenz-
+  Liste herausfiltert (`private = { ignore = true }` greift). Die
+  Eigen-Lizenz `AGPL-3.0-or-later` taucht so korrekt nicht als
+  „akzeptierte Drittanbieter-Lizenz" auf.
+- `CDLA-Permissive-2.0` (Mozilla CA Root Bundle via `webpki-roots`,
+  transitiv über `russh`/`rustls`) in `accepted` aufgenommen.
+
 ## [Unreleased] — Post-v1.0 (Phase 7, E-Rechnungs-Politur)
 
 ### Added

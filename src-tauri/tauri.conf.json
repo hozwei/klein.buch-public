@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "category": "Finance",
     "shortDescription": "Lokale EÜR-Buchhaltung für §19-Kleinunternehmer",
     "longDescription": "Klein.Buch ist eine lokale Desktop-App für deutsche §19-Kleinunternehmer: Rechnungen erstellen (XRechnung + ZUGFeRD-PDF/A-3), GoBD-konformes Archiv, EÜR-Report, DATEV-Export, verschlüsselte Backups. Offline, ohne Cloud, AGPL-3.0.",

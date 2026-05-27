@@ -28,7 +28,18 @@ accepted = [
     "Zlib",
     "OpenSSL",
     "0BSD",
+    # webpki-roots (Mozilla-CA-Root-Bundle, transitiv via russh/rustls)
+    # — Community Data License Agreement, Permissive-2.0. Daten-Lizenz mit
+    # MIT-ähnlich-permissivem Wortlaut.
+    "CDLA-Permissive-2.0",
 ]
+# Die Eigen-Crate `klein-buch` (AGPL-3.0-or-later) ist in Cargo.toml mit
+# `publish = false` markiert und wird zusammen mit `private = { ignore = true }`
+# (unten) von cargo-about automatisch aus der Drittanbieter-Liste
+# herausgefiltert. Deshalb steht AGPL hier NICHT in `accepted` — der spdx-
+# Licensee-Parser von cargo-about 0.6 lehnt die `-or-later`-Form bei
+# `accepted`-Einträgen ohnehin ab („expected a bare-gnu-license"); die korrekte
+# Lösung ist Ignorieren via `publish = false`, nicht Akzeptieren der Lizenz.
 
 # `targets` filtert die analysierten Plattform-spezifischen Dependencies
 # — wir veröffentlichen heute nur Windows x86_64 (Release-Workflow ist

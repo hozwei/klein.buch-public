@@ -6,6 +6,11 @@ authors = ["Manuel Schmid <schmidm@wildbach-computerhilfe.de>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/hozwei/klein.buch-public"
+# Klein.Buch wird NICHT nach crates.io veröffentlicht; Distribution läuft über
+# Windows-Installer (NSIS/MSI). Der Marker macht das explizit und sorgt
+# nebenbei dafür, dass `cargo about generate` die eigene Crate ignoriert
+# (about.toml: `private = { ignore = true }`).
+publish = false
 
 [lib]
 name = "klein_buch_lib"

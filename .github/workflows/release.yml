@@ -128,8 +128,8 @@ jobs:
         shell: pwsh
         run: |
           $bundle = "src-tauri/target/release/bundle"
-          $files = Get-ChildItem -Recurse -Path $bundle -Include *.exe, *.msi
-          if (-not $files) { throw "Keine Installer (.exe/.msi) unter $bundle gefunden" }
+          $files = Get-ChildItem -Recurse -Path $bundle -Include *.exe
+          if (-not $files) { throw "Keine NSIS-Installer (.exe) unter $bundle gefunden" }
           $lines = $files | ForEach-Object {
             $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$h  $($_.Name)"
@@ -159,5 +159,4 @@ jobs:
             macOS/Linux folgen, sobald der KoSIT/Mustang-Sidecar dafür portiert ist.
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/SHA256SUMS.txt
