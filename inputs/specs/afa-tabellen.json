@@ -1,0 +1,63 @@
+{
+  "version": "BMF-2024-12",
+  "source_url": "https://www.bundesfinanzministerium.de/Content/DE/Standardartikel/Themen/Steuern/Weitere_Steuerthemen/Betriebspruefung/AfA-Tabellen/afa-tabelle-allgemein.html",
+  "categories": [
+    {
+      "code": "computer_hardware",
+      "label": "Computer-Hardware",
+      "useful_life_years": 1,
+      "special_rule": "BMF_2021_02_26",
+      "applies_to": ["PC", "Laptop", "Server", "Monitor", "Drucker", "Netzwerk-Equipment"]
+    },
+    {
+      "code": "computer_software",
+      "label": "Software",
+      "useful_life_years": 1,
+      "special_rule": "BMF_2021_02_26"
+    },
+    {
+      "code": "smartphone",
+      "label": "Smartphone/Tablet",
+      "useful_life_years": 5
+    },
+    {
+      "code": "office_furniture",
+      "label": "Büromöbel",
+      "useful_life_years": 13
+    },
+    {
+      "code": "office_equipment",
+      "label": "Büroausstattung (allgemein)",
+      "useful_life_years": 10
+    },
+    {
+      "code": "vehicle_pkw",
+      "label": "PKW",
+      "useful_life_years": 6
+    },
+    {
+      "code": "vehicle_lkw",
+      "label": "LKW",
+      "useful_life_years": 9
+    },
+    {
+      "code": "machinery_general",
+      "label": "Maschinen (allgemein)",
+      "useful_life_years": 8
+    },
+    {
+      "code": "building_office",
+      "label": "Bürogebäude",
+      "useful_life_years": 33
+    },
+    {
+      "code": "telephone_equipment",
+      "label": "Telefon-Anlagen",
+      "useful_life_years": 8
+    }
+  ],
+  "gwg_threshold_cents": 80000,
+  "sammelposten_lower_cents": 25000,
+  "sammelposten_upper_cents": 100000,
+  "sammelposten_years": 5
+}

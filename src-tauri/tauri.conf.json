@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Klein.Buch",
+  "identifier": "de.wildbach.kleinbuch",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Klein.Buch",
+        "maximized": true,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 700
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Finance",
+    "shortDescription": "Lokale EÜR-Buchhaltung für §19-Kleinunternehmer",
+    "longDescription": "Klein.Buch ist eine lokale Desktop-App für deutsche §19-Kleinunternehmer: Rechnungen erstellen (XRechnung + ZUGFeRD-PDF/A-3), GoBD-konformes Archiv, EÜR-Report, DATEV-Export, verschlüsselte Backups. Offline, ohne Cloud, AGPL-3.0.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "binaries/klein-buch-java-x86_64-pc-windows-msvc/klein-buch-java.bat",
+      "binaries/klein-buch-java-x86_64-pc-windows-msvc/versions.json",
+      "binaries/klein-buch-java-x86_64-pc-windows-msvc/lib/*",
+      "binaries/klein-buch-java-x86_64-pc-windows-msvc/runtime/**/*",
+      "binaries/klein-buch-java-x86_64-pc-windows-msvc/xrechnung-config/**/*",
+      "resources/handbook/**/*"
+    ]
+  }
+}

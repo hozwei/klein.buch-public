@@ -1,0 +1,62 @@
+# cargo-about Konfiguration für die Drittanbieter-Lizenz-Liste
+# (Block G2-DOC.3.5, „Über"-Dialog).
+#
+# Generiert wird `resources/handbook/third-party-licenses.html` per
+# `cargo about generate -c about.toml -o resources/handbook/third-party-licenses.html about.hbs`
+# Der Aufruf läuft im Release-CI (siehe .github/workflows/release.yml). Im
+# Dev-Build steht in der Resource ein eingecheckter Stub — der Über-Dialog
+# verlinkt also immer eine existierende Datei, nur ihr Inhalt unterscheidet
+# sich zwischen Release- und Dev-Build.
+#
+# Akzeptierte Lizenzen für die in Klein.Buch verwendeten Crates. Wenn ein
+# Update eine neue Lizenz reinzieht, schlägt der Build fehl — wir müssen
+# uns die neue Lizenz dann explizit anschauen, bevor sie akzeptiert wird.
+# Begründung pro Eintrag steht im PRD §G2-DOC.3.5 (juristische Pflicht-
+# Hinweise) bzw. im ADR-Index.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "OpenSSL",
+    "0BSD",
+]
+
+# `targets` filtert die analysierten Plattform-spezifischen Dependencies
+# — wir veröffentlichen heute nur Windows x86_64 (Release-Workflow ist
+# Windows-only), also reicht dieses Target. Wenn macOS/Linux dazukommen,
+# hier ergänzen.
+#
+# Format: ab cargo-about 0.6 ist `targets` strikt eine String-Liste; die
+# frühere `{ triple = "…" }`-Inline-Table-Form wird abgelehnt
+# („invalid type: map, expected a string").
+targets = [
+    "x86_64-pc-windows-msvc",
+]
+
+# `ignore-build-dependencies`: cargo-about analysiert per Default auch
+# build-script-Abhängigkeiten. Die landen aber nicht im fertigen Binary,
+# also lassen wir sie aus der Über-Liste raus (Lizenz-Pflicht bezieht
+# sich auf das, was wir distributieren).
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+
+# `private` (Standard true) blendet path-/git-Dependencies aus, wenn deren
+# `publish = false` ist. Wir haben keine Workspace-Members, deshalb hier
+# ohne Wirkung; der Eintrag dokumentiert, dass wir das Standardverhalten
+# bewusst beibehalten.
+private = { ignore = true }
+
+# Pro Crate-Override-Slot bleibt leer — wenn ein Crate eine Lizenz-Datei
+# nicht im Repo führt, hier explizit auflisten. Cargo-about meldet den
+# Fall klar im CI-Log.
+[clarify]

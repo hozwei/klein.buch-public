@@ -1,0 +1,25 @@
+Subject: Rechnung {{ invoice.number }} von {{ seller.name }}
+
+Sehr geehrte Damen und Herren,
+
+anbei erhalten Sie unsere Rechnung {{ invoice.number }} vom {{ invoice.date }}
+über {{ invoice.gross_amount_formatted }}.
+
+{% if invoice.due_date -%}
+Fälligkeit: {{ invoice.due_date }}.
+{% endif -%}
+
+Die Rechnung liegt im ZUGFeRD-Format vor (PDF mit eingebettetem XRechnung-XML),
+sodass eine maschinelle Verarbeitung möglich ist.
+
+{% if invoice.is_kleinunternehmer -%}
+{{ kleinunternehmer.hinweis_text }}
+{% endif -%}
+
+Bei Rückfragen melden Sie sich gerne.
+
+Mit freundlichen Grüßen
+{{ seller.name }}
+
+{{ seller.email }}
+{% if seller.phone -%}{{ seller.phone }}{% endif -%}

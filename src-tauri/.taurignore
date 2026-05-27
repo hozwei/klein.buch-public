@@ -1,0 +1,11 @@
+# Defense-in-Depth: Tauri-Dev-Mode-Watcher soll NICHT auf das Sidecar-
+# Bundle reagieren. Der KoSIT-Java-Sidecar schreibt sonst Validation-
+# Reports in das beobachtete Verzeichnis und triggert einen Rebuild
+# mitten in der Lock-Pipeline → App-Crash.
+#
+# KoSIT-Output landet jetzt explizit im tempfile-Dir (via -o flag in
+# einvoice::validator::build_args), aber die Ignore-Liste hier ist
+# Belt-and-Suspender für den Fall dass irgendein Java-Subprocess
+# (Mustang, PDFBox, JCE) Logs/Temp-Files dorthin schreibt.
+
+binaries/

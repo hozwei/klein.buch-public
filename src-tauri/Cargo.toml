@@ -1,0 +1,168 @@
+[package]
+name = "klein-buch"
+version = "2026.5.0"
+description = "Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer"
+authors = ["Manuel Schmid <schmidm@wildbach-computerhilfe.de>"]
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/hozwei/klein.buch-public"
+
+[lib]
+name = "klein_buch_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- Tauri Core ---
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+# Nativer Ordner-Picker für „Durchsuchen…" (Backup-Ziel wählen).
+tauri-plugin-dialog = "2"
+
+# --- Async runtime ---
+tokio = { version = "1", features = ["full"] }
+
+# --- Persistence ---
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+    "chrono",
+    "uuid",
+    "tls-rustls",
+] }
+
+# --- SQLCipher: Verschlüsselung der DB at Rest (ADR 0035, Block G1-ENC) ---
+# sqlx-sqlite 0.8.6 linkt libsqlite3-sys 0.30.1 (verifiziert via Cargo.lock).
+# Eine DIREKTE Dep auf EXAKT diese Version mit dem SQLCipher-Feature zwingt Cargos
+# Feature-Unification über den ganzen Graph: sqlx erhält damit eine SQLCipher-
+# fähige SQLite-Lib statt der Vanilla-`bundled`. `PRAGMA key` ent-/verschlüsselt
+# die DB dann seitenweise (db::open_pool). Schlüssel-Ableitung: SQLCipher-eigenes
+# PBKDF2-HMAC-SHA512, Salt im DB-Header → selbstbeschreibende, cross-OS-portable
+# Datei (ADR-0035-Amendment 2026-05-24, gegen Argon2id-Raw-Key entschieden).
+# `-vendored-openssl`: OpenSSL wird mitkompiliert → self-contained, kein System-
+# OpenSSL nötig (wichtig für Win+Mac-Auslieferung). BUILD-TOOL-PFLICHT am Host:
+# Perl + (Windows-MSVC) NASM — wie bereits für aws-lc-rs/reqwest dokumentiert.
+# Falls EXAKT-Pin bricht (sqlx-Update): `cargo tree -i libsqlite3-sys` muss GENAU
+# EINE Version zeigen, sonst greift die Unification nicht.
+libsqlite3-sys = { version = "=0.30.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# --- Serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# --- Time / IDs ---
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+# --- Cryptography ---
+sha2 = "0.10"
+argon2 = "0.5"
+aes-gcm = "0.10"
+rand = "0.8"
+
+# --- XML / Templates ---
+quick-xml = { version = "0.36", features = ["serialize"] }
+tera = "1"
+
+# --- Markdown (Paket-Markup, Block P2) ---
+# default-features = false → nur der Parser (kein HTML-Renderer; wir bauen Typst
+# + Klartext selbst aus dem AST, Injection-Schutz). GFM-Tabellen via Options.
+pulldown-cmark = { version = "0.12", default-features = false }
+
+# --- PDF rendering ---
+# lopdf: reine Rust-PDF-Manipulation für das Angebots-Bundle (Block 8) —
+# führt Angebots-PDF + AGB-PDF + Datenschutz-PDF zu EINEM Druck-PDF zusammen.
+# Merge-Rezept verifiziert gegen das offizielle examples/merge.rs (lopdf 0.40).
+lopdf = "0.40"
+typst = "0.13"
+typst-pdf = "0.13"
+typst-library = "0.13"
+typst-syntax = "0.13"
+typst-utils = "0.13"
+typst-assets = { version = "0.13", features = ["fonts"] }
+ecow = "0.2"
+comemo = "0.4"
+
+# --- Mail ---
+# default-features = false → kein native-tls (würde mit rustls kollidieren).
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1-rustls-tls",
+    "smtp-transport",
+    "builder",
+    "hostname",
+    "pool",
+] }
+
+# --- HTTP (Block 16: Microsoft Graph OAuth + /sendMail) ---
+# default-features = false → kein native-tls; rustls bleibt der einzige TLS-Stack
+# (konsistent mit lettre/sqlx). `json` für die Token-/Graph-Responses.
+# ACHTUNG (Host-Build): reqwest 0.12 zieht rustls 0.23, dessen Default-Crypto-
+# Provider aws-lc-rs ist (braucht cmake/NASM unter Windows-MSVC). Falls
+# `cargo build` daran scheitert, auf den ring-Provider ausweichen — siehe
+# Block-16-Report.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
+base64 = "0.22"
+url = "2"
+
+# --- OS-Keychain ---
+# keyring 3 hat KEINE Default-Backends — ohne Feature-Flags fällt die Crate
+# auf den In-Memory-Mock-Store zurück, d. h. die SMTP-Passphrase wäre nach
+# App-Neustart weg (Backup-Hardline gebrochen). Wir aktivieren die nativen
+# OS-Stores pro Plattform + secret-service (Linux) mit Rust-Crypto statt
+# openssl (konsistent mit dem rustls-only-Stack, keine System-libssl-Pflicht).
+# Doku: https://docs.rs/keyring/3.6.1/keyring/#credential-store-features
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
+
+# --- SFTP-Backup-Ziel (ADR 0034, Block G1-BKP.3) ---
+# russh = reine-Rust-SSH (RustCrypto), KEIN OpenSSL/libssh → konsistent mit dem
+# rustls-only-/no-system-deps-Stack (kein cmake/NASM-Zwang; aws-lc-rs/ring sind in
+# russh nur optional, der Default-Backend ist RustCrypto). russh-sftp setzt das
+# SFTP-Subsystem auf einen russh-Channel (`channel.into_stream()`).
+# ACHTUNG (im Decision Log + G1-BKP.3-Report dokumentiert): russh 0.60 zieht
+# pre-release-RustCrypto-Transport-Krypto (aes-gcm 0.11-rc, sha2 0.11,
+# signature 3.0-rc, ed25519-dalek 3.0-pre). Diese koexistieren SEMVER-GETRENNT mit
+# unserem stabilen `aes-gcm 0.10`/`sha2 0.10` (Backup-Hülle) — keine Feature-
+# Unification, kein Konflikt — und werden AUSSCHLIESSLICH für die SSH-
+# Transportschicht genutzt, nie für Beleg-/Backup-Krypto. MITM-Schutz über
+# Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
+# unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist
+# die Client-API gegen genau diese Version neu zu verifizieren.
+russh = "0.60"
+russh-sftp = "2.1"
+
+# --- Archive ---
+zip = "2"
+
+# --- Temp files (Sidecar-Bridges schreiben PDFs/XML in Temp-Dirs) ---
+tempfile = "3"
+
+# --- Error handling ---
+thiserror = "1"
+anyhow = "1"
+
+# --- Logging ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros", "rt"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,37 @@
+{
+  "name": "klein-buch",
+  "version": "0.0.0",
+  "versionNote": "Single Source = src-tauri/Cargo.toml. Diese Zahl wird nirgendwo gelesen (Tauri 2 nimmt die Cargo-Version als Bundle-Version; das Frontend liest sie via appInfo() aus dem Backend). Bewusst auf 0.0.0 gepinnt, damit niemand sie versehentlich für die App-Version hält.",
+  "description": "Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer (Tauri 2 + Rust + Svelte 5).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "tauri": "tauri"
+  },
+  "license": "AGPL-3.0-or-later",
+  "repository": "https://github.com/hozwei/klein.buch-public",
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "marked": "^15.0.7",
+    "minisearch": "^7.1.2"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.9.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^22.10.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}

@@ -1,0 +1,2 @@
+# Test-Suite wächst blockweise. Block 1 hat nur die `#[test] fn it_compiles()`
+# in src-tauri/src/* — integration tests starten in Block 2.

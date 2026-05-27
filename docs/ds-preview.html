@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Klein.Buch — Design-System Preview (DS-1)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* ---- Brand: Petrol (von wildbach-computerhilfe.de #176b87) ---- */
+    --c-primary-50:  #eaf3f6;
+    --c-primary-100: #d1e6ec;
+    --c-primary-200: #a6cdd9;
+    --c-primary-300: #6fa9bb;
+    --c-primary-500: #1f7e9a;
+    --c-primary-600: #176b87;   /* DEFAULT / Marke */
+    --c-primary-700: #115468;
+    --c-primary-800: #0d4150;
+
+    /* ---- Accent: frisches Teal-Cyan (Highlights, Links) ---- */
+    --c-accent-500:  #10aeb8;
+    --c-accent-600:  #0d949d;
+
+    /* ---- Semantik ---- */
+    --c-success-50:  #e7f6ef; --c-success-500: #16a571; --c-success-700: #0e7a52;
+    --c-warning-50:  #fdf3e1; --c-warning-500: #e08a16; --c-warning-700: #97590a;
+    --c-danger-50:   #fcebec; --c-danger-500:  #d64550; --c-danger-700:  #a02832;
+    --c-info-50:     #eaf3f6; --c-info-500:    #176b87; --c-info-700:    #115468;
+
+    /* ---- Neutrale (kühles Grau) ---- */
+    --c-bg:          #f4f7f9;
+    --c-surface:     #ffffff;
+    --c-surface-2:   #fbfcfd;
+    --c-border:      #e3e9ed;
+    --c-border-strong:#cdd6dc;
+    --c-text:        #16242c;
+    --c-text-muted:  #5a6b75;
+    --c-text-subtle: #8696a0;
+
+    /* ---- Radien ---- */
+    --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-pill: 999px;
+
+    /* ---- Schatten (weich, SaaS) ---- */
+    --sh-sm: 0 1px 2px rgba(16,40,50,.06);
+    --sh-md: 0 3px 12px rgba(16,40,50,.08);
+    --sh-lg: 0 12px 32px rgba(16,40,50,.10);
+
+    /* ---- Typo-Skala ---- */
+    --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px;
+    --fs-lg: 18px; --fs-xl: 22px; --fs-2xl: 28px; --fs-3xl: 34px;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--c-bg); color: var(--c-text);
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-size: var(--fs-base); line-height: 1.55; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 28px 80px; }
+  .page-head { margin-bottom: 28px; }
+  .page-head h1 { font-size: var(--fs-3xl); font-weight: 700; margin: 0 0 6px; letter-spacing: -.02em; }
+  .page-head p { color: var(--c-text-muted); margin: 0; max-width: 70ch; }
+  .brandbar { height: 4px; width: 64px; background: var(--c-primary-600); border-radius: var(--r-pill); margin: 14px 0 0; }
+
+  section { margin-top: 38px; }
+  .sec-title { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--c-text-subtle); margin: 0 0 14px; }
+
+  .card { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg);
+    box-shadow: var(--sh-sm); padding: 20px 22px; }
+  .grid { display: grid; gap: 16px; }
+  .cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .cols-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
+  @media (max-width: 760px){ .cols-2,.cols-3,.cols-4{ grid-template-columns: 1fr 1fr; } }
+
+  /* swatches */
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px,1fr)); gap: 10px; }
+  .sw { border-radius: var(--r-md); border: 1px solid var(--c-border); overflow: hidden; background: var(--c-surface); }
+  .sw .chip { height: 56px; }
+  .sw .meta { padding: 7px 9px; font-size: var(--fs-xs); }
+  .sw .meta b { display: block; font-weight: 600; }
+  .sw .meta span { color: var(--c-text-subtle); font-variant-numeric: tabular-nums; }
+
+  /* type scale */
+  .type-row { display: flex; align-items: baseline; gap: 16px; padding: 7px 0; border-bottom: 1px dashed var(--c-border); }
+  .type-row:last-child{ border-bottom: 0; }
+  .type-row .tag { width: 64px; color: var(--c-text-subtle); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+
+  /* buttons */
+  .btn { font: inherit; font-weight: 600; border-radius: var(--r-md); padding: 9px 16px; border: 1px solid transparent;
+    cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: background .12s, box-shadow .12s, transform .04s; }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--c-primary-600); color: #fff; box-shadow: var(--sh-sm); }
+  .btn-primary:hover { background: var(--c-primary-700); }
+  .btn-secondary { background: var(--c-surface); color: var(--c-primary-700); border-color: var(--c-border-strong); }
+  .btn-secondary:hover { background: var(--c-primary-50); border-color: var(--c-primary-300); }
+  .btn-ghost { background: transparent; color: var(--c-text-muted); }
+  .btn-ghost:hover { background: var(--c-bg); color: var(--c-text); }
+  .btn-danger { background: var(--c-surface); color: var(--c-danger-700); border-color: #efc6c9; }
+  .btn-danger:hover { background: var(--c-danger-50); }
+  .btn-sm { padding: 6px 11px; font-size: var(--fs-sm); }
+  .btn[disabled]{ opacity: .5; cursor: not-allowed; }
+
+  /* badges */
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600;
+    padding: 3px 10px; border-radius: var(--r-pill); border: 1px solid transparent; white-space: nowrap; }
+  .badge::before { content:""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity:.85; }
+  .b-draft   { background: #eef1f3; color: #51616b; }
+  .b-sent    { background: var(--c-info-50); color: var(--c-info-700); }
+  .b-locked  { background: var(--c-primary-100); color: var(--c-primary-800); }
+  .b-paid    { background: var(--c-success-50); color: var(--c-success-700); }
+  .b-partial { background: var(--c-warning-50); color: var(--c-warning-700); }
+  .b-overdue { background: var(--c-danger-50); color: var(--c-danger-700); }
+  .b-cancel  { background: #eef1f3; color: #8696a0; text-decoration: line-through; }
+  .b-cancel::before{ background: #8696a0; }
+
+  /* form */
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: 5px; }
+  .field .hint { font-size: var(--fs-xs); color: var(--c-text-subtle); margin-top: 4px; }
+  .input, select.input, textarea.input {
+    width: 100%; font: inherit; padding: 9px 11px; border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-md); background: var(--c-surface); color: var(--c-text); transition: border-color .12s, box-shadow .12s; }
+  .input:focus { outline: none; border-color: var(--c-primary-500); box-shadow: 0 0 0 3px var(--c-primary-100); }
+  .input::placeholder { color: var(--c-text-subtle); }
+  .field.error .input { border-color: var(--c-danger-500); box-shadow: 0 0 0 3px var(--c-danger-50); }
+  .field.error .hint { color: var(--c-danger-700); }
+  .input-prefix { position: relative; }
+  .input-prefix .input { padding-left: 30px; }
+  .input-prefix span { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--c-text-subtle); }
+
+  /* table */
+  table.kb { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+  table.kb th { text-align: left; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--c-text-subtle); padding: 10px 12px; border-bottom: 1px solid var(--c-border); }
+  table.kb td { padding: 12px; border-bottom: 1px solid var(--c-border); }
+  table.kb tr:last-child td { border-bottom: 0; }
+  table.kb tbody tr:hover { background: var(--c-surface-2); }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .muted { color: var(--c-text-muted); }
+
+  /* metric cards */
+  .metric { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 16px 18px; box-shadow: var(--sh-sm); }
+  .metric .lbl { font-size: var(--fs-sm); color: var(--c-text-muted); margin: 0 0 6px; }
+  .metric .val { font-size: var(--fs-2xl); font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .metric .val.pos { color: var(--c-success-700); }
+  .metric .delta { font-size: var(--fs-xs); margin-top: 4px; }
+  .delta.up { color: var(--c-success-700); } .delta.down { color: var(--c-danger-700); }
+
+  /* banners / toast */
+  .banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: var(--r-md); font-size: var(--fs-sm); border: 1px solid transparent; }
+  .banner b { font-weight: 600; }
+  .ban-info { background: var(--c-info-50); color: var(--c-info-700); border-color: #cfe0e6; }
+  .ban-warn { background: var(--c-warning-50); color: var(--c-warning-700); border-color: #f3dcae; }
+  .ban-danger { background: var(--c-danger-50); color: var(--c-danger-700); border-color: #efc6c9; }
+  .ban-ico { font-weight: 700; }
+  .toast { display: inline-flex; align-items: center; gap: 9px; background: #14323d; color: #eaf3f6;
+    padding: 11px 15px; border-radius: var(--r-md); box-shadow: var(--sh-lg); font-size: var(--fs-sm); font-weight: 500; }
+  .toast.ok::before { content:"✓"; color: #5fd6a6; font-weight: 700; }
+  .toast.err::before{ content:"!"; color: #ff8a8a; font-weight: 700; }
+
+  /* app shell mock */
+  .shell { display: grid; grid-template-columns: 220px 1fr; border: 1px solid var(--c-border); border-radius: var(--r-lg);
+    overflow: hidden; box-shadow: var(--sh-md); background: var(--c-surface); }
+  @media (max-width: 760px){ .shell { grid-template-columns: 1fr; } .shell .side { display:none; } }
+  .side { background: var(--c-primary-800); color: #cfe0e6; padding: 16px 12px; }
+  .side .logo { display:flex; align-items:center; gap:9px; font-weight:700; color:#fff; font-size: var(--fs-md); padding: 6px 10px 14px; }
+  .side .logo .dot { width: 22px; height: 22px; border-radius: 7px; background: var(--c-accent-500); display:inline-block; }
+  .nav a { display:flex; align-items:center; gap:10px; padding: 9px 10px; border-radius: var(--r-md); color:#bcd4dc; text-decoration:none; font-size: var(--fs-sm); font-weight: 500; }
+  .nav a.active { background: rgba(255,255,255,.12); color:#fff; }
+  .nav a:hover:not(.active){ background: rgba(255,255,255,.06); color:#fff; }
+  .main { padding: 20px 22px; background: var(--c-bg); }
+  .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px; }
+  .topbar h2 { margin:0; font-size: var(--fs-xl); font-weight: 700; }
+  .legend { display:flex; flex-wrap:wrap; gap: 8px; margin-top: 8px; }
+  .footnote { color: var(--c-text-subtle); font-size: var(--fs-xs); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-head">
+    <h1>Klein.Buch — Design-System</h1>
+    <p>DS-1-Vorschlag: Markenfarbe Petrol (aus deiner Wildbach-Seite), frische Akzente, weiche Schatten und runde Cards im Finanzguru-/SaaS-Stil — seriös, aber nicht steril. Alles unten ist ein <b>Vorschlag zur Freigabe</b>, noch nicht im Code.</p>
+    <div class="brandbar"></div>
+  </div>
+
+  <!-- FARBEN -->
+  <section>
+    <p class="sec-title">Farb-Tokens</p>
+    <div class="card">
+      <p class="muted" style="margin:0 0 12px; font-size:13px">Primär — Petrol (Marke). Default ist <b>600 = #176b87</b>.</p>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:var(--c-primary-50)"></div><div class="meta"><b>primary-50</b><span>#eaf3f6</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-primary-100)"></div><div class="meta"><b>primary-100</b><span>#d1e6ec</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-primary-300)"></div><div class="meta"><b>primary-300</b><span>#6fa9bb</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-primary-600)"></div><div class="meta"><b style="color:#fff">primary-600</b><span style="color:#cfe0e6">#176b87</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-primary-800)"></div><div class="meta"><b style="color:#fff">primary-800</b><span style="color:#cfe0e6">#0d4150</span></div></div>
+      </div>
+      <p class="muted" style="margin:18px 0 12px; font-size:13px">Akzent + Semantik</p>
+      <div class="swatches">
+        <div class="sw"><div class="chip" style="background:var(--c-accent-500)"></div><div class="meta"><b style="color:#fff">accent</b><span style="color:#e6fbfc">#10aeb8</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-success-500)"></div><div class="meta"><b style="color:#fff">success</b><span style="color:#e7f6ef">#16a571</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-warning-500)"></div><div class="meta"><b style="color:#fff">warning</b><span style="color:#fdf3e1">#e08a16</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-danger-500)"></div><div class="meta"><b style="color:#fff">danger</b><span style="color:#fcebec">#d64550</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-text)"></div><div class="meta"><b style="color:#fff">text</b><span style="color:#cdd6dc">#16242c</span></div></div>
+        <div class="sw"><div class="chip" style="background:var(--c-bg);border-bottom:1px solid var(--c-border)"></div><div class="meta"><b>bg</b><span>#f4f7f9</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TYPO -->
+  <section>
+    <p class="sec-title">Typografie — Inter</p>
+    <div class="card">
+      <div class="type-row"><span class="tag">34 / 700</span><span style="font-size:34px;font-weight:700;letter-spacing:-.02em">Überschuss 2025</span></div>
+      <div class="type-row"><span class="tag">22 / 700</span><span style="font-size:22px;font-weight:700">Rechnungen</span></div>
+      <div class="type-row"><span class="tag">16 / 600</span><span style="font-size:16px;font-weight:600">Abschnittstitel</span></div>
+      <div class="type-row"><span class="tag">14 / 400</span><span style="font-size:14px">Fließtext — die Standardgröße für Tabellen, Formulare und Beschreibungen.</span></div>
+      <div class="type-row"><span class="tag">13 / 500</span><span style="font-size:13px;font-weight:500;color:var(--c-text-muted)">Label / sekundär</span></div>
+      <div class="type-row"><span class="tag">12 / 600</span><span style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--c-text-subtle)">Tabellen-Kopf</span></div>
+    </div>
+  </section>
+
+  <!-- BUTTONS + BADGES -->
+  <section>
+    <p class="sec-title">Buttons & Status-Badges</p>
+    <div class="grid cols-2">
+      <div class="card">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <button class="btn btn-primary">Rechnung festschreiben</button>
+          <button class="btn btn-secondary">Als PDF</button>
+          <button class="btn btn-ghost">Abbrechen</button>
+          <button class="btn btn-danger">Stornieren</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px">
+          <button class="btn btn-primary btn-sm">Speichern</button>
+          <button class="btn btn-secondary btn-sm">Zurück</button>
+          <button class="btn btn-primary" disabled>Gesperrt</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="legend">
+          <span class="badge b-draft">Entwurf</span>
+          <span class="badge b-sent">Versendet</span>
+          <span class="badge b-locked">Festgeschrieben</span>
+          <span class="badge b-paid">Bezahlt</span>
+          <span class="badge b-partial">Teilbezahlt</span>
+          <span class="badge b-overdue">Überfällig</span>
+          <span class="badge b-cancel">Storniert</span>
+        </div>
+        <p class="footnote">Status-Farben sind durchgängig: Petrol = festgeschrieben, Grün = bezahlt, Amber = teilbezahlt, Rot = überfällig, Grau = Entwurf/Storno.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FORM -->
+  <section>
+    <p class="sec-title">Formular-Felder</p>
+    <div class="card grid cols-2">
+      <div>
+        <div class="field">
+          <label>Kunde</label>
+          <input class="input" value="Mustermann GmbH" />
+        </div>
+        <div class="field">
+          <label>Betrag (brutto)</label>
+          <div class="input-prefix"><span>€</span><input class="input num" value="1.190,00" /></div>
+          <div class="hint">Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen.</div>
+        </div>
+        <div class="field">
+          <label>PDF-Vorlage</label>
+          <select class="input"><option>Modern</option><option>Klassisch</option><option>Minimal</option></select>
+        </div>
+      </div>
+      <div>
+        <div class="field error">
+          <label>Rechnungsdatum</label>
+          <input class="input" value="" placeholder="TT.MM.JJJJ" />
+          <div class="hint">Pflichtfeld — bitte ein Datum angeben.</div>
+        </div>
+        <div class="field">
+          <label>Notiz</label>
+          <textarea class="input" rows="3" placeholder="Interne Notiz (erscheint nicht auf der Rechnung)"></textarea>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- METRICS + BANNERS -->
+  <section>
+    <p class="sec-title">Kennzahlen & Hinweise</p>
+    <div class="grid cols-4" style="margin-bottom:16px">
+      <div class="metric"><p class="lbl">Einnahmen 2025</p><div class="val">24.180 €</div><div class="delta up">▲ 12 % ggü. Vorjahr</div></div>
+      <div class="metric"><p class="lbl">Ausgaben 2025</p><div class="val">9.640 €</div><div class="delta down">▲ 6 % ggü. Vorjahr</div></div>
+      <div class="metric"><p class="lbl">Überschuss</p><div class="val pos">14.540 €</div><div class="delta">EÜR, Cash-Basis</div></div>
+      <div class="metric"><p class="lbl">Offene Posten</p><div class="val">2.380 €</div><div class="delta down">3 überfällig</div></div>
+    </div>
+    <div class="grid cols-3">
+      <div class="banner ban-info"><span class="ban-ico">i</span><div><b>Kleinunternehmer aktiv.</b> USt-Felder sind gesperrt (§19).</div></div>
+      <div class="banner ban-warn"><span class="ban-ico">!</span><div><b>AfA noch nicht gebucht.</b> Für 2 Anlagen im GJ 2025.</div></div>
+      <div class="banner ban-danger"><span class="ban-ico">!</span><div><b>Backup überfällig.</b> Letztes Backup vor 9 Tagen.</div></div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
+      <span class="toast ok">Rechnung RE-2025-0042 festgeschrieben</span>
+      <span class="toast err">Versand fehlgeschlagen — Postfach prüfen</span>
+    </div>
+  </section>
+
+  <!-- APP SHELL MOCK -->
+  <section>
+    <p class="sec-title">In Kontext — so fühlt sich die App an</p>
+    <div class="shell">
+      <aside class="side">
+        <div class="logo"><span class="dot"></span> Klein.Buch</div>
+        <nav class="nav">
+          <a class="active" href="#">Rechnungen</a>
+          <a href="#">Angebote</a>
+          <a href="#">Kosten</a>
+          <a href="#">Anlagen &amp; AfA</a>
+          <a href="#">EÜR</a>
+          <a href="#">Einstellungen</a>
+        </nav>
+      </aside>
+      <div class="main">
+        <div class="topbar">
+          <div>
+            <h2>Rechnungen</h2>
+            <span class="muted" style="font-size:13px">Geschäftsjahr 2025</span>
+          </div>
+          <button class="btn btn-primary">+ Neue Rechnung</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="kb">
+            <thead><tr><th>Nr.</th><th>Kunde</th><th>Datum</th><th class="num">Betrag</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td>RE-2025-0042</td><td>Mustermann GmbH</td><td class="muted">14.05.2025</td><td class="num">1.190,00 €</td><td><span class="badge b-paid">Bezahlt</span></td></tr>
+              <tr><td>RE-2025-0041</td><td>Bäckerei Huber</td><td class="muted">02.05.2025</td><td class="num">  420,00 €</td><td><span class="badge b-overdue">Überfällig</span></td></tr>
+              <tr><td>RE-2025-0040</td><td>Kanzlei Berger</td><td class="muted">28.04.2025</td><td class="num">2.380,00 €</td><td><span class="badge b-locked">Festgeschrieben</span></td></tr>
+              <tr><td class="muted">—</td><td>Studio Nord</td><td class="muted">Entwurf</td><td class="num">  850,00 €</td><td><span class="badge b-draft">Entwurf</span></td></tr>
+              <tr><td>ST-2025-0003</td><td>Café Salzach</td><td class="muted">19.04.2025</td><td class="num">−310,00 €</td><td><span class="badge b-cancel">Storniert</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="footnote">Tabellen-Zeilen mit Hover, tabellarische Ziffern rechtsbündig, Status als Badge. Sidebar in Marken-Petrol mit Akzent-Logo.</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Klein.Buch — Drittanbieter-Bibliotheken</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 760px;
+    margin: 3rem auto;
+    padding: 0 1.25rem;
+    color: #1a1a1a;
+    line-height: 1.55;
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 0.5rem; }
+  .meta { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
+  .stub-box {
+    border: 1px solid #d0e3eb;
+    background: #f3f9fb;
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin: 2rem 0;
+  }
+  .stub-box h2 { margin-top: 0; font-size: 1.05rem; }
+  code { background: #eef; padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.92em; }
+  ul { padding-left: 1.5rem; }
+  li { margin-bottom: 0.35rem; }
+  hr { border: 0; border-top: 1px solid #ddd; margin: 2rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Klein.Buch — Drittanbieter-Bibliotheken</h1>
+<p class="meta">
+  Diese Seite zeigt alle Open-Source-Bibliotheken, auf denen Klein.Buch
+  aufbaut, mit Lizenz, Version und Pflicht-Hinweisen.
+</p>
+
+<div class="stub-box">
+  <h2>Dev-Build-Platzhalter</h2>
+  <p>
+    Sie sehen diesen Hinweis, weil Klein.Buch im Entwicklungs-Modus läuft.
+    Die vollständige Lizenz-Liste wird erst beim offiziellen Release-Build
+    automatisch erzeugt:
+  </p>
+  <ul>
+    <li><strong>Rust-Dependencies</strong>: per
+      <code>cargo about generate -c about.toml about.hbs</code>
+      (siehe <code>klein-buch/src-tauri/about.toml</code>).</li>
+    <li><strong>JS-Dependencies</strong>: per
+      <code>pnpm licenses list --json --prod</code>, anschließend an diese
+      HTML-Datei angehängt.</li>
+  </ul>
+  <p>
+    Beides läuft im Release-Workflow
+    (<code>.github/workflows/release.yml</code>) vor dem Tauri-Build,
+    sodass das produktiv ausgelieferte Bundle die echte, vollständige
+    Liste enthält. Der Über-Dialog selbst zeigt unabhängig davon die
+    tragenden Hauptkomponenten direkt im Fenster.
+  </p>
+</div>
+
+<hr>
+
+<h2>Hauptkomponenten (Auszug aus dem „Über"-Dialog)</h2>
+<p>
+  Die folgenden Bibliotheken halten Klein.Buch am Leben. Vollständige
+  Liste mit Lizenztexten kommt im Release-Build dazu.
+</p>
+<ul>
+  <li><strong>Tauri 2</strong> — MIT/Apache-2.0 — Desktop-Shell</li>
+  <li><strong>Rust-Toolchain</strong> — MIT/Apache-2.0 — Backend</li>
+  <li><strong>Svelte 5</strong> — MIT — Frontend</li>
+  <li><strong>SQLite</strong> — Public Domain — Datenbank-Engine</li>
+  <li><strong>SQLCipher</strong> — BSD-3-Clause — Verschlüsselung at Rest</li>
+  <li><strong>OpenSSL</strong> — Apache-2.0 — Krypto-Primitives
+    (über <code>bundled-sqlcipher-vendored-openssl</code>)</li>
+  <li><strong>Mustang Project</strong> — Apache-2.0 — ZUGFeRD-/PDF-A-3-Erzeugung</li>
+  <li><strong>KoSIT-Validator</strong> — Apache-2.0 — E-Rechnung-Prüfung</li>
+  <li><strong>Typst</strong> — Apache-2.0 — PDF-Erzeugung</li>
+  <li><strong>OpenJDK</strong> — GPL-2.0 with Classpath-Exception — jlink-JRE-Sidecar</li>
+  <li><strong>lettre</strong> — MIT/Apache-2.0 — SMTP-Versand</li>
+  <li><strong>russh + russh-sftp</strong> — Apache-2.0 — SFTP-Backup-Target</li>
+  <li><strong>oauth2</strong> — MIT/Apache-2.0 — MS-Graph-Authentifizierung</li>
+  <li><strong>keyring</strong> — MIT/Apache-2.0 — OS-Keychain</li>
+  <li><strong>marked</strong> — MIT — Markdown-Renderer (Handbuch)</li>
+  <li><strong>minisearch</strong> — MIT — Volltextsuche (Handbuch)</li>
+</ul>
+
+</body>
+</html>

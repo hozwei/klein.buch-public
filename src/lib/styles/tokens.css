@@ -1,0 +1,406 @@
+/* Klein.Buch — zentrale Design-Tokens (DS-1).
+ * Single source of truth für Farben, Spacing, Typo, Radien, Schatten.
+ * Markenfarbe Petrol stammt aus wildbach-computerhilfe.de (#176b87).
+ * Wird einmalig in +layout.svelte importiert. Keine Netz-Abhängigkeit
+ * (local-first): System-Font-Stack statt Web-Font. */
+
+:root {
+  /* ---- Primär: Petrol (Marke) ---- */
+  --c-primary-50:  #eaf3f6;
+  --c-primary-100: #d1e6ec;
+  --c-primary-200: #a6cdd9;
+  --c-primary-300: #6fa9bb;
+  --c-primary-500: #1f7e9a;
+  --c-primary-600: #176b87; /* DEFAULT */
+  --c-primary-700: #115468;
+  --c-primary-800: #0d4150;
+
+  /* ---- Akzent ---- */
+  --c-accent-500: #10aeb8;
+  --c-accent-600: #0d949d;
+
+  /* ---- Semantik ---- */
+  --c-success-50: #e7f6ef; --c-success-500: #16a571; --c-success-700: #0e7a52;
+  --c-warning-50: #fdf3e1; --c-warning-500: #e08a16; --c-warning-700: #97590a;
+  --c-danger-50:  #fcebec; --c-danger-500:  #d64550; --c-danger-700:  #a02832;
+  --c-info-50:    #eaf3f6; --c-info-500:    #176b87; --c-info-700:    #115468;
+
+  /* ---- Neutrale (kühles Grau) ---- */
+  --c-bg:           #f4f7f9;
+  --c-surface:      #ffffff;
+  --c-surface-2:    #fbfcfd;
+  --c-border:       #e3e9ed;
+  --c-border-strong:#cdd6dc;
+  --c-text:         #16242c;
+  --c-text-muted:   #5a6b75;
+  --c-text-subtle:  #8696a0;
+
+  /* ---- Radien (G2-UX.3.1, Apple-Polish: 6/10/14 → 8/12/16/20) ----
+   * Größere Radien lassen die App weicher wirken, ohne ins „Pille-überall"-
+   * Extreme zu kippen. --r-xl ist neu (Modal-Top-Corners, Hero-Cards). */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 20px; --r-pill: 999px;
+
+  /* ---- Layout ---- */
+  --main-pad: 2rem; /* Innenabstand des Haupt-Scrollbereichs (für sticky PageBar genutzt) */
+
+  /* ---- Schatten (G2-UX.3.1, Apple-Polish: zweilagig) ----
+   * Untere Lage = scharfe Hairline (1–2 px) für die Kanten-Definition,
+   * obere Lage = weicher Halo. Karten/Buttons schweben dezenter und sauberer
+   * als mit einem einzelnen Soft-Blur. */
+  --sh-sm: 0 1px 1px rgba(16,40,50,.04), 0 1px 2px rgba(16,40,50,.04);
+  --sh-md: 0 1px 2px rgba(16,40,50,.04), 0 8px 24px rgba(16,40,50,.06);
+  --sh-lg: 0 2px 4px rgba(16,40,50,.04), 0 20px 40px rgba(16,40,50,.10);
+  --sh-xl: 0 4px 8px rgba(16,40,50,.05), 0 32px 64px rgba(16,40,50,.14);
+
+  /* ---- Typo-Skala ---- */
+  --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px;
+  --fs-lg: 18px; --fs-xl: 22px; --fs-2xl: 28px; --fs-3xl: 34px;
+
+  /* Font-Stack (G2-UX.3.1, Apple-Polish):
+   * SF-Familie zuerst (greift auf macOS/iOS, falls eine Klein.Buch-Build dort jemals
+   * läuft), dann „Segoe UI Variable Text" — das ist Windows-11-Default und besser
+   * für negatives Tracking als das alte „Segoe UI"-bitmap-derived. Auf Win 10
+   * fällt es sauber auf „Segoe UI" zurück. Kein Web-Font, alles system-resident. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---- Transitions (G2-UX.3.1, Apple-Polish) ----
+   * Eine Easing-Kurve app-weit. cubic-bezier(.22,.61,.36,1) ist die klassische
+   * „ease-out-quart"-Variante, die macOS für UI-Übergänge nutzt: schneller
+   * Auftakt, sanft ausschwingend. --t-fast für Mikro-Interactions (Hover),
+   * --t-base Default (Buttons, Inputs), --t-slow für Modal-Sheets. */
+  --ease-apple: cubic-bezier(.22,.61,.36,1);
+  --t-fast: 140ms;
+  --t-base: 200ms;
+  --t-slow: 280ms;
+}
+
+/* ---- Base / Reset ---- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  background: var(--c-bg);
+  color: var(--c-text);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--c-primary-600); text-decoration: none; }
+a:hover { text-decoration: underline; }
+/* Headlines (G2-UX.3.1, Apple-Polish): Display-Font + negatives Tracking.
+ * Apple zieht Überschriften enger als Body — wirkt selbstbewusster, ohne
+ * an Lesbarkeit zu verlieren. h1 am stärksten, h2/h3 abgestuft, h4 neutral. */
+h1, h2, h3, h4 { color: var(--c-text); font-family: var(--font-display); }
+h1 { letter-spacing: -.022em; }
+h2 { letter-spacing: -.018em; }
+h3 { letter-spacing: -.012em; }
+:focus-visible { outline: 2px solid var(--c-primary-500); outline-offset: 2px; }
+
+/* ---- Globale Hilfsklassen (in DS-2 von den Seiten genutzt) ---- */
+.kb-num { font-variant-numeric: tabular-nums; text-align: right; }
+.kb-muted { color: var(--c-text-muted); }
+.kb-subtle { color: var(--c-text-subtle); }
+
+/* Eingabefelder: opt-in via class, um die Migration risikolos zu staffeln. */
+.kb-input {
+  width: 100%; font: inherit; padding: 9px 11px;
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+  background: var(--c-surface); color: var(--c-text);
+  transition: border-color var(--t-base) var(--ease-apple), box-shadow var(--t-base) var(--ease-apple);
+}
+/* Apple-typisch: weicher, halbtransparenter Focus-Halo (4 px) statt harter Solid-Ring. */
+.kb-input:focus { outline: none; border-color: var(--c-primary-500); box-shadow: 0 0 0 4px rgba(31,126,154,.18); }
+.kb-input::placeholder { color: var(--c-text-subtle); }
+.kb-input[aria-invalid="true"] { border-color: var(--c-danger-500); box-shadow: 0 0 0 4px rgba(214,69,80,.18); }
+
+/* Filter-Container-Override entfernt (Manuel-Hardline 2026-05-26): alle Buttons
+   haben dieselbe Default-Größe (9px 16px / inherit), auch in Filter-Leisten. */
+
+/* Tabelle */
+.kb-table { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+.kb-table th {
+  text-align: left; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--c-text-subtle); padding: 10px 12px;
+  border-bottom: 1px solid var(--c-border);
+}
+.kb-table td { padding: 12px; border-bottom: 1px solid var(--c-border); }
+.kb-table tbody tr:last-child td { border-bottom: 0; }
+.kb-table tbody tr:hover { background: var(--c-surface-2); }
+
+/* Kennzahl-Karte */
+.kb-metric { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 16px 18px; box-shadow: var(--sh-sm); }
+.kb-metric .lbl { font-size: var(--fs-sm); color: var(--c-text-muted); margin: 0 0 6px; }
+.kb-metric .val { font-size: var(--fs-2xl); font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+
+/* Datei-Auswahl: nativen "Win-2000"-Button global zu einem Sekundär-Button machen.
+ * Greift app-weit für jedes <input type="file"> (WebView2/Chromium unterstützt
+ * ::file-selector-button). */
+input[type="file"] {
+  font: inherit; font-size: var(--fs-sm); color: var(--c-text-muted); max-width: 100%;
+}
+input[type="file"]::file-selector-button {
+  font: inherit; font-weight: 600; font-size: var(--fs-sm);
+  margin-right: 10px; padding: 7px 13px;
+  background: var(--c-surface); color: var(--c-primary-700);
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+  cursor: pointer; transition: background var(--t-base) var(--ease-apple), border-color var(--t-base) var(--ease-apple);
+}
+input[type="file"]::file-selector-button:hover {
+  background: var(--c-primary-50); border-color: var(--c-primary-300);
+}
+
+/* ---- Globale Button-/Link-Aktions-Klassen (DS-2) ----
+ * Vereinheitlicht ALLE Aktions-Buttons app-weit, ohne jede Seite einzeln anzufassen.
+ * !important auf den VISUELLEN Eigenschaften überschreibt die Legacy-Inline-Styles
+ * (alte Blau/Grau-Buttons) in den Seiten. Größen (padding/font-size) der .btn-*
+ * bleiben den Seiten überlassen, damit kleine Inline-Buttons klein bleiben; die
+ * .link*-Klassen (früher unterstrichene Text-Links) werden zu echten Buttons.
+ * Gilt für <button> UND <a>. Cleanup der toten lokalen Regeln folgt im DS-2-Sweep. */
+.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger,
+.link, .link-a, .link-btn {
+  font: inherit !important;
+  font-weight: 600 !important;
+  border-radius: var(--r-md) !important;
+  cursor: pointer;
+  text-decoration: none !important;
+  transition:
+    background var(--t-base) var(--ease-apple),
+    border-color var(--t-base) var(--ease-apple),
+    box-shadow var(--t-base) var(--ease-apple),
+    transform var(--t-fast) var(--ease-apple) !important;
+}
+.btn-primary { background: var(--c-primary-600) !important; color: #fff !important; border: 1px solid var(--c-primary-600) !important; box-shadow: var(--sh-sm); }
+.btn-primary:hover { background: var(--c-primary-700) !important; border-color: var(--c-primary-700) !important; }
+.btn-secondary { background: var(--c-surface) !important; color: var(--c-primary-700) !important; border: 1px solid var(--c-border-strong) !important; }
+.btn-secondary:hover { background: var(--c-primary-50) !important; border-color: var(--c-primary-300) !important; }
+.btn-ghost { background: transparent !important; color: var(--c-text-muted) !important; border: 1px solid transparent !important; }
+.btn-ghost:hover { background: var(--c-bg) !important; color: var(--c-text) !important; }
+.btn-danger, .btn-ghost-danger { background: var(--c-surface) !important; color: var(--c-danger-700) !important; border: 1px solid #efc6c9 !important; }
+.btn-danger:hover, .btn-ghost-danger:hover { background: var(--c-danger-50) !important; }
+/* .link* waren Text-Links → als kleine Sekundär-Buttons darstellen */
+.link, .link-a, .link-btn {
+  display: inline-flex !important; align-items: center; gap: 6px;
+  padding: 6px 11px !important; font-size: var(--fs-sm) !important;
+  background: var(--c-surface) !important; color: var(--c-primary-700) !important;
+  border: 1px solid var(--c-border-strong) !important;
+}
+.link:hover, .link-a:hover, .link-btn:hover { background: var(--c-primary-50) !important; border-color: var(--c-primary-300) !important; }
+.link.danger, .link-btn.danger, .link-a.danger { color: var(--c-danger-700) !important; border-color: #efc6c9 !important; }
+.btn-primary:disabled, .btn-secondary:disabled, .btn-ghost:disabled, .btn-danger:disabled,
+.btn-ghost-danger:disabled, .link:disabled, .link-a:disabled, .link-btn:disabled { opacity: .5 !important; cursor: not-allowed !important; pointer-events: none; }
+
+/* `.btn-sm` und `.sm`-Modifier sind absichtlich no-op (Manuel-Hardline 2026-05-26):
+   ALLE Buttons in der App haben dieselbe Größe (9px 16px / inherit), egal wo sie
+   sitzen. Klassen bleiben definiert (leer) damit bestehende Markup-Nennungen
+   nicht reißen. */
+
+/* ---- Globale Checkboxen (DS-2 / G2-UX.1) ----
+ * Vereinheitlicht alle verbleibenden Checkboxen (Filter, Beleg-
+ * Eigenschaften, Selection, Inline-Tabellen-Edit) im Petrol-Look.
+ * 18×18, eckig, Petrol-Border, Häkchen-SVG bei :checked.
+ * Toggle-/Switch-Komponenten (role="switch", siehe Toggle.svelte) sind
+ * explizit ausgenommen — die nutzen den iOS-Slider-Look. */
+input[type="checkbox"]:not([role="switch"]) {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  cursor: pointer;
+  display: inline-block;
+  vertical-align: middle;
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--t-base) var(--ease-apple), border-color var(--t-base) var(--ease-apple), box-shadow var(--t-base) var(--ease-apple);
+}
+input[type="checkbox"]:not([role="switch"]):hover:not(:disabled) {
+  border-color: var(--c-primary-500);
+}
+input[type="checkbox"]:not([role="switch"]):focus-visible {
+  outline: 2px solid var(--c-primary-500);
+  outline-offset: 2px;
+}
+input[type="checkbox"]:not([role="switch"]):checked {
+  background-color: var(--c-primary-600);
+  border-color: var(--c-primary-600);
+  /* Häkchen als Inline-SVG-Hintergrund (kein Netz, kein Asset). */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3 8.5 6.5 12 13 4.5' /></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px 14px;
+}
+input[type="checkbox"]:not([role="switch"]):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- Globale Tabellen (DS-2): einheitlicher Listen-Look app-weit ----
+ * Vereinheitlicht ALLE Tabellen auf den „Angebote"-Look. Visuelle Props per
+ * !important, damit die alten lokalen th/td-Styles überschrieben werden, ohne
+ * jede Seite anzufassen. text-align wird NICHT angefasst, damit .num/.right
+ * (rechtsbündige Beträge) weiter funktionieren. */
+table { width: 100%; border-collapse: collapse; }
+th {
+  font-size: var(--fs-xs) !important; font-weight: 600 !important;
+  text-transform: uppercase !important; letter-spacing: .05em !important;
+  color: var(--c-text-subtle) !important; background: transparent !important;
+  padding: 10px 12px !important; border-bottom: 1px solid var(--c-border) !important;
+}
+td { padding: 11px 12px !important; border-bottom: 1px solid var(--c-border) !important; }
+tbody tr:hover td { background: var(--c-surface-2); }
+
+/* ---- Globale Status-Pills (DS-2): einheitlich wie die Badge-Komponente ----
+ * Greift für die noch nicht auf <Badge> umgestellten Seiten (Detailseiten,
+ * Kosten, Anschaffungen …). */
+.status {
+  display: inline-flex !important; align-items: center; gap: 6px;
+  font-size: var(--fs-xs) !important; font-weight: 600 !important;
+  padding: 3px 10px !important; border-radius: var(--r-pill) !important; white-space: nowrap;
+}
+.status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
+.status-draft, .status-inactive, .status-paused { background: #eef1f3 !important; color: #51616b !important; }
+.status-issued, .status-converted { background: var(--c-primary-100) !important; color: var(--c-primary-800) !important; }
+.status-sent { background: var(--c-info-50) !important; color: var(--c-info-700) !important; }
+.status-accepted, .status-paid, .status-active { background: var(--c-success-50) !important; color: var(--c-success-700) !important; }
+.status-partially_paid { background: var(--c-warning-50) !important; color: var(--c-warning-700) !important; }
+.status-rejected, .status-canceled, .status-overdue { background: var(--c-danger-50) !important; color: var(--c-danger-700) !important; }
+
+/* ---- Globaler „Zurück"-Button (DS-2) ----
+ * Vereinheitlicht alle `.back`-Navigations-Links app-weit zu einem kleinen
+ * Sekundär-Button oben links (statt blauem Text-Link). !important überschreibt
+ * die alten lokalen `.back`-Styles. */
+.back {
+  display: inline-flex !important; align-items: center; gap: 6px;
+  margin: 0 0 1rem !important;
+  padding: 9px 16px !important;
+  font: inherit !important; font-weight: 600 !important;
+  background: var(--c-surface) !important; color: var(--c-primary-700) !important;
+  border: 1px solid var(--c-border-strong) !important; border-radius: var(--r-md) !important;
+  text-decoration: none !important; white-space: nowrap;
+}
+.back:hover { background: var(--c-primary-50) !important; border-color: var(--c-primary-300) !important; }
+
+/* Klassen-Buttons brauchen eine Default-Größe (z. B. PageBar-Aktionen, die kein
+   lokales Padding mitbringen). Kleine Inline-Buttons überschreiben lokal. */
+.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  line-height: 1.2; padding: 9px 16px;
+}
+
+/* ---- Globale Card (G2-UX.3.4, Apple-Polish) -------------------------------
+ * Eine einzige .card-Definition app-weit. Ersetzt alle lokalen
+ * .card-Overrides aus den Settings-/Detail-Pages (Pre-DS: #fff,
+ * #e5e7eb, border-radius: 6px). Specs identisch zum Apple-Polish-
+ * Standard der Start-Seite (.kpi, .tile).
+ *
+ * overflow-x: auto bleibt drin als Sicherheitsnetz gegen breite
+ * Tabellen/Formulare, die sonst aus der Karte laufen würden. */
+.card {
+  background: var(--c-surface);
+  border: 1px solid rgba(16, 36, 44, 0.06);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-md);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1rem;
+  overflow-x: auto;
+}
+/* Card-Header (h2 direkt in .card): konsistente Margin. */
+.card > h2:first-child {
+  margin: 0 0 0.75rem;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: var(--c-text);
+}
+/* Card-Hilfsklassen: Variante mit Danger-Akzent (.card.danger) für
+   gefährliche Operationen (Factory Reset etc.). */
+.card.danger {
+  border-color: rgba(214, 69, 80, 0.25);
+  background: var(--c-danger-50);
+}
+.card.danger > h2:first-child { color: var(--c-danger-700); }
+
+/* ---- Lead-Paragraph (G2-UX.3.4) -------------------------------------------
+ * Standardisierter Erklär-Absatz direkt unter der PageBar. Vereinheitlicht
+ * .lead / .intro / .muted-Varianten aus den Settings-Pages. */
+.lead {
+  color: var(--c-text-muted);
+  font-size: var(--fs-base);
+  line-height: 1.55;
+  margin: 0 0 1rem;
+  max-width: 56rem;
+}
+
+/* ---- Banner-Boxen (G2-UX.3.4) ---------------------------------------------
+ * Einheitliche Inline-Hinweis-Boxen. .caveat für Warnungen (gelb),
+ * .danger-banner für gefährliche Hinweise (rot), .info-banner für neutrale
+ * Hinweise (Petrol). Ersetzen die ~6 verschiedenen lokalen Varianten. */
+.caveat {
+  background: var(--c-warning-50);
+  border: 1px solid rgba(224, 138, 22, 0.25);
+  color: var(--c-warning-700);
+  padding: 0.7rem 0.95rem;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+.danger-banner {
+  background: var(--c-danger-50);
+  border: 1px solid rgba(214, 69, 80, 0.25);
+  color: var(--c-danger-700);
+  padding: 0.7rem 0.95rem;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+.info-banner {
+  background: var(--c-info-50);
+  border: 1px solid rgba(23, 107, 135, 0.2);
+  color: var(--c-info-700);
+  padding: 0.7rem 0.95rem;
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+/* ---- Page-Transitions (G2-UX.3.1b, Apple-Polish) ----------------------------
+ * Sanfter Seitenwechsel via View-Transitions-API. Animiert wird nur das
+ * <main>-Element (siehe +layout.svelte: `view-transition-name: page-content`)
+ * — die Sidebar bleibt während der Navigation ruhig stehen.
+ *
+ * Crossfade + minimaler Vertikal-Drift (4–6 px) ist Apples Standard-Pattern
+ * für Top-Level-Navigation: die abgehende Seite zieht leicht nach oben weg,
+ * die neue Seite steigt leicht hoch herein. Dauer = --t-base (200 ms),
+ * Easing = --ease-apple (ease-out-quart).
+ *
+ * Engine-Support: WebView2 (Tauri-Win) ab Chromium 111. Wenn die API fehlt,
+ * navigiert SvelteKit weiterhin direkt — kein Schaden, nur kein Effekt.
+ *
+ * System-Setting „Bewegung reduzieren" wird respektiert. */
+@keyframes kb-page-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-4px); }
+}
+@keyframes kb-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+::view-transition-old(page-content) {
+  animation: kb-page-out var(--t-base) var(--ease-apple) both;
+}
+::view-transition-new(page-content) {
+  animation: kb-page-in var(--t-base) var(--ease-apple) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(page-content),
+  ::view-transition-new(page-content) {
+    animation: none;
+  }
+}
