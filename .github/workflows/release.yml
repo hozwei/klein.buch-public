@@ -1,0 +1,163 @@
+name: Release (Windows, unsigned)
+
+# Block 17d — Open-Source-Release-Workflow.
+#
+# Liegt im Repo-Root (.git ist bei …/Buchhaltung) — GitHub Actions liest
+# Workflows ausschließlich aus <repo-root>/.github/workflows/.
+#
+# Bewusst NUR Windows: der KoSIT/Mustang-jlink-Sidecar liegt fertig committet
+# unter src-tauri/binaries/klein-buch-java-x86_64-pc-windows-msvc/
+# und wird vom Tauri-Bundle eingepackt — daher ist hier kein Sidecar-Build
+# nötig. macOS/Linux brauchen einen portierten Sidecar (build-sidecar.sh +
+# .sh-Launcher + Rust-Launcher-Auflösung + per-OS-Tauri-Resources) und kommen
+# als eigener Folgeblock.
+#
+# KEIN Code-Signing: unsignierte Installer + SHA-256-Checksums, als Draft-
+# Release. Keine Secrets. Signing-Hintergrund: docs/release-signing-guide.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release-Tag (CalVer, z. B. v2026.5.0-rc1 für Dry-Run, v2026.5.0 für Release)"
+        required: true
+        default: v2026.5.0-rc1
+
+permissions:
+  contents: write # zum Anlegen des (Draft-)Releases
+
+jobs:
+  windows:
+    name: Windows-Bundle (unsigniert) + Draft-Release
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      # G2-DOC.3.5 — Drittanbieter-Lizenz-Übersicht für den „Über"-Dialog
+      # (vollständige Liste). Wird VOR `pnpm tauri build` erzeugt, damit das
+      # finale Release-Bundle die echte Liste statt des eingecheckten Stubs
+      # einpackt (Tauri kopiert `resources/handbook/**/*` in den resource_dir).
+      #
+      # Rust-Anteil: cargo-about analysiert Cargo.lock + about.toml und
+      # rendert via about.hbs nach `resources/handbook/third-party-licenses.html`.
+      # JS-Anteil: pnpm hängt einen zweiten <section>-Block mit den
+      # produktiven JS-Dependencies an dieselbe Datei an.
+      - name: Install cargo-about
+        run: cargo install cargo-about --locked --version ^0.6
+      - name: Generate third-party-licenses.html
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          cargo about generate -c about.toml -o resources/handbook/third-party-licenses.html about.hbs
+      - name: Append JS dependency licenses
+        shell: pwsh
+        working-directory: .
+        run: |
+          $json = pnpm licenses list --json --prod | Out-String
+          $licenses = $json | ConvertFrom-Json
+          $rows = New-Object System.Collections.Generic.List[string]
+          foreach ($lic in $licenses.PSObject.Properties) {
+            $licName = [System.Web.HttpUtility]::HtmlEncode($lic.Name)
+            foreach ($pkg in $lic.Value) {
+              $name = [System.Web.HttpUtility]::HtmlEncode("$($pkg.name)@$($pkg.version)")
+              $repo = if ($pkg.homepage) { [System.Web.HttpUtility]::HtmlEncode($pkg.homepage) } else { "" }
+              $rows.Add("<tr><td>$name</td><td>$licName</td><td><code>$repo</code></td></tr>")
+            }
+          }
+          Add-Type -AssemblyName System.Web
+          $body = ($rows -join "`n")
+          $append = @"
+          <hr>
+          <h2 id="js-dependencies">JS-Dependencies (pnpm)</h2>
+          <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:.85rem">
+          <thead><tr><th>Paket</th><th>Lizenz</th><th>Homepage</th></tr></thead>
+          <tbody>
+          $body
+          </tbody>
+          </table>
+          </body></html>
+          "@
+          $path = "src-tauri/resources/handbook/third-party-licenses.html"
+          $content = Get-Content $path -Raw
+          # Vor dem </body> einsetzen (cargo-about-Template schreibt es als letztes).
+          $content = $content -replace "</body>\s*</html>\s*$", $append
+          Set-Content -Encoding UTF8 $path $content
+
+      - name: Set build commit env (eingebrannt in app_info)
+        shell: pwsh
+        run: |
+          $commit = (git rev-parse --short HEAD).Trim()
+          "KLEINBUCH_BUILD_COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Tauri build (unsigniert)
+        # Baut Frontend (beforeBuildCommand) + Rust-Release + NSIS/MSI-Installer.
+        # Das committete Windows-Sidecar wird über bundle.resources eingepackt.
+        # `KLEINBUCH_BUILD_COMMIT` aus dem vorigen Step wird via `option_env!`
+        # in das Binary einkompiliert (siehe `commands::system::app_info`).
+        run: pnpm tauri build
+
+      - name: SHA-256-Checksums
+        shell: pwsh
+        run: |
+          $bundle = "src-tauri/target/release/bundle"
+          $files = Get-ChildItem -Recurse -Path $bundle -Include *.exe, *.msi
+          if (-not $files) { throw "Keine Installer (.exe/.msi) unter $bundle gefunden" }
+          $lines = $files | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)"
+          }
+          $lines | Set-Content -Encoding ascii "$bundle/SHA256SUMS.txt"
+          Write-Host "== SHA256SUMS.txt =="
+          Get-Content "$bundle/SHA256SUMS.txt"
+
+      - name: Draft-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Klein.Buch ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer. Offline,
+            ohne Cloud, AGPL-3.0.
+
+            **Unsignierte Windows-Installer.** Windows SmartScreen warnt beim
+            ersten Start ("Unbekannter Herausgeber") → „Weitere Informationen" →
+            „Trotzdem ausführen". Wer das nicht möchte, baut aus dem Quellcode
+            selbst (siehe README).
+
+            **Integrität prüfen:** SHA-256-Summen in `SHA256SUMS.txt`. Unter
+            Windows: `Get-FileHash <datei> -Algorithm SHA256` muss übereinstimmen.
+
+            macOS/Linux folgen, sobald der KoSIT/Mustang-Sidecar dafür portiert ist.
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/SHA256SUMS.txt
