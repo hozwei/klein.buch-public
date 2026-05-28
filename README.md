@@ -144,7 +144,7 @@ Funktional vollständig:
 Offen vor v1.0-Tag: finale Release-Validierung, Code-Signing-Setup,
 GitHub-Release-Workflow.
 
-Aktuelle App-Version: `2026.5.0` (CalVer). Schema-Stand: Migration
+Aktuelle App-Version: `2026.5.1` (CalVer). Schema-Stand: Migration
 0030. ADR-Stand: 0001–0037.
 
 ---

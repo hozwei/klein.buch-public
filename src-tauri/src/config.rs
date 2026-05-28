@@ -104,22 +104,31 @@ pub fn ensure_inputs_seeded(app: &AppHandle, paths: &Paths) -> crate::error::Res
         return Ok(());
     }
 
+    // Bundle-Layout: Tauri-Bundler erhaelt das `resources/`-Prefix aus
+    // `tauri.conf.json::bundle.resources` (analog zum Handbook-Loader in
+    // `commands/system.rs`, der ebenfalls `resource_dir().join("resources")
+    // .join("handbook")` aufruft). Das `resources/`-Zwischenglied gehoert in
+    // den Lese-Pfad — sonst zeigt `bundled` ins Leere und der First-Run-Copy
+    // ist still ein no-op (V2026.5.1-Bug).
     let bundled = app
         .path()
         .resource_dir()
         .map_err(|e| crate::error::Error::Config(format!("resource_dir: {e}")))?
+        .join("resources")
         .join("inputs");
 
     if !bundled.exists() {
-        // Kein Bundle-Mirror — entweder beschädigte Installation oder ein
-        // hypothetisches Vor-R7-INPUTS-Release. Hart loggen, App weiterlaufen
-        // lassen; afa_tabellen::load wirft dann den eigentlichen Fehler.
-        tracing::warn!(
-            target: "klein_buch_lib::config",
-            "Bundle-inputs-Mirror fehlt unter {}; First-Run-Copy übersprungen",
+        // Bundle-Mirror fehlt — beschaedigte Installation. Hart als Error
+        // hochreichen statt nur loggen, damit der naechste Klick auf die
+        // betroffenen Features (AfA-Formular, Mail-Templates, Branding)
+        // nicht erneut mit einem irrefuehrenden „Datei nicht gefunden"
+        // crasht. Der App-Start schlaegt fehl, das Backup-Gate macht es
+        // sichtbar — das ist der richtige Ort fuer „Installation kaputt".
+        return Err(crate::error::Error::Config(format!(
+            "Bundle-inputs-Mirror fehlt unter {}. Bitte Klein.Buch neu \
+             installieren.",
             bundled.display()
-        );
-        return Ok(());
+        )));
     }
 
     std::fs::create_dir_all(&paths.inputs_dir)?;

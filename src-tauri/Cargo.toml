@@ -1,6 +1,6 @@
 [package]
 name = "klein-buch"
-version = "2026.5.0"
+version = "2026.5.1"
 description = "Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer"
 authors = ["Manuel Schmid <schmidm@wildbach-computerhilfe.de>"]
 edition = "2021"

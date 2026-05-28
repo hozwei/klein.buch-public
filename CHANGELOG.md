@@ -3,7 +3,7 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Hotfix-Säule (Ziel: v2026.5.1)
+## [2026.5.1] — Hotfix, veröffentlicht 2026-05-28
 
 ### Fixed
 
@@ -14,7 +14,9 @@ Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
   `tauri.conf.json` `bundle.resources` nicht aufgeführt, und
   `Paths::inputs_dir` zeigte im Release auf `resource_dir().join("inputs")`,
   also ins Leere. `afa_tabellen::load` hatte — anders als die PDF-Vorlagen —
-  keinen eingebetteten Fallback. (Block **R7-INPUTS**.)
+  keinen eingebetteten Fallback. (Block **R7-INPUTS** + Folge-Fix
+  `block-r7-inputs-fix` für den `resources/`-Pfad-Prefix beim Lesen des
+  Bundle-Mirrors.)
 
   Dieselbe Klasse Bug betraf latent `inputs/mail-templates/` (Mail-Versand)
   und `inputs/branding/logo.png` (PDF-Logo); PDF-Rechnungsvorlagen

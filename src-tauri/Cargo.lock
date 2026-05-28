@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "klein-buch"
-version = "2026.5.0"
+version = "2026.5.1"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
