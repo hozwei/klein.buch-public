@@ -111,6 +111,14 @@ pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
     std::fs::create_dir_all(&paths.archive_dir)?;
     std::fs::create_dir_all(&paths.backups_dir)?;
 
+    // R7-INPUTS: First-Run-Copy vom gebundelten Default-Mirror in den
+    // user-editierbaren `paths.inputs_dir`. Idempotent, ohne Ueberschreiben.
+    // Muss VOR der DB-Init laufen, damit z.B. afa_tabellen::load oder die
+    // PDF-Template-Loader bei jeder Production-Installation eine voll
+    // bestueckte `inputs/` vorfinden — sonst crasht das AfA-Formular sofort
+    // beim Mount (Bug V2026.5).
+    crate::config::ensure_inputs_seeded(app, &paths)?;
+
     // G1-RESET (ADR 0036): einen vorgemerkten Factory Reset JETZT anwenden — vor
     // dem Öffnen des Pools (race-frei, kein Windows-File-Lock). Er löscht das
     // gesamte data_dir; ein gleichzeitig vorgemerkter Restore ist damit

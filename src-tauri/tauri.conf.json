@@ -42,7 +42,8 @@
       "binaries/klein-buch-java-x86_64-pc-windows-msvc/lib/*",
       "binaries/klein-buch-java-x86_64-pc-windows-msvc/runtime/**/*",
       "binaries/klein-buch-java-x86_64-pc-windows-msvc/xrechnung-config/**/*",
-      "resources/handbook/**/*"
+      "resources/handbook/**/*",
+      "resources/inputs/**/*"
     ]
   }
 }

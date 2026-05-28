@@ -3,15 +3,72 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2026.5.0] — v1.0 GA, 2026-05-27 (Release-Tag `v2026.5.0` gesetzt, Block G4.4)
+## [Unreleased] — Hotfix-Säule (Ziel: v2026.5.1)
 
-Erster veröffentlichter Release. Inhalt = Stand auf `main` nach G4.3
-(Release-Pipeline-Härtung); G4.4 hat ausschließlich den annotierten
-Tag `v2026.5.0` auf den HEAD von `main` gesetzt und damit den
-Windows-Release-Workflow (`.github/workflows/release.yml`) automatisch
-ausgelöst, der den unsignierten NSIS-Installer plus `SHA256SUMS.txt`
-als Draft-Release veröffentlicht. Der Release-Notes-Body trägt den
-SmartScreen-Hinweis und die SHA-256-Anleitung.
+### Fixed
+
+- **AfA-Formular crashte sofort beim Öffnen in V2026.5.0** mit
+  `Konfiguration: afa-tabellen.json nicht lesbar
+  (…\AppData\Local\Klein.Buch\inputs\specs\afa-tabellen.json): Das System
+  kann den angegebenen Pfad nicht finden`. Ursache: `inputs/` war in
+  `tauri.conf.json` `bundle.resources` nicht aufgeführt, und
+  `Paths::inputs_dir` zeigte im Release auf `resource_dir().join("inputs")`,
+  also ins Leere. `afa_tabellen::load` hatte — anders als die PDF-Vorlagen —
+  keinen eingebetteten Fallback. (Block **R7-INPUTS**.)
+
+  Dieselbe Klasse Bug betraf latent `inputs/mail-templates/` (Mail-Versand)
+  und `inputs/branding/logo.png` (PDF-Logo); PDF-Rechnungsvorlagen
+  überlebten über die eingebetteten `builtin_unified`-Fallbacks.
+
+### Changed
+
+- **`inputs/` ist jetzt vom Bundle entkoppelt:**
+  `klein-buch/src-tauri/build.rs` spiegelt
+  `klein-buch/inputs/{specs,pdf-templates,mail-templates,branding}` nach
+  `src-tauri/resources/inputs/` (gitignored), das landet via
+  `bundle.resources` im NSIS-Setup. `Paths::inputs_dir` zeigt in Production
+  jetzt auf `app_local_data_dir/inputs/` — der einzige Pfad, in den der
+  User aus eigener Kraft schreiben kann (BMF-AfA-Tabellen-Updates, eigene
+  PDF-/Mail-Templates). Im Dev-Build (`cfg!(debug_assertions)`) bleibt der
+  direkte Repo-Pfad.
+- **Neuer First-Run-Copy** (`config::ensure_inputs_seeded`,
+  `db::prepare_filesystem`): kopiert beim ersten Start das gebundelte
+  `resource_dir/inputs/` rekursiv in `app_local_data_dir/inputs/`,
+  **idempotent + ohne Überschreiben** (`inputs/`-Hardline aus
+  `CLAUDE.md`: User-Edits an `afa-tabellen.json` oder eigene Vorlagen
+  überleben jeden App-Start unverändert). Schema bleibt v30.
+
+### Internal
+
+- Tests `klein-buch/src-tauri/tests/inputs_seed_test.rs` decken
+  missing-files, no-overwrite, mixed-gaps, idempotent, nested-subdirs und
+  empty-bundle ab.
+- `docs/RELEASE-1.0-GUIDE.md` (privat) erhält die Sektion
+  „G4-Pre-Tag-Gate — Install-Smoke": vor jedem Phase-Tag muss das
+  NSIS-Setup auf einem sauberen Windows-Profil installiert + die
+  Hauptseiten (AfA-Formular, Vorlagen, Branding, Mail) einmal getouched
+  werden. R1–R6 (v2026.5) hatten diesen Schritt nicht, deshalb ist
+  R7-INPUTS bis ins v1.0-GA durchgerutscht.
+
+## [2026.5.0] — v1.0 GA, veröffentlicht 2026-05-27
+
+Erster öffentlicher Release auf
+<https://github.com/hozwei/klein.buch-public/releases/tag/v2026.5.0>
+(Block G4.5). Inhalt = Stand auf `main` nach G4.3 (Release-Pipeline-
+Härtung). Privates Build-Repo `hozwei/klein-buch` bleibt privat
+(Build-Journal, Memory, QA-Logs werden bewusst nicht freigegeben);
+veröffentlicht wurde aus dem separaten Public-Repo
+`hozwei/klein.buch-public` (gleicher Source-Stand, ohne interne
+Notes). Tag `v2026.5.0` zuerst lokal auf dem privaten `main` gesetzt
+(Block G4.4); die Veröffentlichung in G4.5 erfolgte per
+`workflow_dispatch` im public Repo (`release.yml` mit Tag-Input
+`v2026.5.0`), Draft mit eigenem Release-Notes-Body (Highlights +
+SmartScreen-Hinweis + SHA-256-Anleitung + AGPL-§13-Source-Link) als
+„latest release" publiziert. Artefakte:
+`klein-buch_2026.5.0_x64-setup.exe` + `SHA256SUMS.txt`. Pre-Publish-
+Security-Audit grün (keine Tokens, keine echten Bank-/Steuer-/
+Bestandsdaten, keine DB-Snapshots; AGPL-§13-Pflichtdaten im
+AboutDialog bewusst öffentlich).
 
 ### Changed
 
