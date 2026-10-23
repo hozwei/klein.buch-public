@@ -26,7 +26,9 @@ jobs:
   rust:
     name: cargo fmt + clippy + test
     if: github.repository == 'hozwei/klein.buch-public'
-    runs-on: ubuntu-latest
+    # Fest auf 24.04: ubuntu-latest wechselt seit 19.10.2026 auf 26.04 (apt-Schritt hing dort).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     # MailHog für den Block-5-E2E-Test (SMTP 1025, HTTP-API 8025). Der Test
     # erkennt einen fehlenden MailHog selbst und überspringt sich dann (no-op);
     # hier ist er also voll aktiv.
@@ -48,11 +50,13 @@ jobs:
           df -h /
 
       - name: System-Deps (Tauri 2 on Ubuntu)
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo -E apt-get update
+          sudo -E apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
             librsvg2-dev \
             libssl-dev \
             patchelf
@@ -79,7 +83,8 @@ jobs:
   frontend:
     name: pnpm lint + svelte-check
     if: github.repository == 'hozwei/klein.buch-public'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: .
