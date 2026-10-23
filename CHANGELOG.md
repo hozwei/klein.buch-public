@@ -140,6 +140,38 @@ Arbeitszweig `phase-w`.
   Header je Routenklasse, Fail-closed-Start (auch über das Binary), Abbruch
   beim Festschreiben mit Wiederholung, Header-Timeout, parallele Vorschauen,
   keine Geheimnisse im Log, Healthcheck-Subcommand; Vitest für den Transport.
+- **Anmeldung mit zweitem Faktor (W6):** Einrichtung mit Setup-Token aus dem
+  Container-Log, Daten-Passwort und TOTP (QR-Code, lokal erzeugt); zehn
+  Einmal-Codes für den Notfall. Anmeldung mit Passwort und App-Code (der Code
+  wird vor dem Passwort geprüft, beide Fehler antworten gleich). Ein Code gilt
+  nur einmal, auch über Neustarts. `klein-buch-server totp-reset` setzt den
+  zweiten Faktor zurück (Neueinrichtung mit Setup-Token und Passwort).
+- **Sitzungen (W6):** Cookie `__Host-kb_session` (HttpOnly, Secure,
+  SameSite=Strict), neue ID bei jeder Anmeldung, Ablauf nach 30 min ohne Nutzung
+  bzw. nach 12 h, Abmelden, „Datenbank sperren“ (schließt die Datenbank, meldet
+  alle Geräte ab, pausiert geplante Aufgaben).
+- **Re-Auth für kritische Aktionen (W6):** Restore, Backup-Ziele, Mailkonten,
+  Steuerberater-, Detail-, Migrations- und DSGVO-Export, TOTP und Einmal-Codes
+  erneuern, Passwort ändern verlangen eine Bestätigung mit Passwort und
+  App-Code (gilt 5 min); der Dialog erscheint automatisch.
+- **Daten-Passwort ändern (W6):** Die Datenbank wird mit dem neuen Passwort neu
+  verschlüsselt (Prüfung vor dem Tausch), andere Geräte werden abgemeldet,
+  danach entsteht ein Backup. Ältere Backups bleiben mit dem alten Passwort
+  einspielbar.
+- **Schutz vor Durchprobieren (W6):** Wartezeiten je Gerät bzw. IP (IPv6 je
+  /64) ab dem fünften Fehlversuch, verdoppelnd bis 1 h, keine Dauersperre;
+  ein globales Budget für Clients ohne Gerätecookie. Nach der Anmeldung
+  erscheint die Zahl der Fehlversuche seither.
+- **Betrieb hinter dem Reverse-Proxy (W6):** `KLEIN_BUCH_PUBLIC_URL` ist
+  Pflicht (falscher Host → 421, fremder Origin → 403);
+  `KLEIN_BUCH_TRUSTED_PROXIES` legt fest, von wem `X-Forwarded-*` gilt.
+  Anmelden nur über HTTPS (Proxy), direkt am Server oder mit
+  `KLEIN_BUCH_INSECURE_HTTP=1` (nur Tests). HSTS bei HTTPS.
+- Entfernt: der Übergangspfad für unverschlüsselte Bestands-Datenbanken (E17).
+- Neue Tests: Setup-Token, TOTP vor der KDF, Replay auch nach Neustart,
+  Einmal-Codes, `totp-reset`, Wartezeiten je IP/Gerät, Proxy-Header, Host/Origin,
+  HTTPS-Regel, HSTS, Re-Auth über alle 13 betroffenen Commands, Sperren,
+  Abmelden, Passwort-Wechsel mit Datenerhalt, Log ohne Geheimnisse.
 
 ### Documentation
 

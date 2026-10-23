@@ -173,8 +173,7 @@ pub async fn get_job(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<JobView>, ApiError> {
-    st.sessions
-        .from_headers(&headers)
+    st.authenticate(&headers)
         .ok_or_else(ApiError::unauthenticated)?;
     let id = Uuid::parse_str(&id).map_err(|_| ApiError::not_found())?;
     st.jobs.view(id).map(Json).ok_or_else(ApiError::not_found)

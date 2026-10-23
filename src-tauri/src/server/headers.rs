@@ -161,7 +161,9 @@ pub fn apply(class: ResponseClass, headers: &mut HeaderMap, csp: &Csp, https: bo
     if https {
         set(
             header::STRICT_TRANSPORT_SECURITY,
-            "max-age=31536000; includeSubDomains",
+            // ohne includeSubDomains: die Instanz kennt die Subdomains des
+            // Betreibers nicht (Review W6)
+            "max-age=31536000",
         );
     }
     let (policy, cache) = match class {
@@ -176,20 +178,19 @@ pub fn apply(class: ResponseClass, headers: &mut HeaderMap, csp: &Csp, https: bo
     set(header::CACHE_CONTROL, cache);
 }
 
-/// Ist die Anfrage laut Proxy-Regel HTTPS? Bis W6 (vertraute Proxys) nie.
-pub fn request_is_https(_headers: &HeaderMap) -> bool {
-    false
-}
-
-/// Middleware für alle Antworten.
+/// Middleware für alle Antworten. HSTS nur, wenn die Anfrage laut
+/// Proxy-Regel HTTPS war (`ClientInfo` der Policy-Middleware, W6).
 pub async fn security_headers(
     State(st): State<Arc<ServerState>>,
     req: Request,
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_string();
-    let https = request_is_https(req.headers());
     let mut response = next.run(req).await;
+    let https = response
+        .extensions()
+        .get::<super::policy::ClientInfo>()
+        .is_some_and(|c| c.https);
     let class = classify(&path, &response);
     apply(class, response.headers_mut(), &st.csp, https);
     response

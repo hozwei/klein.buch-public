@@ -284,7 +284,27 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
         // Bereits verschlüsselt (oder nicht vorhanden) → nichts zu tun.
         return Ok(());
     }
+    reencrypt_db_file(db_file, None, passphrase).await
+}
 
+/// Verschlüsselt eine SQLCipher-DB mit neuer Passphrase (Plan W6 „Passphrase
+/// ändern“): Export per `ATTACH … KEY` + `sqlcipher_export` in eine
+/// Temp-Datei, Probe-Read mit der neuen Passphrase, dann atomarer Tausch. Kein
+/// `PRAGMA rekey` (WAL, offene Verbindungen). Voraussetzung: kein offener
+/// Pool auf `db_file`. Scheitert etwas vor dem Tausch, bleibt die Datei mit der
+/// alten Passphrase unverändert.
+pub async fn rekey_db_file(db_file: &Path, old: &str, new: &str) -> Result<()> {
+    if !db_file.exists() || db_file_is_plaintext(db_file) {
+        return Err(Error::Backup(
+            "Neu verschlüsseln nur für eine vorhandene SQLCipher-Datenbank.".into(),
+        ));
+    }
+    reencrypt_db_file(db_file, Some(old), new).await
+}
+
+/// Gemeinsamer Kern: Quelle ohne (`from_key = None`) oder mit Schlüssel öffnen,
+/// in eine mit `passphrase` verschlüsselte Kopie exportieren, prüfen, tauschen.
+async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &str) -> Result<()> {
     let tmp = with_db_suffix(db_file, ".enc-migrating");
     // Reste eines abgebrochenen früheren Laufs entfernen.
     remove_file_if_exists(&tmp)?;
@@ -301,12 +321,15 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
         // Open-Flags der Hauptverbindung. Ohne CREATE schlägt das Anlegen der
         // neuen verschlüsselten Attach-Datei mit SQLITE_CANTOPEN (Code 14) fehl.
         use sqlx::ConnectOptions as _;
-        let opts = SqliteConnectOptions::from_str(&url)?
+        let mut opts = SqliteConnectOptions::from_str(&url)?
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             // `ATTACH … KEY '<Passphrase>'` darf nicht im Log landen (S0-3).
             .log_statements(log::LevelFilter::Off)
             .log_slow_statements(log::LevelFilter::Off, std::time::Duration::from_secs(3600));
+        if let Some(key) = from_key {
+            opts = opts.pragma("key", sqlcipher_key_literal(key));
+        }
         let src = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
@@ -343,13 +366,18 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
     // 2. Verschlüsselte Kopie verifizieren, BEVOR die Klartext-Datei ersetzt wird.
     {
         let check = open_pool(&tmp, Some(passphrase)).await?;
-        let ok = probe_readable(&check).await;
+        // Probe-Read und Integritätsprüfung der neuen Datei (Review W6).
+        let ok = probe_readable(&check).await
+            && sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+                .fetch_one(&check)
+                .await
+                .is_ok_and(|r| r == "ok");
         check.close().await;
         if !ok {
             remove_file_if_exists(&tmp)?;
             return Err(Error::Backup(
                 "Verschlüsselte Kopie ließ sich nicht mit der Passphrase lesen — \
-                 Migration abgebrochen, Klartext-DB unverändert."
+                 abgebrochen, Datenbank unverändert."
                     .into(),
             ));
         }
@@ -366,77 +394,15 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
     remove_file_if_exists(&with_db_suffix(&tmp, "-shm"))?;
     remove_file_if_exists(&with_db_suffix(db_file, "-wal"))?;
     remove_file_if_exists(&with_db_suffix(db_file, "-shm"))?;
+    // Inhalt auf die Platte, dann atomar tauschen und das Verzeichnis sichern.
+    std::fs::File::open(&tmp)?.sync_all()?;
     std::fs::rename(&tmp, db_file)?;
-    Ok(())
-}
-
-/// G1-ENC Schritt 3 — **Orchestrierung** der Bestands-Migration beim ersten
-/// Entsperren/Onboarding einer Klartext-Bestands-DB:
-///
-/// 1. **Pflicht-Pre-Migration-Backup** (verschlüsselte `.kbk`, Trigger
-///    `pre_restore` → never-prune) mit der gerade bestätigten Passphrase —
-///    schlägt es fehl, wird **nichts** verschlüsselt (DB bleibt Klartext, intakt).
-/// 2. Audit-Marker in die (noch offene) Klartext-DB schreiben — er wandert mit in
-///    den Export → lückenloser Audit-Trail.
-/// 3. Übergebenen Klartext-Pool schließen, Datei verschlüsseln + atomar swappen.
-/// 4. Pool **mit Key** neu öffnen, Schema-Check, Erfolgs-Audit.
-///
-/// Liefert den neuen, verschlüsselten Pool zurück (vom Aufrufer in den State zu
-/// hängen). Ist die DB bereits verschlüsselt, wird der übergebene Pool unverändert
-/// zurückgegeben (kein Pre-Backup, kein Swap).
-pub async fn migrate_plaintext_to_encrypted(
-    ctx: &crate::app_ctx::AppCtx,
-    plaintext_pool: SqlitePool,
-    passphrase: &str,
-) -> Result<SqlitePool> {
-    let paths = &ctx.paths;
-    if !db_file_is_plaintext(&paths.db_file) {
-        return Ok(plaintext_pool);
+    if let Some(dir) = db_file.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
     }
-
-    // 1. Pflicht-Pre-Migration-Backup. Bei Fehler: Pool schließen + abbrechen,
-    //    die Klartext-DB bleibt unverändert (sicher wiederholbar).
-    let pre =
-        match crate::backup::create_now(&plaintext_pool, paths, passphrase, "pre_restore").await {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                plaintext_pool.close().await;
-                return Err(e);
-            }
-        };
-
-    // 2. Audit-Marker noch in die Klartext-DB (wird mitexportiert).
-    crate::db::repo::audit_log::append(
-        &plaintext_pool,
-        "encryption.migration.started",
-        "db",
-        "at_rest",
-        Some(&format!(
-            r#"{{"pre_migration_backup":"{}"}}"#,
-            pre.file_path.replace('"', "'")
-        )),
-    )
-    .await
-    .ok();
-
-    // 3. Pool schließen (Windows-File-Lock), dann Datei verschlüsseln + swappen.
-    plaintext_pool.close().await;
-    encrypt_db_file_in_place(&paths.db_file, passphrase).await?;
-
-    // 4. Verschlüsselt neu öffnen + Schema-Check + Erfolgs-Audit.
-    let pool = open_pool(&paths.db_file, Some(passphrase)).await?;
-    run_migrations(ctx, &pool).await?;
-    crate::db::repo::audit_log::append(
-        &pool,
-        "encryption.migration.applied",
-        "db",
-        "at_rest",
-        Some(r#"{"kdf":"sqlcipher-pbkdf2-hmac-sha512"}"#),
-    )
-    .await
-    .ok();
-    tracing::info!("Bestands-DB nach SQLCipher migriert (G1-ENC Schritt 3).");
-    Ok(pool)
+    Ok(())
 }
 
 #[cfg(test)]

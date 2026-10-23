@@ -6,6 +6,7 @@ import {
   invoke,
   newIdempotencyKey,
   onAuthRequired,
+  setReauthHandler,
 } from "./transport";
 
 type Call = { url: string; init: RequestInit };
@@ -112,10 +113,40 @@ describe("transport.invoke", () => {
 });
 
 describe("transport.auth", () => {
-  it("authLogin: 401 → false, 200 → true", async () => {
-    mockFetch([json(401, { message: "Anmeldung fehlgeschlagen." }), json(200, { state: "ok" })]);
-    expect(await authLogin("falsch")).toBe(false);
-    expect(await authLogin("richtig")).toBe(true);
+  it("authLogin: 401 → ok:false, 200 → ok:true mit Fehlversuchen", async () => {
+    const calls = mockFetch([
+      json(401, { message: "Anmeldung fehlgeschlagen." }),
+      json(200, { state: "ok", failedAttempts: 2, recoveryLeft: 10, usedRecoveryCode: false }),
+    ]);
+    expect((await authLogin("falsch", { totpCode: "123456" })).ok).toBe(false);
+    const r = await authLogin("richtig", { totpCode: "654321" });
+    expect(r.ok).toBe(true);
+    expect(r.failedAttempts).toBe(2);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({
+      passphrase: "richtig",
+      totpCode: "654321",
+    });
+  });
+
+  it("403 reauth_required: Dialog, dann Wiederholung mit demselben Schlüssel", async () => {
+    let asked = 0;
+    setReauthHandler(async () => {
+      asked++;
+      return true;
+    });
+    const calls = mockFetch([
+      json(403, { code: "reauth_required", message: "Bitte bestätigen" }),
+      json(200, { ok: true }),
+    ]);
+    await invoke("dsgvo_export", { contactId: "c1" });
+    expect(asked).toBe(1);
+    expect(calls).toHaveLength(2);
+    expect(header(calls[0], IDEMPOTENCY_HEADER)).toBe(header(calls[1], IDEMPOTENCY_HEADER));
+
+    setReauthHandler(async () => false);
+    mockFetch([json(403, { code: "reauth_required", message: "Bitte bestätigen" })]);
+    await expect(invoke("dsgvo_export", {})).rejects.toBe("Bitte bestätigen");
+    setReauthHandler(null);
   });
 
   it("erzeugt unterschiedliche Schlüssel", () => {

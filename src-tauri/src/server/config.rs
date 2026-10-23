@@ -1,9 +1,10 @@
-//! Server-Einstellungen aus der Umgebung (Plan W5). Die Pfade liest
+//! Server-Einstellungen aus der Umgebung (Plan W5/W6). Die Pfade liest
 //! [`crate::config::Paths::from_env`].
 
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use super::policy::{parse_trusted_proxies, HttpPolicy, PublicUrl};
 use crate::error::{Error, Result};
 
 /// Adresse, auf der der Server lauscht (Standard [`DEFAULT_LISTEN`]).
@@ -12,6 +13,12 @@ pub const ENV_LISTEN: &str = "KLEIN_BUCH_LISTEN";
 pub const ENV_ALLOW_UNMOUNTED: &str = "KLEIN_BUCH_ALLOW_UNMOUNTED";
 /// Quelle für die AGPL-§13-Angabe (Forks überschreiben sie).
 pub const ENV_SOURCE_URL: &str = "KLEIN_BUCH_SOURCE_URL";
+/// Öffentliche Adresse der Instanz (Pflicht, Plan W6), z. B. `https://buch.example.org`.
+pub const ENV_PUBLIC_URL: &str = "KLEIN_BUCH_PUBLIC_URL";
+/// CIDR-Liste vertrauter Reverse-Proxys (Standard leer).
+pub const ENV_TRUSTED_PROXIES: &str = "KLEIN_BUCH_TRUSTED_PROXIES";
+/// `1` erlaubt Einrichten/Anmelden über unverschlüsseltes HTTP — nur Tests und CI.
+pub const ENV_INSECURE_HTTP: &str = "KLEIN_BUCH_INSECURE_HTTP";
 
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 pub const DEFAULT_SOURCE_URL: &str = "https://github.com/hozwei/klein.buch-public";
@@ -29,6 +36,24 @@ pub struct StartupOptions {
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub startup: StartupOptions,
+    pub policy: HttpPolicy,
+}
+
+/// Adresse aus `KLEIN_BUCH_LISTEN` (Standard [`DEFAULT_LISTEN`]).
+pub fn listen_from_env_with(get: &impl Fn(&str) -> Option<OsString>) -> Result<SocketAddr> {
+    match get(ENV_LISTEN).filter(|v| !v.is_empty()) {
+        Some(v) => {
+            let s = v.to_string_lossy();
+            s.parse::<SocketAddr>().map_err(|_| {
+                Error::Config(format!(
+                    "{ENV_LISTEN}={s} ist keine Adresse der Form IP:Port — Start abgebrochen."
+                ))
+            })
+        }
+        None => DEFAULT_LISTEN
+            .parse()
+            .map_err(|_| Error::Config("Standardadresse ungültig".into())),
+    }
 }
 
 impl ServerConfig {
@@ -37,25 +62,32 @@ impl ServerConfig {
     }
 
     pub fn from_env_with(get: impl Fn(&str) -> Option<OsString>) -> Result<Self> {
-        let listen = match get(ENV_LISTEN).filter(|v| !v.is_empty()) {
-            Some(v) => {
-                let s = v.to_string_lossy();
-                s.parse::<SocketAddr>().map_err(|_| {
-                    Error::Config(format!(
-                        "{ENV_LISTEN}={s} ist keine Adresse der Form IP:Port — Start abgebrochen."
-                    ))
-                })?
-            }
-            None => DEFAULT_LISTEN
-                .parse()
-                .map_err(|_| Error::Config("Standardadresse ungültig".into()))?,
-        };
+        let listen = listen_from_env_with(&get)?;
         let allow_unmounted = get(ENV_ALLOW_UNMOUNTED).is_some_and(|v| v == "1");
+        let public_url = get(ENV_PUBLIC_URL)
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "{ENV_PUBLIC_URL} fehlt (öffentliche Adresse, z. B. https://buch.example.org) — \
+                     Start abgebrochen."
+                ))
+            })?;
+        let public_url = PublicUrl::parse(&public_url.to_string_lossy())?;
+        let trusted_proxies = match get(ENV_TRUSTED_PROXIES) {
+            Some(v) => parse_trusted_proxies(&v.to_string_lossy())?,
+            None => Vec::new(),
+        };
+        let insecure_http = get(ENV_INSECURE_HTTP).is_some_and(|v| v == "1");
         Ok(Self {
             listen,
             startup: StartupOptions {
                 allow_unmounted,
                 mountinfo: None,
+            },
+            policy: HttpPolicy {
+                public_url,
+                trusted_proxies,
+                insecure_http,
             },
         })
     }
@@ -94,17 +126,30 @@ mod tests {
         }
     }
 
+    const URL: (&str, &str) = (ENV_PUBLIC_URL, "https://buch.example.org");
+
     #[test]
     fn defaults_and_overrides() {
-        let cfg = ServerConfig::from_env_with(env(&[])).unwrap();
+        assert!(
+            ServerConfig::from_env_with(env(&[])).is_err(),
+            "PUBLIC_URL ist Pflicht"
+        );
+        let cfg = ServerConfig::from_env_with(env(&[URL])).unwrap();
         assert_eq!(cfg.listen.to_string(), DEFAULT_LISTEN);
         assert!(!cfg.startup.allow_unmounted);
+        assert!(!cfg.policy.insecure_http);
+        assert!(cfg.policy.trusted_proxies.is_empty());
 
         let cfg = ServerConfig::from_env_with(env(&[
+            URL,
             (ENV_LISTEN, "127.0.0.1:18080"),
             (ENV_ALLOW_UNMOUNTED, "1"),
+            (ENV_TRUSTED_PROXIES, "192.0.2.0/24 198.51.100.7"),
+            (ENV_INSECURE_HTTP, "1"),
         ]))
         .unwrap();
+        assert_eq!(cfg.policy.trusted_proxies.len(), 2);
+        assert!(cfg.policy.insecure_http);
         assert_eq!(cfg.listen.port(), 18080);
         assert!(cfg.startup.allow_unmounted);
         assert_eq!(healthcheck_addr(cfg.listen).to_string(), "127.0.0.1:18080");
@@ -118,9 +163,9 @@ mod tests {
         );
 
         // Nur genau „1“ schaltet die Prüfung ab.
-        let cfg = ServerConfig::from_env_with(env(&[(ENV_ALLOW_UNMOUNTED, "true")])).unwrap();
+        let cfg = ServerConfig::from_env_with(env(&[URL, (ENV_ALLOW_UNMOUNTED, "true")])).unwrap();
         assert!(!cfg.startup.allow_unmounted);
 
-        assert!(ServerConfig::from_env_with(env(&[(ENV_LISTEN, "8080")])).is_err());
+        assert!(ServerConfig::from_env_with(env(&[URL, (ENV_LISTEN, "8080")])).is_err());
     }
 }

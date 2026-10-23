@@ -1,34 +1,45 @@
-//! Einrichten und Anmelden (Plan W5.4, vorläufig).
+//! Einrichten, Anmelden und Sitzungsverwaltung (Plan W6, E3/E5).
 //!
-//! W5 kennt nur die Passphrase: `POST /api/auth/setup` legt die DB an (nur im
-//! Zustand `setup`), `POST /api/auth/login` entsperrt (Zustand `locked`) bzw.
-//! prüft die Passphrase gegen den Verifier (Zustand `unlocked`, kein zweiter
-//! Pool). Beides erzeugt eine neue Sitzung. W6 ergänzt Setup-Token, TOTP,
-//! Rate-Limit, Re-Auth und die HTTP-Policy (Proxy, Host/Origin).
+//! - `GET /api/auth/status` → `{state, insecureHttp}` mit `state` =
+//!   `setup_required` | `totp_setup_required` | `login_required` | `ok`.
+//! - `POST /api/auth/setup` zweistufig über dieselbe Route: `{setupToken,
+//!   step:"totp"}` liefert ein neues TOTP-Geheimnis (QR als SVG);
+//!   `{setupToken, passphrase, totpCode}` richtet atomar ein — erst Token und
+//!   TOTP-Bestätigung, dann die DB (bzw. bei fehlender `totp.json` die
+//!   Neueinrichtung des zweiten Faktors mit der bestehenden Passphrase).
+//! - `POST /api/auth/login` `{passphrase, totpCode | recoveryCode}`: TOTP
+//!   **vor** der KDF, identische Antwort bei falschem TOTP und falscher
+//!   Passphrase, Rate-Limit je Gerät bzw. Client-IP.
+//! - Mit Sitzung: `logout`, `lock` („Datenbank sperren“), `reauth`,
+//!   `security`; mit Sitzung + frischer Re-Auth: `totp/renew`,
+//!   `recovery/renew`, `passphrase`.
 //!
-//! Der Zustandswechsel läuft als eigener Task (Review W5): bricht der Request
-//! ab (Client, 30-s-Timeout), werden DB und Marker trotzdem vollständig bzw.
-//! gar nicht angelegt. Vor dem Login gibt es nur generische Meldungen;
-//! Einzelheiten stehen im Log.
+//! Zustandswechsel laufen als eigener Task (abbruchsicher). Vor dem Login gibt
+//! es nur generische Meldungen; Fehlversuche stehen als
+//! `WARN auth.login.failed ip=… reason=…` im Log (fail2ban-tauglich), nicht im
+//! `audit_log` — dort nur `auth.login.ok` / `auth.reauth.ok` ohne IP.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::extract::{Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize as _;
 
 use super::dispatch::{read_body, require_request_header};
 use super::errors::ApiError;
 use super::instance;
 use super::limits::KDF_WAIT;
-use super::session;
+use super::policy::ClientInfo;
+use super::ratelimit::{self, DEVICE_COOKIE};
+use super::session::{self, SessionId};
 use super::startup::check_archive_paths;
-use super::state::{InstanceState, ServerState};
+use super::state::{InstanceState, ServerState, DB_GATE_WAIT};
+use super::totp::{self, Check};
 use crate::commands::backup::{
     activate_unlocked, backup_setup_passphrase, ensure_no_pending_restore, open_encrypted,
     BackupSetupPassphraseArgs,
@@ -38,10 +49,48 @@ use crate::error::Error;
 
 /// Body-Limit der Auth-Routen.
 pub const AUTH_BODY_LIMIT: usize = 16 * 1024;
+/// Mindestlänge der Passphrase (R5-005, ADR 0035).
+pub const MIN_PASSPHRASE: usize = 16;
 
-#[derive(Deserialize)]
-struct PassphraseBody {
-    passphrase: String,
+/// Körper aller Auth-Routen; Geheimnisse werden beim Drop überschrieben.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AuthBody {
+    passphrase: Option<String>,
+    totp_code: Option<String>,
+    recovery_code: Option<String>,
+    setup_token: Option<String>,
+    step: Option<String>,
+    new_passphrase: Option<String>,
+}
+
+impl Drop for AuthBody {
+    fn drop(&mut self) {
+        for field in [
+            &mut self.passphrase,
+            &mut self.totp_code,
+            &mut self.recovery_code,
+            &mut self.setup_token,
+            &mut self.new_passphrase,
+        ] {
+            if let Some(s) = field.as_mut() {
+                s.zeroize();
+            }
+        }
+    }
+}
+
+impl AuthBody {
+    fn passphrase(&self) -> String {
+        self.passphrase.clone().unwrap_or_default()
+    }
+}
+
+/// Gelesene Anfrage einer Auth-Route.
+struct AuthRequest {
+    info: ClientInfo,
+    headers: HeaderMap,
+    body: AuthBody,
 }
 
 fn auth_failed() -> ApiError {
@@ -52,7 +101,25 @@ fn auth_failed() -> ApiError {
     )
 }
 
-/// Interner Fehler mit generischer Meldung vor dem Login.
+fn insecure_transport() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "insecure_transport",
+        "Anmeldung nur über HTTPS (Reverse-Proxy) oder lokal möglich.",
+    )
+}
+
+fn rate_limited(wait: std::time::Duration) -> ApiError {
+    let secs = wait.as_secs().max(1);
+    ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "rate_limited",
+        format!("Anmeldung fehlgeschlagen. Zu viele Fehlversuche — bitte {secs} s warten."),
+    )
+    .with_retry_after(secs)
+}
+
+/// Interner Fehler mit generischer Meldung (Details nur im Log).
 fn generic_failure(what: &str, detail: &dyn std::fmt::Display) -> ApiError {
     let api = ApiError::internal(&format!("{what}: {detail}"));
     ApiError {
@@ -64,54 +131,89 @@ fn generic_failure(what: &str, detail: &dyn std::fmt::Display) -> ApiError {
     }
 }
 
-/// `GET /api/auth/status` → `setup_required` | `login_required` | `ok`.
-pub async fn status(State(st): State<Arc<ServerState>>, req: Request) -> Json<serde_json::Value> {
-    let state = match st.instance_state() {
-        InstanceState::Setup => "setup_required",
-        InstanceState::Unlocked if st.sessions.from_headers(req.headers()).is_some() => "ok",
-        _ => "login_required",
-    };
-    Json(serde_json::json!({ "state": state }))
-}
-
-fn peer(req: &Request) -> String {
+fn client_info(req: &Request) -> ClientInfo {
     req.extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip().to_canonical().to_string())
-        .unwrap_or_else(|| "-".into())
+        .get::<ClientInfo>()
+        .copied()
+        .unwrap_or(ClientInfo {
+            ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            loopback: false,
+            via_trusted_proxy: false,
+            https: false,
+        })
 }
 
-/// Liest `{passphrase}`; Steuerzeichen (z. B. NUL) werden abgelehnt — sie
-/// gehören in keine Passphrase und landeten sonst in SQLite-Fehlertexten.
-async fn passphrase_from(req: Request) -> Result<String, ApiError> {
+/// Liest Pflicht-Header und Körper; Steuerzeichen in Geheimnissen werden
+/// abgelehnt (sie gehören in keine Passphrase und landeten sonst in
+/// SQLite-Fehlertexten).
+async fn read_request(req: Request) -> Result<AuthRequest, ApiError> {
+    let info = client_info(&req);
     let (parts, body): (_, Body) = req.into_parts();
     require_request_header(&parts.headers)?;
     let mut bytes = read_body(body, &parts.headers, AUTH_BODY_LIMIT)
         .await?
         .to_vec();
-    let parsed = serde_json::from_slice::<PassphraseBody>(&bytes);
+    let parsed = if bytes.iter().all(u8::is_ascii_whitespace) {
+        Ok(AuthBody::default())
+    } else {
+        serde_json::from_slice::<AuthBody>(&bytes)
+    };
     bytes.zeroize();
-    let mut passphrase = parsed
-        .map(|b| b.passphrase)
-        .map_err(|_| ApiError::bad_request("Ungültige Anfrage."))?;
-    if passphrase.chars().any(char::is_control) {
-        passphrase.zeroize();
+    let body = parsed.map_err(|_| ApiError::bad_request("Ungültige Anfrage."))?;
+    let has_control = [
+        &body.passphrase,
+        &body.totp_code,
+        &body.recovery_code,
+        &body.setup_token,
+        &body.new_passphrase,
+    ]
+    .iter()
+    .any(|f| {
+        f.as_deref()
+            .is_some_and(|s| s.chars().any(char::is_control))
+    });
+    if has_control {
         return Err(ApiError::bad_request("Ungültige Anfrage."));
     }
-    Ok(passphrase)
+    Ok(AuthRequest {
+        info,
+        headers: parts.headers,
+        body,
+    })
 }
 
-/// Antwort mit neuer Sitzung.
-fn with_new_session(st: &ServerState) -> Response {
+/// Schlüssel für das Rate-Limit (gültiges Gerätecookie, sonst Client-IP).
+fn rate_key(st: &ServerState, headers: &HeaderMap, info: &ClientInfo) -> (String, bool) {
+    let device = session::cookie_from_headers(headers, DEVICE_COOKIE)
+        .and_then(|v| st.ratelimit.device_id(&v));
+    let has_device = device.is_some();
+    (ratelimit::key_for(device.as_deref(), info.ip), has_device)
+}
+
+/// Antwort mit neuer Sitzung (und ggf. neuem Gerätecookie).
+fn with_new_session(
+    st: &ServerState,
+    mut body: serde_json::Value,
+    set_device_cookie: bool,
+) -> Response {
     let token = st.sessions.create();
-    let mut response = Json(serde_json::json!({ "state": "ok" })).into_response();
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("state".into(), "ok".into());
+    }
+    let mut response = Json(body).into_response();
     if let Ok(v) = HeaderValue::from_str(&session::set_cookie_value(&token)) {
-        response.headers_mut().insert(header::SET_COOKIE, v);
+        response.headers_mut().append(header::SET_COOKIE, v);
+    }
+    if set_device_cookie {
+        let device = st.ratelimit.new_device_cookie();
+        if let Ok(v) = HeaderValue::from_str(&ratelimit::device_cookie_header(&device)) {
+            response.headers_mut().append(header::SET_COOKIE, v);
+        }
     }
     response
 }
 
-/// Führt den Zustandswechsel als eigenen (nachverfolgten) Task aus.
+/// Führt einen Zustandswechsel als eigenen (nachverfolgten) Task aus.
 async fn detached<F>(st: &Arc<ServerState>, fut: F) -> Response
 where
     F: std::future::Future<Output = Result<Response, ApiError>> + Send + 'static,
@@ -123,16 +225,145 @@ where
     }
 }
 
-/// `POST /api/auth/setup` `{passphrase}` — nur im Zustand `setup`.
+fn into_response(result: Result<Response, ApiError>) -> Response {
+    match result {
+        Ok(r) => r,
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Audit ohne IP (Plan W6); ein Fehler wird geloggt, nicht gemeldet.
+async fn audit(st: &ServerState, action: &str) {
+    if let Ok(pool) = st.ctx.pool() {
+        if let Err(e) =
+            crate::db::repo::audit_log::append(&pool, action, "auth", "session", None).await
+        {
+            tracing::error!("Audit {action} nicht geschrieben: {e}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/// `GET /api/auth/status`.
+pub async fn status(State(st): State<Arc<ServerState>>, req: Request) -> Json<serde_json::Value> {
+    let state = match st.instance_state() {
+        InstanceState::Setup => "setup_required",
+        _ if !st.totp.exists() => {
+            // Nach `totp-reset` im laufenden Betrieb: Token für die
+            // Neueinrichtung bereitstellen (einmal, im Container-Log).
+            st.ensure_setup_token();
+            st.sessions.clear();
+            "totp_setup_required"
+        }
+        InstanceState::Unlocked if st.authenticate(req.headers()).is_some() => "ok",
+        _ => "login_required",
+    };
+    Json(serde_json::json!({
+        "state": state,
+        "insecureHttp": st.policy.insecure_http,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Zweiter Faktor
+// ---------------------------------------------------------------------------
+
+/// Prüft TOTP-Code bzw. Einmal-Code (vor jeder KDF).
+fn check_second_factor(st: &ServerState, body: &AuthBody) -> Result<(Check, bool), ApiError> {
+    let result = if let Some(code) = body.totp_code.as_deref().filter(|c| !c.trim().is_empty()) {
+        st.totp.verify_code(code, st.totp_now()).map(|c| (c, false))
+    } else if let Some(code) = body
+        .recovery_code
+        .as_deref()
+        .filter(|c| !c.trim().is_empty())
+    {
+        st.totp.use_recovery(code).map(|c| (c, true))
+    } else {
+        Ok((Check::Invalid, false))
+    };
+    result.map_err(|e| generic_failure("Anmeldung", &e))
+}
+
+/// Code gegen ein ausstehendes (noch nicht gespeichertes) Geheimnis prüfen;
+/// liefert den passenden Zeitschritt (er gilt danach als verbraucht).
+fn code_matches_pending(secret: &[u8], code: &str, now_unix: u64) -> Option<u64> {
+    let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    let now = totp::step_at(now_unix);
+    let mut matched = None;
+    for step in [now.saturating_sub(1), now, now + 1] {
+        let expected = totp::code_for_step(secret, step);
+        if bool::from(expected.as_bytes().ct_eq(code.as_bytes())) && matched.is_none() {
+            matched = Some(step);
+        }
+    }
+    matched.filter(|_| code.len() == totp::DIGITS as usize)
+}
+
+fn totp_offer(st: &ServerState, secret: &[u8]) -> Result<Response, ApiError> {
+    let uri = totp::otpauth_uri(secret, &st.policy.public_url.host);
+    let svg = totp::qr_svg(&uri).map_err(|e| generic_failure("QR-Code", &e))?;
+    Ok(Json(serde_json::json!({
+        "secret": totp::encode_secret(secret),
+        "otpauthUri": uri,
+        "qrSvg": svg,
+    }))
+    .into_response())
+}
+
+fn check_new_passphrase(p: &str) -> Result<(), ApiError> {
+    if p.chars().count() < MIN_PASSPHRASE {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "passphrase_too_short",
+            "Passphrase muss mindestens 16 Zeichen haben (Tipp: 3–4 zufällige Wörter)",
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Einrichtung
+// ---------------------------------------------------------------------------
+
+/// `POST /api/auth/setup` (zweistufig, siehe Moduldoku).
 pub async fn setup(State(st): State<Arc<ServerState>>, req: Request) -> Response {
-    let ip = peer(&req);
-    let passphrase = match passphrase_from(req).await {
-        Ok(p) => p,
+    let request = match read_request(req).await {
+        Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+    if !st.policy.auth_transport_ok(&request.info) {
+        return insecure_transport().into_response();
+    }
+    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
+    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+        return rate_limited(wait).into_response();
+    }
+    let token_ok = request
+        .body
+        .setup_token
+        .as_deref()
+        .is_some_and(|t| st.setup_token_matches(t));
+    if !token_ok {
+        st.ratelimit.failure(&key, has_device);
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.setup.failed ip={} reason=token", request.info.ip);
+        return ApiError::new(
+            StatusCode::FORBIDDEN,
+            "setup_token_invalid",
+            "Einrichtung nicht möglich (Setup-Token aus dem Container-Log prüfen).",
+        )
+        .into_response();
+    }
+    if request.body.step.as_deref() == Some("totp") {
+        let secret = totp::generate_secret();
+        st.set_pending_setup(secret.clone());
+        return into_response(totp_offer(&st, &secret));
+    }
     let task_state = st.clone();
     detached(&st, async move {
-        setup_locked(task_state, ip, passphrase).await
+        setup_final(task_state, request, key, has_device).await
     })
     .await
 }
@@ -154,15 +385,22 @@ fn remove_partial_db(st: &ServerState) {
     }
 }
 
-async fn setup_locked(
+async fn setup_final(
     st: Arc<ServerState>,
-    ip: String,
-    passphrase: String,
+    request: AuthRequest,
+    key: String,
+    has_device: bool,
 ) -> Result<Response, ApiError> {
     let _transition = st.transition.lock().await;
-    let data_dir = &st.ctx.paths.data_dir;
-    if st.instance_state() != InstanceState::Setup
-        || instance::marker_path(data_dir).exists()
+    // Erneut unter der Sperre: parallele Versuche bekommen nicht mehr Anläufe.
+    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+        return Err(rate_limited(wait));
+    }
+    let data_dir = st.ctx.paths.data_dir.clone();
+    let fresh = st.instance_state() == InstanceState::Setup;
+    let resetup = !fresh && !st.totp.exists();
+    if (!fresh && !resetup)
+        || (fresh && instance::marker_path(&data_dir).exists())
         || st.writes_blocked()
     {
         return Err(ApiError::new(
@@ -171,80 +409,184 @@ async fn setup_locked(
             "Einrichtung nicht möglich.",
         ));
     }
+    let secret = st.pending_setup().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "totp_offer_missing",
+            "Bitte zuerst den QR-Code für den zweiten Faktor anfordern.",
+        )
+    })?;
+    let code = request.body.totp_code.clone().unwrap_or_default();
+    let Some(confirmed_step) = code_matches_pending(&secret, &code, st.totp_now()) else {
+        st.ratelimit.failure(&key, has_device);
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "totp_invalid",
+            "Der TOTP-Code stimmt nicht — Uhrzeit des Geräts prüfen und den aktuellen Code eingeben.",
+        ));
+    };
+    let passphrase = request.body.passphrase();
+    if fresh {
+        check_new_passphrase(&passphrase)?;
+    }
     let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
-    let result = backup_setup_passphrase(&st.ctx, BackupSetupPassphraseArgs { passphrase }).await;
-    match result {
-        Ok(_) => {}
-        // DB vollständig eingerichtet und entsperrt, erst danach (Erst-Backup)
-        // gescheitert: Instanz gilt als eingerichtet; der erste Scheduler-Tick
-        // holt das Backup nach.
-        Err(e) if st.ctx.is_unlocked() => {
-            tracing::error!("Einrichtung abgeschlossen, Erst-Backup fehlgeschlagen: {e}");
+
+    if fresh {
+        let result =
+            backup_setup_passphrase(&st.ctx, BackupSetupPassphraseArgs { passphrase }).await;
+        match result {
+            Ok(_) => {}
+            // DB vollständig eingerichtet, erst danach (Erst-Backup) gescheitert:
+            // der erste Scheduler-Tick holt das Backup nach.
+            Err(e) if st.ctx.is_unlocked() => {
+                tracing::error!("Einrichtung abgeschlossen, Erst-Backup fehlgeschlagen: {e}");
+            }
+            Err(e) => {
+                remove_partial_db(&st);
+                return Err(generic_failure("Einrichtung", &e));
+            }
         }
-        Err(Error::Backup(m)) if m.starts_with("Passphrase muss") => {
-            remove_partial_db(&st);
-            return Err(ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "passphrase_too_short",
-                m,
-            ));
-        }
-        Err(e) => {
-            remove_partial_db(&st);
-            return Err(generic_failure("Einrichtung", &e));
+        instance::write_marker(&data_dir).map_err(|e| generic_failure("Instanz-Marker", &e))?;
+    } else {
+        // Neueinrichtung des zweiten Faktors: Passphrase gegen die DB prüfen.
+        let ok = match st.instance_state() {
+            InstanceState::Locked => unlock(&st, passphrase).await?,
+            _ => {
+                let pool = st.ctx.pool()?;
+                let mut p = passphrase;
+                let verified = crate::backup::verify_passphrase(&pool, &p).await;
+                p.zeroize();
+                verified.map_err(|e| generic_failure("Einrichtung", &e))?
+            }
+        };
+        if !ok {
+            st.ratelimit.failure(&key, has_device);
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.setup.failed ip={} reason=passphrase", request.info.ip);
+            return Err(auth_failed());
         }
     }
-    if let Err(e) = instance::write_marker(data_dir) {
-        return Err(generic_failure("Instanz-Marker", &e));
-    }
-    tracing::info!(target: "klein_buch_lib::auth", "auth.setup.ok ip={ip}");
-    Ok(with_new_session(&st))
+
+    let codes = st
+        .totp
+        .install(&secret, confirmed_step)
+        .map_err(|e| generic_failure("TOTP", &e))?;
+    st.finish_setup();
+    st.sessions.clear();
+    st.ratelimit.clear(&key);
+    audit(
+        &st,
+        if fresh {
+            "auth.setup.ok"
+        } else {
+            "auth.totp.setup"
+        },
+    )
+    .await;
+    tracing::info!(target: "klein_buch_lib::auth", "auth.setup.ok ip={}", request.info.ip);
+    Ok(with_new_session(
+        &st,
+        serde_json::json!({ "recoveryCodes": codes }),
+        !has_device,
+    ))
 }
 
-/// `POST /api/auth/login` `{passphrase}`.
+// ---------------------------------------------------------------------------
+// Anmeldung
+// ---------------------------------------------------------------------------
+
+/// `POST /api/auth/login`.
 pub async fn login(State(st): State<Arc<ServerState>>, req: Request) -> Response {
-    let ip = peer(&req);
-    let passphrase = match passphrase_from(req).await {
-        Ok(p) => p,
+    let request = match read_request(req).await {
+        Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+    if !st.policy.auth_transport_ok(&request.info) {
+        return insecure_transport().into_response();
+    }
+    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
+    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={} reason=rate_limited", request.info.ip);
+        return rate_limited(wait).into_response();
+    }
     let task_state = st.clone();
     detached(&st, async move {
-        login_locked(task_state, ip, passphrase).await
+        login_inner(task_state, request, key, has_device).await
     })
     .await
 }
 
-async fn login_locked(
+fn totp_missing(st: &ServerState) -> ApiError {
+    st.ensure_setup_token();
+    st.sessions.clear();
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "totp_setup_required",
+        "Zweiter Faktor fehlt — Neueinrichtung mit dem Setup-Token aus dem Container-Log.",
+    )
+}
+
+async fn login_inner(
     st: Arc<ServerState>,
-    ip: String,
-    mut passphrase: String,
+    request: AuthRequest,
+    key: String,
+    has_device: bool,
 ) -> Result<Response, ApiError> {
     let _transition = st.transition.lock().await;
-    let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
-    let ok = match st.instance_state() {
-        InstanceState::Setup => {
-            passphrase.zeroize();
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "setup_required",
-                "Instanz ist noch nicht eingerichtet.",
-            ));
+    let ip = request.info.ip;
+    // Erneut unter der Sperre: parallele Versuche bekommen nicht mehr Anläufe.
+    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+        return Err(rate_limited(wait));
+    }
+    if st.instance_state() == InstanceState::Setup {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "setup_required",
+            "Instanz ist noch nicht eingerichtet.",
+        ));
+    }
+    if !st.totp.exists() {
+        return Err(totp_missing(&st));
+    }
+    // Zweiter Faktor vor der KDF; ein gültiger Code gilt als verbraucht.
+    let (check, used_recovery) = check_second_factor(&st, &request.body)?;
+    match check {
+        Check::Valid => {}
+        Check::Missing => return Err(totp_missing(&st)),
+        Check::Invalid => {
+            st.ratelimit.failure(&key, has_device);
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason=totp");
+            return Err(auth_failed());
         }
+    }
+    let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
+    let passphrase = request.body.passphrase();
+    let ok = match st.instance_state() {
         InstanceState::Locked => unlock(&st, passphrase).await?,
-        InstanceState::Unlocked => {
+        _ => {
             let pool = st.ctx.pool()?;
-            let verified = crate::backup::verify_passphrase(&pool, &passphrase).await;
-            passphrase.zeroize();
+            let mut p = passphrase;
+            let verified = crate::backup::verify_passphrase(&pool, &p).await;
+            p.zeroize();
             verified.map_err(|e| generic_failure("Anmeldung", &e))?
         }
     };
     if !ok {
+        st.ratelimit.failure(&key, has_device);
         tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason=passphrase");
         return Err(auth_failed());
     }
+    let failed = st.ratelimit.success_login(&key);
+    audit(&st, "auth.login.ok").await;
     tracing::info!(target: "klein_buch_lib::auth", "auth.login.ok ip={ip}");
-    Ok(with_new_session(&st))
+    Ok(with_new_session(
+        &st,
+        serde_json::json!({
+            "failedAttempts": failed,
+            "usedRecoveryCode": used_recovery,
+            "recoveryLeft": st.totp.recovery_left(),
+        }),
+        !has_device,
+    ))
 }
 
 /// Entsperren: DB öffnen und prüfen, Archivpfad-Stichprobe, erst dann
@@ -286,4 +628,393 @@ async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, A
         .await
         .map_err(|e| generic_failure("Entsperren", &e))?;
     Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Mit Sitzung
+// ---------------------------------------------------------------------------
+
+fn session_of(st: &ServerState, headers: &HeaderMap) -> Result<SessionId, ApiError> {
+    st.authenticate(headers)
+        .ok_or_else(ApiError::unauthenticated)
+}
+
+fn require_reauth(st: &ServerState, id: SessionId) -> Result<(), ApiError> {
+    if st.sessions.reauth_fresh(id) {
+        Ok(())
+    } else {
+        Err(ApiError::reauth_required())
+    }
+}
+
+fn ok_clearing_cookie() -> Response {
+    let mut response = Json(serde_json::json!({ "state": "ok" })).into_response();
+    if let Ok(v) = HeaderValue::from_str(&session::clear_cookie_value()) {
+        response.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    response
+}
+
+/// `POST /api/auth/logout`.
+pub async fn logout(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    into_response(
+        async {
+            let request = read_request(req).await?;
+            let id = session_of(&st, &request.headers)?;
+            st.sessions.remove(id);
+            Ok(ok_clearing_cookie())
+        }
+        .await,
+    )
+}
+
+/// `POST /api/auth/lock` — „Datenbank sperren“: wartet auf laufende Aktionen,
+/// hält den Scheduler an, schließt den Pool, überschreibt die Passphrase im RAM
+/// und beendet alle Sitzungen.
+pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    let request = match read_request(req).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = session_of(&st, &request.headers) {
+        return e.into_response();
+    }
+    let task_state = st.clone();
+    detached(&st, async move {
+        lock_database(&task_state)
+            .await
+            .map(|()| ok_clearing_cookie())
+    })
+    .await
+}
+
+/// Sperrt die Datenbank (auch für Tests aufrufbar).
+pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
+    let _transition = st.transition.lock().await;
+    let _gate = tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write())
+        .await
+        .map_err(|_| ApiError::busy(10))?;
+    audit(st, "auth.lock").await;
+    crate::scheduler::tick::stop(&st.ctx).await;
+    if let Some(pool) = st.ctx.take_pool() {
+        pool.close().await;
+    }
+    st.ctx.session.clear();
+    st.sessions.clear();
+    tracing::info!(target: "klein_buch_lib::auth", "Datenbank gesperrt");
+    Ok(())
+}
+
+/// `POST /api/auth/reauth` `{passphrase, totpCode | recoveryCode}`.
+pub async fn reauth(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    let request = match read_request(req).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let id = match session_of(&st, &request.headers) {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
+    if !st.policy.auth_transport_ok(&request.info) {
+        return insecure_transport().into_response();
+    }
+    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
+    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+        return rate_limited(wait).into_response();
+    }
+    let task_state = st.clone();
+    detached(&st, async move {
+        let st = task_state;
+        let ip = request.info.ip;
+        let _transition = st.transition.lock().await;
+        if let Err(wait) = st.ratelimit.check(&key, has_device) {
+            return Err(rate_limited(wait));
+        }
+        let pool = st.ctx.pool()?;
+        let (check, _) = check_second_factor(&st, &request.body)?;
+        if check != Check::Valid {
+            st.ratelimit.failure(&key, has_device);
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={ip} reason=totp");
+            return Err(auth_failed());
+        }
+        let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
+        let mut passphrase = request.body.passphrase();
+        let verified = crate::backup::verify_passphrase(&pool, &passphrase).await;
+        passphrase.zeroize();
+        if !verified.map_err(|e| generic_failure("Re-Auth", &e))? {
+            st.ratelimit.failure(&key, has_device);
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={ip} reason=passphrase");
+            return Err(auth_failed());
+        }
+        st.ratelimit.clear(&key);
+        st.sessions.mark_reauth(id);
+        audit(&st, "auth.reauth.ok").await;
+        Ok(Json(serde_json::json!({
+            "state": "ok",
+            "reauthSeconds": session::REAUTH_WINDOW.as_secs(),
+        }))
+        .into_response())
+    })
+    .await
+}
+
+/// `GET /api/auth/security` — Stand des zweiten Faktors.
+pub async fn security(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    if let Err(e) = session_of(&st, req.headers()) {
+        return e.into_response();
+    }
+    Json(serde_json::json!({
+        "recoveryLeft": st.totp.recovery_left(),
+        "insecureHttp": st.policy.insecure_http,
+    }))
+    .into_response()
+}
+
+/// `POST /api/auth/totp/renew` (Re-Auth): `{step:"totp"}` → neues Geheimnis;
+/// `{totpCode}` → ersetzt Geheimnis und Einmal-Codes.
+pub async fn totp_renew(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    into_response(
+        async {
+            let request = read_request(req).await?;
+            if !st.policy.auth_transport_ok(&request.info) {
+                return Err(insecure_transport());
+            }
+            let id = session_of(&st, &request.headers)?;
+            require_reauth(&st, id)?;
+            if request.body.step.as_deref() == Some("totp") {
+                let secret = totp::generate_secret();
+                st.set_pending_renew(id, secret.clone());
+                return totp_offer(&st, &secret);
+            }
+            let secret = st.take_pending_renew(id).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::CONFLICT,
+                    "totp_offer_missing",
+                    "Bitte zuerst den neuen QR-Code anfordern.",
+                )
+            })?;
+            let code = request.body.totp_code.clone().unwrap_or_default();
+            let Some(confirmed_step) = code_matches_pending(&secret, &code, st.totp_now()) else {
+                // Angebot bleibt gültig für einen neuen Versuch.
+                st.set_pending_renew(id, secret);
+                return Err(ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "totp_invalid",
+                    "Der TOTP-Code stimmt nicht.",
+                ));
+            };
+            let codes = st
+                .totp
+                .install(&secret, confirmed_step)
+                .map_err(|e| generic_failure("TOTP", &e))?;
+            audit(&st, "auth.totp.renewed").await;
+            Ok(Json(serde_json::json!({ "state": "ok", "recoveryCodes": codes })).into_response())
+        }
+        .await,
+    )
+}
+
+/// `POST /api/auth/recovery/renew` (Re-Auth) — neue Einmal-Codes.
+pub async fn recovery_renew(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    into_response(
+        async {
+            let request = read_request(req).await?;
+            if !st.policy.auth_transport_ok(&request.info) {
+                return Err(insecure_transport());
+            }
+            let id = session_of(&st, &request.headers)?;
+            require_reauth(&st, id)?;
+            let codes = st
+                .totp
+                .renew_recovery()
+                .map_err(|e| generic_failure("Einmal-Codes", &e))?;
+            audit(&st, "auth.recovery.renewed").await;
+            Ok(Json(serde_json::json!({ "state": "ok", "recoveryCodes": codes })).into_response())
+        }
+        .await,
+    )
+}
+
+/// `POST /api/auth/passphrase` `{newPassphrase}` (Re-Auth).
+pub async fn change_passphrase(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    let request = match read_request(req).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    if !st.policy.auth_transport_ok(&request.info) {
+        return insecure_transport().into_response();
+    }
+    let id = match session_of(&st, &request.headers).and_then(|id| {
+        require_reauth(&st, id)?;
+        Ok(id)
+    }) {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
+    let new = request.body.new_passphrase.clone().unwrap_or_default();
+    if let Err(e) = check_new_passphrase(&new) {
+        return e.into_response();
+    }
+    let task_state = st.clone();
+    detached(&st, async move { rekey(task_state, id, new).await }).await
+}
+
+/// Passphrase wechseln: Schreibsperre + Scheduler-Pause → Pool zu → neu
+/// verschlüsseln (Temp + rename) → Pool mit neuem Key, Verifier neu →
+/// Sitzungs-Passphrase tauschen → andere Sitzungen ungültig → Antwort; das
+/// Backup mit der neuen Passphrase läuft danach als eigener Task (sonst
+/// überschritte der Wechsel leicht den 30-s-Timeout, Review W6).
+///
+/// Fehlerfälle: Welche Passphrase danach gilt, entscheidet nicht die
+/// Annahme, sondern ein Probe-Öffnen (erst alt, dann neu). Lässt sich der
+/// Verifier nicht schreiben, wird gesperrt — das Entsperren prüft dann über
+/// SQLCipher selbst, also nur mit der neuen Passphrase.
+async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<Response, ApiError> {
+    let _transition = st.transition.lock().await;
+    let ctx = st.ctx.clone();
+    if st.writes_blocked() {
+        new.zeroize();
+        return Err(ApiError::restarting());
+    }
+    let Some(mut old) = ctx.session.get() else {
+        new.zeroize();
+        return Err(ApiError::from_error(&Error::Locked));
+    };
+    if bool::from(old.as_bytes().ct_eq(new.as_bytes())) {
+        old.zeroize();
+        new.zeroize();
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "passphrase_unchanged",
+            "Die neue Passphrase ist dieselbe wie die bisherige.",
+        ));
+    }
+    let gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
+        Ok(g) => g,
+        Err(_) => {
+            old.zeroize();
+            new.zeroize();
+            return Err(ApiError::busy(10));
+        }
+    };
+    crate::scheduler::tick::stop(&ctx).await;
+    if let Some(pool) = ctx.take_pool() {
+        pool.close().await;
+    }
+    let outcome = crate::db::rekey_db_file(&ctx.paths.db_file, &old, &new).await;
+    let new_pool = match outcome {
+        Ok(()) => open_encrypted(&ctx.paths, &new).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let Some(new_pool) = new_pool else {
+        // Probe-Öffnen: welche Passphrase passt jetzt?
+        let reason = match outcome {
+            Err(e) => e.to_string(),
+            Ok(()) => "neue Passphrase öffnet die neu verschlüsselte Datenbank nicht".into(),
+        };
+        let message = if let Ok(Some(pool)) = open_encrypted(&ctx.paths, &old).await {
+            ctx.set_pool(pool);
+            crate::scheduler::tick::resume(&ctx).await;
+            "Passphrase nicht geändert — die bisherige gilt weiter."
+        } else {
+            // Weder sicher alt noch neu offen: gesperrt lassen, Anmeldung
+            // entscheidet (SQLCipher prüft die Passphrase selbst).
+            ctx.session.clear();
+            st.sessions.clear();
+            "Passphrase-Wechsel unklar abgebrochen — bitte neu anmelden (zuerst mit der neuen, \
+             sonst mit der bisherigen Passphrase)."
+        };
+        old.zeroize();
+        new.zeroize();
+        drop(gate);
+        let api = generic_failure("Passphrase ändern", &reason);
+        return Err(ApiError {
+            message: format!(
+                "{message} (Ref {})",
+                api.reference.as_deref().unwrap_or("-")
+            ),
+            ..api
+        });
+    };
+    if let Err(e) = crate::backup::store_verifier(&new_pool, &new).await {
+        // Verifier veraltet: nicht entsperrt weiterlaufen (sonst gälte die alte
+        // Passphrase für Re-Auth), sondern sperren.
+        new_pool.close().await;
+        ctx.session.clear();
+        st.sessions.clear();
+        old.zeroize();
+        new.zeroize();
+        drop(gate);
+        let api = generic_failure("Passphrase ändern", &e);
+        return Err(ApiError {
+            message: format!(
+                "Datenbank neu verschlüsselt, Verifier nicht geschrieben — bitte mit der neuen \
+                 Passphrase neu anmelden (Ref {}).",
+                api.reference.as_deref().unwrap_or("-")
+            ),
+            ..api
+        });
+    }
+    ctx.set_pool(new_pool.clone());
+    ctx.session.set(new.clone());
+    old.zeroize();
+    st.sessions.retain_only(id);
+    crate::scheduler::tick::resume(&ctx).await;
+    if let Err(e) = crate::db::repo::audit_log::append(
+        &new_pool,
+        "backup.passphrase.changed",
+        "backup",
+        "passphrase",
+        None,
+    )
+    .await
+    {
+        tracing::error!("Audit backup.passphrase.changed nicht geschrieben: {e}");
+    }
+    drop(gate);
+    // Sofort ein Backup mit der neuen Passphrase (ältere bleiben mit der alten
+    // einspielbar) — nach der Antwort, das Herunterfahren wartet darauf.
+    let paths = ctx.paths.clone();
+    st.tasks.spawn(async move {
+        match crate::backup::create_now(&new_pool, &paths, &new, "manual").await {
+            Ok(o) => tracing::info!("Backup nach Passphrase-Wechsel: {}", o.file_path),
+            Err(e) => tracing::error!("Backup nach Passphrase-Wechsel fehlgeschlagen: {e}"),
+        }
+        new.zeroize();
+    });
+    tracing::info!(target: "klein_buch_lib::auth", "Passphrase geändert");
+    Ok(Json(serde_json::json!({ "state": "ok", "backupStarted": true })).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand
+// ---------------------------------------------------------------------------
+
+/// `klein-buch-server totp-reset` (per `docker exec`): löscht `totp.json`
+/// unter `flock`. Der laufende Server beendet daraufhin alle Sitzungen; der
+/// nächste Login gibt einen neuen Setup-Token aus.
+pub fn totp_reset_command() -> std::process::ExitCode {
+    let Some(data_dir) = std::env::var_os(crate::config::ENV_DATA_DIR).filter(|v| !v.is_empty())
+    else {
+        eprintln!("{} fehlt.", crate::config::ENV_DATA_DIR);
+        return std::process::ExitCode::FAILURE;
+    };
+    let store = totp::TotpStore::new(std::path::Path::new(&data_dir));
+    match store.reset() {
+        Ok(true) => {
+            println!(
+                "TOTP-Geheimnis gelöscht. Alle Sitzungen enden; beim nächsten Login steht ein \
+                 neuer Setup-Token im Container-Log. Neueinrichtung mit Setup-Token + Passphrase."
+            );
+            std::process::ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            println!("Kein TOTP-Geheimnis vorhanden — nichts zu tun.");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("totp-reset fehlgeschlagen: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
 }

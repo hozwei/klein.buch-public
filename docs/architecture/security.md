@@ -61,17 +61,17 @@ nicht (E1).
 
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
-| Aufruf beliebiger Commands, auch vor dem Entsperren | explizite Allowlist (alles andere 404), Sitzung Pflicht, DB-Commands nur im Zustand `unlocked` (sonst 423) | geplant (W5) |
-| Übernahme einer frischen Instanz (wer zuerst kommt, setzt die Passphrase) | Setup-Token aus dem Container-Log, Setup atomar mit Passphrase + TOTP | geplant (W6) |
+| Aufruf beliebiger Commands, auch vor dem Entsperren | explizite Allowlist (alles andere 404), Sitzung Pflicht, DB-Commands nur im Zustand `unlocked` (sonst 423) | umgesetzt (W5) |
+| Übernahme einer frischen Instanz (wer zuerst kommt, setzt die Passphrase) | Setup-Token aus dem Container-Log, Setup atomar mit Passphrase + TOTP | umgesetzt (W6) |
 | Passwort-Raten | Passphrase ≥ 16 Zeichen | umgesetzt |
-| | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | geplant (W6) |
+| | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | umgesetzt (W6; IPv6 je /64, globales Budget ohne Gerätecookie) |
 | | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
-| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel | geplant (W6) |
-| CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | geplant (W5/W6) |
-| Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | geplant (W6) |
-| Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); Lücke: bricht der Aufrufer ab, wird die Genehmigung frei, während die Arbeit weiterläuft (Jobs, W5) |
-| | Header-Read-Timeout 10 s, Request-Timeouts, `ConcurrencyLimitLayer(64)`, Job-Warteschlange ≤ 8, ≤ 30 Render-/JVM-Aufrufe je Sitzung und Minute, Body-Limits je Route | geplant (W5) |
-| Interna in Fehlermeldungen | Fehlerabbildung je Variante; sonst 500 mit `ref`, Volltext nur im Log | geplant (W5) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel | umgesetzt (W6) |
+| CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | umgesetzt (W5/W6) |
+| Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | umgesetzt (W6) |
+| Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
+| | Header-Read-Timeout 10 s, Request-Timeouts, `ConcurrencyLimitLayer(64)`, Job-Warteschlange ≤ 8, ≤ 30 Render-/JVM-Aufrufe je Sitzung und Minute, Body-Limits je Route | umgesetzt (W5; globale Grenze 64 ohne Warteschlange) |
+| Interna in Fehlermeldungen | Fehlerabbildung je Variante; sonst 500 mit `ref`, Volltext nur im Log | umgesetzt (W5) |
 | Versionsangabe vor dem Login | `GET /api/public/info` (Version, Commit, Quell-URL) ist wegen AGPL §13 öffentlich | bewusst akzeptiert (ADR 0039) |
 
 **Uploads** (Belege, Anhänge, E-Rechnungen, Rechtsdokumente, Logo, Unterschrift)
@@ -90,7 +90,7 @@ nicht (E1).
 | Manipulierte Backup-Datei | GCM-Tag + SHA-256 des Content-ZIP (§3.2) | umgesetzt |
 | Pfad-Traversal im Content-ZIP | Prüfung je Pfadkomponente (`..`, Wurzel, Laufwerkspräfix → Abbruch) | umgesetzt (W2) |
 | Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | geplant (W7) |
-| Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | geplant (W6/W7) |
+| Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | Re-Auth und Hinweis umgesetzt (W6); Upload/Historie W7 |
 | Schema-Konflikt | heute exakt gleiche Schema-Version; künftig `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration, neuere Backups weiter abgelehnt | geplant (W7) |
 
 **Sidecar-Eingaben** (KoSIT, Mustang in der JVM)
@@ -110,8 +110,8 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Passphrase im Statement-Log (`PRAGMA key`, `ATTACH … KEY`) | Statement- und Slow-Statement-Logging auf allen verschlüsselten Verbindungen aus (`db::open_pool`, Snapshot, Verschlüsselungs-Migration) | umgesetzt (W2) |
-| Geheimnisse über andere Wege | `sqlx::query=off` fest im Filter, Default `info`, Request-Log nur Methode/Pfad ohne Query/Status/Dauer, keine Header und Bodies, Empfänger und Dateinamen nur auf DEBUG; Log-Test auf Passphrase, TOTP, Setup-Token, Session-ID | geplant (W5/W6) |
-| Personenbezogene Daten im Audit | Fehlversuche nur als Logzeile `WARN auth.login.failed` (fail2ban-tauglich), nicht ins append-only `audit_log` | geplant (W6) |
+| Geheimnisse über andere Wege | `sqlx::query=off` fest im Filter, Default `info`, Request-Log nur Methode/Pfad ohne Query/Status/Dauer, keine Header und Bodies, Empfänger und Dateinamen nur auf DEBUG; Log-Test auf Passphrase, TOTP, Setup-Token, Session-ID | umgesetzt (W5/W6) |
+| Personenbezogene Daten im Audit | Fehlversuche nur als Logzeile `WARN auth.login.failed` (fail2ban-tauglich), nicht ins append-only `audit_log` | umgesetzt (W6) |
 
 **Volumes** (`/data`, `/inputs`, optional `/backup-targets`)
 
@@ -122,7 +122,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Löschen oder Ersetzen von Archivdateien | Erkennung statt Verhinderung, siehe „Write-once unter Linux" | umgesetzt (W2), Doku W3 |
 | Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
 | | alle Temp-Dateien unter `/data/tmp`, `TMPDIR` im Image | geplant (W7/W11) |
-| Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | geplant (W5) |
+| Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | umgesetzt (W5; Stichprobe beim Entsperren, die DB ist vorher verschlüsselt) |
 | Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | geplant (W11) |
 
 **Backups**

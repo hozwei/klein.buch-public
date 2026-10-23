@@ -12,10 +12,13 @@ use axum::Router;
 use klein_buch_lib::app_ctx::{AppCtx, NoDesktop};
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::server::config::{ServerConfig, StartupOptions};
+use klein_buch_lib::server::policy::{HttpPolicy, PublicUrl};
 use klein_buch_lib::server::state::ServerState;
 use tower::ServiceExt as _;
 
 pub const PASS: &str = "korrekt-pferd-batterie-klammer";
+/// Öffentliche Adresse der Test-Instanz (Host-Header aller Test-Anfragen).
+pub const HOST: &str = "kb.example.org";
 pub const INDEX_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
 <script>window.__kb_boot = 1;</script></head><body><div id=\"app\"></div></body></html>";
 
@@ -68,17 +71,39 @@ pub fn local_config() -> ServerConfig {
             allow_unmounted: true,
             mountinfo: None,
         },
+        // `oneshot` hat keine Gegenstelle (kein Loopback) → unsicheres HTTP
+        // ausdrücklich erlaubt, wie in CI.
+        policy: HttpPolicy {
+            public_url: PublicUrl::parse(&format!("http://{HOST}")).unwrap(),
+            trusted_proxies: Vec::new(),
+            insecure_http: true,
+        },
     }
 }
 
 /// Frische Instanz im Zustand `setup` (Prüfungen wie beim echten Start).
 pub fn test_server() -> TestServer {
+    test_server_with(|_| {})
+}
+
+/// Wie [`test_server`], mit angepasster Konfiguration (z. B. Policy).
+pub fn test_server_with(adjust: impl FnOnce(&mut ServerConfig)) -> TestServer {
     std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1");
     let dir = tempfile::tempdir().unwrap();
     let paths = prepare_dirs(dir.path());
-    let state = klein_buch_lib::server::prepare(ctx_for(paths), &local_config()).unwrap();
+    let mut cfg = local_config();
+    adjust(&mut cfg);
+    let state = klein_buch_lib::server::prepare(ctx_for(paths), &cfg).unwrap();
     let app = klein_buch_lib::server::router(state.clone());
     TestServer { state, app, dir }
+}
+
+/// Setzt die Gegenstelle einer Anfrage (wie die Annahme-Schleife).
+pub fn from_peer(mut req: Request<Body>, peer: &str) -> Request<Body> {
+    let addr: std::net::SocketAddr = peer.parse().unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(addr));
+    req
 }
 
 pub struct Reply {
@@ -115,6 +140,7 @@ pub fn post(uri: &str, body: &str, cookie: Option<&str>, key: Option<&str>) -> R
     let mut b = Request::builder()
         .method(Method::POST)
         .uri(uri)
+        .header(header::HOST, HOST)
         .header(header::CONTENT_TYPE, "application/json")
         .header("x-kleinbuch-request", "1");
     if let Some(c) = cookie {
@@ -127,7 +153,10 @@ pub fn post(uri: &str, body: &str, cookie: Option<&str>, key: Option<&str>) -> R
 }
 
 pub fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
-    let mut b = Request::builder().method(Method::GET).uri(uri);
+    let mut b = Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .header(header::HOST, HOST);
     if let Some(c) = cookie {
         b = b.header(header::COOKIE, format!("__Host-kb_session={c}"));
     }
@@ -136,43 +165,116 @@ pub fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
 
 /// Sitzungs-Cookie aus `Set-Cookie`.
 pub fn session_cookie(reply: &Reply) -> String {
-    let raw = reply
+    reply
         .headers
-        .get(header::SET_COOKIE)
-        .expect("Set-Cookie")
-        .to_str()
-        .unwrap();
-    raw.split(';')
-        .next()
-        .unwrap()
-        .strip_prefix("__Host-kb_session=")
-        .unwrap()
-        .to_string()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|raw| {
+            raw.split(';')
+                .next()
+                .and_then(|c| c.strip_prefix("__Host-kb_session="))
+                .map(str::to_string)
+        })
+        .expect("Set-Cookie der Sitzung")
 }
 
-/// Einrichtung mit [`PASS`]; liefert den Sitzungs-Cookie.
-pub async fn setup(app: &Router) -> String {
-    let reply = send(
-        app,
+/// TOTP-Geheimnis der Instanz (aus `/data/auth/totp.json`).
+pub fn totp_secret(srv: &TestServer) -> Vec<u8> {
+    let path = srv.state.ctx.paths.data_dir.join("auth").join("totp.json");
+    let file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("totp.json")).unwrap();
+    klein_buch_lib::server::totp::decode_secret(file["secret_b32"].as_str().unwrap()).unwrap()
+}
+
+/// Nächster gültiger TOTP-Code: verschiebt die TOTP-Uhr der Instanz um drei
+/// Schritte (jeder Schritt gilt nur einmal) und rechnet den Code aus.
+pub fn next_totp(srv: &TestServer) -> String {
+    srv.state.shift_totp_clock_for_tests(90);
+    let secret = totp_secret(srv);
+    klein_buch_lib::server::totp::code_for_step(
+        &secret,
+        klein_buch_lib::server::totp::step_at(srv.state.totp_now()),
+    )
+}
+
+/// Serialisiert die KDF-lastigen Abläufe (Einrichtung, Anmeldung, Re-Auth)
+/// innerhalb eines Test-Binaries: parallel im Debug-Build reißen Argon2 und
+/// PBKDF2 sonst den 30-s-Timeout der Auth-Routen.
+static KDF_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub async fn kdf_serial() -> tokio::sync::MutexGuard<'static, ()> {
+    KDF_SERIAL.lock().await
+}
+
+/// Einrichtung (Setup-Token + TOTP + [`PASS`]); liefert die Antwort.
+pub async fn setup_reply(srv: &TestServer) -> Reply {
+    let _serial = kdf_serial().await;
+    let token = srv.state.setup_token_for_tests().expect("Setup-Token");
+    let offer = send(
+        &srv.app,
         post(
             "/api/auth/setup",
-            &serde_json::json!({ "passphrase": PASS }).to_string(),
+            &serde_json::json!({ "setupToken": token, "step": "totp" }).to_string(),
             None,
             None,
         ),
     )
     .await;
+    assert_eq!(offer.status, StatusCode::OK, "{}", offer.text());
+    let secret =
+        klein_buch_lib::server::totp::decode_secret(offer.json()["secret"].as_str().unwrap())
+            .unwrap();
+    let code = klein_buch_lib::server::totp::code_for_step(
+        &secret,
+        klein_buch_lib::server::totp::step_at(srv.state.totp_now()),
+    );
+    send(
+        &srv.app,
+        post(
+            "/api/auth/setup",
+            &serde_json::json!({ "setupToken": token, "passphrase": PASS, "totpCode": code })
+                .to_string(),
+            None,
+            None,
+        ),
+    )
+    .await
+}
+
+/// Einrichtung; liefert den Sitzungs-Cookie.
+pub async fn setup(srv: &TestServer) -> String {
+    let reply = setup_reply(srv).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
     session_cookie(&reply)
 }
 
-pub async fn login(app: &Router, pass: &str) -> Reply {
+/// Anmeldung mit `pass` und dem nächsten gültigen TOTP-Code.
+pub async fn login(srv: &TestServer, pass: &str) -> Reply {
+    let _serial = kdf_serial().await;
+    let code = next_totp(srv);
     send(
-        app,
+        &srv.app,
         post(
             "/api/auth/login",
-            &serde_json::json!({ "passphrase": pass }).to_string(),
+            &serde_json::json!({ "passphrase": pass, "totpCode": code }).to_string(),
             None,
+            None,
+        ),
+    )
+    .await
+}
+
+/// Re-Auth der Sitzung (Passphrase + nächster TOTP-Code).
+pub async fn reauth(srv: &TestServer, cookie: &str) -> Reply {
+    let _serial = kdf_serial().await;
+    let code = next_totp(srv);
+    send(
+        &srv.app,
+        post(
+            "/api/auth/reauth",
+            &serde_json::json!({ "passphrase": PASS, "totpCode": code }).to_string(),
+            Some(cookie),
             None,
         ),
     )

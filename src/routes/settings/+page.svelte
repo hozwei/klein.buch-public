@@ -33,6 +33,10 @@
     <span class="s-title">Rechnungs-Layout</span>
     <span class="s-sub">Wie deine PDF-Rechnungen aussehen</span>
   </a>
+  <a href="/settings/security">
+    <span class="s-title">Sicherheit &amp; Anmeldung</span>
+    <span class="s-sub">Zweiter Faktor, Einmal-Codes und Daten-Passwort ändern</span>
+  </a>
   <a href="/settings/backup">
     <span class="s-title">Backups</span>
     <span class="s-sub">Automatische Sicherungen, Wiederherstellung und Protokoll</span>

@@ -4,7 +4,24 @@
 // Block 2: contacts_* + seller_profile_* + paragraph_19_info.
 // Block 3b: invoices_* — Draft, Lock-and-Issue, Cancel, Payment.
 
-import { invoke, authStatus, authSetup, authLogin } from "./transport";
+import { invoke } from "./transport";
+
+// Anmeldung und Sitzung (Plan W6) laufen über `/api/auth/*`.
+export {
+  authStatus,
+  authSetupOffer,
+  authSetupFinish,
+  authLogin,
+  authReauth,
+  authLogout,
+  authLock,
+  authSecurity,
+  authTotpRenewOffer,
+  authTotpRenewFinish,
+  authRecoveryRenew,
+  authChangePassphrase,
+} from "./transport";
+export type { AuthState, AuthStatus, TotpOffer, SecondFactor, LoginResult } from "./transport";
 import type {
   AnonymizeCheck,
   CancelArgs,
@@ -1012,26 +1029,9 @@ export interface ExportReport {
   zipSizeBytes: number;
 }
 
-// Einrichten/Anmelden laufen seit Plan W5 über `/api/auth/*` (transport.ts).
-
-export async function backupNeedsOnboarding(): Promise<boolean> {
-  return (await authStatus()) === "setup_required";
-}
-
-export async function backupIsUnlocked(): Promise<boolean> {
-  return (await authStatus()) === "ok";
-}
 
 export function backupGetSettings(): Promise<BackupSettings> {
   return invoke<BackupSettings>("backup_get_settings");
-}
-
-export function backupSetupPassphrase(passphrase: string): Promise<void> {
-  return authSetup(passphrase);
-}
-
-export function backupUnlock(passphrase: string): Promise<boolean> {
-  return authLogin(passphrase);
 }
 
 export function backupCreateNow(): Promise<BackupOutcome> {

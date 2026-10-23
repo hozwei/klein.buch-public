@@ -442,8 +442,10 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     fragt denselben Port über `127.0.0.1` ab.
 37. **Übergangs-Body-Limit (W5).** 256 KiB für `/api/cmd/*`; die 7 Commands, die bis W7 Dateien
     noch als JSON-Zahlenfeld schicken, bekommen übergangsweise 32 MiB.
-38. **CI ohne Tauri-Pakete (W5).** Der apt-Schritt installiert nur noch `libdbus-1-dev` für den
-    secret-service-Zweig von `keyring` und entfällt mit W8.
+38. **CI ohne Tauri-Pakete (W5).** Der apt-Schritt installiert nur noch `libdbus-1-dev` (für den
+    secret-service-Zweig von `keyring`, entfällt mit W8) und `liblzma-dev` (`zip` → `lzma-sys`
+    linkt die System-Bibliothek; sie kam bisher über die WebKit-Pakete mit, der erste Lauf ohne
+    sie scheiterte beim Linken). Der Builder im Dockerfile (W11) braucht dasselbe.
 39. **Sitzungen nur im RAM (W5).** Ein Neustart meldet alle Sitzungen ab (die DB ist danach ohnehin
     gesperrt, E3). Der Cookie heißt schon jetzt `__Host-kb_session` (Secure, HttpOnly,
     SameSite=Strict); Browser behandeln `localhost`/`127.0.0.1` als sicheren Kontext.
@@ -470,6 +472,69 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
 45. **Herunterfahren wartet auf alle abgekoppelten Tasks (W5, Gegenprüfung)** (`TaskTracker`:
     Commands, Jobs, Anmeldungen; höchstens 10 min), danach Scheduler-Tick und Pool. Die
     Stop-Frist der Container-Verwaltung muss dazu passen (Compose-Beispiel W11, Handbuch W13).
+
+46. **Einrichtung zweistufig über dieselbe Route (W6).** Der Browser braucht das TOTP-Geheimnis,
+    bevor er den Bestätigungscode schicken kann. `POST /api/auth/setup` mit `{setupToken,
+    step:"totp"}` liefert Geheimnis und QR-Code (ausstehend, an den Token gebunden);
+    `{setupToken, passphrase, totpCode}` richtet atomar ein — Token und Code werden geprüft,
+    **bevor** die DB entsteht. Das Inventar der öffentlichen Routen (Plan §3) bleibt unverändert.
+47. **Setup-Token nur auf stderr (W6).** Der Token steht als eigene Zeile im Container-Log
+    (stderr), nie im `tracing`-Log; der Log-Test prüft `tracing` auf Token, TOTP, Passphrase und
+    Sitzungs-ID. Ein Token entsteht beim Start, wenn keine DB oder keine `totp.json` vorhanden ist,
+    bzw. beim ersten Login nach `totp-reset`.
+48. **Bestätigungscode gilt als verbraucht (W6).** Beim Einrichten wird `last_used_step` auf den
+    aktuellen Schritt + 1 gesetzt; der Code der Einrichtung lässt sich nicht für den Login
+    wiederverwenden.
+49. **Rate-Limit-Schlüssel (W6):** gültiges Gerätecookie, sonst Client-IP. Auch Einrichtung (Token)
+    und Re-Auth zählen. Eine Wartezeit antwortet 429 mit `Retry-After`; die Antworten auf falsches
+    TOTP und falsche Passphrase bleiben identisch (401 „Anmeldung fehlgeschlagen.“). Das Gerätecookie
+    entsteht nach erfolgreicher Einrichtung bzw. Anmeldung.
+50. **Re-Auth akzeptiert auch einen Einmal-Code (W6)** — gleiche Faktoren wie der Login.
+51. **Origin-Regel (W6):** Bei ändernden Methoden muss ein vorhandener `Origin` dem öffentlichen
+    Origin entsprechen; fehlt er (Nicht-Browser-Clients), entscheidet der Pflicht-Header
+    `X-KleinBuch-Request`, der im Browser einen CORS-Preflight erzwingt (kein CorsLayer → scheitert).
+52. **Effektiver Host (W6):** `X-Forwarded-Host` zählt nur von vertrauten Proxys, sonst der
+    `Host`-Header; geprüft wird gegen `KLEIN_BUCH_PUBLIC_URL` (421).
+53. **TOTP-Uhr = Systemzeit (W6).** Authenticator-Apps rechnen mit der Wanduhr; eine monotone Uhr
+    liefe nach einem Zeitsprung des Hosts auseinander. Tests verschieben sie über eine
+    Test-Schnittstelle; Sitzungs-Timeouts laufen über `tokio::time` (pausierbar).
+54. **„Datenbank sperren“ und „Passphrase ändern“ warten höchstens 60 s (W6)** über eine
+    Lese-/Schreibsperre auf laufende Commands und Jobs (`db_gate`), sonst 503; neue Aufrufe
+    warten solange.
+55. **Passphrase-Wechsel (W6):** gleiche Passphrase → 422; scheitert das Neuverschlüsseln vor dem
+    Tausch, gilt die alte Passphrase weiter und der Pool wird mit ihr wieder geöffnet. Danach ein
+    Backup (`manual`); ältere Backups bleiben mit der alten Passphrase einspielbar.
+56. **Weitere Auth-Routen nur mit Sitzung (W6):** `logout`, `lock`, `reauth`, `security`; mit
+    Sitzung + Re-Auth `totp/renew` (zweistufig wie die Einrichtung), `recovery/renew`,
+    `passphrase`.
+57. **Klartext-Übergangspfad entfernt (W6, E17):** Adoption in der Einrichtung, Klartext-Zweig beim
+    Entsperren und `migrate_plaintext_to_encrypted` samt Test; `encrypt_db_file_in_place` bleibt
+    als gemeinsamer Kern des Neuverschlüsselns.
+58. **„Fehlversuche seit der letzten Anmeldung“ nur im RAM (W6);** ein Neustart setzt den Zähler
+    zurück. Fehlversuche stehen dauerhaft nur im Log (`WARN auth.login.failed ip=… reason=…`).
+59. **Rate-Limit gegen Adress-Rotation (W6, Gegenprüfung).** IPv6-Clients zählen je /64. Dazu ein
+    globales Budget für alle Clients **ohne** gültiges Gerätecookie (ab 50 Fehlversuchen dieselbe
+    Wartezeit-Staffel): wer die Passphrase kennt, kann den TOTP-Faktor auch mit vielen Adressen
+    nicht durchprobieren; der eigene Client mit Gerätecookie bleibt frei. Die Tabelle ist begrenzt
+    (10 000 Einträge, älteste fallen heraus). Die Wartezeit wird nach dem Warten auf die
+    Zustandssperre erneut geprüft (parallele Versuche bekommen keine Zusatzanläufe).
+60. **Passphrase-Wechsel ohne Zeitfalle (W6, Gegenprüfung).** Das Backup mit der neuen Passphrase
+    läuft nach der Antwort als nachverfolgter Task; der Transport wiederholt Auth-Aufrufe nicht
+    (weder nach Netzfehlern noch nach 503). Im Fehlerfall entscheidet ein Probe-Öffnen, welche
+    Passphrase gilt; lässt sich der Verifier nicht schreiben, wird gesperrt (Entsperren prüft dann
+    über SQLCipher, also nur mit der neuen). Läuft ein Restore, wird der Wechsel abgelehnt. Die neue
+    Datei wird vor dem Tausch per `quick_check` geprüft und mit fsync geschrieben.
+61. **Loopback nur ohne Weiterleitungs-Header (W6, Gegenprüfung).** Ein Reverse-Proxy auf demselben
+    Host erscheint als Loopback; mit `X-Forwarded-*`/`Forwarded` gilt die Anfrage nicht als lokal
+    (sonst wäre Login über Klartext-HTTP aus dem Netz möglich). Ein unlesbarer `X-Forwarded-For`-
+    Eintrag bricht die Kette: dann zählt der vertraute Proxy selbst als Client.
+62. **Transport-Regel auch für Re-Auth, Passphrase und Erneuerungen (W6, Gegenprüfung);** das
+    Frontend schickt Passphrase und Codes nur in einem sicheren Kontext (HTTPS oder localhost).
+63. **HSTS ohne `includeSubDomains` (W6, Gegenprüfung)** — die Instanz kennt die Subdomains des
+    Betreibers nicht. `KLEIN_BUCH_TRUSTED_PROXIES` mit `/0` erzeugt eine Warnung im Log.
+64. **Setup-Token nach `totp-reset` beim Statusabruf (W6, Gegenprüfung),** nicht erst beim Login —
+    die Oberfläche zeigt sofort die Neueinrichtung. Der Healthcheck-Subcommand schickt den Host der
+    öffentlichen URL (fest gebundene IP).
 
 ## Konsequenzen
 

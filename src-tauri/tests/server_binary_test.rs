@@ -1,7 +1,9 @@
-//! Plan W5 Done-Check: Server läuft als Binary mit `KLEIN_BUCH_*` aus der
+//! Plan W5/W6 Done-Check: Server läuft als Binary mit `KLEIN_BUCH_*` aus der
 //! Umgebung; der Subcommand `healthcheck` liefert `setup`, nach der
-//! Einrichtung `unlocked`, nach einem Neustart `locked` und nach dem Login
-//! wieder `unlocked`. SIGTERM beendet den Server geordnet mit Exit 0.
+//! Einrichtung (Setup-Token aus dem Log + Passphrase + TOTP) `unlocked`, nach
+//! einem Neustart `locked` und nach dem Login (Einmal-Code) wieder
+//! `unlocked`. `totp-reset` beendet alle Sitzungen. SIGTERM beendet den
+//! Server geordnet mit Exit 0.
 
 mod server_support;
 
@@ -30,6 +32,7 @@ fn server_cmd(paths: &Paths, port: u16, sub: Option<&str>) -> Command {
         .env("KLEIN_BUCH_RESOURCE_DIR", &paths.resource_dir)
         .env("KLEIN_BUCH_WEB_DIR", &paths.web_dir)
         .env("KLEIN_BUCH_LISTEN", format!("127.0.0.1:{port}"))
+        .env("KLEIN_BUCH_PUBLIC_URL", format!("http://127.0.0.1:{port}"))
         .env("KLEIN_BUCH_ALLOW_UNMOUNTED", "1")
         .env_remove("KLEIN_BUCH_SIDECAR_MOCK")
         .env("RUST_LOG", "info");
@@ -87,24 +90,73 @@ fn terminate(child: &mut Child) -> std::process::ExitStatus {
     panic!("Server reagiert nicht auf SIGTERM");
 }
 
-async fn post_auth(port: u16, path: &str) -> (u16, Option<String>) {
+/// `POST` an eine Auth-Route über Loopback; liefert Status, Körper, Cookie.
+async fn post_auth(
+    port: u16,
+    path: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+) -> (u16, serde_json::Value, Option<String>) {
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(format!("http://127.0.0.1:{port}{path}"))
         .header("X-KleinBuch-Request", "1")
-        .json(&serde_json::json!({ "passphrase": PASS }))
-        .send()
-        .await
-        .unwrap();
+        .json(&body);
+    if let Some(c) = cookie {
+        req = req.header("Cookie", format!("__Host-kb_session={c}"));
+    }
+    let resp = req.send().await.unwrap();
+    let status = resp.status().as_u16();
     let cookie = resp
         .headers()
-        .get("set-cookie")
-        .map(|v| v.to_str().unwrap().to_string());
-    (resp.status().as_u16(), cookie)
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("__Host-kb_session="))
+        .map(str::to_string);
+    let json = resp.json().await.unwrap_or(serde_json::Value::Null);
+    (status, json, cookie)
+}
+
+async fn get_status(port: u16, cookie: &str) -> String {
+    reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/api/auth/status"))
+        .header("Cookie", format!("__Host-kb_session={cookie}"))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["state"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Setup-Token aus dem Log (eigene Zeile auf stderr).
+fn setup_token(log: &Path) -> String {
+    for _ in 0..100 {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if let Some(line) = text.lines().find(|l| l.starts_with("Setup-Token: ")) {
+            return line["Setup-Token: ".len()..].trim().to_string();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("kein Setup-Token im Log");
+}
+
+fn cookie_value(set_cookie: &str) -> String {
+    set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .trim_start_matches("__Host-kb_session=")
+        .to_string()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn healthcheck_reports_setup_unlocked_locked() {
+    use klein_buch_lib::server::totp;
     let dir = tempfile::tempdir().unwrap();
     let paths = prepare_dirs(dir.path());
     let log = dir.path().join("server.log");
@@ -113,12 +165,41 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     let mut child = start(&paths, port, &log);
     assert_eq!(wait_healthy(&paths, port, &log), r#"{"state":"setup"}"#);
 
-    let (status, cookie) = post_auth(port, "/api/auth/setup").await;
-    assert_eq!(status, 200);
+    // Einrichtung: Token aus dem Log → QR/Geheimnis → Passphrase + Code.
+    let token = setup_token(&log);
+    let (status, offer, _) = post_auth(
+        port,
+        "/api/auth/setup",
+        serde_json::json!({ "setupToken": token, "step": "totp" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{offer}");
+    let secret = totp::decode_secret(offer["secret"].as_str().unwrap()).unwrap();
+    let code = totp::code_for_step(&secret, totp::step_at(totp::unix_now()));
+    let (status, done, cookie) = post_auth(
+        port,
+        "/api/auth/setup",
+        serde_json::json!({ "setupToken": token, "passphrase": PASS, "totpCode": code }),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{done}");
     let cookie = cookie.unwrap();
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+    let recovery: Vec<String> = serde_json::from_value(done["recoveryCodes"].clone()).unwrap();
+    assert_eq!(recovery.len(), 10);
     assert_eq!(healthcheck(&paths, port).1, r#"{"state":"unlocked"}"#);
     assert!(paths.data_dir.join(".klein-buch-instance").exists());
+    // Token nach Erfolg ungültig
+    let (status, _, _) = post_auth(
+        port,
+        "/api/auth/setup",
+        serde_json::json!({ "setupToken": token, "step": "totp" }),
+        None,
+    )
+    .await;
+    assert_eq!(status, 403);
 
     let exit = terminate(&mut child);
     assert!(exit.success(), "geordnetes Herunterfahren: {exit:?}");
@@ -126,12 +207,32 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     // Neustart: gesperrt bis zum Login (E3), gilt als gesund.
     let mut child = start(&paths, port, &log);
     assert_eq!(wait_healthy(&paths, port, &log), r#"{"state":"locked"}"#);
-    let (status, _) = post_auth(port, "/api/auth/login").await;
-    assert_eq!(status, 200);
+    let (status, body, cookie) = post_auth(
+        port,
+        "/api/auth/login",
+        serde_json::json!({ "passphrase": PASS, "recoveryCode": recovery[0] }),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
     assert_eq!(healthcheck(&paths, port).1, r#"{"state":"unlocked"}"#);
+    let session = cookie_value(&cookie.unwrap());
+    assert_eq!(get_status(port, &session).await, "ok");
+
+    // totp-reset per Subcommand: alle Sitzungen ungültig, Neueinrichtung nötig.
+    let out = server_cmd(&paths, port, Some("totp-reset"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(get_status(port, &session).await, "totp_setup_required");
     let exit = terminate(&mut child);
     assert!(exit.success());
 
     let text = std::fs::read_to_string(&log).unwrap();
     assert!(!text.contains(PASS), "Passphrase im Server-Log");
+    assert!(!text.contains(&recovery[0]), "Einmal-Code im Server-Log");
 }

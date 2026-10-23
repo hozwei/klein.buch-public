@@ -71,6 +71,14 @@ impl ApiError {
         )
     }
 
+    pub fn reauth_required() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "reauth_required",
+            "Bitte zur Bestätigung erneut anmelden (Passphrase und TOTP).",
+        )
+    }
+
     pub fn missing_request_header() -> Self {
         Self::new(
             StatusCode::FORBIDDEN,

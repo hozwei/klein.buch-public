@@ -4,7 +4,9 @@
 //! damit der Test auch `db::open_pool` prüft) in einen Puffer: Pool mit Key,
 //! ein Pragma, das hinter einer gehaltenen Schreibsperre über 1 s wartet
 //! („slow statement“), Einrichtung, Anmeldung und Commands über den Router.
-//! Keine Zeile darf Passphrase, `PRAGMA key` oder Sitzungs-ID enthalten.
+//! Keine Zeile darf Passphrase, `PRAGMA key`, Sitzungs-ID, Setup-Token oder
+//! TOTP-Code enthalten (Plan W5.9/W6). Der Setup-Token steht nur als eigene
+//! Zeile auf stderr, nie im `tracing`-Log.
 
 mod server_support;
 
@@ -83,9 +85,25 @@ async fn no_passphrase_or_session_id_in_logs() {
 
     // 2. Einrichtung, Anmeldung, Commands über den Router.
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
-    let reply = login(&srv.app, PASS).await;
+    let setup_token = srv.state.setup_token_for_tests().unwrap();
+    let setup = setup_reply(&srv).await;
+    let cookie = session_cookie(&setup);
+    let recovery: Vec<String> =
+        serde_json::from_value(setup.json()["recoveryCodes"].clone()).unwrap();
+    let totp_code = next_totp(&srv);
+    let reply = send(
+        &srv.app,
+        post(
+            "/api/auth/login",
+            &serde_json::json!({ "passphrase": PASS, "totpCode": totp_code }).to_string(),
+            None,
+            None,
+        ),
+    )
+    .await;
     let cookie2 = session_cookie(&reply);
+    let reauth_reply = reauth(&srv, &cookie2).await;
+    assert!(reauth_reply.status.is_success());
     let r = call(&srv.app, &cookie2, "contacts_list", serde_json::json!({})).await;
     assert!(r.status.is_success());
     let _ = send(
@@ -93,7 +111,7 @@ async fn no_passphrase_or_session_id_in_logs() {
         get("/api/auth/status?probe=geheim-im-query", None),
     )
     .await;
-    let wrong = login(&srv.app, "falsche-passphrase-0000000").await;
+    let wrong = login(&srv, "falsche-passphrase-0000000").await;
     assert_eq!(wrong.status.as_u16(), 401);
 
     let text = String::from_utf8_lossy(&buffer.0.lock().unwrap()).into_owned();
@@ -106,6 +124,12 @@ async fn no_passphrase_or_session_id_in_logs() {
         cookie.as_str(),
         cookie2.as_str(),
         "geheim-im-query",
+        setup_token.as_str(),
+        // 6 Ziffern kämen zufällig in Zeitstempeln vor → im JSON-Kontext suchen
+        format!("\"{totp_code}\"").as_str(),
+        "totpCode",
+        recovery[0].as_str(),
+        recovery[9].as_str(),
     ] {
         assert!(!text.contains(secret), "Geheimnis im Log: {secret}");
     }

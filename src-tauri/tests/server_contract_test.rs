@@ -195,7 +195,7 @@ async fn every_allowlisted_name_without_session_is_401() {
 #[tokio::test]
 async fn other_names_are_404_and_get_is_405() {
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
+    let cookie = setup(&srv).await;
     for spec in REGISTRY.iter().filter(|c| !c.exposed()) {
         let r = send(
             &srv.app,
@@ -246,14 +246,28 @@ async fn public_route_inventory() {
     assert!(r.body.is_empty(), "{}", r.text());
 
     // Auth-Routen erreichbar ohne Sitzung (hier: Zustand setup)
-    let r = login(app, PASS).await;
+    let r = send(
+        app,
+        post(
+            "/api/auth/login",
+            &format!(r#"{{"passphrase":"{PASS}","totpCode":"123456"}}"#),
+            None,
+            None,
+        ),
+    )
+    .await;
     assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
     let r = send(
         app,
         post("/api/auth/setup", r#"{"passphrase":"zu-kurz"}"#, None, None),
     )
     .await;
-    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "ohne Setup-Token: {}",
+        r.text()
+    );
 
     // SPA-Assets und Client-Routing
     for path in ["/", "/invoices/abc", "/settings/backup"] {
@@ -289,7 +303,7 @@ async fn public_route_inventory() {
 async fn camel_case_args_locked_423_and_body_limit_413() {
     let srv = test_server();
     let app = &srv.app;
-    let cookie = setup(app).await;
+    let cookie = setup(&srv).await;
 
     let r = send(app, get("/api/auth/status", Some(&cookie))).await;
     assert_eq!(r.json()["state"], "ok");
@@ -335,10 +349,10 @@ async fn camel_case_args_locked_423_and_body_limit_413() {
     assert_eq!(r.json()["state"], "login_required");
 
     // erneut anmelden entsperrt; falsche Passphrase → 401 mit generischer Meldung
-    let r = login(app, "falsche-passphrase-1234567").await;
+    let r = login(&srv, "falsche-passphrase-1234567").await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert_eq!(r.json()["message"], "Anmeldung fehlgeschlagen.");
-    let r = login(app, PASS).await;
+    let r = login(&srv, PASS).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     let fresh = session_cookie(&r);
     assert_ne!(fresh, cookie, "neue Sitzungs-ID beim Login");
@@ -352,6 +366,7 @@ async fn request_header_is_mandatory() {
     let req = axum::http::Request::builder()
         .method("POST")
         .uri("/api/cmd/contacts_list")
+        .header("host", HOST)
         .body(axum::body::Body::from("{}"))
         .unwrap();
     let r = send(&srv.app, req).await;
@@ -359,6 +374,7 @@ async fn request_header_is_mandatory() {
     let req = axum::http::Request::builder()
         .method("POST")
         .uri("/api/auth/login")
+        .header("host", HOST)
         .body(axum::body::Body::from(format!(
             "{{\"passphrase\":\"{PASS}\"}}"
         )))
@@ -371,7 +387,7 @@ async fn request_header_is_mandatory() {
 async fn idempotency_key_replays_write() {
     let srv = test_server();
     let app = &srv.app;
-    let cookie = setup(app).await;
+    let cookie = setup(&srv).await;
     let input = serde_json::json!({"input": {
         "contactType": "customer", "name": "Kunde GmbH", "street": "Hauptstr. 7",
         "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",

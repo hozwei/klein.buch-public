@@ -51,12 +51,9 @@ pub const SETTING_VERIFIER_CT: &str = "backup_verifier_ct_hex";
 // ---------------------------------------------------------------------------
 
 /// Hält die Backup-Passphrase **ausschließlich im Prozess-Memory** der
-/// laufenden Session. Wird in den Tauri-State gehängt. Niemals serialisiert,
-/// niemals in DB/Logs/audit_log.
-///
-/// Hinweis (Hardening-Backlog): die Passphrase liegt als `String` im Heap.
-/// Eine `zeroize`-Wischung beim Drop wäre die nächste Stufe; bewusst nicht in
-/// Block 4, um die Dependency-Fläche unverändert zu lassen.
+/// laufenden Session (im `AppCtx`). Niemals serialisiert, niemals in
+/// DB/Logs/audit_log. Beim Ersetzen und Löschen wird der alte Wert per
+/// `zeroize` überschrieben (Plan W6: „Datenbank sperren“, Passphrase ändern).
 #[derive(Default)]
 pub struct BackupSession {
     inner: Mutex<Option<String>>,
@@ -64,11 +61,20 @@ pub struct BackupSession {
 
 impl BackupSession {
     pub fn set(&self, passphrase: String) {
-        *self.inner.lock().expect("BackupSession mutex poisoned") = Some(passphrase);
+        use zeroize::Zeroize as _;
+        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = guard.as_mut() {
+            old.zeroize();
+        }
+        *guard = Some(passphrase);
     }
 
     pub fn clear(&self) {
-        *self.inner.lock().expect("BackupSession mutex poisoned") = None;
+        use zeroize::Zeroize as _;
+        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(mut old) = guard.take() {
+            old.zeroize();
+        }
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -151,17 +157,7 @@ pub async fn setup_passphrase(
         ));
     }
 
-    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
-    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key_async(passphrase, &salt).await?;
-    let nonce_arr = encrypt::nonce_array(&nonce)?;
-    let ct = encrypt::encrypt(&key, &nonce_arr, encrypt::VERIFIER_PLAINTEXT)?;
-
-    set_setting(pool, SETTING_VERIFIER_SALT, &manifest::to_hex(&salt)).await?;
-    set_setting(pool, SETTING_VERIFIER_NONCE, &manifest::to_hex(&nonce)).await?;
-    set_setting(pool, SETTING_VERIFIER_CT, &manifest::to_hex(&ct)).await?;
-    set_setting(pool, SETTING_PASSPHRASE_SET, "true").await?;
-
+    store_verifier(pool, passphrase).await?;
     session.set(passphrase.to_string());
 
     crate::db::repo::audit_log::append(
@@ -172,6 +168,22 @@ pub async fn setup_passphrase(
         Some(r#"{"verifier":"stored"}"#),
     )
     .await?;
+    Ok(())
+}
+
+/// Schreibt den Verifier (Salt + Nonce + Ciphertext einer Magic-Konstante) für
+/// `passphrase` — bei der Einrichtung und nach „Passphrase ändern“ (W6).
+pub async fn store_verifier(pool: &SqlitePool, passphrase: &str) -> Result<()> {
+    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+    let key = encrypt::derive_key_async(passphrase, &salt).await?;
+    let nonce_arr = encrypt::nonce_array(&nonce)?;
+    let ct = encrypt::encrypt(&key, &nonce_arr, encrypt::VERIFIER_PLAINTEXT)?;
+
+    set_setting(pool, SETTING_VERIFIER_SALT, &manifest::to_hex(&salt)).await?;
+    set_setting(pool, SETTING_VERIFIER_NONCE, &manifest::to_hex(&nonce)).await?;
+    set_setting(pool, SETTING_VERIFIER_CT, &manifest::to_hex(&ct)).await?;
+    set_setting(pool, SETTING_PASSPHRASE_SET, "true").await?;
     Ok(())
 }
 

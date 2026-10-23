@@ -1,47 +1,54 @@
 <script lang="ts">
-  // Block 4 + G1-ENC Schritt 2 — Onboarding/Unlock-Gate.
+  // Anmelde-Maske (Block 4, G1-ENC; seit Plan W6 mit zweitem Faktor).
   //
-  // Plan W5: Status, Einrichtung und Anmeldung laufen über `/api/auth/*`; die
-  // Anmeldung erzeugt die Browser-Sitzung. Meldet der Server später 401/423
-  // (Sitzung weg, Neustart, DB gesperrt), erscheint die Maske erneut.
-  //
-  // Seit der Bootstrap-Inversion ist die Passphrase das **Daten-Passwort**: die
-  // SQLite-DB wird damit verschlüsselt (SQLCipher, ADR 0035) und der DB-Pool
-  // entsteht erst NACH der Eingabe. Ohne Passwort lässt sich die App nicht
-  // öffnen — deshalb gibt es kein „Später"/Überspringen mehr. Solange nicht
-  // entsperrt ist, rendert das Layout die App-Seiten nicht (appState.ready).
+  // Die Passphrase ist das Daten-Passwort: sie entschlüsselt die Datenbank
+  // (SQLCipher, ADR 0035). Dazu kommt TOTP (E5). Abläufe:
+  // - Einrichtung: Setup-Token aus dem Container-Log + Passphrase → QR-Code
+  //   scannen → Code bestätigen → Einmal-Codes notieren.
+  // - TOTP-Neueinrichtung (nach `totp-reset`): Setup-Token + bisherige
+  //   Passphrase → QR → Code → Einmal-Codes.
+  // - Anmeldung: Passphrase + TOTP-Code (oder Einmal-Code).
+  // Meldet der Server später 401/423 (Sitzung abgelaufen, Neustart, DB
+  // gesperrt), erscheint die Maske erneut. Solange sie offen ist, rendert das
+  // Layout die App-Seiten nicht (appState.ready).
   import { onMount } from "svelte";
   import { appState } from "$lib/stores.svelte";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
+  import { flash } from "$lib/toast.svelte";
   import { onAuthRequired } from "$lib/transport";
   import {
-    backupNeedsOnboarding,
-    backupIsUnlocked,
-    backupSetupPassphrase,
-    backupUnlock,
+    authStatus,
+    authSetupOffer,
+    authSetupFinish,
+    authLogin,
+    type TotpOffer,
   } from "$lib/api";
 
-  type Status = "loading" | "setup" | "unlock" | "ready";
+  type Status = "loading" | "setup" | "totp_setup" | "login" | "ready";
+  type SetupStep = "token" | "qr" | "codes";
   let status = $state<Status>("loading");
+  let step = $state<SetupStep>("token");
+  let insecureHttp = $state(false);
+  let token = $state("");
   let pass = $state("");
   let confirm = $state("");
+  let code = $state("");
+  let useRecovery = $state(false);
+  let offer = $state<TotpOffer | null>(null);
+  let recoveryCodes = $state<string[]>([]);
+  let codesNoted = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
-  // R5-015: erstes Input-Element für Auto-Focus beim Wechsel auf setup/unlock.
   let firstInput = $state<HTMLInputElement | null>(null);
 
-  // App-Seiten dürfen erst laden, wenn entsperrt ist (Pool liegt im State).
   $effect(() => {
     appState.ready = status === "ready";
   });
 
-  // R5-014 + R5-015: sobald die Karte sichtbar ist (setup/unlock):
-  // Modal-Stack pushen (App-Shell `inert`) + Auto-Focus aufs erste
-  // Passphrase-Feld. queueMicrotask, damit `firstInput` nach dem Render
-  // schon gesetzt ist. Bei Wechsel zu `ready`/`loading` wird gepoppt.
+  // R5-014/R5-015: Modal-Stack (App-Shell `inert`) + Auto-Focus.
   $effect(() => {
-    if (status === "setup" || status === "unlock") {
+    if (status === "setup" || status === "totp_setup" || status === "login") {
       pushModal();
       queueMicrotask(() => firstInput?.focus());
       return () => popModal();
@@ -52,147 +59,154 @@
     refresh();
     // 401/423 aus einem beliebigen Aufruf → erneut anmelden.
     return onAuthRequired(() => {
-      if (status === "ready" || status === "loading") status = "unlock";
+      if (status === "ready" || status === "loading") refresh();
     });
   });
 
+  // Review W6: Passphrase nie über eine unsichere Verbindung schicken (der
+  // Server lehnt sie dort ab, aber dann war sie schon unterwegs).
+  function insecureContext(): boolean {
+    if (typeof window === "undefined" || window.isSecureContext || insecureHttp) return false;
+    error =
+      "Unsichere Verbindung: Anmelden nur über HTTPS (Reverse-Proxy) oder direkt am Server (localhost).";
+    return true;
+  }
+
+  function resetFields() {
+    pass = "";
+    confirm = "";
+    code = "";
+  }
+
   async function refresh() {
     try {
-      if (await backupNeedsOnboarding()) {
-        status = "setup";
+      const s = await authStatus();
+      insecureHttp = s.insecureHttp;
+      step = "token";
+      offer = null;
+      if (s.state === "setup_required") status = "setup";
+      else if (s.state === "totp_setup_required") status = "totp_setup";
+      else status = s.state === "ok" ? "ready" : "login";
+    } catch (e) {
+      error = String(e);
+      status = "login";
+    }
+  }
+
+  // Einrichtung Schritt 1: Token (+ Passphrase prüfen) → QR anfordern.
+  async function requestOffer() {
+    error = null;
+    if (insecureContext()) return;
+    if (status === "setup") {
+      // R5-005: Passphrase-Floor 16 Zeichen; Backend prüft dasselbe.
+      if (pass.length < 16) {
+        error =
+          "Das Passwort muss mindestens 16 Zeichen haben. " +
+          "Tipp: Nimm 3–4 zufällige Wörter (z. B. „korrekt-pferd-batterie-klammer“).";
         return;
       }
-      status = (await backupIsUnlocked()) ? "ready" : "unlock";
-    } catch (e) {
-      error = String(e);
-      status = "unlock";
+      if (pass !== confirm) {
+        error = "Die beiden Passwörter stimmen nicht überein.";
+        return;
+      }
     }
-  }
-
-  async function doSetup() {
-    error = null;
-    // R5-005: Passphrase-Floor 16 Zeichen (war 8). Verlust = Totalverlust by
-    // design (ADR 0035), 8-Zeichen-Passwörter sind Wörterbuch-Treffer-fähig.
-    // Backend erzwingt denselben Floor in `backup_setup_passphrase`.
-    if (pass.length < 16) {
-      error =
-        "Das Passwort muss mindestens 16 Zeichen haben. " +
-        "Tipp: Nimm 3–4 zufällige Wörter (z. B. „korrekt-pferd-batterie-klammer“).";
-      return;
-    }
-    if (pass !== confirm) {
-      error = "Die beiden Passwörter stimmen nicht überein.";
+    if (token.trim() === "") {
+      error = "Bitte den Setup-Token aus dem Container-Log eingeben.";
       return;
     }
     busy = true;
     try {
-      await backupSetupPassphrase(pass);
-      status = "ready";
+      offer = await authSetupOffer(token.trim());
+      step = "qr";
+      code = "";
     } catch (e) {
       error = String(e);
     } finally {
-      // R5-007: Klartext bei JEDEM Pfad raus aus dem $state — auch im
-      // Fehlerfall. Audit-Safe-Default: Re-Type beim nächsten Versuch.
-      pass = "";
-      confirm = "";
       busy = false;
     }
   }
 
-  async function doUnlock() {
+  // Einrichtung Schritt 2: Code bestätigen → DB anlegen bzw. TOTP neu.
+  async function finishSetup() {
     error = null;
     busy = true;
     try {
-      const ok = await backupUnlock(pass);
-      if (ok) {
+      const r = await authSetupFinish(token.trim(), pass, code.trim());
+      recoveryCodes = r.recoveryCodes;
+      codesNoted = false;
+      step = "codes";
+      resetFields();
+      token = "";
+    } catch (e) {
+      error = String(e);
+      code = "";
+    } finally {
+      busy = false;
+    }
+  }
+
+  function done() {
+    recoveryCodes = [];
+    offer = null;
+    step = "token";
+    status = "ready";
+  }
+
+  async function doLogin() {
+    error = null;
+    if (insecureContext()) {
+      resetFields();
+      return;
+    }
+    busy = true;
+    try {
+      const factor = useRecovery ? { recoveryCode: code.trim() } : { totpCode: code.trim() };
+      const r = await authLogin(pass, factor);
+      if (r.ok) {
         status = "ready";
+        if (r.failedAttempts && r.failedAttempts > 0) {
+          flash(`${r.failedAttempts} Fehlversuch(e) seit der letzten Anmeldung.`, "error");
+        }
+        if (r.usedRecoveryCode) {
+          flash(
+            `Einmal-Code verbraucht — noch ${r.recoveryLeft ?? 0} übrig. Neue Codes unter Einstellungen → Sicherheit.`,
+            "ok",
+          );
+        }
       } else {
-        error = "Falsches Passwort.";
+        error = "Anmeldung fehlgeschlagen.";
       }
     } catch (e) {
       error = String(e);
+      await refresh();
     } finally {
-      // R5-006: Klartext nicht über die await-Grenze hinaus halten — egal
-      // ob Erfolg, falsche Eingabe oder Exception.
-      pass = "";
+      // R5-006: Klartext nicht über die await-Grenze hinaus halten.
+      resetFields();
       busy = false;
     }
   }
-
-  // R5-015: `onKey`-Helper entfernt — Enter-Submit läuft jetzt nativ über
-  // das `<form onsubmit|preventDefault>`-Wrapping (auch aus dem ersten Feld).
 </script>
 
-{#if status === "setup" || status === "unlock"}
-  <!-- R5-015: role=dialog + aria-modal + aria-labelledby; Inhalt als <form>,
-       damit Enter aus jedem Input submitted (statt nur aus dem zweiten Feld
-       per onkeydown). novalidate + preventDefault, damit der Browser kein
-       eigenes Form-Verhalten dazwischenfunkt. -->
-  <div
-    class="overlay"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="backup-gate-title"
-  >
+{#if status === "setup" || status === "totp_setup" || status === "login"}
+  <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="backup-gate-title">
     <div class="modal-card">
-      {#if status === "setup"}
-        <h2 id="backup-gate-title">
-          Daten-Passwort festlegen <HelpAnchor slug="passphrase-einrichten" />
-        </h2>
-        <p>
-          Bevor du loslegst, leg ein <strong>Daten-Passwort</strong> fest. Damit wird
-          deine gesamte Buchhaltung auf diesem PC verschlüsselt — und auch deine
-          Backups. Du brauchst es ab jetzt bei jedem Start, um Klein.Buch zu öffnen.
+      {#if insecureHttp}
+        <p class="insecure" role="alert">
+          Unverschlüsselte Verbindung erlaubt (KLEIN_BUCH_INSECURE_HTTP) — nur für Tests.
         </p>
-        <p class="caveat">
-          Wichtig: Dieses Passwort wird <strong>nirgends gespeichert</strong> und kann
-          <strong>nicht zurückgesetzt</strong> werden. Vergisst du es, kommst du an
-          deine Daten und Backups nicht mehr heran. Schreib es dir an einem sicheren
-          Ort auf (z. B. in einem Passwort-Manager).
+      {/if}
+
+      {#if status === "login"}
+        <h2 id="backup-gate-title">Anmelden</h2>
+        <p>
+          Gib dein <strong>Daten-Passwort</strong> und den aktuellen Code deiner
+          Authenticator-App ein. Ohne beides bleiben deine Daten verschlüsselt.
         </p>
         <form
           novalidate
           onsubmit={(e) => {
             e.preventDefault();
-            doSetup();
-          }}
-        >
-          <label>
-            Passwort (mindestens 16 Zeichen — am besten 3–4 Wörter)
-            <input
-              bind:this={firstInput}
-              type="password"
-              bind:value={pass}
-              autocomplete="new-password"
-              disabled={busy}
-            />
-          </label>
-          <label>
-            Passwort wiederholen
-            <input
-              type="password"
-              bind:value={confirm}
-              autocomplete="new-password"
-              disabled={busy}
-            />
-          </label>
-          {#if error}<p class="err">{error}</p>{/if}
-          <button type="submit" class="primary" disabled={busy}>
-            {busy ? "Richte ein …" : "Festlegen & erstes Backup erstellen"}
-          </button>
-        </form>
-      {:else}
-        <h2 id="backup-gate-title">Willkommen zurück</h2>
-        <p>
-          Gib dein <strong>Daten-Passwort</strong> ein, um Klein.Buch zu öffnen. Ohne
-          das Passwort bleiben deine Daten verschlüsselt. Es gilt nur für diese
-          Sitzung — beim nächsten Start fragt die App erneut.
-        </p>
-        <form
-          novalidate
-          onsubmit={(e) => {
-            e.preventDefault();
-            doUnlock();
+            doLogin();
           }}
         >
           <label>
@@ -205,9 +219,139 @@
               disabled={busy}
             />
           </label>
+          <label>
+            {useRecovery ? "Einmal-Code" : "Code aus der Authenticator-App"}
+            <input
+              type="text"
+              bind:value={code}
+              inputmode={useRecovery ? "text" : "numeric"}
+              autocomplete="one-time-code"
+              disabled={busy}
+            />
+          </label>
+          <button type="button" class="link" onclick={() => (useRecovery = !useRecovery)}>
+            {useRecovery ? "Code aus der App verwenden" : "Gerät verloren? Einmal-Code verwenden"}
+          </button>
           {#if error}<p class="err">{error}</p>{/if}
           <button type="submit" class="primary" disabled={busy}>
-            {busy ? "Entsperre …" : "Öffnen"}
+            {busy ? "Melde an …" : "Anmelden"}
+          </button>
+        </form>
+      {:else if step === "codes"}
+        <h2 id="backup-gate-title">Einmal-Codes notieren</h2>
+        <p>
+          Mit diesen Codes kommst du hinein, falls dein Gerät mit der Authenticator-App
+          verloren geht — jeder Code gilt <strong>einmal</strong> und ersetzt nur den
+          App-Code, nicht das Passwort. Sie werden nur jetzt angezeigt.
+        </p>
+        <ul class="codes">
+          {#each recoveryCodes as c (c)}<li><code>{c}</code></li>{/each}
+        </ul>
+        <label class="check">
+          <input type="checkbox" bind:checked={codesNoted} />
+          Ich habe die Codes sicher notiert.
+        </label>
+        <button type="button" class="primary" disabled={!codesNoted} onclick={done}>Weiter</button>
+      {:else if step === "qr" && offer}
+        <h2 id="backup-gate-title">Authenticator-App verbinden</h2>
+        <p>
+          Scanne den QR-Code mit deiner Authenticator-App (z. B. Aegis, 2FAS, Google
+          Authenticator) und gib den angezeigten Code ein.
+        </p>
+        <div class="qr">{@html offer.qrSvg}</div>
+        <p class="secret">Schlüssel zum Abtippen: <code>{offer.secret}</code></p>
+        <form
+          novalidate
+          onsubmit={(e) => {
+            e.preventDefault();
+            finishSetup();
+          }}
+        >
+          <label>
+            Code aus der App
+            <input
+              bind:this={firstInput}
+              type="text"
+              bind:value={code}
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              disabled={busy}
+            />
+          </label>
+          {#if error}<p class="err">{error}</p>{/if}
+          <button type="submit" class="primary" disabled={busy}>
+            {busy
+              ? "Richte ein …"
+              : status === "setup"
+                ? "Einrichten & erstes Backup erstellen"
+                : "Zweiten Faktor einrichten"}
+          </button>
+        </form>
+      {:else}
+        <h2 id="backup-gate-title">
+          {status === "setup" ? "Klein.Buch einrichten" : "Zweiten Faktor neu einrichten"}
+          <HelpAnchor slug="passphrase-einrichten" />
+        </h2>
+        {#if status === "setup"}
+          <p>
+            Leg ein <strong>Daten-Passwort</strong> fest. Damit werden deine gesamte
+            Buchhaltung und deine Backups verschlüsselt; du brauchst es bei jeder
+            Anmeldung.
+          </p>
+          <p class="caveat">
+            Wichtig: Dieses Passwort wird <strong>nirgends gespeichert</strong> und kann
+            <strong>nicht zurückgesetzt</strong> werden. Vergisst du es, kommst du an
+            deine Daten und Backups nicht mehr heran.
+          </p>
+        {:else}
+          <p>
+            Der zweite Faktor wurde zurückgesetzt. Gib den Setup-Token aus dem
+            Container-Log und dein bisheriges <strong>Daten-Passwort</strong> ein.
+          </p>
+        {/if}
+        <form
+          novalidate
+          onsubmit={(e) => {
+            e.preventDefault();
+            requestOffer();
+          }}
+        >
+          <label>
+            Setup-Token (aus dem Container-Log)
+            <input
+              bind:this={firstInput}
+              type="text"
+              bind:value={token}
+              autocomplete="off"
+              spellcheck="false"
+              disabled={busy}
+            />
+          </label>
+          <label>
+            {status === "setup"
+              ? "Passwort (mindestens 16 Zeichen — am besten 3–4 Wörter)"
+              : "Daten-Passwort"}
+            <input
+              type="password"
+              bind:value={pass}
+              autocomplete={status === "setup" ? "new-password" : "current-password"}
+              disabled={busy}
+            />
+          </label>
+          {#if status === "setup"}
+            <label>
+              Passwort wiederholen
+              <input
+                type="password"
+                bind:value={confirm}
+                autocomplete="new-password"
+                disabled={busy}
+              />
+            </label>
+          {/if}
+          {#if error}<p class="err">{error}</p>{/if}
+          <button type="submit" class="primary" disabled={busy}>
+            {busy ? "Prüfe …" : "Weiter zum QR-Code"}
           </button>
         </form>
       {/if}
@@ -225,14 +369,15 @@
     justify-content: center;
     z-index: 2000;
   }
-  /* Modal-Karte (Overlay): bewusst eigener Stil, nicht globale .card.
-     Größere Tiefe, feste Breite, höherer Schatten — Overlay-Pattern. */
+  /* Modal-Karte (Overlay): bewusst eigener Stil, nicht globale .card. */
   .modal-card {
     background: var(--c-surface);
     border-radius: var(--r-xl);
     padding: 1.75rem;
     width: 32rem;
     max-width: calc(100vw - 2rem);
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   }
   .modal-card h2 {
@@ -243,7 +388,6 @@
     font-size: 0.92rem;
     line-height: 1.5;
   }
-  /* .warn-line entfernt — durch globales .caveat (tokens.css) ersetzt. */
   label {
     display: block;
     margin: 0.9rem 0 0.2rem;
@@ -251,7 +395,14 @@
     font-weight: 600;
     color: #374151;
   }
-  input {
+  label.check {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    font-weight: 500;
+  }
+  input[type="password"],
+  input[type="text"] {
     width: 100%;
     box-sizing: border-box;
     padding: 0.55rem 0.7rem;
@@ -263,13 +414,43 @@
     color: #991b1b;
     font-weight: 600;
   }
+  .insecure {
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+    font-weight: 600;
+  }
+  .qr {
+    display: flex;
+    justify-content: center;
+    margin: 0.5rem 0;
+  }
+  .qr :global(svg) {
+    width: 220px;
+    height: 220px;
+  }
+  .secret code {
+    word-break: break-all;
+  }
+  .codes {
+    columns: 2;
+    padding-left: 1.2rem;
+    font-size: 1rem;
+  }
+  button.link {
+    background: none;
+    border: none;
+    padding: 0.3rem 0;
+    color: var(--c-primary-700);
+    cursor: pointer;
+    font-size: 0.85rem;
+    text-decoration: underline;
+  }
   button.primary {
     margin-top: 1rem;
     width: 100%;
     padding: 0.6rem;
-    /* R5-012: Tailwind-Blau (#2563eb) durch Petrol-Marke ersetzt
-       (Memory `feedback_design_direction`). Onboarding-Flow ist der
-       allererste UI-Eindruck — der trug die falsche Farbe. */
     background: var(--c-primary-600);
     color: #fff;
     border: none;

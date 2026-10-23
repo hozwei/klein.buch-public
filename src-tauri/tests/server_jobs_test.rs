@@ -96,7 +96,7 @@ async fn draft_invoice(srv: &TestServer) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn aborted_lock_request_finishes_and_replays() {
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
+    let cookie = setup(&srv).await;
     let id = draft_invoice(&srv).await;
     let body = serde_json::json!({ "id": id }).to_string();
 
@@ -205,7 +205,7 @@ async fn aborted_lock_request_finishes_and_replays() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn job_status_requires_session_and_unknown_is_404() {
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
+    let cookie = setup(&srv).await;
     let r = call(
         &srv.app,
         &cookie,
@@ -233,7 +233,7 @@ async fn job_status_requires_session_and_unknown_is_404() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unlock_is_refused_when_archive_paths_do_not_match() {
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
+    let cookie = setup(&srv).await;
     let pool = srv.state.ctx.pool().unwrap();
     sqlx::query(
         "INSERT INTO archive_entries
@@ -252,7 +252,7 @@ async fn unlock_is_refused_when_archive_paths_do_not_match() {
     srv.state.ctx.take_pool().unwrap().close().await;
     srv.state.ctx.session.clear();
 
-    let r = login(&srv.app, PASS).await;
+    let r = login(&srv, PASS).await;
     assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
     assert_eq!(r.json()["code"], "unlock_refused");
     assert!(!srv.state.ctx.is_unlocked(), "bleibt gesperrt");
@@ -280,6 +280,14 @@ async fn unlock_is_refused_when_archive_paths_do_not_match() {
 #[tokio::test(start_paused = true)]
 async fn restart_after_restore_blocks_writes_and_shuts_down() {
     let srv = test_server();
+    // Sitzungen gelten nur mit eingerichtetem zweiten Faktor (W6).
+    srv.state
+        .totp
+        .install(
+            &klein_buch_lib::server::totp::generate_secret(),
+            1_800_000_000,
+        )
+        .unwrap();
     let token = srv.state.sessions.create();
     srv.state.request_restart();
     assert!(srv.state.is_stopping());

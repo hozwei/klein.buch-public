@@ -2752,16 +2752,20 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "comemo",
+ "data-encoding",
  "ecow",
+ "hmac 0.12.1",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "ipnet",
  "keyring",
  "lettre",
  "libsqlite3-sys",
  "log",
  "lopdf",
  "pulldown-cmark",
+ "qrcode",
  "quick-xml 0.36.2",
  "rand 0.8.6",
  "reqwest",
@@ -2769,8 +2773,10 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
+ "sha1 0.10.6",
  "sha2 0.10.9",
  "sqlx",
+ "subtle",
  "tempfile",
  "tera",
  "thiserror 1.0.69",
@@ -3986,6 +3992,12 @@ name = "qcms"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edecfcd5d755a5e5d98e24cf43113e7cdaec5a070edd0f6b250c03a573da30fa"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

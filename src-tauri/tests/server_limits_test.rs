@@ -59,7 +59,7 @@ async fn byte_by_byte_headers_are_cut_after_timeout() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn parallel_previews_are_limited() {
     let srv = test_server();
-    let cookie = setup(&srv.app).await;
+    let cookie = setup(&srv).await;
     let mut tasks = Vec::new();
     for _ in 0..50 {
         let app = srv.app.clone();

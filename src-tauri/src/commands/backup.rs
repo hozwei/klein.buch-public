@@ -84,13 +84,9 @@ pub struct BackupNeedsOnboardingArgs {}
 /// lässt sich vor der Passphrase gar nicht öffnen (chicken-and-egg).
 ///
 /// - **Keine DB** → Onboarding (legt die DB verschlüsselt an).
-/// - **Verschlüsselte DB** → kein Onboarding (hat per Konstruktion eine
-///   Passphrase) → Entsperren.
-/// - **Klartext-DB** (pre-G1-Bestand): Onboarding nur, wenn dort noch **keine**
-///   Passphrase gesetzt ist (legitimer Alt-Zustand: DB angelegt, Passphrase nie
-///   eingerichtet). Sonst Entsperren. Das verhindert ein Aussperren von
-///   Bestands-Installationen, in denen die DB existiert, aber noch kein
-///   Verifier geschrieben wurde.
+/// - **DB vorhanden** → kein Onboarding (sie ist per Konstruktion
+///   verschlüsselt; der Klartext-Übergangspfad ist mit W6 entfallen, eine
+///   Klartext-DB verweigert schon den Serverstart).
 pub async fn backup_needs_onboarding(
     ctx: &Arc<AppCtx>,
     _args: BackupNeedsOnboardingArgs,
@@ -100,16 +96,7 @@ pub async fn backup_needs_onboarding(
         ensure_no_pending_restore(&paths)?;
         return Ok(true);
     }
-    if !db::db_file_is_plaintext(&paths.db_file) {
-        return Ok(false);
-    }
-    // Klartext-Übergangs-DB: ohne Key öffnen und prüfen, ob eine Passphrase
-    // gesetzt ist. (Kein open_and_init: keine Migrationen für eine reine
-    // Status-Abfrage; app_settings existiert auf jeder pre-G1-DB.)
-    let pool = db::open_pool(&paths.db_file, None).await?;
-    let has = backup::is_passphrase_set(&pool).await.unwrap_or(false);
-    pool.close().await;
-    Ok(!has)
+    Ok(false)
 }
 
 /// Argumente von [`backup_is_unlocked`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -186,10 +173,8 @@ pub struct BackupSetupPassphraseArgs {
 /// vor dem Onboarding gibt es keinen Pool. Sie öffnet ihn selbst (Passphrase VOR
 /// dem DB-Open) und hängt ihn ein.
 ///
-/// G1-ENC Schritt 3: Wird eine bestehende **Klartext**-DB ohne Passphrase
-/// adoptiert (legitimer pre-G1-Zustand), so wird sie nach dem Setzen des
-/// Verifiers einmalig nach SQLCipher migriert (inkl. Pflicht-Pre-Migration-
-/// Backup). Eine frisch verschlüsselt angelegte DB durchläuft das als No-op.
+/// Seit W6 nur noch für eine frische Instanz (keine DB); das Adoptieren einer
+/// Klartext-Bestands-DB ist entfallen (E17).
 pub async fn backup_setup_passphrase(
     ctx: &Arc<AppCtx>,
     args: BackupSetupPassphraseArgs,
@@ -210,39 +195,17 @@ pub async fn backup_setup_passphrase(
         ));
     }
 
-    let pool = if paths.db_file.exists() {
-        // Bestehende Klartext-DB ohne Passphrase adoptieren (legitimer pre-G1-
-        // Zustand). Sie wird nach dem Setzen des Verifiers unten in Schritt 3
-        // verschlüsselt. Eine bereits verschlüsselte oder bereits eingerichtete
-        // DB gehört zum Entsperren, nicht zum Onboarding.
-        if !db::db_file_is_plaintext(&paths.db_file) {
-            return Err(Error::Backup(
-                "Datenbank ist bereits verschlüsselt — bitte entsperren statt neu einrichten."
-                    .into(),
-            ));
-        }
-        let pool = db::open_and_init(ctx, None).await?;
-        if backup::is_passphrase_set(&pool).await? {
-            pool.close().await;
-            return Err(Error::Backup(
-                "Es existiert bereits eine Datenbank — bitte entsperren statt neu einrichten."
-                    .into(),
-            ));
-        }
-        pool
-    } else {
-        // Frische DB verschlüsselt anlegen (Key = Passphrase) + Migrationen.
-        db::open_and_init(ctx, Some(passphrase.as_str())).await?
-    };
+    if paths.db_file.exists() {
+        return Err(Error::Backup(
+            "Es existiert bereits eine Datenbank — bitte entsperren statt neu einrichten.".into(),
+        ));
+    }
+    // Frische DB verschlüsselt anlegen (Key = Passphrase) + Migrationen.
+    let pool = db::open_and_init(ctx, Some(passphrase.as_str())).await?;
 
     // Verifier + passphrase_set + Session setzen (im jetzt offenen Pool).
     backup::setup_passphrase(&pool, session, &passphrase).await?;
 
-    // G1-ENC Schritt 3: Eine adoptierte Klartext-Bestands-DB jetzt einmalig
-    // verschlüsseln (inkl. Pflicht-Pre-Migration-Backup). Eine frisch
-    // verschlüsselt angelegte DB ist hier ein No-op. Erst danach den (nun
-    // verschlüsselten) Pool in den State hängen.
-    let pool = db::migrate_plaintext_to_encrypted(ctx, pool, &passphrase).await?;
     ctx.set_pool(pool.clone());
 
     // Scheduler erst jetzt starten (Pool liegt im State).
@@ -262,13 +225,9 @@ pub struct BackupUnlockArgs {
 /// Entsperrt die App: öffnet den DB-Pool mit der Passphrase und hängt ihn in den
 /// State. Liefert `true` bei korrekter Passphrase, `false` bei falscher.
 ///
-/// Zwei Pfade, je nach DB-Format:
-/// - **Klartext-Bestands-DB**: ohne Key öffnen, Passphrase gegen den gespeicherten
-///   Verifier prüfen. Bei korrekter Passphrase wird die DB **einmalig nach
-///   SQLCipher migriert** (G1-ENC Schritt 3, inkl. Pflicht-Pre-Migration-Backup),
-///   und der verschlüsselte Pool übernommen.
-/// - **Verschlüsselte DB**: mit Key öffnen; ein Probe-Read entscheidet (SQLCipher
-///   ist selbst der Verifier). Falscher Key → `false`, ohne den State zu ändern.
+/// Die DB wird mit Key geöffnet; ein Probe-Read entscheidet (SQLCipher ist
+/// selbst der Verifier). Falscher Key → `false`, ohne den State zu ändern.
+/// Eine Klartext-DB wird seit W6 nicht mehr geöffnet (E17).
 ///
 /// Bei Erfolg: Pool einhängen, Session entsperren, Scheduler starten, ein
 /// fälliges Auto-Daily-Backup auslösen.
@@ -283,41 +242,16 @@ pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<
         ));
     }
 
-    let pool = if db::db_file_is_plaintext(&paths.db_file) {
-        // Klartext-Übergangspfad: Pool ohne Key, Passphrase via Verifier prüfen.
-        let pool = db::open_and_init(ctx, None).await?;
-        if !backup::verify_passphrase(&pool, &passphrase).await? {
-            // R2-026: Pflicht-Audit (Security-Event). Wenn das Schreiben
-            // fehlschlägt, lieber zusätzlich loggen und trotzdem die Unlock-
-            // Antwort zurückgeben (sonst wird der User bei DB-Lock-Timeout
-            // permanent ausgesperrt) — aber den Fehler nicht stillschweigend
-            // verschlucken.
-            if let Err(e) = crate::db::repo::audit_log::append(
-                &pool,
-                "backup.unlock.failed",
-                "backup",
-                "passphrase",
-                None,
-            )
-            .await
-            {
-                tracing::error!("audit_log.backup.unlock.failed-Schreiben fehlgeschlagen: {e}");
-            }
-            pool.close().await;
-            return Ok(false);
-        }
-        // G1-ENC Schritt 3: Passphrase ist korrekt → die Klartext-Bestands-DB
-        // jetzt einmalig verschlüsseln (inkl. Pflicht-Pre-Migration-Backup) und
-        // den verschlüsselten Pool übernehmen. Beim nächsten Start greift der
-        // verschlüsselte Zweig unten.
-        db::migrate_plaintext_to_encrypted(ctx, pool, &passphrase).await?
-    } else {
-        let Some(pool) = open_encrypted(&paths, &passphrase).await? else {
-            return Ok(false);
-        };
-        db::run_migrations(ctx, &pool).await?;
-        pool
+    if db::db_file_is_plaintext(&paths.db_file) {
+        // Der Klartext-Übergangspfad ist mit W6 entfallen (ADR 0039, E17).
+        return Err(Error::Backup(
+            "Unverschlüsselte Datenbank — wird nicht geöffnet (ADR 0035/0039).".into(),
+        ));
+    }
+    let Some(pool) = open_encrypted(&paths, &passphrase).await? else {
+        return Ok(false);
     };
+    db::run_migrations(ctx, &pool).await?;
     activate_unlocked(ctx, pool, passphrase).await?;
     Ok(true)
 }
@@ -349,6 +283,8 @@ pub async fn activate_unlocked(
 ) -> Result<()> {
     ctx.set_pool(pool.clone());
     ctx.session.set(passphrase);
+    // Nach „Datenbank sperren“ (W6) ist der Scheduler pausiert.
+    crate::scheduler::tick::resume(ctx).await;
     crate::scheduler::tick::ensure_started(ctx);
     // R2-026: Pflicht-Audit (Security-Event), Fehler propagieren.
     crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)

@@ -265,7 +265,8 @@
         body:
           "Wenn du ein älteres Backup wiederherstellst, gehen seither erfasste" +
           " Belege verloren. Sicherheitshalber wird vorher automatisch ein Backup" +
-          " des aktuellen Stands erstellt.",
+          " des aktuellen Stands erstellt. Nach dem Restore gilt die Passphrase" +
+          " dieses Backups.",
         confirmLabel: "Wiederherstellen",
         danger: true,
       }))

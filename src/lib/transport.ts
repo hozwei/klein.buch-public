@@ -8,7 +8,9 @@
 // `GET /api/jobs/{id}` abgeholt. Netzwerkfehler und 503 `timeout`/`busy`
 // werden mit demselben Schlüssel wiederholt; der Server führt eine Aktion
 // dadurch höchstens einmal aus und liefert bei `timeout` das Ergebnis der
-// noch laufenden ersten Ausführung.
+// noch laufenden ersten Ausführung. 403 `reauth_required` (Plan W6) öffnet den
+// Re-Auth-Dialog (`setReauthHandler`) und wiederholt danach mit demselben
+// Schlüssel.
 
 export const REQUEST_HEADER = "X-KleinBuch-Request";
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
@@ -27,6 +29,25 @@ export function onAuthRequired(listener: AuthListener): () => void {
 
 function notifyAuth(reason: AuthReason) {
   for (const l of listeners) l(reason);
+}
+
+/** Zeigt den Re-Auth-Dialog; `true`, wenn die Re-Auth gelungen ist. */
+type ReauthHandler = () => Promise<boolean>;
+let reauthHandler: ReauthHandler | null = null;
+
+/** Registriert den Re-Auth-Dialog (einmal, im Layout). */
+export function setReauthHandler(handler: ReauthHandler | null) {
+  reauthHandler = handler;
+}
+
+/** 403 mit `reauth_required`? */
+async function needsReauth(res: Response): Promise<boolean> {
+  if (res.status !== 403) return false;
+  try {
+    return (await res.clone().json())?.code === "reauth_required";
+  } catch {
+    return false;
+  }
 }
 
 /** Zufälliger Schlüssel (auch ohne `crypto.randomUUID`). */
@@ -114,6 +135,48 @@ async function retryableAfter(res: Response): Promise<number | null> {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 10) : 2;
 }
 
+/**
+ * Schickt eine Anfrage; wiederholt sie mit demselben Schlüssel bei 503
+ * `timeout`/`busy` und nach einer gelungenen Re-Auth (403 `reauth_required`).
+ */
+async function sendWithRetries(
+  url: string,
+  init: RequestInit,
+  opts: { retryTimeout?: boolean; networkRetries?: boolean } = {},
+): Promise<Response> {
+  const retryTimeout = opts.retryTimeout ?? true;
+  const send = opts.networkRetries === false ? sendOnce : fetchWithRetry;
+  const deadline = Date.now() + RETRY_503_MS;
+  let reauthTried = false;
+  let res = await send(url, init);
+  for (;;) {
+    const wait = retryTimeout ? await retryableAfter(res) : null;
+    if (wait !== null && Date.now() < deadline) {
+      await sleep(wait * 1000);
+      res = await send(url, init);
+      continue;
+    }
+    if (!reauthTried && reauthHandler && (await needsReauth(res))) {
+      reauthTried = true;
+      if (await reauthHandler()) {
+        res = await send(url, init);
+        continue;
+      }
+    }
+    return res;
+  }
+}
+
+/** Genau ein Versuch (Auth-POSTs: kein blindes Wiederholen, ein TOTP-Code
+ *  gilt nur einmal). */
+async function sendOnce(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    throw `Server nicht erreichbar (${String(e)}).`;
+  }
+}
+
 /** Ruft einen Command-Kern auf (Ersatz für Tauris `invoke`). */
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const init: RequestInit = {
@@ -127,14 +190,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     body: JSON.stringify(args ?? {}),
   };
   const url = `/api/cmd/${encodeURIComponent(cmd)}`;
-  const deadline = Date.now() + RETRY_503_MS;
-  let res = await fetchWithRetry(url, init);
-  for (;;) {
-    const wait = await retryableAfter(res);
-    if (wait === null || Date.now() >= deadline) break;
-    await sleep(wait * 1000);
-    res = await fetchWithRetry(url, init);
-  }
+  const res = await sendWithRetries(url, init);
   if (res.status === 202) {
     const { jobId } = await res.json();
     return pollJob<T>(jobId);
@@ -147,40 +203,150 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   return (text === "" ? undefined : JSON.parse(text)) as T;
 }
 
-// ---- Anmeldung (Plan W5.4; W6 ergänzt TOTP, Setup-Token, Abmelden) ---------
+// ---- Anmeldung (Plan W6: Setup-Token, TOTP + Passphrase, Sitzungen) --------
 
-export type AuthState = "setup_required" | "login_required" | "ok";
+export type AuthState = "setup_required" | "totp_setup_required" | "login_required" | "ok";
 
-export async function authStatus(): Promise<AuthState> {
+export interface AuthStatus {
+  state: AuthState;
+  /** Server läuft mit KLEIN_BUCH_INSECURE_HTTP=1 (nur Tests). */
+  insecureHttp: boolean;
+}
+
+export async function authStatus(): Promise<AuthStatus> {
   const res = await fetchWithRetry("/api/auth/status", {
     method: "GET",
     credentials: "same-origin",
   });
   if (!res.ok) throw await errorMessage(res);
-  return (await res.json()).state as AuthState;
+  const body = await res.json();
+  return { state: body.state as AuthState, insecureHttp: body.insecureHttp === true };
 }
 
-async function postAuth(path: string, body: unknown): Promise<Response> {
-  return fetchWithRetry(path, {
+function authInit(body: unknown): RequestInit {
+  return {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", [REQUEST_HEADER]: "1" },
     body: JSON.stringify(body),
-  });
+  };
 }
 
-/** Ersteinrichtung mit Passphrase; legt die Sitzung an. */
-export async function authSetup(passphrase: string): Promise<void> {
-  const res = await postAuth("/api/auth/setup", { passphrase });
-  if (!res.ok) throw await errorMessage(res);
+async function postAuth(path: string, body: unknown): Promise<Response> {
+  return sendOnce(path, authInit(body));
 }
 
-/** Anmelden/Entsperren; `false` bei falscher Passphrase. */
-export async function authLogin(passphrase: string): Promise<boolean> {
-  const res = await postAuth("/api/auth/login", { passphrase });
-  if (res.status === 401) return false;
-  if (!res.ok) throw await errorMessage(res);
+/** Wie `postAuth`, mit Re-Auth-Dialog bei 403 `reauth_required`; keine
+ *  Wiederholung nach 503 `timeout` (der Server führt die Aktion zu Ende). */
+async function postAuthReauth(path: string, body: unknown): Promise<Response> {
+  return sendWithRetries(path, authInit(body), { retryTimeout: false, networkRetries: false });
+}
+
+async function jsonOrThrow<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    handleAuthStatus(res);
+    throw await errorMessage(res);
+  }
+  return (await res.json()) as T;
+}
+
+/** Neues TOTP-Geheimnis mit QR-Code (Einrichtung bzw. Erneuerung). */
+export interface TotpOffer {
+  secret: string;
+  otpauthUri: string;
+  qrSvg: string;
+}
+
+/** Einrichtung Schritt 1: Setup-Token prüfen, TOTP-Geheimnis anfordern. */
+export async function authSetupOffer(setupToken: string): Promise<TotpOffer> {
+  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, step: "totp" }));
+}
+
+/** Einrichtung Schritt 2: atomar mit Passphrase und TOTP-Bestätigung. */
+export async function authSetupFinish(
+  setupToken: string,
+  passphrase: string,
+  totpCode: string,
+): Promise<{ recoveryCodes: string[] }> {
+  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, passphrase, totpCode }));
+}
+
+/** Zweiter Faktor: TOTP-Code oder Einmal-Code. */
+export interface SecondFactor {
+  totpCode?: string;
+  recoveryCode?: string;
+}
+
+export interface LoginResult {
+  ok: boolean;
+  failedAttempts?: number;
+  recoveryLeft?: number;
+  usedRecoveryCode?: boolean;
+}
+
+/** Anmelden; `ok:false` bei falschen Angaben (immer dieselbe Meldung). */
+export async function authLogin(passphrase: string, factor: SecondFactor): Promise<LoginResult> {
+  const res = await postAuth("/api/auth/login", { passphrase, ...factor });
+  if (res.status === 401) return { ok: false };
+  const body = await jsonOrThrow<Omit<LoginResult, "ok">>(res);
+  return { ok: true, ...body };
+}
+
+/** Re-Auth der Sitzung (5 min); `false` bei falschen Angaben. Eine
+ *  abgelaufene Sitzung (401 `unauthenticated`) führt zur Anmelde-Maske. */
+export async function authReauth(passphrase: string, factor: SecondFactor): Promise<boolean> {
+  const res = await postAuth("/api/auth/reauth", { passphrase, ...factor });
+  if (res.status === 401) {
+    const body = await res.clone().json().catch(() => null);
+    if (body?.code === "unauthenticated") {
+      notifyAuth("login");
+      throw typeof body.message === "string" ? body.message : "Nicht angemeldet.";
+    }
+    return false;
+  }
+  await jsonOrThrow(res);
   return true;
+}
+
+export async function authLogout(): Promise<void> {
+  await jsonOrThrow(await postAuth("/api/auth/logout", {}));
+}
+
+/** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. */
+export async function authLock(): Promise<void> {
+  await jsonOrThrow(await postAuth("/api/auth/lock", {}));
+}
+
+export async function authSecurity(): Promise<{ recoveryLeft: number; insecureHttp: boolean }> {
+  const res = await fetchWithRetry("/api/auth/security", {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  return jsonOrThrow(res);
+}
+
+export async function authTotpRenewOffer(): Promise<TotpOffer> {
+  return jsonOrThrow(await postAuthReauth("/api/auth/totp/renew", { step: "totp" }));
+}
+
+export async function authTotpRenewFinish(totpCode: string): Promise<string[]> {
+  const body = await jsonOrThrow<{ recoveryCodes: string[] }>(
+    await postAuthReauth("/api/auth/totp/renew", { totpCode }),
+  );
+  return body.recoveryCodes;
+}
+
+export async function authRecoveryRenew(): Promise<string[]> {
+  const body = await jsonOrThrow<{ recoveryCodes: string[] }>(
+    await postAuthReauth("/api/auth/recovery/renew", {}),
+  );
+  return body.recoveryCodes;
+}
+
+export async function authChangePassphrase(
+  newPassphrase: string,
+): Promise<{ backupStarted: boolean }> {
+  return jsonOrThrow(await postAuthReauth("/api/auth/passphrase", { newPassphrase }));
 }
 
 // ---- Neustart nach Restore ---------------------------------------------------

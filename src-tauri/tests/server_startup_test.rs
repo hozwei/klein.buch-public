@@ -192,6 +192,7 @@ async fn binary_exits_nonzero_before_bind() {
         .env("KLEIN_BUCH_RESOURCE_DIR", &paths.resource_dir)
         .env("KLEIN_BUCH_WEB_DIR", &paths.web_dir)
         .env("KLEIN_BUCH_LISTEN", format!("127.0.0.1:{port}"))
+        .env("KLEIN_BUCH_PUBLIC_URL", format!("http://127.0.0.1:{port}"))
         .env("KLEIN_BUCH_ALLOW_UNMOUNTED", "1")
         .env_remove("KLEIN_BUCH_SIDECAR_MOCK")
         .output()

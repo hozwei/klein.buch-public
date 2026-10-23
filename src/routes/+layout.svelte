@@ -7,9 +7,12 @@
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import AboutDialog from "$lib/AboutDialog.svelte";
   import XmlViewerDialog from "$lib/XmlViewerDialog.svelte";
+  import ReauthDialog from "$lib/ReauthDialog.svelte";
+  import { confirmDialog } from "$lib/confirm.svelte";
+  import { flash } from "$lib/toast.svelte";
   import { appState } from "$lib/stores.svelte";
   import { modalStack } from "$lib/modalStack.svelte";
-  import { notificationsUnreadCount, appInfo } from "$lib/api";
+  import { notificationsUnreadCount, appInfo, authLogout, authLock } from "$lib/api";
   import { openAboutDialog } from "$lib/aboutModal.svelte";
   import { formatVersionDisplay } from "$lib/version";
   let { children } = $props();
@@ -96,7 +99,38 @@
       '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
     help: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   };
+
+  // Plan W6: Abmelden beendet nur diese Sitzung; „Datenbank sperren“ schließt
+  // die Datenbank und beendet alle Sitzungen (danach ist die Anmeldung mit
+  // Passwort + App-Code nötig). Danach lädt die Seite neu → Anmelde-Maske.
+  async function logout() {
+    try {
+      await authLogout();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+    location.reload();
+  }
+
+  async function lockDatabase() {
+    const ok = await confirmDialog({
+      title: "Datenbank sperren?",
+      body:
+        "Die Datenbank wird geschlossen und alle angemeldeten Geräte werden abgemeldet. " +
+        "Geplante Aufgaben (Abo-Rechnungen, Backups) pausieren bis zur nächsten Anmeldung.",
+      confirmLabel: "Sperren",
+    });
+    if (!ok) return;
+    try {
+      await authLock();
+      location.reload();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+  }
 
   const nav: Array<{ href: string; label: string; icon: string }> = [
     { href: "/", label: "Start", icon: "home" },
@@ -210,6 +244,34 @@
           <span class="nav-label">Über</span>
         </button>
       </li>
+      <li>
+        <button type="button" class="nav-button" onclick={lockDatabase}>
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true">{@html ICONS.lock}</svg>
+          <span class="nav-label">Datenbank sperren</span>
+        </button>
+      </li>
+      <li>
+        <button type="button" class="nav-button" onclick={logout}>
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true">{@html ICONS.logout}</svg>
+          <span class="nav-label">Abmelden</span>
+        </button>
+      </li>
     </ul>
     <!--
       Sidebar-Footer (G4.1-Fix): reine Versions-Anzeige, unten gepinnt
@@ -230,6 +292,7 @@
 {/if}
 
 <BackupGate />
+<ReauthDialog />
 
 <!-- Global, einmalig: app-weites Feedback (Toast) + Bestätigungs-Dialog +
      statischer „Über"-Dialog (G2-DOC.3.5). -->

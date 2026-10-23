@@ -1,12 +1,16 @@
 //! Gemeinsamer Server-Zustand und Zustandsautomat der Instanz (Plan §3, W5.4).
 //!
 //! `setup` (keine DB) → `locked` (DB vorhanden, kein Pool, kein Scheduler) ↔
-//! `unlocked` (Pool offen). Browser-Sitzungen sind davon getrennt; im W5-Stand
-//! entsteht eine Sitzung nur zusammen mit dem Entsperren bzw. Einrichten.
+//! `unlocked` (Pool offen). Browser-Sitzungen sind davon getrennt (Plan §3):
+//! sie entstehen beim Einrichten und Anmelden, enden per Timeout oder Abmelden;
+//! „Datenbank sperren“ schließt den Pool und beendet alle Sitzungen.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
+
+use axum::http::HeaderMap;
+use subtle::ConstantTimeEq;
 
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -15,7 +19,10 @@ use super::headers::Csp;
 use super::idempotency::IdempotencyStore;
 use super::jobs::JobRegistry;
 use super::limits::Admission;
-use super::session::SessionStore;
+use super::policy::HttpPolicy;
+use super::ratelimit::RateLimiter;
+use super::session::{SessionId, SessionStore};
+use super::totp::TotpStore;
 use crate::app_ctx::AppCtx;
 
 /// Zustand der Instanz.
@@ -41,7 +48,20 @@ impl InstanceState {
 pub const RESTART_GRACE: Duration = Duration::from_secs(10);
 /// Höchstens so lange wartet das Herunterfahren auf laufende Jobs.
 pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(600);
+/// So lange warten „Datenbank sperren“ und „Passphrase ändern“ auf laufende
+/// Aktionen, bevor sie mit 503 abbrechen.
+pub const DB_GATE_WAIT: Duration = Duration::from_secs(60);
 
+/// Setup-Token und ausstehende TOTP-Geheimnisse (Plan W6).
+#[derive(Default)]
+pub struct SetupState {
+    /// 128-bit-Token aus dem Container-Log (pro Start neu, nach Erfolg ungültig).
+    token: Option<String>,
+    /// Geheimnis der laufenden Einrichtung (an den Token gebunden).
+    pending_setup: Option<Vec<u8>>,
+    /// Geheimnis einer laufenden TOTP-Neueinrichtung (an die Sitzung gebunden).
+    pending_renew: Option<(SessionId, Vec<u8>)>,
+}
 pub struct ServerState {
     pub ctx: Arc<AppCtx>,
     pub sessions: SessionStore,
@@ -61,10 +81,29 @@ pub struct ServerState {
     restore_running: AtomicBool,
     /// Exklusive Sperre auf `/data/.klein-buch.lock` (ein Prozess je Instanz).
     _instance_lock: Option<std::fs::File>,
+    /// HTTP-Policy (öffentliche URL, vertraute Proxys, unsicheres HTTP).
+    pub policy: HttpPolicy,
+    /// Zweiter Faktor (`/data/auth/totp.json`).
+    pub totp: TotpStore,
+    /// Rate-Limit für Anmeldung, Einrichtung, Re-Auth.
+    pub ratelimit: RateLimiter,
+    setup: Mutex<SetupState>,
+    /// Lesend gehalten von jedem laufenden Command/Job; schreibend von
+    /// „Datenbank sperren“ und „Passphrase ändern“ (warten auf laufende Arbeit).
+    pub db_gate: tokio::sync::RwLock<()>,
+    /// Verschiebung der TOTP-Uhr in Sekunden (nur Tests).
+    totp_clock_offset: AtomicI64,
 }
 
 impl ServerState {
-    pub fn new(ctx: Arc<AppCtx>, csp: Csp, instance_lock: Option<std::fs::File>) -> Arc<Self> {
+    pub fn new(
+        ctx: Arc<AppCtx>,
+        csp: Csp,
+        instance_lock: Option<std::fs::File>,
+        policy: HttpPolicy,
+        ratelimit: RateLimiter,
+    ) -> Arc<Self> {
+        let totp = TotpStore::new(&ctx.paths.data_dir);
         Arc::new(Self {
             ctx,
             sessions: SessionStore::default(),
@@ -78,7 +117,111 @@ impl ServerState {
             restart_pending: AtomicBool::new(false),
             restore_running: AtomicBool::new(false),
             _instance_lock: instance_lock,
+            policy,
+            totp,
+            ratelimit,
+            setup: Mutex::new(SetupState::default()),
+            db_gate: tokio::sync::RwLock::new(()),
+            totp_clock_offset: AtomicI64::new(0),
         })
+    }
+
+    fn setup_state(&self) -> std::sync::MutexGuard<'_, SetupState> {
+        self.setup.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Braucht die Instanz einen Setup-Token? (keine DB oder kein TOTP)
+    pub fn needs_setup_token(&self) -> bool {
+        self.instance_state() == InstanceState::Setup || !self.totp.exists()
+    }
+
+    /// Erzeugt (falls nötig) einen Setup-Token und gibt ihn als eigene Zeile
+    /// auf stderr aus — nur dort, nie über `tracing` (Plan W6, Log-Test).
+    pub fn ensure_setup_token(&self) {
+        let mut s = self.setup_state();
+        if s.token.is_some() {
+            return;
+        }
+        let mut raw = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut raw);
+        let token = data_encoding::BASE32_NOPAD.encode(&raw);
+        eprintln!(
+            "\n=== Klein.Buch: Einrichtung nötig ===\nSetup-Token: {token}\n             (gilt bis zum nächsten Neustart; im Browser zusammen mit Passphrase und TOTP eingeben)\n"
+        );
+        tracing::warn!(
+            "Einrichtung nötig — Setup-Token steht als eigene Zeile im Container-Log (stderr)"
+        );
+        s.token = Some(token);
+        s.pending_setup = None;
+    }
+
+    /// Prüft den Setup-Token konstantzeitig.
+    pub fn setup_token_matches(&self, candidate: &str) -> bool {
+        let s = self.setup_state();
+        let Some(token) = s.token.as_deref() else {
+            return false;
+        };
+        let candidate = candidate.trim().to_ascii_uppercase();
+        token.len() == candidate.len() && bool::from(token.as_bytes().ct_eq(candidate.as_bytes()))
+    }
+
+    /// Aktueller Setup-Token (Tests lesen ihn statt des Logs).
+    #[doc(hidden)]
+    pub fn setup_token_for_tests(&self) -> Option<String> {
+        self.setup_state().token.clone()
+    }
+
+    /// Ausstehendes Geheimnis der Einrichtung setzen bzw. lesen.
+    pub fn set_pending_setup(&self, secret: Vec<u8>) {
+        self.setup_state().pending_setup = Some(secret);
+    }
+
+    pub fn pending_setup(&self) -> Option<Vec<u8>> {
+        self.setup_state().pending_setup.clone()
+    }
+
+    /// Einrichtung abgeschlossen: Token und ausstehendes Geheimnis verwerfen.
+    pub fn finish_setup(&self) {
+        let mut s = self.setup_state();
+        s.token = None;
+        s.pending_setup = None;
+    }
+
+    pub fn set_pending_renew(&self, session: SessionId, secret: Vec<u8>) {
+        self.setup_state().pending_renew = Some((session, secret));
+    }
+
+    /// Ausstehendes Geheimnis einer TOTP-Neueinrichtung dieser Sitzung.
+    pub fn take_pending_renew(&self, session: SessionId) -> Option<Vec<u8>> {
+        let mut s = self.setup_state();
+        match &s.pending_renew {
+            Some((id, _)) if *id == session => s.pending_renew.take().map(|(_, secret)| secret),
+            _ => None,
+        }
+    }
+
+    /// Unix-Zeit für TOTP (in Tests verschiebbar).
+    pub fn totp_now(&self) -> u64 {
+        let base = super::totp::unix_now() as i64;
+        (base + self.totp_clock_offset.load(Ordering::SeqCst)).max(0) as u64
+    }
+
+    #[doc(hidden)]
+    pub fn shift_totp_clock_for_tests(&self, secs: i64) {
+        self.totp_clock_offset.fetch_add(secs, Ordering::SeqCst);
+    }
+
+    /// Gültige Sitzung zur Anfrage. Fehlt `totp.json` (nach `totp-reset`),
+    /// sind alle Sitzungen ungültig (Plan W6).
+    pub fn authenticate(&self, headers: &HeaderMap) -> Option<SessionId> {
+        if !self.totp.exists() {
+            if !self.sessions.is_empty() {
+                tracing::warn!("totp.json fehlt — alle Sitzungen beendet");
+                self.sessions.clear();
+            }
+            return None;
+        }
+        self.sessions.from_headers(headers)
     }
 
     pub fn instance_state(&self) -> InstanceState {

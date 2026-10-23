@@ -1,11 +1,14 @@
-//! HTTP-Server `klein-buch-server` (Plan W5, ADR 0039): axum-Router, die
+//! HTTP-Server `klein-buch-server` (Plan W5/W6, ADR 0039): axum-Router, die
 //! Verbindungen bedient hyper direkt.
 //!
-//! - [`config`]: Einstellungen aus der Umgebung (Adresse, Schalter)
+//! - [`config`]: Einstellungen aus der Umgebung (Adresse, Schalter, Policy)
+//! - [`policy`]: öffentliche URL, vertraute Proxys, Host/Origin-Prüfung
+//! - [`totp`], [`ratelimit`]: zweiter Faktor, Wartezeiten und Gerätecookie
 //! - [`startup`]: Prüfungen vor dem Port-Bind (fail-closed) und beim Entsperren
 //! - [`instance`]: Instanz-Marker `/data/.klein-buch-instance`
 //! - [`state`]: gemeinsamer Zustand (Kontext, Sitzungen, Jobs, Lastgrenzen)
-//! - [`auth`]: `GET /api/auth/status`, `POST /api/auth/setup`, `POST /api/auth/login`
+//! - [`auth`]: Status, Einrichtung, Anmeldung, Abmelden, Sperren, Re-Auth,
+//!   TOTP/Einmal-Codes erneuern, Passphrase ändern
 //! - [`dispatch`]: `POST /api/cmd/{name}` mit Allowlist aus der Registry
 //! - [`jobs`], [`idempotency`]: abgekoppelte Abläufe, Wiederholung ohne Doppelwirkung
 //! - [`errors`]: Fehlerabbildung auf HTTP-Status und Antwort
@@ -27,9 +30,12 @@ pub mod instance;
 pub mod jobs;
 pub mod limits;
 pub mod logging;
+pub mod policy;
+pub mod ratelimit;
 pub mod session;
 pub mod startup;
 pub mod state;
+pub mod totp;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -46,7 +52,7 @@ use state::ServerState;
 /// Kennung der Anwendung (früher Tauri-Identifier), für die Info-Anzeige.
 pub const APP_IDENTIFIER: &str = "de.wildbach.kleinbuch";
 
-/// Router mit allen Routen und Middleware (Plan W5).
+/// Router mit allen Routen und Middleware (Plan W5/W6).
 ///
 /// Öffentlich (ohne Sitzung) sind genau `GET /api/auth/status`,
 /// `POST /api/auth/setup`, `POST /api/auth/login`, `GET /api/public/info`,
@@ -57,6 +63,13 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/auth/status", get(auth::status))
         .route("/auth/setup", post(auth::setup))
         .route("/auth/login", post(auth::login))
+        .route("/auth/logout", post(auth::logout))
+        .route("/auth/lock", post(auth::lock))
+        .route("/auth/reauth", post(auth::reauth))
+        .route("/auth/security", get(auth::security))
+        .route("/auth/totp/renew", post(auth::totp_renew))
+        .route("/auth/recovery/renew", post(auth::recovery_renew))
+        .route("/auth/passphrase", post(auth::change_passphrase))
         .route("/jobs/{id}", get(jobs::get_job))
         .route("/public/info", get(public_info))
         .fallback(errors::not_found)
@@ -70,6 +83,10 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             limits::global_limit,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            policy::http_policy,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -95,12 +112,15 @@ pub fn main_entry(args: Vec<OsString>) -> ExitCode {
     match sub {
         "serve" => run_server(),
         "healthcheck" => health::healthcheck_command(),
+        "totp-reset" => auth::totp_reset_command(),
         "--version" | "version" => {
             println!("klein-buch-server {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         other => {
-            eprintln!("Unbekannter Befehl „{other}“. Erlaubt: serve, healthcheck, version.");
+            eprintln!(
+                "Unbekannter Befehl „{other}“. Erlaubt: serve, healthcheck, totp-reset, version."
+            );
             ExitCode::from(2)
         }
     }
@@ -179,7 +199,29 @@ async fn serve_main() -> Result<()> {
 pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<ServerState>> {
     let csp = headers::Csp::load(&ctx.paths.web_dir)?;
     let lock = startup::run_checks(&ctx, &cfg.startup)?;
-    Ok(ServerState::new(ctx, csp, Some(lock)))
+    let ratelimit = ratelimit::RateLimiter::load_or_create(&ctx.paths.data_dir)?;
+    if cfg
+        .policy
+        .trusted_proxies
+        .iter()
+        .any(|net| net.prefix_len() == 0)
+    {
+        tracing::warn!(
+            "KLEIN_BUCH_TRUSTED_PROXIES enthält 0.0.0.0/0 bzw. ::/0 — dann vertraut der Server den \
+             Weiterleitungs-Headern jedes Clients (Rate-Limit und HTTPS-Regel umgehbar)"
+        );
+    }
+    if cfg.policy.insecure_http {
+        tracing::warn!(
+            "KLEIN_BUCH_INSECURE_HTTP=1: Einrichten und Anmelden auch über unverschlüsseltes \
+             HTTP — nur für Tests und CI, nie im Betrieb"
+        );
+    }
+    let state = ServerState::new(ctx, csp, Some(lock), cfg.policy.clone(), ratelimit);
+    if state.needs_setup_token() {
+        state.ensure_setup_token();
+    }
+    Ok(state)
 }
 
 async fn wait_for_signal() {

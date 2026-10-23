@@ -1,7 +1,8 @@
 //! `POST /api/cmd/{name}` (Plan W5.2, W5.6).
 //!
 //! Reihenfolge der Prüfungen: Pflicht-Header → Allowlist (sonst 404) →
-//! Sitzung (sonst 401) → Neustart läuft (503) → Body-Limit (413) → JSON (400)
+//! Sitzung (sonst 401) → Re-Auth bei `Auth::Reauth` (sonst 403
+//! `reauth_required`, W6) → Neustart/Restore läuft (503) → Body-Limit (413) → JSON (400)
 //! → Render-/JVM-Kontingent der Sitzung (429). Danach je nach [`Kind`]:
 //!
 //! - `Read`: Zulassung der Kostenklasse, Kern als eigener Task.
@@ -22,7 +23,7 @@ use super::errors::ApiError;
 use super::idempotency::{self, Begin, Completer, StoredResponse};
 use super::limits::ADMISSION_WAIT;
 use super::state::ServerState;
-use crate::commands::registry::{self, CommandSpec, Cost, Kind};
+use crate::commands::registry::{self, Auth, CommandSpec, Cost, Kind};
 
 /// Pflicht-Header jeder ändernden API-Anfrage (Plan W5.11; W6 ergänzt die
 /// Origin-/Host-Prüfung).
@@ -73,9 +74,11 @@ async fn handle(
     require_request_header(headers)?;
     let spec = registry::find_exposed(name).ok_or_else(ApiError::not_found)?;
     let session = st
-        .sessions
-        .from_headers(headers)
+        .authenticate(headers)
         .ok_or_else(ApiError::unauthenticated)?;
+    if spec.auth == Auth::Reauth && !st.sessions.reauth_fresh(session) {
+        return Err(ApiError::reauth_required());
+    }
     if st.writes_blocked() && spec.kind != Kind::Read {
         return Err(ApiError::restarting());
     }
@@ -143,6 +146,7 @@ async fn execute(
     let runner = st.clone();
     let task = st.tasks.spawn(async move {
         let _permit = permit;
+        let _gate = runner.db_gate.read().await;
         let _running = runner.admission.running(spec.cost);
         let stored = to_stored((spec.handler)(runner.ctx.clone(), args).await);
         if let Some(c) = completer {
@@ -185,6 +189,7 @@ fn start_job(
             crate::scheduler::tick::stop(&runner.ctx).await;
         }
         let permit = runner.admission.acquire(spec.cost).await;
+        let gate = runner.db_gate.read().await;
         let _running = runner.admission.running(spec.cost);
         let ctx = runner.ctx.clone();
         let inner = tokio::spawn(async move { (spec.handler)(ctx, args).await });
@@ -197,6 +202,7 @@ fn start_job(
             ))),
         };
         drop(_running);
+        drop(gate);
         drop(permit);
         let ok = outcome.is_ok();
         runner.jobs.finish(id, outcome);

@@ -44,6 +44,9 @@ pub struct Admission {
     /// Laufende Kerne je Klasse und deren Höchststand (Nachweis in Tests).
     running: [AtomicUsize; 5],
     peak: [AtomicUsize; 5],
+    /// Erteilte Zulassungen je Klasse (Nachweis „keine KDF ohne gültiges
+    /// TOTP“, Plan W6).
+    admitted: [AtomicUsize; 5],
 }
 
 /// Siehe [`Admission::running`].
@@ -68,6 +71,7 @@ impl Default for Admission {
             global: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             running: Default::default(),
             peak: Default::default(),
+            admitted: Default::default(),
         }
     }
 }
@@ -104,7 +108,10 @@ impl Admission {
             return Ok(None);
         };
         match tokio::time::timeout(wait, sem.clone().acquire_owned()).await {
-            Ok(Ok(permit)) => Ok(Some(permit)),
+            Ok(Ok(permit)) => {
+                self.admitted[index(cost)].fetch_add(1, Ordering::SeqCst);
+                Ok(Some(permit))
+            }
             Ok(Err(_)) | Err(_) => Err(ApiError::busy(5)),
         }
     }
@@ -121,6 +128,11 @@ impl Admission {
     /// Höchststand gleichzeitig laufender Kerne einer Klasse.
     pub fn peak(&self, cost: Cost) -> usize {
         self.peak[index(cost)].load(Ordering::SeqCst)
+    }
+
+    /// Bisher erteilte Zulassungen einer Klasse.
+    pub fn admitted(&self, cost: Cost) -> usize {
+        self.admitted[index(cost)].load(Ordering::SeqCst)
     }
 
     /// Genehmigung für einen Job: wartet, bis die Klasse frei ist (die

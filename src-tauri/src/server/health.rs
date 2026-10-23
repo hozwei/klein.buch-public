@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-use super::config::{healthcheck_addr, ServerConfig};
+use super::config::{healthcheck_addr, listen_from_env_with};
 use super::state::ServerState;
 
 pub async fn healthz(State(st): State<Arc<ServerState>>, req: Request) -> Response {
@@ -44,8 +44,9 @@ pub async fn healthz(State(st): State<Arc<ServerState>>, req: Request) -> Respon
 /// Subcommand `healthcheck`: fragt `/healthz` über Loopback ab, gibt den
 /// Körper aus; Exit 0 bei 200.
 pub fn healthcheck_command() -> ExitCode {
-    let cfg = match ServerConfig::from_env() {
-        Ok(c) => c,
+    // Nur die Adresse — der Healthcheck braucht keine Policy-Variablen.
+    let listen = match listen_from_env_with(&|name| std::env::var_os(name)) {
+        Ok(l) => l,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::FAILURE;
@@ -61,7 +62,16 @@ pub fn healthcheck_command() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(probe(healthcheck_addr(cfg.listen))) {
+    // Host-Header wie die öffentliche Adresse: über Loopback ist /healthz
+    // ohnehin frei, bei fest gebundener IP prüft der Server den Host (W6).
+    let host = std::env::var(super::config::ENV_PUBLIC_URL)
+        .ok()
+        .and_then(|u| super::policy::PublicUrl::parse(&u).ok())
+        .map(|u| match u.port {
+            Some(p) => format!("{}:{p}", u.host),
+            None => u.host,
+        });
+    match runtime.block_on(probe_with_host(healthcheck_addr(listen), host)) {
         Ok((200, body)) => {
             println!("{body}");
             ExitCode::SUCCESS
@@ -79,10 +89,19 @@ pub fn healthcheck_command() -> ExitCode {
 
 /// Minimaler HTTP/1.1-Client für `/healthz` (Status, Körper).
 pub async fn probe(addr: SocketAddr) -> std::io::Result<(u16, String)> {
+    probe_with_host(addr, None).await
+}
+
+/// Wie [`probe`], mit eigenem `Host`-Header.
+pub async fn probe_with_host(
+    addr: SocketAddr,
+    host: Option<String>,
+) -> std::io::Result<(u16, String)> {
+    let host = host.unwrap_or_else(|| addr.to_string());
     let fut = async {
         let mut stream = tokio::net::TcpStream::connect(addr).await?;
         let request = format!(
-            "GET /healthz HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nUser-Agent: klein-buch-healthcheck\r\n\r\n"
+            "GET /healthz HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: klein-buch-healthcheck\r\n\r\n"
         );
         stream.write_all(request.as_bytes()).await?;
         let mut raw = Vec::new();
