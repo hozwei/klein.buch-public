@@ -396,6 +396,81 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Debug-Builds; `/inputs` und `/data` dürfen nicht ineinander liegen. Das Ergänzen von
     `/inputs` aus `RESOURCE_DIR/inputs` läuft bei jedem Start und überschreibt nie.
 
+24. **Allowlist über die Registry (W5).** Jeder Kern hat einen Weg (`Cmd`, `Replaced`, `Dropped`,
+    `Blocked`); über `POST /api/cmd/{name}` erreichbar ist nur `Cmd` (160 von 183). Die Kerne der
+    übrigen 23 bleiben vorerst im Code und werden in dem Block entfernt bzw. umgebaut, der sie
+    ersetzt (Upload/Download W7, Frontend-Reste W9, Reset und Drop-Folder W11). So bleibt jede
+    Entscheidung in einer Tabelle prüfbar (`commands/registry.rs`, Test über alle Namen).
+25. **Re-Auth-Klasse schon in W5 gesetzt (W5).** Die 13 Commands aus Plan W6 tragen `Reauth`; bis
+    W6 die Frische prüft, gilt für sie die Sitzung.
+26. **Pflicht-Header schon in W5 erzwungen (W5).** `X-KleinBuch-Request` fehlt → 403 auf
+    `/api/cmd/*`, `/api/auth/setup` und `/api/auth/login`. W6 ergänzt Origin/Host.
+27. **Archivpfad-Stichprobe beim Entsperren statt vor dem Port-Bind (W5, Plankorrektur).** Die DB
+    ist vor der Passphrase verschlüsselt; `archive_entries` lässt sich erst nach dem Entsperren
+    lesen. Passt die Stichprobe (erste und letzte drei Einträge) nicht zu `archive_dir`, wird
+    sofort wieder gesperrt; der Login antwortet 409 „Entsperren verweigert“, Details im Log.
+28. **Keine Neueinrichtung über einem Archiv (W5).** Weder DB noch Marker, aber Dateien in
+    `archive/` → Start verweigert (zusätzlich zu „DB ohne Marker“/„Marker ohne DB“).
+29. **Selbsttest verweigert auch root (W5).** Lässt sich eine Datei mit 0400 trotzdem zum
+    Schreiben öffnen (root, ACL), startet der Server nicht: der Write-once-Schutz der Belege
+    (GoBD) hinge sonst allein am Code.
+30. **Keep-Alive faktisch 10 s (W5, Plankorrektur).** hyper misst den Header-Read-Timeout auch in
+    der Leerlaufzeit zwischen zwei Anfragen einer Keep-Alive-Verbindung; eine ruhende Verbindung
+    schließt nach 10 s statt der im Plan genannten 60 s. Strenger, für Browser und Proxy unschädlich.
+31. **Timeout und Zulassung (W5).** Der 30-s-Timeout auf `/api/*` antwortet 503 `timeout` mit
+    `Retry-After` (statt 408); die Arbeit läuft als eigener Task weiter, eine Wiederholung mit
+    demselben Idempotenz-Schlüssel liefert ihr Ergebnis. Zulassung je Kostenklasse über eigene
+    Semaphoren (render 2, jvm 2, kdf 1, backup/export 1), getrennt von denen aus W2, damit ein
+    Aufruf nie auf seine eigene Genehmigung wartet; ein direkter Aufruf wartet höchstens 5 s, sonst
+    503. Globale Grenze 64 Anfragen ohne Warteschlange (503 statt Stau).
+32. **Idempotenz (W5).** Der Server akzeptiert Aufrufe ohne Schlüssel; das Frontend schickt immer
+    einen. Gespeichert werden 2xx/4xx-Antworten für 1 h (höchstens 2048), 5xx nicht (die
+    Wiederholung führt neu aus); gleicher Schlüssel mit anderem Inhalt → 422.
+33. **Jobs (W5).** Die Plan-Liste plus `recurring_invoices_run_now` und
+    `recurring_invoices_run_due_check`, weil beide Rechnungen festschreiben (13 Commands).
+    Ergebnisse bleiben 1 h abrufbar. Nach einem erfolgreichen Restore lehnt der Server Änderungen
+    ab, wartet 3 s (Ergebnis abholbar) und fährt geordnet herunter (Exit 0); der Neustart durch die
+    Container-Verwaltung wendet den Restore vor dem Port-Bind an.
+34. **Fehlerabbildung (W5).** Domain und Mail 422, Backup 409, Crypto 400, neue Variante
+    `BadRequest` (Argumente passen nicht zum Args-Struct) 400, Locked 423, Schema-Mismatch 409,
+    Trigger-RAISE 409 mit Text, Sidecar 503 mit festem Text und `ref`, alles Übrige 500 nur mit
+    `ref`. Vor dem Login nur generische Meldungen; einzige Ausnahme ist der Hinweis auf die
+    Mindestlänge der Passphrase bei der Einrichtung.
+35. **Kein `panic = "abort"` im Release-Profil (W5).** Eine Panik beendet nur die Anfrage bzw. den
+    Job, nicht den Prozess mit entsperrter DB.
+36. **Adresse `KLEIN_BUCH_LISTEN` (W5),** Standard `0.0.0.0:8080`; der Subcommand `healthcheck`
+    fragt denselben Port über `127.0.0.1` ab.
+37. **Übergangs-Body-Limit (W5).** 256 KiB für `/api/cmd/*`; die 7 Commands, die bis W7 Dateien
+    noch als JSON-Zahlenfeld schicken, bekommen übergangsweise 32 MiB.
+38. **CI ohne Tauri-Pakete (W5).** Der apt-Schritt installiert nur noch `libdbus-1-dev` für den
+    secret-service-Zweig von `keyring` und entfällt mit W8.
+39. **Sitzungen nur im RAM (W5).** Ein Neustart meldet alle Sitzungen ab (die DB ist danach ohnehin
+    gesperrt, E3). Der Cookie heißt schon jetzt `__Host-kb_session` (Secure, HttpOnly,
+    SameSite=Strict); Browser behandeln `localhost`/`127.0.0.1` als sicheren Kontext.
+
+40. **Vorgemerkter Factory Reset verweigert den Start (W5, Gegenprüfung).** Der Server wendet
+    `FACTORY_RESET_PENDING.json` nie an; liegt die Datei vor, bricht der Start ab und nichts wird
+    gelöscht (E7). Vorher hätte jeder Neustart `/data` geleert, und bis W7 ließe sich die Datei über
+    einen Export mit Client-Pfad anlegen.
+41. **Entsperren in zwei Schritten (W5, Gegenprüfung).** Öffnen und Probe-Read, dann die
+    Archivpfad-Stichprobe, erst danach Migrationen und Aktivieren (Pool, Passphrase, Scheduler,
+    Audit). Eine verweigerte Stichprobe hinterlässt keinen Zustand.
+42. **Einrichten und Anmelden als eigener Task (W5, Gegenprüfung).** Ein abgebrochener Request
+    (Client, Timeout) unterbricht den Zustandswechsel nicht. Scheitert die Einrichtung vor dem
+    Entsperren, wird die gerade angelegte DB entfernt (sie enthält noch nichts; bliebe sie, könnte
+    der erste Login sie mit beliebiger Passphrase übernehmen). Scheitert nur das Erst-Backup, gilt
+    die Instanz als eingerichtet; der erste Scheduler-Tick holt es nach.
+43. **Ein Prozess je Datenverzeichnis (W5, Gegenprüfung).** Exklusive Sperre auf
+    `/data/.klein-buch.lock` vor allen Schritten, die das Verzeichnis verändern (Restore-Tausch,
+    `tmp/` leeren).
+44. **Restore sperrt Änderungen ab der Annahme (W5, Gegenprüfung).** Der Restore-Job pausiert den
+    Scheduler; Änderungen werden bis zum Neustart mit 503 abgelehnt (sie gingen beim Tausch
+    verloren). Scheitert der Restore, werden Sperre und Pause aufgehoben. Den vollständigen Umbau
+    (Upload, Staging, Phase A) bringt W7.
+45. **Herunterfahren wartet auf alle abgekoppelten Tasks (W5, Gegenprüfung)** (`TaskTracker`:
+    Commands, Jobs, Anmeldungen; höchstens 10 min), danach Scheduler-Tick und Pool. Die
+    Stop-Frist der Container-Verwaltung muss dazu passen (Compose-Beispiel W11, Handbuch W13).
+
 ## Konsequenzen
 
 - Klein.Buch ist von jedem Gerät mit Browser nutzbar, auch mobil; eine Instanz, ein Datenbestand,

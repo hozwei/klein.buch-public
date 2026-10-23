@@ -1,6 +1,6 @@
 //! Anwendungskontext (Plan W4): ersetzt Tauri-`State`/`AppHandle` in den
-//! Command-Kernen (`crate::commands`). Die Tauri-Hülle (bis W5) und der
-//! HTTP-Server (ab W5) halten genau eine Instanz in einem `Arc`.
+//! Command-Kernen (`crate::commands`). Der HTTP-Server (`crate::server`, W5)
+//! hält genau eine Instanz in einem `Arc`.
 
 use crate::backup::BackupSession;
 use crate::config::Paths;
@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 /// Desktop-Nebenwirkungen (Datei öffnen, im Ordner zeigen, Browser, Neustart).
-/// Die Tauri-Hülle setzt sie um; im Server gibt es sie nicht ([`NoDesktop`]) —
-/// die betroffenen Commands entfallen dort oder liefern Bytes (W5/W7).
+/// Im Server gibt es sie nicht ([`NoDesktop`]); die betroffenen Commands sind
+/// nicht freigegeben (W5) oder liefern ab W7 Bytes. Tests zeichnen Aufrufe auf.
 pub trait DesktopActions: Send + Sync {
     fn open_path(&self, path: &Path) -> Result<()>;
     fn reveal(&self, path: &Path) -> Result<()>;
@@ -57,14 +57,17 @@ pub struct AppCtx {
     pub session: BackupSession,
     /// Beim Start angewendeter Restore, dessen Audit nach dem Entsperren folgt.
     pub pending_restore: PendingRestoreAudit,
-    /// OS-Benachrichtigungen (Desktop) bzw. keine (Server, Tests).
+    /// Benachrichtigungen außerhalb der Inbox (im Server keine).
     pub notifier: Arc<dyn Notifier>,
     /// Ablage für Zugangsdaten (bis W8 Keychain, danach SQLCipher-Tabelle).
     pub secrets: Arc<dyn SecretStore>,
-    /// Desktop-Nebenwirkungen (nur Tauri-Hülle).
+    /// Desktop-Nebenwirkungen (im Server [`NoDesktop`]).
     pub desktop: Arc<dyn DesktopActions>,
     /// Einmal-Guard für den Scheduler (genau ein Start pro Prozess).
     scheduler_started: AtomicBool,
+    /// Wird während eines Scheduler-Ticks gehalten; `true` = angehalten
+    /// (`scheduler::tick::stop`, Herunterfahren).
+    pub scheduler_gate: tokio::sync::Mutex<bool>,
     /// Kennung der Anwendung für die Info-Anzeige (z. B. `de.wildbach.kleinbuch`).
     pub app_identifier: String,
 }
@@ -86,6 +89,7 @@ impl AppCtx {
             secrets,
             desktop,
             scheduler_started: AtomicBool::new(false),
+            scheduler_gate: tokio::sync::Mutex::new(false),
             app_identifier: app_identifier.into(),
         }
     }

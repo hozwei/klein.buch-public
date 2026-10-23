@@ -1,0 +1,558 @@
+//! Plan W5 — Contract-Tests des HTTP-Servers per `tower::ServiceExt::oneshot`:
+//! Allowlist (Punkt 2), 404/405/401, Inventar der öffentlichen Routen (§3),
+//! camelCase-Argumente, 423/413/403, Idempotenz, Header je Routenklasse.
+
+mod server_support;
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::get as get_route;
+use axum::Router;
+use klein_buch_lib::commands::registry::{find_exposed, Auth, Kind, Route, REGISTRY};
+use klein_buch_lib::server::headers::{self, ResponseClass};
+use server_support::*;
+
+/// Ersetzt durch `/api/auth/*`.
+const REPLACED_BY_AUTH: &[&str] = &[
+    "backup_needs_onboarding",
+    "backup_is_unlocked",
+    "backup_setup_passphrase",
+    "backup_unlock",
+];
+
+/// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Upload-Routen,
+/// Archiv-Download, entfallene Desktop-Funktionen, Gesperrtes.
+const NOT_ON_CMD: &[&str] = &[
+    "backup_needs_onboarding",
+    "backup_is_unlocked",
+    "backup_setup_passphrase",
+    "backup_unlock",
+    "expenses_parse_einvoice",
+    "seller_signature_set",
+    "invoices_open_pdf",
+    "attachments_open",
+    "backup_restore_preview",
+    "backup_open_folder",
+    "backup_reveal_path",
+    "euer_reveal_path",
+    "invoices_reveal_pdf",
+    "attachments_reveal",
+    "third_party_licenses_path",
+    "factory_reset_check",
+    "factory_reset",
+    "drop_folder_settings_get",
+    "drop_folder_settings_set",
+    "drop_folder_sync_now",
+    "mail_oauth_status",
+    "mail_oauth_connect",
+    "mail_oauth_disconnect",
+];
+
+/// Re-Auth-Pflicht laut Plan W6 (Prüfung der Frische folgt dort).
+const REAUTH: &[&str] = &[
+    "backup_set_target",
+    "backup_set_sftp_target",
+    "backup_test_sftp",
+    "backup_restore_apply",
+    "mail_account_create",
+    "mail_account_update",
+    "mail_account_delete",
+    "mail_account_test_connection",
+    "mail_send_test",
+    "migration_export_run",
+    "dsgvo_export",
+    "euer_export_stb_zip",
+    "euer_export_detail_zip",
+];
+
+/// Jobs laut Plan W5.6.
+const JOBS: &[&str] = &[
+    "invoices_lock_and_issue",
+    "quotes_issue",
+    "invoices_cancel",
+    "recurring_invoices_run_now",
+    "recurring_invoices_run_due_check",
+    "mail_send_invoice",
+    "mail_send_quote",
+    "package_catalog_send",
+    "backup_create_now",
+    "backup_restore_apply",
+    "euer_export_stb_zip",
+    "dsgvo_export",
+    "migration_export_run",
+];
+
+fn api_ts_commands() -> BTreeSet<String> {
+    let api = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/lib/api.ts");
+    let text = std::fs::read_to_string(api).unwrap();
+    let mut out = BTreeSet::new();
+    for (idx, _) in text.match_indices("invoke") {
+        let rest = &text[idx + "invoke".len()..];
+        let rest = match rest.strip_prefix('<') {
+            Some(r) => match r.find(">(") {
+                Some(end) => &r[end + 1..],
+                None => continue,
+            },
+            None => rest,
+        };
+        let Some(rest) = rest.strip_prefix("(\"") else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else { continue };
+        out.insert(rest[..end].to_string());
+    }
+    out
+}
+
+fn exposed_names() -> BTreeSet<String> {
+    REGISTRY
+        .iter()
+        .filter(|c| c.exposed())
+        .map(|c| c.name.to_string())
+        .collect()
+}
+
+#[test]
+fn allowlist_is_exactly_plan_point_2() {
+    let mut frontend = api_ts_commands();
+    frontend.extend(REPLACED_BY_AUTH.iter().map(|s| s.to_string()));
+    let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
+    assert_eq!(
+        registry, frontend,
+        "Registry = Frontend-Commands + Auth-Ersatz"
+    );
+
+    let expected: BTreeSet<String> = frontend
+        .iter()
+        .filter(|n| !NOT_ON_CMD.contains(&n.as_str()))
+        .cloned()
+        .collect();
+    assert_eq!(exposed_names(), expected);
+    assert_eq!(expected.len(), 183 - NOT_ON_CMD.len());
+
+    for spec in REGISTRY.iter() {
+        let reauth = REAUTH.contains(&spec.name);
+        if spec.exposed() {
+            assert_eq!(
+                spec.auth,
+                if reauth { Auth::Reauth } else { Auth::Session },
+                "{}",
+                spec.name
+            );
+            assert_ne!(
+                spec.auth,
+                Auth::Public,
+                "{} darf nicht öffentlich sein",
+                spec.name
+            );
+        }
+        assert_eq!(
+            spec.kind == Kind::Job,
+            JOBS.contains(&spec.name),
+            "{}",
+            spec.name
+        );
+    }
+    for blocked in [
+        "factory_reset",
+        "factory_reset_check",
+        "drop_folder_sync_now",
+        "mail_oauth_connect",
+    ] {
+        assert_eq!(
+            REGISTRY.iter().find(|c| c.name == blocked).unwrap().route,
+            Route::Blocked
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_allowlisted_name_without_session_is_401() {
+    let srv = test_server();
+    for name in exposed_names() {
+        let r = send(
+            &srv.app,
+            post(&format!("/api/cmd/{name}"), "{}", None, None),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{name}: {}", r.text());
+        let r = send(
+            &srv.app,
+            post(&format!("/api/cmd/{name}"), "{}", Some("ausgedacht"), None),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNAUTHORIZED,
+            "{name} mit falschem Cookie"
+        );
+    }
+}
+
+#[tokio::test]
+async fn other_names_are_404_and_get_is_405() {
+    let srv = test_server();
+    let cookie = setup(&srv.app).await;
+    for spec in REGISTRY.iter().filter(|c| !c.exposed()) {
+        let r = send(
+            &srv.app,
+            post(
+                &format!("/api/cmd/{}", spec.name),
+                "{}",
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", spec.name);
+    }
+    for name in ["gibt_es_nicht", "invoices_archive_paths", "CONTACTS_LIST"] {
+        let r = send(
+            &srv.app,
+            post(&format!("/api/cmd/{name}"), "{}", Some(&cookie), None),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{name}");
+    }
+    let r = send(&srv.app, get("/api/cmd/contacts_list", Some(&cookie))).await;
+    assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED);
+}
+
+/// Öffentlich sind genau die Routen aus Plan §3; alles andere verlangt eine
+/// Sitzung oder existiert nicht.
+#[tokio::test]
+async fn public_route_inventory() {
+    let srv = test_server();
+    let app = &srv.app;
+
+    let r = send(app, get("/api/auth/status", None)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json()["state"], "setup_required");
+
+    let r = send(app, get("/api/public/info", None)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let info = r.json();
+    for key in ["version", "commit", "sourceUrl", "licenseSpdx"] {
+        assert!(info.get(key).is_some(), "{key} fehlt: {info}");
+    }
+    assert_eq!(info["licenseSpdx"], "AGPL-3.0-or-later");
+
+    // ohne Loopback-Peer: nur Status, kein Körper
+    let r = send(app, get("/healthz", None)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body.is_empty(), "{}", r.text());
+
+    // Auth-Routen erreichbar ohne Sitzung (hier: Zustand setup)
+    let r = login(app, PASS).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    let r = send(
+        app,
+        post("/api/auth/setup", r#"{"passphrase":"zu-kurz"}"#, None, None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+
+    // SPA-Assets und Client-Routing
+    for path in ["/", "/invoices/abc", "/settings/backup"] {
+        let r = send(app, get(path, None)).await;
+        assert_eq!(r.status, StatusCode::OK, "{path}");
+        assert!(r.text().contains("__kb_boot"), "{path} liefert index.html");
+    }
+    let r = send(app, get("/_app/immutable/app.js", None)).await;
+    assert_eq!(r.status, StatusCode::OK);
+
+    // alles andere: Sitzung nötig oder 404
+    let r = send(
+        app,
+        get(&format!("/api/jobs/{}", uuid::Uuid::new_v4()), None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = send(app, post("/api/cmd/contacts_list", "{}", None, None)).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    for path in [
+        "/api/unbekannt",
+        "/api",
+        "/api/upload/beleg",
+        "/files/archive/1",
+    ] {
+        let r = send(app, get(path, None)).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(r.json()["code"], "not_found", "{path}: JSON statt SPA");
+    }
+}
+
+#[tokio::test]
+async fn camel_case_args_locked_423_and_body_limit_413() {
+    let srv = test_server();
+    let app = &srv.app;
+    let cookie = setup(app).await;
+
+    let r = send(app, get("/api/auth/status", Some(&cookie))).await;
+    assert_eq!(r.json()["state"], "ok");
+
+    let r = call(
+        app,
+        &cookie,
+        "contacts_list",
+        serde_json::json!({"includeArchived": true}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(r.json().is_array());
+
+    // Pflichtfeld fehlt → 400 statt 500
+    let r = call(app, &cookie, "contacts_get", serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    assert_eq!(r.json()["code"], "bad_request");
+    // kaputtes JSON → 400
+    let r = send(
+        app,
+        post("/api/cmd/contacts_list", "{", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    // 300 KiB → 413
+    let big = format!("{{\"query\":\"{}\"}}", "x".repeat(300 * 1024));
+    let r = send(
+        app,
+        post("/api/cmd/contacts_search", &big, Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    // gesperrt → DB-Command 423
+    let pool = srv.state.ctx.take_pool().unwrap();
+    pool.close().await;
+    let r = call(app, &cookie, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::LOCKED, "{}", r.text());
+    assert_eq!(r.json()["code"], "locked");
+    let r = send(app, get("/api/auth/status", Some(&cookie))).await;
+    assert_eq!(r.json()["state"], "login_required");
+
+    // erneut anmelden entsperrt; falsche Passphrase → 401 mit generischer Meldung
+    let r = login(app, "falsche-passphrase-1234567").await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(r.json()["message"], "Anmeldung fehlgeschlagen.");
+    let r = login(app, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let fresh = session_cookie(&r);
+    assert_ne!(fresh, cookie, "neue Sitzungs-ID beim Login");
+    let r = call(app, &fresh, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn request_header_is_mandatory() {
+    let srv = test_server();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/cmd/contacts_list")
+        .body(axum::body::Body::from("{}"))
+        .unwrap();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .body(axum::body::Body::from(format!(
+            "{{\"passphrase\":\"{PASS}\"}}"
+        )))
+        .unwrap();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn idempotency_key_replays_write() {
+    let srv = test_server();
+    let app = &srv.app;
+    let cookie = setup(app).await;
+    let input = serde_json::json!({"input": {
+        "contactType": "customer", "name": "Kunde GmbH", "street": "Hauptstr. 7",
+        "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",
+        "acceptsEinvoice": true
+    }})
+    .to_string();
+    let a = send(
+        app,
+        post(
+            "/api/cmd/contacts_create",
+            &input,
+            Some(&cookie),
+            Some("k-1"),
+        ),
+    )
+    .await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.text());
+    let b = send(
+        app,
+        post(
+            "/api/cmd/contacts_create",
+            &input,
+            Some(&cookie),
+            Some("k-1"),
+        ),
+    )
+    .await;
+    assert_eq!(b.status, StatusCode::OK);
+    assert_eq!(a.json()["id"], b.json()["id"], "gleiches Ergebnis");
+    let list = call(app, &cookie, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(
+        list.json().as_array().unwrap().len(),
+        1,
+        "nur einmal angelegt"
+    );
+
+    let other = input.replace("Kunde GmbH", "Andere AG");
+    let c = send(
+        app,
+        post(
+            "/api/cmd/contacts_create",
+            &other,
+            Some(&cookie),
+            Some("k-1"),
+        ),
+    )
+    .await;
+    assert_eq!(c.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(c.json()["code"], "idempotency_mismatch");
+    let d = send(
+        app,
+        post(
+            "/api/cmd/contacts_create",
+            &input,
+            Some(&cookie),
+            Some("k 1"),
+        ),
+    )
+    .await;
+    assert_eq!(d.status, StatusCode::BAD_REQUEST);
+}
+
+fn header_snapshot(headers: &axum::http::HeaderMap) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = headers
+        .iter()
+        .filter(|(k, _)| {
+            ![
+                header::DATE,
+                header::CONTENT_LENGTH,
+                header::LAST_MODIFIED,
+                header::ACCEPT_RANGES,
+                header::ETAG,
+            ]
+            .contains(k)
+        })
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_string()))
+        .collect();
+    out.sort();
+    out
+}
+
+const COMMON: &[(&str, &str)] = &[
+    ("cross-origin-opener-policy", "same-origin"),
+    ("cross-origin-resource-policy", "same-origin"),
+    (
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=(), payment=()",
+    ),
+    ("referrer-policy", "no-referrer"),
+    ("x-content-type-options", "nosniff"),
+];
+
+fn expected(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = COMMON
+        .iter()
+        .chain(extra.iter())
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    v.sort();
+    v
+}
+
+#[tokio::test]
+async fn header_snapshot_per_route_class() {
+    let srv = test_server();
+    let app = &srv.app;
+    let spa_csp = srv.state.csp.spa.clone();
+    assert!(spa_csp.contains("script-src 'self' 'sha256-"), "{spa_csp}");
+    assert!(spa_csp.contains("frame-ancestors 'none'"));
+
+    // SPA
+    let r = send(app, get("/", None)).await;
+    assert_eq!(
+        header_snapshot(&r.headers),
+        expected(&[
+            ("cache-control", "no-store"),
+            ("content-security-policy", &spa_csp),
+            ("content-type", "text/html"),
+        ])
+    );
+    // API
+    let r = send(app, get("/api/auth/status", None)).await;
+    assert_eq!(
+        header_snapshot(&r.headers),
+        expected(&[
+            ("cache-control", "no-store"),
+            ("content-security-policy", headers::CSP_NONE),
+            ("content-type", "application/json"),
+        ])
+    );
+    // gehashtes Asset
+    let r = send(app, get("/_app/immutable/app.js", None)).await;
+    assert_eq!(
+        header_snapshot(&r.headers),
+        expected(&[
+            ("cache-control", headers::CACHE_IMMUTABLE),
+            ("content-security-policy", headers::CSP_NONE),
+            ("content-type", "text/javascript"),
+        ])
+    );
+
+    // PDF inline und Download: Klassen, die die Routen aus W7 setzen
+    let probe = Router::new()
+        .route(
+            "/files/pdf",
+            get_route(|| async {
+                let mut r =
+                    ([(header::CONTENT_TYPE, "application/pdf")], "%PDF-1.7").into_response();
+                r.extensions_mut().insert(ResponseClass::PdfInline);
+                r
+            }),
+        )
+        .route(
+            "/files/download",
+            get_route(|| async { ([(header::CONTENT_TYPE, "application/octet-stream")], "x") }),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            srv.state.clone(),
+            headers::security_headers,
+        ));
+    let r = send(&probe, get("/files/pdf", None)).await;
+    assert_eq!(
+        header_snapshot(&r.headers),
+        expected(&[
+            ("cache-control", "no-store"),
+            ("content-security-policy", headers::CSP_PDF_INLINE),
+            ("content-type", "application/pdf"),
+        ])
+    );
+    let r = send(&probe, get("/files/download", None)).await;
+    assert_eq!(
+        header_snapshot(&r.headers),
+        expected(&[
+            ("cache-control", "no-store"),
+            ("content-security-policy", headers::CSP_DOWNLOAD),
+            ("content-type", "application/octet-stream"),
+        ])
+    );
+    // kein CORS
+    let r = send(app, get("/api/auth/status", None)).await;
+    assert!(r.headers.get("access-control-allow-origin").is_none());
+    // die Registry-Funktion für den Dispatcher findet nur Freigegebenes
+    assert!(find_exposed("factory_reset").is_none());
+}

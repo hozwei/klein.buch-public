@@ -44,26 +44,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free disk space (Runner läuft sonst bei Tauri+Typst voll)
+      - name: Free disk space (Runner läuft sonst bei Typst + SQLCipher voll)
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      # Die Ubuntu-Spiegel der Runner lieferten im Oktober 2026 zeitweise nur mit
-      # Timeouts (bis 35 min). Daher: .deb-Pakete im Actions-Cache, Spiegelliste
-      # mit Fallback (ein hängender Spiegel bricht nach 30 s ab, dann der nächste)
-      # und ein festes Limit. Der Schritt entfällt mit Tauri (W5).
+      # Seit W5 ohne Tauri: kein WebKitGTK mehr. Bis W8 (`keyring` entfällt)
+      # braucht nur noch der secret-service-Zweig libdbus. Die Ubuntu-Spiegel
+      # lieferten im Oktober 2026 zeitweise nur mit Timeouts: .deb-Pakete im
+      # Actions-Cache, Spiegelliste mit Fallback, festes Limit.
       - name: Cache apt-Pakete
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-24.04-tauri-v1
+          key: apt-debs-${{ runner.os }}-24.04-dbus-v1
 
-      - name: System-Deps (Tauri 2 on Ubuntu)
-        timeout-minutes: 30
+      - name: System-Deps (libdbus für keyring, bis W8)
+        timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          if pkg-config --exists dbus-1; then echo "libdbus vorhanden"; exit 0; fi
           printf '%s\n' \
             http://azure.archive.ubuntu.com/ubuntu \
             http://archive.ubuntu.com/ubuntu \
@@ -74,11 +75,7 @@ jobs:
           sudo -E apt-get $APT_OPTS update
           mkdir -p ~/apt-debs
           sudo cp ~/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          sudo -E apt-get $APT_OPTS install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            librsvg2-dev \
-            libssl-dev \
-            patchelf
+          sudo -E apt-get $APT_OPTS install -y --no-install-recommends libdbus-1-dev pkg-config
           cp /var/cache/apt/archives/*.deb ~/apt-debs/ 2>/dev/null || true
 
       - name: Setup Rust toolchain

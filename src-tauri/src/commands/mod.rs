@@ -1,5 +1,5 @@
-//! Command-Kerne (Plan W4) — Brücke zwischen Transport (Tauri-Hülle bis W5,
-//! HTTP ab W5) und Domain/DB-Schicht. Jeder Kern ist
+//! Command-Kerne (Plan W4) — Brücke zwischen Transport (HTTP-Dispatcher
+//! `server::dispatch`, W5) und Domain/DB-Schicht. Jeder Kern ist
 //! `async fn name(ctx: &Arc<AppCtx>, args: NameArgs) -> Result<T>`; die
 //! Args-Structs übernehmen die camelCase-Schlüssel der bisherigen `invoke`-
 //! Aufrufe. [`registry`] listet alle Kerne mit ihren Metadaten.

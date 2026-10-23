@@ -25,6 +25,17 @@ use crate::notify::Notifier;
 /// Tick-Intervall in Sekunden (5 Minuten).
 const TICK_INTERVAL_SECS: u64 = 300;
 
+/// Wartet einen laufenden Tick ab und pausiert weitere (Herunterfahren,
+/// Restore; Plan W5.6).
+pub async fn stop(ctx: &AppCtx) {
+    *ctx.scheduler_gate.lock().await = true;
+}
+
+/// Hebt eine Pause wieder auf (z. B. nach gescheitertem Restore).
+pub async fn resume(ctx: &AppCtx) {
+    *ctx.scheduler_gate.lock().await = false;
+}
+
 /// Startet die Scheduler-Schleife genau einmal pro Prozess. Muss NACH dem
 /// Entsperren aufgerufen werden (der Pool liegt dann im [`AppCtx`]). Mehrfache
 /// Aufrufe (z. B. erneutes Entsperren) sind no-ops.
@@ -47,9 +58,15 @@ pub fn start(ctx: Arc<AppCtx>) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await; // erster Tick: sofort; danach alle 5 min
+            let gate = ctx.scheduler_gate.lock().await;
+            if *gate {
+                tracing::debug!("Scheduler pausiert — Tick ausgelassen");
+                continue;
+            }
             if let Err(e) = run_tick(&ctx).await {
                 tracing::warn!("Scheduler-Tick fehlgeschlagen: {e}");
             }
+            drop(gate);
         }
     });
 }
@@ -123,18 +140,8 @@ pub async fn run_jobs(
         Err(e) => tracing::warn!("Abo-Rechnungs-Lauf fehlgeschlagen: {e}"),
     }
 
-    // 6. Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP).
-    // Inbox-only (R4-007-Pattern) — keine AppHandle-Bindung im Scheduler-Pfad.
-    match crate::scheduler::drop_folder::run_sync(pool, paths, session, today).await {
-        Ok(report) if report.imported > 0 || report.failed > 0 => tracing::info!(
-            "Scheduler: Drop-Folder {} importiert / {} fehlerhaft / {} versteckt",
-            report.imported,
-            report.failed,
-            report.ignored_hidden
-        ),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("Drop-Folder-Sync fehlgeschlagen: {e}"),
-    }
+    // Der Drop-Folder (Block PV1-DROP) läuft im Server nicht (E11, Plan W5.2);
+    // Rechnungseingang per Upload (W7).
     Ok(())
 }
 

@@ -1,9 +1,10 @@
-//! Plan W4 — Kern-Schnitt: Registry und Tauri-Freiheit der Kerne.
+//! Plan W4/W5 — Kern-Schnitt: Registry und Tauri-Freiheit.
 //!
 //! - Die Registry (`commands::registry::REGISTRY`) enthält genau die Commands,
-//!   die das Frontend in `src/lib/api.ts` aufruft (gelesen per Regex).
-//! - Außerhalb der Tauri-Hülle (`src/tauri_shell/`, `src/lib.rs`) kommt im Code
-//!   weder `tauri::` noch `AppHandle` noch `State<` vor.
+//!   die das Frontend in `src/lib/api.ts` aufruft (gelesen per Regex), plus die
+//!   vier, die seit W5 über `/api/auth/*` laufen.
+//! - Seit W5 gibt es kein Tauri mehr: weder im Code (`tauri::`, `AppHandle`)
+//!   noch in `Cargo.toml`.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -53,9 +54,21 @@ fn api_ts_commands() -> BTreeSet<String> {
 
 #[test]
 fn registry_matches_frontend_api() {
-    let api = api_ts_commands();
+    let mut api = api_ts_commands();
+    assert_eq!(api.len(), 179, "api.ts ruft 179 Commands auf (Plan W5)");
+    // seit W5 über /api/auth/* (transport.ts)
+    for name in [
+        "backup_needs_onboarding",
+        "backup_is_unlocked",
+        "backup_setup_passphrase",
+        "backup_unlock",
+    ] {
+        assert!(
+            api.insert(name.to_string()),
+            "{name} ruft api.ts nicht mehr per invoke auf"
+        );
+    }
     let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
-    assert_eq!(api.len(), 183, "api.ts ruft 183 Commands auf (Plan W4)");
     let missing: Vec<_> = api.difference(&registry).collect();
     let extra: Vec<_> = registry.difference(&api).collect();
     assert!(
@@ -85,21 +98,19 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn no_tauri_outside_the_shell() {
+fn no_tauri_anywhere() {
     let src = manifest_dir().join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);
-    let shell = src.join("tauri_shell");
-    let lib = src.join("lib.rs");
     let mut hits = Vec::new();
     for f in files {
-        if f.starts_with(&shell) || f == lib {
-            continue;
-        }
         let text = std::fs::read_to_string(&f).unwrap();
         for (n, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
-            if code.contains("tauri::") || code.contains("AppHandle") || code.contains("State<") {
+            if code.contains("tauri::")
+                || code.contains("tauri_plugin")
+                || code.contains("AppHandle")
+            {
                 hits.push(format!(
                     "{}:{}: {}",
                     f.strip_prefix(&src).unwrap().display(),
@@ -109,11 +120,18 @@ fn no_tauri_outside_the_shell() {
             }
         }
     }
-    assert!(
-        hits.is_empty(),
-        "Tauri-Bezug außerhalb der Hülle:\n{}",
-        hits.join("\n")
-    );
+    assert!(hits.is_empty(), "Tauri-Bezug im Code:\n{}", hits.join("\n"));
+
+    let cargo = std::fs::read_to_string(manifest_dir().join("Cargo.toml")).unwrap();
+    for line in cargo.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        assert!(!line.contains("tauri"), "Tauri in Cargo.toml: {line}");
+    }
+    for gone in ["build.rs", "tauri.conf.json", "capabilities"] {
+        assert!(
+            !manifest_dir().join(gone).exists(),
+            "{gone} entfällt (Plan W5)"
+        );
+    }
 }
 
 /// Ein Registry-Handler übersetzt das camelCase-JSON in das Args-Struct und

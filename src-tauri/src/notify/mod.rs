@@ -1,7 +1,7 @@
 //! Notify-Modul (Phase 2D, Block 15).
 //! - `store`: persistente In-App-Inbox (Quelle der Wahrheit).
-//! - [`Notifier`]: Kanal für OS-native Benachrichtigungen. Die Desktop-Fassung
-//!   (Tauri-Plugin) lebt in `tauri_shell`; im Server gibt es keinen (Plan W4).
+//! - [`Notifier`]: Kanal außerhalb der Inbox. Die Desktop-Fassung (Tauri-
+//!   Plugin) ist mit W5 entfallen; im Server gibt es keinen ([`InboxOnly`]).
 //! - `rules`: Reminder-Konfiguration (User-editierbar, per Migration geseedet).
 //!
 //! [`emit`] ist der zentrale Einstieg: schreibt in die Inbox (idempotent via

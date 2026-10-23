@@ -152,17 +152,23 @@ fn build_transport(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Execu
 pub async fn send(config: &SmtpConfig, mail: &OutgoingMail) -> Result<SmtpResponseInfo> {
     let message = build_message(mail)?;
     let transport = build_transport(config)?;
+    // Empfänger und Benutzername nur auf DEBUG (Plan W5.9, personenbezogen).
     tracing::info!(
         host = %config.host,
         port = config.port,
         use_tls = config.use_tls,
-        user = config.username.as_deref().unwrap_or("-"),
-        to = %mail.to,
         attachments = mail.attachments.len(),
         "SMTP: sende Mail (Passwort wird nie geloggt)"
     );
+    tracing::debug!(
+        user = config.username.as_deref().unwrap_or("-"),
+        to = %mail.to,
+        "SMTP: Empfänger"
+    );
     let response = transport.send(message).await.map_err(|e| {
-        tracing::warn!(host = %config.host, to = %mail.to, error = %e, "SMTP: Versand fehlgeschlagen");
+        // Die Server-Antwort nennt oft den Empfänger → nur auf DEBUG.
+        tracing::warn!(host = %config.host, "SMTP: Versand fehlgeschlagen");
+        tracing::debug!(error = %e, "SMTP: Fehlerantwort");
         Error::Mail(format!("SMTP-Versand fehlgeschlagen: {e}"))
     })?;
     let info = SmtpResponseInfo {
@@ -170,7 +176,6 @@ pub async fn send(config: &SmtpConfig, mail: &OutgoingMail) -> Result<SmtpRespon
         message: response.first_line().map(|s| s.to_string()),
     };
     tracing::info!(
-        to = %mail.to,
         code = info.code.as_deref().unwrap_or("-"),
         "SMTP: Mail erfolgreich an den Server übergeben"
     );

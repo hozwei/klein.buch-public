@@ -113,7 +113,7 @@ pub struct AppInfo {
     pub app_version: String,
     /// Erwartete DB-Schema-Version dieser Binary.
     pub schema_version: i32,
-    /// Tauri-Identifier aus `tauri.conf.json` (`de.wildbach.kleinbuch`).
+    /// Kennung der Anwendung (`server::APP_IDENTIFIER`, `de.wildbach.kleinbuch`).
     pub identifier: String,
     /// SPDX-Kennung der App-Lizenz (`AGPL-3.0-or-later`).
     pub license_spdx: String,

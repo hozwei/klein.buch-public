@@ -142,12 +142,19 @@ pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
     // beim Mount (Bug V2026.5).
     crate::config::ensure_inputs_seeded(paths)?;
 
-    // G1-RESET (ADR 0036): einen vorgemerkten Factory Reset JETZT anwenden — vor
-    // dem Öffnen des Pools (race-frei, kein Windows-File-Lock). Er löscht das
-    // gesamte data_dir; ein gleichzeitig vorgemerkter Restore ist damit
-    // gegenstandslos → früher Rücksprung in den leeren Onboarding-Zustand.
-    if crate::backup::factory_reset::apply_pending(paths)? {
-        return Ok(());
+    // E7 (ADR 0036/0039, Plan W5): Factory Reset ist im Server-Betrieb
+    // abgeschaltet. Ein vorgemerkter Reset (Marker der Desktop-Fassung oder von
+    // außen angelegt) wird nie angewendet — der Start bricht ab, nichts wird
+    // gelöscht. Der Reset-Code selbst entfällt in W11.
+    let reset_marker = paths
+        .data_dir
+        .join(crate::backup::factory_reset::RESET_MARKER);
+    if reset_marker.exists() {
+        return Err(Error::Config(format!(
+            "{} gefunden — Factory Reset ist im Server-Betrieb abgeschaltet (E7). \
+             Start abgebrochen, nichts gelöscht; Datei prüfen und entfernen.",
+            reset_marker.display()
+        )));
     }
 
     // Block 4: Vorgemerkten Restore JETZT anwenden — vor dem Öffnen des Pools.
@@ -222,6 +229,13 @@ pub async fn open_and_init(ctx: &crate::app_ctx::AppCtx, key: Option<&str>) -> R
     let pool = open_pool(&paths.db_file, key).await?;
     run_migrations(ctx, &pool).await?;
     Ok(pool)
+}
+
+/// `SQLITE_NOTADB` (26): mit falschem SQLCipher-Key scheitert schon der
+/// Verbindungsaufbau (die Pragmas beim Connect lesen die Datei), nicht erst der
+/// Probe-Read. Gilt beim Entsperren als „falsche Passphrase“.
+pub fn is_not_a_database(err: &Error) -> bool {
+    matches!(err, Error::Db(sqlx::Error::Database(db)) if db.code().as_deref() == Some("26"))
 }
 
 /// Billiger Probe-Read: schlägt fehl, wenn der SQLCipher-Key falsch ist (oder

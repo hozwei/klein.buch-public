@@ -52,6 +52,12 @@ Arbeitszweig `phase-w`.
 - **Kein `SQLITE_BUSY` bei parallelen Buchungen:** Schreib-Transaktionen mit
   `BEGIN IMMEDIATE`, `busy_timeout` 15 s. (W2)
 - **Restore:** Archivdateien sind danach wieder schreibgeschützt. (W2)
+- **Falsche Passphrase beim Entsperren** meldete bei verschlüsselter DB einen
+  Datenbankfehler statt „falsches Passwort“: SQLCipher scheitert schon beim
+  Verbindungsaufbau (`file is not a database`); das gilt jetzt als falsche
+  Passphrase. (W5)
+- **Mail-Empfänger und SMTP-Benutzer** stehen nur noch auf DEBUG im Log, nicht
+  mehr auf INFO/WARN. (W5)
 - **Restore-Tausch abbruchsicher:** eine Zustandsdatei steuert nach einem
   Abbruch das Zurückholen der Originale; ein Fehler in jeder Stufe stellt den
   alten Stand wieder her, nichts wird in unklaren Lagen gelöscht; solange ein
@@ -84,6 +90,56 @@ Arbeitszweig `phase-w`.
 - Neue Tests: Storno über den Kern, §19-Prüfung in der Vorlagen-Vorschau,
   UTF-8-Prüfung beim Rechnungseingang, Restore-Audit über den Kontext,
   Registry = Frontend-Aufrufe, kein Tauri-Bezug außerhalb der Hülle.
+- **Tauri entfernt, HTTP-Server `klein-buch-server` (W5):** axum-Router, hyper
+  mit Header-Read-Timeout 10 s, einziger Einstieg (Subcommands `serve`,
+  `healthcheck`, `version`; Adresse `KLEIN_BUCH_LISTEN`, Standard
+  `0.0.0.0:8080`). Tauri samt Plugins, `build.rs`, `capabilities/` und
+  `tauri.conf.json` entfallen; die Crate ist nur noch eine Bibliothek plus Binary.
+- **`POST /api/cmd/{name}` mit verbindlicher Allowlist (W5):** 160 der 183 Kerne
+  sind erreichbar; Einrichten/Anmelden laufen über `/api/auth/*`, Upload- und
+  Download-Wege folgen in W7, Factory Reset, Drop-Folder und Microsoft 365 sind
+  im Server gesperrt, Desktop-Funktionen („Im Ordner zeigen“) entfallen. Alles
+  andere → 404, ohne Sitzung → 401, gesperrte DB → 423, zu großer Körper → 413,
+  ohne Pflicht-Header `X-KleinBuch-Request` → 403.
+- **Fehler mit Status statt String (W5):** fachliche Fehler 4xx mit Meldung,
+  Trigger-Verstöße 409 mit Text, Sidecar-Ausfall 503, interne Fehler 500 nur mit
+  Referenz (voller Text im Log).
+- **Einrichten und Anmelden (W5, vorläufig):** `GET /api/auth/status`,
+  `POST /api/auth/setup`, `POST /api/auth/login` mit Passphrase; Sitzungs-Cookie
+  `__Host-kb_session` (HttpOnly, Secure, SameSite=Strict). TOTP, Setup-Token und
+  Rate-Limit folgen in W6.
+- **Start fail-closed (W5):** Volumes `/data` und `/inputs` müssen eingebunden
+  und beschreibbar sein; Instanz-Marker `/data/.klein-buch-instance` und DB
+  müssen zusammenpassen; keine unverschlüsselte DB; Selbsttest des
+  Schreibschutzes im Archiv; Reste in `/data/tmp` werden entfernt — alles vor dem
+  Port-Bind. Ein vorgemerkter Factory Reset wird nicht angewendet, sondern
+  verweigert den Start (E7); eine Sperrdatei verhindert einen zweiten Prozess
+  auf demselben Datenverzeichnis. Beim Entsperren prüft eine Stichprobe, ob die
+  Archivpfade zum Datenverzeichnis passen, bevor Scheduler und Pool aktiv werden.
+- **Jobs und Idempotenz (W5):** Festschreiben, Storno, Versand, Backup, Restore
+  und Exporte laufen als Job (`202` + `GET /api/jobs/{id}`), ändernde Aufrufe als
+  eigener Task mit Idempotenz-Schlüssel — ein abgebrochener Request hinterlässt
+  nichts halb, die Wiederholung liefert dasselbe Ergebnis. Während eines Restores
+  sind Änderungen gesperrt und der Scheduler pausiert; danach fährt der Server
+  geordnet herunter (wartet auf laufende Tasks), der Neustart wendet ihn an.
+  Einrichten und Anmelden laufen ebenfalls abbruchsicher.
+- **Sicherheits-Header und Lastgrenzen (W5):** CSP mit Hashes der
+  Inline-Skripte (kein `unsafe-inline` für Skripte), `nosniff`,
+  `Referrer-Policy`, COOP/CORP, `Permissions-Policy`, `Cache-Control` je
+  Routenklasse; höchstens 64 Anfragen gleichzeitig, je Kostenklasse 2/2/1/1
+  Plätze, 30 Render-/Java-Aufrufe je Minute und Sitzung, 30-s-Timeout.
+- **Logging ohne Geheimnisse (W5):** `sqlx::query=off` fest im Filter,
+  Standard `info`; das Zugriffsprotokoll nennt Methode, Pfad ohne Query,
+  Status und Dauer.
+- **`/healthz` (W5):** nach außen 200/503 ohne Körper, über Loopback mit
+  `{"state":"setup|locked|unlocked"}`; `locked` gilt als gesund.
+- **Frontend über HTTP (W5):** `src/lib/transport.ts` ersetzt die
+  Tauri-Bridge (Pflicht-Header, Idempotenz-Schlüssel, Job-Abfrage, Anmeldung bei
+  401/423, Warten auf den Neustart nach dem Restore).
+- Neue Tests: Allowlist, Routen-Inventar, Statustabelle aller Fehlervarianten,
+  Header je Routenklasse, Fail-closed-Start (auch über das Binary), Abbruch
+  beim Festschreiben mit Wiederholung, Header-Timeout, parallele Vorschauen,
+  keine Geheimnisse im Log, Healthcheck-Subcommand; Vitest für den Transport.
 
 ### Documentation
 

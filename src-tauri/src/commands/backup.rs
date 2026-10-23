@@ -60,7 +60,7 @@ pub struct BackupHistoryItem {
 /// Review W2 S0-2/S1-3: Solange ein Restore vorgemerkt ist oder ein Tausch
 /// nicht sauber abgeschlossen wurde, weder Onboarding noch Entsperren — sonst
 /// entstünde neben `klein-buch.sqlite.rollback` eine neue DB.
-fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
+pub fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
     if crate::backup::restore::restore_incomplete(paths) {
         return Err(Error::Backup(
             "Eine Wiederherstellung ist noch nicht abgeschlossen. Bitte die App neu \
@@ -274,7 +274,6 @@ pub struct BackupUnlockArgs {
 /// fälliges Auto-Daily-Backup auslösen.
 pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<bool> {
     let BackupUnlockArgs { passphrase } = args;
-    let session = &ctx.session;
 
     let paths = ctx.paths.clone();
     ensure_no_pending_restore(&paths)?;
@@ -313,19 +312,43 @@ pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<
         // verschlüsselte Zweig unten.
         db::migrate_plaintext_to_encrypted(ctx, pool, &passphrase).await?
     } else {
-        // Verschlüsselte DB: mit Key öffnen, Probe-Read als Verifier.
-        let pool = db::open_pool(&paths.db_file, Some(passphrase.as_str())).await?;
-        if !db::probe_readable(&pool).await {
-            // Falsche Passphrase: DB nicht lesbar → kein Audit möglich.
-            pool.close().await;
+        let Some(pool) = open_encrypted(&paths, &passphrase).await? else {
             return Ok(false);
-        }
+        };
         db::run_migrations(ctx, &pool).await?;
         pool
     };
+    activate_unlocked(ctx, pool, passphrase).await?;
+    Ok(true)
+}
 
+/// Öffnet die verschlüsselte DB mit der Passphrase und prüft sie per
+/// Probe-Read — ohne Migrationen und ohne den Zustand zu ändern. `None` =
+/// falsche Passphrase. Mit falschem Key scheitert meist schon der
+/// Verbindungsaufbau (`SQLITE_NOTADB`).
+pub async fn open_encrypted(paths: &Paths, passphrase: &str) -> Result<Option<sqlx::SqlitePool>> {
+    let pool = match db::open_pool(&paths.db_file, Some(passphrase)).await {
+        Ok(pool) => pool,
+        Err(e) if db::is_not_a_database(&e) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if !db::probe_readable(&pool).await {
+        // Falsche Passphrase: DB nicht lesbar → kein Audit möglich.
+        pool.close().await;
+        return Ok(None);
+    }
+    Ok(Some(pool))
+}
+
+/// Hängt einen geprüften, migrierten Pool ein: Pool, Passphrase der Sitzung,
+/// Scheduler, Audit `backup.unlock.ok`.
+pub async fn activate_unlocked(
+    ctx: &Arc<AppCtx>,
+    pool: sqlx::SqlitePool,
+    passphrase: String,
+) -> Result<()> {
     ctx.set_pool(pool.clone());
-    session.set(passphrase);
+    ctx.session.set(passphrase);
     crate::scheduler::tick::ensure_started(ctx);
     // R2-026: Pflicht-Audit (Security-Event), Fehler propagieren.
     crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
@@ -334,7 +357,7 @@ pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<
     // „Täglich beim App-Start“: das fällige Tages-Backup legt der erste
     // Scheduler-Tick an (läuft sofort nach `ensure_started`, Plan W2.4). Ein
     // zusätzlicher Aufruf hier erzeugte zwei volle Backups (Review W2 S3).
-    Ok(true)
+    Ok(())
 }
 
 /// Argumente von [`backup_create_now`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

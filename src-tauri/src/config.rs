@@ -1,8 +1,7 @@
 //! App-Konfiguration: Pfade zu DB, Archive, Backups, Inputs, Sidecar, Web.
 //!
 //! Plan W4: Die Kerne kennen nur [`Paths`]. Der Server liest sie aus der Umgebung
-//! ([`Paths::from_env`], ohne Debug-Sonderwege); die Tauri-Hülle (bis W5) baut
-//! sie aus dem `AppHandle` (`tauri_shell::paths_from_handle`).
+//! ([`Paths::from_env`], ohne Debug-Sonderwege).
 //!
 //! ## `inputs/` — Zwei-Welten-Modell (R7-INPUTS)
 //!

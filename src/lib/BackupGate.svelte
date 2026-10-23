@@ -1,6 +1,10 @@
 <script lang="ts">
   // Block 4 + G1-ENC Schritt 2 — Onboarding/Unlock-Gate.
   //
+  // Plan W5: Status, Einrichtung und Anmeldung laufen über `/api/auth/*`; die
+  // Anmeldung erzeugt die Browser-Sitzung. Meldet der Server später 401/423
+  // (Sitzung weg, Neustart, DB gesperrt), erscheint die Maske erneut.
+  //
   // Seit der Bootstrap-Inversion ist die Passphrase das **Daten-Passwort**: die
   // SQLite-DB wird damit verschlüsselt (SQLCipher, ADR 0035) und der DB-Pool
   // entsteht erst NACH der Eingabe. Ohne Passwort lässt sich die App nicht
@@ -10,6 +14,7 @@
   import { appState } from "$lib/stores.svelte";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
+  import { onAuthRequired } from "$lib/transport";
   import {
     backupNeedsOnboarding,
     backupIsUnlocked,
@@ -43,7 +48,13 @@
     }
   });
 
-  onMount(refresh);
+  onMount(() => {
+    refresh();
+    // 401/423 aus einem beliebigen Aufruf → erneut anmelden.
+    return onAuthRequired(() => {
+      if (status === "ready" || status === "loading") status = "unlock";
+    });
+  });
 
   async function refresh() {
     try {

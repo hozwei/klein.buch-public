@@ -1,8 +1,10 @@
-// Tauri-Command-Bridge. Frontend ruft Backend via `invoke<T>(name, args)`.
+// Backend-Aufrufe. Jede Funktion ruft einen Command-Kern über
+// `invoke<T>(name, args)` auf — seit Plan W5 per HTTP (`src/lib/transport.ts`,
+// `POST /api/cmd/{name}`), vorher über die Tauri-Bridge.
 // Block 2: contacts_* + seller_profile_* + paragraph_19_info.
 // Block 3b: invoices_* — Draft, Lock-and-Issue, Cancel, Payment.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, authStatus, authSetup, authLogin } from "./transport";
 import type {
   AnonymizeCheck,
   CancelArgs,
@@ -1010,24 +1012,26 @@ export interface ExportReport {
   zipSizeBytes: number;
 }
 
-export function backupNeedsOnboarding(): Promise<boolean> {
-  return invoke<boolean>("backup_needs_onboarding");
+// Einrichten/Anmelden laufen seit Plan W5 über `/api/auth/*` (transport.ts).
+
+export async function backupNeedsOnboarding(): Promise<boolean> {
+  return (await authStatus()) === "setup_required";
 }
 
-export function backupIsUnlocked(): Promise<boolean> {
-  return invoke<boolean>("backup_is_unlocked");
+export async function backupIsUnlocked(): Promise<boolean> {
+  return (await authStatus()) === "ok";
 }
 
 export function backupGetSettings(): Promise<BackupSettings> {
   return invoke<BackupSettings>("backup_get_settings");
 }
 
-export function backupSetupPassphrase(passphrase: string): Promise<BackupOutcome> {
-  return invoke<BackupOutcome>("backup_setup_passphrase", { passphrase });
+export function backupSetupPassphrase(passphrase: string): Promise<void> {
+  return authSetup(passphrase);
 }
 
 export function backupUnlock(passphrase: string): Promise<boolean> {
-  return invoke<boolean>("backup_unlock", { passphrase });
+  return authLogin(passphrase);
 }
 
 export function backupCreateNow(): Promise<BackupOutcome> {

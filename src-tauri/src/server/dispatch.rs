@@ -1,0 +1,212 @@
+//! `POST /api/cmd/{name}` (Plan W5.2, W5.6).
+//!
+//! Reihenfolge der Prüfungen: Pflicht-Header → Allowlist (sonst 404) →
+//! Sitzung (sonst 401) → Neustart läuft (503) → Body-Limit (413) → JSON (400)
+//! → Render-/JVM-Kontingent der Sitzung (429). Danach je nach [`Kind`]:
+//!
+//! - `Read`: Zulassung der Kostenklasse, Kern als eigener Task.
+//! - `Write`: wie `Read`, zusätzlich Idempotenz-Schlüssel. Der Task läuft auch
+//!   weiter, wenn der Client den Request abbricht.
+//! - `Job`: `202 {"jobId"}`, Ergebnis über `GET /api/jobs/{id}`.
+//!
+//! DB-Commands im Zustand `locked` liefern über die Fehlerabbildung 423.
+
+use std::sync::Arc;
+
+use axum::body::{Body, Bytes};
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+
+use super::errors::ApiError;
+use super::idempotency::{self, Begin, Completer, StoredResponse};
+use super::limits::ADMISSION_WAIT;
+use super::state::ServerState;
+use crate::commands::registry::{self, CommandSpec, Cost, Kind};
+
+/// Pflicht-Header jeder ändernden API-Anfrage (Plan W5.11; W6 ergänzt die
+/// Origin-/Host-Prüfung).
+pub const REQUEST_HEADER: &str = "x-kleinbuch-request";
+
+pub async fn cmd(
+    State(st): State<Arc<ServerState>>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    match handle(st, &name, &headers, body).await {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+/// Prüft den Pflicht-Header.
+pub fn require_request_header(headers: &HeaderMap) -> Result<(), ApiError> {
+    if headers.contains_key(REQUEST_HEADER) {
+        Ok(())
+    } else {
+        Err(ApiError::missing_request_header())
+    }
+}
+
+/// Liest den Körper bis `limit` Bytes, sonst 413 (auch vorab über
+/// `Content-Length`).
+pub async fn read_body(body: Body, headers: &HeaderMap, limit: usize) -> Result<Bytes, ApiError> {
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if declared.is_some_and(|len| len > limit as u64) {
+        return Err(ApiError::payload_too_large());
+    }
+    axum::body::to_bytes(body, limit)
+        .await
+        .map_err(|_| ApiError::payload_too_large())
+}
+
+async fn handle(
+    st: Arc<ServerState>,
+    name: &str,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<Response, ApiError> {
+    require_request_header(headers)?;
+    let spec = registry::find_exposed(name).ok_or_else(ApiError::not_found)?;
+    let session = st
+        .sessions
+        .from_headers(headers)
+        .ok_or_else(ApiError::unauthenticated)?;
+    if st.writes_blocked() && spec.kind != Kind::Read {
+        return Err(ApiError::restarting());
+    }
+    let bytes = read_body(body, headers, spec.body_limit).await?;
+    let args: serde_json::Value = if bytes.iter().all(u8::is_ascii_whitespace) {
+        serde_json::Value::Object(Default::default())
+    } else {
+        serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("Ungültiges JSON."))?
+    };
+    if matches!(spec.cost, Cost::Render | Cost::Jvm) {
+        st.sessions
+            .allow_heavy(session)
+            .map_err(|wait| ApiError::rate_limited(wait.as_secs().max(1)))?;
+    }
+    match spec.kind {
+        Kind::Read => execute(st, spec, args, None).await,
+        Kind::Write | Kind::Job => {
+            let completer = match idempotency::key_from_headers(headers)? {
+                None => None,
+                Some(key) => {
+                    let hash = idempotency::body_hash(spec.name, &bytes);
+                    match st.idem.begin(spec.name, &key, hash) {
+                        Begin::New(c) => Some(c),
+                        Begin::Replay(stored) => return Ok(stored.into_response()),
+                        Begin::Wait(rx) => {
+                            return Ok(idempotency::wait_for(rx).await?.into_response())
+                        }
+                        Begin::Mismatch => return Err(ApiError::new(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "idempotency_mismatch",
+                            "Idempotenz-Schlüssel wurde schon für eine andere Anfrage verwendet.",
+                        )),
+                    }
+                }
+            };
+            if spec.kind == Kind::Job {
+                start_job(st, spec, args, completer)
+            } else {
+                execute(st, spec, args, completer).await
+            }
+        }
+    }
+}
+
+/// Ergebnis eines Kerns als gespeicherte Antwort.
+fn to_stored(outcome: crate::error::Result<serde_json::Value>) -> StoredResponse {
+    match outcome {
+        Ok(value) => StoredResponse::json(StatusCode::OK, &value),
+        Err(err) => {
+            let api = ApiError::from_error(&err);
+            StoredResponse::json(api.status, &api.body())
+        }
+    }
+}
+
+/// Direkter Aufruf: Zulassung, dann Kern als eigener Task (läuft bei Abbruch
+/// des Requests zu Ende und hinterlegt sein Ergebnis beim Idempotenz-Eintrag).
+async fn execute(
+    st: Arc<ServerState>,
+    spec: &'static CommandSpec,
+    args: serde_json::Value,
+    completer: Option<Completer>,
+) -> Result<Response, ApiError> {
+    let permit = st.admission.admit(spec.cost, ADMISSION_WAIT).await?;
+    let runner = st.clone();
+    let task = st.tasks.spawn(async move {
+        let _permit = permit;
+        let _running = runner.admission.running(spec.cost);
+        let stored = to_stored((spec.handler)(runner.ctx.clone(), args).await);
+        if let Some(c) = completer {
+            c.complete(stored.clone());
+        }
+        stored
+    });
+    match task.await {
+        Ok(stored) => Ok(stored.into_response()),
+        Err(join) => Err(ApiError::internal(&format!(
+            "Command {} abgebrochen: {join}",
+            spec.name
+        ))),
+    }
+}
+
+/// Job: Platz reservieren, sofort `202 {"jobId"}`, Ablauf als eigener Task.
+fn start_job(
+    st: Arc<ServerState>,
+    spec: &'static CommandSpec,
+    args: serde_json::Value,
+    completer: Option<Completer>,
+) -> Result<Response, ApiError> {
+    let id = st.jobs.reserve(spec.name)?;
+    let restore = spec.name == "backup_restore_apply";
+    if restore {
+        // Ab der Annahme keine Änderungen mehr (sie gingen beim Tausch verloren).
+        st.begin_restore();
+    }
+    let accepted = StoredResponse::json(
+        StatusCode::ACCEPTED,
+        &serde_json::json!({ "jobId": id.to_string() }),
+    );
+    if let Some(c) = completer {
+        c.complete(accepted.clone());
+    }
+    let runner = st.clone();
+    st.tasks.spawn(async move {
+        if restore {
+            crate::scheduler::tick::stop(&runner.ctx).await;
+        }
+        let permit = runner.admission.acquire(spec.cost).await;
+        let _running = runner.admission.running(spec.cost);
+        let ctx = runner.ctx.clone();
+        let inner = tokio::spawn(async move { (spec.handler)(ctx, args).await });
+        let outcome = match inner.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(err)) => Err(ApiError::from_error(&err)),
+            Err(join) => Err(ApiError::internal(&format!(
+                "Job {} abgebrochen: {join}",
+                spec.name
+            ))),
+        };
+        drop(_running);
+        drop(permit);
+        let ok = outcome.is_ok();
+        runner.jobs.finish(id, outcome);
+        if restore {
+            if ok {
+                runner.request_restart();
+            } else {
+                runner.abort_restore().await;
+            }
+        }
+    });
+    Ok(accepted.into_response())
+}

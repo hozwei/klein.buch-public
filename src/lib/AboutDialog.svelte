@@ -9,7 +9,6 @@
   // (Standard-Browser bzw. Standard-Programm des OS). Das Modal selbst hält
   // keine Eingaben — kein Form-Submit, kein Pflicht-State.
 
-  import { onMount } from "svelte";
   import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { aboutModalStore, closeAboutDialog } from "$lib/aboutModal.svelte";
   import { appInfo, thirdPartyLicensesPath } from "$lib/api";
@@ -23,14 +22,21 @@
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;
 
-  // App-Info beim ersten Mount einmal laden — die Werte sind Compile-Time-
-  // konstant, ein Refresh pro App-Lauf reicht.
-  onMount(async () => {
-    try {
-      info = await appInfo();
-    } catch (e) {
-      infoError = e instanceof Error ? e.message : String(e);
-    }
+  // App-Info beim ersten Öffnen einmal laden — die Werte sind Compile-Time-
+  // konstant, ein Abruf pro App-Lauf reicht. Seit Plan W5 braucht `app_info`
+  // eine Sitzung; der Dialog ist erst nach der Anmeldung erreichbar, ein
+  // Laden beim Mount (vor der Anmeldung) endete in 401.
+  let infoRequested = false;
+  $effect(() => {
+    if (!aboutModalStore.visible || infoRequested) return;
+    infoRequested = true;
+    appInfo()
+      .then((i) => {
+        info = i;
+      })
+      .catch((e) => {
+        infoError = e instanceof Error ? e.message : String(e);
+      });
   });
 
   // Beim Öffnen: aktuell fokussiertes Element merken, Close-Button fokussieren,

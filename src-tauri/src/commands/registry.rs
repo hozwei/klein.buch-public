@@ -1,17 +1,18 @@
-//! GENERIERT (Plan W4, `w4_codegen.py`), danach von Hand gepflegt: Registry
-//! aller Command-Kerne mit Metadaten für den HTTP-Dispatcher (W5).
+//! Registry aller Command-Kerne (Plan W4, Handler generiert per `w4_codegen.py`)
+//! mit den Zugriffsregeln für den HTTP-Dispatcher (Plan W5.2, ADR 0039).
 //!
-//! Jeder Eintrag: Name (= `invoke`-Name im Frontend), `auth`, `cost`,
-//! `body_limit` und ein Handler, der das JSON-Argument-Objekt in das
-//! Args-Struct des Kerns übersetzt. Die Werte für `auth`/`cost` setzen
-//! W5/W6; bis dahin `Session`/`Cheap`.
+//! Jeder Eintrag: Name (= Command-Name im Frontend), Weg ([`Route`]), `auth`,
+//! `cost`, Art ([`Kind`]), `body_limit` und ein Handler, der das JSON-Argument-
+//! Objekt in das Args-Struct des Kerns übersetzt. Über `POST /api/cmd/{name}`
+//! erreichbar ist nur, was [`Route::Cmd`] hat (verbindliche Allowlist); alles
+//! andere beantwortet der Dispatcher mit 404.
 
 use crate::app_ctx::AppCtx;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// Antwort eines Handlers (serialisiertes Ergebnis des Kerns).
 pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send>>;
@@ -25,7 +26,7 @@ pub enum Auth {
     Public,
     /// gültige Sitzung
     Session,
-    /// gültige Sitzung + frische Re-Auth
+    /// gültige Sitzung + frische Re-Auth (Prüfung der Frische ab W6)
     Reauth,
 }
 
@@ -33,17 +34,47 @@ pub enum Auth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cost {
     Cheap,
+    /// Typst-Render
     Render,
+    /// JVM-Start (KoSIT, Mustang)
     Jvm,
+    /// Passphrase-Ableitung
     Kdf,
+    /// Backup, Restore, Exporte
     Backup,
+}
+
+/// Art des Aufrufs (Plan W5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// liest nur
+    Read,
+    /// ändert Daten; läuft abgekoppelt vom Request, Idempotenz-Schlüssel
+    Write,
+    /// langer, zustandsändernder Ablauf: `202 + jobId`, Ergebnis über `/api/jobs/{id}`
+    Job,
+}
+
+/// Über welchen Weg der Kern erreichbar ist (Plan W5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// `POST /api/cmd/{name}` (Allowlist)
+    Cmd,
+    /// ersetzt durch eine eigene Route (Auth, Upload, Download)
+    Replaced(&'static str),
+    /// entfällt im Server (Desktop-Funktion)
+    Dropped,
+    /// im Server-Betrieb gesperrt (E7 Factory Reset, E9 MS-Graph, E11 Drop-Folder)
+    Blocked,
 }
 
 /// Ein Registry-Eintrag.
 pub struct CommandSpec {
     pub name: &'static str,
+    pub route: Route,
     pub auth: Auth,
     pub cost: Cost,
+    pub kind: Kind,
     pub body_limit: usize,
     pub handler: Handler,
 }
@@ -51,9 +82,191 @@ pub struct CommandSpec {
 /// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
 pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
 
-/// Sucht einen Eintrag nach Name.
+/// Übergangs-Limit für Commands, die Dateien noch als JSON-Zahlenfeld
+/// übertragen (bis W7 auf `POST /api/upload/{art}` umstellt; ein Byte wird im
+/// JSON zu bis zu 4 Zeichen).
+pub const LEGACY_UPLOAD_BODY_LIMIT: usize = 32 * 1024 * 1024;
+
+/// Weg im Server (Plan W5.2).
+fn route_of(name: &str) -> Route {
+    match name {
+        "backup_needs_onboarding" | "backup_is_unlocked" => Route::Replaced("GET /api/auth/status"),
+        "backup_setup_passphrase" => Route::Replaced("POST /api/auth/setup"),
+        "backup_unlock" => Route::Replaced("POST /api/auth/login"),
+        "expenses_parse_einvoice" | "seller_signature_set" => {
+            Route::Replaced("POST /api/upload/{art} (W7)")
+        }
+        "invoices_open_pdf" | "attachments_open" => Route::Replaced("GET /files/archive/{id} (W7)"),
+        "backup_restore_preview"
+        | "backup_open_folder"
+        | "backup_reveal_path"
+        | "euer_reveal_path"
+        | "invoices_reveal_pdf"
+        | "attachments_reveal"
+        | "third_party_licenses_path" => Route::Dropped,
+        "factory_reset_check"
+        | "factory_reset"
+        | "drop_folder_settings_get"
+        | "drop_folder_settings_set"
+        | "drop_folder_sync_now"
+        | "mail_oauth_status"
+        | "mail_oauth_connect"
+        | "mail_oauth_disconnect" => Route::Blocked,
+        _ => Route::Cmd,
+    }
+}
+
+/// Re-Auth-Pflicht (Plan W6; die Prüfung der Frische folgt in W6).
+fn auth_of(name: &str) -> Auth {
+    match name {
+        "backup_set_target"
+        | "backup_set_sftp_target"
+        | "backup_test_sftp"
+        | "backup_restore_apply"
+        | "mail_account_create"
+        | "mail_account_update"
+        | "mail_account_delete"
+        | "mail_account_test_connection"
+        | "mail_send_test"
+        | "migration_export_run"
+        | "dsgvo_export"
+        | "euer_export_stb_zip"
+        | "euer_export_detail_zip" => Auth::Reauth,
+        _ => Auth::Session,
+    }
+}
+
+/// Kostenklasse (Plan W5.8).
+fn cost_of(name: &str) -> Cost {
+    match name {
+        "pdf_template_preview"
+        | "package_preview"
+        | "package_catalog_render"
+        | "package_catalog_send"
+        | "quotes_generate_pdf"
+        | "quotes_open_bundle"
+        | "quotes_issue"
+        | "mail_send_quote" => Cost::Render,
+        "invoices_lock_and_issue"
+        | "invoices_cancel"
+        | "recurring_invoices_run_now"
+        | "recurring_invoices_run_due_check"
+        | "expenses_create_from_einvoice"
+        | "expenses_parse_einvoice"
+        | "expenses_receipt_xml_text" => Cost::Jvm,
+        "backup_create_now"
+        | "backup_restore_apply"
+        | "migration_export_run"
+        | "dsgvo_export"
+        | "euer_export_detail_zip"
+        | "euer_export_elster"
+        | "euer_export_pdf"
+        | "euer_export_datev"
+        | "euer_export_stb_zip"
+        | "archive_integrity_run" => Cost::Backup,
+        _ => Cost::Cheap,
+    }
+}
+
+/// Art des Aufrufs (Plan W5.6). Was nicht ausdrücklich nur liest, gilt als
+/// ändernd (abgekoppelt + Idempotenz — für reine Leser unschädlich).
+fn kind_of(name: &str) -> Kind {
+    match name {
+        // Festschreiben/Ausstellen, Storno, Versand, Backup, Restore, Exporte
+        "invoices_lock_and_issue"
+        | "quotes_issue"
+        | "invoices_cancel"
+        | "recurring_invoices_run_now"
+        | "recurring_invoices_run_due_check"
+        | "mail_send_invoice"
+        | "mail_send_quote"
+        | "package_catalog_send"
+        | "backup_create_now"
+        | "backup_restore_apply"
+        | "euer_export_stb_zip"
+        | "dsgvo_export"
+        | "migration_export_run" => Kind::Job,
+        // legt fällige Abo-Kosten an
+        "recurring_run_due_check" => Kind::Write,
+        n if n.ends_with("_list")
+            || n.ends_with("_get")
+            || n.ends_with("_search")
+            || n.ends_with("_data")
+            || n.ends_with("_info")
+            || n.ends_with("_overview")
+            || n.ends_with("_history")
+            || n.ends_with("_preview")
+            || n.ends_with("_count")
+            || n.ends_with("_status")
+            || n.ends_with("_check") =>
+        {
+            Kind::Read
+        }
+        "euer_compute_report"
+        | "euer_available_years"
+        | "euer_package"
+        | "euer_afa_pending"
+        | "assets_afa_table"
+        | "assets_suggest_method"
+        | "depreciation_list_for_year"
+        | "email_log_for"
+        | "invoices_validate_draft"
+        | "quotes_validate_draft"
+        | "quotes_legal_bindings"
+        | "travel_compute"
+        | "expenses_receipt_xml_text" => Kind::Read,
+        _ => Kind::Write,
+    }
+}
+
+fn body_limit_of(name: &str) -> usize {
+    match name {
+        "attachments_add"
+        | "expenses_create"
+        | "private_movements_create"
+        | "quotes_accept"
+        | "legal_documents_upload"
+        | "seller_logo_set"
+        | "expenses_create_from_einvoice" => LEGACY_UPLOAD_BODY_LIMIT,
+        _ => DEFAULT_BODY_LIMIT,
+    }
+}
+
+impl CommandSpec {
+    fn new(name: &'static str, handler: Handler) -> Self {
+        Self {
+            name,
+            route: route_of(name),
+            auth: auth_of(name),
+            cost: cost_of(name),
+            kind: kind_of(name),
+            body_limit: body_limit_of(name),
+            handler,
+        }
+    }
+
+    /// Über `POST /api/cmd/{name}` erreichbar?
+    pub fn exposed(&self) -> bool {
+        self.route == Route::Cmd
+    }
+}
+
+/// Alle Command-Kerne mit ihren Zugriffsregeln.
+pub static REGISTRY: LazyLock<Vec<CommandSpec>> = LazyLock::new(|| {
+    ENTRIES
+        .iter()
+        .map(|(name, handler)| CommandSpec::new(name, *handler))
+        .collect()
+});
+
+/// Sucht einen Eintrag nach Name (auch nicht erreichbare).
 pub fn find(name: &str) -> Option<&'static CommandSpec> {
     REGISTRY.iter().find(|c| c.name == name)
+}
+
+/// Sucht einen über `POST /api/cmd/{name}` erreichbaren Eintrag (Allowlist).
+pub fn find_exposed(name: &str) -> Option<&'static CommandSpec> {
+    find(name).filter(|c| c.exposed())
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
@@ -62,233 +275,221 @@ fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
     } else {
         v
     };
-    Ok(serde_json::from_value(v)?)
+    serde_json::from_value(v).map_err(|e| Error::BadRequest(e.to_string()))
 }
 
-macro_rules! spec {
-    ($name:literal, $handler:path) => {
-        CommandSpec {
-            name: $name,
-            auth: Auth::Session,
-            cost: Cost::Cheap,
-            body_limit: DEFAULT_BODY_LIMIT,
-            handler: $handler,
-        }
-    };
-}
-
-/// Alle über HTTP erreichbaren Command-Kerne (W5 schränkt per Allowlist ein).
-pub static REGISTRY: &[CommandSpec] = &[
-    spec!("assets_list", h::assets_list),
-    spec!("assets_get", h::assets_get),
-    spec!("assets_afa_table", h::assets_afa_table),
-    spec!("assets_suggest_method", h::assets_suggest_method),
-    spec!("assets_create", h::assets_create),
-    spec!("assets_update", h::assets_update),
-    spec!("assets_dispose", h::assets_dispose),
-    spec!("attachments_open", h::attachments_open),
-    spec!("attachments_reveal", h::attachments_reveal),
-    spec!("attachments_list", h::attachments_list),
-    spec!("attachments_add", h::attachments_add),
-    spec!("backup_needs_onboarding", h::backup_needs_onboarding),
-    spec!("backup_is_unlocked", h::backup_is_unlocked),
-    spec!("backup_get_settings", h::backup_get_settings),
-    spec!("backup_setup_passphrase", h::backup_setup_passphrase),
-    spec!("backup_unlock", h::backup_unlock),
-    spec!("backup_create_now", h::backup_create_now),
-    spec!("backup_set_target", h::backup_set_target),
-    spec!("backup_test_sftp", h::backup_test_sftp),
-    spec!("backup_set_sftp_target", h::backup_set_sftp_target),
-    spec!("backup_open_folder", h::backup_open_folder),
-    spec!("backup_reveal_path", h::backup_reveal_path),
-    spec!("backup_list", h::backup_list),
-    spec!("backup_log_list", h::backup_log_list),
-    spec!("backup_log_search", h::backup_log_search),
-    spec!("backup_restore_preview", h::backup_restore_preview),
-    spec!("backup_restore_apply", h::backup_restore_apply),
-    spec!("contacts_list", h::contacts_list),
-    spec!("contacts_get", h::contacts_get),
-    spec!("contacts_create", h::contacts_create),
-    spec!("contacts_update", h::contacts_update),
-    spec!("contacts_archive", h::contacts_archive),
-    spec!("contacts_unarchive", h::contacts_unarchive),
-    spec!("contacts_search", h::contacts_search),
-    spec!("contacts_anonymize_check", h::contacts_anonymize_check),
-    spec!("contacts_anonymize", h::contacts_anonymize),
-    spec!("depreciation_accrue_year", h::depreciation_accrue_year),
-    spec!("depreciation_reset_asset", h::depreciation_reset_asset),
-    spec!("depreciation_list_for_year", h::depreciation_list_for_year),
-    spec!("dsgvo_export", h::dsgvo_export),
-    spec!("euer_compute_report", h::euer_compute_report),
-    spec!("euer_available_years", h::euer_available_years),
-    spec!("euer_package", h::euer_package),
-    spec!("euer_export_detail_zip", h::euer_export_detail_zip),
-    spec!("euer_export_elster", h::euer_export_elster),
-    spec!("euer_export_pdf", h::euer_export_pdf),
-    spec!("euer_export_datev", h::euer_export_datev),
-    spec!("euer_export_stb_zip", h::euer_export_stb_zip),
-    spec!("euer_afa_pending", h::euer_afa_pending),
-    spec!("euer_reveal_path", h::euer_reveal_path),
-    spec!("expenses_list", h::expenses_list),
-    spec!("expenses_get", h::expenses_get),
-    spec!("expenses_create", h::expenses_create),
-    spec!("expenses_cancel", h::expenses_cancel),
-    spec!("expenses_set_payment", h::expenses_set_payment),
-    spec!("expenses_parse_einvoice", h::expenses_parse_einvoice),
-    spec!(
+/// Alle Command-Kerne mit Handler, in der Reihenfolge der Quelldateien.
+static ENTRIES: &[(&str, Handler)] = &[
+    ("assets_list", h::assets_list),
+    ("assets_get", h::assets_get),
+    ("assets_afa_table", h::assets_afa_table),
+    ("assets_suggest_method", h::assets_suggest_method),
+    ("assets_create", h::assets_create),
+    ("assets_update", h::assets_update),
+    ("assets_dispose", h::assets_dispose),
+    ("attachments_open", h::attachments_open),
+    ("attachments_reveal", h::attachments_reveal),
+    ("attachments_list", h::attachments_list),
+    ("attachments_add", h::attachments_add),
+    ("backup_needs_onboarding", h::backup_needs_onboarding),
+    ("backup_is_unlocked", h::backup_is_unlocked),
+    ("backup_get_settings", h::backup_get_settings),
+    ("backup_setup_passphrase", h::backup_setup_passphrase),
+    ("backup_unlock", h::backup_unlock),
+    ("backup_create_now", h::backup_create_now),
+    ("backup_set_target", h::backup_set_target),
+    ("backup_test_sftp", h::backup_test_sftp),
+    ("backup_set_sftp_target", h::backup_set_sftp_target),
+    ("backup_open_folder", h::backup_open_folder),
+    ("backup_reveal_path", h::backup_reveal_path),
+    ("backup_list", h::backup_list),
+    ("backup_log_list", h::backup_log_list),
+    ("backup_log_search", h::backup_log_search),
+    ("backup_restore_preview", h::backup_restore_preview),
+    ("backup_restore_apply", h::backup_restore_apply),
+    ("contacts_list", h::contacts_list),
+    ("contacts_get", h::contacts_get),
+    ("contacts_create", h::contacts_create),
+    ("contacts_update", h::contacts_update),
+    ("contacts_archive", h::contacts_archive),
+    ("contacts_unarchive", h::contacts_unarchive),
+    ("contacts_search", h::contacts_search),
+    ("contacts_anonymize_check", h::contacts_anonymize_check),
+    ("contacts_anonymize", h::contacts_anonymize),
+    ("depreciation_accrue_year", h::depreciation_accrue_year),
+    ("depreciation_reset_asset", h::depreciation_reset_asset),
+    ("depreciation_list_for_year", h::depreciation_list_for_year),
+    ("dsgvo_export", h::dsgvo_export),
+    ("euer_compute_report", h::euer_compute_report),
+    ("euer_available_years", h::euer_available_years),
+    ("euer_package", h::euer_package),
+    ("euer_export_detail_zip", h::euer_export_detail_zip),
+    ("euer_export_elster", h::euer_export_elster),
+    ("euer_export_pdf", h::euer_export_pdf),
+    ("euer_export_datev", h::euer_export_datev),
+    ("euer_export_stb_zip", h::euer_export_stb_zip),
+    ("euer_afa_pending", h::euer_afa_pending),
+    ("euer_reveal_path", h::euer_reveal_path),
+    ("expenses_list", h::expenses_list),
+    ("expenses_get", h::expenses_get),
+    ("expenses_create", h::expenses_create),
+    ("expenses_cancel", h::expenses_cancel),
+    ("expenses_set_payment", h::expenses_set_payment),
+    ("expenses_parse_einvoice", h::expenses_parse_einvoice),
+    (
         "expenses_create_from_einvoice",
-        h::expenses_create_from_einvoice
+        h::expenses_create_from_einvoice,
     ),
-    spec!("expenses_receipt_xml_text", h::expenses_receipt_xml_text),
-    spec!("factory_reset_check", h::factory_reset_check),
-    spec!("factory_reset", h::factory_reset),
-    spec!("fiscal_year_overview", h::fiscal_year_overview),
-    spec!("fiscal_year_close", h::fiscal_year_close),
-    spec!("fiscal_year_closed_list", h::fiscal_year_closed_list),
-    spec!("fiscal_year_auto_close_get", h::fiscal_year_auto_close_get),
-    spec!("fiscal_year_auto_close_set", h::fiscal_year_auto_close_set),
-    spec!("invoices_list", h::invoices_list),
-    spec!("invoices_get", h::invoices_get),
-    spec!("invoices_open_pdf", h::invoices_open_pdf),
-    spec!("invoices_reveal_pdf", h::invoices_reveal_pdf),
-    spec!("invoices_create_draft", h::invoices_create_draft),
-    spec!("invoices_validate_draft", h::invoices_validate_draft),
-    spec!("invoices_lock_and_issue", h::invoices_lock_and_issue),
-    spec!("invoices_record_payment", h::invoices_record_payment),
-    spec!("invoices_cancel", h::invoices_cancel),
-    spec!("legal_documents_list", h::legal_documents_list),
-    spec!("legal_documents_upload", h::legal_documents_upload),
-    spec!("legal_documents_activate", h::legal_documents_activate),
-    spec!("legal_documents_deactivate", h::legal_documents_deactivate),
-    spec!("mail_accounts_list", h::mail_accounts_list),
-    spec!("mail_account_create", h::mail_account_create),
-    spec!("mail_account_update", h::mail_account_update),
-    spec!("mail_account_delete", h::mail_account_delete),
-    spec!(
+    ("expenses_receipt_xml_text", h::expenses_receipt_xml_text),
+    ("factory_reset_check", h::factory_reset_check),
+    ("factory_reset", h::factory_reset),
+    ("fiscal_year_overview", h::fiscal_year_overview),
+    ("fiscal_year_close", h::fiscal_year_close),
+    ("fiscal_year_closed_list", h::fiscal_year_closed_list),
+    ("fiscal_year_auto_close_get", h::fiscal_year_auto_close_get),
+    ("fiscal_year_auto_close_set", h::fiscal_year_auto_close_set),
+    ("invoices_list", h::invoices_list),
+    ("invoices_get", h::invoices_get),
+    ("invoices_open_pdf", h::invoices_open_pdf),
+    ("invoices_reveal_pdf", h::invoices_reveal_pdf),
+    ("invoices_create_draft", h::invoices_create_draft),
+    ("invoices_validate_draft", h::invoices_validate_draft),
+    ("invoices_lock_and_issue", h::invoices_lock_and_issue),
+    ("invoices_record_payment", h::invoices_record_payment),
+    ("invoices_cancel", h::invoices_cancel),
+    ("legal_documents_list", h::legal_documents_list),
+    ("legal_documents_upload", h::legal_documents_upload),
+    ("legal_documents_activate", h::legal_documents_activate),
+    ("legal_documents_deactivate", h::legal_documents_deactivate),
+    ("mail_accounts_list", h::mail_accounts_list),
+    ("mail_account_create", h::mail_account_create),
+    ("mail_account_update", h::mail_account_update),
+    ("mail_account_delete", h::mail_account_delete),
+    (
         "mail_account_test_connection",
-        h::mail_account_test_connection
+        h::mail_account_test_connection,
     ),
-    spec!("mail_oauth_status", h::mail_oauth_status),
-    spec!("mail_oauth_connect", h::mail_oauth_connect),
-    spec!("mail_oauth_disconnect", h::mail_oauth_disconnect),
-    spec!("email_log_list", h::email_log_list),
-    spec!("email_log_for", h::email_log_for),
-    spec!("email_log_search", h::email_log_search),
-    spec!("mail_invoice_preview", h::mail_invoice_preview),
-    spec!("mail_send_invoice", h::mail_send_invoice),
-    spec!("mail_send_test", h::mail_send_test),
-    spec!("mail_quote_preview", h::mail_quote_preview),
-    spec!("mail_send_quote", h::mail_send_quote),
-    spec!("migration_export_run", h::migration_export_run),
-    spec!("notifications_list", h::notifications_list),
-    spec!("notifications_unread_count", h::notifications_unread_count),
-    spec!("notifications_dismiss", h::notifications_dismiss),
-    spec!("notifications_dismiss_all", h::notifications_dismiss_all),
-    spec!("notification_rules_list", h::notification_rules_list),
-    spec!(
+    ("mail_oauth_status", h::mail_oauth_status),
+    ("mail_oauth_connect", h::mail_oauth_connect),
+    ("mail_oauth_disconnect", h::mail_oauth_disconnect),
+    ("email_log_list", h::email_log_list),
+    ("email_log_for", h::email_log_for),
+    ("email_log_search", h::email_log_search),
+    ("mail_invoice_preview", h::mail_invoice_preview),
+    ("mail_send_invoice", h::mail_send_invoice),
+    ("mail_send_test", h::mail_send_test),
+    ("mail_quote_preview", h::mail_quote_preview),
+    ("mail_send_quote", h::mail_send_quote),
+    ("migration_export_run", h::migration_export_run),
+    ("notifications_list", h::notifications_list),
+    ("notifications_unread_count", h::notifications_unread_count),
+    ("notifications_dismiss", h::notifications_dismiss),
+    ("notifications_dismiss_all", h::notifications_dismiss_all),
+    ("notification_rules_list", h::notification_rules_list),
+    (
         "notification_rules_set_enabled",
-        h::notification_rules_set_enabled
+        h::notification_rules_set_enabled,
     ),
-    spec!("notifications_run_checks", h::notifications_run_checks),
-    spec!("package_categories_list", h::package_categories_list),
-    spec!("package_category_create", h::package_category_create),
-    spec!("package_category_update", h::package_category_update),
-    spec!("package_categories_reorder", h::package_categories_reorder),
-    spec!("packages_list", h::packages_list),
-    spec!("packages_get", h::packages_get),
-    spec!("packages_create", h::packages_create),
-    spec!(
+    ("notifications_run_checks", h::notifications_run_checks),
+    ("package_categories_list", h::package_categories_list),
+    ("package_category_create", h::package_category_create),
+    ("package_category_update", h::package_category_update),
+    ("package_categories_reorder", h::package_categories_reorder),
+    ("packages_list", h::packages_list),
+    ("packages_get", h::packages_get),
+    ("packages_create", h::packages_create),
+    (
         "packages_update_as_new_revision",
-        h::packages_update_as_new_revision
+        h::packages_update_as_new_revision,
     ),
-    spec!("packages_archive", h::packages_archive),
-    spec!("packages_reactivate", h::packages_reactivate),
-    spec!("package_revisions_list", h::package_revisions_list),
-    spec!("package_revisions_get", h::package_revisions_get),
-    spec!("package_revisions_rollback", h::package_revisions_rollback),
-    spec!("package_preview", h::package_preview),
-    spec!("package_materialize_item", h::package_materialize_item),
-    spec!("package_catalog_render", h::package_catalog_render),
-    spec!("package_catalog_send", h::package_catalog_send),
-    spec!("payment_accounts_list", h::payment_accounts_list),
-    spec!(
+    ("packages_archive", h::packages_archive),
+    ("packages_reactivate", h::packages_reactivate),
+    ("package_revisions_list", h::package_revisions_list),
+    ("package_revisions_get", h::package_revisions_get),
+    ("package_revisions_rollback", h::package_revisions_rollback),
+    ("package_preview", h::package_preview),
+    ("package_materialize_item", h::package_materialize_item),
+    ("package_catalog_render", h::package_catalog_render),
+    ("package_catalog_send", h::package_catalog_send),
+    ("payment_accounts_list", h::payment_accounts_list),
+    (
         "payment_accounts_ensure_defaults",
-        h::payment_accounts_ensure_defaults
+        h::payment_accounts_ensure_defaults,
     ),
-    spec!("payment_accounts_create", h::payment_accounts_create),
-    spec!("payment_accounts_update", h::payment_accounts_update),
-    spec!(
+    ("payment_accounts_create", h::payment_accounts_create),
+    ("payment_accounts_update", h::payment_accounts_update),
+    (
         "payment_accounts_set_active",
-        h::payment_accounts_set_active
+        h::payment_accounts_set_active,
     ),
-    spec!("private_movements_list", h::private_movements_list),
-    spec!("private_movements_get", h::private_movements_get),
-    spec!("private_movements_create", h::private_movements_create),
-    spec!("quotes_list", h::quotes_list),
-    spec!("quotes_get", h::quotes_get),
-    spec!("quotes_attachments_list", h::quotes_attachments_list),
-    spec!("quotes_create_draft", h::quotes_create_draft),
-    spec!("quotes_validate_draft", h::quotes_validate_draft),
-    spec!("quotes_issue", h::quotes_issue),
-    spec!("quotes_accept", h::quotes_accept),
-    spec!("quotes_reject", h::quotes_reject),
-    spec!("quotes_cancel", h::quotes_cancel),
-    spec!("quotes_convert_to_invoice", h::quotes_convert_to_invoice),
-    spec!("quotes_generate_pdf", h::quotes_generate_pdf),
-    spec!("quotes_open_bundle", h::quotes_open_bundle),
-    spec!("quotes_legal_bindings", h::quotes_legal_bindings),
-    spec!("recurring_list", h::recurring_list),
-    spec!("recurring_get", h::recurring_get),
-    spec!("recurring_create", h::recurring_create),
-    spec!("recurring_update", h::recurring_update),
-    spec!("recurring_set_active", h::recurring_set_active),
-    spec!("recurring_run_now", h::recurring_run_now),
-    spec!("recurring_run_due_check", h::recurring_run_due_check),
-    spec!("recurring_invoices_list", h::recurring_invoices_list),
-    spec!("recurring_invoices_get", h::recurring_invoices_get),
-    spec!("recurring_invoices_create", h::recurring_invoices_create),
-    spec!("recurring_invoices_update", h::recurring_invoices_update),
-    spec!(
+    ("private_movements_list", h::private_movements_list),
+    ("private_movements_get", h::private_movements_get),
+    ("private_movements_create", h::private_movements_create),
+    ("quotes_list", h::quotes_list),
+    ("quotes_get", h::quotes_get),
+    ("quotes_attachments_list", h::quotes_attachments_list),
+    ("quotes_create_draft", h::quotes_create_draft),
+    ("quotes_validate_draft", h::quotes_validate_draft),
+    ("quotes_issue", h::quotes_issue),
+    ("quotes_accept", h::quotes_accept),
+    ("quotes_reject", h::quotes_reject),
+    ("quotes_cancel", h::quotes_cancel),
+    ("quotes_convert_to_invoice", h::quotes_convert_to_invoice),
+    ("quotes_generate_pdf", h::quotes_generate_pdf),
+    ("quotes_open_bundle", h::quotes_open_bundle),
+    ("quotes_legal_bindings", h::quotes_legal_bindings),
+    ("recurring_list", h::recurring_list),
+    ("recurring_get", h::recurring_get),
+    ("recurring_create", h::recurring_create),
+    ("recurring_update", h::recurring_update),
+    ("recurring_set_active", h::recurring_set_active),
+    ("recurring_run_now", h::recurring_run_now),
+    ("recurring_run_due_check", h::recurring_run_due_check),
+    ("recurring_invoices_list", h::recurring_invoices_list),
+    ("recurring_invoices_get", h::recurring_invoices_get),
+    ("recurring_invoices_create", h::recurring_invoices_create),
+    ("recurring_invoices_update", h::recurring_invoices_update),
+    (
         "recurring_invoices_set_active",
-        h::recurring_invoices_set_active
+        h::recurring_invoices_set_active,
     ),
-    spec!("recurring_invoices_run_now", h::recurring_invoices_run_now),
-    spec!(
+    ("recurring_invoices_run_now", h::recurring_invoices_run_now),
+    (
         "recurring_invoices_run_due_check",
-        h::recurring_invoices_run_due_check
+        h::recurring_invoices_run_due_check,
     ),
-    spec!("seller_profile_get", h::seller_profile_get),
-    spec!("seller_profile_upsert", h::seller_profile_upsert),
-    spec!("seller_logo_set", h::seller_logo_set),
-    spec!("seller_logo_clear", h::seller_logo_clear),
-    spec!("seller_logo_data", h::seller_logo_data),
-    spec!("pdf_templates_list", h::pdf_templates_list),
-    spec!("pdf_template_preview", h::pdf_template_preview),
-    spec!(
+    ("seller_profile_get", h::seller_profile_get),
+    ("seller_profile_upsert", h::seller_profile_upsert),
+    ("seller_logo_set", h::seller_logo_set),
+    ("seller_logo_clear", h::seller_logo_clear),
+    ("seller_logo_data", h::seller_logo_data),
+    ("pdf_templates_list", h::pdf_templates_list),
+    ("pdf_template_preview", h::pdf_template_preview),
+    (
         "seller_default_template_set",
-        h::seller_default_template_set
+        h::seller_default_template_set,
     ),
-    spec!("paragraph_19_info", h::paragraph_19_info),
-    spec!("travel_settings_get", h::travel_settings_get),
-    spec!("travel_settings_set", h::travel_settings_set),
-    spec!("travel_compute", h::travel_compute),
-    spec!("seller_signature_set", h::seller_signature_set),
-    spec!("seller_signature_clear", h::seller_signature_clear),
-    spec!("seller_signature_data", h::seller_signature_data),
-    spec!("quote_signature_get", h::quote_signature_get),
-    spec!("quote_signature_set", h::quote_signature_set),
-    spec!("seller_owner_get", h::seller_owner_get),
-    spec!("seller_owner_set", h::seller_owner_set),
-    spec!("document_terms_get", h::document_terms_get),
-    spec!("document_terms_set", h::document_terms_set),
-    spec!("drop_folder_settings_get", h::drop_folder_settings_get),
-    spec!("drop_folder_settings_set", h::drop_folder_settings_set),
-    spec!("drop_folder_sync_now", h::drop_folder_sync_now),
-    spec!("audit_trail_list", h::audit_trail_list),
-    spec!("archive_integrity_run", h::archive_integrity_run),
-    spec!("archive_integrity_history", h::archive_integrity_history),
-    spec!("app_info", h::app_info),
-    spec!("third_party_licenses_path", h::third_party_licenses_path),
+    ("paragraph_19_info", h::paragraph_19_info),
+    ("travel_settings_get", h::travel_settings_get),
+    ("travel_settings_set", h::travel_settings_set),
+    ("travel_compute", h::travel_compute),
+    ("seller_signature_set", h::seller_signature_set),
+    ("seller_signature_clear", h::seller_signature_clear),
+    ("seller_signature_data", h::seller_signature_data),
+    ("quote_signature_get", h::quote_signature_get),
+    ("quote_signature_set", h::quote_signature_set),
+    ("seller_owner_get", h::seller_owner_get),
+    ("seller_owner_set", h::seller_owner_set),
+    ("document_terms_get", h::document_terms_get),
+    ("document_terms_set", h::document_terms_set),
+    ("drop_folder_settings_get", h::drop_folder_settings_get),
+    ("drop_folder_settings_set", h::drop_folder_settings_set),
+    ("drop_folder_sync_now", h::drop_folder_sync_now),
+    ("audit_trail_list", h::audit_trail_list),
+    ("archive_integrity_run", h::archive_integrity_run),
+    ("archive_integrity_history", h::archive_integrity_history),
+    ("app_info", h::app_info),
+    ("third_party_licenses_path", h::third_party_licenses_path),
 ];
 
 mod h {

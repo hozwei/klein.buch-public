@@ -1,10 +1,10 @@
 //! Zentrale Error-Typen für Klein.Buch.
 //!
-//! `Error` ist `thiserror`-basiert und wird via `serde` ans Frontend serialisiert.
-//! Schema-Mismatch ist eine eigene Variante, damit Frontend und Bootstrap-Logik
-//! gleich darauf reagieren können.
+//! `Error` ist `thiserror`-basiert. Der HTTP-Server bildet jede Variante vor dem
+//! Serialisieren auf Status und Antwort ab (`server::errors`, Plan W5.3); interne
+//! Texte gehen nur ins Log. Schema-Mismatch ist eine eigene Variante, damit
+//! Frontend und Bootstrap-Logik gleich darauf reagieren können.
 
-use serde::Serialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -47,6 +47,10 @@ pub enum Error {
     #[error("Datenbank gesperrt — bitte zuerst entsperren.")]
     Locked,
 
+    /// Argumente eines Commands passen nicht zum Args-Struct (HTTP 400).
+    #[error("Ungültige Anfrage: {0}")]
+    BadRequest(String),
+
     #[error("Verschlüsselung: {0}")]
     Crypto(String),
 
@@ -58,10 +62,3 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-// Tauri-Command-Bridge: serialisiere Error als String fürs Frontend.
-impl Serialize for Error {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        s.serialize_str(&self.to_string())
-    }
-}

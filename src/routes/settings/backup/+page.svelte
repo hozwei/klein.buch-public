@@ -1,6 +1,7 @@
 <script lang="ts">
   // Block 4 — Backup & Restore.
   import { onMount, tick } from "svelte";
+  import { waitForRestart } from "$lib/transport";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
   import PageBar from "$lib/PageBar.svelte";
@@ -275,11 +276,17 @@
     try {
       const r = await backupRestoreApply(restorePath.trim(), restorePass);
       restorePass = "";
+      // Plan W5: der Server startet nach dem Restore selbst neu und wendet ihn
+      // dabei an; danach ist die Anmeldung mit der Passphrase des Backups nötig.
       restoreReport =
         `Wiederherstellung vorbereitet. Sicherheits-Backup: ${r.preRestoreBackupPath}. ` +
-        "Bitte starte die App jetzt neu — dann wird die Wiederherstellung angewendet." +
+        "Der Server startet jetzt neu und wendet die Wiederherstellung an — bitte warten." +
         (r.notice ? ` ${r.notice}` : "");
-      flash("Wiederherstellung vorgemerkt — App neu starten.", "ok");
+      flash("Wiederherstellung vorgemerkt — Server startet neu.", "ok");
+      if (!(await waitForRestart())) {
+        restoreReport +=
+          " Der Server ist nach drei Minuten nicht zurück. Bitte den Container prüfen und die Seite neu laden.";
+      }
     } catch (e) {
       flash(String(e), "error");
     } finally {
