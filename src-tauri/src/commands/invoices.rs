@@ -483,6 +483,9 @@ async fn run_lock_pipeline_inner(
     buyer_reference: &str,
     cancel_pair: Option<LockCancelPair<'_>>,
 ) -> Result<LockResponse> {
+    // Review W2 S0-1: Festschreiben derselben Rechnung läuft nie doppelt
+    // (Doppelklick, zwei Browser-Tabs); der zweite Lauf sieht danach `locked_at`.
+    let _invoice_guard = crate::locks::INVOICES.lock(invoice_id).await;
     let detail = invoices::get_detail(pool, invoice_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {invoice_id}")))?;
@@ -661,9 +664,11 @@ async fn run_lock_pipeline_inner(
     let zugferd_bytes =
         mustang_bridge::create_zugferd(&pdf_bytes, &xml, &paths.sidecar_dir).await?;
 
-    // 7. Archivierung — PDF + XML in `archive_entries`.
+    // 7. Archivierung — PDF + XML in `archive_entries`. Bei einer Wiederholung
+    //    nach Abbruch (Datei schon registriert, Rechnung nicht festgeschrieben)
+    //    weicht der Name auf eine neue Version aus (Review W2 S1-1).
     let fy = detail.invoice.fiscal_year as i32;
-    let pdf_archive = archive::store_bytes(
+    let pdf_archive = archive::store_bytes_new_version(
         pool,
         &paths.archive_dir,
         fy,
@@ -673,7 +678,7 @@ async fn run_lock_pipeline_inner(
         &zugferd_bytes,
     )
     .await?;
-    let xml_archive = archive::store_bytes(
+    let xml_archive = archive::store_bytes_new_version(
         pool,
         &paths.archive_dir,
         fy,
@@ -811,6 +816,9 @@ pub async fn invoices_cancel(
 ) -> Result<CancelResponse> {
     let pool = pool.inner();
     let paths = Paths::from_handle(&app)?;
+    // Zwei Storno-Anfragen für dieselbe Rechnung laufen nacheinander; die zweite
+    // sieht dann „bereits storniert“ (Review W2, Sperre je Beleg).
+    let _original_guard = crate::locks::INVOICES.lock(&args.invoice_id).await;
 
     let original = invoices::get_detail(pool, &args.invoice_id)
         .await?

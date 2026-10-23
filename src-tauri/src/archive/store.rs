@@ -92,6 +92,9 @@ pub struct StoredArchive {
 /// Bytes hashen, in den Archive-Tree schreiben, Datei sperren, DB-Eintrag
 /// schreiben, Audit-Log-Eintrag schreiben. Liefert die Archive-ID
 /// (UUIDv7) und den absoluten Pfad.
+///
+/// Liegt am Zielpfad schon ein **registrierter** Eintrag mit anderem Inhalt,
+/// ist das ein harter Fehler („existiert bereits mit anderem Hash“).
 pub async fn store_bytes(
     pool: &SqlitePool,
     archive_root: &Path,
@@ -101,6 +104,90 @@ pub async fn store_bytes(
     mime_type: &str,
     bytes: &[u8],
 ) -> Result<StoredArchive> {
+    match store_bytes_inner(
+        pool,
+        archive_root,
+        fiscal_year,
+        kind,
+        file_name,
+        mime_type,
+        bytes,
+    )
+    .await?
+    {
+        StoreAttempt::Stored(s) => Ok(s),
+        StoreAttempt::Conflict(path) => Err(crate::error::Error::Domain(format!(
+            "archive::store: Datei existiert bereits mit anderem Hash: {}",
+            path.display()
+        ))),
+    }
+}
+
+/// Wie [`store_bytes`], weicht aber bei einem registrierten Eintrag mit anderem
+/// Inhalt auf eine neue Dateiversion aus (`RE-2026-0001-2.pdf`, `-3`, …).
+///
+/// Für Belege, die nach einem Abbruch neu erzeugt werden (Review W2 S1-1): ist
+/// die PDF schon archiviert, die Rechnung aber noch nicht festgeschrieben
+/// (Fehler beim XML, Absturz), erzeugt jeder neue Versuch andere Bytes
+/// (Zeitstempel in den PDF-Metadaten). Der alte Eintrag bleibt write-once im
+/// Archiv (nicht referenziert), der Beleg verweist auf die neue Version.
+#[allow(clippy::too_many_arguments)]
+pub async fn store_bytes_new_version(
+    pool: &SqlitePool,
+    archive_root: &Path,
+    fiscal_year: i32,
+    kind: ArchiveKind,
+    file_name: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<StoredArchive> {
+    const MAX_VERSIONS: u32 = 50;
+    let (stem, ext) = match file_name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (file_name.to_string(), String::new()),
+    };
+    for version in 1..=MAX_VERSIONS {
+        let name = if version == 1 {
+            file_name.to_string()
+        } else {
+            format!("{stem}-{version}{ext}")
+        };
+        match store_bytes_inner(
+            pool,
+            archive_root,
+            fiscal_year,
+            kind,
+            &name,
+            mime_type,
+            bytes,
+        )
+        .await?
+        {
+            StoreAttempt::Stored(s) => return Ok(s),
+            StoreAttempt::Conflict(_) => continue,
+        }
+    }
+    Err(crate::error::Error::Domain(format!(
+        "archive::store: mehr als {MAX_VERSIONS} Versionen von {file_name}"
+    )))
+}
+
+enum StoreAttempt {
+    Stored(StoredArchive),
+    /// Registrierter Eintrag am Zielpfad mit anderem Inhalt.
+    Conflict(PathBuf),
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn store_bytes_inner(
+    pool: &SqlitePool,
+    archive_root: &Path,
+    fiscal_year: i32,
+    kind: ArchiveKind,
+    file_name: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<StoreAttempt> {
     if file_name.is_empty() {
         return Err(crate::error::Error::Domain(
             "archive::store: file_name darf nicht leer sein".into(),
@@ -117,15 +204,24 @@ pub async fn store_bytes(
 
     let abs_path = build_path(archive_root, fiscal_year, kind, file_name);
 
+    // Review W2 S0-1: Prüfen, Schreiben und INSERT je Zielpfad am Stück. Ohne
+    // Sperre könnte ein paralleler Lauf eine gerade geschriebene, noch nicht
+    // registrierte Datei für verwaist halten. Schlüssel in Kleinbuchstaben, weil
+    // manche Dateisysteme Groß-/Kleinschreibung nicht unterscheiden.
+    let _path_guard = crate::locks::ARCHIVE_PATHS
+        .lock(&abs_path.to_string_lossy().to_lowercase())
+        .await;
+
     // Parent-Verzeichnis sicherstellen.
     if let Some(parent) = abs_path.parent() {
         fs::create_dir_all(parent)?;
     }
 
     // Wenn die Datei bereits existiert: prüfe Hash. Identisch → Idempotenz,
-    // wiederverwenden statt Fehler. Unterschiedlich → nur mit DB-Eintrag ein
-    // harter Fehler; ohne Eintrag ein Rest eines abgebrochenen Laufs (W2.1).
-    let mut replaced_orphan_hash: Option<String> = None;
+    // wiederverwenden statt Fehler. Unterschiedlich → mit DB-Eintrag ein
+    // Konflikt; ohne Eintrag ein Rest eines abgebrochenen Laufs (W2.1), der
+    // **beiseitegelegt** (nicht gelöscht) wird.
+    let mut replaced_orphan: Option<(String, String)> = None;
     if abs_path.exists() {
         let existing = fs::read(&abs_path)?;
         let existing_hash = sha256_hex(&existing);
@@ -134,22 +230,19 @@ pub async fn store_bytes(
             // DB-Eintrag vorhanden → zurückgeben; sonst weiter zum Insert,
             // denn der ist Single Source of Truth.
             if let Some(found) = registered {
-                return Ok(found);
+                return Ok(StoreAttempt::Stored(found));
             }
         } else if registered.is_some() {
-            return Err(crate::error::Error::Domain(format!(
-                "archive::store: Datei existiert bereits mit anderem Hash: {}",
-                abs_path.display()
-            )));
+            return Ok(StoreAttempt::Conflict(abs_path));
         } else {
+            let kept = keep_orphan_aside(&abs_path)?;
             tracing::warn!(
-                "archive::store: verwaiste Datei ohne archive_entries-Eintrag wird ersetzt: {}",
+                "archive::store: Datei ohne archive_entries-Eintrag beiseitegelegt ({}) und neu geschrieben: {}",
+                kept,
                 abs_path.display()
             );
-            make_writable(&abs_path)?;
-            fs::remove_file(&abs_path)?;
             write_new_readonly(&abs_path, bytes)?;
-            replaced_orphan_hash = Some(existing_hash);
+            replaced_orphan = Some((existing_hash, kept));
         }
     } else {
         write_new_readonly(&abs_path, bytes)?;
@@ -180,8 +273,13 @@ pub async fn store_bytes(
     .execute(pool)
     .await?;
 
-    let orphan = replaced_orphan_hash
-        .map(|h| format!(r#","replaced_orphan_hash":"{h}""#))
+    let orphan = replaced_orphan
+        .map(|(h, kept)| {
+            format!(
+                r#","replaced_orphan_hash":"{h}","orphan_kept_as":"{}""#,
+                escape_json(&kept)
+            )
+        })
         .unwrap_or_default();
     audit::archive_event(
         pool,
@@ -196,14 +294,28 @@ pub async fn store_bytes(
     )
     .await?;
 
-    Ok(StoredArchive {
+    Ok(StoreAttempt::Stored(StoredArchive {
         archive_id,
         file_path: path_str,
         file_name: file_name.to_string(),
         file_hash_sha256: hash,
         file_size_bytes: size,
         mime_type: mime_type.to_string(),
-    })
+    }))
+}
+
+/// Legt eine nicht registrierte Datei am Zielpfad unter einem versteckten Namen
+/// beiseite (`.<name>.orphan-<uuid>`, Schreibschutz bleibt) und liefert den
+/// neuen Dateinamen. Nichts wird gelöscht (Review W2 S0-1/S2-5): sollte die
+/// Waisen-Erkennung je irren (Pfad-Schreibweise, Umzug), bleibt die Datei da.
+fn keep_orphan_aside(path: &Path) -> Result<String> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let kept = format!(".{name}.orphan-{}", uuid::Uuid::now_v7().simple());
+    fs::rename(path, path.with_file_name(&kept))?;
+    Ok(kept)
 }
 
 /// Variante ohne Audit-Spur — für den Integrity-Cron, der bereits
@@ -364,22 +476,6 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
-/// Hebt den Schreibschutz auf (nur für das Aufräumen von Temp-/Waisen-Dateien).
-fn make_writable(path: &Path) -> Result<()> {
-    let mut perms = fs::metadata(path)?.permissions();
-    #[allow(clippy::permissions_set_readonly_false)]
-    perms.set_readonly(false);
-    fs::set_permissions(path, perms)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut p = fs::metadata(path)?.permissions();
-        p.set_mode(0o600);
-        fs::set_permissions(path, p)?;
-    }
-    Ok(())
-}
-
 pub(crate) fn set_readonly(path: &Path) -> Result<()> {
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_readonly(true);
@@ -421,6 +517,20 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
+        create_tables(&pool).await;
+        pool
+    }
+
+    /// Datei-DB im Produktionsmodus (WAL, busy_timeout, mehrere Verbindungen).
+    async fn file_pool(dir: &Path) -> SqlitePool {
+        let pool = crate::db::open_pool(&dir.join("t.sqlite"), None)
+            .await
+            .unwrap();
+        create_tables(&pool).await;
+        pool
+    }
+
+    async fn create_tables(pool: &SqlitePool) {
         sqlx::query(
             "CREATE TABLE archive_entries (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -433,7 +543,7 @@ mod tests {
                 received_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
             ) STRICT",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
         sqlx::query(
@@ -447,10 +557,9 @@ mod tests {
                 details_json TEXT
             ) STRICT",
         )
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-        pool
     }
 
     #[tokio::test]
@@ -581,7 +690,103 @@ mod tests {
         .unwrap()
         .get("details_json");
         assert!(details.contains("replaced_orphan_hash"), "{details}");
+        // Review W2 S0-1: die Waise wird beiseitegelegt, nicht gelöscht.
+        let kept: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().contains(".orphan-"))
+            .collect();
+        assert_eq!(kept.len(), 1, "Waise beiseitegelegt");
+        assert_eq!(fs::read(&kept[0]).unwrap(), b"erster Versuch");
+        unlock_for_test(&kept[0]).unwrap();
         unlock_for_test(Path::new(&res.file_path)).unwrap();
+    }
+
+    /// Review W2 S0-1: zwei parallele Schreiber mit verschiedenen Bytes auf
+    /// denselben Pfad — genau einer wird registriert, der andere bekommt den
+    /// Konflikt, und die registrierte Datei passt zu ihrem Hash.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_writers_on_same_path_never_break_registered_file() {
+        let dir = TempDir::new().unwrap();
+        let pool = file_pool(dir.path()).await;
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..6 {
+            let pool = pool.clone();
+            let root = dir.path().to_path_buf();
+            set.spawn(async move {
+                store_bytes(
+                    &pool,
+                    &root,
+                    2026,
+                    ArchiveKind::InvoicePdf,
+                    "RE-2026-0009.pdf",
+                    "application/pdf",
+                    format!("Version {i}").as_bytes(),
+                )
+                .await
+            });
+        }
+        let mut ok = Vec::new();
+        while let Some(r) = set.join_next().await {
+            match r.unwrap() {
+                Ok(s) => ok.push(s),
+                Err(e) => assert!(e.to_string().contains("anderem Hash"), "{e}"),
+            }
+        }
+        assert_eq!(ok.len(), 1, "genau ein registrierter Eintrag");
+        let bytes = fs::read(&ok[0].file_path).unwrap();
+        assert_eq!(sha256_hex(&bytes), ok[0].file_hash_sha256);
+        unlock_for_test(Path::new(&ok[0].file_path)).unwrap();
+    }
+
+    /// Review W2 S1-1: Wiederholung nach Abbruch mit neuen Bytes weicht auf eine
+    /// neue Dateiversion aus statt dauerhaft zu scheitern.
+    #[tokio::test]
+    async fn new_version_on_registered_conflict() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let a = store_bytes_new_version(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0010.pdf",
+            "application/pdf",
+            b"erster",
+        )
+        .await
+        .unwrap();
+        let same = store_bytes_new_version(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0010.pdf",
+            "application/pdf",
+            b"erster",
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.archive_id, same.archive_id, "gleiche Bytes → idempotent");
+        let b = store_bytes_new_version(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0010.pdf",
+            "application/pdf",
+            b"zweiter",
+        )
+        .await
+        .unwrap();
+        assert_eq!(b.file_name, "RE-2026-0010-2.pdf");
+        assert_eq!(
+            fs::read(&a.file_path).unwrap(),
+            b"erster",
+            "alter Eintrag unverändert"
+        );
+        unlock_for_test(Path::new(&a.file_path)).unwrap();
+        unlock_for_test(Path::new(&b.file_path)).unwrap();
     }
 
     #[tokio::test]

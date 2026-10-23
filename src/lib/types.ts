@@ -1564,6 +1564,9 @@ export interface IntegrityCheckSummary {
   filesPassed: number;
   filesFailed: number;
   failedArchiveIds: string[];
+  /** Vorhanden, aber nicht lesbar (z. B. Rechte) — kein Manipulationsbefund (W2). */
+  filesUnreadable: number;
+  unreadableArchiveIds: string[];
 }
 
 /** Eine Zeile der Integrity-Check-Historie (`commands::system::IntegrityCheckRow`). */

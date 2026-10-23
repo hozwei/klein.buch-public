@@ -44,6 +44,11 @@
           `${s.filesFailed} von ${s.filesChecked} Archiv-Datei(en) beschädigt!`,
           "error",
         );
+      } else if (s.filesUnreadable > 0) {
+        flash(
+          `${s.filesUnreadable} von ${s.filesChecked} Archiv-Datei(en) nicht lesbar (z. B. Dateirechte) — kein Manipulationsbefund, Prüfung aber unvollständig.`,
+          "error",
+        );
       } else {
         flash(`${s.filesChecked} Datei(en) geprüft — alle unverändert.`);
       }

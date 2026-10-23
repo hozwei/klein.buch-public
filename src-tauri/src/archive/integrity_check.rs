@@ -77,8 +77,27 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
     };
 
     // Verwaiste Datei (gelöscht/verschoben) sauber abfangen, BEVOR ein Lese-Fehler
-    // entsteht — getrennt von Tamper (Hash-Mismatch).
-    if !std::path::Path::new(&path).exists() {
+    // entsteht — getrennt von Tamper (Hash-Mismatch). Review W2 S2-1: nur
+    // `NotFound` heißt „fehlt“; ein Rechteproblem auf dem Ordner (`exists()`
+    // lieferte dann `false`) ist „nicht lesbar“, kein Missing.
+    let meta = std::fs::metadata(&path);
+    if let Err(e) = &meta {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            audit::archive_event(
+                pool,
+                audit::ArchiveAction::IntegrityUnreadable,
+                archive_id,
+                Some(&format!(
+                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
+                    escape(&path),
+                    e.kind()
+                )),
+            )
+            .await?;
+            return Ok(VerifyOutcome::Unreadable);
+        }
+    }
+    if meta.is_err() {
         audit::archive_event(
             pool,
             audit::ArchiveAction::IntegrityMissing,

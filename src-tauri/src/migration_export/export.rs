@@ -116,13 +116,14 @@ pub async fn export_all(
         .compression_method(zip::CompressionMethod::Deflated);
 
     // ----- R4-006: TX-Snapshot über alle DB-Reads -----
-    // Eine eigene Connection für den gesamten Snapshot; `BEGIN IMMEDIATE`
-    // fixiert den Read-Stand gegen parallele Writer (WAL-Modus erlaubt
-    // gleichzeitige Reader, aber ohne TX würden wir pro Tabelle eigene
-    // Snapshots erhalten → potenzielle Inkonsistenz zwischen z. B.
-    // `invoices` und `invoice_items`).
-    let mut conn = pool.acquire().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+    // Eine Lese-Transaktion für den gesamten Snapshot: im WAL-Modus fixiert
+    // das erste SELECT den Stand für alle weiteren Reads (sonst bekäme jede
+    // Tabelle einen eigenen Stand → Inkonsistenz zwischen z. B. `invoices` und
+    // `invoice_items`). Review W2 S1-4: deferred statt `BEGIN IMMEDIATE` — die
+    // Schreibsperre blockierte sonst alle Schreiber für die Dauer des ZIPs —
+    // und als sqlx-`Transaction`, die bei einem Fehler zurückrollt, statt eine
+    // Verbindung mit offenem Transaktionsblock an den Pool zurückzugeben.
+    let mut conn = pool.begin().await?;
 
     // 1. Tabellen.
     let tables = json_dump::list_tables_in_conn(&mut conn).await?;
@@ -185,8 +186,7 @@ pub async fn export_all(
     zw.write_all(erd.as_bytes())?;
 
     // TX-Snapshot abschließen — alle DB-Reads sind durch.
-    sqlx::query("COMMIT").execute(&mut *conn).await?;
-    drop(conn);
+    conn.commit().await?;
 
     // 5. Manifest — R4-005: `archive_file_hashes` zusätzlich aufgenommen.
     let exported_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();

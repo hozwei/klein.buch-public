@@ -707,12 +707,37 @@ pub async fn auto_daily_if_due(
         }
     };
 
-    if due {
-        auto_backup_if_unlocked(pool, paths, session, "auto_daily").await
-    } else {
-        Ok(None)
+    if !due {
+        return Ok(None);
     }
+    // Review W2 S2-3: nach einem Fehlschlag (z. B. Platte voll) frühestens nach
+    // einer Stunde erneut — sonst alle 5 min ein `backup.failed` im
+    // append-only Audit-Log, samt Snapshot und Argon2id.
+    {
+        let last = DAILY_LAST_FAILURE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(t) = *last {
+            if t.elapsed() < DAILY_RETRY_AFTER {
+                return Ok(None);
+            }
+        }
+    }
+    let outcome = auto_backup_if_unlocked(pool, paths, session, "auto_daily").await?;
+    *DAILY_LAST_FAILURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = match outcome {
+        Some(_) => None,
+        // Session war entsperrt (oben geprüft) → `None` heißt fehlgeschlagen.
+        None => Some(std::time::Instant::now()),
+    };
+    Ok(outcome)
 }
+
+/// Zeitpunkt des letzten fehlgeschlagenen Tages-Backups (Backoff, S2-3).
+static DAILY_LAST_FAILURE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// Wartezeit nach einem fehlgeschlagenen Tages-Backup.
+const DAILY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
 
 #[cfg(test)]
 mod tests {

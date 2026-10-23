@@ -58,6 +58,21 @@ pub struct BackupHistoryItem {
     pub verified_at: Option<String>,
 }
 
+/// Review W2 S0-2/S1-3: Solange ein Restore vorgemerkt ist oder ein Tausch
+/// nicht sauber abgeschlossen wurde, weder Onboarding noch Entsperren — sonst
+/// entstünde neben `klein-buch.sqlite.rollback` eine neue DB.
+fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
+    if crate::backup::restore::restore_incomplete(paths) {
+        return Err(Error::Backup(
+            "Eine Wiederherstellung ist noch nicht abgeschlossen. Bitte die App neu \
+             starten; bleibt diese Meldung, ist das Datenverzeichnis zu prüfen \
+             (Datei RESTORE_PENDING.json bzw. *.rollback)."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Onboarding-Gate.
 ///
 /// G1-ENC Schritt 2 (Bootstrap-Inversion): primäres Signal ist die
@@ -76,6 +91,7 @@ pub struct BackupHistoryItem {
 pub async fn backup_needs_onboarding(app: AppHandle) -> Result<bool> {
     let paths = Paths::from_handle(&app)?;
     if !paths.db_file.exists() {
+        ensure_no_pending_restore(&paths)?;
         return Ok(true);
     }
     if !db::db_file_is_plaintext(&paths.db_file) {
@@ -159,6 +175,7 @@ pub async fn backup_setup_passphrase(
     passphrase: String,
 ) -> Result<BackupOutcome> {
     let paths = Paths::from_handle(&app)?;
+    ensure_no_pending_restore(&paths)?;
     // R5-005: Passphrase-Floor von 8 auf 16 Zeichen gehoben. Verlust = Total-
     // verlust by design (ADR 0035) — 8-Zeichen-Passwörter sind gegen
     // Argon2id-m=64MB zwar nicht trivial, aber Wörterbuch-/Top-1k-Treffer-
@@ -232,6 +249,7 @@ pub async fn backup_unlock(
     passphrase: String,
 ) -> Result<bool> {
     let paths = Paths::from_handle(&app)?;
+    ensure_no_pending_restore(&paths)?;
     if !paths.db_file.exists() {
         return Err(Error::Backup(
             "Keine Datenbank gefunden — bitte zuerst einrichten.".into(),
@@ -285,8 +303,9 @@ pub async fn backup_unlock(
     crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
         .await?;
 
-    // „Täglich beim App-Start": fälliges Auto-Daily-Backup auslösen.
-    let _ = backup::auto_daily_if_due(&pool, &paths, session.inner()).await;
+    // „Täglich beim App-Start“: das fällige Tages-Backup legt der erste
+    // Scheduler-Tick an (läuft sofort nach `ensure_started`, Plan W2.4). Ein
+    // zusätzlicher Aufruf hier erzeugte zwei volle Backups (Review W2 S3).
     Ok(true)
 }
 

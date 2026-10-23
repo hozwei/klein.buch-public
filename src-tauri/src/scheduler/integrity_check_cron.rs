@@ -20,7 +20,11 @@ use tauri::AppHandle;
 pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -> Result<()> {
     let this_month = today.format("%Y-%m").to_string();
     let last: Option<String> =
-        sqlx::query_scalar("SELECT MAX(started_at) FROM archive_integrity_checks")
+        // Review W2 S2-2: nur abgeschlossene Läufe zählen — ein abgebrochener
+        // Scan (DB-Fehler) darf den Monat nicht als erledigt markieren.
+        sqlx::query_scalar(
+            "SELECT MAX(started_at) FROM archive_integrity_checks WHERE finished_at IS NOT NULL",
+        )
             .fetch_one(pool)
             .await?;
     // `started_at` ist UTC (`datetime('now','utc')`); der Monat zählt in
@@ -42,7 +46,18 @@ pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -
         summary.files_passed,
         summary.files_failed
     );
+    notify_summary(pool, app, &summary, &this_month).await
+}
 
+/// Hinweise zum Ergebnis eines Scans — vom Monats-Cron und vom manuellen Lauf
+/// (Review W2 S1-2: sonst erschien „nicht lesbar“ in einem Monat mit manuellem
+/// Scan gar nicht).
+pub async fn notify_summary(
+    pool: &SqlitePool,
+    app: Option<&AppHandle>,
+    summary: &integrity_check::IntegrityCheckSummary,
+    this_month: &str,
+) -> Result<()> {
     if summary.files_failed > 0 {
         if let Some(rule) = rules::get_enabled_by_type(pool, "archive_integrity_failed").await? {
             let key = format!("archive_integrity_failed:{this_month}");

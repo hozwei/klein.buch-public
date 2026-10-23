@@ -78,11 +78,18 @@ pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> {
     let url = format!("sqlite://{}", db_file.to_string_lossy());
 
+    // Statement-Logging aus (Review W2 S0-3, Plan W5.9): sqlx führt
+    // `PRAGMA key = '<Passphrase>'` als normales Statement aus und loggt es auf
+    // DEBUG bzw. als „slow statement“ (ab 1 s, z. B. PBKDF2 beim ersten Lesen)
+    // auf WARN — mit der Passphrase im Text.
+    use sqlx::ConnectOptions as _;
     let mut opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
         .foreign_keys(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .busy_timeout(BUSY_TIMEOUT);
+        .busy_timeout(BUSY_TIMEOUT)
+        .log_statements(log::LevelFilter::Off)
+        .log_slow_statements(log::LevelFilter::Off, std::time::Duration::from_secs(3600));
 
     if let Some(passphrase) = key {
         opts = opts.pragma("key", sqlcipher_key_literal(passphrase));
@@ -126,9 +133,10 @@ pub fn db_file_is_plaintext(path: &Path) -> bool {
 pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
     let paths = Paths::from_handle(app)?;
 
+    // `archive/` und `backups/` erst NACH dem Restore-Recovery anlegen (Review
+    // W2 S0-2): ein leeres neues `archive/` neben `archive.rollback` sah für ein
+    // älteres Recovery wie „Tausch fertig“ aus.
     std::fs::create_dir_all(&paths.data_dir)?;
-    std::fs::create_dir_all(&paths.archive_dir)?;
-    std::fs::create_dir_all(&paths.backups_dir)?;
 
     // R7-INPUTS: First-Run-Copy vom gebundelten Default-Mirror in den
     // user-editierbaren `paths.inputs_dir`. Idempotent, ohne Ueberschreiben.
@@ -152,6 +160,8 @@ pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
             *holder.0.lock().expect("PendingRestoreAudit poisoned") = Some(info);
         }
     }
+    std::fs::create_dir_all(&paths.archive_dir)?;
+    std::fs::create_dir_all(&paths.backups_dir)?;
     Ok(())
 }
 
@@ -278,9 +288,13 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
         // setzt SQLITE_OPEN_CREATE auf der Verbindung — und `ATTACH` erbt die
         // Open-Flags der Hauptverbindung. Ohne CREATE schlägt das Anlegen der
         // neuen verschlüsselten Attach-Datei mit SQLITE_CANTOPEN (Code 14) fehl.
+        use sqlx::ConnectOptions as _;
         let opts = SqliteConnectOptions::from_str(&url)?
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            // `ATTACH … KEY '<Passphrase>'` darf nicht im Log landen (S0-3).
+            .log_statements(log::LevelFilter::Off)
+            .log_slow_statements(log::LevelFilter::Off, std::time::Duration::from_secs(3600));
         let src = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)

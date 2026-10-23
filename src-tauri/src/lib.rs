@@ -20,6 +20,7 @@ pub mod error;
 pub mod euer;
 pub mod fiscal_year;
 pub mod limits;
+pub mod locks;
 pub mod mail;
 pub mod migration_export;
 pub mod notify;
@@ -66,16 +67,16 @@ pub fn run() {
             app.manage(db::PendingRestoreAudit::default());
             app.manage(scheduler::tick::SchedulerStarted::default());
 
-            let handle = app.handle().clone();
             // Nur Dateisystem vorbereiten (Verzeichnisse + vorgemerkter Restore)
-            // — ohne Pool. Onboarding/Unlock öffnen den Pool danach.
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) = db::prepare_filesystem(&handle) {
-                    tracing::error!("Dateisystem-Vorbereitung fehlgeschlagen: {err:#}");
-                    // Kein exit(1): das Backup-Gate (Onboarding/Unlock) macht den
-                    // Fehler sichtbar, statt die App stumm zu beenden.
-                }
-            });
+            // — ohne Pool. Onboarding/Unlock öffnen den Pool danach. Synchron
+            // (Review W2 S1-3): der Restore-Tausch muss fertig sein, bevor das
+            // Frontend entsperren kann, sonst öffnete der Pool eine DB, die der
+            // Tausch gerade ersetzt oder zurückrollt.
+            if let Err(err) = db::prepare_filesystem(app.handle()) {
+                tracing::error!("Dateisystem-Vorbereitung fehlgeschlagen: {err:#}");
+                // Kein exit(1): das Backup-Gate (Onboarding/Unlock) macht den
+                // Fehler sichtbar, statt die App stumm zu beenden.
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -49,22 +49,37 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      # Der Azure-Mirror lieferte im Oktober 2026 Pakete nur mit Timeouts (35 min); daher
-      # archive.ubuntu.com, Wiederholungen und ein festes Limit. Entfällt mit Tauri (W5).
+      # Die Ubuntu-Spiegel der Runner lieferten im Oktober 2026 zeitweise nur mit
+      # Timeouts (bis 35 min). Daher: .deb-Pakete im Actions-Cache, Spiegelliste
+      # mit Fallback (ein hängender Spiegel bricht nach 30 s ab, dann der nächste)
+      # und ein festes Limit. Der Schritt entfällt mit Tauri (W5).
+      - name: Cache apt-Pakete
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-24.04-tauri-v1
+
       - name: System-Deps (Tauri 2 on Ubuntu)
         timeout-minutes: 30
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
+          printf '%s\n' \
+            http://azure.archive.ubuntu.com/ubuntu \
+            http://archive.ubuntu.com/ubuntu \
+            http://mirrors.edge.kernel.org/ubuntu | sudo tee /etc/apt/ubuntu-mirrors.txt >/dev/null
+          sudo sed -i -E 's#https?://(azure\.)?archive\.ubuntu\.com/ubuntu/?#mirror+file:/etc/apt/ubuntu-mirrors.txt#g' \
             /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
           APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           sudo -E apt-get $APT_OPTS update
+          mkdir -p ~/apt-debs
+          sudo cp ~/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
           sudo -E apt-get $APT_OPTS install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
             libssl-dev \
             patchelf
+          cp /var/cache/apt/archives/*.deb ~/apt-debs/ 2>/dev/null || true
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable

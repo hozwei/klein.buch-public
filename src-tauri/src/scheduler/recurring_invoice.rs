@@ -50,20 +50,6 @@ use crate::notify::{self, NewNotification};
 /// Erwarten nicht vorrückt.
 pub const CATCH_UP_CAP: usize = 120;
 
-/// Sperre pro Vorlage (Plan W1.4): Tick und „Jetzt erstellen“ verarbeiten
-/// dieselbe Vorlage nie gleichzeitig. Zusammen mit dem Compare-and-Swap in
-/// [`recurring_invoice::advance`] entsteht je Periode genau eine Rechnung.
-static TEMPLATE_LOCKS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
-> = std::sync::LazyLock::new(Default::default);
-
-fn template_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
-    let mut map = TEMPLATE_LOCKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.entry(id.to_string()).or_default().clone()
-}
-
 /// Deutsche Monatsnamen (Index 1..=12) für die Leistungszeitraum-Beschriftung.
 const MONTHS_DE: [&str; 12] = [
     "Januar",
@@ -114,8 +100,7 @@ pub async fn process_due(
     for listed in &due {
         // Unter der Vorlagen-Sperre frisch lesen: ein paralleles „Jetzt
         // erstellen“ kann die Vorlage inzwischen vorgerückt haben.
-        let lock = template_lock(&listed.id);
-        let _guard = lock.lock().await;
+        let _guard = crate::locks::RECURRING_TEMPLATES.lock(&listed.id).await;
         let tmpl = match recurring_invoice::get_row(pool, &listed.id).await {
             Ok(Some(t)) if t.active != 0 => t,
             Ok(_) => continue,
@@ -156,8 +141,8 @@ pub async fn run_now(
     id: &str,
     today: NaiveDate,
 ) -> Result<String> {
-    let lock = template_lock(id);
-    let _guard = lock.lock().await;
+    // Plan W1.4: nie gleichzeitig mit dem Tick auf derselben Vorlage.
+    let _guard = crate::locks::RECURRING_TEMPLATES.lock(id).await;
     let tmpl = recurring_invoice::get_row(pool, id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Abo-Vorlage nicht gefunden: {id}")))?;

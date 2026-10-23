@@ -52,6 +52,22 @@ Arbeitszweig `phase-w`.
 - **Kein `SQLITE_BUSY` bei parallelen Buchungen:** Schreib-Transaktionen mit
   `BEGIN IMMEDIATE`, `busy_timeout` 15 s. (W2)
 - **Restore:** Archivdateien sind danach wieder schreibgeschützt. (W2)
+- **Restore-Tausch abbruchsicher:** eine Zustandsdatei steuert nach einem
+  Abbruch das Zurückholen der Originale; ein Fehler in jeder Stufe stellt den
+  alten Stand wieder her, nichts wird in unklaren Lagen gelöscht; solange ein
+  Restore offen ist, sind Einrichten und Entsperren gesperrt. Der Marker
+  entsteht erst nach dem Audit-Eintrag; Dateinamen mit `..` blockieren den
+  Restore nicht mehr; kopierte Dateien werden mit `fsync` geschrieben. (W2)
+- **Parallele Festschreib-Läufe** derselben Rechnung laufen nacheinander;
+  Archivpfade sind gegen gleichzeitiges Schreiben gesperrt; nicht registrierte
+  Dateien am Zielpfad werden beiseitegelegt statt gelöscht; eine Wiederholung
+  nach Abbruch legt eine neue Dateiversion an, statt die Rechnungsnummer zu
+  blockieren. (W2)
+- **Passphrase nie im Log:** Statement-Logging von sqlx für die
+  verschlüsselten Verbindungen abgeschaltet (sonst konnte `PRAGMA key` als
+  „langsames Statement“ im Log landen). (W2)
+- **Migrations-Export** blockiert keine Schreiber mehr und hinterlässt bei
+  Fehlern keine offene Transaktion. (W2)
 
 ### Changed
 

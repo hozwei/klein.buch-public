@@ -31,8 +31,20 @@ pub async fn audit_trail_list(
 }
 
 #[tauri::command]
-pub async fn archive_integrity_run(pool: State<'_, SqlitePool>) -> Result<IntegrityCheckSummary> {
-    integrity_check::run_full_scan(pool.inner()).await
+pub async fn archive_integrity_run(
+    app: tauri::AppHandle,
+    pool: State<'_, SqlitePool>,
+) -> Result<IntegrityCheckSummary> {
+    let summary = integrity_check::run_full_scan(pool.inner()).await?;
+    let month = crate::clock::today_berlin().format("%Y-%m").to_string();
+    crate::scheduler::integrity_check_cron::notify_summary(
+        pool.inner(),
+        Some(&app),
+        &summary,
+        &month,
+    )
+    .await?;
+    Ok(summary)
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
