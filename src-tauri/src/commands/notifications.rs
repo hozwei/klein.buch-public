@@ -123,5 +123,5 @@ pub async fn notifications_run_checks(
     integrity_check_cron::run(pool, ctx.notifier(), today)
         .await
         .ok();
-    reminders::run(pool, ctx.notifier(), today, &paths.backups_dir).await
+    reminders::run(pool, ctx.notifier(), today, &paths.backup_targets_dir).await
 }

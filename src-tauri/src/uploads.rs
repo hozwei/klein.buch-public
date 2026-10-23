@@ -295,17 +295,52 @@ pub fn sniff(head: &[u8], whole: Option<&[u8]>) -> Option<FileType> {
         .take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/')
         .collect();
     let local = name.rsplit(':').next().unwrap_or("");
-    // HTML/XHTML ist kein zulässiges XML (aktive Inhalte im Browser).
-    if local.eq_ignore_ascii_case("html") || text.contains("http://www.w3.org/1999/xhtml") {
+    // HTML/XHTML ist kein zulässiges XML (aktive Inhalte im Browser): Wurzel
+    // html/body/script, XHTML-Namensraum, `<script`, Zeichenreferenzen in
+    // Namensraum-Angaben (Gegenprüfung W7).
+    let lower = text.to_ascii_lowercase();
+    let suspicious_ns = lower.match_indices("xmlns").any(|(i, _)| {
+        lower[i..]
+            .chars()
+            .take(200)
+            .collect::<String>()
+            .contains("&#")
+    });
+    if ["html", "body", "script"]
+        .iter()
+        .any(|r| local.eq_ignore_ascii_case(r))
+        || lower.contains("www.w3.org/1999/xhtml")
+        || lower.contains("<script")
+        || prefixed_script(&lower)
+        || suspicious_ns
+    {
         return None;
     }
-    if local.eq_ignore_ascii_case("svg") {
+    // Eingebettetes SVG zählt als SVG (nur für Logo/Unterschrift zulässig).
+    if local.eq_ignore_ascii_case("svg") || lower.contains("www.w3.org/2000/svg") {
         Some(FileType::Svg)
     } else if !local.is_empty() {
         Some(FileType::Xml)
     } else {
         None
     }
+}
+
+/// `<prefix:script` (Element mit Namensraum-Präfix).
+fn prefixed_script(lower: &str) -> bool {
+    lower.match_indices(":script").any(|(i, _)| {
+        let before = &lower[..i];
+        match before.rfind('<') {
+            Some(lt) => {
+                let prefix = &before[lt + 1..];
+                !prefix.is_empty()
+                    && prefix
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+            }
+            None => false,
+        }
+    })
 }
 
 /// Freier Platz (Bytes) auf dem Dateisystem von `path`.
@@ -515,10 +550,10 @@ impl UploadStore {
         })
     }
 
-    /// Pfad und Größe eines Uploads, ohne ihn zu lesen (Restore, W7c).
-    pub fn path_of(&self, id: &str, kinds: &[UploadKind]) -> Result<(PathBuf, u64)> {
+    /// Pfad, Größe und Dateiname eines Uploads, ohne ihn zu lesen (Restore).
+    pub fn path_of(&self, id: &str, kinds: &[UploadKind]) -> Result<(PathBuf, u64, String)> {
         let entry = self.entry(id, kinds)?;
-        Ok((entry.path, entry.size))
+        Ok((entry.path, entry.size, entry.file_name))
     }
 
     /// Gibt einen verbrauchten Upload frei (löscht die Datei).
@@ -539,22 +574,53 @@ impl UploadStore {
         }
     }
 
-    /// Entfernt abgelaufene Einträge samt Dateien.
+    /// Entfernt abgelaufene Einträge samt Dateien, dazu nicht registrierte
+    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`UPLOAD_TTL`] sind.
     pub fn sweep(&self) {
         let now = Instant::now();
-        let expired: Vec<PathBuf> = {
+        let (expired, known): (Vec<PathBuf>, Vec<String>) = {
             let mut map = self.lock();
             let gone: Vec<Uuid> = map
                 .iter()
                 .filter(|(_, e)| e.expires <= now)
                 .map(|(id, _)| *id)
                 .collect();
-            gone.iter()
+            let expired = gone
+                .iter()
                 .filter_map(|id| map.remove(id).map(|e| e.path))
-                .collect()
+                .collect();
+            (
+                expired,
+                map.keys().map(|id| id.simple().to_string()).collect(),
+            )
         };
         for path in expired {
             Self::remove_files(&path);
+        }
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > UPLOAD_TTL);
+            if old && !known.contains(&name) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
+    /// Alle Einträge und Dateien löschen (beim Sperren der Datenbank).
+    pub fn clear(&self) {
+        self.lock().clear();
+        if let Ok(entries) = std::fs::read_dir(&self.root) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
     }
 
@@ -599,6 +665,15 @@ mod tests {
         assert_eq!(sniff(xhtml, Some(xhtml)), None);
         let embedded = b"<a xmlns:h=\"http://www.w3.org/1999/xhtml\"><h:script/></a>";
         assert_eq!(sniff(embedded, Some(embedded)), None);
+        // Gegenprüfung W7: Zeichenreferenz im Namensraum, HTML-Fragment, SVG
+        let charref = b"<a xmlns:h=\"http://www.w3.org/1999/&#120;html\"><h:x/></a>";
+        assert_eq!(sniff(charref, Some(charref)), None);
+        let body = b"<!DOCTYPE html><body><p>x</p></body>";
+        assert_eq!(sniff(body, Some(body)), None);
+        let inner_svg = b"<a xmlns:s=\"http://www.w3.org/2000/svg\"><s:svg/></a>";
+        assert_eq!(sniff(inner_svg, Some(inner_svg)), Some(FileType::Svg));
+        let einvoice = b"<?xml version=\"1.0\"?><rsm:CrossIndustryInvoice xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"/>";
+        assert_eq!(sniff(einvoice, Some(einvoice)), Some(FileType::Xml));
         let latin1 = b"<?xml version=\"1.0\"?><a>M\xfcller</a>";
         assert_eq!(sniff(latin1, Some(latin1)), None);
         assert_eq!(sniff(b"hallo", Some(b"hallo")), None);

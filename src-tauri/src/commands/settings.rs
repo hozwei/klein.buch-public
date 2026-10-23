@@ -94,7 +94,13 @@ pub async fn seller_logo_clear(
     let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
     if let Some(p) = seller_profile::get(&pool).await? {
-        if let Some(fname) = p.logo_filename.as_deref() {
+        // Ein ungültiger Altwert wird nur aus dem Profil entfernt, nie als
+        // Pfad benutzt (Plan W7, Gegenprüfung).
+        if let Some(fname) = p
+            .logo_filename
+            .as_deref()
+            .filter(|f| branding::is_asset_name(f))
+        {
             branding::clear_logo(&dir, fname)?;
         }
     }

@@ -158,7 +158,16 @@ pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
     }
 
     // Block 4: Vorgemerkten Restore JETZT anwenden — vor dem Öffnen des Pools.
-    if let Some(info) = crate::backup::restore::apply_pending(paths)? {
+    // Reste eines abgebrochenen Phase-A-Laufs (Staging ohne Marker und ohne
+    // Tausch-Zustand) entfernen (Gegenprüfung W7).
+    crate::backup::restore::clean_stale_staging(paths);
+    // Ein angewendeter Restore, dessen Audit noch aussteht, steht in
+    // RESTORE_APPLIED.json (übersteht Neustarts, Gegenprüfung W7).
+    let applied = match crate::backup::restore::apply_pending(paths)? {
+        Some(info) => Some(info),
+        None => crate::backup::restore::read_applied(paths),
+    };
+    if let Some(info) = applied {
         *ctx.pending_restore
             .0
             .lock()
@@ -194,12 +203,16 @@ pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> 
                 "backup.restore.applied",
                 "backup",
                 "restore",
-                Some(&format!(
-                    r#"{{"source":"{}","staged_at":"{}","branding_restored":{}}}"#,
-                    info.source.replace('"', "'"),
-                    info.staged_at.replace('"', "'"),
-                    info.branding_restored
-                )),
+                Some(
+                    &serde_json::json!({
+                        "source": info.source,
+                        "staged_at": info.staged_at,
+                        "branding_restored": info.branding_restored,
+                        "pre_restore_backup": info.pre_restore_backup,
+                        "schema": info.schema_version,
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .map_err(|e| {
@@ -214,6 +227,18 @@ pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> 
                 ))
             })?;
             tracing::info!("Restore angewendet (Quelle: {})", info.source);
+            // Das Pre-Restore-Backup stand nur in der verworfenen DB — hier in
+            // die Historie übernehmen (Restore aus der Liste möglich).
+            crate::backup::record_existing_backup(
+                pool,
+                &ctx.paths.backups_dir,
+                &info.pre_restore_backup,
+                "pre_restore",
+            )
+            .await
+            .ok();
+            crate::backup::restore::warn_missing_templates(&ctx.paths, pool, &info.staged_at).await;
+            crate::backup::restore::clear_applied(&ctx.paths);
         }
     }
     Ok(())

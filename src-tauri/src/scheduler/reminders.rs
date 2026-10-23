@@ -19,14 +19,14 @@ use std::path::Path;
 /// Führt alle aktiven Reminder-Regeln aus. Liefert die Anzahl neu erzeugter
 /// Hinweise (Dedup-Treffer zählen nicht).
 ///
-/// `floor_dir` ist der lokale Backup-Floor (`paths.backups_dir`); die
-/// `backup_overdue`-Regel braucht ihn, um ein konfiguriertes Off-Site-Ziel vom
-/// Floor zu unterscheiden (G1-NOTIFY).
+/// `targets_root` ist die Wurzel der Verzeichnis-Ziele
+/// (`paths.backup_targets_dir`); die `backup_overdue`-Regel braucht sie, um die
+/// konfigurierten Off-Site-Ziele zu lesen (G1-NOTIFY, Plan W7).
 pub async fn run(
     pool: &SqlitePool,
     notifier: Option<&dyn Notifier>,
     today: NaiveDate,
-    floor_dir: &Path,
+    targets_root: &Path,
 ) -> Result<usize> {
     let mut created = 0usize;
 
@@ -37,7 +37,7 @@ pub async fn run(
         created += fiscal_year_lock_pending(pool, notifier, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "backup_overdue").await? {
-        created += backup_overdue(pool, notifier, &rule, today, floor_dir).await?;
+        created += backup_overdue(pool, notifier, &rule, today, targets_root).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "invoice_overdue").await? {
         created += invoice_overdue(pool, notifier, &rule, today).await?;
@@ -139,12 +139,12 @@ async fn backup_overdue(
     notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
-    floor_dir: &Path,
+    targets_root: &Path,
 ) -> Result<usize> {
     let max_age = rule.config_i64("max_age_days", 7);
-    let has_offsite = crate::backup::target::offsite_target(pool, floor_dir)
+    let has_offsite = !crate::backup::target::list_targets(pool, targets_root)
         .await?
-        .is_some();
+        .is_empty();
 
     let (last, title, body, key): (Option<String>, &str, String, String) = if has_offsite {
         let last = sqlx::query_scalar(
@@ -351,8 +351,8 @@ mod tests {
     }
 
     async fn set_offsite(pool: &SqlitePool) {
-        sqlx::query("INSERT INTO app_settings (key, value) VALUES ('backup_target', ?)")
-            .bind(r#"{"kind":"directory","path":"/mnt/onedrive/kb"}"#)
+        sqlx::query("INSERT INTO app_settings (key, value) VALUES ('backup_targets', ?)")
+            .bind(r#"[{"id":"a","label":"NAS","kind":"directory","path":"nas/kb"}]"#)
             .execute(pool)
             .await
             .unwrap();
@@ -366,7 +366,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         // Kein Off-Site-Ziel, kein Backup → überfällig über den Floor-Pfad.
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
@@ -390,7 +390,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         // Off-Site konfiguriert, aber noch kein erfolgreiches Off-Site-Backup → überfällig.
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
@@ -432,7 +432,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
                 .await

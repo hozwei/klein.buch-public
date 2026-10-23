@@ -277,6 +277,11 @@ pub async fn kdf_serial() -> tokio::sync::MutexGuard<'static, ()> {
 
 /// Einrichtung (Setup-Token + TOTP + [`PASS`]); liefert die Antwort.
 pub async fn setup_reply(srv: &TestServer) -> Reply {
+    setup_reply_with(srv, PASS).await
+}
+
+/// Einrichtung mit eigener Passphrase (z. B. Disaster Recovery).
+pub async fn setup_reply_with(srv: &TestServer, pass: &str) -> Reply {
     let _serial = kdf_serial().await;
     let token = srv.state.setup_token_for_tests().expect("Setup-Token");
     let offer = send(
@@ -301,7 +306,7 @@ pub async fn setup_reply(srv: &TestServer) -> Reply {
         &srv.app,
         post(
             "/api/auth/setup",
-            &serde_json::json!({ "setupToken": token, "passphrase": PASS, "totpCode": code })
+            &serde_json::json!({ "setupToken": token, "passphrase": pass, "totpCode": code })
                 .to_string(),
             None,
             None,
@@ -315,6 +320,38 @@ pub async fn setup(srv: &TestServer) -> String {
     let reply = setup_reply(srv).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
     session_cookie(&reply)
+}
+
+/// Einrichtung mit eigener Passphrase; liefert den Sitzungs-Cookie.
+pub async fn setup_with(srv: &TestServer, pass: &str) -> String {
+    let reply = setup_reply_with(srv, pass).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    session_cookie(&reply)
+}
+
+/// Neustart auf demselben Datenverzeichnis (wie die Container-Verwaltung nach
+/// einem Restore): altes Herunterfahren abwarten, dann Prüfungen und
+/// `prepare_filesystem` neu (wendet einen vorgemerkten Restore an). Die
+/// TOTP-Uhr läuft weiter (verbrauchte Schritte bleiben verbraucht).
+pub async fn restart(srv: TestServer) -> TestServer {
+    let offset = srv.state.totp_now() as i64 - klein_buch_lib::server::totp::unix_now() as i64;
+    if srv.state.is_stopping() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            srv.state.shutdown.cancelled(),
+        )
+        .await
+        .expect("Herunterfahren nach dem Restore");
+    }
+    srv.state.finish_shutdown().await;
+    let TestServer { state, app, dir } = srv;
+    drop(app);
+    drop(state);
+    let paths = prepare_dirs(dir.path());
+    let state = klein_buch_lib::server::prepare(ctx_for(paths), &local_config()).unwrap();
+    state.shift_totp_clock_for_tests(offset);
+    let app = klein_buch_lib::server::router(state.clone());
+    TestServer { state, app, dir }
 }
 
 /// Anmeldung mit `pass` und dem nächsten gültigen TOTP-Code.
@@ -370,7 +407,8 @@ pub async fn call(app: &Router, cookie: &str, name: &str, args: serde_json::Valu
 
 /// Wartet auf das Ende eines Jobs; liefert die Job-Sicht.
 pub async fn wait_job(app: &Router, cookie: &str, id: &str) -> Reply {
-    for _ in 0..600 {
+    // bis 120 s: Backups laufen nacheinander (Tages-Lauf), KDF unter Last
+    for _ in 0..2400 {
         let reply = send(app, get(&format!("/api/jobs/{id}"), Some(cookie))).await;
         assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
         if reply.json()["state"] != "running" {

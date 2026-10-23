@@ -84,6 +84,7 @@ async fn setup() -> Ctx {
         sidecar_dir: dir.join("sidecar"),
         resource_dir: std::path::PathBuf::from("/non/existent/resources"),
         web_dir: std::path::PathBuf::from("/non/existent/web"),
+        backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
     };
 
     let url = format!("sqlite://{}", paths.db_file.to_string_lossy());

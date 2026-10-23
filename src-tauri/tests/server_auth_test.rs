@@ -458,7 +458,7 @@ async fn reauth_commands_require_fresh_reauth() {
         .filter(|c| c.exposed() && c.auth == Auth::Reauth)
         .map(|c| c.name)
         .collect();
-    assert_eq!(reauth_cmds.len(), 13);
+    assert_eq!(reauth_cmds.len(), 14);
     for name in &reauth_cmds {
         let r = send(
             &srv.app,

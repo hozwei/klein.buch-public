@@ -33,6 +33,9 @@ pub struct SellerProfileInput {
     pub phone: Option<String>,
     pub iban: Option<String>,
     pub bic: Option<String>,
+    /// Wird ignoriert (Plan W7, Gegenprüfung): der Logo-Dateiname kommt nie
+    /// vom Client, gesetzt nur über `seller_logo_set`/`seller_logo_clear`.
+    #[serde(default, skip_deserializing)]
     pub logo_filename: Option<String>,
     pub is_kleinunternehmer: bool,
     pub default_pdf_template: Option<String>,
@@ -156,7 +159,6 @@ pub async fn upsert(pool: &SqlitePool, input: &SellerProfileInput) -> Result<Sel
             phone = excluded.phone,
             iban = excluded.iban,
             bic = excluded.bic,
-            logo_filename = excluded.logo_filename,
             is_kleinunternehmer = excluded.is_kleinunternehmer,
             waived_paragraph_19_since = excluded.waived_paragraph_19_since,
             default_pdf_template = excluded.default_pdf_template,
@@ -211,13 +213,9 @@ pub async fn upsert(pool: &SqlitePool, input: &SellerProfileInput) -> Result<Sel
             .map(|s| s.trim())
             .filter(|s| !s.is_empty()),
     )
-    .bind(
-        input
-            .logo_filename
-            .as_deref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty()),
-    )
+    // logo_filename: beim ersten Anlegen leer, danach unverändert (nur über
+    // set_logo_filename aus dem Logo-Upload).
+    .bind(None::<String>)
     .bind(if new_is_klein { 1i64 } else { 0i64 })
     .bind(waived_since_new.as_deref())
     .bind(&default_pdf_template)

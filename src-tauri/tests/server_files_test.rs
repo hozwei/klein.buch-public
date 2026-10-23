@@ -254,7 +254,7 @@ async fn all_exports_are_downloads_and_leave_nothing_behind() {
         assert!(!got.body.is_empty(), "{name}");
     }
     assert_eq!(remaining_downloads(&srv), 0, "nichts mehr in tmp/downloads");
-    let dsgvo_dir = srv.state.ctx.paths.data_dir.join("export").join("dsgvo");
+    let dsgvo_dir = srv.state.ctx.paths.data_dir.join("tmp").join("dsgvo");
     assert_eq!(
         std::fs::read_dir(&dsgvo_dir)
             .map(|it| it.count())
@@ -295,7 +295,7 @@ async fn previews_are_inline_and_reusable() {
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
-const PATH_ARGS_UNTIL_W7CD: &[&str] = &["backup_restore_apply.path", "backup_set_target.path"];
+const PATH_ARGS_UNTIL_W7CD: &[&str] = &[];
 
 /// Kein Args-Struct eines freigegebenen Commands hat ein Pfadfeld (Plan W7).
 #[test]

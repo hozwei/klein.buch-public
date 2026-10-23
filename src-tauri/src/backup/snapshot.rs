@@ -211,7 +211,7 @@ fn collect_files(base: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(out)
 }
 
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     format!("{:x}", h.finalize())
@@ -234,6 +234,7 @@ mod tests {
             sidecar_dir: dir.join("sidecar"),
             resource_dir: std::path::PathBuf::from("/non/existent/resources"),
             web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         }
     }
 

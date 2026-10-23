@@ -10,6 +10,18 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **Logo-Dateiname vom Browser:** Das Profil übernahm den Logo-Dateinamen vom
+  Browser; darüber ließen sich mit einer Sitzung beliebige Dateien lesen oder
+  löschen. Jetzt setzt nur der Logo-Upload den Namen, und nur `logo.*`/
+  `signature.*` im Branding-Ordner werden gelesen. (W7)
+- **Restore-Protokoll:** Der Audit-Eintrag zum Restore ging verloren (er stand
+  in der beim Tausch verworfenen Datenbank) bzw. hing an einem Neustart. Jetzt
+  steht „Restore angefordert“ im Sicherheits-Backup und „Restore angewendet“
+  in der wiederhergestellten Datenbank, auch nach Neustarts. (W7)
+- **Backups trugen immer die aktuelle Schema-Version** statt der der
+  gesicherten Datenbank (relevant für Backups vor einer Umstellung). (W7)
+- **SFTP-Backups** wurden direkt unter dem Endnamen geschrieben; ein Abbruch
+  hinterließ eine halbe Datei. Jetzt Temp-Datei + Umbenennen. (W7)
 - **E-Rechnung (XRechnung) wurde von KoSIT abgelehnt**, wenn keine USt-IdNr.
   hinterlegt war: Es fehlten die Gruppe „Verkäufer-Kontakt“ (BG-6, BR-DE-2) und
   eine Verkäufer-Kennung (BR-CO-26). Jetzt enthält das XML BG-6 (Ansprechpartner
@@ -188,6 +200,22 @@ Arbeitszweig `phase-w`.
   für Logo/Unterschrift, kein HTML), zu wenig freier Platz wird abgelehnt
   (`KLEIN_BUCH_MIN_FREE_BYTES`).
 - Entfernt: „Im Ordner zeigen“, „Ordner öffnen“ und „Pfad kopieren“.
+- **Restore per Upload oder aus der Liste (W7):** Backup-Datei hochladen (mit
+  Fortschritt) oder ein lokales Backup auswählen; eingespielt werden Backups ab
+  v2026.5 (Schema 30). Erst wird entschlüsselt, dann das Sicherheits-Backup
+  angelegt — eine falsche Passphrase verändert nichts. Das Entpacken ist gegen
+  Zip-Bomben, fremde Pfade und Symlinks gehärtet; fehlende eigene PDF-Vorlagen
+  meldet danach die Inbox.
+- **Pflicht-Backup vor jeder Datenbank-Umstellung (W7):** Beim Entsperren einer
+  älteren Datenbank entsteht vorher ein geprüftes Backup; ohne Backup keine
+  Umstellung.
+- **Mehrere externe Backup-Ziele (W7):** Ordner unter `/backup-targets` (eigene
+  Volumes) und SFTP-Server, beliebig kombiniert; jedes Backup geht an jedes Ziel,
+  Fehler je Ziel im Protokoll und in der Inbox, Status in der Übersicht und im
+  Healthcheck. Der Cloud-Ordner-Vorschlag entfällt. Neue Variablen:
+  `KLEIN_BUCH_BACKUP_TARGETS_DIR` (Standard `/backup-targets`),
+  `KLEIN_BUCH_MAX_RESTORE_BYTES` (Standard 4 GiB), `KLEIN_BUCH_MIN_FREE_BYTES`
+  (Standard 2 GiB).
 
 ### Documentation
 

@@ -108,6 +108,7 @@ async fn setup() -> Env {
         sidecar_dir: PathBuf::from("/non/existent/sidecar"),
         resource_dir: std::path::PathBuf::from("/non/existent/resources"),
         web_dir: std::path::PathBuf::from("/non/existent/web"),
+        backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
     };
     Env {
         pool,

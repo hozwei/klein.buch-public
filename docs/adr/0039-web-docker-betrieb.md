@@ -571,6 +571,105 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `KLEIN_BUCH_MIN_FREE_BYTES` (Standard 2 GiB) plus der angekündigten Größe (höchstens dem
     Limit der Art) liegt; ungültige Werte der beiden Upload-Variablen brechen den Start ab.
     `statvfs` über `rustix` (kein `unsafe`).
+72. **Restore-Reihenfolge (W7).** Manifest → Format → Schema `30 ≤ s ≤ EXPECTED` → Entschlüsseln
+    (Passphrase-Prüfung) → Pre-Restore-Backup → Platzprüfung (entpackte Größe laut ZIP-Verzeichnis
+    ≤ `KLEIN_BUCH_MAX_RESTORE_BYTES` und ≤ frei − `KLEIN_BUCH_MIN_FREE_BYTES`) → Entpacken →
+    gestagte DB mit der Backup-Passphrase öffnen, Schema-Version = Manifest. Eine falsche Passphrase
+    schreibt nichts (auch kein Pre-Restore-Backup) und lässt den Upload für den nächsten Versuch
+    liegen; jeder andere Fehler verwirft Upload und Staging. Eine unverschlüsselte DB im Backup wird
+    abgelehnt (sie würde den Start sperren). Quelle in Audit, Marker und Bericht ohne Serverpfad
+    („Upload <Datei>“ bzw. „Backup vom <Zeit>“); aus der Historie nur Dateien im lokalen
+    Backup-Ordner. Die Datei liegt beim Entschlüsseln ganz im Speicher (AES-GCM über den ganzen
+    Inhalt): Speicherbedarf rund das Dreifache der Backup-Größe (Datei, Ciphertext-Kopie,
+    Klartext; Betrieb W13). Gegenprüfung: Phase A prüft zusätzlich die Archivpfade der gestagten
+    DB gegen `archive_dir` und die Migrations-Prüfsummen gegen diese Version (sonst wäre die
+    Instanz nach dem Tausch dauerhaft gesperrt) und verlangt das Doppelte der entpackten Größe als
+    freien Platz (der Tausch kopiert das Staging). Ein zweiter Restore während des ersten wird mit
+    503 abgelehnt; ein schon vorgemerkter Restore sperrt weitere. Der Restore-Job wartet
+    exklusiv auf laufende Commands/Jobs (`db_gate.write`), deren Änderungen damit im
+    Pre-Restore-Backup stehen; wartende Schreib-Commands brechen danach mit 503 ab.
+73. **Gehärtetes Entpacken (W7).** Nur normale Pfadbestandteile (`enclosed_name()` lässt `a/../b`
+    zu — das unterliefe die Allowlist), Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`,
+    im Format 1 zusätzlich `inputs/branding/**` (übersprungen); keine Symlinks, keine doppelten Dateien (`create_new`), höchstens
+    200 000 Einträge, je Eintrag höchstens 200 × gepackte Größe + 1 MiB Sockel (kleine, sehr gut
+    komprimierbare Dateien), gesamt höchstens das Budget aus Nr. 72 — gezählt werden die
+    tatsächlich gelesenen Bytes (`take`), nicht die Angaben im ZIP.
+74. **Pflicht-Backup vor Migration mit echter Schema-Version (W7).** Backups tragen die
+    Schema-Version der gesicherten Datenbank (Manifest und `backup_history`), nicht mehr die
+    einkompilierte — sonst würde das Backup einer v30-DB vor der Migration als v31 gelten und beim
+    Restore nicht migriert. Beim Entsperren mit älterem Schema: Backup `manual`, danach vollständig
+    gelesen und entschlüsselt; scheitert das, wird nicht migriert (409
+    `pre_migration_backup_failed`, Log, Inbox, Instanz bleibt gesperrt). Nach der Migration Audit
+    `backup.pre_migration {from, to, backup_id}`. Ein Restore eines älteren Backups läuft beim
+    nächsten Entsperren über denselben Weg. Der Fall „Schema 30 → 31“ wird erst mit Migration 0031
+    (W8) echt; bis dahin prüfen die Tests den Weg mit einer um eine Version älteren DB.
+75. **Schreibsperre während des Restores bleibt 503 `restarting` (W7, Plan korrigiert).** 423
+    bedeutet im Transport „Datenbank gesperrt → Entsperren-Maske“; während Phase A ist Warten und
+    Wiederholen richtig (Nr. 44).
+76. **Vorlagen nach dem Restore (W7).** Nach dem Anwenden prüft der erste Entsperr-Lauf die
+    Standard-Vorlage im Verkäuferprofil, offene Rechnungs- und Angebotsentwürfe und aktive
+    Abo-Rechnungen gegen `/inputs/pdf-templates` (+ eingebaute) und legt bei fehlenden eine
+    Inbox-Warnung mit den Namen an (`/inputs` ist nicht Teil des Backups).
+77. **Mehrere Off-Site-Ziele (W7).** `app_settings.backup_targets` = `[{id, label, kind, …}]`
+    (höchstens 10), Lesefallback `backup_target`/`backup_target_path` (ein Verzeichnis außerhalb der
+    Wurzel wird verworfen). Verzeichnis-Ziele werden relativ zur Wurzel `/backup-targets`
+    (`KLEIN_BUCH_BACKUP_TARGETS_DIR`, neues Feld `Paths::backup_targets_dir`) gespeichert und bei
+    jedem Schreiben per `canonicalize` geprüft; fehlende Unterordner werden angelegt, aber nie
+    außerhalb (jeder vorhandene Vorfahr wird geprüft). Zur Auswahl listet die Oberfläche die
+    Unterordner der Wurzel (eingebundene Volumes). Jedes Backup geht auf jedes Ziel; Fehler je Ziel
+    in `backup_log` (Label = Ziel-Bezeichnung), Audit, Inbox-Warnung (nicht abschaltbar, je Ziel und
+    Tag) und `app_settings.backup_offsite_results`. Status `offsite` = `missing` (kein Ziel) |
+    `failing` (ein Ziel scheiterte zuletzt) | `ok`; im Loopback-`/healthz`, in den
+    Backup-Einstellungen und als Aufgabe in der Übersicht. Ohne Ziel wöchentlich ein Inbox-Hinweis.
+    Rotation je Ziel (Gruppe = enthaltender Ordner bzw. SFTP-Ordner). Neue Commands
+    `backup_target_add_directory`, `backup_target_add_sftp`, `backup_target_remove` (Re-Auth);
+    `backup_set_target`/`backup_set_sftp_target` sind ersetzt (nicht mehr freigegeben, Code entfällt
+    in W11); `detect_cloud_targets`/`default_suggestion` und die Ordnerauswahl per Tauri-Dialog
+    entfallen.
+78. **SFTP je Ziel (W7).** Passwort je Ziel-ID im Schlüsselspeicher (Rückfall auf den alten
+    Einzel-Eintrag; ab W8 im `SecretStore` der DB); Upload unter `.<name>.part`, dann `rename`
+    (kein halbes `.kbk` unter dem Endnamen). Ein nicht erreichbares SFTP-Ziel dient im Test als
+    „Mock“ für den Ausfall eines Ziels.
+79. **Restore-Audit dauerhaft (W7, Gegenprüfung).** `backup.restore.requested` entsteht nach der
+    Passphrase-Prüfung und VOR dem Pre-Restore-Backup, steht also in genau dieser Sicherung des
+    ersetzten Stands (die alte DB wird beim Tausch verworfen). Der Tausch legt die Angaben in
+    `RESTORE_APPLIED.json` ab (statt nur im RAM); das erste Entsperren schreibt
+    `backup.restore.applied` (mit Pre-Restore-Backup und Schema) in die wiederhergestellte DB,
+    übernimmt das Pre-Restore-Backup in `backup_history` (Restore aus der Liste möglich) und löscht
+    die Datei erst danach — auch nach weiteren Neustarts vor dem Entsperren. Pre-Restore-Backups
+    gehen jetzt auch an die Off-Site-Ziele (nie rotiert). Reste eines abgebrochenen Phase-A-Laufs
+    (Staging ohne Marker/Tausch-Zustand) räumt der Start auf.
+80. **Desktop-Backups (W7, Gegenprüfung, Korrektur von Nr. 73).** Desktop-Backups enthalten
+    Windows-Archivpfade und werden deshalb in Phase A abgelehnt, sobald sie festgeschriebene Belege
+    enthalten (E17: kein Datenumzug aus der Desktop-Fassung). Format 1 bleibt nur für Backups ohne
+    Archiveinträge bzw. mit passenden Pfaden zulässig. Disaster Recovery setzt denselben
+    Datenpfad voraus (im Container immer `/data`).
+81. **Logo-Dateiname nie vom Client (W7, Gegenprüfung, S1).** `seller_profile_upsert` übernahm
+    `logoFilename` ungeprüft; `seller_logo_data`/`seller_logo_clear` bauten daraus einen Pfad —
+    Lesen (z. B. `/data/auth/totp.json`) und Löschen beliebiger Dateien mit einer Sitzung. Jetzt
+    wird das Feld ignoriert (nur `seller_logo_set`/`_clear` setzen es), und Branding-Namen müssen
+    `logo|signature.<erlaubte Endung>` sein.
+82. **Uploads und Ablagen (W7, Gegenprüfung).** Der ganze Multipart-Körper ist auf Limit + 64 KiB
+    begrenzt (`http_body_util::Limited`, sonst puffert multer Präambel/Part-Header unbegrenzt);
+    genau ein Feld `file`. Downloads und Uploads werden minütlich aufgeräumt (auch unregistrierte
+    Reste abgebrochener Vorgänge nach Ablauf), beim Sperren der Datenbank ganz geleert; die
+    DSGVO-Auskunft entsteht in `<data>/tmp/dsgvo/<id>` und wird bei Fehlern sofort gelöscht. HEAD
+    auf `/files/*` → 405 (verbrauchte sonst einmalige Exporte bzw. schrieb `archive.read`). XML
+    ohne `<script`/`<p:script`, ohne Wurzel html/body/script und ohne Zeichenreferenzen in
+    Namensraum-Angaben; eingebettetes SVG gilt als SVG. Der Migrations-Export schreibt den
+    Dateinamen statt des Serverpfads ins Audit.
+83. **Ziele (W7, Gegenprüfung).** Die erste Ebene unter `/backup-targets` (das Volume) wird nie
+    angelegt; beim Hinzufügen Normalisierung, Dublettenprüfung am aufgelösten Pfad und ein
+    Schreibtest. Je Ziel Gesamt-Timeout (60 s + 1 s je MiB), Verzeichnis-Schreiben außerhalb der
+    Runtime. Die kurze Floor-Aufbewahrung gilt nur, wenn mindestens ein Ziel zuletzt erfolgreich
+    war. Der alte SFTP-Schlüsselbund-Eintrag dient nur noch dem übernommenen Altziel `sftp`.
+    `KLEIN_BUCH_BACKUP_TARGETS_DIR` darf nicht `/` sein und nicht mit Daten/Vorlagen
+    ineinanderliegen. `backup.pre_migration` wird vor der Migration in die alte DB geschrieben.
+    Angebot annehmen prüft den Status vor dem Archivieren des Vertrags. Nicht übernommen (S3,
+    Queue): WAL/SHM beim Tausch mitsichern, laufende Uploads bei `MAX_PENDING`/Platz reservieren,
+    Angebots-Bundle mit hochgeladenen Rechtsdokumenten weiter inline (nur eigene Uploads des
+    Inhabers), Status `offsite` veraltet nicht (die Regel `backup_overdue` deckt veraltete Kopien
+    ab).
 
 ## Konsequenzen
 

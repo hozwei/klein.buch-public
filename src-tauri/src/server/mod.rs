@@ -88,8 +88,16 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .merge(upload)
         .nest("/api", api)
         .route("/healthz", get(health::healthz))
-        .route("/files/download/{id}", get(files::download))
-        .route("/files/archive/{id}", get(files::archive))
+        // HEAD würde einen einmaligen Export verbrauchen bzw. `archive.read`
+        // auditieren, ohne auszuliefern (Gegenprüfung W7) → 405.
+        .route(
+            "/files/download/{id}",
+            get(files::download).head(head_not_allowed),
+        )
+        .route(
+            "/files/archive/{id}",
+            get(files::archive).head(head_not_allowed),
+        )
         // sonst kein SPA-Fallback unter /files
         .route("/files/{*rest}", any(errors::not_found))
         .fallback_service(headers::spa_service(&state.ctx.paths.web_dir))
@@ -107,6 +115,10 @@ pub fn router(state: Arc<ServerState>) -> Router {
         ))
         .layer(middleware::from_fn(logging::access_log))
         .with_state(state)
+}
+
+async fn head_not_allowed() -> axum::http::StatusCode {
+    axum::http::StatusCode::METHOD_NOT_ALLOWED
 }
 
 /// `GET /api/public/info` (AGPL §13): Version, Commit, Quelle, Lizenz.
@@ -194,6 +206,22 @@ async fn serve_main() -> Result<()> {
         .await
         .map_err(|e| Error::Config(format!("Port {} nicht verfügbar: {e}", cfg.listen)))?;
     tracing::info!("Klein.Buch lauscht auf {}", cfg.listen);
+
+    // Abgelaufene Downloads und Uploads unabhängig von Anfragen löschen
+    // (Plan W7: „nach 1 h gelöscht“, Gegenprüfung).
+    let sweeper = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    sweeper.ctx.downloads.sweep();
+                    sweeper.ctx.uploads.sweep();
+                }
+                _ = sweeper.shutdown.cancelled() => break,
+            }
+        }
+    });
 
     let token = state.shutdown.clone();
     tokio::spawn(async move {

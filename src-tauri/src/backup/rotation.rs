@@ -119,7 +119,9 @@ pub fn is_floor_path(target_path: &str, floor_dir: &Path) -> bool {
 }
 
 /// Pure: getierte Pruning-Entscheidung. Partitioniert die Einträge nach
-/// `target_path` in Floor vs. Off-Site und wendet je Tier die passende Policy an.
+/// `target_path` in Floor vs. Off-Site; Off-Site wird je Ziel (enthaltender
+/// Ordner bzw. SFTP-Ordner, [`crate::backup::target::group_key`]) gruppiert
+/// und je Gruppe mit der Off-Site-Policy rotiert (Plan W7, mehrere Ziele).
 pub fn plan_tiered_deletions(
     entries: &[BackupRef],
     floor_dir: &Path,
@@ -131,7 +133,16 @@ pub fn plan_tiered_deletions(
         .cloned()
         .partition(|e| is_floor_path(&e.target_path, floor_dir));
     let mut out = plan_deletions(&floor, floor_policy);
-    out.extend(plan_deletions(&offsite, offsite_policy));
+    let mut groups: std::collections::BTreeMap<String, Vec<BackupRef>> = Default::default();
+    for e in offsite {
+        groups
+            .entry(crate::backup::target::group_key(&e.target_path))
+            .or_default()
+            .push(e);
+    }
+    for group in groups.values() {
+        out.extend(plan_deletions(group, offsite_policy));
+    }
     out
 }
 
@@ -145,10 +156,15 @@ pub fn plan_tiered_deletions(
 /// Off-Site-`sftp://`-Einträge werden nur aus der History entfernt — die
 /// Remote-Datei wird **nicht** gelöscht (kein Netzwerk-Delete nach jedem Lock;
 /// der eigene Server wird vom Nutzer verwaltet, siehe ADR 0034).
-pub async fn run(pool: &SqlitePool, floor_dir: &Path) -> Result<usize> {
-    let offsite_configured = crate::backup::target::offsite_target(pool, floor_dir)
-        .await?
-        .is_some();
+pub async fn run(pool: &SqlitePool, floor_dir: &Path, targets_root: &Path) -> Result<usize> {
+    // Kurze Floor-Aufbewahrung nur, wenn mindestens ein Ziel zuletzt
+    // erfolgreich war — sonst ist der Floor die einzige Kopie
+    // (Gegenprüfung W7).
+    let targets = crate::backup::target::list_targets(pool, targets_root).await?;
+    let results = crate::backup::target::load_results(pool).await?;
+    let offsite_configured = targets
+        .iter()
+        .any(|t| results.get(&t.id).is_some_and(|r| r.ok));
     let floor_policy = if offsite_configured {
         RetentionPolicy::floor()
     } else {
@@ -359,12 +375,13 @@ mod tests {
         assert!(del.contains(&"f1".to_string()));
         assert!(del.contains(&"f2".to_string()));
         assert!(!del.contains(&"f3".to_string()));
-        // Off-Site (4 Dailies: s1<o1<o2<o3), keep 2 → behalte o2,o3; lösche o1,s1.
+        // Off-Site je Ziel (Plan W7): Ordner-Ziel (3 Dailies), keep 2 → lösche o1;
+        // das SFTP-Ziel ist eine eigene Gruppe mit nur einem Daily → bleibt.
         assert!(del.contains(&"o1".to_string()));
-        assert!(del.contains(&"s1".to_string()));
+        assert!(!del.contains(&"s1".to_string()));
         assert!(!del.contains(&"o2".to_string()));
         assert!(!del.contains(&"o3".to_string()));
-        assert_eq!(del.len(), 4);
+        assert_eq!(del.len(), 3);
     }
 
     // ---- G1-HARDEN.5: Mindestzahl + neuestes Backup nie löschen --------------

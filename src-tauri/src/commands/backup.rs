@@ -18,28 +18,36 @@ pub struct BackupSettings {
     pub passphrase_set: bool,
     pub unlocked: bool,
     /// Lokaler **Floor**-Ordner (`paths.backups_dir`) — wird IMMER geschrieben
-    /// (G1-BKP.4). Das Ziel unten ist die zusätzliche Off-Site-Spiegelung.
+    /// (G1-BKP.4). Die Ziele unten sind die zusätzlichen Off-Site-Kopien.
     pub floor_path: String,
-    /// Pfad, falls das aktuelle (Off-Site-)Ziel ein **Verzeichnis** ist (sonst `None`).
-    pub target_path: Option<String>,
-    pub default_suggestion: String,
-    /// Vom Auto-Detect erkannte Cloud-Ordner (G1-BKP.2) als 1-Klick-Vorschläge.
-    pub detected_targets: Vec<backup::target::DetectedTarget>,
-    /// Konfiguration, falls das aktuelle Ziel **SFTP** ist (G1-BKP.3) — ohne
-    /// Passwort (das lebt im Keychain).
-    pub sftp: Option<SftpTargetView>,
+    /// Wurzel der Verzeichnis-Ziele (`/backup-targets`, Plan W7).
+    pub targets_root: String,
+    /// Unterordner der Wurzel zur Auswahl (eingebundene Volumes).
+    pub available_dirs: Vec<String>,
+    /// Konfigurierte Off-Site-Ziele (ohne Passwörter).
+    pub targets: Vec<TargetView>,
+    /// `missing` | `failing` | `ok` (Plan W7).
+    pub offsite_status: String,
 }
 
-/// SFTP-Zielkonfiguration fürs UI (kein Passwort).
+/// Off-Site-Ziel fürs UI (kein Passwort).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SftpTargetView {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub remote_dir: String,
-    /// Gepinnter SHA-256-Host-Key-Fingerprint, falls bereits bestätigt.
+pub struct TargetView {
+    pub id: String,
+    pub label: String,
+    /// `directory` | `sftp`
+    pub kind: String,
+    /// Verzeichnis-Ziel: Ordner relativ zur Wurzel.
+    pub directory: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub user: Option<String>,
+    pub remote_dir: Option<String>,
+    /// Gepinnter SHA-256-Host-Key-Fingerprint.
     pub host_fingerprint: Option<String>,
+    /// Ergebnis des letzten Laufs.
+    pub last_result: Option<backup::target::TargetResult>,
 }
 
 /// Eine Zeile aus `backup_history` für die Liste.
@@ -123,38 +131,58 @@ pub async fn backup_get_settings(
     let pool = ctx.pool()?;
     let session = &ctx.session;
 
-    let floor_path = ctx.paths.clone().backups_dir.to_string_lossy().to_string();
-    // Konfiguriertes Ziel → Directory-Pfad bzw. SFTP-View aufteilen.
-    let (target_path, sftp) = match backup::target::get_target(&pool).await? {
-        Some(backup::target::BackupTarget::Directory { path }) => (Some(path), None),
-        Some(backup::target::BackupTarget::Sftp {
-            host,
-            port,
-            user,
-            remote_dir,
-            host_fingerprint,
-        }) => (
-            None,
-            Some(SftpTargetView {
-                host,
-                port,
-                user,
-                remote_dir,
-                host_fingerprint,
-            }),
-        ),
-        None => (None, None),
-    };
+    let paths = &ctx.paths;
+    let root = &paths.backup_targets_dir;
+    let results = backup::target::load_results(&pool).await?;
+    let targets = backup::target::list_targets(&pool, root)
+        .await?
+        .into_iter()
+        .map(|t| {
+            let last_result = results.get(&t.id).cloned();
+            match t.target {
+                backup::target::BackupTarget::Directory { path } => TargetView {
+                    id: t.id,
+                    label: t.label,
+                    kind: "directory".into(),
+                    directory: Some(path),
+                    host: None,
+                    port: None,
+                    user: None,
+                    remote_dir: None,
+                    host_fingerprint: None,
+                    last_result,
+                },
+                backup::target::BackupTarget::Sftp {
+                    host,
+                    port,
+                    user,
+                    remote_dir,
+                    host_fingerprint,
+                } => TargetView {
+                    id: t.id,
+                    label: t.label,
+                    kind: "sftp".into(),
+                    directory: None,
+                    host: Some(host),
+                    port: Some(port),
+                    user: Some(user),
+                    remote_dir: Some(remote_dir),
+                    host_fingerprint,
+                    last_result,
+                },
+            }
+        })
+        .collect();
     Ok(BackupSettings {
         passphrase_set: backup::is_passphrase_set(&pool).await?,
         unlocked: session.is_unlocked(),
-        floor_path,
-        target_path,
-        default_suggestion: backup::target::default_suggestion()
-            .to_string_lossy()
+        floor_path: paths.backups_dir.to_string_lossy().to_string(),
+        targets_root: root.to_string_lossy().to_string(),
+        available_dirs: backup::target::available_dirs(root),
+        targets,
+        offsite_status: backup::target::offsite_status(&pool, root)
+            .await?
             .to_string(),
-        detected_targets: backup::target::detect_cloud_targets(),
-        sftp,
     })
 }
 
@@ -251,7 +279,7 @@ pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<
     let Some(pool) = open_encrypted(&paths, &passphrase).await? else {
         return Ok(false);
     };
-    db::run_migrations(ctx, &pool).await?;
+    migrate_with_backup(ctx, &pool, &passphrase).await?;
     activate_unlocked(ctx, pool, passphrase).await?;
     Ok(true)
 }
@@ -272,6 +300,83 @@ pub async fn open_encrypted(paths: &Paths, passphrase: &str) -> Result<Option<sq
         return Ok(None);
     }
     Ok(Some(pool))
+}
+
+/// Fehler des Pflicht-Backups vor einer Migration (Plan W7): keine Migration,
+/// die Datenbank bleibt gesperrt.
+pub const PRE_MIGRATION_FAILED: &str = "Pflicht-Backup vor der Datenbank-Migration fehlgeschlagen";
+
+/// Migrationen mit Pflicht-Backup (ADR 0039 E15, Plan W7): Ist die
+/// Schema-Version der geöffneten DB älter als `EXPECTED`, entsteht vorher ein
+/// Backup `manual` mit der alten Version, das vollständig gelesen und geprüft
+/// wird. Scheitert es, wird nicht migriert (Fehler, Instanz bleibt gesperrt;
+/// Log + Inbox-Hinweis). Vor der Migration Audit `backup.pre_migration`.
+/// Frische oder aktuelle Datenbanken migrieren ohne Backup.
+pub async fn migrate_with_backup(
+    ctx: &Arc<AppCtx>,
+    pool: &sqlx::SqlitePool,
+    passphrase: &str,
+) -> Result<()> {
+    use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
+    let Some(from) = db::schema_version::read(pool)
+        .await?
+        .filter(|v| *v < EXPECTED_SCHEMA_VERSION)
+    else {
+        return db::run_migrations(ctx, pool).await;
+    };
+    let backup = async {
+        let outcome = backup::create_now(pool, &ctx.paths, passphrase, "manual").await?;
+        backup::verify_backup_file(std::path::Path::new(&outcome.file_path), passphrase).await?;
+        Ok::<_, Error>(outcome)
+    }
+    .await;
+    let outcome = match backup {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            tracing::error!(
+                "{PRE_MIGRATION_FAILED} (Schema {from} → {EXPECTED_SCHEMA_VERSION}): {e} — \
+                 keine Migration, die Datenbank bleibt gesperrt"
+            );
+            let body = format!(
+                "Vor der Umstellung der Datenbank von Version {from} auf \
+                 {EXPECTED_SCHEMA_VERSION} ließ sich kein Backup schreiben. Es wurde nichts \
+                 umgestellt. Prüfe Speicherplatz und Schreibrechte von /data (Server-Log)."
+            );
+            crate::notify::store::create(
+                pool,
+                crate::notify::NewNotification {
+                    title: "Datenbank-Migration abgebrochen",
+                    body: &body,
+                    severity: "urgent",
+                    action_url: Some("/settings/backup-log"),
+                    dedup_key: Some(&format!("pre_migration_failed:{from}")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok();
+            return Err(Error::Backup(format!("{PRE_MIGRATION_FAILED}: {e}")));
+        }
+    };
+    // Audit noch in der alten DB, vor der Migration (übersteht sie; auch ein
+    // Abbruch mittendrin ist dann dokumentiert, Gegenprüfung W7).
+    crate::db::repo::audit_log::append(
+        pool,
+        "backup.pre_migration",
+        "backup",
+        &outcome.history_id,
+        Some(&format!(
+            r#"{{"from":{from},"to":{EXPECTED_SCHEMA_VERSION},"backup_id":"{}"}}"#,
+            outcome.history_id
+        )),
+    )
+    .await?;
+    db::run_migrations(ctx, pool).await?;
+    tracing::info!(
+        "Datenbank von Schema {from} auf {EXPECTED_SCHEMA_VERSION} migriert (Backup {})",
+        outcome.file_name
+    );
+    Ok(())
 }
 
 /// Hängt einen geprüften, migrierten Pool ein: Pool, Passphrase der Sitzung,
@@ -320,16 +425,131 @@ pub async fn backup_create_now(
 /// Argumente von [`backup_set_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // nicht mehr freigegeben, entfällt in W11
 pub struct BackupSetTargetArgs {
     pub path: String,
 }
 
-/// Setzt das Backup-Ziel (Verzeichnis).
-pub async fn backup_set_target(ctx: &Arc<AppCtx>, args: BackupSetTargetArgs) -> Result<()> {
-    let BackupSetTargetArgs { path } = args;
-    let pool = ctx.pool()?;
+/// Ersetzt durch [`backup_target_add_directory`] (Plan W7, nicht mehr
+/// freigegeben; entfällt in W11).
+pub async fn backup_set_target(_ctx: &Arc<AppCtx>, args: BackupSetTargetArgs) -> Result<()> {
+    let BackupSetTargetArgs { path: _ } = args;
+    Err(Error::Domain(
+        "Ersetzt durch „Backup-Ziel hinzufügen“ (mehrere Ziele, Plan W7).".into(),
+    ))
+}
 
-    backup::target::set_directory_target(&pool, &path).await
+/// Argumente von [`backup_target_add_directory`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTargetAddDirectoryArgs {
+    pub label: String,
+    /// Ordner relativ zur Wurzel `/backup-targets` (z. B. `nas/klein-buch`).
+    pub directory: String,
+}
+
+/// Neues Verzeichnis-Ziel unter `/backup-targets` (Plan W7, Re-Auth). Der
+/// Ordner wird sofort aufgelöst und geprüft (angelegt, falls er fehlt).
+pub async fn backup_target_add_directory(
+    ctx: &Arc<AppCtx>,
+    args: BackupTargetAddDirectoryArgs,
+) -> Result<backup::target::TargetEntry> {
+    let BackupTargetAddDirectoryArgs { label, directory } = args;
+    let pool = ctx.pool()?;
+    let root = &ctx.paths.backup_targets_dir;
+    // Normalisiert speichern (`nas/./kb` → `nas/kb`), Dubletten am
+    // aufgelösten Pfad erkennen und einmal schreiben/löschen (Gegenprüfung W7).
+    if directory.trim().starts_with('/') {
+        backup::target::check_relative(directory.trim())?;
+    }
+    let directory = directory
+        .trim()
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    let resolved = backup::target::resolve_directory(root, &directory)?;
+    for existing in backup::target::list_targets(&pool, root).await? {
+        if let backup::target::BackupTarget::Directory { path } = &existing.target {
+            if backup::target::resolve_directory(root, path).ok().as_ref() == Some(&resolved) {
+                return Err(Error::Domain(format!(
+                    "Dieser Ordner ist schon als Ziel „{}“ eingerichtet.",
+                    existing.label
+                )));
+            }
+        }
+    }
+    let probe = resolved.join(".klein-buch-write-test");
+    std::fs::write(&probe, b"ok")
+        .and_then(|_| std::fs::remove_file(&probe))
+        .map_err(|e| Error::Domain(format!("Im Ordner kann nicht geschrieben werden: {e}")))?;
+    let entry = backup::target::TargetEntry {
+        id: uuid::Uuid::now_v7().to_string(),
+        label: clean_label(&label, &directory),
+        target: backup::target::BackupTarget::Directory { path: directory },
+    };
+    add_target(&pool, root, entry).await
+}
+
+fn clean_label(label: &str, fallback: &str) -> String {
+    let l: String = label
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(80)
+        .collect();
+    if l.is_empty() {
+        fallback.to_string()
+    } else {
+        l
+    }
+}
+
+async fn add_target(
+    pool: &sqlx::SqlitePool,
+    root: &std::path::Path,
+    entry: backup::target::TargetEntry,
+) -> Result<backup::target::TargetEntry> {
+    let mut targets = backup::target::list_targets(pool, root).await?;
+    if targets.iter().any(|t| t.target == entry.target) {
+        return Err(Error::Domain(
+            "Dieses Backup-Ziel ist schon eingerichtet.".into(),
+        ));
+    }
+    targets.push(entry.clone());
+    backup::target::save_targets(pool, &targets).await?;
+    Ok(entry)
+}
+
+/// Argumente von [`backup_target_remove`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTargetRemoveArgs {
+    pub id: String,
+}
+
+/// Entfernt ein Off-Site-Ziel (Plan W7, Re-Auth); vorhandene Dateien dort
+/// bleiben liegen, das SFTP-Passwort wird gelöscht.
+pub async fn backup_target_remove(ctx: &Arc<AppCtx>, args: BackupTargetRemoveArgs) -> Result<()> {
+    let BackupTargetRemoveArgs { id } = args;
+    let pool = ctx.pool()?;
+    let root = &ctx.paths.backup_targets_dir;
+    let mut targets = backup::target::list_targets(&pool, root).await?;
+    let before = targets.len();
+    let removed: Vec<_> = targets.iter().filter(|t| t.id == id).cloned().collect();
+    targets.retain(|t| t.id != id);
+    if targets.len() == before {
+        return Err(Error::Domain(format!("Backup-Ziel nicht gefunden: {id}")));
+    }
+    backup::target::save_targets(&pool, &targets).await?;
+    backup::target::store_results(&pool, &targets, &[]).await?;
+    if removed
+        .iter()
+        .any(|t| matches!(t.target, backup::target::BackupTarget::Sftp { .. }))
+    {
+        backup::sftp::delete_password(&id).ok();
+    }
+    Ok(())
 }
 
 /// Argumente von [`backup_test_sftp`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -341,6 +561,9 @@ pub struct BackupTestSftpArgs {
     pub user: String,
     pub remote_dir: String,
     pub password: String,
+    /// Gespeichertes Ziel, dessen Passwort bei leerer Eingabe genutzt wird.
+    #[serde(default)]
+    pub target_id: Option<String>,
 }
 
 /// Testet eine SFTP-Verbindung (G1-BKP.3): Handshake + Auth + Schreibrechte.
@@ -360,6 +583,7 @@ pub async fn backup_test_sftp(
         user,
         remote_dir,
         password,
+        target_id,
     } = args;
 
     if host.trim().is_empty() || user.trim().is_empty() {
@@ -371,7 +595,8 @@ pub async fn backup_test_sftp(
         return Err(Error::Backup("Ungültiger SFTP-Port.".into()));
     }
     let effective = if password.is_empty() {
-        backup::sftp::get_password()?.ok_or_else(|| {
+        let id = target_id.unwrap_or_default();
+        backup::sftp::get_password(&id)?.ok_or_else(|| {
             Error::Backup(
                 "Kein Passwort eingegeben und keines gespeichert — bitte SFTP-Passwort eingeben."
                     .into(),
@@ -393,6 +618,7 @@ pub async fn backup_test_sftp(
 /// Argumente von [`backup_set_sftp_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // nicht mehr freigegeben, entfällt in W11
 pub struct BackupSetSftpTargetArgs {
     pub host: String,
     pub port: u16,
@@ -410,10 +636,36 @@ pub struct BackupSetSftpTargetArgs {
 /// `host_fingerprint` ist Pflicht — er stammt aus [`backup_test_sftp`] und ist
 /// der MITM-Schutz: ohne ihn lehnt der spätere Upload ab.
 pub async fn backup_set_sftp_target(
-    ctx: &Arc<AppCtx>,
-    args: BackupSetSftpTargetArgs,
+    _ctx: &Arc<AppCtx>,
+    _args: BackupSetSftpTargetArgs,
 ) -> Result<()> {
-    let BackupSetSftpTargetArgs {
+    Err(Error::Domain(
+        "Ersetzt durch „Backup-Ziel hinzufügen“ (mehrere Ziele, Plan W7).".into(),
+    ))
+}
+
+/// Argumente von [`backup_target_add_sftp`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTargetAddSftpArgs {
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub remote_dir: String,
+    pub host_fingerprint: String,
+    pub password: String,
+}
+
+/// Neues SFTP-Ziel (Plan W7, Re-Auth). `host_fingerprint` ist Pflicht (aus
+/// [`backup_test_sftp`], MITM-Schutz); das Passwort liegt je Ziel im
+/// Schlüsselspeicher, **nie** in DB/Log/Audit.
+pub async fn backup_target_add_sftp(
+    ctx: &Arc<AppCtx>,
+    args: BackupTargetAddSftpArgs,
+) -> Result<backup::target::TargetEntry> {
+    let BackupTargetAddSftpArgs {
+        label,
         host,
         port,
         user,
@@ -422,7 +674,6 @@ pub async fn backup_set_sftp_target(
         password,
     } = args;
     let pool = ctx.pool()?;
-
     if host.trim().is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
@@ -436,18 +687,29 @@ pub async fn backup_set_sftp_target(
             "Kein Host-Fingerprint — bitte zuerst die Verbindung testen und bestätigen.".into(),
         ));
     }
-    // Passwort nur überschreiben, wenn eines eingegeben wurde.
-    if !password.is_empty() {
-        backup::sftp::set_password(&password)?;
+    if password.is_empty() {
+        return Err(Error::Backup("Bitte das SFTP-Passwort eingeben.".into()));
     }
-    let target = backup::target::BackupTarget::Sftp {
-        host: host.trim().to_string(),
-        port,
-        user: user.trim().to_string(),
-        remote_dir: remote_dir.trim().to_string(),
-        host_fingerprint: Some(host_fingerprint.trim().to_string()),
+    let id = uuid::Uuid::now_v7().to_string();
+    let entry = backup::target::TargetEntry {
+        id: id.clone(),
+        label: clean_label(&label, host.trim()),
+        target: backup::target::BackupTarget::Sftp {
+            host: host.trim().to_string(),
+            port,
+            user: user.trim().to_string(),
+            remote_dir: remote_dir.trim().to_string(),
+            host_fingerprint: Some(host_fingerprint.trim().to_string()),
+        },
     };
-    backup::target::set_target(&pool, &target).await
+    backup::sftp::set_password(&id, &password)?;
+    match add_target(&pool, &ctx.paths.backup_targets_dir, entry).await {
+        Ok(entry) => Ok(entry),
+        Err(e) => {
+            backup::sftp::delete_password(&id).ok();
+            Err(e)
+        }
+    }
 }
 
 /// Argumente von [`backup_open_folder`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -577,30 +839,98 @@ pub async fn backup_restore_preview(
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRestoreApplyArgs {
-    pub path: String,
+    /// `.kbk` aus `POST /api/upload/restore` (Plan W7) …
+    #[serde(default)]
+    pub upload_id: Option<String>,
+    /// … oder ein lokales Backup aus der Historie (`backup_history.id`).
+    #[serde(default)]
+    pub backup_id: Option<String>,
+    /// Passphrase des Backups (danach die Passphrase der Instanz).
     pub passphrase: String,
 }
 
-/// Restore Phase A: Pre-Restore-Backup, entschlüsseln, ins Staging entpacken,
-/// Neustart anfordern.
+/// Restore Phase A (Plan W7): Quelle ist ein Upload oder ein lokales Backup
+/// aus der Historie (nur Dateien im lokalen Backup-Ordner); danach Neustart.
+/// Der Upload wird nach Erfolg und nach jedem Fehler außer einer falschen
+/// Passphrase verworfen.
 pub async fn backup_restore_apply(
     ctx: &Arc<AppCtx>,
     args: BackupRestoreApplyArgs,
 ) -> Result<restore::RestoreReport> {
-    let BackupRestoreApplyArgs { path, passphrase } = args;
+    let BackupRestoreApplyArgs {
+        upload_id,
+        backup_id,
+        passphrase,
+    } = args;
     let pool = ctx.pool()?;
-    let session = &ctx.session;
-
-    let pool = &pool;
-    let paths = ctx.paths.clone();
-    restore::apply(
-        pool,
-        &paths,
-        session,
-        std::path::Path::new(&path),
+    let upload_id = upload_id.filter(|s| !s.is_empty());
+    let backup_id = backup_id.filter(|s| !s.is_empty());
+    let (path, label) = match (&upload_id, &backup_id) {
+        (Some(id), None) => {
+            let (path, _size, name) = ctx
+                .uploads
+                .path_of(id, &[crate::uploads::UploadKind::Restore])?;
+            (path, format!("Upload {name}"))
+        }
+        (None, Some(id)) => history_backup_path(&pool, &ctx.paths, id).await?,
+        _ => {
+            return Err(Error::BadRequest(
+                "Genau eine Quelle angeben: uploadId oder backupId.".into(),
+            ))
+        }
+    };
+    let limits = ctx.uploads.limits();
+    let result = restore::apply(
+        &pool,
+        &ctx.paths,
+        &ctx.session,
+        &path,
+        &label,
         &passphrase,
+        restore::RestoreLimits {
+            max_bytes: limits.max_restore_bytes,
+            min_free_bytes: limits.min_free_bytes,
+        },
     )
-    .await
+    .await;
+    if let Some(id) = upload_id.as_deref() {
+        let keep = matches!(&result, Err(e) if restore::is_wrong_passphrase(e));
+        if !keep {
+            ctx.uploads.consume(id);
+        }
+    }
+    result
+}
+
+/// Pfad eines lokalen Backups aus der Historie — nur unter `backups_dir`
+/// (aufgelöst per `canonicalize`, keine Symlinks nach draußen).
+async fn history_backup_path(
+    pool: &sqlx::SqlitePool,
+    paths: &Paths,
+    id: &str,
+) -> Result<(std::path::PathBuf, String)> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT target_path, created_at FROM backup_history WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    let (target, created_at) =
+        row.ok_or_else(|| Error::Domain(format!("Backup nicht gefunden: {id}")))?;
+    let not_local = || {
+        Error::Domain(
+            "Nur lokale Backups aus dem Backup-Ordner lassen sich direkt einspielen — \
+             andere bitte herunterladen und hochladen."
+                .into(),
+        )
+    };
+    let root = paths.backups_dir.canonicalize().map_err(|_| not_local())?;
+    let real = std::path::Path::new(&target)
+        .canonicalize()
+        .map_err(|_| not_local())?;
+    if !real.starts_with(&root) || !real.is_file() {
+        return Err(not_local());
+    }
+    Ok((real, format!("Backup vom {created_at}")))
 }
 
 #[cfg(test)]

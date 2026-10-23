@@ -247,8 +247,17 @@ impl ServerState {
 
     /// Restore beginnt: ab sofort keine Änderungen mehr annehmen (sie gingen
     /// beim Tausch verloren). Der Job pausiert danach den Scheduler.
-    pub fn begin_restore(&self) {
-        self.restore_running.store(true, Ordering::SeqCst);
+    /// `false`, wenn schon ein Restore läuft (zweite Anfrage → 503,
+    /// Gegenprüfung W7).
+    pub fn begin_restore(&self) -> bool {
+        self.restore_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Restore nicht angenommen (Job-Platz fehlte): nur die Sperre lösen.
+    pub fn cancel_restore(&self) {
+        self.restore_running.store(false, Ordering::SeqCst);
     }
 
     /// Restore gescheitert: Sperre aufheben, Scheduler fortsetzen.

@@ -619,9 +619,19 @@ async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, A
             "Entsperren verweigert — Einzelheiten im Server-Log.",
         ));
     }
-    if let Err(e) = crate::db::run_migrations(ctx, &pool).await {
+    if let Err(e) = crate::commands::backup::migrate_with_backup(ctx, &pool, &passphrase).await {
         pool.close().await;
         passphrase.zeroize();
+        let msg = e.to_string();
+        if msg.contains(crate::commands::backup::PRE_MIGRATION_FAILED) {
+            // Plan W7: klare Meldung, Einzelheiten im Log (dort schon protokolliert).
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "pre_migration_backup_failed",
+                "Entsperren abgebrochen: Vor der Datenbank-Umstellung ließ sich kein Backup \
+                 schreiben. Es wurde nichts verändert — Einzelheiten im Server-Log.",
+            ));
+        }
         return Err(generic_failure("Entsperren", &e));
     }
     activate_unlocked(ctx, pool, passphrase)
@@ -701,6 +711,10 @@ pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     }
     st.ctx.session.clear();
     st.sessions.clear();
+    // Exporte (Klartext!) und Uploads nicht über das Sperren hinaus liegen
+    // lassen (Gegenprüfung W7).
+    st.ctx.downloads.clear();
+    st.ctx.uploads.clear();
     tracing::info!(target: "klein_buch_lib::auth", "Datenbank gesperrt");
     Ok(())
 }

@@ -33,6 +33,9 @@ const DROPPED_FROM_FRONTEND: &[&str] = &[
     "euer_reveal_path",
     "backup_open_folder",
     "backup_reveal_path",
+    "backup_restore_preview",
+    "backup_set_target",
+    "backup_set_sftp_target",
 ];
 
 /// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,
@@ -43,6 +46,8 @@ const NOT_ON_CMD: &[&str] = &[
     "backup_is_unlocked",
     "backup_setup_passphrase",
     "backup_unlock",
+    "backup_set_target",
+    "backup_set_sftp_target",
     "invoices_open_pdf",
     "attachments_open",
     "backup_restore_preview",
@@ -64,8 +69,9 @@ const NOT_ON_CMD: &[&str] = &[
 
 /// Re-Auth-Pflicht laut Plan W6 (Prüfung der Frische folgt dort).
 const REAUTH: &[&str] = &[
-    "backup_set_target",
-    "backup_set_sftp_target",
+    "backup_target_add_directory",
+    "backup_target_add_sftp",
+    "backup_target_remove",
     "backup_test_sftp",
     "backup_restore_apply",
     "mail_account_create",
@@ -143,7 +149,12 @@ fn allowlist_is_exactly_plan_point_2() {
         .cloned()
         .collect();
     assert_eq!(exposed_names(), expected);
-    assert_eq!(expected.len(), 183 - NOT_ON_CMD.len());
+    assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
+    assert_eq!(
+        REGISTRY.len(),
+        186,
+        "183 (W4) + 3 Backup-Ziel-Commands (W7)"
+    );
 
     for spec in REGISTRY.iter() {
         let reauth = REAUTH.contains(&spec.name);

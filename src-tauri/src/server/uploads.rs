@@ -50,6 +50,26 @@ pub async fn upload(
     }
 }
 
+/// Fehlerkette enthält das Überschreiten des Körperlimits (`http_body_util::Limited`)?
+fn is_too_large(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if e.to_string().contains("length limit exceeded") {
+            return true;
+        }
+        cur = e.source();
+    }
+    false
+}
+
+fn multipart_error(err: &axum::extract::multipart::MultipartError, what: &str) -> ApiError {
+    if is_too_large(err) {
+        ApiError::payload_too_large()
+    } else {
+        ApiError::bad_request(what.to_string())
+    }
+}
+
 fn declared_length(headers: &HeaderMap) -> Option<u64> {
     headers
         .get(header::CONTENT_LENGTH)
@@ -84,19 +104,22 @@ async fn upload_inner(st: &ServerState, art: &str, req: Request) -> Result<Uploa
         return Err(ApiError::insufficient_storage());
     }
 
+    // Der ganze Körper (Präambel, Part-Header, Rahmen) ist begrenzt, nicht nur
+    // das Feld — multer puffert sonst unbegrenzt (Gegenprüfung W7).
+    let body_limit = usize::try_from(max.saturating_add(MULTIPART_OVERHEAD)).unwrap_or(usize::MAX);
+    let req = req.map(|b| axum::body::Body::new(http_body_util::Limited::new(b, body_limit)));
     let mut multipart = Multipart::from_request(req, &())
         .await
         .map_err(|_| ApiError::bad_request("Erwartet multipart/form-data mit dem Feld „file“."))?;
-    let mut field = loop {
-        let next = tokio::time::timeout(IDLE_TIMEOUT, multipart.next_field())
-            .await
-            .map_err(|_| ApiError::bad_request("Upload abgebrochen (keine Daten)."))?
-            .map_err(|_| ApiError::bad_request("Multipart-Daten fehlerhaft."))?;
-        match next {
-            Some(f) if f.name() == Some("file") => break f,
-            Some(_) => continue,
-            None => return Err(ApiError::bad_request("Feld „file“ fehlt.")),
-        }
+    let next = tokio::time::timeout(IDLE_TIMEOUT, multipart.next_field())
+        .await
+        .map_err(|_| ApiError::bad_request("Upload abgebrochen (keine Daten)."))?
+        .map_err(|e| multipart_error(&e, "Multipart-Daten fehlerhaft."))?;
+    // Genau ein Feld „file“ (Plan W7).
+    let mut field = match next {
+        Some(f) if f.name() == Some("file") => f,
+        Some(_) => return Err(ApiError::bad_request("Nur das Feld „file“ ist erlaubt.")),
+        None => return Err(ApiError::bad_request("Feld „file“ fehlt.")),
     };
     let original_name = field.file_name().unwrap_or("").to_string();
 
@@ -111,7 +134,7 @@ async fn upload_inner(st: &ServerState, art: &str, req: Request) -> Result<Uploa
         let chunk = tokio::time::timeout(IDLE_TIMEOUT, field.chunk())
             .await
             .map_err(|_| ApiError::bad_request("Upload abgebrochen (Zeitüberschreitung)."))?
-            .map_err(|_| ApiError::bad_request("Upload abgebrochen."))?;
+            .map_err(|e| multipart_error(&e, "Upload abgebrochen."))?;
         let Some(chunk) = chunk else { break };
         size = size.saturating_add(chunk.len() as u64);
         if size > max {
@@ -129,8 +152,16 @@ async fn upload_inner(st: &ServerState, art: &str, req: Request) -> Result<Uploa
         .await
         .map_err(|e| ApiError::internal(&format!("Upload schreiben: {e}")))?;
     drop(file);
+    drop(field);
     if size == 0 {
         return Err(ApiError::bad_request("Die Datei ist leer."));
+    }
+    let more = tokio::time::timeout(IDLE_TIMEOUT, multipart.next_field())
+        .await
+        .map_err(|_| ApiError::bad_request("Upload abgebrochen (keine Daten)."))?
+        .map_err(|e| multipart_error(&e, "Multipart-Daten fehlerhaft."))?;
+    if more.is_some() {
+        return Err(ApiError::bad_request("Nur das Feld „file“ ist erlaubt."));
     }
 
     let mut file_type = sniff(&head, None);

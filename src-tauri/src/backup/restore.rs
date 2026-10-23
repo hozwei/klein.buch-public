@@ -25,7 +25,7 @@
 
 use crate::backup::{create_now, encrypt, manifest, snapshot, BackupSession};
 use crate::config::Paths;
-use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
+use crate::db::schema_version::{EXPECTED_SCHEMA_VERSION, MIN_RESTORE_SCHEMA_VERSION};
 use crate::error::{Error, Result};
 use chrono::Utc;
 use serde::Serialize;
@@ -58,11 +58,15 @@ pub struct RestorePreview {
 #[serde(rename_all = "camelCase")]
 pub struct RestoreReport {
     pub requires_restart: bool,
-    pub pre_restore_backup_path: String,
-    pub source_file: String,
+    /// Dateiname des Pre-Restore-Backups (im lokalen Backup-Ordner).
+    pub pre_restore_backup: String,
+    /// Quelle ohne Serverpfad (Upload-Dateiname bzw. Backup aus der Historie).
+    pub source: String,
     pub staged_at: String,
     /// Format-Version des eingespielten Backups.
     pub format_version: u32,
+    /// Schema-Version des Backups (ältere werden beim Entsperren migriert).
+    pub schema_version: i32,
     /// `true`, wenn Logo und Unterschrift (`data/branding`) mit eingespielt werden.
     pub branding_restored: bool,
     /// Hinweis für die Oberfläche (z. B. Format-1-Backup ohne Logo/Unterschrift).
@@ -85,7 +89,7 @@ pub fn preview(file_path: &Path) -> Result<RestorePreview> {
         format_version: m.format_version,
         schema_version: m.schema_version,
         current_schema_version: EXPECTED_SCHEMA_VERSION,
-        compatible: m.schema_version == EXPECTED_SCHEMA_VERSION,
+        compatible: ensure_restorable_schema(m.schema_version).is_ok(),
         content_size_bytes: m.content_size_bytes,
     })
 }
@@ -111,36 +115,67 @@ pub fn decrypt_backup(
     Ok((m, content))
 }
 
-/// Phase A: validieren, Pre-Restore-Backup, entschlüsseln, ins Staging entpacken,
-/// Marker schreiben. Verlangt eine entsperrte Session (für das Pre-Restore-
-/// Backup mit der *aktuellen* Passphrase).
+/// Grenzen für Phase A (Plan W7): Gesamtgröße beim Entpacken und freier Platz.
+#[derive(Debug, Clone, Copy)]
+pub struct RestoreLimits {
+    /// Höchstens so viele Bytes werden entpackt (`KLEIN_BUCH_MAX_RESTORE_BYTES`).
+    pub max_bytes: u64,
+    /// So viel muss nach dem Entpacken frei bleiben (`KLEIN_BUCH_MIN_FREE_BYTES`).
+    pub min_free_bytes: u64,
+}
+
+impl Default for RestoreLimits {
+    fn default() -> Self {
+        let l = crate::uploads::UploadLimits::default();
+        Self {
+            max_bytes: l.max_restore_bytes,
+            min_free_bytes: l.min_free_bytes,
+        }
+    }
+}
+
+/// Wie [`apply`] gescheitert ist: bei falscher Passphrase darf derselbe Upload
+/// erneut versucht werden, sonst wird er verworfen (Plan W7).
+pub fn is_wrong_passphrase(err: &Error) -> bool {
+    matches!(err, Error::Crypto(_))
+}
+
+/// Phase A (Plan W7): Manifest und Format prüfen → Schema `30 ≤ s ≤ EXPECTED`
+/// → entschlüsseln (Passphrase-Prüfung vor jedem Schreiben) →
+/// Pre-Restore-Backup mit der aktuellen Passphrase → Platz prüfen → gehärtet
+/// ins Staging entpacken → gestagte DB mit der Backup-Passphrase öffnen und
+/// ihre Schema-Version gegen das Manifest prüfen → Audit → Marker. Scheitert
+/// ein Schritt nach dem Anlegen des Stagings, wird es gelöscht. `label`
+/// beschreibt die Quelle ohne Serverpfad (Audit, Marker, Bericht).
 pub async fn apply(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
     file_path: &Path,
+    label: &str,
     passphrase: &str,
+    limits: RestoreLimits,
 ) -> Result<RestoreReport> {
     let current = session.get().ok_or_else(|| {
         Error::Backup("Vor dem Restore bitte die App entsperren (aktuelle Passphrase).".into())
     })?;
+    // Ein schon vorgemerkter Restore würde sonst sein Staging verlieren
+    // (Gegenprüfung W7).
+    if paths.data_dir.join(RESTORE_MARKER).exists() || restore_incomplete(paths) {
+        return Err(Error::Backup(
+            "Ein Restore ist bereits vorgemerkt — der Server startet neu.".into(),
+        ));
+    }
 
     let file_bytes = fs::read(file_path)?;
     let header = manifest::read_manifest_only(&file_bytes)?;
     manifest::ensure_supported_format(header.format_version)?;
     let branding_restored = header.format_version >= 2;
-    if header.schema_version != EXPECTED_SCHEMA_VERSION {
-        return Err(Error::Backup(format!(
-            "Backup hat Schema-Version {}, die App erwartet {}. Restore abgebrochen — bitte App-Version angleichen.",
-            header.schema_version, EXPECTED_SCHEMA_VERSION
-        )));
-    }
+    ensure_restorable_schema(header.schema_version)?;
 
-    // Pre-Restore-Backup (Pflicht) mit der aktuellen Session-Passphrase.
-    let pre = create_now(pool, paths, &current, "pre_restore").await?;
-
-    // Entschlüsseln + Content-Hash prüfen — Argon2id/AES außerhalb der Runtime,
-    // KDF begrenzt (Plan W2.6).
+    // Entschlüsseln + Content-Hash prüfen — vor dem Pre-Restore-Backup, damit
+    // eine falsche Passphrase nichts schreibt. Argon2id/AES außerhalb der
+    // Runtime, KDF begrenzt (Plan W2.6).
     let content_zip = {
         let pass = zeroize::Zeroizing::new(passphrase.to_string());
         crate::limits::run_blocking(&crate::limits::KDF, move || {
@@ -149,19 +184,59 @@ pub async fn apply(
         .await?
     };
 
-    // Ins Staging entpacken (ebenfalls blockierende Arbeit).
+    // Pflicht-Audit (R2-026, Gegenprüfung W7): VOR dem Pre-Restore-Backup, damit
+    // der Eintrag in genau dieser Sicherung des ersetzten Stands steht (die
+    // alte DB selbst wird beim Tausch verworfen). Scheitert er, passiert nichts.
+    crate::db::repo::audit_log::append(
+        pool,
+        "backup.restore.requested",
+        "backup",
+        "restore",
+        Some(
+            &serde_json::json!({
+                "source": label,
+                "schema": header.schema_version,
+                "format": header.format_version,
+            })
+            .to_string(),
+        ),
+    )
+    .await?;
+
+    // Pre-Restore-Backup (Pflicht) mit der aktuellen Session-Passphrase.
+    let pre = create_now(pool, paths, &current, "pre_restore").await?;
+
+    // Platz: entpackte Größe laut Verzeichnis ≤ Limit und ≤ (frei − Reserve)/2
+    // — der Tausch beim Neustart kopiert das Staging noch einmal
+    // (Gegenprüfung W7).
+    let declared = declared_size(&content_zip)?;
+    let free = crate::uploads::free_bytes(&paths.data_dir)?;
+    let budget = limits
+        .max_bytes
+        .min(free.saturating_sub(limits.min_free_bytes) / 2);
+    if declared > budget {
+        return Err(Error::Backup(format!(
+            "Backup zu groß für den Restore: {declared} Bytes entpackt, erlaubt {budget} \
+             (KLEIN_BUCH_MAX_RESTORE_BYTES / freier Platz)."
+        )));
+    }
+
     let staging = paths.data_dir.join(RESTORE_STAGING);
     reset_dir(&staging)?;
-    {
-        let staging = staging.clone();
-        tokio::task::spawn_blocking(move || extract_zip(&content_zip, &staging))
-            .await
-            .map_err(|e| Error::Backup(format!("Entpacken abgebrochen: {e}")))??;
-    }
-    if !staging.join("klein-buch.sqlite").is_file() {
-        return Err(Error::Backup(
-            "Backup enthält keine klein-buch.sqlite — Restore abgebrochen".into(),
-        ));
+    let staged = stage(
+        content_zip,
+        &staging,
+        paths,
+        header.format_version,
+        header.schema_version,
+        passphrase,
+        budget,
+    )
+    .await;
+    if let Err(e) = staged {
+        let _ = clear_dir_force(&staging);
+        let _ = fs::remove_dir(&staging);
+        return Err(e);
     }
 
     // Marker vorbereiten (Dateisystem, nicht DB). Er wird erst nach dem
@@ -173,56 +248,279 @@ pub async fn apply(
     let marker_tmp = paths.data_dir.join(format!("{RESTORE_MARKER}.tmp"));
     let info = serde_json::json!({
         "staging": staging.to_string_lossy(),
-        "source": file_path.to_string_lossy(),
+        "source": label,
         "staged_at": staged_at,
-        "pre_restore_backup": pre.file_path,
+        "pre_restore_backup": pre.file_name,
         "format_version": header.format_version,
+        "schema_version": header.schema_version,
     });
-    {
+    let written = (|| -> Result<()> {
         use std::io::Write;
         let mut f = fs::File::create(&marker_tmp)?;
         f.write_all(&serde_json::to_vec_pretty(&info)?)?;
         f.sync_all()?;
-    }
-
-    // R2-026: Pflicht-Audit (GoBD: Restore-Vorgang muss lückenlos
-    // dokumentiert sein). Fehler propagieren statt schlucken.
-    let audited = crate::db::repo::audit_log::append(
-        pool,
-        "backup.restore.staged",
-        "backup",
-        "restore",
-        Some(&format!(
-            r#"{{"source":"{}","pre_restore":"{}"}}"#,
-            file_path.to_string_lossy().replace('"', "'"),
-            pre.file_path.replace('"', "'")
-        )),
-    )
-    .await;
-    if let Err(e) = audited {
+        Ok(())
+    })();
+    if let Err(e) = written {
         let _ = fs::remove_file(&marker_tmp);
+        let _ = clear_dir_force(&staging);
         return Err(e);
     }
-    fs::rename(&marker_tmp, &marker)?;
+
+    // Der Pflicht-Audit steht schon vor dem Pre-Restore-Backup; nach dem
+    // Tausch schreibt das erste Entsperren `backup.restore.applied` in die
+    // wiederhergestellte DB (aus RESTORE_APPLIED.json, übersteht Neustarts).
+    if let Err(e) = fs::rename(&marker_tmp, &marker) {
+        let _ = fs::remove_file(&marker_tmp);
+        let _ = clear_dir_force(&staging);
+        let _ = fs::remove_dir(&staging);
+        return Err(e.into());
+    }
 
     Ok(RestoreReport {
         requires_restart: true,
-        pre_restore_backup_path: pre.file_path,
-        source_file: file_path.to_string_lossy().to_string(),
+        pre_restore_backup: pre.file_name,
+        source: label.to_string(),
         staged_at,
         format_version: header.format_version,
+        schema_version: header.schema_version,
         branding_restored,
         notice: (!branding_restored).then(|| NOTICE_V1_NO_BRANDING.to_string()),
     })
 }
 
+/// Schema-Version eines Backups im zulässigen Bereich (E15)?
+pub fn ensure_restorable_schema(schema: i32) -> Result<()> {
+    if schema > EXPECTED_SCHEMA_VERSION {
+        return Err(Error::Backup(format!(
+            "Backup hat Schema-Version {schema}, diese Version kennt höchstens \
+             {EXPECTED_SCHEMA_VERSION}. Restore abgebrochen — bitte zuerst Klein.Buch aktualisieren."
+        )));
+    }
+    if schema < MIN_RESTORE_SCHEMA_VERSION {
+        return Err(Error::Backup(format!(
+            "Backup hat Schema-Version {schema}; eingespielt werden Backups ab Version \
+             {MIN_RESTORE_SCHEMA_VERSION} (Klein.Buch v2026.5). Restore abgebrochen."
+        )));
+    }
+    Ok(())
+}
+
+/// Summe der entpackten Größen laut ZIP-Verzeichnis (Vorabprüfung; das
+/// Entpacken zählt die tatsächlich gelesenen Bytes).
+fn declared_size(zip_bytes: &[u8]) -> Result<u64> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))?;
+    let mut total: u64 = 0;
+    for i in 0..archive.len() {
+        total = total.saturating_add(archive.by_index_raw(i)?.size());
+    }
+    Ok(total)
+}
+
+/// Angewendete Migrationen der gestagten DB müssen mit denen dieser Version
+/// übereinstimmen (Version + Prüfsumme), sonst scheitert das Entsperren nach
+/// dem Tausch mit `VersionMismatch` (Gegenprüfung W7).
+async fn check_migration_checksums(pool: &SqlitePool) -> Result<()> {
+    let applied: Vec<(i64, Vec<u8>)> =
+        sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations WHERE success = 1")
+            .fetch_all(pool)
+            .await?;
+    for (version, checksum) in applied {
+        let known = crate::db::MIGRATOR
+            .migrations
+            .iter()
+            .find(|m| m.version == version);
+        match known {
+            Some(m) if m.checksum.as_ref() == checksum.as_slice() => {}
+            _ => {
+                return Err(Error::Backup(format!(
+                    "Migration {version} im Backup passt nicht zu dieser Version \
+                     (Prüfsumme) — Restore abgebrochen."
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Entpacken + gestagte DB prüfen (blockierende Teile außerhalb der Runtime).
+async fn stage(
+    content_zip: Vec<u8>,
+    staging: &Path,
+    paths: &Paths,
+    format_version: u32,
+    schema_version: i32,
+    passphrase: &str,
+    budget: u64,
+) -> Result<()> {
+    {
+        let staging = staging.to_path_buf();
+        let limits = ExtractLimits {
+            max_total: budget,
+            ..ExtractLimits::default()
+        };
+        tokio::task::spawn_blocking(move || {
+            extract_zip(&content_zip, &staging, format_version, &limits)
+        })
+        .await
+        .map_err(|e| Error::Backup(format!("Entpacken abgebrochen: {e}")))??;
+    }
+    let staged_db = staging.join("klein-buch.sqlite");
+    if !staged_db.is_file() {
+        return Err(Error::Backup(
+            "Backup enthält keine klein-buch.sqlite — Restore abgebrochen".into(),
+        ));
+    }
+    if crate::db::db_file_is_plaintext(&staged_db) {
+        return Err(Error::Backup(
+            "Backup enthält eine unverschlüsselte Datenbank — wird nicht eingespielt \
+             (ADR 0035/0039)."
+                .into(),
+        ));
+    }
+    // Gestagte DB mit der Backup-Passphrase (= deren DB-Key) öffnen und prüfen.
+    let pool = crate::db::open_pool(&staged_db, Some(passphrase)).await?;
+    let checked = async {
+        if !crate::db::probe_readable(&pool).await {
+            return Err(Error::Backup(
+                "Die Datenbank im Backup lässt sich mit der Backup-Passphrase nicht lesen.".into(),
+            ));
+        }
+        let found = crate::db::schema_version::read(&pool)
+            .await?
+            .ok_or_else(|| {
+                Error::Backup("Die Datenbank im Backup hat keine Schema-Version.".into())
+            })?;
+        if found != schema_version {
+            return Err(Error::Backup(format!(
+                "Schema-Version der Datenbank im Backup ({found}) passt nicht zum \
+                 Manifest ({schema_version}) — Restore abgebrochen."
+            )));
+        }
+        ensure_restorable_schema(found)?;
+        // Gegenprüfung W7: Was das Entsperren später prüft, schon hier — sonst
+        // wäre die Instanz nach dem Tausch dauerhaft gesperrt.
+        crate::server::startup::check_archive_paths(&pool, paths)
+            .await
+            .map_err(|_| {
+                Error::Backup(format!(
+                    "Die Archivpfade im Backup passen nicht zu {} (Backup einer Instanz mit \
+                 anderem Datenverzeichnis oder der Desktop-Fassung) — Restore abgebrochen.",
+                    paths.archive_dir.display()
+                ))
+            })?;
+        check_migration_checksums(&pool).await
+    }
+    .await;
+    pool.close().await;
+    checked
+}
+
+/// Nach dem Restore (Plan W7): Werden PDF-Vorlagen verwendet, die nicht in
+/// `/inputs` liegen (die Vorlagen sind nicht Teil des Backups)? Geprüft werden
+/// die Standard-Vorlage im Verkäuferprofil, offene Rechnungs- und
+/// Angebotsentwürfe und aktive Abo-Rechnungen. Fehlende → Inbox-Warnung mit
+/// Namen. Liefert die fehlenden Namen (best effort, Fehler nur im Log).
+pub async fn warn_missing_templates(
+    paths: &Paths,
+    pool: &SqlitePool,
+    staged_at: &str,
+) -> Vec<String> {
+    let available: std::collections::BTreeSet<String> =
+        match crate::pdf::templates::list_templates(&paths.inputs_dir) {
+            Ok(list) => list.into_iter().map(|t| t.name).collect(),
+            Err(e) => {
+                tracing::warn!("Vorlagen nach dem Restore nicht prüfbar: {e}");
+                return Vec::new();
+            }
+        };
+    let referenced: Vec<String> = match sqlx::query_scalar(
+        "SELECT default_pdf_template FROM seller_profile
+         UNION SELECT pdf_template FROM invoices WHERE locked_at IS NULL
+         UNION SELECT pdf_template FROM quotes WHERE locked_at IS NULL
+         UNION SELECT pdf_template FROM recurring_invoices WHERE active = 1",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Vorlagen nach dem Restore nicht prüfbar: {e}");
+            return Vec::new();
+        }
+    };
+    let missing: Vec<String> = referenced
+        .into_iter()
+        .filter(|n| !n.trim().is_empty() && !available.contains(n))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !missing.is_empty() {
+        let names = missing.join(", ");
+        tracing::warn!("Nach dem Restore fehlen PDF-Vorlagen in /inputs: {names}");
+        let body = format!(
+            "Diese PDF-Vorlagen werden verwendet, liegen aber nicht im Vorlagen-Ordner \
+             (/inputs/pdf-templates): {names}. Die Vorlagen sind nicht Teil des Backups — \
+             bitte wieder dort ablegen, sonst lassen sich betroffene Belege nicht erzeugen."
+        );
+        crate::notify::store::create(
+            pool,
+            crate::notify::NewNotification {
+                title: "PDF-Vorlagen nach dem Restore fehlen",
+                body: &body,
+                severity: "warning",
+                action_url: Some("/settings/pdf-templates"),
+                dedup_key: Some(&format!("restore_missing_templates:{staged_at}")),
+                ..Default::default()
+            },
+        )
+        .await
+        .ok();
+    }
+    missing
+}
+
 /// Info über einen angewandten Restore (für nachträgliches Audit nach Pool-Open).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct AppliedInfo {
     pub source: String,
     pub staged_at: String,
     /// `true`, wenn `data/branding` ersetzt wurde (Backup-Format ≥ 2).
     pub branding_restored: bool,
+    /// Dateiname des Pre-Restore-Backups im lokalen Backup-Ordner.
+    #[serde(default)]
+    pub pre_restore_backup: String,
+    #[serde(default)]
+    pub schema_version: Option<i32>,
+}
+
+/// Datei im `data_dir`: angewendeter Restore, dessen Audit noch aussteht
+/// (Gegenprüfung W7 — übersteht Neustarts bis zum ersten Entsperren).
+pub const RESTORE_APPLIED: &str = "RESTORE_APPLIED.json";
+
+/// Liest einen angewendeten, noch nicht auditierten Restore.
+pub fn read_applied(paths: &Paths) -> Option<AppliedInfo> {
+    let bytes = fs::read(paths.data_dir.join(RESTORE_APPLIED)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Staging und Marker-Temp eines abgebrochenen Phase-A-Laufs entfernen —
+/// nur, wenn weder ein Marker noch ein Tausch-Zustand existiert.
+pub fn clean_stale_staging(paths: &Paths) {
+    if paths.data_dir.join(RESTORE_MARKER).exists() || swap_state_path(paths).exists() {
+        return;
+    }
+    let staging = paths.data_dir.join(RESTORE_STAGING);
+    if staging.exists() {
+        let _ = clear_dir_force(&staging);
+        let _ = fs::remove_dir(&staging);
+    }
+    let _ = fs::remove_file(paths.data_dir.join(format!("{RESTORE_MARKER}.tmp")));
+}
+
+/// Nach dem geschriebenen Audit: Datei entfernen.
+pub fn clear_applied(paths: &Paths) {
+    let _ = fs::remove_file(paths.data_dir.join(RESTORE_APPLIED));
 }
 
 /// Suffix für die zur-Seite-bewegten Originale beim Phase-B-Swap (R4-001).
@@ -500,6 +798,20 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         .and_then(|v| v.as_u64())
         .unwrap_or(1);
     let restore_branding = format_version >= 2;
+    let pre_restore_backup = info
+        .get("pre_restore_backup")
+        .and_then(|v| v.as_str())
+        .map(|p| {
+            Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let schema_version = info
+        .get("schema_version")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
 
     let staged_db = staging.join("klein-buch.sqlite");
     if !staged_db.is_file() {
@@ -593,6 +905,24 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
     }
     write_swap_state(paths, SwapPhase::Copied)?;
 
+    // Angewendet: Angaben für den Audit dauerhaft ablegen, bevor der Marker
+    // verschwindet (Gegenprüfung W7, übersteht Neustarts).
+    let applied = AppliedInfo {
+        source,
+        staged_at,
+        branding_restored: restore_branding,
+        pre_restore_backup,
+        schema_version,
+    };
+    {
+        use std::io::Write;
+        let tmp = paths.data_dir.join(format!("{RESTORE_APPLIED}.tmp"));
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(&serde_json::to_vec_pretty(&applied)?)?;
+        f.sync_all()?;
+        fs::rename(&tmp, paths.data_dir.join(RESTORE_APPLIED))?;
+    }
+
     // Stufe 3 — Aufräumen.
     for (_, rb, is_dir) in &pairs {
         if rb.exists() {
@@ -604,11 +934,7 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
     let _ = fs::remove_dir(&staging);
     clear_swap_state(paths);
 
-    Ok(Some(AppliedInfo {
-        source,
-        staged_at,
-        branding_restored: restore_branding,
-    }))
+    Ok(Some(applied))
 }
 
 // ---------------------------------------------------------------------------
@@ -719,48 +1045,143 @@ fn copy_file_synced(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Entpackt einen Content-ZIP nach `dest`. Wehrt Path-Traversal ab.
-fn extract_zip(zip_bytes: &[u8], dest: &Path) -> Result<()> {
+/// Grenzen beim Entpacken eines Content-ZIP (Plan W7, Zip-Bomben-Schutz).
+#[derive(Debug, Clone, Copy)]
+pub struct ExtractLimits {
+    /// Höchstens so viele Bytes insgesamt.
+    pub max_total: u64,
+    /// Höchstens so viele Einträge.
+    pub max_entries: usize,
+    /// Höchstens dieses Verhältnis entpackt : gepackt je Eintrag …
+    pub max_ratio: u64,
+    /// … plus dieser Sockel (kleine, gut komprimierbare Dateien).
+    pub ratio_slack: u64,
+}
+
+impl Default for ExtractLimits {
+    fn default() -> Self {
+        Self {
+            max_total: crate::uploads::DEFAULT_MAX_RESTORE_BYTES,
+            max_entries: 200_000,
+            max_ratio: 200,
+            ratio_slack: 1024 * 1024,
+        }
+    }
+}
+
+/// Erlaubte Einträge: `klein-buch.sqlite`, `archive/**`, `branding/**`; im
+/// Format 1 zusätzlich `inputs/branding/**` (wird übersprungen, Logo und
+/// Unterschrift bleiben dann unverändert). `Some(true)` = entpacken,
+/// `Some(false)` = überspringen, `None` = abbrechen.
+fn entry_action(rel: &Path, is_dir: bool, format_version: u32) -> Option<bool> {
+    let parts: Vec<&std::ffi::OsStr> = rel.iter().collect();
+    match parts.first().and_then(|p| p.to_str()) {
+        Some("klein-buch.sqlite") if parts.len() == 1 && !is_dir => Some(true),
+        Some("archive") | Some("branding") => Some(true),
+        Some("inputs")
+            if format_version < 2 && parts.get(1).and_then(|p| p.to_str()) == Some("branding") =>
+        {
+            Some(false)
+        }
+        Some("inputs") if format_version < 2 && parts.len() == 1 && is_dir => Some(false),
+        _ => None,
+    }
+}
+
+/// Entpackt einen Content-ZIP gehärtet nach `dest` (Plan W7): Pfade nur über
+/// `enclosed_name()` (kein `..`, kein absoluter Pfad), nur erlaubte Namen
+/// ([`entry_action`]), keine Symlinks, keine doppelten Dateien, höchstens
+/// `max_entries` Einträge, gelesene Bytes per `take` begrenzt (gesamt und je
+/// Eintrag nach Kompressionsverhältnis). Liefert die geschriebenen Bytes.
+pub fn extract_zip(
+    zip_bytes: &[u8],
+    dest: &Path,
+    format_version: u32,
+    limits: &ExtractLimits,
+) -> Result<u64> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))?;
+    if archive.len() > limits.max_entries {
+        return Err(Error::Backup(format!(
+            "Backup-ZIP hat {} Einträge (höchstens {}) — Restore abgebrochen",
+            archive.len(),
+            limits.max_entries
+        )));
+    }
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
-        // Review W2 S1-5: Komponenten prüfen statt Zeichenfolgen — ein Anhang
-        // „Angebot v2..pdf“ ist legitim, `../x` oder `/x` nicht.
-        let unsafe_path = name.starts_with('\\')
-            || Path::new(&name).components().any(|c| {
-                matches!(
-                    c,
-                    std::path::Component::ParentDir
-                        | std::path::Component::RootDir
-                        | std::path::Component::Prefix(_)
-                )
-            });
-        if unsafe_path {
+        if file.is_symlink() {
             return Err(Error::Backup(format!(
-                "unsicherer Pfad im Backup-ZIP: {name}"
+                "Symlink im Backup-ZIP: {name} — Restore abgebrochen"
             )));
         }
-        let out_path = dest.join(&name);
-        if name.ends_with('/') {
+        // Review W2 S1-5 / Plan W7: Komponenten prüfen statt Zeichenfolgen —
+        // „Angebot v2..pdf“ ist legitim, `../x`, `/x` oder `C:\x` nicht.
+        // `enclosed_name()` lässt `a/../b` zu (bleibt im Ziel, unterläuft aber
+        // die Allowlist) — daher nur normale Bestandteile.
+        let rel = file
+            .enclosed_name()
+            .filter(|p| {
+                p.components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+            })
+            .filter(|_| !name.starts_with('\\') && !name.contains(':'))
+            .ok_or_else(|| Error::Backup(format!("unsicherer Pfad im Backup-ZIP: {name}")))?;
+        let is_dir = file.is_dir();
+        match entry_action(&rel, is_dir, format_version) {
+            Some(true) => {}
+            Some(false) => continue,
+            None => {
+                return Err(Error::Backup(format!(
+                    "unerwarteter Eintrag im Backup-ZIP: {name} — Restore abgebrochen"
+                )))
+            }
+        }
+        let out_path = dest.join(&rel);
+        if is_dir {
             fs::create_dir_all(&out_path)?;
             continue;
         }
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf)?;
-        fs::write(&out_path, &buf)?;
+        let by_ratio = file
+            .compressed_size()
+            .saturating_mul(limits.max_ratio)
+            .saturating_add(limits.ratio_slack);
+        let remaining = limits.max_total.saturating_sub(total);
+        let cap = by_ratio.min(remaining);
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out_path)
+            .map_err(|e| Error::Backup(format!("Eintrag {name} nicht anlegbar (doppelt?): {e}")))?;
+        let written = std::io::copy(&mut (&mut file).take(cap.saturating_add(1)), &mut out)?;
+        if written > cap {
+            drop(out);
+            let _ = fs::remove_file(&out_path);
+            return Err(Error::Backup(if cap == remaining {
+                format!(
+                    "Backup entpackt größer als erlaubt ({} Bytes) — Restore abgebrochen",
+                    limits.max_total
+                )
+            } else {
+                format!(
+                    "Eintrag {name} entpackt sich über das Verhältnis {}:1 — Restore abgebrochen",
+                    limits.max_ratio
+                )
+            }));
+        }
+        total = total.saturating_add(written);
     }
-    Ok(())
+    Ok(total)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backup;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use tempfile::TempDir;
 
     fn paths_for(dir: &Path) -> Paths {
@@ -773,21 +1194,25 @@ mod tests {
             sidecar_dir: dir.join("sidecar"),
             resource_dir: std::path::PathBuf::from("/non/existent/resources"),
             web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         }
     }
 
+    /// Grenzen für Tests (kleines `/tmp`).
+    const TEST_LIMITS: RestoreLimits = RestoreLimits {
+        max_bytes: 1 << 30,
+        min_free_bytes: 0,
+    };
+
+    /// Test-DB wie im Betrieb verschlüsselt (SQLCipher, Key = Passphrase).
     async fn pool_for_backup(db_file: &Path) -> SqlitePool {
-        let opts = SqliteConnectOptions::new()
-            .filename(db_file)
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
+        let pool = crate::db::open_pool(db_file, Some("passphrase-1234567890"))
             .await
             .unwrap();
         for ddl in [
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))) STRICT",
+            "INSERT INTO app_settings (key, value) VALUES ('schema_version', '30')",
             "CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_utc TEXT NOT NULL DEFAULT (datetime('now','utc')),
                 actor TEXT NOT NULL DEFAULT 'system', action TEXT NOT NULL,
@@ -801,6 +1226,10 @@ mod tests {
                 verified_at TEXT) STRICT",
             "CREATE TABLE marker (id INTEGER PRIMARY KEY, v TEXT) STRICT",
             "INSERT INTO marker (v) VALUES ('original-data')",
+            // für die Prüfungen in Phase A (Archivpfade, Migrationen)
+            "CREATE TABLE archive_entries (id TEXT PRIMARY KEY NOT NULL, file_path TEXT NOT NULL)",
+            "CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, checksum BLOB NOT NULL,
+                success INTEGER NOT NULL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -822,7 +1251,13 @@ mod tests {
         // Korrekte Passphrase → Content entschlüsselbar, enthält DB.
         let (_m, content) = decrypt_backup(&file_bytes, "passphrase-1234567890").unwrap();
         let staging = dir.path().join("stg");
-        extract_zip(&content, &staging).unwrap();
+        extract_zip(
+            &content,
+            &staging,
+            manifest::FORMAT_VERSION,
+            &ExtractLimits::default(),
+        )
+        .unwrap();
         assert!(staging.join("klein-buch.sqlite").is_file());
 
         // Falsche Passphrase → Fehler.
@@ -836,14 +1271,14 @@ mod tests {
         std::fs::create_dir_all(&paths.backups_dir).unwrap();
         let pool = pool_for_backup(&paths.db_file).await;
 
-        let outcome = backup::create_now(&pool, &paths, "pw-abcdef", "manual")
+        let outcome = backup::create_now(&pool, &paths, "passphrase-1234567890", "manual")
             .await
             .unwrap();
         let mut file_bytes = std::fs::read(&outcome.file_path).unwrap();
         // Letztes Byte (im Ciphertext-Bereich) kippen → GCM-Auth schlägt an.
         let last = file_bytes.len() - 1;
         file_bytes[last] ^= 0x01;
-        assert!(decrypt_backup(&file_bytes, "pw-abcdef").is_err());
+        assert!(decrypt_backup(&file_bytes, "passphrase-1234567890").is_err());
     }
 
     #[test]
@@ -856,7 +1291,13 @@ mod tests {
         zw.write_all(b"x").unwrap();
         let bytes = zw.finish().unwrap().into_inner();
         let dir = TempDir::new().unwrap();
-        assert!(extract_zip(&bytes, dir.path()).is_err());
+        assert!(extract_zip(
+            &bytes,
+            dir.path(),
+            manifest::FORMAT_VERSION,
+            &ExtractLimits::default()
+        )
+        .is_err());
     }
 
     #[test]
@@ -945,7 +1386,9 @@ mod tests {
             &paths,
             &session,
             Path::new(&original.file_path),
+            "test.kbk",
             "passphrase-1234567890",
+            TEST_LIMITS,
         )
         .await
         .unwrap();
@@ -953,7 +1396,7 @@ mod tests {
         // Pre-Restore-Backup wurde erzwungen erstellt + Staging/Marker liegen vor.
         assert!(report.requires_restart);
         assert!(
-            Path::new(&report.pre_restore_backup_path).is_file(),
+            paths.backups_dir.join(&report.pre_restore_backup).is_file(),
             "Pre-Restore-Backup muss als Datei existieren"
         );
         assert!(paths.data_dir.join(RESTORE_MARKER).exists());
@@ -969,12 +1412,7 @@ mod tests {
         assert!(apply_pending(&paths).unwrap().is_some());
 
         // DB neu öffnen (ohne DDL) → Stand muss IDENTISCH zum Original sein.
-        let opts = SqliteConnectOptions::new()
-            .filename(&paths.db_file)
-            .create_if_missing(false);
-        let pool2 = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
+        let pool2 = crate::db::open_pool(&paths.db_file, Some("passphrase-1234567890"))
             .await
             .unwrap();
         let v: String = sqlx::query_scalar("SELECT v FROM marker")
@@ -1059,7 +1497,9 @@ mod tests {
             &paths,
             &session,
             Path::new(&original.file_path),
+            "test.kbk",
             "passphrase-1234567890",
+            TEST_LIMITS,
         )
         .await
         .unwrap();
@@ -1104,9 +1544,17 @@ mod tests {
 
         let session = backup::BackupSession::default();
         session.set("passphrase-1234567890".to_string());
-        let report = apply(&pool, &paths, &session, &v1, "passphrase-1234567890")
-            .await
-            .unwrap();
+        let report = apply(
+            &pool,
+            &paths,
+            &session,
+            &v1,
+            "v1.kbk",
+            "passphrase-1234567890",
+            TEST_LIMITS,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.format_version, 1);
         assert!(!report.branding_restored);
         assert_eq!(report.notice.as_deref(), Some(NOTICE_V1_NO_BRANDING));
@@ -1149,7 +1597,9 @@ mod tests {
             &paths,
             &session,
             Path::new(&original.file_path),
+            "test.kbk",
             "passphrase-1234567890",
+            TEST_LIMITS,
         )
         .await
         .unwrap();
@@ -1307,7 +1757,13 @@ mod tests {
         zw.write_all(b"x").unwrap();
         let bytes = zw.finish().unwrap().into_inner();
         let dir = TempDir::new().unwrap();
-        extract_zip(&bytes, dir.path()).unwrap();
+        extract_zip(
+            &bytes,
+            dir.path(),
+            manifest::FORMAT_VERSION,
+            &ExtractLimits::default(),
+        )
+        .unwrap();
         assert!(dir
             .path()
             .join("archive/2026/attachments/Angebot v2..pdf")
@@ -1318,8 +1774,121 @@ mod tests {
             zw.start_file(evil, opts).unwrap();
             zw.write_all(b"x").unwrap();
             let bytes = zw.finish().unwrap().into_inner();
-            assert!(extract_zip(&bytes, dir.path()).is_err(), "{evil}");
+            assert!(
+                extract_zip(
+                    &bytes,
+                    dir.path(),
+                    manifest::FORMAT_VERSION,
+                    &ExtractLimits::default()
+                )
+                .is_err(),
+                "{evil}"
+            );
         }
+    }
+
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in entries {
+            zw.start_file(*name, opts).unwrap();
+            zw.write_all(bytes).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    /// Plan W7: Allowlist, Eintragszahl, Gesamtgröße, Symlinks, Doppelte,
+    /// Format-1-Branding übersprungen.
+    #[test]
+    fn extract_zip_hardening() {
+        let limits = ExtractLimits::default();
+        let ok = zip_of(&[
+            ("klein-buch.sqlite", b"db"),
+            ("archive/2026/a.pdf", b"a"),
+            ("branding/logo.png", b"l"),
+        ]);
+        let dir = TempDir::new().unwrap();
+        assert_eq!(extract_zip(&ok, dir.path(), 2, &limits).unwrap(), 4);
+
+        // fremde Namen, auch Unterordner der DB
+        for evil in [
+            "inputs/branding/x.png",
+            "klein-buch.sqlite/x",
+            "data/x",
+            "C:x",
+            "archive/x/../../evil",
+        ] {
+            let dir = TempDir::new().unwrap();
+            let bytes = zip_of(&[(evil, b"x")]);
+            assert!(
+                extract_zip(&bytes, dir.path(), 2, &limits).is_err(),
+                "{evil}"
+            );
+        }
+        // Format 1: inputs/branding wird übersprungen
+        let dir = TempDir::new().unwrap();
+        let v1 = zip_of(&[
+            ("klein-buch.sqlite", b"db"),
+            ("inputs/branding/logo.png", b"l"),
+        ]);
+        extract_zip(&v1, dir.path(), 1, &limits).unwrap();
+        assert!(!dir.path().join("inputs").exists());
+
+        // zu viele Einträge
+        let few = ExtractLimits {
+            max_entries: 2,
+            ..limits
+        };
+        let dir = TempDir::new().unwrap();
+        let err = extract_zip(&ok, dir.path(), 2, &few).unwrap_err();
+        assert!(err.to_string().contains("Einträge"), "{err}");
+
+        // Gesamtgröße
+        let small = ExtractLimits {
+            max_total: 3,
+            ..limits
+        };
+        let dir = TempDir::new().unwrap();
+        let err = extract_zip(&ok, dir.path(), 2, &small).unwrap_err();
+        assert!(err.to_string().contains("größer als erlaubt"), "{err}");
+
+        // doppelte Datei
+        let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        {
+            use std::io::Write;
+            zw.start_file("archive/a.pdf", opts).unwrap();
+            zw.write_all(b"1").unwrap();
+            zw.start_file("archive/b.pdf", opts).unwrap();
+            zw.write_all(b"2").unwrap();
+        }
+        let mut bytes = zw.finish().unwrap().into_inner();
+        // zweiten Namen auf den ersten umbiegen (lokaler Kopf + Verzeichnis)
+        let needle = b"archive/b.pdf";
+        let mut i = 0;
+        while i + needle.len() <= bytes.len() {
+            if &bytes[i..i + needle.len()] == needle {
+                bytes[i + 8] = b'a';
+            }
+            i += 1;
+        }
+        let dir = TempDir::new().unwrap();
+        // zip fasst doppelte Namen beim Öffnen zusammen; sonst greift
+        // `create_new`. In keinem Fall wird eine Datei überschrieben.
+        let _ = extract_zip(&bytes, dir.path(), 2, &limits);
+        let files: Vec<_> = std::fs::read_dir(dir.path().join("archive"))
+            .map(|it| it.flatten().collect())
+            .unwrap_or_default();
+        assert!(files.len() <= 1, "{files:?}");
+
+        // Symlink
+        let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        zw.add_symlink("archive/link", "/etc/passwd", opts).unwrap();
+        let bytes = zw.finish().unwrap().into_inner();
+        let dir = TempDir::new().unwrap();
+        let err = extract_zip(&bytes, dir.path(), 2, &limits).unwrap_err();
+        assert!(err.to_string().contains("Symlink"), "{err}");
     }
 
     #[test]
@@ -1351,7 +1920,9 @@ mod tests {
             &paths,
             &session,
             Path::new(&original.file_path),
+            "test.kbk",
             "passphrase-1234567890",
+            TEST_LIMITS,
         )
         .await
         .unwrap_err();

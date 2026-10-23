@@ -275,6 +275,41 @@ async fn receipt_logo_and_legal_document_via_upload() {
         "logo.svg",
         "Endung aus dem Inhalt"
     );
+    // Gegenprüfung W7: der Logo-Dateiname kommt nie vom Client (sonst Lesen/
+    // Löschen beliebiger Dateien über seller_logo_data/seller_logo_clear).
+    let secret = srv.state.ctx.paths.data_dir.join("auth").join("totp.json");
+    let r = call(
+        &srv.app,
+        &cookie,
+        "seller_profile_upsert",
+        serde_json::json!({ "input": {
+            "name": "Beispiel IT-Service", "legalForm": null, "street": "Beispielweg 1",
+            "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",
+            "taxNumber": "123/456/78901", "vatId": null, "email": "kontakt@example.org",
+            "phone": "+49 000 000000", "iban": null, "bic": null,
+            "logoFilename": secret.to_string_lossy(),
+            "isKleinunternehmer": true, "defaultPdfTemplate": "default",
+            "defaultCurrency": "EUR", "confirmWaiveParagraph19": null
+        }}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(
+        r.json()["logoFilename"],
+        "logo.svg",
+        "Client-Wert ignoriert"
+    );
+    let r = call(&srv.app, &cookie, "seller_logo_data", serde_json::json!({})).await;
+    assert!(!r.text().contains("secret_b32"), "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "seller_logo_clear",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(secret.exists(), "nichts außerhalb gelöscht");
 
     let legal = upload_id(&srv, &cookie, "rechtsdokument", "agb.pdf", b"%PDF-1.7 agb").await;
     let r = call(
@@ -418,4 +453,60 @@ async fn broken_multipart_leaves_nothing() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
     assert_eq!(pending_uploads(&srv), 0);
     assert!(srv.state.ctx.uploads.is_empty());
+}
+
+/// Gegenprüfung W7: der ganze Körper ist begrenzt (auch Präambel/Part-Header,
+/// ohne Content-Length), und genau ein Feld „file“ ist erlaubt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn whole_body_is_limited_and_single_field() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    // 3 MiB Präambel ohne Boundary an „logo“ (Limit 2 MiB + Rahmen), ohne Content-Length
+    let body = vec![b'x'; 3 * MIB];
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/upload/logo")
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_TYPE, "multipart/form-data; boundary=b")
+        .header(header::COOKIE, format!("__Host-kb_session={cookie}"))
+        .header("x-kleinbuch-request", "1")
+        .body(Body::from_stream(futures_util::stream::iter(
+            body.chunks(64 * 1024)
+                .map(|c| Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(c)))
+                .collect::<Vec<_>>(),
+        )))
+        .unwrap();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE, "{}", r.text());
+    // zusätzliches Feld → 400
+    let b = "kb-test-boundary-7f3a";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.pdf\"\r\n\r\n%PDF-1.7\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"extra\"\r\n\r\nx\r\n--{b}--\r\n"
+    );
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/upload/beleg")
+        .header(header::HOST, HOST)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={b}"),
+        )
+        .header(header::COOKIE, format!("__Host-kb_session={cookie}"))
+        .header("x-kleinbuch-request", "1")
+        .body(Body::from(body))
+        .unwrap();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    assert_eq!(pending_uploads(&srv), 0);
+    // HEAD auf Datei-Routen verbraucht nichts
+    let req = Request::builder()
+        .method(Method::HEAD)
+        .uri("/files/download/00000000-0000-0000-0000-000000000000")
+        .header(header::HOST, HOST)
+        .header(header::COOKIE, format!("__Host-kb_session={cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::METHOD_NOT_ALLOWED);
 }

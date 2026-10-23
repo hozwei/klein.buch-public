@@ -473,6 +473,14 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
         ),
         None => None,
     };
+    // Status vor dem Archivieren prüfen — sonst bleibt bei einem schon
+    // angenommenen Angebot ein unlöschbarer Anhang zurück (Gegenprüfung W7).
+    if quote_row.status != "sent" {
+        return Err(Error::Domain(format!(
+            "Annahme nur für versendete Angebote möglich (status={})",
+            quote_row.status
+        )));
+    }
     if let Some(contract) = contract.as_ref() {
         // R2-024 (GJ-Guard): Beilagen werden mit `quote_row.fiscal_year` ins
         // write-once-Archiv abgelegt. Liegt das Angebot in einem festgeschrieben

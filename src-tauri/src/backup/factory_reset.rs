@@ -74,7 +74,9 @@ pub fn apply_pending(paths: &Paths) -> Result<bool> {
         let _ = crate::mail::keyring::delete_password(svc);
         let _ = crate::mail::keyring::delete_oauth_tokens(svc);
     }
-    let _ = crate::backup::sftp::delete_password();
+    // SFTP-Passwörter liegen seit W7 je Ziel-ID; der Reset ist im
+    // Server-Betrieb abgeschaltet (E7) und entfällt in W11, die Passwörter
+    // wandern in W8 in den SecretStore der Datenbank (mit ihr gelöscht).
 
     tracing::warn!("Factory Reset angewandt — lokale Instanz geleert (Onboarding).");
     Ok(true)
@@ -97,6 +99,7 @@ mod tests {
             sidecar_dir: dir.join("sidecar"),
             resource_dir: std::path::PathBuf::from("/non/existent/resources"),
             web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         }
     }
 

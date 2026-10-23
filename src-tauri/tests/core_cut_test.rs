@@ -65,6 +65,9 @@ fn registry_matches_frontend_api() {
         "euer_reveal_path",
         "backup_open_folder",
         "backup_reveal_path",
+        "backup_restore_preview",
+        "backup_set_target",
+        "backup_set_sftp_target",
     ] {
         let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
         assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");

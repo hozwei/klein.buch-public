@@ -15,6 +15,32 @@ use sqlx::{Row, SqlitePool};
 
 pub const EXPECTED_SCHEMA_VERSION: i32 = 30;
 
+/// Älteste Schema-Version, die ein Restore annimmt (ADR 0039 E15/E17):
+/// ältere Backups stammen aus der Desktop-Fassung vor v2026.5.
+pub const MIN_RESTORE_SCHEMA_VERSION: i32 = 30;
+
+/// Schema-Version der Datenbank; `None`, wenn es (noch) keine gibt (frische DB).
+pub async fn read(pool: &SqlitePool) -> Result<Option<i32>> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if exists == 0 {
+        return Ok(None);
+    }
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'schema_version'")
+            .fetch_optional(pool)
+            .await?;
+    value
+        .map(|v| {
+            v.parse::<i32>()
+                .map_err(|_| Error::Config(format!("schema_version ist kein Integer: '{v}'")))
+        })
+        .transpose()
+}
+
 pub async fn check_compatible(pool: &SqlitePool) -> Result<()> {
     let row = sqlx::query("SELECT value FROM app_settings WHERE key = 'schema_version'")
         .fetch_one(pool)

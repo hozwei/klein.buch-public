@@ -88,9 +88,29 @@ fn remove_existing(dir: &Path, stem: &str) {
     }
 }
 
+/// Zulässiger Branding-Dateiname: `logo.<ext>` oder `signature.<ext>` mit
+/// erlaubter Endung, ohne Pfadbestandteile (Plan W7, Gegenprüfung: der Name
+/// stammt aus der DB und darf nie aus dem Branding-Ordner hinausführen).
+pub fn is_asset_name(filename: &str) -> bool {
+    match filename.split_once('.') {
+        Some((stem, ext)) => {
+            matches!(stem, "logo" | "signature")
+                && ALLOWED_EXT.contains(&ext)
+                && !ext.contains(['.', '/', '\\'])
+        }
+        None => false,
+    }
+}
+
 /// Entfernt eine Branding-Datei (idempotent — fehlende Datei ist kein Fehler).
-/// Filename-basiert, funktioniert für Logo und Signatur.
+/// Filename-basiert, funktioniert für Logo und Signatur; andere Namen werden
+/// abgelehnt.
 pub fn clear_logo(dir: &Path, filename: &str) -> Result<()> {
+    if !is_asset_name(filename) {
+        return Err(Error::Domain(format!(
+            "Ungültiger Branding-Dateiname „{filename}“."
+        )));
+    }
     let path = dir.join(filename);
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| Error::Config(format!("Datei löschen: {e}")))?;
@@ -129,6 +149,9 @@ pub fn find_signature(dir: &Path) -> Option<(String, Vec<u8>)> {
 /// Liest das Logo und gibt eine Data-URL (`data:<mime>;base64,…`) für die
 /// In-App-Vorschau zurück. `None`, wenn die Datei fehlt.
 pub fn read_logo_data_url(dir: &Path, filename: &str) -> Result<Option<String>> {
+    if !is_asset_name(filename) {
+        return Ok(None);
+    }
     let path = dir.join(filename);
     let Ok(bytes) = std::fs::read(&path) else {
         return Ok(None);
@@ -177,6 +200,35 @@ mod tests {
         clear_logo(&dir, "logo.svg").unwrap();
         assert!(read_logo_data_url(&dir, "logo.svg").unwrap().is_none());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Plan W7 (Gegenprüfung): Namen aus der DB führen nie aus dem Ordner.
+    #[test]
+    fn asset_names_are_strict() {
+        for ok in ["logo.png", "logo.svg", "signature.jpeg"] {
+            assert!(is_asset_name(ok), "{ok}");
+        }
+        for bad in [
+            "/data/auth/totp.json",
+            "../klein-buch.sqlite",
+            "logo.png/../../x",
+            "logo",
+            "logo.exe",
+            "evil.png",
+            "logo.tar.png",
+        ] {
+            assert!(!is_asset_name(bad), "{bad}");
+        }
+        let base = tmp();
+        let dir = branding_dir(&base);
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = base.join("geheim.txt");
+        std::fs::write(&outside, b"x").unwrap();
+        let abs = outside.to_string_lossy().to_string();
+        assert!(read_logo_data_url(&dir, &abs).unwrap().is_none());
+        assert!(clear_logo(&dir, &abs).is_err());
+        assert!(outside.exists(), "nichts außerhalb gelöscht");
         let _ = std::fs::remove_dir_all(&base);
     }
 

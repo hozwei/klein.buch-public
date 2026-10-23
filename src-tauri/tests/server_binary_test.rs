@@ -59,8 +59,18 @@ fn healthcheck(paths: &Paths, port: u16) -> (bool, String) {
     )
 }
 
+/// `(state, offsite)` aus dem Healthcheck-Körper.
+fn health_state(body: &str) -> (String, Option<String>) {
+    let v: serde_json::Value = serde_json::from_str(body).unwrap_or_else(|_| panic!("{body}"));
+    (
+        v["state"].as_str().unwrap_or_default().to_string(),
+        v["offsite"].as_str().map(str::to_string),
+    )
+}
+
 fn wait_healthy(paths: &Paths, port: u16, log: &Path) -> String {
-    for _ in 0..200 {
+    // bis 60 s: Debug-Build, Seeding und KDF unter Last (CI, paralleler Gate-Lauf)
+    for _ in 0..600 {
         let (ok, body) = healthcheck(paths, port);
         if ok {
             return body;
@@ -163,7 +173,10 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     let port = free_port();
 
     let mut child = start(&paths, port, &log);
-    assert_eq!(wait_healthy(&paths, port, &log), r#"{"state":"setup"}"#);
+    assert_eq!(
+        health_state(&wait_healthy(&paths, port, &log)),
+        ("setup".into(), None)
+    );
 
     // Einrichtung: Token aus dem Log → QR/Geheimnis → Passphrase + Code.
     let token = setup_token(&log);
@@ -189,7 +202,11 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
     let recovery: Vec<String> = serde_json::from_value(done["recoveryCodes"].clone()).unwrap();
     assert_eq!(recovery.len(), 10);
-    assert_eq!(healthcheck(&paths, port).1, r#"{"state":"unlocked"}"#);
+    // Plan W7: ohne Off-Site-Ziel meldet der Loopback-Healthcheck `missing`
+    assert_eq!(
+        health_state(&healthcheck(&paths, port).1),
+        ("unlocked".into(), Some("missing".into()))
+    );
     assert!(paths.data_dir.join(".klein-buch-instance").exists());
     // Token nach Erfolg ungültig
     let (status, _, _) = post_auth(
@@ -206,7 +223,10 @@ async fn healthcheck_reports_setup_unlocked_locked() {
 
     // Neustart: gesperrt bis zum Login (E3), gilt als gesund.
     let mut child = start(&paths, port, &log);
-    assert_eq!(wait_healthy(&paths, port, &log), r#"{"state":"locked"}"#);
+    assert_eq!(
+        health_state(&wait_healthy(&paths, port, &log)),
+        ("locked".into(), None)
+    );
     let (status, body, cookie) = post_auth(
         port,
         "/api/auth/login",
@@ -215,7 +235,7 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     )
     .await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(healthcheck(&paths, port).1, r#"{"state":"unlocked"}"#);
+    assert_eq!(health_state(&healthcheck(&paths, port).1).0, "unlocked");
     let session = cookie_value(&cookie.unwrap());
     assert_eq!(get_status(port, &session).await, "ok");
 

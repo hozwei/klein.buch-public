@@ -66,9 +66,9 @@ pub async fn factory_reset_check(
     let pool = &pool;
     let paths = ctx.paths.clone();
     let locked = count_locked_documents(pool).await?;
-    let off_site = backup::target::offsite_target(pool, &paths.backups_dir).await?;
-    let (has_off_site_target, off_site_label) = match &off_site {
-        Some(t) => (true, Some(off_site_label_of(t))),
+    let off_site = backup::target::list_targets(pool, &paths.backup_targets_dir).await?;
+    let (has_off_site_target, off_site_label) = match off_site.first() {
+        Some(t) => (true, Some(off_site_label_of(&t.target))),
         None => (false, None),
     };
     Ok(FactoryResetCheck {
@@ -233,6 +233,7 @@ mod tests {
             sidecar_dir: dir.join("sidecar"),
             resource_dir: std::path::PathBuf::from("/non/existent/resources"),
             web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         }
     }
 

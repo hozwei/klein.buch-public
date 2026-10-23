@@ -79,9 +79,9 @@ nicht (E1).
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Pfad-Tricks im Dateinamen | `archive::store` lehnt Namen mit `/`, `\`, `:` ab | umgesetzt |
-| Übergroße oder falsch deklarierte Dateien (heute JSON-Bytes ohne Limit außer Branding) | Multipart gestreamt, Limits je Art (20 / 10 / 2 MiB), Typ per Magic Bytes gegen Allowlist, `mime_type` aus dieser Prüfung, freier Platz vor dem Archivieren | geplant (W7) |
-| Skript in einer ausgelieferten fremden Datei | fremde Dateien nur als `attachment` mit `Content-Security-Policy: sandbox`; `inline` nur für selbst erzeugte PDFs; `nosniff` | geplant (W7) |
-| Auslieferung manipulierter oder fremder Archivdateien | Download nur über `read_and_verify` (Hash vor dem ersten Byte), `canonicalize` gegen `archive_dir`, Audit `archive.read` | geplant (W7) |
+| Übergroße oder falsch deklarierte Dateien (heute JSON-Bytes ohne Limit außer Branding) | Multipart gestreamt, Limits je Art (20 / 10 / 2 MiB), Typ per Magic Bytes gegen Allowlist, `mime_type` aus dieser Prüfung, freier Platz vor dem Archivieren | umgesetzt (W7): `POST /api/upload/{art}`, 413/415/507 |
+| Skript in einer ausgelieferten fremden Datei | fremde Dateien nur als `attachment` mit `Content-Security-Policy: sandbox`; `inline` nur für selbst erzeugte PDFs; `nosniff` | umgesetzt (W7): `/files/archive`, `/files/download` |
+| Auslieferung manipulierter oder fremder Archivdateien | Download nur über `read_and_verify` (Hash vor dem ersten Byte), `canonicalize` gegen `archive_dir`, Audit `archive.read` | umgesetzt (W7) |
 
 **Restore-Upload** (`.kbk`)
 
@@ -89,9 +89,9 @@ nicht (E1).
 |---|---|---|
 | Manipulierte Backup-Datei | GCM-Tag + SHA-256 des Content-ZIP (§3.2) | umgesetzt |
 | Pfad-Traversal im Content-ZIP | Prüfung je Pfadkomponente (`..`, Wurzel, Laufwerkspräfix → Abbruch) | umgesetzt (W2) |
-| Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | geplant (W7) |
-| Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | Re-Auth und Hinweis umgesetzt (W6); Upload/Historie W7 |
-| Schema-Konflikt | heute exakt gleiche Schema-Version; künftig `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration, neuere Backups weiter abgelehnt | geplant (W7) |
+| Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | umgesetzt (W7), dazu nur normale Pfadbestandteile |
+| Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | umgesetzt (W6/W7) |
+| Schema-Konflikt | heute exakt gleiche Schema-Version; künftig `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration, neuere Backups weiter abgelehnt | umgesetzt (W7); echte Vorwärtsmigration ab 0031 (W8) |
 
 **Sidecar-Eingaben** (KoSIT, Mustang in der JVM)
 
@@ -131,7 +131,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 |---|---|---|
 | Lesen eines Backups | Argon2id + AES-256-GCM (§3.2); die DB im Content-ZIP ist zusätzlich SQLCipher-verschlüsselt | umgesetzt (W2) |
 | Inkonsistenter oder überschriebener Stand | Snapshot per `VACUUM INTO`, Backups serialisiert, Dateinamen mit Millisekunden + Kurz-UUID | umgesetzt (W2) |
-| Migration ohne Rückweg | Pflicht-Backup vor jeder Migration (Entsperren mit älterem Schema, Restore eines älteren Backups) | geplant (W7) |
+| Migration ohne Rückweg | Pflicht-Backup vor jeder Migration (Entsperren mit älterem Schema, Restore eines älteren Backups) | umgesetzt (W7) |
 | Speicher | das Backup wird im RAM gebaut (etwa 3× Archivgröße) | Doku-Hinweis (W13) |
 
 **Off-Site-Ziele**
@@ -139,8 +139,8 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Halbe Datei unter dem endgültigen Namen (Verzeichnis-Ziel) | Temp-Datei + `fsync` + `rename` + Verzeichnis-`fsync` | umgesetzt (W2) |
-| Halbe Datei auf SFTP | SFTP schreibt heute direkt unter dem endgültigen Namen; ein abgebrochener Upload kann eine unvollständige `.kbk` hinterlassen, die der Restore am GCM-Tag erkennt; das Backup-Protokoll zeigt den Fehlschlag | offen |
-| Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / ok | geplant (W7) |
+| Halbe Datei auf SFTP | Upload unter `.<name>.part`, dann `rename` | umgesetzt (W7) |
+| Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / ok | umgesetzt (W7) |
 | MITM zum SFTP-Server | Host-Key-Pinning (SHA-256, TOFU) | umgesetzt |
 | SSRF und Abgreifen gespeicherter Zugangsdaten über Test-Verbindungen | Zugangsdaten an (Host, Port, Benutzer) gebunden; Tests gespeicherter Ziele nur per ID; Port-Allowlist; ≤ 10 Tests je Minute; Re-Auth | geplant (W8) |
 
@@ -375,31 +375,29 @@ der Schema-Check der DB selbst.
 
 - **Floor** — immer lokal unter `<data_dir>/backups`, nicht abschaltbar.
   Schlägt er fehl, ist das Backup fehlgeschlagen.
-- **Off-Site** — heute ein konfigurierbares Ziel: Verzeichnis (USB, NAS,
-  Cloud-Ordner über einen Sync-Client) **oder** SFTP. Pre-Restore-Backups werden
-  nicht gespiegelt. Ein nicht erreichbares Off-Site-Ziel ist **nicht** fatal:
-  `backup_log` mit `status='failed'`, Audit `backup.mirror.failed`,
-  Inbox-Hinweis; der Floor ist gesichert, und ein festgeschriebener Beleg wird
-  nie zurückgerollt.
+- **Off-Site** (W7) — beliebig viele Ziele (`app_settings.backup_targets`,
+  höchstens 10): Verzeichnisse unter `/backup-targets/…` (eingebundene Volumes,
+  relativ gespeichert, beim Schreiben per `canonicalize` geprüft; das Volume
+  selbst wird nie angelegt) und SFTP. Jedes Backup — auch das Pre-Restore-Backup —
+  geht an jedes Ziel, je Ziel mit Gesamt-Timeout. Ein nicht erreichbares Ziel
+  ist **nicht** fatal: `backup_log` mit `status='failed'` und Ziel-Bezeichnung,
+  Audit `backup.mirror.failed`, Inbox-Hinweis; die übrigen Ziele und der Floor
+  sind gesichert, ein festgeschriebener Beleg wird nie zurückgerollt. Status
+  `offsite` = missing / failing / ok (Übersicht, Einstellungen,
+  Loopback-`/healthz`); ohne Ziel wöchentlich ein Inbox-Hinweis.
 - **Schreiben ins Verzeichnis** (Floor und Off-Site, W2): Temp-Datei
   `.<name>.<uuid>.part` im Zielordner, `fsync`, `rename`, Verzeichnis-`fsync`.
   Ein Abbruch hinterlässt nie eine halbe `.kbk` unter dem endgültigen Namen.
 - **Aufbewahrung:** Floor 7 tägliche / 3 monatliche / 1 jährliche, solange ein
-  Off-Site-Ziel konfiguriert ist, sonst wie Off-Site 30 / 12 / 7 (§3.5).
+  Off-Site-Ziel zuletzt erfolgreich war, sonst wie Off-Site 30 / 12 / 7 (§3.5);
+  Off-Site je Ziel rotiert.
 - **Tages-Backup** (W2): im Scheduler-Tick, sobald das letzte Backup älter als
   24 h ist — im laufenden Betrieb, nicht nur beim Entsperren. Nach einem
   Fehlschlag frühestens nach einer Stunde erneut.
 
-Auto-Detect: OneDrive (Windows) und iCloud (macOS) werden in der Desktop-App als
-Cloud-Ordner vorgeschlagen. **Kein** proprietäres Cloud-API; alles über lokale
-Ordner, die ein Sync-Client hochlädt.
-
-**Server-Betrieb (geplant W7, Amendment ADR 0034):** Off-Site wird Pflicht
-(Inbox-Warnung, Status `offsite` in Übersicht und Loopback-`/healthz`; das
-Festschreiben wird nicht blockiert). Verzeichnis-Ziele nur unter den
-Mount-Wurzeln `/backup-targets/…` (`canonicalize`), dazu SFTP; mehrere Ziele
-gleichzeitig mit Fehler, Rotation und Historie je Ziel. Die Auto-Erkennung
-entfällt.
+**Kein** proprietäres Cloud-API; Cloud-Speicher nur über einen Ordner, den der
+Betreiber als Volume unter `/backup-targets` einbindet. Die Auto-Erkennung von
+OneDrive/iCloud ist entfallen (W7).
 
 ### 3.4 SFTP
 
@@ -407,17 +405,15 @@ entfällt.
 SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker). **Host-Key-
 Pinning** über SHA-256 (Trust-On-First-Use): der Verbindungstest (`probe`)
 liefert den Fingerprint (`SHA256:…`), der Nutzer bestätigt ihn, und er wird im
-Ziel gespeichert (`app_settings.backup_target`, Feld `host_fingerprint`). Ein
+Ziel gespeichert (`app_settings.backup_targets`, Feld `host_fingerprint`). Ein
 Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz).
 Verbindungsaufbau mit 20 s Timeout.
 
-Das Passwort liegt im **OS-Keychain** (bis W8, danach im SecretStore, §4), nie
-im Ziel-JSON, in Logs oder im Audit.
+Das Passwort liegt je Ziel-ID im **OS-Keychain** (bis W8, danach im
+SecretStore, §4), nie im Ziel-JSON, in Logs oder im Audit.
 
-Der Upload schreibt die Datei direkt unter ihrem endgültigen Namen (kein
-Temp + `rename` wie beim Verzeichnis-Ziel). Ein abgebrochener Upload kann eine
-unvollständige Datei hinterlassen; der Restore erkennt sie am GCM-Tag, das
-Backup-Protokoll zeigt den Fehlschlag.
+Der Upload schreibt unter `.<name>.part` und benennt danach um (W7); ein
+abgebrochener Upload hinterlässt keine `.kbk` unter dem endgültigen Namen.
 
 **Server-Betrieb (geplant W8):** Zugangsdaten an (Host, Port, Benutzer)
 gebunden — wer eines davon ändert, muss das Passwort neu eingeben; Tests
@@ -528,14 +524,17 @@ Marker-Datei im Dateisystem (nicht in der DB, die ja ausgetauscht wird).
 
 ### Phase A (Live)
 
-- **Restore** (`backup::restore::apply`). Format prüfen (1–2), Schema-Version
-  prüfen (heute exakt gleich; ältere Backups ab W7), **Pre-Restore-Backup** mit
-  der *aktuellen* Passphrase, Backup entschlüsseln + Content-Hash prüfen (unter
-  der `KDF`-Semaphore), ins Staging `restore-staging/` entpacken (Pfade je
-  Komponente geprüft), Marker vorbereiten (`RESTORE_PENDING.json.tmp`, `fsync`).
-  Erst nach dem Pflicht-Audit `backup.restore.staged` kommt der Marker per
-  `rename` an seinen Platz (W2): scheitert der Audit, wird der Restore beim
-  Neustart auch nicht angewendet.
+- **Restore** (`backup::restore::apply`, W7; Quelle Upload oder lokales Backup
+  aus der Historie). Format prüfen (1–2), Schema `30 ≤ s ≤ EXPECTED`, Backup
+  entschlüsseln + Content-Hash prüfen (unter der `KDF`-Semaphore; falsche
+  Passphrase schreibt nichts), Pflicht-Audit `backup.restore.requested`, dann
+  **Pre-Restore-Backup** mit der *aktuellen* Passphrase (enthält den Audit),
+  Platz prüfen, gehärtet ins Staging `restore-staging/` entpacken (Allowlist,
+  nur normale Pfadbestandteile, Größen- und Verhältnisgrenzen, keine Symlinks),
+  gestagte DB mit der Backup-Passphrase öffnen (Schema, Archivpfade,
+  Migrations-Prüfsummen), Marker per `rename`. Der Tausch beim Neustart legt
+  `RESTORE_APPLIED.json` an; das erste Entsperren schreibt
+  `backup.restore.applied` und trägt das Pre-Restore-Backup in die Historie ein.
 - **Factory Reset** (nur Desktop). Gating durchlaufen (Export-First-Pflicht
   etc.), Passphrase-Verify, **Marker schreiben** (`FACTORY_RESET_PENDING.json`),
   `AppHandle::restart()`.
@@ -756,7 +755,8 @@ Linux deshalb **keine physische Unveränderbarkeit**.
 1. **SHA-256 beim Schreiben** — Hash, Größe und Pfad stehen unveränderlich in
    `archive_entries` (in der verschlüsselten DB).
 2. **Re-Hash beim Lesen** — `read_and_verify` liefert bei Abweichung einen
-   Fehler statt der Bytes; im Server läuft jeder Download darüber (geplant W7).
+   Fehler statt der Bytes; im Server läuft jeder Download darüber (W7,
+   `GET /files/archive/{id}`).
 3. **Monatlicher Integritätslauf** (§8) — manipulierte, fehlende und nicht
    lesbare Dateien werden getrennt gemeldet, Manipulation und Verlust als
    dringender Hinweis.

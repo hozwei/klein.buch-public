@@ -905,17 +905,19 @@ export function euerExportStbZip(fiscalYear: number, skr: string): Promise<StbEx
 
 // ---- Backup + Restore (Block 4) --------------------------------------------
 
-export interface DetectedTarget {
+/** Off-Site-Ziel (Plan W7, mehrere Ziele; ohne Passwort). */
+export interface TargetView {
+  id: string;
   label: string;
-  path: string;
-}
-
-export interface SftpTargetView {
-  host: string;
-  port: number;
-  user: string;
-  remoteDir: string;
+  kind: "directory" | "sftp";
+  /** Verzeichnis-Ziel: Ordner relativ zu `targetsRoot`. */
+  directory: string | null;
+  host: string | null;
+  port: number | null;
+  user: string | null;
+  remoteDir: string | null;
   hostFingerprint: string | null;
+  lastResult: { ok: boolean; at: string; error: string | null } | null;
 }
 
 export interface SftpProbe {
@@ -929,11 +931,13 @@ export interface BackupSettings {
   unlocked: boolean;
   /** Lokaler Floor-Ordner (immer geschrieben, G1-BKP.4). */
   floorPath: string;
-  /** Off-Site-Ziel (Verzeichnis), falls konfiguriert. */
-  targetPath: string | null;
-  defaultSuggestion: string;
-  detectedTargets: DetectedTarget[];
-  sftp: SftpTargetView | null;
+  /** Wurzel der Verzeichnis-Ziele (`/backup-targets`). */
+  targetsRoot: string;
+  /** Eingebundene Unterordner der Wurzel. */
+  availableDirs: string[];
+  targets: TargetView[];
+  /** `missing` | `failing` | `ok`. */
+  offsiteStatus: "missing" | "failing" | "ok";
 }
 
 export interface BackupOutcome {
@@ -944,10 +948,8 @@ export interface BackupOutcome {
   retentionTag: string;
   triggerReason: string;
   createdAt: string;
-  /** Off-Site-Pfad/URI bei erfolgreicher Spiegelung (sonst null). */
-  mirrorTarget: string | null;
-  /** Fehlertext, falls die Off-Site-Spiegelung fehlschlug (sonst null). */
-  mirrorError: string | null;
+  /** Ergebnis je Off-Site-Ziel (Plan W7). */
+  offsite: { targetId: string; label: string; location: string | null; error: string | null }[];
 }
 
 export interface BackupHistoryItem {
@@ -987,24 +989,17 @@ export interface BackupLogFilter {
   limit?: number | null;
 }
 
-export interface RestorePreview {
-  filePath: string;
-  createdAt: string;
-  appVersion: string;
-  formatVersion: number;
-  schemaVersion: number;
-  currentSchemaVersion: number;
-  compatible: boolean;
-  contentSizeBytes: number;
-}
-
 export interface RestoreReport {
   requiresRestart: boolean;
-  preRestoreBackupPath: string;
-  sourceFile: string;
+  /** Dateiname des Sicherheits-Backups vor dem Restore. */
+  preRestoreBackup: string;
+  /** Quelle (Upload-Dateiname bzw. Backup aus der Historie). */
+  source: string;
   stagedAt: string;
   /** Backup-Format (1 = ohne Logo/Unterschrift, 2 = mit). */
   formatVersion: number;
+  /** Schema-Version des Backups (ältere werden beim Entsperren migriert). */
+  schemaVersion: number;
   /** Logo und Unterschrift werden mit eingespielt. */
   brandingRestored: boolean;
   /** Hinweis für die Anzeige, z. B. bei Format-1-Backups. */
@@ -1029,8 +1024,27 @@ export function backupCreateNow(): Promise<BackupOutcome> {
   return invoke<BackupOutcome>("backup_create_now");
 }
 
-export function backupSetTarget(path: string): Promise<void> {
-  return invoke<void>("backup_set_target", { path });
+/** Verzeichnis-Ziel unter `/backup-targets` hinzufügen (Re-Auth). */
+export function backupTargetAddDirectory(label: string, directory: string): Promise<TargetView> {
+  return invoke<TargetView>("backup_target_add_directory", { label, directory });
+}
+
+/** SFTP-Ziel hinzufügen (Re-Auth; Fingerprint aus `backupTestSftp`). */
+export function backupTargetAddSftp(args: {
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  remoteDir: string;
+  hostFingerprint: string;
+  password: string;
+}): Promise<TargetView> {
+  return invoke<TargetView>("backup_target_add_sftp", args);
+}
+
+/** Off-Site-Ziel entfernen (Re-Auth; Dateien am Ziel bleiben). */
+export function backupTargetRemove(id: string): Promise<void> {
+  return invoke<void>("backup_target_remove", { id });
 }
 
 export function backupTestSftp(
@@ -1039,26 +1053,9 @@ export function backupTestSftp(
   user: string,
   remoteDir: string,
   password: string,
+  targetId: string | null = null,
 ): Promise<SftpProbe> {
-  return invoke<SftpProbe>("backup_test_sftp", { host, port, user, remoteDir, password });
-}
-
-export function backupSetSftpTarget(
-  host: string,
-  port: number,
-  user: string,
-  remoteDir: string,
-  hostFingerprint: string,
-  password: string,
-): Promise<void> {
-  return invoke<void>("backup_set_sftp_target", {
-    host,
-    port,
-    user,
-    remoteDir,
-    hostFingerprint,
-    password,
-  });
+  return invoke<SftpProbe>("backup_test_sftp", { host, port, user, remoteDir, password, targetId });
 }
 
 export function backupList(): Promise<BackupHistoryItem[]> {
@@ -1075,12 +1072,16 @@ export function backupLogSearch(filter: BackupLogFilter): Promise<BackupLogEntry
   return invoke<BackupLogEntry[]>("backup_log_search", { filter });
 }
 
-export function backupRestorePreview(path: string): Promise<RestorePreview> {
-  return invoke<RestorePreview>("backup_restore_preview", { path });
-}
+/** Quelle eines Restores (Plan W7): hochgeladene `.kbk` oder lokales Backup
+ *  aus der Historie. */
+export type RestoreSource = { uploadId: string } | { backupId: string };
 
-export function backupRestoreApply(path: string, passphrase: string): Promise<RestoreReport> {
-  return invoke<RestoreReport>("backup_restore_apply", { path, passphrase });
+/** Restore Phase A (Job, Re-Auth); danach startet der Server neu. */
+export function backupRestoreApply(
+  source: RestoreSource,
+  passphrase: string,
+): Promise<RestoreReport> {
+  return invoke<RestoreReport>("backup_restore_apply", { ...source, passphrase });
 }
 
 // ---- Migrations-Export (Block 4) -------------------------------------------

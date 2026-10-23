@@ -169,22 +169,53 @@ impl DownloadStore {
         }
     }
 
-    /// Entfernt abgelaufene Einträge samt Dateien.
+    /// Entfernt abgelaufene Einträge samt Dateien, dazu nicht registrierte
+    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`EXPORT_TTL`] sind.
     pub fn sweep(&self) {
         let now = Instant::now();
-        let expired: Vec<PathBuf> = {
+        let (expired, known): (Vec<PathBuf>, Vec<String>) = {
             let mut map = self.lock();
             let gone: Vec<Uuid> = map
                 .iter()
                 .filter(|(_, e)| e.expires <= now)
                 .map(|(id, _)| *id)
                 .collect();
-            gone.iter()
+            let expired = gone
+                .iter()
                 .filter_map(|id| map.remove(id).map(|e| e.path))
-                .collect()
+                .collect();
+            (
+                expired,
+                map.keys().map(|id| id.simple().to_string()).collect(),
+            )
         };
         for path in expired {
             Self::remove_files(&path);
+        }
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > EXPORT_TTL);
+            if old && !known.contains(&name) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
+    /// Alle Einträge und Dateien löschen (beim Sperren der Datenbank).
+    pub fn clear(&self) {
+        self.lock().clear();
+        if let Ok(entries) = std::fs::read_dir(&self.root) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
     }
 

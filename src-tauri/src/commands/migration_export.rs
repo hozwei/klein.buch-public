@@ -35,7 +35,11 @@ pub async fn migration_export_run(
         pool,
         "migration.export",
         "migration",
-        &report.zip_path,
+        // kein Serverpfad im Audit (Gegenprüfung W7)
+        &target
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
         Some(&format!(
             r#"{{"tables":{},"rows":{},"archiveFiles":{}}}"#,
             report.table_count, report.total_rows, report.archive_file_count

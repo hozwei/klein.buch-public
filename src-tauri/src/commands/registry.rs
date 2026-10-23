@@ -89,6 +89,9 @@ fn route_of(name: &str) -> Route {
         "backup_setup_passphrase" => Route::Replaced("POST /api/auth/setup"),
         "backup_unlock" => Route::Replaced("POST /api/auth/login"),
         "invoices_open_pdf" | "attachments_open" => Route::Replaced("GET /files/archive/{id} (W7)"),
+        "backup_set_target" | "backup_set_sftp_target" => {
+            Route::Replaced("backup_target_add_directory / backup_target_add_sftp (W7)")
+        }
         "backup_restore_preview"
         | "backup_open_folder"
         | "backup_reveal_path"
@@ -113,6 +116,9 @@ fn auth_of(name: &str) -> Auth {
     match name {
         "backup_set_target"
         | "backup_set_sftp_target"
+        | "backup_target_add_directory"
+        | "backup_target_add_sftp"
+        | "backup_target_remove"
         | "backup_test_sftp"
         | "backup_restore_apply"
         | "mail_account_create"
@@ -284,6 +290,12 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("backup_set_target", h::backup_set_target),
     ("backup_test_sftp", h::backup_test_sftp),
     ("backup_set_sftp_target", h::backup_set_sftp_target),
+    (
+        "backup_target_add_directory",
+        h::backup_target_add_directory,
+    ),
+    ("backup_target_add_sftp", h::backup_target_add_sftp),
+    ("backup_target_remove", h::backup_target_remove),
     ("backup_open_folder", h::backup_open_folder),
     ("backup_reveal_path", h::backup_reveal_path),
     ("backup_list", h::backup_list),
@@ -637,6 +649,33 @@ mod h {
             let args: crate::commands::backup::BackupSetTargetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_set_target(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_target_add_directory(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupTargetAddDirectoryArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_target_add_directory(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_target_add_sftp(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupTargetAddSftpArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_target_add_sftp(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_target_remove(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupTargetRemoveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_target_remove(&ctx, args).await?,
             )?)
         })
     }

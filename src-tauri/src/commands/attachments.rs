@@ -158,7 +158,6 @@ pub async fn attachments_add(
         &upload.bytes,
     )
     .await?;
-    ctx.uploads.consume(&args.upload_id);
 
     let label = args
         .label
@@ -190,6 +189,8 @@ pub async fn attachments_add(
     )
     .await?;
 
+    // Erst nach Erfolg freigeben (ADR 0039 Nr. 69).
+    ctx.uploads.consume(&args.upload_id);
     attachments::list_for_parent(pool, &args.parent_type, &args.parent_id).await
 }
 

@@ -148,6 +148,15 @@ async fn execute(
         let _permit = permit;
         let _gate = runner.db_gate.read().await;
         let _running = runner.admission.running(spec.cost);
+        // Während des Wartens kann ein Restore begonnen haben (Gegenprüfung W7).
+        if runner.writes_blocked() && spec.kind != Kind::Read {
+            let api = ApiError::restarting();
+            let stored = StoredResponse::json(api.status, &api.body());
+            if let Some(c) = completer {
+                c.complete(stored.clone());
+            }
+            return stored;
+        }
         let stored = to_stored((spec.handler)(runner.ctx.clone(), args).await);
         if let Some(c) = completer {
             c.complete(stored.clone());
@@ -170,12 +179,21 @@ fn start_job(
     args: serde_json::Value,
     completer: Option<Completer>,
 ) -> Result<Response, ApiError> {
-    let id = st.jobs.reserve(spec.name)?;
     let restore = spec.name == "backup_restore_apply";
-    if restore {
-        // Ab der Annahme keine Änderungen mehr (sie gingen beim Tausch verloren).
-        st.begin_restore();
+    // Ab der Annahme keine Änderungen mehr (sie gingen beim Tausch verloren);
+    // ein zweiter Restore gleichzeitig wird abgelehnt (Gegenprüfung W7).
+    if restore && !st.begin_restore() {
+        return Err(ApiError::restarting());
     }
+    let id = match st.jobs.reserve(spec.name) {
+        Ok(id) => id,
+        Err(e) => {
+            if restore {
+                st.cancel_restore();
+            }
+            return Err(e);
+        }
+    };
     let accepted = StoredResponse::json(
         StatusCode::ACCEPTED,
         &serde_json::json!({ "jobId": id.to_string() }),
@@ -189,20 +207,37 @@ fn start_job(
             crate::scheduler::tick::stop(&runner.ctx).await;
         }
         let permit = runner.admission.acquire(spec.cost).await;
-        let gate = runner.db_gate.read().await;
+        // Der Restore wartet exklusiv auf laufende Commands und Jobs, damit
+        // ihre Änderungen im Pre-Restore-Backup stehen (Gegenprüfung W7).
+        let write_gate = if restore {
+            Some(runner.db_gate.write().await)
+        } else {
+            None
+        };
+        let read_gate = if restore {
+            None
+        } else {
+            Some(runner.db_gate.read().await)
+        };
         let _running = runner.admission.running(spec.cost);
-        let ctx = runner.ctx.clone();
-        let inner = tokio::spawn(async move { (spec.handler)(ctx, args).await });
-        let outcome = match inner.await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(err)) => Err(ApiError::from_error(&err)),
-            Err(join) => Err(ApiError::internal(&format!(
-                "Job {} abgebrochen: {join}",
-                spec.name
-            ))),
+        let blocked = !restore && runner.writes_blocked() && spec.kind != Kind::Read;
+        let outcome = if blocked {
+            Err(ApiError::restarting())
+        } else {
+            let ctx = runner.ctx.clone();
+            let inner = tokio::spawn(async move { (spec.handler)(ctx, args).await });
+            match inner.await {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(err)) => Err(ApiError::from_error(&err)),
+                Err(join) => Err(ApiError::internal(&format!(
+                    "Job {} abgebrochen: {join}",
+                    spec.name
+                ))),
+            }
         };
         drop(_running);
-        drop(gate);
+        drop(read_gate);
+        drop(write_gate);
         drop(permit);
         let ok = outcome.is_ok();
         runner.jobs.finish(id, outcome);

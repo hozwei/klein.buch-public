@@ -2,7 +2,7 @@
 //!
 //! Reiner **Lese-/Export-Pfad**: sammelt alle Daten zu einem Kontakt
 //! ([`crate::db::repo::dsgvo`]), baut den Report ([`crate::domain::dsgvo`]) und
-//! schreibt ein **Komplett-ZIP** nach `data/export/dsgvo/`:
+//! schreibt ein **Komplett-ZIP** nach `data/tmp/dsgvo/<id>/` (Download, Plan W7):
 //!
 //! - `auskunft.pdf`   — lesbare Auskunft (Typst, Art. 15)
 //! - `auskunft.json`  — maschinenlesbar inkl. SHA-256 (Art. 20)
@@ -80,6 +80,30 @@ pub async fn export_core(
     generated_at: &str,
     file_date: &str,
 ) -> Result<DsgvoExportResult> {
+    // Eigenes Verzeichnis unter <data>/tmp (beim Start geleert); bei einem
+    // Fehler wird es sofort gelöscht — keine halbe Auskunft mit Personendaten
+    // bleibt liegen (Gegenprüfung W7).
+    let out_dir = paths
+        .data_dir
+        .join("tmp")
+        .join("dsgvo")
+        .join(uuid::Uuid::new_v4().simple().to_string());
+    std::fs::create_dir_all(&out_dir)?;
+    let res = export_core_in(pool, paths, contact_id, generated_at, file_date, &out_dir).await;
+    if res.is_err() {
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+    res
+}
+
+async fn export_core_in(
+    pool: &SqlitePool,
+    paths: &Paths,
+    contact_id: &str,
+    generated_at: &str,
+    file_date: &str,
+    out_dir: &std::path::Path,
+) -> Result<DsgvoExportResult> {
     let gathered = dsgvo_repo::gather(pool, contact_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {contact_id}")))?;
@@ -113,9 +137,6 @@ pub async fn export_core(
     };
     let mut report = dsgvo::assemble(&raw);
 
-    // Zielpfad (Maschinen schreiben nur nach data/).
-    let out_dir = paths.data_dir.join("export").join("dsgvo");
-    std::fs::create_dir_all(&out_dir)?;
     let slug = slugify(&gathered.contact.name);
     let file_name = format!("auskunft-{slug}-{file_date}.zip");
     let zip_path = out_dir.join(&file_name);
@@ -234,13 +255,17 @@ pub async fn dsgvo_export(ctx: &Arc<AppCtx>, args: DsgvoExportArgs) -> Result<Ds
     let mut res = export_core(&pool, &paths, &contact_id, &generated_at, &file_date).await?;
 
     // Plan W7: als Download ausliefern (kein Öffnen im Dateimanager).
-    let (download_id, target) = ctx.downloads.prepare(&res.file_name)?;
-    std::fs::rename(&res.zip_path, &target)?;
-    res.download = Some(ctx.downloads.register(
-        download_id,
-        &target,
-        crate::downloads::DownloadKind::Export,
-    )?);
+    let source = std::path::PathBuf::from(&res.zip_path);
+    let moved = (|| -> Result<crate::downloads::DownloadTicket> {
+        let (download_id, target) = ctx.downloads.prepare(&res.file_name)?;
+        std::fs::rename(&source, &target)?;
+        ctx.downloads
+            .register(download_id, &target, crate::downloads::DownloadKind::Export)
+    })();
+    if let Some(dir) = source.parent() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    res.download = Some(moved?);
     Ok(res)
 }
 

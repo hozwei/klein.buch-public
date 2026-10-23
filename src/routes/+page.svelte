@@ -13,6 +13,7 @@
     invoicesList,
     expensesList,
     backupLogList,
+    backupGetSettings,
     notificationsList,
     recurringInvoicesList,
   } from "$lib/api";
@@ -42,6 +43,8 @@
   let expenses = $state<ExpenseListItem[] | null>(null);
   let expensesErr = $state<string | null>(null);
   let backupLog = $state<BackupLogEntry[] | null>(null);
+  // Plan W7: Off-Site-Status (missing | failing | ok); null = nicht geladen.
+  let offsiteStatus = $state<"missing" | "failing" | "ok" | null>(null);
   let backupErr = $state<string | null>(null);
   let notifications = $state<AppNotification[] | null>(null);
   let notifErr = $state<string | null>(null);
@@ -67,6 +70,7 @@
     invoices = null; invoicesErr = null;
     expenses = null; expensesErr = null;
     backupLog = null; backupErr = null;
+    offsiteStatus = null;
     notifications = null; notifErr = null;
     recurring = null; recurringErr = null;
 
@@ -92,6 +96,7 @@
       backupLogList(20),
       notificationsList(false),
       recurringInvoicesList(false),
+      backupGetSettings(),
     ]);
 
     const [
@@ -103,6 +108,7 @@
       rBackup,
       rNotif,
       rRecurring,
+      rBackupSettings,
     ] = results;
 
     if (rSeller.status === "fulfilled") seller = rSeller.value;
@@ -125,6 +131,8 @@
 
     if (rNotif.status === "fulfilled") notifications = rNotif.value;
     else notifErr = errMsg(rNotif.reason);
+
+    if (rBackupSettings.status === "fulfilled") offsiteStatus = rBackupSettings.value.offsiteStatus;
 
     if (rRecurring.status === "fulfilled") recurring = rRecurring.value;
     else recurringErr = errMsg(rRecurring.reason);
@@ -542,6 +550,20 @@
             </a>
           </li>
         {/each}
+
+        {#if offsiteStatus === "missing" || offsiteStatus === "failing"}
+          <li class="task">
+            <div class="task-row">
+              <span class="task-badge tb-danger">Backup</span>
+              <span class="task-text">
+                {offsiteStatus === "missing"
+                  ? "Kein externes Backup-Ziel eingerichtet."
+                  : "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen."}
+              </span>
+              <a class="btn-secondary btn-sm" href="/settings/backup">Ziele prüfen</a>
+            </div>
+          </li>
+        {/if}
 
         {#if backupAmpel === "red" || backupAmpel === "never"}
           <li class="task">

@@ -8,8 +8,9 @@
 //!
 //! - **Passwort nie in DB/Log/audit.** Es lebt ausschließlich im OS-Keychain
 //!   (Windows Credential Manager / macOS Keychain / Linux Secret Service), genau
-//!   wie die SMTP-Passphrase (siehe [`crate::mail::keyring`]). Es gibt genau ein
-//!   SFTP-Ziel, daher eine feste Service-ID.
+//!   wie die SMTP-Passphrase (siehe [`crate::mail::keyring`]), je Ziel-ID ein
+//!   Eintrag (mehrere Ziele, Plan W7); der alte Einzel-Eintrag dient als
+//!   Rückfall. Ab W8 liegt es im `SecretStore` der Datenbank.
 //! - **Host-Key-Pinning (MITM-Schutz).** Der Server-Host-Key wird über einen
 //!   gepinnten SHA-256-Fingerprint (`SHA256:…`) verifiziert. Ein Upload ohne
 //!   passenden Pin wird **abgelehnt**. Den Fingerprint ermittelt der einmalige
@@ -32,10 +33,14 @@ use crate::error::{Error, Result};
 /// Gesamt-Timeout für Handshake + Auth + SFTP-Open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Keychain-Service-ID des SFTP-Backup-Passworts (es gibt genau EIN Ziel).
+/// Keychain-Service-ID der SFTP-Backup-Passwörter.
 const KEYRING_SERVICE: &str = "kleinbuch::backup::sftp";
-/// Fixer `user`-Teil des Keychain-Eintrags.
+/// `user`-Teil des alten Einzel-Eintrags (vor mehreren Zielen).
 const KEYRING_USER: &str = "sftp-password";
+
+fn keyring_user(target_id: &str) -> String {
+    format!("{KEYRING_USER}:{target_id}")
+}
 
 /// Name der temporären Probe-Datei für den Schreibrechte-Test.
 const PROBE_FILE: &str = ".klein-buch-write-test";
@@ -90,9 +95,9 @@ fn fingerprint_of(key: &PublicKey) -> String {
 // Keychain (Imperative Shell) — Passwort nie in DB/Log/audit
 // ---------------------------------------------------------------------------
 
-/// Speichert das SFTP-Passwort im OS-Credential-Manager.
-pub fn set_password(password: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+/// Speichert das SFTP-Passwort des Ziels im OS-Credential-Manager.
+pub fn set_password(target_id: &str, password: &str) -> Result<()> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &keyring_user(target_id))
         .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht erstellbar: {e}")))?;
     entry
         .set_password(password)
@@ -100,21 +105,34 @@ pub fn set_password(password: &str) -> Result<()> {
     Ok(())
 }
 
-/// Liest das SFTP-Passwort. `Ok(None)`, wenn keines hinterlegt ist; andere
-/// Store-Fehler werden propagiert (defekter Keychain ≠ „kein Passwort").
-pub fn get_password() -> Result<Option<String>> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht lesbar: {e}")))?;
-    match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(Error::Backup(format!("SFTP-Passwort nicht lesbar: {e}"))),
+/// Liest das SFTP-Passwort des Ziels (Rückfall: alter Einzel-Eintrag).
+/// `Ok(None)`, wenn keines hinterlegt ist; andere Store-Fehler werden
+/// propagiert (defekter Keychain ≠ „kein Passwort").
+pub fn get_password(target_id: &str) -> Result<Option<String>> {
+    if target_id.is_empty() {
+        return Ok(None);
     }
+    // Rückfall auf den alten Einzel-Eintrag nur für das übernommene Altziel
+    // (ID „sftp“, Gegenprüfung W7).
+    let mut users = vec![keyring_user(target_id)];
+    if target_id == "sftp" {
+        users.push(KEYRING_USER.to_string());
+    }
+    for user in users {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, &user)
+            .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht lesbar: {e}")))?;
+        match entry.get_password() {
+            Ok(p) => return Ok(Some(p)),
+            Err(keyring::Error::NoEntry) => continue,
+            Err(e) => return Err(Error::Backup(format!("SFTP-Passwort nicht lesbar: {e}"))),
+        }
+    }
+    Ok(None)
 }
 
-/// Löscht das SFTP-Passwort. Idempotent (fehlender Eintrag = Ok).
-pub fn delete_password() -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
+/// Löscht das SFTP-Passwort des Ziels. Idempotent (fehlender Eintrag = Ok).
+pub fn delete_password(target_id: &str) -> Result<()> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, &keyring_user(target_id))
         .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht adressierbar: {e}")))?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
@@ -216,17 +234,26 @@ async fn open(
 /// erst durchgereicht, wenn auch das rekursive Anlegen scheitert.
 async fn write_remote(sftp: &SftpSession, dir: &str, name: &str, bytes: &[u8]) -> Result<String> {
     let path = remote_join(dir, name);
-    if let Err(first) = create_and_write(sftp, &path, bytes).await {
+    // Plan W7: erst unter einem Temp-Namen schreiben, dann umbenennen — ein
+    // Abbruch hinterlässt keine halbe `.kbk` unter dem endgültigen Namen.
+    let tmp = remote_join(dir, &format!(".{name}.part"));
+    if let Err(first) = create_and_write(sftp, &tmp, bytes).await {
         if dir != "." {
             // Rekursives `mkdir -p` — pro Komponente best-effort, idempotent
             // ggü. „existiert bereits".
             mkdir_p_remote(sftp, dir).await;
         }
-        create_and_write(sftp, &path, bytes).await.map_err(|e| {
+        create_and_write(sftp, &tmp, bytes).await.map_err(|e| {
             Error::Backup(format!(
                 "SFTP-Schreiben nach '{path}' fehlgeschlagen: {e} (erster Versuch: {first})"
             ))
         })?;
+    }
+    if let Err(e) = sftp.rename(&tmp, &path).await {
+        let _ = sftp.remove_file(&tmp).await;
+        return Err(Error::Backup(format!(
+            "SFTP-Umbenennen nach '{path}' fehlgeschlagen: {e}"
+        )));
     }
     Ok(path)
 }
@@ -352,7 +379,9 @@ pub async fn probe(
 /// Erzwingt einen gepinnten Host-Fingerprint (sonst Abbruch) und liest das
 /// Passwort aus dem Keychain. Bei Host-Key-Abweichung bricht der Upload mit einer
 /// expliziten MITM-Warnung ab (kein Blind-Trust).
+#[allow(clippy::too_many_arguments)]
 pub async fn upload(
+    target_id: &str,
     host: &str,
     port: u16,
     user: &str,
@@ -372,11 +401,14 @@ pub async fn upload(
                     .into(),
             )
         })?;
-    let password = get_password()?.filter(|p| !p.is_empty()).ok_or_else(|| {
-        Error::Backup(
-            "Kein SFTP-Passwort im Schlüsselbund — bitte das SFTP-Ziel erneut speichern.".into(),
-        )
-    })?;
+    let password = get_password(target_id)?
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| {
+            Error::Backup(
+                "Kein SFTP-Passwort im Schlüsselbund — bitte das SFTP-Ziel erneut speichern."
+                    .into(),
+            )
+        })?;
 
     let dir = normalize_remote_dir(remote_dir);
     let seen = Arc::new(Mutex::new(None));
@@ -468,10 +500,10 @@ mod tests {
     fn keyring_wrapper_contract_against_mock() {
         use_mock_store();
         // Frischer Eintrag → Ok(None) (NoEntry-Mapping).
-        assert_eq!(get_password().unwrap(), None);
+        assert_eq!(get_password("ziel-1").unwrap(), None);
         // set + delete dürfen nicht hart fehlschlagen; delete ist idempotent.
-        set_password("s3cr3t-sftp").unwrap();
-        delete_password().unwrap();
-        delete_password().unwrap();
+        set_password("ziel-1", "s3cr3t-sftp").unwrap();
+        delete_password("ziel-1").unwrap();
+        delete_password("ziel-1").unwrap();
     }
 }

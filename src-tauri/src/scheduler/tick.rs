@@ -121,7 +121,7 @@ pub async fn run_jobs(
     }
 
     // 4. Reminder-Regeln (Block 15; backup_overdue Off-Site-bewusst seit G1-NOTIFY).
-    match crate::scheduler::reminders::run(pool, notifier, today, &paths.backups_dir).await {
+    match crate::scheduler::reminders::run(pool, notifier, today, &paths.backup_targets_dir).await {
         Ok(n) if n > 0 => tracing::info!("Scheduler: {n} neue Hinweis(e) erzeugt"),
         Ok(_) => {}
         Err(e) => tracing::warn!("Reminder-Lauf fehlgeschlagen: {e}"),
@@ -163,6 +163,7 @@ mod tests {
             sidecar_dir: dir.path().join("sidecar"),
             resource_dir: std::path::PathBuf::from("/non/existent/resources"),
             web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         };
         std::fs::create_dir_all(&paths.backups_dir).unwrap();
         std::fs::create_dir_all(&paths.archive_dir).unwrap();

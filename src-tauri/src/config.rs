@@ -19,6 +19,9 @@ pub const ENV_DATA_DIR: &str = "KLEIN_BUCH_DATA_DIR";
 pub const ENV_INPUTS_DIR: &str = "KLEIN_BUCH_INPUTS_DIR";
 pub const ENV_RESOURCE_DIR: &str = "KLEIN_BUCH_RESOURCE_DIR";
 pub const ENV_WEB_DIR: &str = "KLEIN_BUCH_WEB_DIR";
+/// Wurzel der Verzeichnis-Backup-Ziele (optional, Standard [`DEFAULT_BACKUP_TARGETS_DIR`]).
+pub const ENV_BACKUP_TARGETS_DIR: &str = "KLEIN_BUCH_BACKUP_TARGETS_DIR";
+pub const DEFAULT_BACKUP_TARGETS_DIR: &str = "/backup-targets";
 
 #[derive(Debug, Clone)]
 pub struct Paths {
@@ -33,6 +36,9 @@ pub struct Paths {
     pub resource_dir: PathBuf,
     /// Gebautes Frontend (SPA), das der Server ausliefert (ab W5).
     pub web_dir: PathBuf,
+    /// Wurzel der Verzeichnis-Backup-Ziele (Mounts unter `/backup-targets`,
+    /// `KLEIN_BUCH_BACKUP_TARGETS_DIR`, Plan W7).
+    pub backup_targets_dir: PathBuf,
 }
 
 impl Paths {
@@ -52,6 +58,7 @@ impl Paths {
             inputs_dir,
             resource_dir,
             web_dir,
+            backup_targets_dir: PathBuf::from(DEFAULT_BACKUP_TARGETS_DIR),
         }
     }
 
@@ -87,18 +94,39 @@ impl Paths {
                 data_dir.display()
             )));
         }
-        Ok(Self::from_dirs(data_dir, inputs_dir, resource_dir, web_dir))
+        let mut paths = Self::from_dirs(data_dir, inputs_dir, resource_dir, web_dir);
+        if let Some(dir) = get(ENV_BACKUP_TARGETS_DIR).filter(|v| !v.is_empty()) {
+            paths.backup_targets_dir = PathBuf::from(dir);
+        }
+        // Gegenprüfung W7: die Ziel-Wurzel darf weder Daten noch Vorlagen
+        // enthalten oder in ihnen liegen (Ziel „archive“ o. Ä.).
+        let t = &paths.backup_targets_dir;
+        if t.parent().is_none()
+            || t.starts_with(&paths.data_dir)
+            || paths.data_dir.starts_with(t)
+            || t.starts_with(&paths.inputs_dir)
+            || paths.inputs_dir.starts_with(t)
+        {
+            return Err(crate::error::Error::Config(format!(
+                "{ENV_BACKUP_TARGETS_DIR} ({}) darf nicht / sein und nicht mit \
+                 {ENV_DATA_DIR}/{ENV_INPUTS_DIR} ineinander liegen — Start abgebrochen.",
+                t.display()
+            )));
+        }
+        Ok(paths)
     }
 
     /// Alles unter einem Wurzelverzeichnis (`data/`, `inputs/`, `resources/`,
     /// `web/`) — für Tests und lokale Probeläufe.
     pub fn under(root: &Path) -> Self {
-        Self::from_dirs(
+        let mut paths = Self::from_dirs(
             root.join("data"),
             root.join("inputs"),
             root.join("resources"),
             root.join("web"),
-        )
+        );
+        paths.backup_targets_dir = root.join("backup-targets");
+        paths
     }
 }
 
