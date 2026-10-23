@@ -31,3 +31,24 @@ Ein Restore darf nie unbemerkt Daten zerstören.
 ## Referenzen
 
 `backup::{manifest,encrypt,snapshot,rotation,restore}`; Block-4-Notes.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039; Blöcke W1, W2, W7). Krypto
+(Argon2id + AES-256-GCM), Rotation und Pre-Restore-Pflicht bleiben unverändert.
+
+- **Backup-`FORMAT_VERSION` 2:** Der Content enthält `branding/` aus `data_dir` (hochgeladenes
+  Logo, Unterschrift); Format 1 sicherte stattdessen `inputs/branding/`. Aus `inputs/` wird
+  nichts mehr gesichert: `/inputs` ist im Container ein eigenes Volume mit menschen-gepflegten
+  Vorlagen, das der Betreiber selbst sichert. Restore nimmt Format 1 und 2 an; bei Format 1
+  bleibt `data/branding` unverändert, der Restore-Report sagt das.
+- **Konsistenter Snapshot:** Die DB wird per `VACUUM INTO` über eine eigene Verbindung kopiert
+  (verschlüsselt wie das Original) statt per Checkpoint und Dateikopie; Temp-Dateien liegen
+  unter `<data_dir>/tmp`. Das tägliche Backup läuft im Scheduler-Tick, nicht nur beim Start.
+- **Restore älterer Backups (Block W7):** Statt exakt gleicher Schema-Version nimmt der
+  Restore Backups mit `30 ≤ schema_version ≤` erwarteter Version an und migriert danach
+  vorwärts; Backups einer neueren Version bleiben abgelehnt (Down-Migration-Schutz). Die
+  Untergrenze 30 begründet ADR 0039.
+- **Pflicht-Backup vor jeder Migration** (ADR 0039, E15): Beim Entsperren mit älterem Schema
+  und nach dem Restore eines älteren Backups entsteht vorher ein verifiziertes Backup
+  (Auslöser `manual`, wird nie rotiert); scheitert es, wird nicht migriert.

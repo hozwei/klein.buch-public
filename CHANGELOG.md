@@ -69,6 +69,18 @@ Arbeitszweig `phase-w`.
 - **Migrations-Export** blockiert keine Schreiber mehr und hinterlässt bei
   Fehlern keine offene Transaktion. (W2)
 
+### Documentation
+
+- **ADR 0039 „Web-/Docker-Betrieb“:** Entscheidungen E1–E17, Bedrohungsmodell
+  für den Internetbetrieb, Standardentscheidungen und die Entscheidungen
+  während der Umsetzung; löst ADR 0002 (Tauri-Shell) und ADR 0038 (NSIS-Bundle)
+  ab. Amendments in ADR 0001, 0008, 0009, 0011, 0013, 0014, 0023, 0028, 0034,
+  0035, 0036, 0037; ADR-Index aktualisiert. (W3)
+- `docs/architecture/security.md` überarbeitet (Threat Model für den
+  Internetbetrieb, Stand der Umsetzung je Maßnahme, Doku-Drift bei Verifier und
+  SQLCipher-Migration behoben, Write-once unter Linux ehrlich beschrieben);
+  `gobd.md` zum neuen Archiv-Schreibpfad nachgezogen. (W3)
+
 ### Changed
 
 - CI läuft auch auf dem Arbeitszweig `phase-w`, mit `concurrency`, nur

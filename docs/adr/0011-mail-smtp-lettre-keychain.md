@@ -45,3 +45,23 @@ in der DB liegen.
 
 `mail::{smtp,keyring,templates}`, `commands::mail`; keyring-Doku
 „Credential store features".
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039, E6/E9; Umsetzung Block W8). Im
+Container gibt es keinen OS-Keychain (kein Secret-Service, keine Desktop-Anmeldung); der
+`keyring`-Mock wäre flüchtig. Deshalb:
+
+- **Secrets in der SQLCipher-DB:** SMTP-Passwörter und das SFTP-Passwort der Off-Site-Ziele
+  (ADR 0034) liegen in einer eigenen STRICT-Tabelle der verschlüsselten DB (Migration `0031`),
+  Schlüssel je Mailkonto- bzw. Ziel-ID. Sie sind durch dieselbe Passphrase geschützt wie alle
+  Daten (ADR 0035), gehen damit nur verschlüsselt in Backups und weder in den Migrations- noch
+  in den DSGVO-Export. Die Regel „nie in der DB“ wird zu „nur in der verschlüsselten DB“; die
+  verworfene doppelte Krypto entsteht nicht, weil SQLCipher die ganze Datei verschlüsselt.
+- **`keyring` entfällt** samt Feature-Flags und Service-ID-Schema; `mail_accounts` hält weiter
+  nur Metadaten. Tests brauchen keinen Keyring-Mock mehr.
+- **Zugangsdaten an (Host, Port, Benutzer) gebunden:** Ändert sich eines dieser Felder, löscht
+  der Server das gespeicherte Passwort; ohne neues Passwort wird abgelehnt. Test-Verbindungen
+  für gespeicherte Konten nur per ID; `use_tls=false` nur ohne Zugangsdaten.
+- **Nur SMTP:** OAuth/MS-Graph (ADR 0028) ist im Server-Betrieb ausgeblendet.
+- Passwörter bleiben aus Logs und `audit_log` heraus (Backup-Hardline unverändert).

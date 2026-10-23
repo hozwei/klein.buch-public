@@ -2,12 +2,174 @@
 
 > Vertiefung zu „Backup" und „Verschlüsselung at Rest" in
 > `../ARCHITECTURE.md` §7. Wie die Geheimnis-Kette gebaut ist, wo welche
-> Geheimnisse leben, wie Bootstrap und Restore und Factory Reset
-> race-frei zueinander passen.
+> Geheimnisse leben, wie Bootstrap, Restore und Factory Reset race-frei
+> zueinander passen — und gegen wen sich Klein.Buch im Internetbetrieb
+> (Phase W) schützen muss.
 
 ADR-Basis: 0035 (Verschlüsselung at Rest), 0034 (Backup-Ziele/Retention/Log),
 0036 (Factory Reset), 0009 (Backup als First-Class), 0011 + 0028
-(Mail-Credentials im Keychain).
+(Mail-Credentials im Keychain), 0039 (Web-/Docker-Betrieb).
+
+**Stand des Codes.** Beschrieben ist der Stand nach den Phase-W-Blöcken W1 und
+W2: Die Desktop-Shell ist noch vorhanden, eine HTTP-Schnittstelle gibt es noch
+nicht. Was der Server-Betrieb ändert, steht an der jeweiligen Stelle mit dem
+Block des Arbeitsplans („geplant (Wn)"). Nichts davon gilt als erledigt, bevor
+der Block abgeschlossen ist.
+
+---
+
+## Threat Model für den Internetbetrieb (Phase W, ADR 0039)
+
+Mit Phase W wird Klein.Buch ein selbst gehosteter Dienst im Docker-Image: **ein
+Nutzer pro Instanz**, bedient im Browser, aus dem Internet erreichbar; TLS
+terminiert der Reverse-Proxy des Betreibers. Das bisherige Bedrohungsmodell
+(ADR 0035: gestohlenes Gerät, kopierte Datei) bleibt gültig, ist aber nicht mehr
+das maßgebliche. Maßgeblich ist jetzt ein Angreifer im Netz.
+
+Status in den Tabellen: **umgesetzt (W1/W2)** = heute im Code; **umgesetzt** =
+schon vor Phase W vorhanden; **geplant (Wn)** = Block des Arbeitsplans, noch
+nicht im Code.
+
+### Schutzgüter
+
+- **Belege und Archiv** — Integrität über 10 Jahre (GoBD, §147 AO).
+- **Steuer- und Kundendaten** — Vertraulichkeit (DSGVO).
+- **Die Passphrase** — ein Geheimnis für DB, Backups und Anmeldung (§1).
+- **Zugangsdaten** zu SMTP- und SFTP-Servern.
+- **Verfügbarkeit** von Festschreiben, Versand und Backups.
+
+### Akteure
+
+| # | Akteur | Fähigkeiten | Annahme |
+|---|---|---|---|
+| A1 | Anonymer Angreifer im Internet | erreicht alle öffentlichen Routen; Scans, Passwort-Raten, präparierte Requests | Hauptgegner |
+| A2 | Angreifer mit fremder Sitzung | gestohlenes Cookie oder offenes Browser-Fenster des Nutzers; kennt weder Passphrase noch TOTP | wird durch Re-Auth begrenzt |
+| A3 | Bösartige Website im Browser des Nutzers | CSRF, Clickjacking, Skript über eine ausgelieferte fremde Datei | wird durch Header und Origin-Prüfung begrenzt |
+| A4 | Netzwerk-Angreifer auf dem Weg zu externen Zielen | Man-in-the-Middle zu SMTP, SFTP, Versionsabfrage | TLS bzw. Host-Key-Pinning |
+| A5 | Lieferant einer Datei | präparierte PDF, XML oder ZIP, die der Nutzer hochlädt oder einspielt | Parser laufen begrenzt |
+| A6 | Wer an Volumes oder Backups kommt | Dateizugriff ohne Passphrase: Backup-Datenträger, Off-Site-Anbieter, fehlkonfigurierter Host | Verschlüsselung und Erkennung |
+| A7 | Lieferkette | kompromittierte Crate, npm-Paket, JAR, Basis-Image oder GitHub-Action | Pins, Scans, Signatur |
+
+**Vertraut bzw. nicht abgedeckt:** root auf dem Host des Betreibers (kann nach
+dem Entsperren die Passphrase aus dem Prozessspeicher lesen und jede Datei
+ändern) und der Nutzer selbst. Mehrere Nutzer, Rollen und Mandanten gibt es
+nicht (E1).
+
+### Angriffsflächen und Gegenmaßnahmen
+
+**HTTP-API** (`POST /api/cmd/{name}`, Auth-Routen, `/healthz`, `/legal/`, SPA)
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Aufruf beliebiger Commands, auch vor dem Entsperren | explizite Allowlist (alles andere 404), Sitzung Pflicht, DB-Commands nur im Zustand `unlocked` (sonst 423) | geplant (W5) |
+| Übernahme einer frischen Instanz (wer zuerst kommt, setzt die Passphrase) | Setup-Token aus dem Container-Log, Setup atomar mit Passphrase + TOTP | geplant (W6) |
+| Passwort-Raten | Passphrase ≥ 16 Zeichen | umgesetzt |
+| | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | geplant (W6) |
+| | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel | geplant (W6) |
+| CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | geplant (W5/W6) |
+| Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | geplant (W6) |
+| Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); Lücke: bricht der Aufrufer ab, wird die Genehmigung frei, während die Arbeit weiterläuft (Jobs, W5) |
+| | Header-Read-Timeout 10 s, Request-Timeouts, `ConcurrencyLimitLayer(64)`, Job-Warteschlange ≤ 8, ≤ 30 Render-/JVM-Aufrufe je Sitzung und Minute, Body-Limits je Route | geplant (W5) |
+| Interna in Fehlermeldungen | Fehlerabbildung je Variante; sonst 500 mit `ref`, Volltext nur im Log | geplant (W5) |
+| Versionsangabe vor dem Login | `GET /api/public/info` (Version, Commit, Quell-URL) ist wegen AGPL §13 öffentlich | bewusst akzeptiert (ADR 0039) |
+
+**Uploads** (Belege, Anhänge, E-Rechnungen, Rechtsdokumente, Logo, Unterschrift)
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Pfad-Tricks im Dateinamen | `archive::store` lehnt Namen mit `/`, `\`, `:` ab | umgesetzt |
+| Übergroße oder falsch deklarierte Dateien (heute JSON-Bytes ohne Limit außer Branding) | Multipart gestreamt, Limits je Art (20 / 10 / 2 MiB), Typ per Magic Bytes gegen Allowlist, `mime_type` aus dieser Prüfung, freier Platz vor dem Archivieren | geplant (W7) |
+| Skript in einer ausgelieferten fremden Datei | fremde Dateien nur als `attachment` mit `Content-Security-Policy: sandbox`; `inline` nur für selbst erzeugte PDFs; `nosniff` | geplant (W7) |
+| Auslieferung manipulierter oder fremder Archivdateien | Download nur über `read_and_verify` (Hash vor dem ersten Byte), `canonicalize` gegen `archive_dir`, Audit `archive.read` | geplant (W7) |
+
+**Restore-Upload** (`.kbk`)
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Manipulierte Backup-Datei | GCM-Tag + SHA-256 des Content-ZIP (§3.2) | umgesetzt |
+| Pfad-Traversal im Content-ZIP | Prüfung je Pfadkomponente (`..`, Wurzel, Laufwerkspräfix → Abbruch) | umgesetzt (W2) |
+| Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | geplant (W7) |
+| Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | geplant (W6/W7) |
+| Schema-Konflikt | heute exakt gleiche Schema-Version; künftig `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration, neuere Backups weiter abgelehnt | geplant (W7) |
+
+**Sidecar-Eingaben** (KoSIT, Mustang in der JVM)
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Hängende oder ausufernde Prüfung präparierter XML/PDF | eigener Prozess, Timeout + `kill_on_drop` | umgesetzt |
+| | höchstens 2 JVM-Starts gleichzeitig (`limits::JVM`) | umgesetzt (W2) |
+| Mock-Modus im Produktivbetrieb | Release-Build mit gesetztem `KLEIN_BUCH_SIDECAR_MOCK` startet nicht | umgesetzt (W1) |
+| Manipulierte Java-Komponenten, zu viel Speicher | Linux-Sidecar mit SHA-256 der Original-JARs in `sidecar/versions.json`, `-Xmx512m`, Temp unter `/data/tmp` | geplant (W11) |
+
+Fehler in den Parsern der Drittkomponenten bleiben ein Restrisiko; begrenzt wird
+es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
+
+**Logs**
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Passphrase im Statement-Log (`PRAGMA key`, `ATTACH … KEY`) | Statement- und Slow-Statement-Logging auf allen verschlüsselten Verbindungen aus (`db::open_pool`, Snapshot, Verschlüsselungs-Migration) | umgesetzt (W2) |
+| Geheimnisse über andere Wege | `sqlx::query=off` fest im Filter, Default `info`, Request-Log nur Methode/Pfad ohne Query/Status/Dauer, keine Header und Bodies, Empfänger und Dateinamen nur auf DEBUG; Log-Test auf Passphrase, TOTP, Setup-Token, Session-ID | geplant (W5/W6) |
+| Personenbezogene Daten im Audit | Fehlversuche nur als Logzeile `WARN auth.login.failed` (fail2ban-tauglich), nicht ins append-only `audit_log` | geplant (W6) |
+
+**Volumes** (`/data`, `/inputs`, optional `/backup-targets`)
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Lesen der Datenbank | SQLCipher (§2) | umgesetzt |
+| Lesen der Belege | **Archivdateien (PDF/XML), Logo und Unterschrift liegen unverschlüsselt im Volume.** Schutz ist Sache des Betreibers (Host-Zugriff, Volume-Verschlüsselung). | bewusst akzeptiert |
+| Löschen oder Ersetzen von Archivdateien | Erkennung statt Verhinderung, siehe „Write-once unter Linux" | umgesetzt (W2), Doku W3 |
+| Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
+| | alle Temp-Dateien unter `/data/tmp`, `TMPDIR` im Image | geplant (W7/W11) |
+| Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | geplant (W5) |
+| Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | geplant (W11) |
+
+**Backups**
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Lesen eines Backups | Argon2id + AES-256-GCM (§3.2); die DB im Content-ZIP ist zusätzlich SQLCipher-verschlüsselt | umgesetzt (W2) |
+| Inkonsistenter oder überschriebener Stand | Snapshot per `VACUUM INTO`, Backups serialisiert, Dateinamen mit Millisekunden + Kurz-UUID | umgesetzt (W2) |
+| Migration ohne Rückweg | Pflicht-Backup vor jeder Migration (Entsperren mit älterem Schema, Restore eines älteren Backups) | geplant (W7) |
+| Speicher | das Backup wird im RAM gebaut (etwa 3× Archivgröße) | Doku-Hinweis (W13) |
+
+**Off-Site-Ziele**
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Halbe Datei unter dem endgültigen Namen (Verzeichnis-Ziel) | Temp-Datei + `fsync` + `rename` + Verzeichnis-`fsync` | umgesetzt (W2) |
+| Halbe Datei auf SFTP | SFTP schreibt heute direkt unter dem endgültigen Namen; ein abgebrochener Upload kann eine unvollständige `.kbk` hinterlassen, die der Restore am GCM-Tag erkennt; das Backup-Protokoll zeigt den Fehlschlag | offen |
+| Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / ok | geplant (W7) |
+| MITM zum SFTP-Server | Host-Key-Pinning (SHA-256, TOFU) | umgesetzt |
+| SSRF und Abgreifen gespeicherter Zugangsdaten über Test-Verbindungen | Zugangsdaten an (Host, Port, Benutzer) gebunden; Tests gespeicherter Ziele nur per ID; Port-Allowlist; ≤ 10 Tests je Minute; Re-Auth | geplant (W8) |
+
+**Lieferkette des Images**
+
+| Risiko | Gegenmaßnahme | Status |
+|---|---|---|
+| Kompromittierte Abhängigkeit | `Cargo.lock` + `pnpm-lock.yaml`; Build mit `--locked` bzw. `--frozen-lockfile`, `cargo auditable` | Lockfiles umgesetzt, Rest geplant (W11) |
+| | `cargo deny`, `cargo audit`, `pnpm audit`, gitleaks, `trivy`-Gate, SBOM; Actions per Commit-SHA, Basis-Images per Digest; Renovate/Dependabot | geplant (W12) |
+| Untergeschobenes Image | Build nur aus dem öffentlichen Repo, cosign-Signatur (keyless), feste Tags ohne `:latest`, Tags und Images nie löschen | geplant (W12) |
+| Selbst-Update als Einfallstor | kein Update-Knopf in der App (bräuchte `docker.sock`, also praktisch root auf dem Host); opt-in Versionsprüfung ohne weitere Daten | Entscheidung E14, Umsetzung geplant (W12) |
+
+**Passphrase im Speicher.** Nach dem Entsperren liegt die Passphrase im
+Prozessspeicher (`BackupSession`). Die KDF-Pfade arbeiten mit `Zeroizing`-Kopien
+(umgesetzt). „Datenbank sperren" (Pool zu, Scheduler gestoppt, Passphrase per
+`zeroize` gelöscht, alle Sitzungen ungültig) ist geplant (W6). Nach einem
+Neustart bleibt die Instanz gesperrt, bis der Nutzer im Browser entsperrt; ein
+Auto-Unlock ist ausgeschlossen (E3).
+
+### Restrisiken (bewusst akzeptiert)
+
+- Wer den Host oder Code als Server-Benutzer kontrolliert, kann nach dem
+  Entsperren alles: Passphrase lesen, Dateien löschen oder ersetzen. Klein.Buch
+  erkennt Änderungen am Archiv, verhindert sie aber nicht.
+- Archivdateien sind im Volume lesbar (siehe oben).
+- Ohne korrekt gesetztes `KLEIN_BUCH_TRUSTED_PROXIES` sieht der Server nur die
+  Adresse des Proxys; die Wartezeit je IP wirkt dann global.
+- Wer Passphrase **und** zweiten Faktor hat, ist der Inhaber. Es gibt kein
+  Rollenmodell.
 
 ---
 
@@ -15,27 +177,30 @@ ADR-Basis: 0035 (Verschlüsselung at Rest), 0034 (Backup-Ziele/Retention/Log),
 
 Klein.Buch hat **eine** Passphrase. Sie ist gleichzeitig:
 
-1. **App-Login.** Beim Start wird sie verlangt, sonst kein Pool-Open.
+1. **App-Login.** Ohne sie wird kein Pool geöffnet. Im Server-Betrieb kommt ein
+   zweiter Faktor (TOTP) dazu, und Entsperren der Datenbank und Anmelden einer
+   Browser-Sitzung werden getrennt (geplant W6, Amendment ADR 0035).
 2. **SQLCipher-Key-Source.** Aus ihr leitet SQLCipher per PBKDF2-HMAC-SHA512
    (Salt im DB-Header) den Page-Encryption-Key ab.
 3. **Backup-Schlüssel-Wurzel.** Die Backup-Hülle wird mit einem
-   Argon2id-abgeleiteten Key (m=64 MB, t=3, p=4) aus derselben Passphrase
+   Argon2id-abgeleiteten Key (m = 64 MiB, t = 3, p = 4) aus derselben Passphrase
    gebildet.
 
 **Konsequenz.** Wer die Passphrase hat, hat die DB *und* die Backups. Wer sie
 **verliert**, hat *nichts*. Es gibt **keinen Recovery-Backdoor**. Das ist
 Absicht (ADR 0035): wer Belege jahrzehntelang aufbewahren will, muss seine
 Passphrase ebenso lange sicher verwahren — typischerweise in einem Passwort-
-Manager (das wird im Onboarding-Wizard empfohlen).
+Manager (das wird im Onboarding-Wizard empfohlen). Mindestlänge: 16 Zeichen,
+geprüft im Frontend und im Backend.
 
 **Warum zwei verschiedene KDFs?**
 
 - **SQLCipher's eigene PBKDF2-HMAC-SHA512** ist im DB-Format eingebaut, mit
   Salt im DB-Header. Das macht die DB-Datei selbstbeschreibend (jede DB-Datei
   enthält ihr eigenes Salt) und cross-OS-portabel. Argon2id-Raw-Key als
-  SQLCipher-Schlüssel haben wir bewusst nicht genommen — der Cargo-Vorteil
-  (FIPS-Argon2id-fester Key) wäre durch den Verlust der Selbstbeschreibung
-  zunichte gemacht (ADR-0035-Amendment 2026-05-24).
+  SQLCipher-Schlüssel haben wir bewusst nicht genommen — der Vorteil wäre durch
+  den Verlust der Selbstbeschreibung zunichte gemacht (ADR-0035-Amendment
+  2026-05-24).
 - **Backup-Hülle mit Argon2id**, weil dort kein Self-Describing-Format
   gefordert ist und Argon2id für Brute-Force-Resistenz aktuell die beste
   Wahl ist. Salt + Argon2id-Parameter stehen im Manifest jedes Backups.
@@ -67,29 +232,67 @@ genau **eine** Version zeigen, sonst greift die Unification nicht.
 
 ```rust
 db::open_pool(path, key)
-    → SqliteConnectOptions::new()
-        .filename(path)
-        .pragma("key", key)
-        .pragma("foreign_keys", "ON");
+    → SqliteConnectOptions::from_str(url)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(Wal)
+        .busy_timeout(15 s)
+        .log_statements(Off)
+        .log_slow_statements(Off, …)
+        .pragma("key", sqlcipher_key_literal(passphrase));  // nur mit key
 ```
 
-Der `PRAGMA key`-Befehl wird beim ersten Connect ausgeführt und entschlüsselt
-die DB seitenweise. Ohne Passphrase ist die Datei eine Zufallszahl. Mit
-falscher Passphrase liefert der nächste SELECT einen `file is not a database`-
-Fehler — sauber abfangbar.
+Der `PRAGMA key`-Befehl wird beim Verbindungsaufbau vor jedem anderen Statement
+ausgeführt; die Passphrase steht als SQL-Literal darin (einfache
+Anführungszeichen verdoppelt). Ohne Passphrase ist die Datei eine Zufallszahl.
+Mit falscher Passphrase liefert die erste Abfrage einen `file is not a
+database`-Fehler — sauber abfangbar.
 
-### 2.3 Verifier-Datei
+**Kein Statement-Logging** (W2): sqlx protokolliert jedes Statement auf DEBUG
+und langsame Statements (die erste PBKDF2-Ableitung dauert spürbar) auf WARN —
+samt Passphrase im `PRAGMA key`. Deshalb ist beides auf allen Verbindungen mit
+Schlüssel abgeschaltet: Pool, Snapshot-Verbindung, Verschlüsselungs-Migration
+(`ATTACH … KEY`).
 
-Klein.Buch persistiert **keinen** Hash der Passphrase irgendwo. Stattdessen
-gibt es eine **Verifier-Tabelle** in der DB (`app_settings.key_verifier`),
-die beim Setup mit einem bekannten Klartext geschrieben wird (z. B. einem
-fixen Tag). Beim Unlock-Versuch wird die DB mit der eingegebenen Passphrase
-geöffnet und der Verifier ausgelesen. Stimmt er, ist die Passphrase richtig;
-stimmt er nicht oder ist der Eintrag unleserlich, ist sie falsch.
+Schreib-Transaktionen, die vorher lesen (Festschreiben, Zahlung,
+Nummernkreis), beginnen mit `BEGIN IMMEDIATE` (`db::begin_immediate`, W2): die
+Schreibsperre wird am Anfang geholt und bis zum `busy_timeout` von 15 s
+abgewartet, statt unter WAL beim Hochstufen sofort mit `SQLITE_BUSY` zu
+scheitern.
 
-**Vorteil:** der Verifier liegt selbst verschlüsselt in der DB; wer ihn aus
-einer kopierten DB-Datei rausholen will, braucht schon die Passphrase. Es
-gibt also kein offline-rate-bares Geheimnis außerhalb der DB.
+### 2.3 Prüfen der Passphrase (Verifier)
+
+Klein.Buch speichert weder die Passphrase noch einen Passwort-Hash. Es gibt zwei
+Prüfwege:
+
+1. **Verschlüsselte DB (Normalfall).** SQLCipher selbst ist der Verifier.
+   Entsperren = `db::open_pool(path, Some(passphrase))` + `db::probe_readable`
+   (`SELECT count(*) FROM sqlite_master`). Schlägt das fehl, war die Passphrase
+   falsch; der Pool wird verworfen, am Zustand ändert sich nichts.
+2. **Verschlüsselter Verifier in `app_settings`.** Beim Einrichten
+   (`backup::setup_passphrase`) wird aus der Passphrase per Argon2id mit
+   zufälligem Salt (16 Byte) ein Schlüssel abgeleitet und damit die feste
+   Konstante `KLEIN-BUCH-PASSPHRASE-OK` per AES-256-GCM (zufällige Nonce,
+   12 Byte) verschlüsselt. Gespeichert werden vier Schlüssel:
+
+   | Schlüssel | Inhalt |
+   |---|---|
+   | `backup_passphrase_set` | `"true"`, sobald eingerichtet |
+   | `backup_verifier_salt_hex` | Argon2id-Salt (hex) |
+   | `backup_verifier_nonce_hex` | AES-GCM-Nonce (hex) |
+   | `backup_verifier_ct_hex` | Ciphertext + GCM-Tag (hex) |
+
+   `backup::verify_passphrase` leitet den Schlüssel neu ab und entschlüsselt;
+   scheitert das GCM-Tag oder weicht der Klartext ab, ist die Passphrase
+   falsch. Genutzt wird das bei bereits offener DB: Bestätigung vor dem Factory
+   Reset und der Klartext-Übergangspfad (§7). Im Server-Betrieb prüft die
+   Re-Auth bei entsperrter DB auf diesem Weg, ohne einen zweiten Pool zu öffnen
+   (geplant W6).
+
+**Vorteil:** der Verifier liegt selbst in der verschlüsselten DB; wer ihn aus
+einer kopierten DB-Datei holen will, braucht schon die Passphrase. Es gibt also
+kein offline ratbares Geheimnis außerhalb der DB, und jeder Rateversuch gegen
+den Verifier kostet eine volle Argon2id-Ableitung.
 
 ---
 
@@ -97,75 +300,161 @@ gibt also kein offline-rate-bares Geheimnis außerhalb der DB.
 
 ### 3.1 Snapshot
 
-`backup::snapshot::create(db_path, target_path)` kopiert die SQLCipher-DB-
-Datei **as-is** in einen Snapshot. Inkl. Header-Salt. Der Snapshot ist also
-weiterhin verschlüsselt — er wird in derselben Geheimnis-Kette nochmal
-„umverpackt".
+`backup::snapshot::build_content_zip(paths, key)` baut den unverschlüsselten
+Content-ZIP, der danach in die Hülle kommt.
 
-Implementation: `VACUUM INTO 'target_path'` über die Live-DB (das ist
-SQLCipher-aware und respektiert WAL-State), oder als Fallback Datei-Kopie
-unter Read-Lock.
+**DB-Snapshot (W2).** `VACUUM INTO '<data_dir>/tmp/snapshot-<uuid>.db'` über
+eine **eigene** Verbindung, nicht über den Pool (`VACUUM INTO` darf nicht in
+einer Transaktion laufen). SQLite liest dabei einen konsistenten Stand: alle vor
+dem Start committeten Transaktionen, nichts Halbes, auch bei parallelem
+Schreiber (WAL). Danach wird die Datei gelesen und gelöscht.
+
+**Verschlüsselt wie das Original.** Die Verbindung öffnet mit der Passphrase.
+Liefert SQLCipher trotzdem eine unverschlüsselte Kopie (erkannt am
+Magic-Header `SQLite format 3`), wird sie verworfen und per `ATTACH … KEY` +
+`sqlcipher_export` verschlüsselt neu erzeugt; ist sie danach immer noch
+unverschlüsselt, bricht das Backup ab. Ein Content-ZIP mit Klartext-DB entsteht
+nie.
+
+**Temp-Dateien** liegen unter `<data_dir>/tmp`, nie unter `/tmp` (im Container
+ein RAM-tmpfs).
+
+**Inhalt (Backup-Format 2, W1):**
+
+```text
+klein-buch.sqlite        ← SQLCipher-Snapshot
+archive/<jahr>/<...>     ← write-once GoBD-Archiv (PDF/XML/Belege)
+branding/<...>           ← Logo + Unterschrift aus <data_dir>/branding
+```
+
+Format 1 enthielt statt `branding/` den Ordner `inputs/branding`. Der Restore
+nimmt Format 1 und 2 an; bei Format 1 bleiben Logo und Unterschrift unverändert,
+und der Restore-Bericht sagt das. `inputs/` (Vorlagen, AfA-Tabellen) wird nicht
+gesichert; im Server-Betrieb ist `/inputs` ein eigenes Volume mit eigener
+Sicherung beim Betreiber.
+
+Das Packen (Lesen + Deflate) läuft in `spawn_blocking`.
 
 ### 3.2 Hülle
 
-`backup::encrypt::wrap(snapshot_bytes, manifest, passphrase)`:
+`backup::create_now(pool, paths, passphrase, trigger)`:
 
-1. Random-Salt (16 Byte) für Argon2id.
-2. Random-Nonce (12 Byte) für AES-GCM.
-3. `key = argon2id(passphrase, salt, m=64MB, t=3, p=4)` → 32 Byte.
-4. `nonce` + `salt` + `aes_gcm(key, nonce, plaintext = snapshot || manifest_json)`
-   → Container.
-5. Manifest separat vorhängen (lesbar, beschreibt Schema-Version + App-Version
-   + Hash des Plaintexts).
+1. Content-ZIP (§3.1) + SHA-256.
+2. Zufälliges Salt (16 Byte) und zufällige Nonce (12 Byte) pro Backup (OS-RNG).
+3. `key = argon2id(passphrase, salt, m=64 MiB, t=3, p=4)` → 32 Byte. Ableitung
+   und Verschlüsselung laufen außerhalb der async-Runtime unter der
+   `KDF`-Semaphore.
+4. `ciphertext = aes_256_gcm(key, nonce, content_zip)` inkl. 16-Byte-Tag.
+5. Datei = Zeile 1 `KLEIN-BUCH-BACKUP-1`, Zeile 2 Manifest-JSON, danach der
+   Ciphertext.
 
-Container-Format ist versioniert (`Magic + Version + Salt + Nonce + Length +
-Ciphertext + Tag`). Header sind klar lesbar, der Inhalt nicht.
+Das **Manifest** ist Klartext, damit der Restore-Wizard ohne Passphrase anzeigen
+kann, was er einspielen würde: `formatVersion` (2), `schemaVersion`,
+`appVersion`, `createdAt`, KDF-Parameter, Salt, Nonce, SHA-256 und Größe des
+entschlüsselten Content-ZIP. Der Inhalt ist verschlüsselt und über das GCM-Tag
+gegen Veränderung geschützt; nach dem Entschlüsseln wird zusätzlich der
+Content-SHA-256 verglichen. Das Manifest selbst ist **nicht** Teil der
+GCM-Authentisierung; maßgeblich für die Schema-Version ist nach dem Einspielen
+der Schema-Check der DB selbst.
+
+**Ablauf drumherum (W2):**
+
+- Backups laufen **nacheinander** (prozessweiter Mutex in `create_now`):
+  Auto-Backup nach dem Festschreiben, Tages-Backup im Scheduler-Tick, manuelles
+  Backup, Pre-Restore-Backup — nie zwei gleichzeitig.
+- Dateiname `klein-buch-<JJJJMMTT-hhmmssmmm>-<8 Hex>.kbk` (Europe/Berlin,
+  Millisekunden + Kurz-UUID): zwei Backups in derselben Sekunde ergeben zwei
+  Dateien.
+- Jeder Schreibversuch auf ein Ziel landet im append-only `backup_log` (Erfolg
+  und Fehlschlag, je Ziel) — nie mit Passphrase. Fehler **vor** dem Schreiben
+  (z. B. beim Snapshot) stehen derzeit nicht im `backup_log`, sondern nur als
+  Audit `backup.failed` (Auto-Backup) bzw. als Fehlermeldung (manuell); offener
+  Punkt.
 
 ### 3.3 Ziele
 
-`backup::target::resolve_target(settings)` liefert mindestens den **Floor**
-(lokal, `%APPDATA%\…\backups\`, immer aktiv, 7 Tages/3 Wochen/1 Monat) und
-nach Möglichkeit ein **Off-Site-Ziel** (Verzeichnis-Mount **oder** SFTP,
-30/12/7 Aufbewahrung). „Immer zweifach" ist best-effort: wenn das Off-Site-
-Ziel temporär nicht erreichbar ist, gibt es ein `backup_log`-Eintrag mit
-`status='failed'` und eine Notification, der Floor läuft trotzdem.
+- **Floor** — immer lokal unter `<data_dir>/backups`, nicht abschaltbar.
+  Schlägt er fehl, ist das Backup fehlgeschlagen.
+- **Off-Site** — heute ein konfigurierbares Ziel: Verzeichnis (USB, NAS,
+  Cloud-Ordner über einen Sync-Client) **oder** SFTP. Pre-Restore-Backups werden
+  nicht gespiegelt. Ein nicht erreichbares Off-Site-Ziel ist **nicht** fatal:
+  `backup_log` mit `status='failed'`, Audit `backup.mirror.failed`,
+  Inbox-Hinweis; der Floor ist gesichert, und ein festgeschriebener Beleg wird
+  nie zurückgerollt.
+- **Schreiben ins Verzeichnis** (Floor und Off-Site, W2): Temp-Datei
+  `.<name>.<uuid>.part` im Zielordner, `fsync`, `rename`, Verzeichnis-`fsync`.
+  Ein Abbruch hinterlässt nie eine halbe `.kbk` unter dem endgültigen Namen.
+- **Aufbewahrung:** Floor 7 tägliche / 3 monatliche / 1 jährliche, solange ein
+  Off-Site-Ziel konfiguriert ist, sonst wie Off-Site 30 / 12 / 7 (§3.5).
+- **Tages-Backup** (W2): im Scheduler-Tick, sobald das letzte Backup älter als
+  24 h ist — im laufenden Betrieb, nicht nur beim Entsperren. Nach einem
+  Fehlschlag frühestens nach einer Stunde erneut.
 
-Auto-Detect (G1-BKP.2): OneDrive (Windows) und iCloud (macOS) als Cloud-
-Ordner erkannt; manuelle Wahl als Fallback (Linux/Rest). **Kein**
-proprietäres Cloud-API; alles über lokale Ordner, die ein OS-Sync-Client
-hochlädt.
+Auto-Detect: OneDrive (Windows) und iCloud (macOS) werden in der Desktop-App als
+Cloud-Ordner vorgeschlagen. **Kein** proprietäres Cloud-API; alles über lokale
+Ordner, die ein Sync-Client hochlädt.
+
+**Server-Betrieb (geplant W7, Amendment ADR 0034):** Off-Site wird Pflicht
+(Inbox-Warnung, Status `offsite` in Übersicht und Loopback-`/healthz`; das
+Festschreiben wird nicht blockiert). Verzeichnis-Ziele nur unter den
+Mount-Wurzeln `/backup-targets/…` (`canonicalize`), dazu SFTP; mehrere Ziele
+gleichzeitig mit Fehler, Rotation und Historie je Ziel. Die Auto-Erkennung
+entfällt.
 
 ### 3.4 SFTP
 
 `backup::sftp` benutzt `russh`/`russh-sftp`. Nur **Passwort-Auth** (kein
 SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker). **Host-Key-
-Pinning** über SHA-256 TOFU (Trust-On-First-Use): beim ersten Verbinden
-wird der Host-Key gemerkt; jede spätere Abweichung führt zum Abbruch
-(Man-in-the-Middle-Schutz). Pin steht in `app_settings.sftp_host_key_sha256`.
+Pinning** über SHA-256 (Trust-On-First-Use): der Verbindungstest (`probe`)
+liefert den Fingerprint (`SHA256:…`), der Nutzer bestätigt ihn, und er wird im
+Ziel gespeichert (`app_settings.backup_target`, Feld `host_fingerprint`). Ein
+Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz).
+Verbindungsaufbau mit 20 s Timeout.
 
-Passwort liegt im **OS-Keychain**, Referenz steht in den Backup-Settings.
+Das Passwort liegt im **OS-Keychain** (bis W8, danach im SecretStore, §4), nie
+im Ziel-JSON, in Logs oder im Audit.
+
+Der Upload schreibt die Datei direkt unter ihrem endgültigen Namen (kein
+Temp + `rename` wie beim Verzeichnis-Ziel). Ein abgebrochener Upload kann eine
+unvollständige Datei hinterlassen; der Restore erkennt sie am GCM-Tag, das
+Backup-Protokoll zeigt den Fehlschlag.
+
+**Server-Betrieb (geplant W8):** Zugangsdaten an (Host, Port, Benutzer)
+gebunden — wer eines davon ändert, muss das Passwort neu eingeben; Tests
+gespeicherter Ziele nur per ID; der gespeicherte Fingerprint muss der letzten
+Probe dieser Sitzung entsprechen; Port-Allowlist; alles mit Re-Auth.
 
 ### 3.5 Rotation
 
-`backup::rotation::prune(target, keep_n)` läuft pro Klasse (`daily` /
-`weekly` / `monthly`). **Invariante** (G1-HARDEN.5): das **global neueste**
-Backup wird **nie** gelöscht, auch wenn keep-Werte auf 0 stehen würden. Eine
-garantierte Mindestzahl bleibt immer erhalten.
+`backup::rotation::run(pool, backups_dir)` prunt pro Klasse (`daily` /
+`monthly` / `yearly`) und Ablage (Floor bzw. Off-Site, zugeordnet über den
+`target_path`). `manual`- und `pre_restore`-Backups werden **nie** automatisch
+gelöscht. **Invariante** (G1-HARDEN.5): das **global neueste** Backup wird
+**nie** gelöscht, auch wenn keep-Werte auf 0 stehen würden. Eine garantierte
+Mindestzahl bleibt immer erhalten.
 
-Test: `tests/backup_rotation_test.rs` prüft diese Invariante explizit.
+Test: die Unit-Tests in `src/backup/rotation.rs` (Abschnitt G1-HARDEN.5)
+prüfen diese Invariante explizit.
 
 ---
 
-## 4. Keychain-Topologie
+## 4. Keychain-Topologie (bis W8, danach SecretStore in SQLCipher)
 
-Was im OS-Keychain liegt (`keyring`-Crate, native Backends — `apple-native`/
-`windows-native`/`sync-secret-service`):
+> **Gilt bis Block W8.** Danach liegen die Zugangsdaten in einer STRICT-Tabelle
+> der SQLCipher-DB (`SecretStore`, Migration `0031`, Schlüssel je Mailkonto-
+> bzw. Ziel-ID), sind damit nur mit der Passphrase lesbar und Teil des
+> verschlüsselten Backups, aber nicht des Migrations- und DSGVO-Exports. Die
+> `keyring`-Crate (und mit ihr `libdbus`) entfällt (E6, Amendment ADR 0011/0028).
 
-| Service | Key | Inhalt |
+Was heute im OS-Keychain liegt (`keyring`-Crate, native Backends —
+`apple-native`/`windows-native`/`sync-secret-service`):
+
+| Service | User | Inhalt |
 |---|---|---|
-| `de.wildbach.kleinbuch` | `smtp:{mail_account_id}` | SMTP-Passphrase |
-| `de.wildbach.kleinbuch` | `oauth:{mail_account_id}:refresh:0..N` | Refresh-Token, gechunkt (Windows-2560-Byte-Limit pro Eintrag) |
-| `de.wildbach.kleinbuch` | `sftp_backup:{settings_id}` | SFTP-Passwort |
+| `kleinbuch::mail::{mail_account_id}` | `smtp` | SMTP-Passwort |
+| `kleinbuch::mail::{mail_account_id}` | `oauth` | Kopf des OAuth-Token-Bündels (Anzahl der Teile) |
+| `kleinbuch::mail::{mail_account_id}::oauth.{i}` | `oauth` | Refresh-Token, gechunkt (Windows-Limit 2560 Zeichen pro Eintrag) |
+| `kleinbuch::backup::sftp` | `sftp-password` | SFTP-Passwort (genau ein Ziel) |
 
 **Disziplin.**
 
@@ -175,139 +464,223 @@ Was im OS-Keychain liegt (`keyring`-Crate, native Backends — `apple-native`/
 - In Tests (`#[cfg(test)]`) ist der Mock-Store aktiv; **Produktion** hat
   keinen In-Memory-Fallback (G1-HARDEN.3).
 
-**Factory Reset** wischt die Keychain-Einträge best-effort (`backup::
-factory_reset::apply_pending` ruft `keyring::Entry::delete_password` für jeden
-bekannten Service-Key). „Best-effort" heißt: Fehler beim Wipen blockieren den
-Reset nicht (der wäre sonst nicht durchzubekommen, wenn das OS-Keychain
-gerade meckert).
+**Factory Reset** (nur Desktop) wischt die Keychain-Einträge best-effort
+(`backup::factory_reset::apply_pending` löscht SMTP-Passwort und OAuth-Token je
+bekanntem Mailkonto sowie das SFTP-Passwort). „Best-effort" heißt: Fehler beim
+Wischen blockieren den Reset nicht (der wäre sonst nicht durchzubekommen, wenn
+der OS-Keychain gerade meckert).
 
 ---
 
 ## 5. Bootstrap-Reihenfolge
 
-Aus `../ARCHITECTURE.md` §3 — hier mit Sicherheits-Blickwinkel:
+Aus `../ARCHITECTURE.md` §3 — hier mit Sicherheits-Blickwinkel (Desktop-Stand;
+Server siehe unten):
 
-1. **Setup-Closure.** Nur Tauri-State + `prepare_filesystem`. **Kein**
+1. **Setup-Closure.** Nur App-State + `prepare_filesystem`. **Kein**
    Pool-Open. Wer hier den DB-Pool öffnen würde, ohne Passphrase, kriegt
    eine wertlose Datei oder einen Fehler.
-2. **`prepare_filesystem`.** Macht zwei sicherheits-relevante Dinge: (a)
-   vorgemerkte **Restore-Marker** abarbeiten — DB-Datei + Archiv swappen,
-   bevor der Pool jemand sieht; (b) vorgemerkte **Factory-Reset-Marker**
-   abarbeiten — `data_dir` nuken, Kern-Verzeichnisse leer neu anlegen. Beides
-   in Phase B (siehe §6).
-3. **Frontend** prüft `backup_needs_onboarding`. Klartext-DB ohne Verifier
-   ⇒ Onboarding. Verschlüsselte DB ⇒ Unlock-Screen. Keine DB ⇒ Onboarding.
-4. **Onboarding** setzt Passphrase, schreibt Verifier, baut DB an oder
-   migriert eine bestehende Klartext-DB (siehe §7).
-5. **Unlock** öffnet den Pool, prüft Verifier, übergibt die Passphrase in
-   die `BackupSession` (Memory).
-6. **Migrations + Scheduler-Start** danach, in der entsperrten DB.
+2. **`prepare_filesystem`.** Legt `data_dir` an, kopiert fehlende
+   `inputs/`-Dateien (ohne zu überschreiben) und arbeitet dann vorgemerkte
+   Marker ab: (a) **Factory-Reset-Marker** `FACTORY_RESET_PENDING.json` —
+   `data_dir` leeren, früher Rücksprung in den Onboarding-Zustand; (b)
+   **Restore** — erst Reste eines unterbrochenen Tauschs heilen, dann einen
+   vorgemerkten Restore (`RESTORE_PENDING.json`) anwenden (§6). `archive/` und
+   `backups/` werden erst **danach** angelegt: ein leeres neues `archive/` neben
+   `archive.rollback` sah für die Wiederherstellung früher wie „Tausch fertig"
+   aus.
+3. **Frontend** prüft `backup_needs_onboarding`. Keine DB ⇒ Onboarding.
+   Verschlüsselte DB ⇒ Entsperren. Klartext-DB (Übergang, §7) ⇒ Onboarding nur,
+   wenn dort noch keine Passphrase eingerichtet ist, sonst Entsperren.
+4. **Onboarding** setzt die Passphrase, legt die DB verschlüsselt an (oder
+   migriert eine Klartext-DB, §7), schreibt den Verifier (§2.3) und erstellt
+   sofort das erste Backup.
+5. **Entsperren** öffnet den Pool mit der Passphrase, prüft per Probe-Read,
+   wendet Migrationen an (Schema-Check), schreibt einen gepufferten
+   Restore-Audit und übergibt die Passphrase an die `BackupSession`
+   (Prozessspeicher).
+6. **Scheduler-Start** danach; das fällige Tages-Backup legt der erste Tick an.
+
+**Solange ein Restore offen ist** — Marker, Zustandsdatei
+`RESTORE_SWAP_STATE.json` oder `*.rollback`-Reste vorhanden — lehnen Onboarding
+und Entsperren ab (`restore::restore_incomplete`). Sonst entstünde neben der
+beiseitegelegten DB eine neue.
 
 **Was diese Reihenfolge schützt:** ohne Schritt 4 oder 5 gibt es nichts im
 Pool-State. Jeder Command, der den Pool braucht, scheitert sauber an „Pool
 nicht da" (übersetzt im UI als „App noch nicht entsperrt").
+
+**Server-Betrieb (geplant W5/W6).** Zustandsautomat `setup` (leeres `/data`) →
+`locked` (kein Pool, kein Scheduler) ↔ `unlocked`; Browser-Sitzungen sind davon
+getrennt. `prepare_filesystem` läuft synchron **vor** dem Port-Bind; die
+fail-closed-Prüfungen aus dem Threat Model verweigern den Start. Nach jedem
+Neustart ist die Instanz gesperrt, bis der Nutzer entsperrt (E3).
 
 ---
 
 ## 6. Race-Freiheit durch Zwei-Phasen-Pattern
 
 Sowohl **Restore** als auch **Factory Reset** machen destruktive FS-Ops
-(DB-Datei ersetzen, Archiv ersetzen, `data_dir` nuken). Im **Live-Command**
+(DB-Datei ersetzen, Archiv ersetzen, `data_dir` leeren). Im **Live-Command**
 ist der Pool offen — wir können da nicht einfach die Datei ersetzen
-(Windows-File-Lock, sqlite-WAL-State). Lösung:
+(Windows-File-Lock, SQLite-WAL-State). Lösung: zwei Phasen, verbunden über eine
+Marker-Datei im Dateisystem (nicht in der DB, die ja ausgetauscht wird).
 
 ### Phase A (Live)
 
-- **Restore.** Manifest lesen, Hash-Verify, Schema-Check, Pre-Restore-Backup,
-  **Marker schreiben** (eine `.pending_restore`-Datei im `data_dir` mit dem
-  Pfad des entpackten Snapshots), `AppHandle::restart()`.
-- **Factory Reset.** Gating durchlaufen (Export-First-Pflicht etc.),
-  Passphrase-Verify, **Marker schreiben** (`.pending_factory_reset`),
+- **Restore** (`backup::restore::apply`). Format prüfen (1–2), Schema-Version
+  prüfen (heute exakt gleich; ältere Backups ab W7), **Pre-Restore-Backup** mit
+  der *aktuellen* Passphrase, Backup entschlüsseln + Content-Hash prüfen (unter
+  der `KDF`-Semaphore), ins Staging `restore-staging/` entpacken (Pfade je
+  Komponente geprüft), Marker vorbereiten (`RESTORE_PENDING.json.tmp`, `fsync`).
+  Erst nach dem Pflicht-Audit `backup.restore.staged` kommt der Marker per
+  `rename` an seinen Platz (W2): scheitert der Audit, wird der Restore beim
+  Neustart auch nicht angewendet.
+- **Factory Reset** (nur Desktop). Gating durchlaufen (Export-First-Pflicht
+  etc.), Passphrase-Verify, **Marker schreiben** (`FACTORY_RESET_PENDING.json`),
   `AppHandle::restart()`.
 
-In keiner der beiden Phasen wird der Pool geschlossen. Phase A endet mit
-einem Restart, der gesamte Prozess-State verschwindet.
+In Phase A wird der Pool nicht geschlossen. Phase A endet mit einem Neustart
+(Restore: vom Nutzer ausgelöst; Factory Reset: `AppHandle::restart()`); der
+gesamte Prozess-State verschwindet. Im Server beendet sich der Prozess nach dem
+Restore geordnet, sobald laufende Jobs fertig sind, und die Container-Verwaltung
+startet ihn neu (geplant W5).
 
-### Phase B (nächster App-Start, in `prepare_filesystem`)
+### Phase B (nächster Start, in `prepare_filesystem`, vor dem Pool-Open)
 
-- Datei `.pending_restore` ⇒ DB-Datei und Archiv atomar swappen
-  (`rename`-basiert), `PendingRestoreAudit` mit dem Audit-Event befüllen
-  (wird nach Pool-Open ins `audit_log` geschrieben).
-- Datei `.pending_factory_reset` ⇒ `data_dir`-Inhalt nuken, Kern-Verzeichnisse
-  leer neu anlegen, Keychain-Wipe-Best-Effort. **Off-Site-Backups** in Cloud/
-  SFTP bleiben unangetastet (das ist eine bewusste Architektur-Entscheidung —
-  GoBD und Geräte-Weitergabe trennen).
+**Restore** (`restore::apply_pending`) tauscht DB, `archive/` und ab Format 2
+`branding/` in drei Stufen. Den Fortschritt hält die Zustandsdatei
+`RESTORE_SWAP_STATE.json` fest (W2), jeweils atomar geschrieben (Temp-Datei,
+`fsync`, `rename`, Verzeichnis-`fsync`):
 
-Phase B läuft **vor** dem Pool-Open. Wenn dort etwas fehlschlägt, ist die
-DB-Datei in einem definierten Zustand (entweder noch alt oder schon neu, nie
-halb).
+1. Zustand `moving`. WAL/SHM der alten DB entfernen; die Originale per `rename`
+   beiseitelegen (`klein-buch.sqlite.rollback`, `archive.rollback`,
+   `branding.rollback`). Scheitert ein Schritt, werden die schon verschobenen
+   sofort zurückgeholt.
+2. Zustand `moved`. Kopie aus dem Staging, jede Datei mit `fsync`; danach das
+   Archiv wieder schreibgeschützt (`0o400`, dieselbe Funktion wie beim
+   Archivieren, W2). Scheitert die Kopie (auch der Schreibschutz), werden die
+   Teilkopien entfernt und die Originale zurückgeholt; gelingt das nicht
+   vollständig, bleibt der Zustand `moved` für den nächsten Start.
+3. Zustand `copied`. `.rollback`-Fassungen, Marker, Staging und Zustandsdatei
+   löschen.
 
-**Tests** (G1-HARDEN.1, G1-RESET-Tests): Roundtrip mit Crash zwischen Phase
-A und Phase B funktioniert (Marker bleibt, Phase B greift beim nächsten
-Start). Crash mitten in Phase B macht keinen halben Swap (atomic-rename
-oder Failure).
+**Wiederherstellung nach einem Abbruch** (`restore::recover_pending_rollback`,
+am Anfang von Phase B, also vor jedem Pool-Open und bevor `archive/` angelegt
+wird):
+
+| Zustand | Bedeutung | Aktion |
+|---|---|---|
+| `copied` | Kopie war vollständig | nur die `.rollback`-Fassungen löschen |
+| `moving` / `moved` | Tausch unvollständig | Teilkopien entfernen, Originale aus `.rollback` zurück; der Marker bleibt, der Tausch beginnt neu |
+| keine Zustandsdatei, aber `.rollback` vorhanden (älterer Stand) | unklar | **nichts löschen**: fehlt das Original, kommt die `.rollback`-Fassung zurück; sind beide da, wird die `.rollback`-Fassung als `.verworfen-<uuid>` beiseitegelegt |
+
+Der Audit `backup.restore.applied` wird nach dem Pool-Open geschrieben
+(`PendingRestoreAudit`). Scheitert er, schlägt das Entsperren fehl, und der
+Eintrag bleibt für den nächsten Versuch vorgemerkt.
+
+**Factory Reset** (nur Desktop): Datei `FACTORY_RESET_PENDING.json` ⇒
+`data_dir`-Inhalt leeren, Kern-Verzeichnisse leer neu anlegen,
+Keychain-Wipe best-effort. **Off-Site-Backups** in Cloud/SFTP bleiben
+unangetastet (bewusste Architektur-Entscheidung — GoBD und Geräte-Weitergabe
+trennen). Im Server-Modus ist der Factory Reset abgeschaltet (E7, Amendment
+ADR 0036); der Code entfällt in W11.
+
+**Tests** (G1-HARDEN.1, G1-RESET-Tests, Review W2): Roundtrip mit Crash
+zwischen Phase A und Phase B (Marker bleibt, Phase B greift beim nächsten
+Start); gezielt injizierte Fehler in Stufe 1 und Stufe 2 hinterlassen die
+Originale; nach Backup → Restore hat keine Datei unter `archive/` ein
+Schreibbit.
 
 ---
 
 ## 7. Encryption-Migration (Klartext → SQLCipher)
 
-Eine Installation, die vor G1-ENC angelegt wurde, hat eine **Klartext-DB**.
-Beim ersten Start mit der neuen App-Version läuft folgendes:
+Eine Installation, die vor G1-ENC angelegt wurde, hat eine **Klartext-DB**
+(erkannt an `db::db_file_is_plaintext`: die Datei beginnt mit
+`SQLite format 3\0`; SQLCipher verschlüsselt auch den Header). Sie wird beim
+Onboarding (Klartext-DB ohne Passphrase) bzw. beim ersten Entsperren (Klartext-DB
+mit Verifier; Passphrase per `backup::verify_passphrase` geprüft) einmalig
+verschlüsselt — `db::migrate_plaintext_to_encrypted`:
 
-1. `db::prepare_filesystem` sieht eine DB-Datei und keinen Verifier
-   (Klartext-DB hat den `key_verifier`-Eintrag nicht oder lesbar im
-   Klartext).
-2. Onboarding-Screen lädt mit Hinweis „Wir richten ab jetzt ein App-Passwort
-   ein, das gleichzeitig Ihre Daten verschlüsselt. **Pflicht-Pre-Migration-
-   Backup wird erstellt**, bevor wir die DB neu schreiben."
-3. Passphrase wird gesetzt.
-4. `backup::encrypt::migrate_plaintext_to_encrypted(old_path, passphrase)`:
-   - **Pre-Migration-Backup** anlegen (Klartext-DB als verschlüsselte Backup-
-     Hülle in Floor + Off-Site).
-   - SQLCipher öffnet eine neue verschlüsselte DB, `sqlcipher_export` aus der
-     alten Klartext-DB.
-   - **Probe-Lese** der neuen DB (öffnen + select count(*) auf jeder Kern-
-     Tabelle).
-   - Bei Erfolg: atomarer Swap (`rename` von alt nach `.bak` und neu nach
-     final-Pfad). Bei jedem Fehler bleibt die Klartext-DB intakt.
-5. Audit-Eintrag `db.encryption_migrated`.
+1. **Pflicht-Pre-Migration-Backup** (`create_now`, Auslöser `pre_restore`,
+   wird nie rotiert) mit der gerade bestätigten Passphrase. Scheitert es, wird
+   **nichts** verschlüsselt; die Klartext-DB bleibt unverändert.
+2. Audit `encryption.migration.started` noch in die Klartext-DB — er wandert mit
+   in den Export, der Audit-Trail bleibt lückenlos.
+3. Pool schließen, dann `db::encrypt_db_file_in_place`:
+   - Reste eines früheren Laufs (`<db>.enc-migrating` samt `-wal`/`-shm`)
+     entfernen.
+   - Eigene Einzelverbindung auf die Klartext-Quelle (Statement-Logging aus),
+     `PRAGMA wal_checkpoint(TRUNCATE)`, `ATTACH DATABASE '<db>.enc-migrating'
+     AS encrypted KEY …`, `SELECT sqlcipher_export('encrypted')`, `DETACH`.
+   - **Probe-Lesen** der Kopie mit der Passphrase. Scheitert es, wird die
+     Kopie gelöscht; die Klartext-DB bleibt unverändert.
+   - WAL/SHM von Kopie und Quelle entfernen (sonst würde SQLite die
+     Klartext-WAL auf die verschlüsselte Datei anwenden).
+   - **Atomarer `rename`** der Kopie auf den DB-Pfad. Neben der DB bleibt keine
+     Klartext-Kopie zurück.
+4. Pool mit Key neu öffnen, Migrationen + Schema-Check, Audit
+   `encryption.migration.applied`.
 
-Damit ist der Übergang reversibel, solange das `.bak` noch da ist. Nach
-manueller Bestätigung („Migration ok") wird `.bak` gelöscht.
+Der Rückweg ist das Pre-Migration-Backup (verschlüsselte `.kbk`), nicht eine
+Datei neben der DB.
+
+**Server-Betrieb:** Es gibt keinen Desktop-Bestand zu übernehmen (E17). Der
+Klartext-Übergangspfad wird entfernt (geplant W6); eine Klartext-DB lässt den
+Server nicht starten (geplant W5).
 
 ---
 
-## 8. Tamper vs. Waisen
+## 8. Integritätsprüfung: manipuliert, fehlt, nicht lesbar
 
-`scheduler::integrity_check_cron` läuft monatlich und unterscheidet zwei
-Befunde am Archiv:
+`scheduler::integrity_check_cron` prüft höchstens einmal je Kalendermonat
+(Monat in Europe/Berlin; nur abgeschlossene Läufe zählen, ein abgebrochener
+Scan markiert den Monat nicht als erledigt). Manuell: `archive_integrity_run`.
+Je Eintrag in `archive_entries` klassifiziert
+`archive::integrity_check::verify_one` genau einen Befund mit genau einem
+Audit-Eintrag:
 
-- **Tamper.** Datei existiert, aber SHA-256 stimmt nicht mit
-  `archive_entries.hash` überein. Audit-Event `archive.integrity_tamper`,
-  `archive_integrity_checks.tamper_archive_ids` += diese ID.
-- **Waisen** (G1-HARDEN.4). Datei existiert nicht mehr, aber
-  `archive_entries`-Eintrag schon. Audit-Event `archive.integrity_missing`,
-  `files_missing` += 1, `missing_archive_ids` += diese ID.
+| Befund | Erkennung | Audit |
+|---|---|---|
+| **in Ordnung** | Datei lesbar, Größe und SHA-256 stimmen | `archive.integrity_pass` |
+| **manipuliert** | Datei lesbar, Größe oder SHA-256 weicht ab | `archive.integrity_fail` |
+| **fehlt** (G1-HARDEN.4) | `metadata` liefert `NotFound` | `archive.integrity_missing` |
+| **nicht lesbar** (W2) | Datei oder Ordner vorhanden, aber Lese- bzw. Rechtefehler (z. B. `PermissionDenied`) | `archive.integrity_unreadable` |
 
-Eine Waise ist kein Tamper — sie kann auch eine schiefgegangene Sync,
-ein gelöschtes externes Backup-Volume oder ein verschobenes `archive/`
-sein. Sie ist trotzdem ein Problem, weil der Beleg dann nicht mehr lesbar
-ist; aber sie ist nicht „jemand hat die Datei manipuliert".
+Ein DB-Fehler bricht den Scan ab, statt als Manipulation zu zählen.
 
-Cron-Notification meldet beides getrennt: „X Manipulationen, Y verlorene
-Belege". `files_failed` (Summe der Probleme) bleibt ehrlich und ist die
-Headline-Zahl.
+**Warum getrennt?** Eine fehlende Datei kann auch eine schiefgegangene Sync,
+ein gelöschtes externes Volume oder ein verschobenes `archive/` sein. Eine nicht
+lesbare Datei ist meist ein Rechteproblem — im Container etwa eine falsche UID
+am Volume; ohne die Trennung wäre dann das ganze Archiv „manipuliert". Beides
+ist ein Problem, weil der Beleg nicht mehr lesbar ist, aber keines heißt „jemand
+hat die Datei verändert".
+
+**Ergebnis.** `archive_integrity_checks` hält das Aggregat: `files_failed` =
+manipuliert + fehlt (ehrliche Kopfzahl, IDs in `failed_archive_ids_json`). Nicht
+lesbare Dateien zählen **nicht** in `files_failed`, sondern gesondert im Ergebnis
+des Laufs und im Hinweis; die Historie in `archive_integrity_checks` speichert sie
+noch nicht (braucht eine Spalte, also eine Migration). Hinweise
+(auch nach einem manuellen Lauf): „Archiv-Integrität gestört" (dringend; nennt
+verändert und fehlend getrennt) und „Archiv-Dateien nicht lesbar" (Warnung).
+
+Der fachliche Lesepfad `archive::store::read_and_verify` prüft ebenfalls Größe
+und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
 
 ---
 
 ## 9. Versand-Sicherheit
 
-- **SMTP** läuft über `lettre` async mit **TLS oder STARTTLS** (kein Plain-
-  SMTP). Passphrase aus dem Keychain, Audit-Eintrag `mail.sent` ohne
-  Passphrase.
+- **SMTP** läuft über `lettre` async, standardmäßig mit **TLS** (Port 465)
+  oder **STARTTLS**. Ist im Konto TLS abgeschaltet, wird unverschlüsselt
+  gesendet — heute auch mit Zugangsdaten; im Server-Betrieb nur noch ohne
+  Zugangsdaten (geplant W8). Passwort aus dem Keychain (bis W8), Audit-Eintrag
+  `mail.sent` ohne Passwort.
 - **OAuth/Graph** läuft über `oauth2` mit **PKCE-S256**, Loopback-Capture
   des Redirects auf `127.0.0.1:<random>`. Refresh-Token ins Keychain gechunkt,
-  Access-Token nur im Memory.
+  Access-Token nur im Memory. **Im Server-Modus ausgeblendet** (E9; Commands
+  gesperrt ab W5).
 - Jeder Versand-Versuch (erfolgreich oder nicht) landet im append-only
   `email_log`. Provider-Antwort wird kanonisiert (Header-Stripping) und
   gespeichert — kein OAuth-Token darin.
@@ -316,23 +689,103 @@ Headline-Zahl.
 
 ## 10. Was nicht im Scope ist
 
-- **Multi-User / Rollen.** Klein.Buch ist Single-User. Jeder, der die
-  Passphrase hat, ist der Inhaber. Wer mehrere Personen Zugriff geben will,
-  muss das auf OS-Ebene lösen (Mehrbenutzer-Konten, getrennte Passphrasen
-  pro Profil).
-- **Cloud-Hosted-Variante.** v1.0 ist local-only. Eine Hosted-Variante
-  bräuchte DSGVO-AVV, Server-Backup-Konzept, ISO-27001-Spuren — das ist
-  Post-v1.0, eigene Produkt-Linie.
+- **Multi-User / Rollen.** Klein.Buch ist Single-User, auch im Server-Betrieb
+  (E1): eine Instanz = ein Nutzer = ein Unternehmen. Wer die Passphrase (und
+  im Server den zweiten Faktor) hat, ist der Inhaber. Wer mehreren Personen
+  Zugriff geben will, betreibt getrennte Instanzen.
+- **SaaS / Mandantenbetrieb.** Selbst gehosteter Betrieb einer eigenen Instanz
+  ist mit Phase W vorgesehen (ADR 0039). Ein gehosteter Dienst für Dritte
+  bräuchte Mandantentrennung, DSGVO-AVV und ein Betriebskonzept — das ist eine
+  eigene Produkt-Linie.
 - **Anti-Forensik / Plausible Deniability.** Wer eine verschlüsselte DB
   hat, hat eine. Klein.Buch behauptet nicht, dass die *Existenz* der DB
   verborgen wäre.
-- **Hardware-Token.** Yubikey/Smartcard-Auth ist nicht vorgesehen. Passphrase
-  in einem guten Passwort-Manager ist die empfohlene Praxis.
+- **Hardware-Token.** Yubikey/Smartcard/WebAuthn sind nicht vorgesehen. Im
+  Server-Betrieb ist TOTP der zweite Faktor (geplant W6); die Passphrase gehört
+  in einen guten Passwort-Manager.
+- **Physische Unveränderbarkeit des Archivs (WORM).** Siehe „Write-once unter
+  Linux".
+
+---
+
+## Write-once unter Linux
+
+**Was der Code tut** (`archive::store`, W2). Eine Archivdatei entsteht als
+Temp-Datei mit eindeutigem Namen (`.<name>.<uuid>.tmp`, `create_new`) im
+Zielordner, wird mit `fsync` geschrieben, **vor** dem Sichtbarwerden
+schreibgeschützt (`0o400`) und per `hard_link` an den Zielnamen gebracht; der
+Hardlink scheitert, wenn das Ziel schon existiert, es wird also nie
+überschrieben. Auf Dateisystemen ohne Hardlinks fällt der Code auf `rename`
+nach vorheriger Prüfung zurück; das ist ohne No-Clobber-Garantie (die Sperre je
+Pfad mildert es), deshalb gehören DB und Archiv nicht auf solche Dateisysteme.
+Danach wird der Temp-Name entfernt und der Ordner per `fsync` festgeschrieben
+(best-effort). Prüfen, Schreiben und `archive_entries`-INSERT laufen unter einer
+Sperre je Zielpfad (`locks::ARCHIVE_PATHS`), das Festschreiben einer Rechnung
+unter einer Sperre je Rechnung (`locks::INVOICES`).
+
+- Liegt am Zielpfad eine **nicht registrierte** Datei (Rest eines Abbruchs),
+  wird sie als `.<name>.orphan-<uuid>` beiseitegelegt — nie gelöscht — und im
+  Audit `archive.store` vermerkt.
+- Liegt dort ein **registrierter** Eintrag mit anderem Inhalt, ist das ein
+  Fehler; wird ein Beleg nach einem Abbruch neu erzeugt, weicht der Code auf eine
+  neue Dateiversion aus (`RE-…-2.pdf`). Der alte Eintrag bleibt unverändert im
+  Archiv.
+- `trg_archive_no_update` verbietet Änderungen an Pfad, Hash und Größe in
+  `archive_entries`.
+- Nach einem Restore wird das Archiv wieder auf `0o400` gesetzt (§6).
+
+**Was `0o400` nicht leistet.** Unter Linux schützt der Modus nur vor
+versehentlichem Überschreiben des Inhalts. Er verhindert **nicht**:
+
+- dass derselbe Benutzer (die UID des Servers) den Modus zurücksetzt — der
+  Eigentümer darf `chmod`;
+- dass dieser Benutzer die Datei **löscht oder umbenennt** — dafür zählt das
+  Schreibrecht auf den Ordner, und das braucht der Server, um neue Belege
+  abzulegen;
+- dass eine andere Datei unter demselben Namen abgelegt wird, nachdem die
+  alte gelöscht wurde;
+- Eingriffe von root auf dem Host oder von jedem, der das Volume direkt
+  einbindet.
+
+Ein Unveränderbar-Attribut (`chattr +i`) verlangt `CAP_LINUX_IMMUTABLE`, das ein
+Nicht-root-Container ohne Capabilities nicht hat. Klein.Buch verspricht unter
+Linux deshalb **keine physische Unveränderbarkeit**.
+
+**Worauf der Schutz beruht: Erkennung und Wiederherstellbarkeit.**
+
+1. **SHA-256 beim Schreiben** — Hash, Größe und Pfad stehen unveränderlich in
+   `archive_entries` (in der verschlüsselten DB).
+2. **Re-Hash beim Lesen** — `read_and_verify` liefert bei Abweichung einen
+   Fehler statt der Bytes; im Server läuft jeder Download darüber (geplant W7).
+3. **Monatlicher Integritätslauf** (§8) — manipulierte, fehlende und nicht
+   lesbare Dateien werden getrennt gemeldet, Manipulation und Verlust als
+   dringender Hinweis.
+4. **Off-Site-Backups** — verschlüsselt, mit Archiv, lange aufbewahrt
+   (30 tägliche / 12 monatliche / 7 jährliche). Eine veränderte oder gelöschte
+   Datei lässt sich aus einem älteren Backup zurückholen.
+5. **Snapshots des Dateisystems beim Betreiber** — schreibgeschützte Snapshots
+   des Daten-Volumes (z. B. ZFS oder Btrfs) liegen außerhalb der Reichweite des
+   Server-Benutzers. Das ist Betriebsaufgabe und wird im Betriebshandbuch
+   empfohlen (W13).
+
+Ergänzend (geplant): Selbsttest beim Start (`chmod 0400` im Archiv anlegen und
+prüfen; scheitert er, etwa wegen NFSv4-ACLs, startet der Server nicht, W5) und
+der Hinweis, DB und Archiv nicht auf NFS/SMB zu legen (W13).
+
+**Was bleibt.** Wer Code als Server-Benutzer ausführt, kann Archivdateien löschen
+oder ersetzen. Klein.Buch bemerkt das spätestens beim nächsten Lesen oder
+Integritätslauf; zurückholen lässt es sich nur aus Backups oder Snapshots, die
+dieser Benutzer nicht erreicht.
 
 ---
 
 ## Letzte Verifikation
 
-Stand: 2026-05-26, ADRs 0009/0034/0035/0036. Quelle: `src/backup/`,
-`src/db/` (Pool-Open + Bootstrap), `src/mail/keyring.rs`, Cargo.toml
-(libsqlite3-sys-Pin).
+Stand: 2026-10-23 (Phase W nach W1/W2, Version 2026.5.1, Schema v30), ADRs
+0009/0034/0035/0036/0039. Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`,
+`restore.rs`, `target.rs`, `sftp.rs`, `manifest.rs`, `encrypt.rs`,
+`rotation.rs`), `src/db/mod.rs` (Pool-Open, Bootstrap, Verschlüsselungs-
+Migration), `src/archive/store.rs`, `src/archive/integrity_check.rs`,
+`src/scheduler/integrity_check_cron.rs`, `src/limits.rs`, `src/locks.rs`,
+`src/mail/keyring.rs`, `src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin);
+Planwerte aus dem Arbeitsplan Phase W (Blöcke W5–W13).

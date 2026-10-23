@@ -24,6 +24,7 @@ Total-Löschung).
 3. **Archive ist write-once.** Beleg-PDF und -XML werden mit SHA-256 in
    `archive/` abgelegt, `chmod 0o400` (read-only), `trg_archive_no_update`
    schützt `hash`/`path`/`size`. Re-Hash beim Lesen detektiert Tamper.
+   Unter Linux heißt das Erkennung, nicht Verhinderung (§3.4).
 4. **Audit-Log ist append-only.** Triggers verbieten UPDATE und DELETE auf
    `audit_log`.
 5. **Aufbewahrung 10 Jahre.** Es gibt kein Löschen-UI für Belege.
@@ -101,38 +102,76 @@ Korrigieren funktioniert nur per Insert eines neueren Datensatzes.
 
 ### 3.1 Schreiben
 
-`archive::store(kind, bytes)`:
+`archive::store::store_bytes(pool, archive_root, fiscal_year, kind,
+file_name, mime_type, bytes)`:
 
-1. UUIDv7 generieren.
-2. Datei nach `%APPDATA%\…\archive\{YYYY}\{kind}\{uuid}.{ext}` schreiben.
-3. SHA-256 berechnen.
-4. `archive_entries`-Insert: `(id, kind, path, hash, size_bytes, created_at)`.
-5. `chmod 0o400` (read-only) — auf Windows entsprechend
-   `FILE_ATTRIBUTE_READONLY` + ACL.
+1. Dateiname prüfen (nicht leer, kein `/`, `\`, `:`); SHA-256 und Größe
+   berechnen.
+2. Zielpfad `<archive_dir>/<Geschäftsjahr>/<kind>/<file_name>`, z. B.
+   `2026/invoices/pdf/RE-2026-0001.pdf`.
+3. Sperre je Zielpfad (`locks::ARCHIVE_PATHS`): Prüfen, Schreiben und Insert
+   laufen am Stück.
+4. Schreiben (Phase W, W2): Temp-Datei mit eindeutigem Namen
+   (`.<name>.<uuid>.tmp`, `create_new`), `fsync`, Schreibschutz `0o400`
+   (Windows: `FILE_ATTRIBUTE_READONLY`) **vor** dem Sichtbarwerden, dann
+   `hard_link` an den Zielnamen. Der Hardlink scheitert, wenn das Ziel schon
+   existiert — überschrieben wird nie (Ausnahme: Dateisysteme ohne Hardlinks,
+   dort `rename` nach vorheriger Prüfung unter der Pfad-Sperre). Temp-Name
+   entfernen, Ordner-`fsync`.
+5. `archive_entries`-Insert `(id UUIDv7, file_path UNIQUE, file_name,
+   file_hash_sha256, file_size_bytes, mime_type, source)` + Audit
+   `archive.store`.
 
-**Idempotenz.** Vor dem Schreiben wird über den Hash gesucht. Wenn ein
-Eintrag mit demselben Hash existiert, wird die existierende ArchiveId
-zurückgegeben — keine Duplikate.
+**Datei am Zielpfad schon vorhanden:**
+
+- gleicher Hash, registriert → der bestehende Eintrag wird zurückgegeben
+  (idempotent, keine Duplikate);
+- gleicher Hash, nicht registriert → nur der Insert wird nachgeholt;
+- anderer Hash, nicht registriert (Rest eines abgebrochenen Laufs) → die Datei
+  wird als `.<name>.orphan-<uuid>` beiseitegelegt, **nie gelöscht**, neu
+  geschrieben und im Audit vermerkt;
+- anderer Hash, registriert → Fehler „existiert bereits mit anderem Hash".
+  Beim Festschreiben einer Rechnung (PDF und XML) weicht der Code stattdessen
+  auf eine neue Dateiversion aus (`RE-2026-0001-2.pdf`, …): ein neuer Versuch
+  nach einem Abbruch erzeugt andere Bytes (Zeitstempel). Der alte Eintrag
+  bleibt unverändert im Archiv, der Beleg verweist auf die neue Version.
 
 ### 3.2 Lesen + Re-Hash
 
-`archive::store::read(archive_id)`:
+`archive::store::read_and_verify(pool, archive_id)`:
 
-1. `archive_entries` lookup → `(path, hash)`.
+1. `archive_entries` lookup → `(file_path, hash, size)`.
 2. Datei lesen.
-3. SHA-256 neu berechnen.
-4. Mismatch ⇒ `archive.integrity_tamper`-Audit + Fehler.
-5. Datei nicht vorhanden ⇒ `archive.integrity_missing`-Audit + Fehler.
+3. Größe und SHA-256 vergleichen.
+4. Abweichung ⇒ Fehler („archive tamper"), keine Bytes.
+5. Erfolg ⇒ Audit `archive.read` (der Integritätslauf nutzt eine Variante ohne
+   diesen Audit).
 
-**Wichtig** (G1-HARDEN.4): Tamper und Waisen sind **getrennte** Events. Eine
-fehlende Datei ist nicht automatisch eine Manipulation — sie kann auch ein
-verschwundenes Backup-Volume sein. Der Cron meldet beides, aber getrennt.
+**Wichtig** (G1-HARDEN.4, W2): Manipuliert, fehlt und nicht lesbar sind
+**getrennte** Befunde. Eine fehlende Datei ist nicht automatisch eine
+Manipulation — sie kann auch ein verschwundenes Backup-Volume sein; eine nicht
+lesbare Datei ist meist ein Rechteproblem. Der Cron meldet sie getrennt.
 
 ### 3.3 Re-Hash-Cron
 
-`scheduler::integrity_check_cron` läuft monatlich. Resultat landet in
-`archive_integrity_checks` (Aggregat) und produziert pro Fund ein Audit-Event.
-Manuelle Trigger über `commands::system::archive_integrity_run`.
+`scheduler::integrity_check_cron` läuft höchstens einmal je Kalendermonat.
+Je Eintrag entsteht genau ein Audit-Event (`archive.integrity_pass`,
+`_fail`, `_missing`, `_unreadable`); das Aggregat landet in
+`archive_integrity_checks`. Manuelle Trigger über
+`commands::system::archive_integrity_run`. Details in `security.md` §8.
+
+### 3.4 Write-once unter Linux (Phase W)
+
+Im Server-Betrieb (Docker, ADR 0039) ist `0o400` nur ein Schreibschutz für den
+Inhalt. Derselbe Benutzer, unter dem der Server läuft, kann den Modus
+zurücksetzen und Dateien löschen oder umbenennen (dafür zählt das Schreibrecht
+auf den Ordner, das der Server zum Ablegen neuer Belege braucht); root auf dem
+Host ohnehin. Klein.Buch verspricht unter Linux deshalb keine physische
+Unveränderbarkeit. Der Schutz beruht auf **Erkennung und Wiederherstellbarkeit**:
+SHA-256 beim Schreiben, Re-Hash beim Lesen, monatlicher Integritätslauf,
+Off-Site-Backups und schreibgeschützte Snapshots des Dateisystems beim
+Betreiber. Begründung und Einzelheiten: `security.md`, Kapitel „Write-once
+unter Linux".
 
 ---
 
@@ -145,8 +184,8 @@ trivialen Mutationen schreiben einen Eintrag:
   `invoice.canceled` (für Storno-Erzeugung), `quote.created`/`issued`/
   `accepted`/`rejected`/`converted`/`canceled`, `expense.created`,
   `private_movement.created`.
-- Archiv: `archive.stored`, `archive.integrity_tamper`,
-  `archive.integrity_missing`.
+- Archiv: `archive.store`, `archive.read`, `archive.integrity_pass`, `archive.integrity_fail`,
+  `archive.integrity_missing`, `archive.integrity_unreadable` (W2).
 - Fiskal: `fiscal_year.closed`, `fiscal_year.reopened` (gibt es nicht — der
   Eintrag würde fehlen, weil close unumkehrbar ist).
 - AfA: `depreciation.accrued`, `depreciation.year_locked`.
@@ -272,7 +311,7 @@ der App rauskramen konnte) und versucht einen Beleg zu ändern.
   nicht in der App. Wer in SQLCipher-CLI einen UPDATE auf einer gelockten
   Rechnung versucht, bekommt einen RAISE-Fehler.
 - **Archive-Hash.** Wer das gelagerte PDF/XML ändert, fliegt beim nächsten
-  Re-Hash auf — Audit-Eintrag `archive.integrity_tamper`. Der gelagerte
+  Re-Hash auf — Audit-Eintrag `archive.integrity_fail`. Der gelagerte
   Beleg ist dann zwar manipuliert, aber das System merkt es und sagt es laut.
 - **Audit-Append-only.** Eine direkte Manipulation der Audit-Tabelle
   scheitert am `trg_audit_no_update`/`_no_delete`. Wer die Trigger droppt,
@@ -320,3 +359,5 @@ GoBD-Tests sind verteilt:
 Stand: 2026-05-26, Schema v27, ADRs 0006/0027/0036. Quelle:
 `klein-buch/src-tauri/migrations/*.sql` (Trigger-Definitionen) +
 `src/archive/`, `src/fiscal_year/`, `src/backup/factory_reset.rs`.
+§3 (Archiv) nachgezogen am 2026-10-23 gegen `src/archive/store.rs`,
+`src/archive/integrity_check.rs` und `src/locks.rs` (Phase W, Stand nach W2).

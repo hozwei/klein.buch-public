@@ -220,3 +220,27 @@ G1-BKP.3 fertig), `db::repo::backup_log` (geplant), Migration `0026_backup_log`
 (geplant), Frontend `routes/settings/backup` + Log-Ansicht; ADR 0009
 (Backup-Krypto), ADR 0035 (Verschlüsselung at Rest), ADR 0027 (Reminder).
 RELEASE-1.0-GUIDE.md §G1.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · Phase W (Umsetzung Block W7). Im Container liegen DB,
+Archiv und Floor (`/data/backups`) auf demselben Volume, einen Sync-Ordner des
+Desktops gibt es nicht (ADR 0039, E8).
+
+- **Off-Site wird Pflicht.** Fehlt ein funktionierendes Off-Site-Ziel, erzeugt die
+  App eine Inbox-Warnung; der Status `offsite` = `missing` | `failing` | `ok`
+  steht im Übersichts-Banner und im Loopback-`/healthz`. Das Festschreiben wird
+  **nicht** blockiert (Floor bleibt der Boden, Mirror-Fehler nie fatal, G1-BKP.4).
+- **Ziele:** Verzeichnis-Ziele nur unter den Mount-Wurzeln `/backup-targets/…`
+  (Allowlist, Pfad per `canonicalize` geprüft, Symlinks nach draußen abgelehnt);
+  dort bindet der Betreiber z. B. einen Sync-Client-Ordner oder eine
+  Netzwerkfreigabe des Hosts ein. Dazu SFTP (eigener Server, zweites Gerät im
+  LAN, Anbieter mit SFTP-Zugang). Keine Cloud-API im Code (Pt. 1 bleibt).
+- **Mehrere Ziele gleichzeitig:** `app_settings`-Key `backup_targets` als
+  JSON-Array `{id, kind, label, …}` mit Lesefallback auf `backup_target`, ohne
+  Migration. Jedes Backup geht auf jedes Ziel; Fehler je Ziel als eigene
+  `backup_log`-Zeile (`target_kind`/`target_label`), Rotation und Historie je
+  Ziel. Fällt ein Ziel aus, werden die übrigen trotzdem geschrieben.
+- **Entfällt:** OneDrive-/iCloud-Erkennung (Pt. 2) und die Ordner-Dialoge der
+  Desktop-App. Das SFTP-Passwort zieht vom OS-Keychain in die verschlüsselte
+  Secret-Tabelle (Block W8, Amendment ADR 0011/0028).

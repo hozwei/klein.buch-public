@@ -1,6 +1,16 @@
 # ADR 0002 — App-Shell Tauri 2 + Rust-Backend
 
-**Status:** Akzeptiert · 2026-05-19 · Block 1. (Decision-Log D-01, D-02)
+**Status:** Akzeptiert · 2026-05-19 · Block 1. (Decision-Log D-01, D-02) · **Abgelöst durch ADR 0039 (2026-10-23)**
+
+## Abgelöst (2026-10-23)
+
+Klein.Buch läuft seit Phase W als Webapp im öffentlichen Docker-Image, aus dem
+Internet erreichbar und für genau einen Nutzer pro Instanz; Tauri und die
+Desktop-App entfallen ohne Parallelbetrieb. Damit wird die unten verworfene
+Alternative „Reines Web + lokaler Server“ unter den neuen Anforderungen
+(Internetbetrieb, ein Nutzer, Docker) gewählt; Port und Prozess verwaltet der
+Container. Rust-Backend, Svelte-Frontend und die explizite Command-Grenze bleiben,
+nur die Shell wechselt zu einem HTTP-Server (axum). Begründung: ADR 0039.
 
 ## Kontext
 

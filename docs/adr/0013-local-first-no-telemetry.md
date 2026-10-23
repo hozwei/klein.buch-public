@@ -26,3 +26,23 @@ Datensparsamkeit und Nachvollziehbarkeit, nicht aus Cloud-Komfort.
 ## Referenzen
 
 CLAUDE.md „Local-First strict"; PRD §4.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039, E1/E14; Umsetzung Blöcke W5, W12).
+Klein.Buch läuft als Server im Container, der Nutzer arbeitet im Browser. Das ändert den
+Netzwerk-Teil dieser Entscheidung, nicht ihren Kern:
+
+- **Eingehend:** ein HTTP-Listener für den Browser-Zugriff, vorgesehen hinter einem
+  Reverse-Proxy mit TLS. Ohne Sitzung erreichbar sind nur Einrichtung/Anmeldung,
+  `GET /api/public/info`, `/healthz` und `/legal/` (ADR 0039).
+- **Weiterhin keine Telemetrie, kein Auto-Update, kein Cloud-Sync**, kein
+  Crash-/Usage-Reporting.
+- **Neu, nur opt-in:** eine Versionsprüfung gegen die GitHub-Releases des öffentlichen
+  Repositorys. Außer der Abfrage selbst werden keine Daten gesendet; Name und Link einer neuen
+  Version erscheinen als Text (nie HTML) in der Inbox. Ohne Opt-in keine Verbindung.
+- **Das Update löst der Betreiber aus**, in seiner Container-Verwaltung. Die App tauscht ihr
+  Image nicht selbst: Dafür bräuchte sie `docker.sock`, also praktisch root auf dem Host, was
+  für einen aus dem Internet erreichbaren Dienst ausgeschlossen ist (ADR 0039, E14).
+- **Ausgehend** nur: Versand (SMTP), Off-Site-Backup (SFTP, ADR 0034) und die opt-in
+  Versionsprüfung. Der Sidecar läuft lokal im Container.

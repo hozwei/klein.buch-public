@@ -293,3 +293,26 @@ Frontend `routes/expenses/[id]/+page.svelte` (Roh-XML-Modal),
 Verwandte ADRs: 0024 (E-Rechnung-Empfang), 0023 (Scheduler-Modell), 0006
 (GoBD-Archiv), 0027 (Notifications + GJ-Lock + Integrity-Cron).
 PRD: `PRD-klein-buch.md` Revision 7.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · Phase W (Umsetzung Block W7). Betrifft nur den
+Drop-Folder (D-71, D-74 bis D-79); Profil-Whitelist (D-73) und Roh-XML-Viewer
+(D-72, D-80) bleiben unverändert.
+
+- **Rechnungseingang per Upload im Browser** statt überwachtem Ordner (ADR 0039,
+  E11). Im Container gibt es keinen Ordner, den ein Mail- oder Sync-Client des
+  Nutzers befüllt; der Upload funktioniert dagegen von jedem Gerät, auch mobil.
+- **Weg:** `POST /api/upload/…` (multipart, gestreamt), danach dieselbe Pipeline
+  wie bisher (`einvoice::parser`, KoSIT beratend, `expenses_create_from_einvoice`,
+  Lock + Archiv). Der Grundsatz „ein Pipeline-Pfad“ aus D-74/D-77 bleibt.
+- **Prüfung vor der Pipeline:** Dateityp per Magic Bytes gegen die
+  Upload-Allowlist (u. a. PDF und UTF-8-XML), `mime_type` aus dieser Prüfung statt
+  aus der Dateiendung; Größenlimit 10 MiB je E-Rechnung; freier Speicherplatz wird
+  vor dem Archivieren geprüft.
+- **Entfällt:** `drop_folder_settings_get/_set` und `drop_folder_sync_now` sind ab
+  Block W5 gesperrt, der Tick-Job verlässt `run_tick` (Amendment ADR 0023); die
+  Seite `settings/drop-folder` entfällt in Block W9, Drop-Folder-Code und
+  `tests/drop_folder_sync_test.rs` in Block W11.
+- **Migration `0029_drop_folder.sql` bleibt** (forward-only, ebenso `0030`); ihre
+  Settings-Keys und Notification-Regeln sind im Server-Betrieb ohne Wirkung.
