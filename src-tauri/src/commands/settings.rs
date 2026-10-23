@@ -240,7 +240,7 @@ pub async fn pdf_template_preview(
         }
     ]);
 
-    let pdf = crate::pdf::typst_render::render_invoice(
+    let pdf = crate::pdf::typst_render::invoice_job(
         &source,
         "MUSTER-2026-0001",
         &input,
@@ -251,7 +251,9 @@ pub async fn pdf_template_preview(
         Some("Max Mustermann"),
         &accounts_json,
         true,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
     let dir = paths.data_dir.join("preview");
     std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("preview-Ordner: {e}")))?;

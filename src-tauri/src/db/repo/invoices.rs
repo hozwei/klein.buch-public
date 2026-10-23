@@ -101,7 +101,7 @@ pub async fn create_draft(
         crate::domain::invoice::InvoiceDirection::Received => "received",
     };
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO invoices (
@@ -346,7 +346,7 @@ pub async fn lock_with_pair_cancel(
     update: &LockUpdate<'_>,
     pair: Option<PairCancel<'_>>,
 ) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     // Vor-Check: schon gelockt? Lesen INNERHALB der TX, damit der WHERE-Guard
     // im UPDATE-Statement gegen TOCTOU-Races zwischen Pre-Check und UPDATE
@@ -441,7 +441,7 @@ pub async fn record_payment(
         )));
     }
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     let invoice = sqlx::query(
         "SELECT gross_amount_cents, paid_amount_cents, payment_history_json, status, locked_at

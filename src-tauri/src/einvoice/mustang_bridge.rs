@@ -216,6 +216,11 @@ async fn run_launcher(
         "Mustang-Sidecar startet: {action_label} ({}).",
         launcher.display()
     );
+    // Plan W2.6: höchstens `limits::JVM` gleichzeitige Java-Starts.
+    let _jvm = crate::limits::JVM
+        .acquire()
+        .await
+        .map_err(|e| Error::Sidecar(format!("JVM-Semaphore: {e}")))?;
     let mut cmd = tokio::process::Command::new(launcher);
     cmd.args(args).current_dir(cwd).kill_on_drop(true);
     let output = match tokio::time::timeout(

@@ -3652,6 +3652,7 @@ dependencies = [
  "keyring",
  "lettre",
  "libsqlite3-sys",
+ "log",
  "lopdf",
  "pulldown-cmark",
  "quick-xml 0.36.2",
@@ -3682,6 +3683,7 @@ dependencies = [
  "typst-utils",
  "url",
  "uuid",
+ "zeroize",
  "zip",
 ]
 

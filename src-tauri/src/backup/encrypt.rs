@@ -41,6 +41,15 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
     buf
 }
 
+/// Wie [`derive_key`], aber außerhalb der async-Runtime und durch
+/// [`crate::limits::KDF`] begrenzt (Plan W2.6) — Argon2id braucht 64 MiB und
+/// spürbar CPU-Zeit.
+pub async fn derive_key_async(passphrase: &str, salt: &[u8]) -> Result<[u8; KEY_LEN]> {
+    let pass = zeroize::Zeroizing::new(passphrase.as_bytes().to_vec());
+    let salt = salt.to_vec();
+    crate::limits::run_blocking(&crate::limits::KDF, move || derive_key(&pass, &salt)).await
+}
+
 /// Leitet aus Passphrase + Salt den 32-Byte-AES-Schlüssel ab (Argon2id).
 pub fn derive_key(passphrase: &[u8], salt: &[u8]) -> Result<[u8; KEY_LEN]> {
     if salt.len() < 8 {

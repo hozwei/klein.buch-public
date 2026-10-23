@@ -10,7 +10,7 @@
 
 use crate::{
     archive::{audit, store},
-    error::Result,
+    error::{Error, Result},
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -30,6 +30,11 @@ pub struct IntegrityCheckSummary {
     pub failed_archive_ids: Vec<String>,
     /// Nur die verwaisten Einträge (Datei nicht mehr vorhanden).
     pub missing_archive_ids: Vec<String>,
+    /// Plan W2.2: Dateien, die vorhanden, aber nicht lesbar sind (z. B.
+    /// fehlende Rechte). **Nicht** in `files_failed` — kein Manipulationsbefund,
+    /// aber ein Betriebsproblem, das gemeldet wird.
+    pub files_unreadable: i64,
+    pub unreadable_archive_ids: Vec<String>,
 }
 
 /// Ergebnis der Verifikation eines einzelnen Archiv-Eintrags (G1-HARDEN.4).
@@ -42,6 +47,9 @@ pub enum VerifyOutcome {
     /// Datei fehlt — verwaister `archive_entries`-Eintrag. **Sauberes Skip**
     /// statt Lese-Fehler; eigener Audit-Eintrag (`archive.integrity_missing`).
     Missing,
+    /// Plan W2.2: Datei vorhanden, aber nicht lesbar (z. B. `PermissionDenied`).
+    /// Kein Tamper; eigener Audit-Eintrag (`archive.integrity_unreadable`).
+    Unreadable,
 }
 
 /// Verifiziert einen einzelnen Archive-Eintrag und **klassifiziert** das
@@ -90,6 +98,23 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 .await?;
             Ok(VerifyOutcome::Pass)
         }
+        // Plan W2.2: Lese-/Rechtefehler sind keine Manipulation.
+        Err(Error::Io(e)) => {
+            audit::archive_event(
+                pool,
+                audit::ArchiveAction::IntegrityUnreadable,
+                archive_id,
+                Some(&format!(
+                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
+                    escape(&path),
+                    e.kind()
+                )),
+            )
+            .await?;
+            Ok(VerifyOutcome::Unreadable)
+        }
+        // DB-Fehler brechen den Scan ab, statt als Tamper zu zählen.
+        Err(e @ Error::Db(_)) => Err(e),
         Err(e) => {
             let msg = format!("{e}");
             audit::archive_event(
@@ -124,11 +149,13 @@ pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
     let mut passed = 0i64;
     let mut tampered_ids: Vec<String> = Vec::new();
     let mut missing_ids: Vec<String> = Vec::new();
+    let mut unreadable_ids: Vec<String> = Vec::new();
     for id in &ids {
         match verify_one(pool, id).await? {
             VerifyOutcome::Pass => passed += 1,
             VerifyOutcome::Tampered => tampered_ids.push(id.clone()),
             VerifyOutcome::Missing => missing_ids.push(id.clone()),
+            VerifyOutcome::Unreadable => unreadable_ids.push(id.clone()),
         }
     }
 
@@ -165,6 +192,8 @@ pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
         files_missing: missing_ids.len() as i64,
         failed_archive_ids: failed_ids,
         missing_archive_ids: missing_ids,
+        files_unreadable: unreadable_ids.len() as i64,
+        unreadable_archive_ids: unreadable_ids,
     })
 }
 
@@ -257,6 +286,51 @@ mod tests {
         assert_eq!(sum.files_passed, 3);
         assert_eq!(sum.files_failed, 0);
         assert!(sum.failed_archive_ids.is_empty());
+    }
+
+    /// Plan W2.2: eine nicht lesbare Datei (fehlende Rechte) ist **kein**
+    /// Tamper-Befund, sondern `Unreadable` mit eigenem Audit-Eintrag.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn permission_denied_is_unreadable_not_tampered() {
+        use std::os::unix::fs::PermissionsExt;
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let r = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0001.pdf",
+            "application/pdf",
+            b"intakt",
+        )
+        .await
+        .unwrap();
+        fs::set_permissions(&r.file_path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&r.file_path).is_ok() {
+            // Läuft als root (Rechte greifen nicht) — Szenario nicht herstellbar.
+            fs::set_permissions(&r.file_path, fs::Permissions::from_mode(0o600)).unwrap();
+            return;
+        }
+
+        assert_eq!(
+            verify_one(&pool, &r.archive_id).await.unwrap(),
+            VerifyOutcome::Unreadable
+        );
+        let sum = run_full_scan(&pool).await.unwrap();
+        assert_eq!(sum.files_failed, 0, "kein Tamper-/Missing-Befund");
+        assert_eq!(sum.files_unreadable, 1);
+        assert_eq!(sum.unreadable_archive_ids, vec![r.archive_id.clone()]);
+        let fails: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'archive.integrity_fail'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(fails, 0);
+
+        fs::set_permissions(&r.file_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     #[tokio::test]

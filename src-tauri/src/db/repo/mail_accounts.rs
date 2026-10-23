@@ -50,7 +50,7 @@ pub async fn create(pool: &SqlitePool, input: &MailAccountInput) -> Result<MailA
     // Passphrase ab (user "smtp"), oauth_microsoft die Token-Bundle (user "oauth").
     let keychain_service_id = Some(crate::mail::keyring::service_id(&id));
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     if input.is_default {
         sqlx::query("UPDATE mail_accounts SET is_default = 0")
             .execute(&mut *tx)
@@ -130,7 +130,7 @@ pub async fn update(
     id: &str,
     input: &MailAccountInput,
 ) -> Result<MailAccountRow> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     if input.is_default {
         sqlx::query("UPDATE mail_accounts SET is_default = 0 WHERE id != ?")
             .bind(id)

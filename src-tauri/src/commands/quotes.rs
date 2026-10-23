@@ -778,7 +778,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
             .collect(),
     );
 
-    let pdf_bytes = typst_render::render_quote(
+    let pdf_bytes = typst_render::quote_job(
         &source,
         &quote.quote_number,
         &input,
@@ -790,7 +790,9 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         signature_enabled,
         owner_name.as_deref(),
         &accounts_json,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
     let stored = archive::store_bytes(
         pool,

@@ -139,13 +139,25 @@ pub async fn apply(
     // Pre-Restore-Backup (Pflicht) mit der aktuellen Session-Passphrase.
     let pre = create_now(pool, paths, &current, "pre_restore").await?;
 
-    // Entschlüsseln + Content-Hash prüfen.
-    let (_m, content_zip) = decrypt_backup(&file_bytes, passphrase)?;
+    // Entschlüsseln + Content-Hash prüfen — Argon2id/AES außerhalb der Runtime,
+    // KDF begrenzt (Plan W2.6).
+    let content_zip = {
+        let pass = zeroize::Zeroizing::new(passphrase.to_string());
+        crate::limits::run_blocking(&crate::limits::KDF, move || {
+            decrypt_backup(&file_bytes, &pass).map(|(_m, content)| content)
+        })
+        .await?
+    };
 
-    // Ins Staging entpacken.
+    // Ins Staging entpacken (ebenfalls blockierende Arbeit).
     let staging = paths.data_dir.join(RESTORE_STAGING);
     reset_dir(&staging)?;
-    extract_zip(&content_zip, &staging)?;
+    {
+        let staging = staging.clone();
+        tokio::task::spawn_blocking(move || extract_zip(&content_zip, &staging))
+            .await
+            .map_err(|e| Error::Backup(format!("Entpacken abgebrochen: {e}")))??;
+    }
     if !staging.join("klein-buch.sqlite").is_file() {
         return Err(Error::Backup(
             "Backup enthält keine klein-buch.sqlite — Restore abgebrochen".into(),
@@ -363,6 +375,10 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         if staged_archive.is_dir() {
             fs::create_dir_all(&paths.archive_dir)?;
             copy_dir_recursive(&staged_archive, &paths.archive_dir)?;
+            // Plan W2.7: `fs::copy`/`fs::write` legen beschreibbare Dateien an —
+            // das Archiv muss danach wieder write-once (`0o400`) sein. Ein
+            // Fehler hier löst denselben Rollback aus wie jeder Swap-Fehler.
+            set_tree_readonly(&paths.archive_dir)?;
         }
         // Format ≥ 2: `data/branding` exakt auf den Backup-Stand (auch leer).
         if restore_branding {
@@ -488,6 +504,20 @@ fn reset_dir(dir: &Path) -> Result<()> {
     clear_dir_force(dir)?;
     let _ = fs::remove_dir(dir);
     fs::create_dir_all(dir)?;
+    Ok(())
+}
+
+/// Setzt jede Datei unter `dir` schreibgeschützt (`0o400` unter Unix), mit
+/// derselben Funktion wie beim Archivieren ([`crate::archive::store`]).
+fn set_tree_readonly(dir: &Path) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            set_tree_readonly(&path)?;
+        } else {
+            crate::archive::store::set_readonly(&path)?;
+        }
+    }
     Ok(())
 }
 
@@ -899,6 +929,60 @@ mod tests {
             !paths.inputs_dir.join("branding").exists(),
             "inputs/ bleibt tabu"
         );
+    }
+
+    /// Plan W2.7: nach Backup → Restore hat keine Datei unter `archive/` ein
+    /// Schreibbit (write-once auch nach dem Kopieren aus dem Staging).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restored_archive_files_are_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        fs::create_dir_all(paths.archive_dir.join("2026/invoices/pdf")).unwrap();
+        let f = paths.archive_dir.join("2026/invoices/pdf/RE-2026-0001.pdf");
+        fs::write(&f, b"pdf").unwrap();
+        crate::archive::store::set_readonly(&f).unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+
+        let original = backup::create_now(&pool, &paths, "passphrase-1234567890", "manual")
+            .await
+            .unwrap();
+        let session = backup::BackupSession::default();
+        session.set("passphrase-1234567890".to_string());
+        apply(
+            &pool,
+            &paths,
+            &session,
+            Path::new(&original.file_path),
+            "passphrase-1234567890",
+        )
+        .await
+        .unwrap();
+        pool.close().await;
+        apply_pending(&paths).unwrap().unwrap();
+
+        let mut checked = 0;
+        let mut stack = vec![paths.archive_dir.clone()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    let mode = fs::metadata(&p).unwrap().permissions().mode();
+                    assert_eq!(
+                        mode & 0o222,
+                        0,
+                        "{} hat ein Schreibbit ({mode:o})",
+                        p.display()
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 1);
     }
 
     #[test]

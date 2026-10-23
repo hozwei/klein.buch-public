@@ -71,6 +71,8 @@ sha2 = "0.10"
 argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
+# Geheimnisse (Passphrase-Kopien) im RAM nach Gebrauch überschreiben.
+zeroize = "1"
 
 # --- XML / Templates ---
 quick-xml = { version = "0.36", features = ["serialize"] }
@@ -162,6 +164,9 @@ anyhow = "1"
 
 # --- Logging ---
 tracing = "0.1"
+# Nur für sqlx::ConnectOptions::log_statements(LevelFilter): Statement-Logging aus,
+# weil `PRAGMA key` die Passphrase enthält (Plan W2.3/W5.9).
+log = "0.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]

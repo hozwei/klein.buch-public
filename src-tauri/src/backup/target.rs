@@ -167,6 +167,38 @@ pub async fn offsite_target(pool: &SqlitePool, floor_dir: &Path) -> Result<Optio
     }
 }
 
+/// Schreibt `bytes` dauerhaft nach `full` (Plan W2.3): Temp-Datei im selben
+/// Verzeichnis, `fsync`, `rename`, Verzeichnis-`fsync`. Ein Abbruch hinterlässt
+/// nie eine halbe `.kbk` unter dem endgültigen Namen.
+fn write_file_durable(full: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let name = full
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "backup".into());
+    let tmp = full.with_file_name(format!(".{name}.{}.part", uuid::Uuid::now_v7().simple()));
+    let result = (|| -> Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, full)?;
+        if let Some(parent) = full.parent() {
+            if let Ok(d) = std::fs::File::open(parent) {
+                let _ = d.sync_all();
+            }
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Schreibt einen Backup-Blob ans Ziel und liefert den vollständigen Pfad/URI
 /// zurück (für `backup_history.target_path`, später `backup_log.full_path`).
 ///
@@ -179,7 +211,7 @@ pub async fn write_backup(target: &BackupTarget, file_name: &str, bytes: &[u8]) 
             let dir = PathBuf::from(path);
             std::fs::create_dir_all(&dir)?;
             let full = dir.join(file_name);
-            std::fs::write(&full, bytes)?;
+            write_file_durable(&full, bytes)?;
             Ok(full.to_string_lossy().to_string())
         }
         BackupTarget::Sftp {

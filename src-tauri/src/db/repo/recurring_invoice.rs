@@ -33,7 +33,7 @@ pub async fn create(
     let id = Uuid::now_v7().to_string();
     let totals = compute_totals(&input.items);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO recurring_invoices (
@@ -83,7 +83,7 @@ pub async fn update(
 ) -> Result<RecurringInvoiceDetail> {
     let totals = compute_totals(&input.items);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     let res = sqlx::query(
         "UPDATE recurring_invoices SET

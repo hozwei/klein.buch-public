@@ -54,7 +54,7 @@ pub async fn create_version(
     }
     let id = Uuid::now_v7().to_string();
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     let next_version: i64 = sqlx::query(
         "SELECT COALESCE(MAX(version), 0) + 1 AS v FROM legal_documents WHERE doc_type = ?",
     )
@@ -113,7 +113,7 @@ pub async fn get_active(pool: &SqlitePool, doc_type: &str) -> Result<Option<Lega
 /// bisher aktive Version desselben `doc_type`, damit der partial-unique Index
 /// `uq_legal_documents_active` nie verletzt wird.
 pub async fn activate(pool: &SqlitePool, id: &str) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     let doc_type: String = sqlx::query("SELECT doc_type FROM legal_documents WHERE id = ?")
         .bind(id)
         .fetch_optional(&mut *tx)

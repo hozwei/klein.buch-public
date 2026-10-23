@@ -37,6 +37,21 @@ Arbeitszweig `phase-w`.
   `KLEIN_BUCH_SIDECAR_MOCK` startet nicht. (W1)
 - **Integritätsprüfung** zählt den Monat in Europe/Berlin (lief am Monatsersten
   sonst doppelt oder gar nicht). (W1)
+- **Archiv-Schreibpfad:** eindeutige Temp-Datei, Schreibschutz vor dem
+  Sichtbarwerden; ein abgebrochenes Festschreiben hinterlässt keine Datei mehr,
+  die jeden weiteren Versuch mit „existiert mit anderem Hash“ blockiert. (W2)
+- **Integritätsprüfung:** nicht lesbare Dateien (z. B. Rechte) gelten nicht mehr
+  als manipuliert, sondern bekommen einen eigenen Hinweis. (W2)
+- **Backup konsistent:** DB-Snapshot per `VACUUM INTO` über eine eigene
+  Verbindung (auch bei parallelem Schreiber ein sauberer Stand), verschlüsselt
+  wie das Original; Backups laufen nacheinander, Dateinamen mit Millisekunden
+  (zwei Backups in derselben Sekunde überschrieben sich); Off-Site-Kopien per
+  Temp-Datei + fsync + Umbenennen. (W2)
+- **Tägliches Backup auch im laufenden Betrieb** (Scheduler), nicht nur beim
+  Entsperren. (W2)
+- **Kein `SQLITE_BUSY` bei parallelen Buchungen:** Schreib-Transaktionen mit
+  `BEGIN IMMEDIATE`, `busy_timeout` 15 s. (W2)
+- **Restore:** Archivdateien sind danach wieder schreibgeschützt. (W2)
 
 ### Changed
 
@@ -51,6 +66,9 @@ Arbeitszweig `phase-w`.
 - Migrationen `0001` und `0002` mit LF statt CRLF (sqlx prüft die Rohbytes);
   ein Test verhindert CR in Migrationen. (W1)
 - Frontend-Tests mit vitest (`pnpm test`, läuft in CI). (W1)
+- PDF-Erzeugung, Passphrase-Ableitung und ZIP laufen außerhalb der
+  async-Runtime; gleichzeitige Renders (2), Java-Starts (2) und
+  Passphrase-Ableitungen (1) sind begrenzt. (W2)
 
 ## [2026.5.1] — Hotfix, veröffentlicht 2026-05-28
 

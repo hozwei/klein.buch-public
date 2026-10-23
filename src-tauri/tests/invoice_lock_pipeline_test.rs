@@ -536,3 +536,68 @@ async fn storno_creates_new_invoice_and_marks_original() {
     // "MOCK on" sicher; ein remove_var hier wäre eine Race gegen
     // gleichzeitig laufende Tests im selben Crate.
 }
+
+/// Plan W2.5: Festschreiben und Zahlungen laufen parallel auf derselben
+/// Rechnung (und auf einer schon festgeschriebenen) — kein `SQLITE_BUSY`.
+/// Lesen-dann-Schreiben-Transaktionen starten mit `BEGIN IMMEDIATE`; die
+/// Pool-Verbindungen warten über den `busy_timeout` statt sofort abzubrechen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_lock_and_payments_do_not_hit_sqlite_busy() {
+    let env = setup_env(true).await;
+    let contact_id = create_test_contact(&env.pool).await;
+    let a = create_draft(&env, &contact_id, good_input()).await;
+    let b = create_draft(&env, &contact_id, good_input()).await;
+    // Produktions-Pool (WAL, busy_timeout, 5 Verbindungen) auf dieselbe Datei.
+    let pool = klein_buch_lib::db::open_pool(&env.paths.db_file, None)
+        .await
+        .unwrap();
+    inv_cmd::run_lock_pipeline(&pool, &env.paths, &b, "N/A")
+        .await
+        .unwrap();
+
+    let is_busy = |e: &klein_buch_lib::error::Error| {
+        let m = e.to_string();
+        m.contains("database is locked") || m.contains("SQLITE_BUSY") || m.contains("(code: 5)")
+    };
+
+    let mut set = tokio::task::JoinSet::new();
+    for i in 0..10 {
+        let pool = pool.clone();
+        let target = if i % 2 == 0 { a.clone() } else { b.clone() };
+        set.spawn(async move {
+            let r = invoices::record_payment(&pool, &target, 100, "2026-06-01", None).await;
+            (target, r)
+        });
+    }
+    let lock_a = inv_cmd::run_lock_pipeline(&pool, &env.paths, &a, "N/A");
+    let pay = async {
+        let mut results = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            results.push(joined.unwrap());
+        }
+        results
+    };
+    let (locked, payments) = tokio::join!(lock_a, pay);
+    if let Err(e) = &locked {
+        assert!(!is_busy(e), "Festschreiben scheiterte an SQLITE_BUSY: {e}");
+    }
+    locked.unwrap();
+    for (target, r) in payments {
+        match r {
+            Ok(_) => {}
+            Err(e) => {
+                assert!(!is_busy(&e), "Zahlung scheiterte an SQLITE_BUSY: {e}");
+                // Erlaubt: Zahlung auf A, bevor A festgeschrieben war.
+                assert!(
+                    target == a && e.to_string().contains("nicht gelockt"),
+                    "{e}"
+                );
+            }
+        }
+    }
+    let row_b = invoices::get(&pool, &b).await.unwrap().unwrap();
+    assert_eq!(
+        row_b.paid_amount_cents, 500,
+        "alle 5 Zahlungen auf B gebucht"
+    );
+}

@@ -642,7 +642,7 @@ async fn run_lock_pipeline_inner(
         (Some(vp), Some((_, bytes))) => Some((vp, bytes.as_slice())),
         _ => None,
     };
-    let pdf_bytes = typst_render::render_invoice(
+    let pdf_bytes = typst_render::invoice_job(
         &template_source,
         &detail.invoice.invoice_number,
         &input,
@@ -653,7 +653,9 @@ async fn run_lock_pipeline_inner(
         owner_name.as_deref(),
         &accounts_json,
         service_date_fallback,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
     // 6. Mustang: ZUGFeRD-PDF/A-3 mit eingebettetem XML.
     let zugferd_bytes =

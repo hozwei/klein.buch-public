@@ -75,7 +75,7 @@ pub async fn category_update(pool: &SqlitePool, id: &str, name: &str) -> Result<
 
 /// Setzt `sort_order` gemäß der übergebenen ID-Reihenfolge (0..n).
 pub async fn categories_reorder(pool: &SqlitePool, ordered_ids: &[String]) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     for (idx, id) in ordered_ids.iter().enumerate() {
         sqlx::query(
             "UPDATE package_categories SET sort_order = ?, updated_at = datetime('now','utc') WHERE id = ?",
@@ -171,7 +171,7 @@ pub async fn create(
     revision: &PackageRevisionInput,
 ) -> Result<PackageRow> {
     let id = Uuid::now_v7().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     let next_sort: i64 = sqlx::query("SELECT COALESCE(MAX(sort_order), -1) + 1 AS s FROM packages")
         .fetch_one(&mut *tx)
         .await?
@@ -203,7 +203,7 @@ pub async fn update_as_new_revision(
     name: &str,
     revision: &PackageRevisionInput,
 ) -> Result<PackageRow> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     let res = sqlx::query(
         "UPDATE packages SET name = ?, category_id = ?, updated_at = datetime('now','utc')
           WHERE id = ?",
@@ -308,7 +308,7 @@ pub async fn rollback(pool: &SqlitePool, package_id: &str, to_revision: i64) -> 
         note: None,
     };
     let note = format!("Rollback auf Revision {to_revision}");
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     insert_revision_tx(&mut tx, package_id, &input, Some(&note)).await?;
     tx.commit().await?;
     get(pool, package_id)

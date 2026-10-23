@@ -19,6 +19,7 @@ pub mod einvoice;
 pub mod error;
 pub mod euer;
 pub mod fiscal_year;
+pub mod limits;
 pub mod mail;
 pub mod migration_export;
 pub mod notify;

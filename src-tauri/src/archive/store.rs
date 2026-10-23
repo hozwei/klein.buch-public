@@ -8,8 +8,13 @@
 //!
 //! 1. **Idempotente Hash-Berechnung** vor dem Schreiben (SHA-256 über die
 //!    übergebenen Bytes).
-//! 2. **Atomische Sichtbarkeit**: zuerst in eine `.tmp`-Datei schreiben,
-//!    dann `rename` → erst dann existiert die finale Datei.
+//! 2. **Atomische Sichtbarkeit**: zuerst in eine Temp-Datei mit eindeutigem
+//!    Namen schreiben (`.<name>.<uuid>.tmp`, fsync), schreibschützen, dann
+//!    ohne Überschreiben an den Zielnamen bringen (Plan W2.1) → erst dann
+//!    existiert die finale Datei, und sie ist von Anfang an read-only.
+//!    Eine Datei am Zielpfad **ohne** `archive_entries`-Eintrag ist der Rest
+//!    eines abgebrochenen Laufs (nie Teil der Aufbewahrung) und wird ersetzt;
+//!    mit Eintrag bleibt ein anderer Inhalt ein harter Fehler.
 //! 3. **Read-only** nach Schreiben: `set_readonly(true)` (Windows: setzt
 //!    `FILE_ATTRIBUTE_READONLY`; Unix: zusätzlich Mode `0o400`).
 //! 4. **Eintrag in `archive_entries`** mit identem Hash, Größe und Pfad.
@@ -118,34 +123,36 @@ pub async fn store_bytes(
     }
 
     // Wenn die Datei bereits existiert: prüfe Hash. Identisch → Idempotenz,
-    // wiederverwenden statt Fehler. Unterschiedlich → harter Fehler.
+    // wiederverwenden statt Fehler. Unterschiedlich → nur mit DB-Eintrag ein
+    // harter Fehler; ohne Eintrag ein Rest eines abgebrochenen Laufs (W2.1).
+    let mut replaced_orphan_hash: Option<String> = None;
     if abs_path.exists() {
         let existing = fs::read(&abs_path)?;
         let existing_hash = sha256_hex(&existing);
-        if existing_hash != hash {
+        let registered = lookup_by_path(pool, &abs_path).await?;
+        if existing_hash == hash {
+            // DB-Eintrag vorhanden → zurückgeben; sonst weiter zum Insert,
+            // denn der ist Single Source of Truth.
+            if let Some(found) = registered {
+                return Ok(found);
+            }
+        } else if registered.is_some() {
             return Err(crate::error::Error::Domain(format!(
                 "archive::store: Datei existiert bereits mit anderem Hash: {}",
                 abs_path.display()
             )));
-        }
-        // Wenn DB-Eintrag existiert: zurückgeben. Falls nicht: weiter zum
-        // Insert, denn der ist Single Source of Truth.
-        if let Some(found) = lookup_by_path(pool, &abs_path).await? {
-            return Ok(found);
+        } else {
+            tracing::warn!(
+                "archive::store: verwaiste Datei ohne archive_entries-Eintrag wird ersetzt: {}",
+                abs_path.display()
+            );
+            make_writable(&abs_path)?;
+            fs::remove_file(&abs_path)?;
+            write_new_readonly(&abs_path, bytes)?;
+            replaced_orphan_hash = Some(existing_hash);
         }
     } else {
-        // Atomar schreiben: .tmp → rename. Auf Windows ist rename über
-        // existing target ein Fehler — wir haben oben aber existence
-        // ausgeschlossen.
-        let tmp = abs_path.with_extension(format!(
-            "{}.tmp",
-            abs_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("part")
-        ));
-        fs::write(&tmp, bytes)?;
-        fs::rename(&tmp, &abs_path)?;
+        write_new_readonly(&abs_path, bytes)?;
     }
 
     set_readonly(&abs_path)?;
@@ -173,12 +180,15 @@ pub async fn store_bytes(
     .execute(pool)
     .await?;
 
+    let orphan = replaced_orphan_hash
+        .map(|h| format!(r#","replaced_orphan_hash":"{h}""#))
+        .unwrap_or_default();
     audit::archive_event(
         pool,
         audit::ArchiveAction::Store,
         &archive_id,
         Some(&format!(
-            r#"{{"path":"{}","size":{},"hash":"{}"}}"#,
+            r#"{{"path":"{}","size":{},"hash":"{}"{orphan}}}"#,
             escape_json(&path_str),
             size,
             hash
@@ -302,7 +312,75 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", h.finalize())
 }
 
-fn set_readonly(path: &Path) -> Result<()> {
+/// Schreibt `bytes` als neue, schreibgeschützte Datei an `final_path` (Plan
+/// W2.1): eindeutiger Temp-Name im selben Verzeichnis (keine Kollision mit
+/// Resten früherer Läufe oder parallelen Schreibern), `fsync`, Schreibschutz
+/// **vor** dem Sichtbarwerden, dann ohne Überschreiben an den Zielnamen
+/// (`hard_link` scheitert, wenn das Ziel schon existiert). Fehler räumen die
+/// Temp-Datei weg.
+fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let name = final_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| {
+            crate::error::Error::Domain("archive::store: ungültiger Dateiname".into())
+        })?;
+    let tmp = final_path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::now_v7().simple()));
+    let result = (|| -> Result<()> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        set_readonly(&tmp)?;
+        match fs::hard_link(&tmp, final_path) {
+            // Der Hardlink teilt den Inode: die Temp-Datei nur entfernen, ihre
+            // Rechte NICHT ändern (sonst wäre auch die Zieldatei beschreibbar).
+            // Unter Linux braucht das Löschen nur Schreibrecht aufs Verzeichnis.
+            Ok(()) => fs::remove_file(&tmp)?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(crate::error::Error::Domain(format!(
+                    "archive::store: Datei wurde parallel angelegt: {}",
+                    final_path.display()
+                )));
+            }
+            // Dateisystem ohne Hardlinks: rename (Ziel wurde vorher geprüft).
+            Err(_) => fs::rename(&tmp, final_path)?,
+        }
+        if let Some(parent) = final_path.parent() {
+            // Verzeichniseintrag dauerhaft machen (best-effort, nicht überall möglich).
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+        Ok(())
+    })();
+    if result.is_err() && tmp.exists() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Hebt den Schreibschutz auf (nur für das Aufräumen von Temp-/Waisen-Dateien).
+fn make_writable(path: &Path) -> Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    fs::set_permissions(path, perms)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut p = fs::metadata(path)?.permissions();
+        p.set_mode(0o600);
+        fs::set_permissions(path, p)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn set_readonly(path: &Path) -> Result<()> {
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_readonly(true);
     fs::set_permissions(path, perms)?;
@@ -419,6 +497,90 @@ mod tests {
         assert_eq!(cnt, 1);
 
         // Teardown
+        unlock_for_test(Path::new(&res.file_path)).unwrap();
+    }
+
+    /// Plan W2.1: ein liegengebliebener Temp-Rest (früher fester Name
+    /// `<name>.tmp`, hier sogar schreibgeschützt) blockiert das Archivieren nicht,
+    /// und nach dem Schreiben bleibt keine Temp-Datei zurück.
+    #[tokio::test]
+    async fn store_ignores_stale_temp_file_and_leaves_no_temp() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let target_dir = dir
+            .path()
+            .join("2026")
+            .join(ArchiveKind::InvoicePdf.dir_slug());
+        fs::create_dir_all(&target_dir).unwrap();
+        let stale = target_dir.join("RE-2026-0001.pdf.tmp");
+        fs::write(&stale, b"rest").unwrap();
+        set_readonly(&stale).unwrap();
+
+        let res = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0001.pdf",
+            "application/pdf",
+            b"neu",
+        )
+        .await
+        .unwrap();
+        assert_eq!(fs::read(&res.file_path).unwrap(), b"neu");
+        let leftovers: Vec<String> = fs::read_dir(&target_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with('.') && n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "Temp-Reste: {leftovers:?}");
+        unlock_for_test(&stale).unwrap();
+        unlock_for_test(Path::new(&res.file_path)).unwrap();
+    }
+
+    /// Plan W2.1: Abbruch nach dem Schreiben, vor dem DB-Eintrag → Wiederholung
+    /// mit anderen Bytes (z. B. neu gerenderte PDF) ersetzt die verwaiste Datei
+    /// statt dauerhaft an „existiert mit anderem Hash“ zu scheitern.
+    #[tokio::test]
+    async fn store_replaces_orphan_file_without_db_entry() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let path = build_path(
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0002.pdf",
+        );
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_new_readonly(&path, b"erster Versuch").unwrap();
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+
+        let res = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0002.pdf",
+            "application/pdf",
+            b"zweiter Versuch",
+        )
+        .await
+        .unwrap();
+        assert_eq!(fs::read(&res.file_path).unwrap(), b"zweiter Versuch");
+        assert!(fs::metadata(&res.file_path)
+            .unwrap()
+            .permissions()
+            .readonly());
+        use sqlx::Row;
+        let details: String = sqlx::query(
+            "SELECT details_json FROM audit_log WHERE action = 'archive.store' AND entity_id = ?",
+        )
+        .bind(&res.archive_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("details_json");
+        assert!(details.contains("replaced_orphan_hash"), "{details}");
         unlock_for_test(Path::new(&res.file_path)).unwrap();
     }
 

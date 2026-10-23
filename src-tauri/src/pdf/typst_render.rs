@@ -78,6 +78,35 @@ pub fn render_invoice(
     accounts: &serde_json::Value,
     service_date_fallback: bool,
 ) -> Result<Vec<u8>> {
+    invoice_job(
+        template_source,
+        invoice_number,
+        input,
+        seller,
+        buyer,
+        branding_dir,
+        logo,
+        owner_name,
+        accounts,
+        service_date_fallback,
+    )?
+    .compile()
+}
+
+/// Render-Auftrag zu [`render_invoice`] (Plan W2.6, für [`PdfJob::compile_async`]).
+#[allow(clippy::too_many_arguments)]
+pub fn invoice_job(
+    template_source: &str,
+    invoice_number: &str,
+    input: &InvoiceInput,
+    seller: &SellerView<'_>,
+    buyer: &BuyerView<'_>,
+    branding_dir: Option<&Path>,
+    logo: Option<(&str, &[u8])>,
+    owner_name: Option<&str>,
+    accounts: &serde_json::Value,
+    service_date_fallback: bool,
+) -> Result<PdfJob> {
     let data = build_data_json(
         invoice_number,
         input,
@@ -95,7 +124,13 @@ pub fn render_invoice(
     // PDF/A-3b ist ohnehin der für ZUGFeRD geforderte Standard
     // (PDF 1.7 + erlaubte eingebettete Dateien).
     let embedded: Vec<(&str, &[u8])> = logo.into_iter().collect();
-    compile_pdf(template_source, &data, branding_dir, true, &embedded)
+    Ok(PdfJob::new(
+        template_source,
+        data,
+        branding_dir,
+        true,
+        &embedded,
+    ))
 }
 
 /// Renderiert ein **Angebot** als Standard-PDF (Block 8). Anders als die
@@ -118,6 +153,37 @@ pub fn render_quote(
     owner_name: Option<&str>,
     accounts: &serde_json::Value,
 ) -> Result<Vec<u8>> {
+    quote_job(
+        template_source,
+        quote_number,
+        input,
+        seller,
+        buyer,
+        branding_dir,
+        logo,
+        signature,
+        signature_enabled,
+        owner_name,
+        accounts,
+    )?
+    .compile()
+}
+
+/// Render-Auftrag zu [`render_quote`] (Plan W2.6).
+#[allow(clippy::too_many_arguments)]
+pub fn quote_job(
+    template_source: &str,
+    quote_number: &str,
+    input: &QuoteRenderInput,
+    seller: &SellerView<'_>,
+    buyer: &BuyerView<'_>,
+    branding_dir: Option<&Path>,
+    logo: Option<(&str, &[u8])>,
+    signature: Option<(&str, &[u8])>,
+    signature_enabled: bool,
+    owner_name: Option<&str>,
+    accounts: &serde_json::Value,
+) -> Result<PdfJob> {
     let data = build_quote_data_json(
         quote_number,
         input,
@@ -136,7 +202,13 @@ pub fn render_quote(
     if let Some(s) = signature {
         embedded.push(s);
     }
-    compile_pdf(template_source, &data, branding_dir, false, &embedded)
+    Ok(PdfJob::new(
+        template_source,
+        data,
+        branding_dir,
+        false,
+        &embedded,
+    ))
 }
 
 /// Renderiert die **Anlage-EÜR-Übersicht** als Standard-PDF (Block 14a, Schritt 2).
@@ -148,7 +220,7 @@ pub fn render_euer(
     data_json: &str,
     branding_dir: Option<&Path>,
 ) -> Result<Vec<u8>> {
-    compile_pdf(template_source, data_json, branding_dir, false, &[])
+    plain_job(template_source, data_json, branding_dir).compile()
 }
 
 /// Generisches Plain-PDF-Rendering aus einem Typst-Template + Daten-JSON
@@ -159,7 +231,74 @@ pub fn render_pdf(
     data_json: &str,
     branding_dir: Option<&Path>,
 ) -> Result<Vec<u8>> {
-    compile_pdf(template_source, data_json, branding_dir, false, &[])
+    plain_job(template_source, data_json, branding_dir).compile()
+}
+
+/// Render-Auftrag für ein Plain-PDF aus Vorlage + Daten-JSON ([`render_pdf`],
+/// [`render_euer`]; Plan W2.6).
+pub fn plain_job(template_source: &str, data_json: &str, branding_dir: Option<&Path>) -> PdfJob {
+    PdfJob::new(
+        template_source,
+        data_json.to_string(),
+        branding_dir,
+        false,
+        &[],
+    )
+}
+
+/// Fertig vorbereiteter Render-Auftrag (Plan W2.6): besitzt alle Eingaben, damit
+/// die Typst-Kompilation (CPU-lastig, 100 ms bis Sekunden) außerhalb der
+/// async-Runtime laufen kann — [`PdfJob::compile_async`] nutzt
+/// `spawn_blocking` und begrenzt parallele Renders über
+/// [`crate::limits::RENDER`].
+pub struct PdfJob {
+    template_source: String,
+    data_json: String,
+    branding_dir: Option<PathBuf>,
+    pdf_a3b: bool,
+    embedded: Vec<(String, Vec<u8>)>,
+}
+
+impl PdfJob {
+    fn new(
+        template_source: &str,
+        data_json: String,
+        branding_dir: Option<&Path>,
+        pdf_a3b: bool,
+        embedded: &[(&str, &[u8])],
+    ) -> Self {
+        Self {
+            template_source: template_source.to_string(),
+            data_json,
+            branding_dir: branding_dir.map(Path::to_path_buf),
+            pdf_a3b,
+            embedded: embedded
+                .iter()
+                .map(|(p, b)| ((*p).to_string(), b.to_vec()))
+                .collect(),
+        }
+    }
+
+    /// Kompiliert synchron (Tests, Aufrufer ohne Runtime).
+    pub fn compile(&self) -> Result<Vec<u8>> {
+        let embedded: Vec<(&str, &[u8])> = self
+            .embedded
+            .iter()
+            .map(|(p, b)| (p.as_str(), b.as_slice()))
+            .collect();
+        compile_pdf(
+            &self.template_source,
+            &self.data_json,
+            self.branding_dir.as_deref(),
+            self.pdf_a3b,
+            &embedded,
+        )
+    }
+
+    /// Kompiliert in `spawn_blocking` unter der Render-Semaphore.
+    pub async fn compile_async(self) -> Result<Vec<u8>> {
+        crate::limits::run_blocking(&crate::limits::RENDER, move || self.compile()).await
+    }
 }
 
 /// Gemeinsame Typst-Kompilation + PDF-Export. `pdf_a3b` erzwingt PDF/A-3b
@@ -495,6 +634,31 @@ pub fn render_package_catalog(
     branding_dir: Option<&Path>,
     logo: Option<(&str, &[u8])>,
 ) -> Result<Vec<u8>> {
+    package_catalog_job(
+        template_source,
+        entries,
+        seller,
+        contact_name,
+        owner_name,
+        generated_at,
+        branding_dir,
+        logo,
+    )?
+    .compile()
+}
+
+/// Render-Auftrag zu [`render_package_catalog`] (Plan W2.6).
+#[allow(clippy::too_many_arguments)]
+pub fn package_catalog_job(
+    template_source: &str,
+    entries: &[CatalogEntry<'_>],
+    seller: &SellerView<'_>,
+    contact_name: Option<&str>,
+    owner_name: Option<&str>,
+    generated_at: &str,
+    branding_dir: Option<&Path>,
+    logo: Option<(&str, &[u8])>,
+) -> Result<PdfJob> {
     if entries.is_empty() {
         return Err(Error::Domain(
             "Bitte mindestens ein Paket für die Broschüre auswählen.".into(),
@@ -509,7 +673,13 @@ pub fn render_package_catalog(
         generated_at,
     )?;
     let embedded: Vec<(&str, &[u8])> = logo.into_iter().collect();
-    compile_pdf(template_source, &data, branding_dir, false, &embedded)
+    Ok(PdfJob::new(
+        template_source,
+        data,
+        branding_dir,
+        false,
+        &embedded,
+    ))
 }
 
 // -----------------------------------------------------------------------
@@ -667,6 +837,36 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    /// Plan W2.6: Typst läuft in `spawn_blocking` — auf einer
+    /// `current_thread`-Runtime kommt eine zweite Aufgabe während des Renders
+    /// weiter voran (vorher blockierte der Render den einzigen Runtime-Thread).
+    #[tokio::test(flavor = "current_thread")]
+    async fn render_does_not_block_current_thread_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let source = "#set page(width: 120mm, height: 80mm)\n\
+                      #for i in range(150) [ = Seite #i \\ #lorem(120) ]";
+        let job = plain_job(source, "{}", None);
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let t = ticks.clone();
+        let ticker = tokio::spawn(async move {
+            loop {
+                t.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        });
+        let started = std::time::Instant::now();
+        let pdf = job.compile_async().await.unwrap();
+        let elapsed = started.elapsed();
+        ticker.abort();
+        assert!(pdf.starts_with(b"%PDF-"));
+        let n = ticks.load(Ordering::SeqCst);
+        assert!(
+            n >= 3,
+            "zweite Aufgabe lief während des Renders ({elapsed:?}) nur {n}× — Runtime blockiert?"
+        );
     }
 
     fn without_whitespace(s: &str) -> String {

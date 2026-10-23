@@ -79,11 +79,26 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
     let session = app.state::<BackupSession>();
     let paths = Paths::from_handle(app)?;
     let today = crate::clock::today_berlin();
-    let pool = pool.inner();
-    let session = session.inner();
+    run_jobs(pool.inner(), &paths, session.inner(), Some(app), today).await
+}
+
+/// Die Jobs eines Ticks — ohne Tauri-State testbar (`app = None`).
+pub async fn run_jobs(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &BackupSession,
+    app: Option<&AppHandle>,
+    today: chrono::NaiveDate,
+) -> Result<()> {
+    // 0. Tages-Backup (Plan W2.4): fällig, wenn das letzte Backup älter als 24 h
+    //    ist — im laufenden Betrieb, nicht nur beim Entsperren. Fehler landen im
+    //    Backup-Protokoll; der Tick läuft weiter.
+    if let Err(e) = crate::backup::auto_daily_if_due(pool, paths, session).await {
+        tracing::warn!("Tages-Backup fehlgeschlagen: {e}");
+    }
 
     // 1. Recurring-Kosten (Block 10).
-    match crate::scheduler::recurring::process_due(pool, &paths, session, today).await {
+    match crate::scheduler::recurring::process_due(pool, paths, session, today).await {
         Ok(report) if report.created_expenses > 0 => tracing::info!(
             "Scheduler: {} Recurring-Kosten aus {} Abo(s) angelegt",
             report.created_expenses,
@@ -95,28 +110,25 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
 
     // 2. Auto-AfA zur GJ-Wende (Block 15).
     if let Err(e) =
-        crate::scheduler::depreciation_year_close::run(pool, &paths, session, Some(app), today)
-            .await
+        crate::scheduler::depreciation_year_close::run(pool, paths, session, app, today).await
     {
         tracing::warn!("Auto-AfA-Lauf fehlgeschlagen: {e}");
     }
 
     // 3. Monatlicher Archiv-Integrity-Check (Block 15).
-    if let Err(e) = crate::scheduler::integrity_check_cron::run(pool, Some(app), today).await {
+    if let Err(e) = crate::scheduler::integrity_check_cron::run(pool, app, today).await {
         tracing::warn!("Integrity-Check fehlgeschlagen: {e}");
     }
 
     // 4. Reminder-Regeln (Block 15; backup_overdue Off-Site-bewusst seit G1-NOTIFY).
-    match crate::scheduler::reminders::run(pool, Some(app), today, &paths.backups_dir).await {
+    match crate::scheduler::reminders::run(pool, app, today, &paths.backups_dir).await {
         Ok(n) if n > 0 => tracing::info!("Scheduler: {n} neue Hinweis(e) erzeugt"),
         Ok(_) => {}
         Err(e) => tracing::warn!("Reminder-Lauf fehlgeschlagen: {e}"),
     }
 
     // 5. Wiederkehrende Ausgangsrechnungen (Block RI-2).
-    match crate::scheduler::recurring_invoice::process_due(pool, &paths, session, Some(app), today)
-        .await
-    {
+    match crate::scheduler::recurring_invoice::process_due(pool, paths, session, app, today).await {
         Ok(report) if report.created_invoices > 0 => tracing::info!(
             "Scheduler: {} Abo-Rechnung(en) aus {} Vorlage(n) erzeugt",
             report.created_invoices,
@@ -128,7 +140,7 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
 
     // 6. Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP).
     // Inbox-only (R4-007-Pattern) — keine AppHandle-Bindung im Scheduler-Pfad.
-    match crate::scheduler::drop_folder::run_sync(pool, &paths, session, today).await {
+    match crate::scheduler::drop_folder::run_sync(pool, paths, session, today).await {
         Ok(report) if report.imported > 0 || report.failed > 0 => tracing::info!(
             "Scheduler: Drop-Folder {} importiert / {} fehlerhaft / {} versteckt",
             report.imported,
@@ -144,6 +156,51 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::SchedulerStarted;
+
+    /// Plan W2.4: der Tick legt das fällige Tages-Backup selbst an — ohne
+    /// Entsperr-Ereignis; ein zweiter Tick am selben Tag nicht noch einmal.
+    #[tokio::test]
+    async fn tick_creates_daily_backup_without_unlock_event() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        let paths = super::Paths {
+            data_dir: data.clone(),
+            db_file: data.join("klein-buch.sqlite"),
+            archive_dir: data.join("archive"),
+            backups_dir: data.join("backups"),
+            inputs_dir: dir.path().join("inputs"),
+            sidecar_dir: dir.path().join("sidecar"),
+        };
+        std::fs::create_dir_all(&paths.backups_dir).unwrap();
+        std::fs::create_dir_all(&paths.archive_dir).unwrap();
+        let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+        let session = super::BackupSession::default();
+        session.set("passphrase-1234567890".into());
+        let today = crate::clock::today_berlin();
+
+        super::run_jobs(&pool, &paths, &session, None, today)
+            .await
+            .unwrap();
+        let daily: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_daily'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(daily, 1, "Tages-Backup aus dem Tick");
+
+        super::run_jobs(&pool, &paths, &session, None, today)
+            .await
+            .unwrap();
+        let daily: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_daily'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(daily, 1, "nicht doppelt innerhalb von 24 h");
+    }
 
     /// Der Einmal-Guard erlaubt genau einen Start; Folgeaufrufe sind no-ops.
     #[test]

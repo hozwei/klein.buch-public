@@ -157,7 +157,9 @@ pub async fn export_core(
     } else {
         None
     };
-    let pdf_bytes = typst_render::render_pdf(&source, &data_json, branding_opt)?;
+    let pdf_bytes = typst_render::plain_job(&source, &data_json, branding_opt)
+        .compile_async()
+        .await?;
     zw.start_file("auskunft.pdf", opts)?;
     zw.write_all(&pdf_bytes)?;
 

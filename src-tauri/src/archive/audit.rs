@@ -19,6 +19,10 @@ pub enum ArchiveAction {
     /// Datei nachvollziehbar von einer **manipulierten** (Hash-Mismatch) Datei
     /// getrennt bleibt.
     IntegrityMissing,
+    /// Plan W2.2: Datei vorhanden, aber nicht lesbar (z. B. fehlende Rechte).
+    /// Kein Manipulationsbefund — eigene Kategorie, damit Rechteprobleme nicht
+    /// als Tamper gemeldet werden.
+    IntegrityUnreadable,
 }
 
 impl ArchiveAction {
@@ -29,6 +33,7 @@ impl ArchiveAction {
             ArchiveAction::IntegrityPass => "archive.integrity_pass",
             ArchiveAction::IntegrityFail => "archive.integrity_fail",
             ArchiveAction::IntegrityMissing => "archive.integrity_missing",
+            ArchiveAction::IntegrityUnreadable => "archive.integrity_unreadable",
         }
     }
 }

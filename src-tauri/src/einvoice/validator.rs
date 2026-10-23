@@ -217,6 +217,11 @@ pub async fn validate(xml: &str, sidecar_dir: &Path) -> Result<ValidationReport>
     // unbegrenzt blockieren (sonst friert die App bei „Stelle aus…" ein).
     const VALIDATOR_TIMEOUT_SECS: u64 = 120;
     tracing::info!("KoSIT-Validator startet: {}", launcher.display());
+    // Plan W2.6: höchstens `limits::JVM` gleichzeitige Java-Starts.
+    let _jvm = crate::limits::JVM
+        .acquire()
+        .await
+        .map_err(|e| Error::Sidecar(format!("JVM-Semaphore: {e}")))?;
     let mut cmd = tokio::process::Command::new(&launcher);
     cmd.args(&args)
         // cwd auf tmpdir — verhindert dass etwaige relative File-Outputs

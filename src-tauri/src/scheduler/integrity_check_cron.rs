@@ -71,6 +71,31 @@ pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -
             .await?;
         }
     }
+
+    // Plan W2.2: nicht lesbare Dateien (Rechte) sind kein Tamper, aber ein
+    // Betriebsproblem — eigener Hinweis, damit sie nicht untergehen.
+    if summary.files_unreadable > 0 {
+        let key = format!("archive_integrity_unreadable:{this_month}");
+        let body = format!(
+            "{} Archiv-Datei(en) konnten nicht gelesen werden (z. B. fehlende \
+             Dateirechte). Das ist kein Manipulationsbefund, verhindert aber die \
+             Prüfung. Bitte die Rechte im Datenverzeichnis prüfen.",
+            summary.files_unreadable
+        );
+        notify::emit(
+            pool,
+            app,
+            NewNotification {
+                title: "Archiv-Dateien nicht lesbar",
+                body: &body,
+                severity: "warning",
+                action_url: Some("/settings/audit-trail"),
+                dedup_key: Some(&key),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 

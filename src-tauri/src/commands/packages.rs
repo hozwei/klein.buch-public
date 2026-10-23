@@ -275,7 +275,9 @@ pub async fn package_preview(
     } else {
         None
     };
-    let pdf = typst_render::render_pdf(templates::PACKAGE_PREVIEW_TEMPLATE, &json, branding_opt)?;
+    let pdf = typst_render::plain_job(templates::PACKAGE_PREVIEW_TEMPLATE, &json, branding_opt)
+        .compile_async()
+        .await?;
 
     let dir = paths.data_dir.join("preview");
     std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("Vorschau-Ordner: {e}")))?;
@@ -492,7 +494,7 @@ async fn render_catalog_pdf(
 
     let generated_at = crate::clock::today_berlin().to_string();
 
-    typst_render::render_package_catalog(
+    typst_render::package_catalog_job(
         templates::PACKAGE_CATALOG_TEMPLATE,
         &entries,
         &seller_view,
@@ -501,7 +503,9 @@ async fn render_catalog_pdf(
         &generated_at,
         branding_opt,
         logo_opt,
-    )
+    )?
+    .compile_async()
+    .await
 }
 
 /// Druck/Vorschau: rendert die Broschüre für die gewählten Pakete und öffnet sie.

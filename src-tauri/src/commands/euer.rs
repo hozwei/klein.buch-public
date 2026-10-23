@@ -329,7 +329,9 @@ async fn build_euer_pdf_bytes(
         None
     };
 
-    typst_render::render_euer(&source, &data_json, branding_opt)
+    typst_render::plain_job(&source, &data_json, branding_opt)
+        .compile_async()
+        .await
 }
 
 /// Erzeugt das vollständige EÜR-Dokument als PDF und schreibt es an den gewählten
@@ -553,7 +555,9 @@ pub async fn euer_export_stb_zip(
     } else {
         None
     };
-    let cover_pdf = typst_render::render_pdf(&cover_source, &cover_json, branding_opt)?;
+    let cover_pdf = typst_render::plain_job(&cover_source, &cover_json, branding_opt)
+        .compile_async()
+        .await?;
 
     // LIESMICH.txt (R2-019).
     let liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum);

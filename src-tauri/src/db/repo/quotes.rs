@@ -69,7 +69,7 @@ pub async fn create_draft(
 ) -> Result<QuoteRow> {
     let id = Uuid::now_v7().to_string();
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO quotes (

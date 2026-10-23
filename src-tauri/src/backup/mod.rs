@@ -34,6 +34,9 @@ use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::sync::Mutex;
 
+/// Serialisiert [`create_now`] (Plan W2.3).
+static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 // ---------------------------------------------------------------------------
 // app_settings-Keys (Block 4)
 // ---------------------------------------------------------------------------
@@ -150,7 +153,7 @@ pub async fn setup_passphrase(
 
     let salt = encrypt::random_bytes(encrypt::SALT_LEN);
     let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
+    let key = encrypt::derive_key_async(passphrase, &salt).await?;
     let nonce_arr = encrypt::nonce_array(&nonce)?;
     let ct = encrypt::encrypt(&key, &nonce_arr, encrypt::VERIFIER_PLAINTEXT)?;
 
@@ -212,7 +215,7 @@ pub async fn verify_passphrase(pool: &SqlitePool, passphrase: &str) -> Result<bo
     let nonce = encrypt::nonce_array(&manifest::from_hex(&nonce_hex)?)?;
     let ct = manifest::from_hex(&ct_hex)?;
 
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
+    let key = encrypt::derive_key_async(passphrase, &salt).await?;
     match encrypt::decrypt(&key, &nonce, &ct) {
         Ok(pt) => Ok(pt == encrypt::VERIFIER_PLAINTEXT),
         Err(_) => Ok(false),
@@ -331,15 +334,31 @@ pub async fn create_now(
     passphrase: &str,
     trigger_reason: &str,
 ) -> Result<BackupOutcome> {
-    // 1. Konsistenter Content-Snapshot.
-    let content = snapshot::build_content_zip(pool, paths).await?;
+    // Plan W2.3: Backups laufen nacheinander (Auto-Backup nach Lock, Tages-Backup
+    // im Tick, manuell, Pre-Restore) — nie zwei gleichzeitig.
+    let _serial = BACKUP_LOCK.lock().await;
+
+    // 1. Konsistenter Content-Snapshot. Die DB ist mit derselben Passphrase
+    //    verschlüsselt (eine Passphrase-Kette, ADR 0035); Klartext nur in Tests.
+    let db_key = (!crate::db::db_file_is_plaintext(&paths.db_file)).then_some(passphrase);
+    let content = snapshot::build_content_zip(paths, db_key).await?;
 
     // 2. Schlüssel ableiten + verschlüsseln (frische Salt+Nonce pro Backup).
+    //    Argon2id + AES außerhalb der Runtime, KDF begrenzt (Plan W2.6).
     let salt = encrypt::random_bytes(encrypt::SALT_LEN);
     let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
-    let nonce_arr = encrypt::nonce_array(&nonce)?;
-    let ciphertext = encrypt::encrypt(&key, &nonce_arr, &content.zip_bytes)?;
+    let ciphertext = {
+        let pass = zeroize::Zeroizing::new(passphrase.as_bytes().to_vec());
+        let salt = salt.clone();
+        let nonce = nonce.clone();
+        let zip_bytes = content.zip_bytes.clone();
+        crate::limits::run_blocking(&crate::limits::KDF, move || {
+            let key = encrypt::derive_key(&pass, &salt)?;
+            let nonce_arr = encrypt::nonce_array(&nonce)?;
+            encrypt::encrypt(&key, &nonce_arr, &zip_bytes)
+        })
+        .await?
+    };
 
     // 3. Manifest + Datei-Frame.
     let app_version = env!("CARGO_PKG_VERSION").to_string();
@@ -364,10 +383,13 @@ pub async fn create_now(
     let file_bytes = manifest::frame(&man, &ciphertext)?;
     let file_hash = snapshot::sha256_hex(&file_bytes);
     let size_bytes = file_bytes.len() as i64;
+    // Millisekunden + Kurz-UUID: zwei Backups in derselben Sekunde ergeben zwei
+    // Dateien (Plan W2.3).
     let stamp = crate::clock::now_berlin()
-        .format("%Y%m%d-%H%M%S")
+        .format("%Y%m%d-%H%M%S%3f")
         .to_string();
-    let file_name = format!("klein-buch-{stamp}.kbk");
+    let short = uuid::Uuid::now_v7().simple().to_string();
+    let file_name = format!("klein-buch-{stamp}-{}.kbk", &short[short.len() - 8..]);
     let retention_tag =
         rotation::classify_retention(crate::clock::today_berlin(), trigger_reason).to_string();
 
@@ -848,5 +870,48 @@ mod tests {
         assert!(setup_passphrase(&pool, &session, "noch-eine-lang-genug")
             .await
             .is_err());
+    }
+
+    /// Plan W2.3: zwei Backups in derselben Sekunde (auch gleichzeitig
+    /// angestoßen) ergeben zwei Dateien und zwei `backup_log`-Zeilen.
+    #[tokio::test]
+    async fn two_backups_in_same_second_give_two_files_and_log_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        let paths = Paths {
+            data_dir: data.clone(),
+            db_file: data.join("klein-buch.sqlite"),
+            archive_dir: data.join("archive"),
+            backups_dir: data.join("backups"),
+            inputs_dir: dir.path().join("inputs"),
+            sidecar_dir: dir.path().join("sidecar"),
+        };
+        std::fs::create_dir_all(&paths.backups_dir).unwrap();
+        let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+
+        let pass = "passphrase-1234567890";
+        let (a, b) = tokio::join!(
+            create_now(&pool, &paths, pass, "manual"),
+            create_now(&pool, &paths, pass, "manual"),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_ne!(a.file_path, b.file_path);
+        let files = std::fs::read_dir(&paths.backups_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .map(|e| e.file_name().to_string_lossy().ends_with(".kbk"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(files, 2);
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_log WHERE target_kind = 'local' AND status = 'ok'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 2);
     }
 }

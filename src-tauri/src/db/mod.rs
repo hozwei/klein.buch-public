@@ -41,9 +41,27 @@ pub struct PendingRestoreAudit(pub Mutex<Option<AppliedInfo>>);
 /// leitet aus dieser Passphrase intern (PBKDF2-HMAC-SHA512) den Seiten-
 /// schlüssel ab; der KDF-Salt liegt im DB-Header → selbstbeschreibende,
 /// cross-OS-portable Datei (ADR 0035, Amendment 2026-05-24).
-fn sqlcipher_key_literal(passphrase: &str) -> String {
+pub(crate) fn sqlcipher_key_literal(passphrase: &str) -> String {
     format!("'{}'", passphrase.replace('\'', "''"))
 }
+
+/// Startet eine Schreib-Transaktion mit `BEGIN IMMEDIATE` (Plan W2.5).
+///
+/// Ein normales `BEGIN` (deferred) nimmt die Schreibsperre erst beim ersten
+/// Schreiben; liest die Transaktion vorher (Lesen-dann-Schreiben, z. B.
+/// Festschreiben, Zahlung, Nummernkreis) und hat inzwischen eine andere
+/// Verbindung geschrieben, scheitert das Hochstufen unter WAL sofort mit
+/// `SQLITE_BUSY` — der `busy_timeout` greift dort nicht. `IMMEDIATE` holt die
+/// Sperre am Anfang und wartet dabei bis zum `busy_timeout`.
+pub async fn begin_immediate(
+    pool: &SqlitePool,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
+    Ok(pool.begin_with("BEGIN IMMEDIATE").await?)
+}
+
+/// Wartezeit auf eine belegte Datenbank, bevor `SQLITE_BUSY` gemeldet wird
+/// (Plan W2.5).
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Öffnet (oder erstellt) den SQLite-Pool für `db_file`.
 ///
@@ -63,7 +81,8 @@ pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> 
     let mut opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(BUSY_TIMEOUT);
 
     if let Some(passphrase) = key {
         opts = opts.pragma("key", sqlcipher_key_literal(passphrase));
