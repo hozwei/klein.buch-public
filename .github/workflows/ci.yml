@@ -49,13 +49,18 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
+      # Der Azure-Mirror lieferte im Oktober 2026 Pakete nur mit Timeouts (35 min); daher
+      # archive.ubuntu.com, Wiederholungen und ein festes Limit. Entfällt mit Tauri (W5).
       - name: System-Deps (Tauri 2 on Ubuntu)
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt-get update
-          sudo -E apt-get install -y --no-install-recommends \
+          sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
+            /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
+          APT_OPTS="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
+          sudo -E apt-get $APT_OPTS update
+          sudo -E apt-get $APT_OPTS install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             librsvg2-dev \
             libssl-dev \
