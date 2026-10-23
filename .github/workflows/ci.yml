@@ -2,9 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, phase-w]
   pull_request:
     branches: [main]
+
+# Ein neuer Push bricht den laufenden Lauf desselben Zweigs ab (der Token kann Läufe
+# weder abbrechen noch neu starten).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +25,7 @@ env:
 jobs:
   rust:
     name: cargo fmt + clippy + test
+    if: github.repository == 'hozwei/klein.buch-public'
     runs-on: ubuntu-latest
     # MailHog für den Block-5-E2E-Test (SMTP 1025, HTTP-API 8025). Der Test
     # erkennt einen fehlenden MailHog selbst und überspringt sich dann (no-op);
@@ -68,6 +78,7 @@ jobs:
 
   frontend:
     name: pnpm lint + svelte-check
+    if: github.repository == 'hozwei/klein.buch-public'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -75,15 +86,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Version aus "packageManager" in package.json.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
+          package_json_file: package.json
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: "pnpm"
           cache-dependency-path: pnpm-lock.yaml
 
