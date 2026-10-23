@@ -130,6 +130,8 @@ fn sample_cii_xml(invoice_number: &str) -> String {
         tax_number: Some("11/222/33333"),
         vat_id: Some("DE123456789"),
         email: "rechnung@lieferant.de",
+        phone: Some("+49 000 000000"),
+        contact_name: None,
         iban: None,
         bic: None,
         is_kleinunternehmer: false,

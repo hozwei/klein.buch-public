@@ -78,7 +78,7 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
     let pool = app.state::<SqlitePool>();
     let session = app.state::<BackupSession>();
     let paths = Paths::from_handle(app)?;
-    let today = chrono::Local::now().date_naive();
+    let today = crate::clock::today_berlin();
     let pool = pool.inner();
     let session = session.inner();
 

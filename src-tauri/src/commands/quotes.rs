@@ -27,7 +27,7 @@
 //! `validate_quote` blockt jeden USt-Ausweis bei `is_kleinunternehmer = true`
 //! (über `kleinunternehmer::assert_no_vat`) — §14c-Schutz auch im Angebot.
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -63,7 +63,10 @@ use crate::pdf::{bundle, klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    pub fiscal_year: i64,
+    /// Optional und nur zur Kontrolle: der Server leitet das GJ aus dem
+    /// Angebotsdatum ab (Plan W1.2); ein abweichender Wert wird abgelehnt.
+    #[serde(default)]
+    pub fiscal_year: Option<i64>,
     pub input: QuoteInput,
 }
 
@@ -156,10 +159,16 @@ pub async fn quotes_attachments_list(
 #[tauri::command]
 pub async fn quotes_create_draft(
     pool: State<'_, SqlitePool>,
+    args: CreateDraftArgs,
+) -> Result<QuoteDetail> {
+    create_draft_core(pool.inner(), args).await
+}
+
+/// Testbarer Kern von [`quotes_create_draft`] (ohne Tauri-State).
+pub async fn create_draft_core(
+    pool: &SqlitePool,
     mut args: CreateDraftArgs,
 ) -> Result<QuoteDetail> {
-    let pool = pool.inner();
-
     // P3: Positionen mit Markdown-Body → `description` aus dem Markup als Klartext
     // neu berechnen (konsistente Beschreibung, auch nach Body-Edits).
     recompute_markup_descriptions(&mut args.input.items);
@@ -208,8 +217,13 @@ pub async fn quotes_create_draft(
         }
     }
 
-    let quote_number =
-        numbering::next_number(pool, DocType::Quote, args.fiscal_year as i32).await?;
+    // GJ = Jahr des Angebotsdatums (Plan W1.2) — bestimmt den Nummernkreis.
+    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+        &args.input.quote_date,
+        args.fiscal_year,
+    )
+    .map_err(Error::Domain)?;
+    let quote_number = numbering::next_number(pool, DocType::Quote, fiscal_year as i32).await?;
     let totals = quote::compute_totals(&args.input.items);
     let snapshot = SellerSnapshot {
         name: seller_row.name.as_str(),
@@ -232,7 +246,7 @@ pub async fn quotes_create_draft(
 
     let payload = quotes::DraftCreatePayload {
         contact_id: args.contact_id.clone(),
-        fiscal_year: args.fiscal_year,
+        fiscal_year,
         is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
         input: args.input.clone(),
     };
@@ -594,14 +608,14 @@ pub async fn quotes_convert_to_invoice(
             .unwrap_or_else(|| quote.pdf_template.clone()),
     };
     let input = quote::convert_to_invoice(&items, &opts);
-    let fiscal_year = args.invoice_date.year() as i64;
+    // GJ leitet create_invoice_draft_from_input aus dem Rechnungsdatum ab (W1.2).
 
     // Gemeinsamer Draft-Helper: Snapshots, Belegnummer, derived_from_quote_id,
     // Audit invoice.draft_create.
     let invoice_detail = crate::commands::invoices::create_invoice_draft_from_input(
         pool,
         &quote.contact_id,
-        fiscal_year,
+        None,
         &input,
         Some(&quote.id),
     )
@@ -971,8 +985,7 @@ fn make_buyer_view_from_quote(q: &QuoteRow) -> Option<BuyerView<'_>> {
 }
 
 fn today_berlin() -> NaiveDate {
-    // Wie commands::invoices: System-TZ (Block 0 pinnt Europe/Berlin).
-    Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
@@ -985,6 +998,8 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         tax_number: row.tax_number.as_deref(),
         vat_id: row.vat_id.as_deref(),
         email: &row.email,
+        phone: row.phone.as_deref(),
+        contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
         is_kleinunternehmer: row.is_kleinunternehmer == 1,

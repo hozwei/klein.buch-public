@@ -44,7 +44,7 @@ pub struct FiscalYearOverview {
 #[tauri::command]
 pub async fn fiscal_year_overview(pool: State<'_, SqlitePool>) -> Result<FiscalYearOverview> {
     let pool = pool.inner();
-    let current = chrono::Local::now().date_naive().year() as i64;
+    let current = crate::clock::today_berlin().year() as i64;
     let auto = app_settings::get_bool(pool, "depreciation_auto_year_close", true).await?;
 
     let inputs = euer_repo::load_inputs(pool).await?;
@@ -117,7 +117,7 @@ pub async fn fiscal_year_close(
     year: i64,
 ) -> Result<lock::FiscalYearLock> {
     let paths = Paths::from_handle(&app)?;
-    let today = chrono::Local::now().date_naive();
+    let today = crate::clock::today_berlin();
     lock::close_year(pool.inner(), &paths, session.inner(), year, today).await
 }
 

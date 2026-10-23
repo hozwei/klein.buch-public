@@ -994,6 +994,12 @@ export interface RestoreReport {
   preRestoreBackupPath: string;
   sourceFile: string;
   stagedAt: string;
+  /** Backup-Format (1 = ohne Logo/Unterschrift, 2 = mit). */
+  formatVersion: number;
+  /** Logo und Unterschrift werden mit eingespielt. */
+  brandingRestored: boolean;
+  /** Hinweis für die Anzeige, z. B. bei Format-1-Backups. */
+  notice: string | null;
 }
 
 export interface ExportReport {

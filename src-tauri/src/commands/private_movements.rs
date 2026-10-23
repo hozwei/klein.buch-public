@@ -4,7 +4,6 @@
 //! nur der Vollständigkeit der Kasse. Erfassung schreibt sofort fest (Lock-Event
 //! → Backup-Hook). Kein Storno/Edit — Korrektur via Gegenbewegung (append-only).
 
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -54,8 +53,17 @@ pub async fn private_movements_create(
     session: State<'_, backup::BackupSession>,
     args: PrivateMovementCreateArgs,
 ) -> Result<PrivateMovementRow> {
-    let pool = pool.inner();
     let paths = Paths::from_handle(&app)?;
+    create_core(pool.inner(), &paths, session.inner(), args).await
+}
+
+/// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).
+pub async fn create_core(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &backup::BackupSession,
+    args: PrivateMovementCreateArgs,
+) -> Result<PrivateMovementRow> {
     let input = args.input;
 
     if let Err(errs) = private_movement::validate_private_movement(&input) {
@@ -68,9 +76,12 @@ pub async fn private_movements_create(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.movement_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
+    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+        &input.movement_date,
+        args.fiscal_year,
+    )
+    .map_err(Error::Domain)?;
     // GJ-Festschreibung (Block 15): keine neue Privatbewegung mit Datum in einem
     // abgeschlossenen Geschäftsjahr.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -118,7 +129,7 @@ pub async fn private_movements_create(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "private_movement.lock")
+    backup::auto_backup_if_unlocked(pool, paths, session, "private_movement.lock")
         .await
         .ok();
 

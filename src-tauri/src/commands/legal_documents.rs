@@ -60,7 +60,7 @@ pub async fn legal_documents_upload(
     // (mehrere Versionen mit gleichem Original-Namen kollisionsfrei).
     let token = &Uuid::now_v7().to_string()[..8];
     let archive_name = format!("{doc_type}-{token}-{sanitized}");
-    let fiscal_year = chrono::Local::now().year();
+    let fiscal_year = crate::clock::today_berlin().year();
 
     let stored = archive::store_bytes(
         pool,

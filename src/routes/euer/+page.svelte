@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { yearBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { euerAvailableYears, euerComputeReport } from "$lib/api";
   import type { EuerReport } from "$lib/types";
@@ -17,7 +18,7 @@
   onMount(async () => {
     try {
       years = await euerAvailableYears();
-      selectedYear = years[0] ?? new Date().getFullYear();
+      selectedYear = years[0] ?? yearBerlin();
     } catch (e) {
       error = String(e);
       loading = false;

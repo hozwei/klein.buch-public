@@ -740,6 +740,8 @@ mod tests {
             tax_number: Some("123/456/78901"),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de",
+            phone: None,
+            contact_name: None,
             iban: None,
             bic: None,
             is_kleinunternehmer: true,

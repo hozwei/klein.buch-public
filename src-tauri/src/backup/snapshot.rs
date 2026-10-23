@@ -6,8 +6,12 @@
 //! ```text
 //! klein-buch.sqlite        ← konsistenter DB-Snapshot (WAL-Checkpoint + Datei)
 //! archive/<jahr>/<...>     ← write-once GoBD-Archiv (PDF/XML/Belege)
-//! inputs/branding/<...>    ← Logo/Branding (menschen-maintained, klein)
+//! branding/<...>           ← hochgeladenes Logo + Unterschrift aus `data/branding`
 //! ```
+//!
+//! Format 2 (Plan W1.5): `branding/` kommt aus `data_dir/branding` — dort legt
+//! die App Logo und Unterschrift ab ([`crate::branding`]). Format 1 sicherte
+//! stattdessen `inputs/branding/` (menschen-gepflegt, nicht Teil der Daten).
 //!
 //! DB-Snapshot: zuerst `PRAGMA wal_checkpoint(TRUNCATE)` (schreibt die WAL in
 //! die Haupt-Datei zurück), dann die DB-Datei direkt lesen. Das ist robust über
@@ -37,7 +41,7 @@ pub async fn build_content_zip(pool: &SqlitePool, paths: &Paths) -> Result<Conte
     let db_bytes = read_db_snapshot_bytes(pool, &paths.db_file).await?;
 
     let archive_files = collect_files(&paths.archive_dir)?;
-    let branding_dir = paths.inputs_dir.join("branding");
+    let branding_dir = crate::branding::branding_dir(&paths.data_dir);
     let branding_files = collect_files(&branding_dir)?;
 
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
@@ -53,7 +57,7 @@ pub async fn build_content_zip(pool: &SqlitePool, paths: &Paths) -> Result<Conte
         zw.write_all(&bytes)?;
     }
     for (rel, abs) in &branding_files {
-        zw.start_file(format!("inputs/branding/{rel}"), opts)?;
+        zw.start_file(format!("branding/{rel}"), opts)?;
         let bytes = fs::read(abs)?;
         zw.write_all(&bytes)?;
     }
@@ -167,8 +171,12 @@ mod tests {
             b"pdf-bytes",
         )
         .unwrap();
+        // Format 2 (W1.5): Logo/Unterschrift aus data/branding, nicht aus inputs/.
+        fs::create_dir_all(paths.data_dir.join("branding")).unwrap();
+        fs::write(paths.data_dir.join("branding/logo.png"), b"png").unwrap();
+        fs::write(paths.data_dir.join("branding/signature.png"), b"sig").unwrap();
         fs::create_dir_all(paths.inputs_dir.join("branding")).unwrap();
-        fs::write(paths.inputs_dir.join("branding/logo.png"), b"png").unwrap();
+        fs::write(paths.inputs_dir.join("branding/logo-vorlage.png"), b"png").unwrap();
 
         let content = build_content_zip(&pool, &paths).await.unwrap();
         assert!(!content.zip_bytes.is_empty());
@@ -181,7 +189,12 @@ mod tests {
             .collect();
         assert!(names.contains(&"klein-buch.sqlite".to_string()));
         assert!(names.contains(&"archive/2026/invoices/pdf/RE-2026-0001.pdf".to_string()));
-        assert!(names.contains(&"inputs/branding/logo.png".to_string()));
+        assert!(names.contains(&"branding/logo.png".to_string()));
+        assert!(names.contains(&"branding/signature.png".to_string()));
+        assert!(
+            !names.iter().any(|n| n.starts_with("inputs/")),
+            "inputs/ gehört nicht ins Backup: {names:?}"
+        );
 
         // Der eingebettete DB-Snapshot muss eine valide SQLite-Datei sein.
         use std::io::Read;

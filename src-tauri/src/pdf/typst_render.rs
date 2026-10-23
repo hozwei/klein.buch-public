@@ -612,8 +612,9 @@ impl TemplateWorld {
     }
 }
 
+/// Typst-`datetime.today()` in Europe/Berlin (Plan W1.8).
 fn today_de_local() -> Datetime {
-    let now = chrono::Local::now().date_naive();
+    let now = crate::clock::today_berlin();
     Datetime::from_ymd_hms(now.year(), now.month() as u8, now.day() as u8, 0, 0, 0)
         .unwrap_or_else(|| Datetime::from_ymd_hms(2026, 1, 1, 0, 0, 0).expect("static"))
 }
@@ -657,6 +658,63 @@ mod tests {
     use crate::domain::invoice::{InvoiceDirection, InvoiceItemInput};
     use chrono::NaiveDate;
 
+    /// Text aller Text-Läufe eines gesetzten Dokuments (Seiten → Frames).
+    fn frame_text(frame: &typst::layout::Frame, out: &mut String) {
+        for (_, item) in frame.items() {
+            match item {
+                typst::layout::FrameItem::Group(g) => frame_text(&g.frame, out),
+                typst::layout::FrameItem::Text(t) => out.push_str(&t.text),
+                _ => {}
+            }
+        }
+    }
+
+    fn without_whitespace(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// Plan W1.10: Satzzeichen aus dem Paket-Markup (Typst-Syntax wie `//`,
+    /// `=`, `/ t:`, `~`, `--`) erscheinen im gesetzten Dokument genau wie im
+    /// Klartext für BT-154 (`to_plaintext`) — nichts verschluckt oder umgedeutet.
+    /// Geprüft wird der Text der gesetzten Seiten (Frames), aus denen
+    /// `typst_pdf` das PDF schreibt; `lopdf` kann die ToUnicode-CMaps von Typst
+    /// nicht lesen, daher keine Textextraktion aus den PDF-Bytes.
+    #[test]
+    fn escaped_markup_renders_same_text_as_plaintext() {
+        use crate::domain::package::{parse_markup, to_plaintext, to_typst};
+        let cases = [
+            "a // b",
+            "= x",
+            "/ t: d",
+            "~",
+            "--",
+            "Wartung -- 2 h // inkl. Anfahrt",
+            "1 + 2 = 3, a - b / c",
+            "Preis: 5,00 € (netto); 10 % Rabatt? Ja!",
+        ];
+        for src in cases {
+            let doc = parse_markup(src);
+            let expected = without_whitespace(&to_plaintext(&doc));
+            let source = format!(
+                "#set page(width: 180mm, height: auto, margin: 5mm)\n{}",
+                to_typst(&doc)
+            );
+            let world = TemplateWorld::new(&source, "{}", None, &[]).unwrap();
+            let document = typst::compile::<PagedDocument>(&world)
+                .output
+                .unwrap_or_else(|e| panic!("Typst-Fehler für {src:?}: {e:?}"));
+
+            let mut laid_out = String::new();
+            for page in &document.pages {
+                frame_text(&page.frame, &mut laid_out);
+            }
+            assert_eq!(without_whitespace(&laid_out), expected, "Satz: {src:?}");
+
+            let pdf = typst_pdf::pdf(&document, &typst_pdf::PdfOptions::default()).unwrap();
+            assert!(pdf.starts_with(b"%PDF-"), "PDF-Export für {src:?}");
+        }
+    }
+
     fn seller() -> SellerView<'static> {
         SellerView {
             name: "Wildbach Computerhilfe",
@@ -667,6 +725,8 @@ mod tests {
             tax_number: Some("123/456/78901"),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de",
+            phone: None,
+            contact_name: None,
             iban: None,
             bic: None,
             is_kleinunternehmer: true,

@@ -161,9 +161,10 @@ pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
                 "backup",
                 "restore",
                 Some(&format!(
-                    r#"{{"source":"{}","staged_at":"{}"}}"#,
+                    r#"{{"source":"{}","staged_at":"{}","branding_restored":{}}}"#,
                     info.source.replace('"', "'"),
-                    info.staged_at.replace('"', "'")
+                    info.staged_at.replace('"', "'"),
+                    info.branding_restored
                 )),
             )
             .await

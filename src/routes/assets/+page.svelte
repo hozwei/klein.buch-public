@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { yearBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { assetsList, depreciationAccrueYear } from "$lib/api";
   import type { AssetListItem } from "$lib/types";
@@ -23,7 +24,7 @@
   let statusFilter = $state<"active" | "disposed" | "">("active");
 
   // AfA-Buchen
-  const currentYear = new Date().getFullYear();
+  const currentYear = yearBerlin();
   let showAccrue = $state(false);
   let accrueYear = $state<number>(currentYear);
 

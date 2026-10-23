@@ -86,7 +86,7 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de".into(),
-            phone: None,
+            phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
             logo_filename: None,

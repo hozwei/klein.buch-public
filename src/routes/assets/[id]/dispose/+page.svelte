@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -17,11 +18,11 @@
 
   let id = $derived($page.params.id ?? "");
 
-  let disposalDate = $state(new Date().toISOString().slice(0, 10));
+  let disposalDate = $state(todayBerlin());
   let disposalType = $state<DisposalType>("sale");
   let proceedsEuros = $state<number>(0);
 
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
 
   let isSale = $derived(disposalType === "sale");
   let proceedsCents = $derived(isSale ? Math.round(proceedsEuros * 100) : 0);

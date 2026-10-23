@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin, yearOfIsoDate, addDaysIso } from "$lib/date";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
@@ -53,7 +54,7 @@
 
   // Heute (Europe/Berlin-nah via lokalem Datum) — Obergrenze für Rechnungs- und
   // Leistungsdatum: beide dürfen nicht in der Zukunft liegen.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayBerlin();
   let contactId = $state("");
   let invoiceDate = $state(today);
   let deliveryDate = $state("");
@@ -119,8 +120,7 @@
   });
 
   let fiscalYear = $derived(() => {
-    const d = new Date(invoiceDate);
-    return Number.isNaN(d.getTime()) ? new Date().getFullYear() : d.getFullYear();
+    return yearOfIsoDate(invoiceDate);
   });
 
   onMount(async () => {
@@ -248,10 +248,7 @@
   }
 
   function addDays(iso: string, days: number): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return addDaysIso(iso, days);
   }
 
   function eurosFromInput(v: number): number {

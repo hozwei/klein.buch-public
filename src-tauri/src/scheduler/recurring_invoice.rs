@@ -50,6 +50,20 @@ use crate::notify::{self, NewNotification};
 /// Erwarten nicht vorrückt.
 pub const CATCH_UP_CAP: usize = 120;
 
+/// Sperre pro Vorlage (Plan W1.4): Tick und „Jetzt erstellen“ verarbeiten
+/// dieselbe Vorlage nie gleichzeitig. Zusammen mit dem Compare-and-Swap in
+/// [`recurring_invoice::advance`] entsteht je Periode genau eine Rechnung.
+static TEMPLATE_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn template_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let mut map = TEMPLATE_LOCKS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.entry(id.to_string()).or_default().clone()
+}
+
 /// Deutsche Monatsnamen (Index 1..=12) für die Leistungszeitraum-Beschriftung.
 const MONTHS_DE: [&str; 12] = [
     "Januar",
@@ -97,8 +111,20 @@ pub async fn process_due(
     let due = recurring_invoice::list_due(pool, &today.to_string()).await?;
     let mut report = ProcessReport::default();
 
-    for tmpl in &due {
-        match catch_up(pool, paths, app, tmpl, today).await {
+    for listed in &due {
+        // Unter der Vorlagen-Sperre frisch lesen: ein paralleles „Jetzt
+        // erstellen“ kann die Vorlage inzwischen vorgerückt haben.
+        let lock = template_lock(&listed.id);
+        let _guard = lock.lock().await;
+        let tmpl = match recurring_invoice::get_row(pool, &listed.id).await {
+            Ok(Some(t)) if t.active != 0 => t,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("Abo-Rechnung {} nicht lesbar: {e}", listed.id);
+                continue;
+            }
+        };
+        match catch_up(pool, paths, app, &tmpl, today).await {
             Ok(0) => {}
             Ok(n) => {
                 report.processed_templates += 1;
@@ -130,6 +156,8 @@ pub async fn run_now(
     id: &str,
     today: NaiveDate,
 ) -> Result<String> {
+    let lock = template_lock(id);
+    let _guard = lock.lock().await;
     let tmpl = recurring_invoice::get_row(pool, id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Abo-Vorlage nicht gefunden: {id}")))?;
@@ -152,7 +180,14 @@ pub async fn run_now(
 
     let invoice_id = process_one(pool, paths, app, &tmpl, &items, occurrence, today).await?;
     let following = compute_next_due_date(freq, day, occurrence);
-    recurring_invoice::advance(pool, &tmpl.id, &invoice_id, &following.to_string()).await?;
+    recurring_invoice::advance(
+        pool,
+        &tmpl.id,
+        &occurrence.to_string(),
+        &invoice_id,
+        &following.to_string(),
+    )
+    .await?;
 
     backup::auto_backup_if_unlocked(pool, paths, session, "recurring_invoice.lock")
         .await
@@ -190,7 +225,14 @@ async fn catch_up(
     while next <= today && end.map(|e| next <= e).unwrap_or(true) && created < CATCH_UP_CAP {
         let invoice_id = process_one(pool, paths, app, tmpl, &items, next, today).await?;
         let following = compute_next_due_date(freq, day, next);
-        recurring_invoice::advance(pool, &tmpl.id, &invoice_id, &following.to_string()).await?;
+        recurring_invoice::advance(
+            pool,
+            &tmpl.id,
+            &next.to_string(),
+            &invoice_id,
+            &following.to_string(),
+        )
+        .await?;
         next = following;
         created += 1;
     }
@@ -219,7 +261,8 @@ async fn process_one(
 
     // Draft über den normalen Weg — vergibt die Nummer + persistiert (Transaktion).
     let detail =
-        create_invoice_draft_from_input(pool, &tmpl.contact_id, fiscal_year, &input, None).await?;
+        create_invoice_draft_from_input(pool, &tmpl.contact_id, Some(fiscal_year), &input, None)
+            .await?;
     let invoice_id = detail.invoice.id.clone();
     let number = detail.invoice.invoice_number.clone();
 
@@ -887,6 +930,69 @@ mod pipeline_tests {
             after.next_due_date, "2026-06-01",
             "um eine Periode vorgerückt"
         );
+    }
+
+    /// Plan W1.4: Tick und „Jetzt erstellen“ gleichzeitig auf derselben fälligen
+    /// Periode → genau eine Rechnung, Vorlage genau einmal vorgerückt.
+    #[tokio::test]
+    async fn parallel_tick_and_run_now_create_exactly_one_invoice() {
+        let (pool, dir) = setup_pool().await;
+        let paths = paths_for(dir.path());
+        mk_seller(&pool).await;
+        let contact_id = mk_contact(&pool).await;
+        let session = BackupSession::default();
+        session.set("passphrase-1234".into());
+
+        let detail =
+            recurring_invoice::create(&pool, &ri_tmpl(&contact_id, d(2026, 5, 1), "draft"))
+                .await
+                .unwrap();
+        let id = detail.template.id.clone();
+
+        let (tick, now) = tokio::join!(
+            process_due(&pool, &paths, &session, None, d(2026, 5, 20)),
+            run_now(&pool, &paths, &session, None, &id, d(2026, 5, 20)),
+        );
+        let tick = tick.unwrap();
+        let created = tick.created_invoices + usize::from(now.is_ok());
+        assert_eq!(
+            created, 1,
+            "genau eine Rechnung (tick={tick:?}, run_now={now:?})"
+        );
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let after = recurring_invoice::get_row(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.next_due_date, "2026-06-01");
+    }
+
+    /// Compare-and-Swap: ein veralteter Stichtag rückt nicht vor.
+    #[tokio::test]
+    async fn advance_with_stale_due_date_is_rejected() {
+        let (pool, _dir) = setup_pool().await;
+        mk_seller(&pool).await;
+        let contact_id = mk_contact(&pool).await;
+        let detail =
+            recurring_invoice::create(&pool, &ri_tmpl(&contact_id, d(2026, 5, 1), "draft"))
+                .await
+                .unwrap();
+        let id = detail.template.id.clone();
+        let err = recurring_invoice::advance(&pool, &id, "2026-04-01", "inv-x", "2026-05-01")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("vorgerückt"), "{err}");
+        let row = recurring_invoice::get_row(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.next_due_date, "2026-05-01");
+        assert!(row.last_invoice_id.is_none());
     }
 
     #[tokio::test]

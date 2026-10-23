@@ -54,7 +54,7 @@ pub async fn notifications_run_checks(
     app: AppHandle,
     pool: State<'_, SqlitePool>,
 ) -> Result<usize> {
-    let today = chrono::Local::now().date_naive();
+    let today = crate::clock::today_berlin();
     let pool = pool.inner();
     let paths = crate::config::Paths::from_handle(&app)?;
     integrity_check_cron::run(pool, Some(&app), today)

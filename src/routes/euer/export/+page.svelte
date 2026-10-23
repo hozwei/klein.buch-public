@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { yearBerlin } from "$lib/date";
   // Block 14a — EÜR-Export (Selbst-Abgabe): Anlage EÜR + Anlageverzeichnis
   // (AVEÜR) + Einzelaufstellung. Anzeige + CSV/ZIP. (Das druckbare Typst-PDF
   // folgt in Schritt 2.)
@@ -58,13 +59,13 @@
     if (typeof localStorage !== "undefined") localStorage.setItem("datevSkr", skr);
   });
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = yearBerlin();
   let canBookAfa = $derived(selectedYear != null && selectedYear <= currentYear);
 
   onMount(async () => {
     try {
       years = await euerAvailableYears();
-      selectedYear = years[0] ?? new Date().getFullYear();
+      selectedYear = years[0] ?? yearBerlin();
     } catch (e) {
       error = String(e);
       loading = false;

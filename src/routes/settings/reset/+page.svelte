@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   // Block G1-RESET — Factory Reset (ADR 0036).
   //
   // Die EINE sanktionierte Total-Löschung: nukt die gesamte lokale Instanz und
@@ -43,7 +44,7 @@
     }
     try {
       const s = await backupGetSettings();
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = todayBerlin();
       const sep = s.defaultSuggestion.includes("\\") ? "\\" : "/";
       exportPath = `${s.defaultSuggestion}${sep}klein-buch-export-${stamp}.zip`;
     } catch {

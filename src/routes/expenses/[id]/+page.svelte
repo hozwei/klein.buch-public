@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import {
@@ -28,7 +29,7 @@
   let showCancel = $state(false);
   let cancelReason = $state("");
   let showPay = $state(false);
-  let payDate = $state(new Date().toISOString().slice(0, 10));
+  let payDate = $state(todayBerlin());
   let payAccountId = $state<string>("");
 
   // PV1-A5: Roh-XML-Viewer wird global im Root-Layout gemountet
@@ -101,7 +102,7 @@
   });
 
   function startPay() {
-    payDate = detail?.expense.paidDate ?? new Date().toISOString().slice(0, 10);
+    payDate = detail?.expense.paidDate ?? todayBerlin();
     payAccountId =
       detail?.expense.paidFromAccountId ??
       accounts.find((a) => a.isDefault === 1 && a.active === 1)?.id ??
@@ -238,7 +239,7 @@
         <div class="pay-grid">
           <label>
             Bezahlt am
-            <input type="date" bind:value={payDate} max={new Date().toISOString().slice(0, 10)} />
+            <input type="date" bind:value={payDate} max={todayBerlin()} />
           </label>
           <label>
             Konto

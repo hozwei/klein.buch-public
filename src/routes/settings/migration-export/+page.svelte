@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   // Block 4 — Migrations-Export (offenes ZIP aller Daten).
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
@@ -16,7 +17,7 @@
   onMount(async () => {
     try {
       const s = await backupGetSettings();
-      const stamp = new Date().toISOString().slice(0, 10);
+      const stamp = todayBerlin();
       const sep = s.defaultSuggestion.includes("\\") ? "\\" : "/";
       // Standard-Vorschlag: neben dem Backup-Ordner ablegen.
       targetPath = `${s.defaultSuggestion}${sep}klein-buch-export-${stamp}.zip`;

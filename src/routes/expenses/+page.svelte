@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { expensesList, recurringList } from "$lib/api";
   import type { ExpenseListItem } from "$lib/types";
@@ -30,7 +31,7 @@
     try {
       all = await expensesList({ includeCanceled: true });
       const subs = await recurringList(false);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBerlin();
       dueAbos = subs.filter((s) => s.active === 1 && s.nextDueDate <= today).length;
     } catch (e) {
       error = String(e);

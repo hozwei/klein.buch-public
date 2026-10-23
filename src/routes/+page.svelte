@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { APP_TIME_ZONE, dayOfYearBerlin, daysInYear, todayBerlin, yearBerlin } from "$lib/date";
   // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
   // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
@@ -137,42 +138,27 @@
 
   // ---- Derived-Werte ---------------------------------------------------------
 
+  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1).
   const today = new Date();
-  const todayIso = todayIsoLocal();
-
-  function todayIsoLocal(): string {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
+  const todayIso = todayBerlin(today);
+  const currentYear = yearBerlin(today);
 
   const fmtHeroDate = new Intl.DateTimeFormat("de-DE", {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: APP_TIME_ZONE,
   });
   const heroDate = fmtHeroDate.format(today);
 
-  function dayOfYear(d: Date): number {
-    const start = new Date(d.getFullYear(), 0, 0);
-    const diff = d.getTime() - start.getTime();
-    return Math.floor(diff / 86_400_000);
-  }
-
-  function daysInYear(year: number): number {
-    return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
-  }
-
-  const fyDay = dayOfYear(today);
-  const fyDaysInYear = daysInYear(today.getFullYear());
+  const fyDay = dayOfYearBerlin(today);
+  const fyDaysInYear = daysInYear(currentYear);
   // Tag-Anzeige nur sinnvoll, wenn das offene GJ das laufende Kalenderjahr ist.
   // Bei offenem Vorjahr (currentYear < today.year) wäre „Tag X von 365" für
   // das Vorjahr irreführend → wir lassen die Tag-Zeile dann weg.
   const showFyDay = $derived(
-    fyOverview !== null && fyOverview.currentYear === today.getFullYear(),
+    fyOverview !== null && fyOverview.currentYear === currentYear,
   );
 
   // §19-Modus aus seller_profile (Singleton; isKleinunternehmer ist 0|1).
@@ -260,7 +246,7 @@
   // currentYear ist das älteste offene GJ. Wenn currentYear < heutiges Jahr,
   // gibt es ein abschließbares Vorjahr.
   const overdueFy: number | null = $derived(
-    fyOverview && fyOverview.currentYear < today.getFullYear()
+    fyOverview && fyOverview.currentYear < currentYear
       ? fyOverview.currentYear
       : null,
   );

@@ -3,6 +3,55 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Umbau zur Web-/Docker-Fassung (Phase W). Bis zum nächsten Release nur auf dem
+Arbeitszweig `phase-w`.
+
+### Fixed
+
+- **E-Rechnung (XRechnung) wurde von KoSIT abgelehnt**, wenn keine USt-IdNr.
+  hinterlegt war: Es fehlten die Gruppe „Verkäufer-Kontakt“ (BG-6, BR-DE-2) und
+  eine Verkäufer-Kennung (BR-CO-26). Jetzt enthält das XML BG-6 (Ansprechpartner
+  = Inhaber-Name bzw. Firmenname, Telefon, E-Mail) und ohne USt-IdNr. die
+  Steuernummer als BT-29. Ohne Telefonnummer in den Stammdaten wird nicht
+  festgeschrieben (klare Meldung statt KoSIT-Fehler). KoSIT-Ablehnungen nennen
+  die verletzten Regeln, statt nur „validator exit-code 1“. (W1)
+- **Belegdatum und Geschäftsjahr in Europe/Berlin:** Das Frontend nahm „heute“
+  in UTC (zwischen 0 und 1–2 Uhr der Vortag, in der Neujahrsnacht eine Nummer
+  aus dem Vorjahreskreis); der Server nutzte die Prozess-Zeitzone. Jetzt gilt
+  überall Europe/Berlin (`chrono-tz`, `src/lib/date.ts`). (W1)
+- **Geschäftsjahr kommt vom Server:** Rechnung, Angebot, Kosten, Kosten aus
+  E-Rechnung und Privatbewegung leiten das GJ aus dem Belegdatum ab; ein
+  abweichendes GJ vom Client wird abgelehnt. (W1)
+- **Abo-Rechnungen ohne Doppel:** Vorrücken per Compare-and-Swap plus Sperre je
+  Vorlage zwischen automatischem Lauf und „Jetzt erstellen“. (W1)
+- **Logo und Unterschrift im Backup:** Backups (Format 2) enthalten
+  `data/branding`; der Restore spielt es zurück. Backups im Format 1 lassen sich
+  weiter einspielen, das gespeicherte Logo bleibt dann unverändert (Hinweis im
+  Restore-Ergebnis). (W1)
+- **Typst-Escaping vollständig:** Jedes ASCII-Satzzeichen in Paket-Texten wird
+  maskiert; `//`, `=`, `/ …:`, `~` oder `--` verschwanden sonst im PDF oder wurden
+  umgedeutet. (W1)
+- **Sidecar-Mock nur in Debug-/Test-Builds;** ein Release-Build mit gesetztem
+  `KLEIN_BUCH_SIDECAR_MOCK` startet nicht. (W1)
+- **Integritätsprüfung** zählt den Monat in Europe/Berlin (lief am Monatsersten
+  sonst doppelt oder gar nicht). (W1)
+
+### Changed
+
+- CI läuft auch auf dem Arbeitszweig `phase-w`, mit `concurrency`, nur
+  Leserechten (`contents: read`), Node 22, pnpm-Version aus `packageManager`
+  in `package.json`, festem Runner `ubuntu-24.04` und Zeitlimits. (W0)
+- `LICENSE` enthält jetzt den vollständigen Text der AGPL-3.0 (vorher nur
+  Urheberhinweis und Platzhalter); Urheberhinweis in `COPYRIGHT`, Hinweis zur
+  Java-Laufzeit der Windows-Releases v2026.5.0/v2026.5.1 in
+  `THIRD-PARTY-NOTICES.md` und `versions.json`. CI prüft die Prüfsumme von
+  `LICENSE`. (W1)
+- Migrationen `0001` und `0002` mit LF statt CRLF (sqlx prüft die Rohbytes);
+  ein Test verhindert CR in Migrationen. (W1)
+- Frontend-Tests mit vitest (`pnpm test`, läuft in CI). (W1)
+
 ## [2026.5.1] — Hotfix, veröffentlicht 2026-05-28
 
 ### Fixed

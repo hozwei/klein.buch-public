@@ -9,6 +9,7 @@ pub mod archive;
 pub mod assets;
 pub mod backup;
 pub mod branding;
+pub mod clock;
 pub mod commands;
 pub mod config;
 pub mod db;
@@ -34,6 +35,19 @@ pub fn run() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     tracing::info!("Klein.Buch v{} startet", env!("CARGO_PKG_VERSION"));
+
+    // Plan W1.3: Sidecar-Mock nur in Debug-/Test-Builds; ein Release-Build mit
+    // gesetztem Schalter verweigert den Start.
+    let mock_env = std::env::var(einvoice::SIDECAR_MOCK_ENV).ok();
+    if einvoice::mock_policy(cfg!(debug_assertions), mock_env.as_deref())
+        == einvoice::MockPolicy::RefuseStart
+    {
+        tracing::error!(
+            "{} ist in Release-Builds nicht erlaubt — Start abgebrochen.",
+            einvoice::SIDECAR_MOCK_ENV
+        );
+        std::process::exit(1);
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

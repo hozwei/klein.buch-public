@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
@@ -13,8 +14,8 @@
   let busy = $state(false);
 
   // Formularfelder
-  let expenseDate = $state(new Date().toISOString().slice(0, 10));
-  let paidDate = $state<string>(new Date().toISOString().slice(0, 10));
+  let expenseDate = $state(todayBerlin());
+  let paidDate = $state<string>(todayBerlin());
   let notPaidYet = $state(false);
   let vendorContactId = $state<string>("");
   let vendorName = $state("");
@@ -32,7 +33,7 @@
   let receiptFile = $state<File | null>(null);
 
   // Kein zukünftiges Datum erlaubt (Beleg-/Zahldatum); Backend erzwingt es auch.
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
 
   let grossCents = $derived(Math.round(netEuros * 100) + Math.round(taxEuros * 100));
 

@@ -233,9 +233,9 @@ fn audit_details(t: &RecurringInvoiceRow) -> String {
     )
 }
 
-/// Heutiges Datum (Europe/Berlin = System-TZ, in Block 0 gepinnt).
+/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> chrono::NaiveDate {
-    chrono::Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn esc(s: &str) -> String {

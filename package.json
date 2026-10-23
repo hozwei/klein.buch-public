@@ -12,6 +12,7 @@
     "lint": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "test": "TZ=UTC vitest run",
     "tauri": "tauri"
   },
   "license": "AGPL-3.0-or-later",
@@ -19,8 +20,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-opener": "^2",
     "marked": "^15.0.7",
     "minisearch": "^7.1.2"
   },
@@ -33,6 +34,7 @@
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "~5.6.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^3.2.7"
   }
 }

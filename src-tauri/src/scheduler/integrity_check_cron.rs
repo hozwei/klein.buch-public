@@ -23,10 +23,13 @@ pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -
         sqlx::query_scalar("SELECT MAX(started_at) FROM archive_integrity_checks")
             .fetch_one(pool)
             .await?;
+    // `started_at` ist UTC (`datetime('now','utc')`); der Monat zählt in
+    // Europe/Berlin, sonst läuft der Scan um Mitternacht am Monatsersten doppelt
+    // oder gar nicht (Plan W1.8).
     let ran_this_month = last
         .as_deref()
-        .and_then(|ts| ts.get(0..7))
-        .map(|m| m == this_month)
+        .and_then(crate::clock::db_utc_to_berlin)
+        .map(|b| b.format("%Y-%m").to_string() == this_month)
         .unwrap_or(false);
     if ran_this_month {
         return Ok(());

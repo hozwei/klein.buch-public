@@ -33,6 +33,8 @@ fn seller_kleinunternehmer() -> SellerView<'static> {
         tax_number: Some("133/456/7890"),
         vat_id: None,
         email: "schmidm@wildbach-computerhilfe.de",
+        phone: Some("+49 000 000000"),
+        contact_name: None,
         iban: Some("DE02120300000000202051"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,

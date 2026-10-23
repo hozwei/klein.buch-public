@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import {
@@ -38,7 +39,7 @@
 
   // Annahme-Panel
   let showAccept = $state(false);
-  let acceptedDate = $state(new Date().toISOString().slice(0, 10));
+  let acceptedDate = $state(todayBerlin());
   let signedContractFile = $state<File | null>(null);
   let attachmentLabel = $state("");
 

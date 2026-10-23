@@ -13,7 +13,7 @@
 //! `ArchiveKind::ExpenseOriginal`-Klassifizierung). Hier nur **zusätzliche**
 //! Anhänge.
 
-use chrono::{Datelike, Local};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -120,7 +120,7 @@ pub async fn attachments_add(
     let token = &uuid::Uuid::now_v7().to_string()[..8];
     let archive_name = format!("{}-{token}-{sanitized}", args.parent_type);
     let mime = guess_mime(&sanitized);
-    let fiscal_year = Local::now().year();
+    let fiscal_year = crate::clock::today_berlin().year();
 
     let stored = archive::store_bytes(
         pool,

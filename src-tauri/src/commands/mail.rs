@@ -473,7 +473,9 @@ pub async fn mail_send_test(
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    let now = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
+    let now = crate::clock::now_berlin()
+        .format("%d.%m.%Y %H:%M")
+        .to_string();
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),

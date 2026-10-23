@@ -17,7 +17,6 @@
 //! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne
 //! Tauri-/Opener-Hülle.
 
-use chrono::Local;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::io::Write;
@@ -216,7 +215,7 @@ pub async fn dsgvo_export(
     contact_id: String,
 ) -> Result<DsgvoExportResult> {
     let paths = Paths::from_handle(&app)?;
-    let now = Local::now();
+    let now = crate::clock::now_berlin();
     let generated_at = now.format("%Y-%m-%d %H:%M").to_string();
     let file_date = now.format("%Y-%m-%d").to_string();
 

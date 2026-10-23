@@ -319,7 +319,14 @@ und die App-Version anhängen.
 
 ## Lizenz
 
-**AGPL-3.0-or-later.** Siehe `LICENSE`.
+**AGPL-3.0-or-later.** `LICENSE` enthält den vollständigen Lizenztext der GNU
+Affero General Public License, Version 3.
+
+Klein.Buch
+Copyright (C) 2026  Manuel Schmid <schmidm@wildbach-computerhilfe.de>
+
+Urheberhinweis und Kurzfassung der Lizenzbedingungen stehen in `COPYRIGHT`,
+mitgelieferte Komponenten Dritter in `THIRD-PARTY-NOTICES.md`.
 
 Bei Eigen-Hosting einer veränderten Version (zum Beispiel als
 Webdienst) gilt §13 AGPL: der vollständige Quelltext muss

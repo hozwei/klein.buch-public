@@ -8,7 +8,7 @@
 //! Export (DATEV-CSV + Steuerberater-ZIP) folgt in Block 14b/14c; die
 //! ELSTER-Ausfüllhilfe (Block 14a) liegt unten.
 
-use chrono::{Datelike, Local};
+use chrono::Datelike;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::SqlitePool;
@@ -73,7 +73,7 @@ pub async fn euer_available_years(pool: State<'_, SqlitePool>) -> Result<Vec<i64
         .map(|y| y as i64)
         .collect();
 
-    let current = Local::now().year() as i64;
+    let current = crate::clock::today_berlin().year() as i64;
     if !years.contains(&current) {
         years.push(current);
     }
@@ -249,7 +249,7 @@ async fn build_euer_pdf_bytes(
 
     let data = json!({
         "year": fiscal_year,
-        "generatedAt": Local::now().date_naive().to_string(),
+        "generatedAt": crate::clock::today_berlin().to_string(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
         "seller": {
@@ -399,7 +399,9 @@ pub async fn euer_export_datev(
     let header = DatevHeader {
         fiscal_year: y,
         skr: skr_enum,
-        generated_at: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
+        generated_at: crate::clock::now_berlin()
+            .format("%Y%m%d%H%M%S%3f")
+            .to_string(),
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
 
@@ -475,7 +477,9 @@ pub async fn euer_export_stb_zip(
     let datev_header = DatevHeader {
         fiscal_year: y,
         skr: skr_enum,
-        generated_at: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
+        generated_at: crate::clock::now_berlin()
+            .format("%Y%m%d%H%M%S%3f")
+            .to_string(),
     };
     let datev_bytes = datev_csv::to_datev(&datev_header, &bookings);
 
@@ -509,7 +513,7 @@ pub async fn euer_export_stb_zip(
     // Deckblatt-PDF (R2-019: §19-Klausel + Disclaimer in den Cover-Daten).
     let cover_data = json!({
         "year": fiscal_year,
-        "generatedAt": Local::now().date_naive().to_string(),
+        "generatedAt": crate::clock::today_berlin().to_string(),
         "skr": skr_enum.code(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
@@ -651,7 +655,7 @@ pub async fn euer_export_stb_zip(
         // wäre der Hash zirkulär).
         let manifest_json = serde_json::to_string_pretty(&json!({
             "fiscalYear": fiscal_year,
-            "generatedAt": Local::now().to_rfc3339(),
+            "generatedAt": crate::clock::now_berlin().to_rfc3339(),
             "algorithm": "SHA-256",
             "files": manifest,
         }))?;

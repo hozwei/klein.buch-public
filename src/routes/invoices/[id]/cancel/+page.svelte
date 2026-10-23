@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -15,7 +16,7 @@
   let submitting = $state(false);
   let error = $state<string | null>(null);
   let reason = $state("");
-  let stornoDate = $state(new Date().toISOString().slice(0, 10));
+  let stornoDate = $state(todayBerlin());
 
   let id = $derived($page.params.id ?? "");
   let canCancel = $derived(

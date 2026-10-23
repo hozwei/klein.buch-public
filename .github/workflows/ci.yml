@@ -86,7 +86,7 @@ jobs:
         run: cargo test --all-features
 
   frontend:
-    name: pnpm lint + svelte-check
+    name: pnpm lint + svelte-check + vitest
     if: github.repository == 'hozwei/klein.buch-public'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -114,3 +114,13 @@ jobs:
 
       - name: svelte-check
         run: pnpm lint
+
+      - name: vitest
+        run: pnpm test
+
+      # LICENSE muss der unveränderte AGPL-3.0-Volltext sein (gnu.org, Stand 23.10.2026).
+      - name: LICENSE = AGPL-3.0-Volltext, COPYRIGHT vorhanden
+        run: |
+          echo "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0  -" > "$RUNNER_TEMP/license.sha256"
+          tr -d '\r' < LICENSE | sha256sum -c "$RUNNER_TEMP/license.sha256"
+          test -s COPYRIGHT

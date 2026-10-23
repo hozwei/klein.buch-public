@@ -277,7 +277,8 @@
       restorePass = "";
       restoreReport =
         `Wiederherstellung vorbereitet. Sicherheits-Backup: ${r.preRestoreBackupPath}. ` +
-        "Bitte starte die App jetzt neu — dann wird die Wiederherstellung angewendet.";
+        "Bitte starte die App jetzt neu — dann wird die Wiederherstellung angewendet." +
+        (r.notice ? ` ${r.notice}` : "");
       flash("Wiederherstellung vorgemerkt — App neu starten.", "ok");
     } catch (e) {
       flash(String(e), "error");

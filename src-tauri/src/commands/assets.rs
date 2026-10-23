@@ -13,7 +13,7 @@
 //! Anlegen → (bei Bedarf korrigieren, solange unlocked) → AfA buchen (lockt) →
 //! ggf. veräußern. Gelöscht wird nie (GoBD-Hardline).
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -427,9 +427,9 @@ fn resolve_method(input: &AssetInput) -> Result<(String, Option<f64>)> {
     Ok((method.as_db().to_string(), useful_life))
 }
 
-/// Heutiges Datum (Europe/Berlin = System-TZ, in Block 0 gepinnt).
+/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
-    Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn esc(s: &str) -> String {

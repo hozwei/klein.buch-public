@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin, yearOfIsoDate, addDaysIso, daysFromTodayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
@@ -47,10 +48,10 @@
   let saving = $state(false);
 
   let contactId = $state("");
-  let quoteDate = $state(new Date().toISOString().slice(0, 10));
+  let quoteDate = $state(todayBerlin());
   // Default-Bindefrist: 30 Tage.
   let validUntil = $state(
-    new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10),
+    daysFromTodayBerlin(30),
   );
   let currency = $state("EUR");
   let pdfTemplate = $state("default");
@@ -97,8 +98,7 @@
   });
 
   let fiscalYear = $derived(() => {
-    const d = new Date(quoteDate);
-    return Number.isNaN(d.getTime()) ? new Date().getFullYear() : d.getFullYear();
+    return yearOfIsoDate(quoteDate);
   });
 
   onMount(async () => {
@@ -217,10 +217,7 @@
   }
 
   function addDays(iso: string, days: number): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return addDaysIso(iso, days);
   }
 
   function eurosFromInput(v: number): number {

@@ -12,7 +12,8 @@
 //! XML, bekommt ein ZUGFeRD-PDF/A-3 zurück.
 //!
 //! Mock-Modus über `KLEIN_BUCH_SIDECAR_MOCK=1` — Bridge liefert die
-//! Original-PDF-Bytes unverändert zurück. CI + Cowork-Sandbox nutzen das.
+//! Original-PDF-Bytes unverändert zurück. Nur in Debug-/Test-Builds wirksam
+//! ([`super::sidecar_mock_active`], Plan W1.3).
 //!
 //! Block 11 ergänzt `extract_xml(pdf_bytes) -> String` für Empfangs-
 //! Parser. Hier nur als Stub-Signatur.
@@ -94,7 +95,7 @@ pub async fn create_zugferd_with_profile(
     sidecar_dir: &Path,
     profile: &str,
 ) -> Result<Vec<u8>> {
-    if std::env::var("KLEIN_BUCH_SIDECAR_MOCK").as_deref() == Ok("1") {
+    if super::sidecar_mock_active() {
         return Ok(pdf_bytes.to_vec());
     }
 
@@ -173,7 +174,7 @@ pub fn validate_combine_output(bytes: &[u8], combine_log: &str) -> Result<()> {
 /// Extrahiert XML aus einem ZUGFeRD-PDF (Block 11). Mock liefert leeren
 /// String. Production verifiziert mit Re-Embed-Roundtrip.
 pub async fn extract_xml(pdf_bytes: &[u8], sidecar_dir: &Path) -> Result<String> {
-    if std::env::var("KLEIN_BUCH_SIDECAR_MOCK").as_deref() == Ok("1") {
+    if super::sidecar_mock_active() {
         return Ok(String::new());
     }
     let launcher = launcher_path(sidecar_dir);

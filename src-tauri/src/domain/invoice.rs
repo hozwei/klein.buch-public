@@ -115,6 +115,10 @@ pub struct SellerView<'a> {
     pub tax_number: Option<&'a str>,
     pub vat_id: Option<&'a str>,
     pub email: &'a str,
+    /// Telefon (XRechnung BT-42, Pflicht nach BR-DE-6; Plan W1.11).
+    pub phone: Option<&'a str>,
+    /// Ansprechpartner (BT-41). `None` → der Verkäufer-Name.
+    pub contact_name: Option<&'a str>,
     pub iban: Option<&'a str>,
     pub bic: Option<&'a str>,
     pub is_kleinunternehmer: bool,
@@ -223,6 +227,15 @@ pub enum InvoiceValidationError {
     /// §14 Abs 4 Nr 2 — Steuernummer ODER USt-IdNr. Pflicht (nicht bei
     /// Kleinbetragsrechnung).
     SellerMissingTaxIdAndVatId,
+
+    // --- XRechnung (Plan W1.11) — jede ausgestellte Rechnung bekommt ein
+    // XRechnung-XML, auch Kleinbetragsrechnungen. ---
+    /// BR-DE-6: Telefon des Verkäufers (BT-42) ist Pflicht.
+    XRechnungSellerPhoneMissing,
+    /// BR-CO-26: ohne USt-IdNr. braucht es eine Kennung (BT-29 = Steuernummer).
+    /// Nur bei Kleinbetragsrechnungen eigener Fehler, sonst greift
+    /// [`Self::SellerMissingTaxIdAndVatId`].
+    XRechnungSellerIdMissing,
     BuyerNameMissing,
     /// Empfänger-Adresse Pflicht (nicht bei Kleinbetragsrechnung).
     BuyerAddressIncomplete,
@@ -286,6 +299,12 @@ pub fn message(e: &InvoiceValidationError) -> String {
         E::SellerMissingTaxIdAndVatId => {
             "Steuernummer oder USt-IdNr. ist erforderlich (§14 Abs. 4 UStG).".into()
         }
+        E::XRechnungSellerPhoneMissing => {
+            "Telefonnummer fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-DE-6) Pflicht.".into()
+        }
+        E::XRechnungSellerIdMissing => {
+            "Steuernummer oder USt-IdNr. fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-CO-26) Pflicht, auch bei Kleinbetragsrechnungen.".into()
+        }
         E::BuyerNameMissing => "Empfänger-Name fehlt.".into(),
         E::BuyerAddressIncomplete => {
             "Empfänger-Adresse ist unvollständig (Straße, PLZ, Ort).".into()
@@ -311,7 +330,7 @@ pub fn message(e: &InvoiceValidationError) -> String {
 /// Validiert eine [`InvoiceInput`] gegen §14 UStG + §19 + §33 UStDV.
 ///
 /// `today` ist injizierbar — Tests pinnen das Datum, Production reicht
-/// `chrono::Local::now().date_naive()` (über Europe/Berlin) rein.
+/// `crate::clock::today_berlin()` (Europe/Berlin) rein.
 ///
 /// **Aggregiert** alle Fehler; gibt nicht beim ersten Fail auf. Wenn Vec
 /// leer → Rechnung darf in `lock_and_issue` weiter.
@@ -432,6 +451,16 @@ pub fn validate_for_issue(
     if buyer.name.trim().is_empty() {
         errs.push(E::BuyerNameMissing);
     }
+    // XRechnung BR-DE-6 (BG-6 Seller Contact): Telefon ist Pflicht und wird
+    // nicht erfunden (Plan W1.11).
+    if seller.phone.map(|s| s.trim().is_empty()).unwrap_or(true) {
+        errs.push(E::XRechnungSellerPhoneMissing);
+    }
+    let has_seller_id = seller
+        .tax_number
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+        || seller.vat_id.map(|s| !s.trim().is_empty()).unwrap_or(false);
 
     // Kleinbetrag-Modus: nutzt brutto-Gesamtsumme aus compute_totals.
     let totals = compute_totals(&input.items);
@@ -443,6 +472,9 @@ pub fn validate_for_issue(
     }
 
     let kleinbetrag = kleinbetragsrechnung::is_applicable(totals.gross_amount_cents);
+    if kleinbetrag && !has_seller_id {
+        errs.push(E::XRechnungSellerIdMissing);
+    }
 
     if !kleinbetrag {
         // §14 Abs 4 Nr 2: Steuernummer ODER USt-IdNr.
@@ -493,6 +525,8 @@ mod tests {
             tax_number: Some("123/456/78901"),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de",
+            phone: Some("+49 000 000000"),
+            contact_name: None,
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
@@ -656,7 +690,9 @@ mod tests {
 
     #[test]
     fn validate_kleinbetrag_drops_tax_id_and_buyer_address_requirement() {
-        // Brutto 200 € → Kleinbetrag.
+        // Brutto 200 € → Kleinbetrag: §33 UStDV verlangt weder Steuernummer noch
+        // Empfänger-Adresse. Die XRechnung (BR-CO-26) braucht aber eine
+        // Verkäufer-Kennung — das ist seit Plan W1.11 der einzige Fehler.
         let mut inv = good_invoice();
         inv.items = vec![item(1, 1.0, 20_000)]; // 200,00 €
         let mut s = seller_klein();
@@ -666,8 +702,45 @@ mod tests {
         b.street = None;
         b.postal_code = None;
         b.city = None;
+        let err = validate_for_issue(&inv, &s, &b, NaiveDate::from_ymd_opt(2026, 5, 20).unwrap())
+            .unwrap_err();
+        assert_eq!(err, vec![InvoiceValidationError::XRechnungSellerIdMissing]);
+
+        // Mit Steuernummer ist die Kleinbetragsrechnung ohne Empfänger-Adresse ok.
+        s.tax_number = Some("123/456/78901");
         let r = validate_for_issue(&inv, &s, &b, NaiveDate::from_ymd_opt(2026, 5, 20).unwrap());
         assert!(r.is_ok(), "kleinbetrag soll milder sein, got {r:?}");
+    }
+
+    /// Plan W1.11: ohne Telefon kein Festschreiben (XRechnung BR-DE-6), ohne
+    /// erfundene Ersatzangabe.
+    #[test]
+    fn validate_requires_seller_phone_for_xrechnung() {
+        let mut s = seller_klein();
+        s.phone = None;
+        let err = validate_for_issue(
+            &good_invoice(),
+            &s,
+            &buyer_full(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![InvoiceValidationError::XRechnungSellerPhoneMissing]
+        );
+        s.phone = Some("   ");
+        let err = validate_for_issue(
+            &good_invoice(),
+            &s,
+            &buyer_full(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            vec![InvoiceValidationError::XRechnungSellerPhoneMissing]
+        );
     }
 
     #[test]

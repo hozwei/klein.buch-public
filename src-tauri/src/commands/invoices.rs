@@ -33,7 +33,7 @@
 //! getriggert. Block 4 implementiert die Backup-Schicht; bis dahin ist
 //! das ein Trace-Log + Audit-Eintrag (`invoice.lock.backup_pending`).
 
-use chrono::{Local, NaiveDate};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -66,7 +66,10 @@ use crate::pdf::{klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    pub fiscal_year: i64,
+    /// Optional und nur zur Kontrolle: der Server leitet das GJ aus dem
+    /// Rechnungsdatum ab (Plan W1.2); ein abweichender Wert wird abgelehnt.
+    #[serde(default)]
+    pub fiscal_year: Option<i64>,
     /// Buyer-Reference (BT-10). Default `"N/A"` für B2C; B2G muss
     /// Leitweg-ID setzen.
     pub buyer_reference: Option<String>,
@@ -230,10 +233,16 @@ pub async fn invoices_create_draft(
 pub async fn create_invoice_draft_from_input(
     pool: &SqlitePool,
     contact_id: &str,
-    fiscal_year: i64,
+    client_fiscal_year: Option<i64>,
     input: &InvoiceInput,
     derived_from_quote_id: Option<&str>,
 ) -> Result<InvoiceDetail> {
+    // GJ = Jahr des Rechnungsdatums (Plan W1.2) — bestimmt den Nummernkreis.
+    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+        &input.invoice_date,
+        client_fiscal_year,
+    )
+    .map_err(Error::Domain)?;
     // P3: Positionen mit Markdown-Body → `description` (XRechnung-BT-154) aus dem
     // Markup als Klartext neu berechnen, damit das XML auch nach Edits stimmt.
     let owned_input;
@@ -491,7 +500,12 @@ async fn run_lock_pipeline_inner(
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
 
-    let seller_view = make_seller_view(&seller_row);
+    // BT-41 (Ansprechpartner) = gepflegter Inhaber-Name, sonst der Verkäufer-Name.
+    let owner_name = crate::db::repo::app_settings::get(pool, "seller_owner_name")
+        .await?
+        .filter(|s| !s.trim().is_empty());
+    let mut seller_view = make_seller_view(&seller_row);
+    seller_view.contact_name = owner_name.as_deref();
 
     // Block 19: Generator + PDF aus dem Buyer-SNAPSHOT (nicht dem Live-Kontakt),
     // damit eine spätere DSGVO-Anonymisierung des Kontakts den festgeschriebenen
@@ -996,11 +1010,8 @@ fn effective_delivery_date(
 }
 
 fn today_berlin() -> NaiveDate {
-    // Europe/Berlin via chrono-tz wäre sauberer, aber zieht weitere
-    // Dependency. Local::now() folgt dem System-TZ; Block 0 hat
-    // Europe/Berlin als Host-TZ gepinnt (CLAUDE.md). Wenn das ein
-    // Problem wird, migrieren wir auf chrono-tz.
-    Local::now().date_naive()
+    // Europe/Berlin unabhängig von der Prozess-TZ (Plan W1.8).
+    crate::clock::today_berlin()
 }
 
 fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
@@ -1013,6 +1024,8 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         tax_number: row.tax_number.as_deref(),
         vat_id: row.vat_id.as_deref(),
         email: &row.email,
+        phone: row.phone.as_deref(),
+        contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
         is_kleinunternehmer: row.is_kleinunternehmer == 1,
@@ -1196,6 +1209,8 @@ fn variant_name(e: &invoice::InvoiceValidationError) -> &'static str {
         E::SellerNameMissing => "SellerNameMissing",
         E::SellerAddressIncomplete => "SellerAddressIncomplete",
         E::SellerMissingTaxIdAndVatId => "SellerMissingTaxIdAndVatId",
+        E::XRechnungSellerPhoneMissing => "XRechnungSellerPhoneMissing",
+        E::XRechnungSellerIdMissing => "XRechnungSellerIdMissing",
         E::BuyerNameMissing => "BuyerNameMissing",
         E::BuyerAddressIncomplete => "BuyerAddressIncomplete",
         E::ItemDescriptionMissing(_) => "ItemDescriptionMissing",

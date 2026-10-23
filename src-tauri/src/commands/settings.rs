@@ -146,6 +146,8 @@ pub async fn pdf_template_preview(
         tax_number: Some("133/456/7890"),
         vat_id: None,
         email: "kontakt@mustermann-it.example",
+        phone: None,
+        contact_name: None,
         iban: Some("DE02 1203 0000 0000 2020 51"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
@@ -655,7 +657,7 @@ pub async fn drop_folder_sync_now(
     session: State<'_, BackupSession>,
 ) -> Result<DropFolderSyncResult> {
     let paths = Paths::from_handle(&app)?;
-    let today = chrono::Local::now().date_naive();
+    let today = crate::clock::today_berlin();
     let report =
         crate::scheduler::drop_folder::run_sync(pool.inner(), &paths, session.inner(), today)
             .await?;

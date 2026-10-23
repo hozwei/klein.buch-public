@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -60,7 +61,7 @@
   let contactId = $state<string>("");
   let frequency = $state<Frequency>("monthly");
   let dayOfPeriod = $state<number>(1);
-  let nextDueDate = $state(new Date().toISOString().slice(0, 10));
+  let nextDueDate = $state(todayBerlin());
   let endDate = $state<string>("");
   let paymentTermsDays = $state<number>(14);
   let autoMode = $state<RecurringInvoiceMode>("draft");

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { paymentAccountsList, privateMovementsCreate } from "$lib/api";
@@ -11,7 +12,7 @@
   let accounts = $state<PaymentAccount[]>([]);
   let busy = $state(false);
 
-  let movementDate = $state(new Date().toISOString().slice(0, 10));
+  let movementDate = $state(todayBerlin());
   let movementType = $state<MovementType>("entnahme");
   let amountEuros = $state<number>(0);
   let accountId = $state<string>("");
@@ -91,7 +92,7 @@
   <div class="grid">
     <label>
       Datum
-      <input type="date" bind:value={movementDate} max={new Date().toISOString().slice(0, 10)} />
+      <input type="date" bind:value={movementDate} max={todayBerlin()} />
     </label>
     <label>
       Art

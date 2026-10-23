@@ -37,7 +37,7 @@ fn base_input() -> SellerProfileInput {
         tax_number: Some("132/456/7890".into()),
         vat_id: None,
         email: "info@wildbach-computerhilfe.de".into(),
-        phone: None,
+        phone: Some("+49 000 000000".into()),
         iban: None,
         bic: None,
         logo_filename: None,

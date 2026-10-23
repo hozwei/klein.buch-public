@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -27,7 +28,7 @@
   let vendorContactId = $state<string>("");
   let frequency = $state<Frequency>("monthly");
   let dayOfPeriod = $state<number>(1);
-  let nextDueDate = $state(new Date().toISOString().slice(0, 10));
+  let nextDueDate = $state(todayBerlin());
   let expectedEuros = $state<number>(0);
   let category = $state<ExpenseCategory>("software");
   let descriptionTemplate = $state("");

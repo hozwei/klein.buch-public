@@ -50,6 +50,28 @@ pub async fn check_compatible(pool: &SqlitePool) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Plan W1.9: sqlx prüft die SHA-384 der Rohbytes jeder Migration. CRLF aus
+    /// einem Windows-Checkout ergäbe andere Checksummen als der LF-Stand im
+    /// öffentlichen Repo (VersionMismatch bei Restore/Update). Daher: kein CR.
+    #[test]
+    fn migrations_have_no_cr() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut checked = 0;
+        let mut with_cr = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("migrations/ lesbar") {
+            let path = entry.expect("Eintrag").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+                continue;
+            }
+            checked += 1;
+            if std::fs::read(&path).expect("lesbar").contains(&b'\r') {
+                with_cr.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        assert!(checked >= 30, "nur {checked} Migrationen gefunden");
+        assert!(with_cr.is_empty(), "Migrationen mit CR: {with_cr:?}");
+    }
+
     #[tokio::test]
     async fn check_passes_on_matching_version() {
         let pool = SqlitePool::connect(":memory:").await.unwrap();

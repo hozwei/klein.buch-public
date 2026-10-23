@@ -16,8 +16,10 @@
 //!
 //! GoBD/§-Hinweise:
 //! - **`inputs/` bleibt tabu** — beim Restore werden nur maschinen-verwaltete
-//!   Daten ersetzt (DB + `archive/`). Branding aus `inputs/` wird **nicht**
-//!   überschrieben (es ist menschen-maintained und liegt ohnehin lokal vor).
+//!   Daten ersetzt (DB + `archive/` + ab Format 2 `data/branding`, also Logo und
+//!   Unterschrift). `inputs/` wird **nicht** überschrieben (menschen-gepflegt).
+//!   Backups im Format 1 enthalten kein `data/branding`; dann bleibt es
+//!   unverändert und der Restore-Report sagt das (Plan W1.5).
 //! - **Pre-Restore-Backup ist Pflicht** und nutzt die *aktuelle* Session-
 //!   Passphrase, sodass der Vor-Restore-Stand jederzeit wiederherstellbar ist.
 
@@ -59,7 +61,18 @@ pub struct RestoreReport {
     pub pre_restore_backup_path: String,
     pub source_file: String,
     pub staged_at: String,
+    /// Format-Version des eingespielten Backups.
+    pub format_version: u32,
+    /// `true`, wenn Logo und Unterschrift (`data/branding`) mit eingespielt werden.
+    pub branding_restored: bool,
+    /// Hinweis für die Oberfläche (z. B. Format-1-Backup ohne Logo/Unterschrift).
+    pub notice: Option<String>,
 }
+
+/// Hinweis bei Backups im Format 1 (ohne `data/branding`).
+pub const NOTICE_V1_NO_BRANDING: &str = "Dieses Backup stammt aus einer älteren Version \
+     (Format 1) und enthält kein Logo und keine Unterschrift. Die aktuell gespeicherten \
+     bleiben unverändert.";
 
 /// Liest den Plain-Header eines Backup-Files für die Anzeige im Wizard.
 pub fn preview(file_path: &Path) -> Result<RestorePreview> {
@@ -114,6 +127,8 @@ pub async fn apply(
 
     let file_bytes = fs::read(file_path)?;
     let header = manifest::read_manifest_only(&file_bytes)?;
+    manifest::ensure_supported_format(header.format_version)?;
+    let branding_restored = header.format_version >= 2;
     if header.schema_version != EXPECTED_SCHEMA_VERSION {
         return Err(Error::Backup(format!(
             "Backup hat Schema-Version {}, die App erwartet {}. Restore abgebrochen — bitte App-Version angleichen.",
@@ -145,6 +160,7 @@ pub async fn apply(
         "source": file_path.to_string_lossy(),
         "staged_at": staged_at,
         "pre_restore_backup": pre.file_path,
+        "format_version": header.format_version,
     });
     fs::write(&marker, serde_json::to_vec_pretty(&info)?)?;
 
@@ -168,6 +184,9 @@ pub async fn apply(
         pre_restore_backup_path: pre.file_path,
         source_file: file_path.to_string_lossy().to_string(),
         staged_at,
+        format_version: header.format_version,
+        branding_restored,
+        notice: (!branding_restored).then(|| NOTICE_V1_NO_BRANDING.to_string()),
     })
 }
 
@@ -176,12 +195,16 @@ pub async fn apply(
 pub struct AppliedInfo {
     pub source: String,
     pub staged_at: String,
+    /// `true`, wenn `data/branding` ersetzt wurde (Backup-Format ≥ 2).
+    pub branding_restored: bool,
 }
 
 /// Suffix für die zur-Seite-bewegten Originale beim Phase-B-Swap (R4-001).
 const DB_ROLLBACK_SUFFIX: &str = ".rollback";
 /// Verzeichnis-Name für das zur-Seite-bewegte alte Archive.
 const ARCHIVE_ROLLBACK_DIR: &str = "archive.rollback";
+/// Verzeichnis-Name für das zur-Seite-bewegte alte `data/branding` (Plan W1.5).
+const BRANDING_ROLLBACK_DIR: &str = "branding.rollback";
 
 /// **R4-001:** Bereinigt Rollback-Reste aus einem unvollständigen Vorlauf-Swap.
 ///
@@ -233,6 +256,20 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
         }
         _ => {}
     }
+
+    // Branding-Seite (Plan W1.5), gleiche Logik wie beim Archive.
+    let branding = crate::branding::branding_dir(&paths.data_dir);
+    let rb_branding = paths.data_dir.join(BRANDING_ROLLBACK_DIR);
+    match (branding.is_dir(), rb_branding.is_dir()) {
+        (true, true) => {
+            let _ = clear_dir_force(&rb_branding);
+            let _ = fs::remove_dir(&rb_branding);
+        }
+        (false, true) => {
+            fs::rename(&rb_branding, &branding)?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -272,6 +309,12 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    // Marker ohne Angabe stammen aus Format 1 (vor Plan W1.5).
+    let format_version = info
+        .get("format_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1);
+    let restore_branding = format_version >= 2;
 
     let staged_db = staging.join("klein-buch.sqlite");
     if !staged_db.is_file() {
@@ -283,6 +326,8 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
     // R4-001: Stage 1 — alte DB + altes Archive per atomic rename zur Seite.
     let rb_db = with_suffix(&paths.db_file, DB_ROLLBACK_SUFFIX);
     let rb_archive = paths.data_dir.join(ARCHIVE_ROLLBACK_DIR);
+    let branding = crate::branding::branding_dir(&paths.data_dir);
+    let rb_branding = paths.data_dir.join(BRANDING_ROLLBACK_DIR);
 
     // DB-Side: WAL/SHM gehören zur alten DB → mit ihnen kann SQLite nicht ohne
     // sie zurück, also löschen wir sie sofort. Die .rollback-DB ist ohne WAL/SHM
@@ -300,6 +345,11 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         let _ = fs::remove_dir(&rb_archive);
         fs::rename(&paths.archive_dir, &rb_archive)?;
     }
+    if restore_branding && branding.is_dir() {
+        let _ = clear_dir_force(&rb_branding);
+        let _ = fs::remove_dir(&rb_branding);
+        fs::rename(&branding, &rb_branding)?;
+    }
 
     // R4-001: Stage 2 — eigentlicher Swap. Bei jedem Fehler darin: Rollback,
     // Marker bleibt für Re-Run.
@@ -313,6 +363,14 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         if staged_archive.is_dir() {
             fs::create_dir_all(&paths.archive_dir)?;
             copy_dir_recursive(&staged_archive, &paths.archive_dir)?;
+        }
+        // Format ≥ 2: `data/branding` exakt auf den Backup-Stand (auch leer).
+        if restore_branding {
+            fs::create_dir_all(&branding)?;
+            let staged_branding = staging.join("branding");
+            if staged_branding.is_dir() {
+                copy_dir_recursive(&staged_branding, &branding)?;
+            }
         }
         Ok(())
     })();
@@ -331,6 +389,15 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         if rb_archive.is_dir() {
             let _ = fs::rename(&rb_archive, &paths.archive_dir);
         }
+        if restore_branding {
+            if branding.is_dir() {
+                let _ = clear_dir_force(&branding);
+                let _ = fs::remove_dir(&branding);
+            }
+            if rb_branding.is_dir() {
+                let _ = fs::rename(&rb_branding, &branding);
+            }
+        }
         // Marker + Staging bleiben — Re-Run kann später durchgereicht werden.
         return Err(e);
     }
@@ -341,12 +408,20 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         let _ = clear_dir_force(&rb_archive);
         let _ = fs::remove_dir(&rb_archive);
     }
+    if rb_branding.is_dir() {
+        let _ = clear_dir_force(&rb_branding);
+        let _ = fs::remove_dir(&rb_branding);
+    }
 
     // Marker + Staging aufräumen.
     let _ = fs::remove_file(&marker);
     let _ = clear_dir_force(&staging);
 
-    Ok(Some(AppliedInfo { source, staged_at }))
+    Ok(Some(AppliedInfo {
+        source,
+        staged_at,
+        branding_restored: restore_branding,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +767,146 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1000, "alle 1000 Zeilen müssen wiederhergestellt sein");
+    }
+
+    /// Baut aus einem aktuellen Backup ein Backup im alten Format 1 nach
+    /// (`inputs/branding/` statt `branding/`, `formatVersion` 1).
+    fn rewrite_as_format_v1(file: &Path, passphrase: &str) -> PathBuf {
+        use std::io::Write;
+        let bytes = fs::read(file).unwrap();
+        let (mut m, content) = decrypt_backup(&bytes, passphrase).unwrap();
+        let mut src = zip::ZipArchive::new(Cursor::new(content)).unwrap();
+        let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for i in 0..src.len() {
+            let mut e = src.by_index(i).unwrap();
+            let name = e.name().to_string();
+            let new_name = match name.strip_prefix("branding/") {
+                Some(rest) => format!("inputs/branding/{rest}"),
+                None => name,
+            };
+            let mut buf = Vec::new();
+            e.read_to_end(&mut buf).unwrap();
+            zw.start_file(new_name, opts).unwrap();
+            zw.write_all(&buf).unwrap();
+        }
+        let zip_bytes = zw.finish().unwrap().into_inner();
+        let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+        let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+        let key = encrypt::derive_key(passphrase.as_bytes(), &salt).unwrap();
+        let ct =
+            encrypt::encrypt(&key, &encrypt::nonce_array(&nonce).unwrap(), &zip_bytes).unwrap();
+        m.format_version = 1;
+        m.salt_hex = manifest::to_hex(&salt);
+        m.nonce_hex = manifest::to_hex(&nonce);
+        m.content_sha256 = snapshot::sha256_hex(&zip_bytes);
+        m.content_size_bytes = zip_bytes.len() as u64;
+        let out = file.with_file_name("format-v1.kbk");
+        fs::write(&out, manifest::frame(&m, &ct).unwrap()).unwrap();
+        out
+    }
+
+    /// Plan W1.5: Logo und Unterschrift (`data/branding`) überstehen
+    /// Backup → Restore; ein nach dem Backup gelöschtes Bild kommt zurück,
+    /// ein später hinzugekommenes verschwindet (exakter Backup-Stand).
+    #[tokio::test]
+    async fn restore_roundtrip_includes_logo_and_signature() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        let branding = crate::branding::branding_dir(&paths.data_dir);
+        fs::create_dir_all(&branding).unwrap();
+        fs::write(branding.join("logo.png"), b"LOGO-ORIGINAL").unwrap();
+        fs::write(branding.join("signature.png"), b"SIG-ORIGINAL").unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+
+        let original = backup::create_now(&pool, &paths, "passphrase-1234567890", "manual")
+            .await
+            .unwrap();
+
+        // Stand verändern: Logo ersetzt, Unterschrift gelöscht, neue Datei.
+        fs::write(branding.join("logo.png"), b"LOGO-NEU").unwrap();
+        fs::remove_file(branding.join("signature.png")).unwrap();
+        fs::write(branding.join("logo.svg"), b"<svg/>").unwrap();
+
+        let session = backup::BackupSession::default();
+        session.set("passphrase-1234567890".to_string());
+        let report = apply(
+            &pool,
+            &paths,
+            &session,
+            Path::new(&original.file_path),
+            "passphrase-1234567890",
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.format_version, manifest::FORMAT_VERSION);
+        assert!(report.branding_restored);
+        assert!(report.notice.is_none());
+
+        pool.close().await;
+        let applied = apply_pending(&paths).unwrap().unwrap();
+        assert!(applied.branding_restored);
+        assert_eq!(
+            fs::read(branding.join("logo.png")).unwrap(),
+            b"LOGO-ORIGINAL"
+        );
+        assert_eq!(
+            fs::read(branding.join("signature.png")).unwrap(),
+            b"SIG-ORIGINAL"
+        );
+        assert!(!branding.join("logo.svg").exists());
+        assert!(!paths.data_dir.join(BRANDING_ROLLBACK_DIR).exists());
+    }
+
+    /// Plan W1.5: ein Backup im Format 1 wird weiter eingespielt; `data/branding`
+    /// bleibt dabei unverändert und der Report sagt das.
+    #[tokio::test]
+    async fn restore_of_format_v1_backup_keeps_branding() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        let branding = crate::branding::branding_dir(&paths.data_dir);
+        fs::create_dir_all(&branding).unwrap();
+        fs::write(branding.join("logo.png"), b"LOGO-IM-BACKUP").unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+
+        let v2 = backup::create_now(&pool, &paths, "passphrase-1234567890", "manual")
+            .await
+            .unwrap();
+        let v1 = rewrite_as_format_v1(Path::new(&v2.file_path), "passphrase-1234567890");
+        assert_eq!(preview(&v1).unwrap().format_version, 1);
+
+        fs::write(branding.join("logo.png"), b"LOGO-AKTUELL").unwrap();
+
+        let session = backup::BackupSession::default();
+        session.set("passphrase-1234567890".to_string());
+        let report = apply(&pool, &paths, &session, &v1, "passphrase-1234567890")
+            .await
+            .unwrap();
+        assert_eq!(report.format_version, 1);
+        assert!(!report.branding_restored);
+        assert_eq!(report.notice.as_deref(), Some(NOTICE_V1_NO_BRANDING));
+
+        pool.close().await;
+        let applied = apply_pending(&paths).unwrap().unwrap();
+        assert!(!applied.branding_restored);
+        assert_eq!(
+            fs::read(branding.join("logo.png")).unwrap(),
+            b"LOGO-AKTUELL"
+        );
+        assert!(
+            !paths.inputs_dir.join("branding").exists(),
+            "inputs/ bleibt tabu"
+        );
+    }
+
+    #[test]
+    fn unsupported_format_version_is_rejected() {
+        assert!(manifest::ensure_supported_format(1).is_ok());
+        assert!(manifest::ensure_supported_format(2).is_ok());
+        assert!(manifest::ensure_supported_format(0).is_err());
+        assert!(manifest::ensure_supported_format(3).is_err());
     }
 
     /// G1-HARDEN.1: ohne entsperrte Session bricht der Restore ab — das

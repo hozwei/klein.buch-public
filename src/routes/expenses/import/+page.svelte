@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import PageBar from "$lib/PageBar.svelte";
@@ -37,8 +38,8 @@
   let parsed = $state<EInvoiceParseResult["parsed"] | null>(null);
 
   // Editierbare Formularfelder (aus dem Vorschlag vorbefüllt).
-  let expenseDate = $state(new Date().toISOString().slice(0, 10));
-  let paidDate = $state<string>(new Date().toISOString().slice(0, 10));
+  let expenseDate = $state(todayBerlin());
+  let paidDate = $state<string>(todayBerlin());
   let notPaidYet = $state(true);
   let vendorContactId = $state<string>("");
   let vendorName = $state("");
@@ -51,7 +52,7 @@
   let reverseCharge13b = $state(false);
   let notes = $state("");
 
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
   let grossCents = $derived(Math.round(netEuros * 100) + Math.round(taxEuros * 100));
 
   onMount(async () => {
@@ -88,7 +89,7 @@
       const inp = res.input;
       expenseDate = inp.expenseDate;
       notPaidYet = inp.paidDate === null;
-      paidDate = inp.paidDate ?? new Date().toISOString().slice(0, 10);
+      paidDate = inp.paidDate ?? todayBerlin();
       vendorName = inp.vendorName;
       vendorInvoiceNumber = inp.vendorInvoiceNumber ?? "";
       category = inp.category as ExpenseCategory;

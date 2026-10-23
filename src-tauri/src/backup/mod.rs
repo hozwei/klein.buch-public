@@ -29,7 +29,7 @@ pub mod target;
 use crate::config::Paths;
 use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
 use crate::error::{Error, Result};
-use chrono::{Local, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::sync::Mutex;
@@ -364,10 +364,12 @@ pub async fn create_now(
     let file_bytes = manifest::frame(&man, &ciphertext)?;
     let file_hash = snapshot::sha256_hex(&file_bytes);
     let size_bytes = file_bytes.len() as i64;
-    let stamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let stamp = crate::clock::now_berlin()
+        .format("%Y%m%d-%H%M%S")
+        .to_string();
     let file_name = format!("klein-buch-{stamp}.kbk");
     let retention_tag =
-        rotation::classify_retention(Local::now().date_naive(), trigger_reason).to_string();
+        rotation::classify_retention(crate::clock::today_berlin(), trigger_reason).to_string();
 
     // 4. Floor schreiben — IMMER lokal (`paths.backups_dir`). Das ist die
     //    primäre, nicht-abschaltbare Sicherheits-Kopie (G1-BKP.4 Tier-Modell).
@@ -407,7 +409,7 @@ pub async fn create_now(
                  Prüfe Speicherplatz und Schreibrechte. Details im Backup-Protokoll.",
                 &format!(
                     "backup_result_failed_floor:{}",
-                    Local::now().format("%Y-%m-%d")
+                    crate::clock::now_berlin().format("%Y-%m-%d")
                 ),
             )
             .await;
@@ -552,7 +554,7 @@ pub async fn create_now(
                         ),
                         &format!(
                             "backup_result_failed_offsite:{}",
-                            Local::now().format("%Y-%m-%d")
+                            crate::clock::now_berlin().format("%Y-%m-%d")
                         ),
                     )
                     .await;

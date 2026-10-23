@@ -14,7 +14,7 @@ use crate::db::models::SellerProfileRow;
 use crate::db::repo::audit_log;
 use crate::domain::kleinunternehmer::{waiver_deadline, KleinunternehmerStatus};
 use crate::error::{Error, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -71,7 +71,7 @@ pub async fn upsert(pool: &SqlitePool, input: &SellerProfileInput) -> Result<Sel
 
     let new_is_klein = input.is_kleinunternehmer;
     let prev_is_klein = prev_status.map(|s| s.is_kleinunternehmer);
-    let today = Utc::now().date_naive();
+    let today = crate::clock::today_berlin();
 
     // Wechsel 1 → 0 (Verzicht auf §19): UI-Bestätigung Pflicht, Datum setzen,
     // Audit-Log.

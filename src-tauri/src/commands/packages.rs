@@ -415,6 +415,8 @@ fn seller_view_from_row(row: &SellerProfileRow) -> SellerView<'_> {
         tax_number: row.tax_number.as_deref(),
         vat_id: row.vat_id.as_deref(),
         email: &row.email,
+        phone: row.phone.as_deref(),
+        contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
         is_kleinunternehmer: row.is_kleinunternehmer == 1,
@@ -488,7 +490,7 @@ async fn render_catalog_pdf(
         _ => None,
     };
 
-    let generated_at = chrono::Local::now().date_naive().to_string();
+    let generated_at = crate::clock::today_berlin().to_string();
 
     typst_render::render_package_catalog(
         templates::PACKAGE_CATALOG_TEMPLATE,

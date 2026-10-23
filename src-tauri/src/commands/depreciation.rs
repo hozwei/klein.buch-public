@@ -9,7 +9,6 @@
 //! Der automatische GJ-Wende-Lauf (01.01.) + die Festschreibung werden erst in
 //! Block 15 verdrahtet.
 
-use chrono::Local;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
 
@@ -30,7 +29,7 @@ pub async fn depreciation_accrue_year(
 ) -> Result<AccrueReport> {
     let pool = pool.inner();
     let paths = Paths::from_handle(&app)?;
-    let today = Local::now().date_naive();
+    let today = crate::clock::today_berlin();
     accrue_yearly::accrue_for_year(pool, &paths, session.inner(), fiscal_year, today).await
 }
 

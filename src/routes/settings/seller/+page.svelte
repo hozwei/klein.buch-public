@@ -223,6 +223,7 @@
       <legend>Kontakt</legend>
       <label>E-Mail *<input type="email" bind:value={input.email} required /></label>
       <label>Telefon<input type="tel" bind:value={input.phone} /></label>
+      <p class="hint">Pflicht für die E-Rechnung (XRechnung, Verkäufer-Kontakt): ohne Telefonnummer lässt sich keine Rechnung festschreiben.</p>
     </fieldset>
 
     <fieldset>

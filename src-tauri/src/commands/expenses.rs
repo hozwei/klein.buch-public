@@ -16,7 +16,7 @@
 //!   Diese Pipeline erzwingt daher keine USt-Freiheit (siehe domain::expense).
 //! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
 
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, State};
@@ -134,8 +134,17 @@ pub async fn expenses_create(
     session: State<'_, backup::BackupSession>,
     args: ExpenseCreateArgs,
 ) -> Result<ExpenseDetail> {
-    let pool = pool.inner();
     let paths = Paths::from_handle(&app)?;
+    create_core(pool.inner(), &paths, session.inner(), args).await
+}
+
+/// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
+pub async fn create_core(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &backup::BackupSession,
+    args: ExpenseCreateArgs,
+) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
     // Lieferanten-Snapshot: bei verknüpftem Kontakt dessen Namen sicherstellen.
@@ -159,9 +168,12 @@ pub async fn expenses_create(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.expense_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
+    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+        &input.expense_date,
+        args.fiscal_year,
+    )
+    .map_err(Error::Domain)?;
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -217,7 +229,7 @@ pub async fn expenses_create(
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "expense.lock")
+    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
         .await
         .ok();
 
@@ -491,9 +503,12 @@ pub async fn create_from_einvoice_with(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.expense_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
+    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+        &input.expense_date,
+        args.fiscal_year,
+    )
+    .map_err(Error::Domain)?;
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -574,10 +589,9 @@ pub async fn create_from_einvoice_with(
         .ok_or_else(|| Error::Domain("import: detail-load leer".into()))
 }
 
-/// Heutiges Datum (Europe/Berlin = System-TZ, in Block 0 gepinnt). Wie in
-/// `commands::invoices`; bei Bedarf später auf chrono-tz migrieren.
+/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
-    Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn escape(s: &str) -> String {

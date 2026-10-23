@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin, yearOfIsoDate, addDaysIso } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -51,7 +52,7 @@
 
   // Rechnungs-spezifische Felder (das Angebot trägt sie nicht).
   // Heute = Obergrenze für Rechnungs- und Leistungsdatum (keine Zukunft).
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayBerlin();
   let invoiceDate = $state(today);
   let deliveryDate = $state("");
   let dueDate = $state("");
@@ -79,8 +80,7 @@
   let convertible = $derived(detail?.quote.status === "accepted");
 
   let fiscalYear = $derived(() => {
-    const d = new Date(invoiceDate);
-    return Number.isNaN(d.getTime()) ? new Date().getFullYear() : d.getFullYear();
+    return yearOfIsoDate(invoiceDate);
   });
 
   // §19-Hardline: USt-Felder gesperrt, Items auf category=E / rate=0 zwingen.
@@ -144,10 +144,7 @@
   });
 
   function addDays(iso: string, days: number): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return addDaysIso(iso, days);
   }
 
   function addItem() {

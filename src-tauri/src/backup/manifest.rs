@@ -22,7 +22,25 @@ use serde::{Deserialize, Serialize};
 pub const MAGIC: &str = "KLEIN-BUCH-BACKUP-1";
 
 /// Aktuelle Backup-Format-Version (nicht zu verwechseln mit der DB-Schema-Version).
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// - 1: DB + `archive/` + `inputs/branding/`
+/// - 2 (Plan W1.5): DB + `archive/` + `branding/` aus `data_dir` (Logo, Unterschrift)
+pub const FORMAT_VERSION: u32 = 2;
+
+/// Älteste Format-Version, die der Restore noch einspielt.
+pub const MIN_SUPPORTED_FORMAT_VERSION: u32 = 1;
+
+/// Prüft, ob der Restore ein Backup dieses Formats einspielen kann.
+pub fn ensure_supported_format(format_version: u32) -> Result<()> {
+    if (MIN_SUPPORTED_FORMAT_VERSION..=FORMAT_VERSION).contains(&format_version) {
+        Ok(())
+    } else {
+        Err(Error::Backup(format!(
+            "Backup-Format {format_version} wird nicht unterstützt (erwartet \
+             {MIN_SUPPORTED_FORMAT_VERSION}–{FORMAT_VERSION}) — bitte eine passende App-Version verwenden."
+        )))
+    }
+}
 
 /// KDF-Parameter, die zur Wiederherstellung des Schlüssels nötig sind.
 /// Werden mitgeschrieben, damit ein künftiger Parameter-Wechsel alte Backups

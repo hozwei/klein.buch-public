@@ -62,6 +62,8 @@ serde_json = "1"
 
 # --- Time / IDs ---
 chrono = { version = "0.4", features = ["serde"] }
+# Zeitzone fest Europe/Berlin (Plan W1.8, E12), unabhängig von der Prozess-TZ.
+chrono-tz = "0.10"
 uuid = { version = "1", features = ["v7", "serde"] }
 
 # --- Cryptography ---
