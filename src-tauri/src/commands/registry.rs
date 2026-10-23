@@ -1,0 +1,1949 @@
+//! GENERIERT (Plan W4, `w4_codegen.py`), danach von Hand gepflegt: Registry
+//! aller Command-Kerne mit Metadaten für den HTTP-Dispatcher (W5).
+//!
+//! Jeder Eintrag: Name (= `invoke`-Name im Frontend), `auth`, `cost`,
+//! `body_limit` und ein Handler, der das JSON-Argument-Objekt in das
+//! Args-Struct des Kerns übersetzt. Die Werte für `auth`/`cost` setzen
+//! W5/W6; bis dahin `Session`/`Cheap`.
+
+use crate::app_ctx::AppCtx;
+use crate::error::Result;
+use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+/// Antwort eines Handlers (serialisiertes Ergebnis des Kerns).
+pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send>>;
+/// Handler: Kontext + JSON-Argumente → JSON-Ergebnis.
+pub type Handler = fn(Arc<AppCtx>, Value) -> HandlerFuture;
+
+/// Wer darf aufrufen (Plan §3, W5/W6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Auth {
+    /// ohne Sitzung
+    Public,
+    /// gültige Sitzung
+    Session,
+    /// gültige Sitzung + frische Re-Auth
+    Reauth,
+}
+
+/// Kostenklasse für Lastgrenzen (Plan W5.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cost {
+    Cheap,
+    Render,
+    Jvm,
+    Kdf,
+    Backup,
+}
+
+/// Ein Registry-Eintrag.
+pub struct CommandSpec {
+    pub name: &'static str,
+    pub auth: Auth,
+    pub cost: Cost,
+    pub body_limit: usize,
+    pub handler: Handler,
+}
+
+/// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
+pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
+
+/// Sucht einen Eintrag nach Name.
+pub fn find(name: &str) -> Option<&'static CommandSpec> {
+    REGISTRY.iter().find(|c| c.name == name)
+}
+
+fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
+    let v = if v.is_null() {
+        Value::Object(Default::default())
+    } else {
+        v
+    };
+    Ok(serde_json::from_value(v)?)
+}
+
+macro_rules! spec {
+    ($name:literal, $handler:path) => {
+        CommandSpec {
+            name: $name,
+            auth: Auth::Session,
+            cost: Cost::Cheap,
+            body_limit: DEFAULT_BODY_LIMIT,
+            handler: $handler,
+        }
+    };
+}
+
+/// Alle über HTTP erreichbaren Command-Kerne (W5 schränkt per Allowlist ein).
+pub static REGISTRY: &[CommandSpec] = &[
+    spec!("assets_list", h::assets_list),
+    spec!("assets_get", h::assets_get),
+    spec!("assets_afa_table", h::assets_afa_table),
+    spec!("assets_suggest_method", h::assets_suggest_method),
+    spec!("assets_create", h::assets_create),
+    spec!("assets_update", h::assets_update),
+    spec!("assets_dispose", h::assets_dispose),
+    spec!("attachments_open", h::attachments_open),
+    spec!("attachments_reveal", h::attachments_reveal),
+    spec!("attachments_list", h::attachments_list),
+    spec!("attachments_add", h::attachments_add),
+    spec!("backup_needs_onboarding", h::backup_needs_onboarding),
+    spec!("backup_is_unlocked", h::backup_is_unlocked),
+    spec!("backup_get_settings", h::backup_get_settings),
+    spec!("backup_setup_passphrase", h::backup_setup_passphrase),
+    spec!("backup_unlock", h::backup_unlock),
+    spec!("backup_create_now", h::backup_create_now),
+    spec!("backup_set_target", h::backup_set_target),
+    spec!("backup_test_sftp", h::backup_test_sftp),
+    spec!("backup_set_sftp_target", h::backup_set_sftp_target),
+    spec!("backup_open_folder", h::backup_open_folder),
+    spec!("backup_reveal_path", h::backup_reveal_path),
+    spec!("backup_list", h::backup_list),
+    spec!("backup_log_list", h::backup_log_list),
+    spec!("backup_log_search", h::backup_log_search),
+    spec!("backup_restore_preview", h::backup_restore_preview),
+    spec!("backup_restore_apply", h::backup_restore_apply),
+    spec!("contacts_list", h::contacts_list),
+    spec!("contacts_get", h::contacts_get),
+    spec!("contacts_create", h::contacts_create),
+    spec!("contacts_update", h::contacts_update),
+    spec!("contacts_archive", h::contacts_archive),
+    spec!("contacts_unarchive", h::contacts_unarchive),
+    spec!("contacts_search", h::contacts_search),
+    spec!("contacts_anonymize_check", h::contacts_anonymize_check),
+    spec!("contacts_anonymize", h::contacts_anonymize),
+    spec!("depreciation_accrue_year", h::depreciation_accrue_year),
+    spec!("depreciation_reset_asset", h::depreciation_reset_asset),
+    spec!("depreciation_list_for_year", h::depreciation_list_for_year),
+    spec!("dsgvo_export", h::dsgvo_export),
+    spec!("euer_compute_report", h::euer_compute_report),
+    spec!("euer_available_years", h::euer_available_years),
+    spec!("euer_package", h::euer_package),
+    spec!("euer_export_detail_zip", h::euer_export_detail_zip),
+    spec!("euer_export_elster", h::euer_export_elster),
+    spec!("euer_export_pdf", h::euer_export_pdf),
+    spec!("euer_export_datev", h::euer_export_datev),
+    spec!("euer_export_stb_zip", h::euer_export_stb_zip),
+    spec!("euer_afa_pending", h::euer_afa_pending),
+    spec!("euer_reveal_path", h::euer_reveal_path),
+    spec!("expenses_list", h::expenses_list),
+    spec!("expenses_get", h::expenses_get),
+    spec!("expenses_create", h::expenses_create),
+    spec!("expenses_cancel", h::expenses_cancel),
+    spec!("expenses_set_payment", h::expenses_set_payment),
+    spec!("expenses_parse_einvoice", h::expenses_parse_einvoice),
+    spec!(
+        "expenses_create_from_einvoice",
+        h::expenses_create_from_einvoice
+    ),
+    spec!("expenses_receipt_xml_text", h::expenses_receipt_xml_text),
+    spec!("factory_reset_check", h::factory_reset_check),
+    spec!("factory_reset", h::factory_reset),
+    spec!("fiscal_year_overview", h::fiscal_year_overview),
+    spec!("fiscal_year_close", h::fiscal_year_close),
+    spec!("fiscal_year_closed_list", h::fiscal_year_closed_list),
+    spec!("fiscal_year_auto_close_get", h::fiscal_year_auto_close_get),
+    spec!("fiscal_year_auto_close_set", h::fiscal_year_auto_close_set),
+    spec!("invoices_list", h::invoices_list),
+    spec!("invoices_get", h::invoices_get),
+    spec!("invoices_open_pdf", h::invoices_open_pdf),
+    spec!("invoices_reveal_pdf", h::invoices_reveal_pdf),
+    spec!("invoices_create_draft", h::invoices_create_draft),
+    spec!("invoices_validate_draft", h::invoices_validate_draft),
+    spec!("invoices_lock_and_issue", h::invoices_lock_and_issue),
+    spec!("invoices_record_payment", h::invoices_record_payment),
+    spec!("invoices_cancel", h::invoices_cancel),
+    spec!("legal_documents_list", h::legal_documents_list),
+    spec!("legal_documents_upload", h::legal_documents_upload),
+    spec!("legal_documents_activate", h::legal_documents_activate),
+    spec!("legal_documents_deactivate", h::legal_documents_deactivate),
+    spec!("mail_accounts_list", h::mail_accounts_list),
+    spec!("mail_account_create", h::mail_account_create),
+    spec!("mail_account_update", h::mail_account_update),
+    spec!("mail_account_delete", h::mail_account_delete),
+    spec!(
+        "mail_account_test_connection",
+        h::mail_account_test_connection
+    ),
+    spec!("mail_oauth_status", h::mail_oauth_status),
+    spec!("mail_oauth_connect", h::mail_oauth_connect),
+    spec!("mail_oauth_disconnect", h::mail_oauth_disconnect),
+    spec!("email_log_list", h::email_log_list),
+    spec!("email_log_for", h::email_log_for),
+    spec!("email_log_search", h::email_log_search),
+    spec!("mail_invoice_preview", h::mail_invoice_preview),
+    spec!("mail_send_invoice", h::mail_send_invoice),
+    spec!("mail_send_test", h::mail_send_test),
+    spec!("mail_quote_preview", h::mail_quote_preview),
+    spec!("mail_send_quote", h::mail_send_quote),
+    spec!("migration_export_run", h::migration_export_run),
+    spec!("notifications_list", h::notifications_list),
+    spec!("notifications_unread_count", h::notifications_unread_count),
+    spec!("notifications_dismiss", h::notifications_dismiss),
+    spec!("notifications_dismiss_all", h::notifications_dismiss_all),
+    spec!("notification_rules_list", h::notification_rules_list),
+    spec!(
+        "notification_rules_set_enabled",
+        h::notification_rules_set_enabled
+    ),
+    spec!("notifications_run_checks", h::notifications_run_checks),
+    spec!("package_categories_list", h::package_categories_list),
+    spec!("package_category_create", h::package_category_create),
+    spec!("package_category_update", h::package_category_update),
+    spec!("package_categories_reorder", h::package_categories_reorder),
+    spec!("packages_list", h::packages_list),
+    spec!("packages_get", h::packages_get),
+    spec!("packages_create", h::packages_create),
+    spec!(
+        "packages_update_as_new_revision",
+        h::packages_update_as_new_revision
+    ),
+    spec!("packages_archive", h::packages_archive),
+    spec!("packages_reactivate", h::packages_reactivate),
+    spec!("package_revisions_list", h::package_revisions_list),
+    spec!("package_revisions_get", h::package_revisions_get),
+    spec!("package_revisions_rollback", h::package_revisions_rollback),
+    spec!("package_preview", h::package_preview),
+    spec!("package_materialize_item", h::package_materialize_item),
+    spec!("package_catalog_render", h::package_catalog_render),
+    spec!("package_catalog_send", h::package_catalog_send),
+    spec!("payment_accounts_list", h::payment_accounts_list),
+    spec!(
+        "payment_accounts_ensure_defaults",
+        h::payment_accounts_ensure_defaults
+    ),
+    spec!("payment_accounts_create", h::payment_accounts_create),
+    spec!("payment_accounts_update", h::payment_accounts_update),
+    spec!(
+        "payment_accounts_set_active",
+        h::payment_accounts_set_active
+    ),
+    spec!("private_movements_list", h::private_movements_list),
+    spec!("private_movements_get", h::private_movements_get),
+    spec!("private_movements_create", h::private_movements_create),
+    spec!("quotes_list", h::quotes_list),
+    spec!("quotes_get", h::quotes_get),
+    spec!("quotes_attachments_list", h::quotes_attachments_list),
+    spec!("quotes_create_draft", h::quotes_create_draft),
+    spec!("quotes_validate_draft", h::quotes_validate_draft),
+    spec!("quotes_issue", h::quotes_issue),
+    spec!("quotes_accept", h::quotes_accept),
+    spec!("quotes_reject", h::quotes_reject),
+    spec!("quotes_cancel", h::quotes_cancel),
+    spec!("quotes_convert_to_invoice", h::quotes_convert_to_invoice),
+    spec!("quotes_generate_pdf", h::quotes_generate_pdf),
+    spec!("quotes_open_bundle", h::quotes_open_bundle),
+    spec!("quotes_legal_bindings", h::quotes_legal_bindings),
+    spec!("recurring_list", h::recurring_list),
+    spec!("recurring_get", h::recurring_get),
+    spec!("recurring_create", h::recurring_create),
+    spec!("recurring_update", h::recurring_update),
+    spec!("recurring_set_active", h::recurring_set_active),
+    spec!("recurring_run_now", h::recurring_run_now),
+    spec!("recurring_run_due_check", h::recurring_run_due_check),
+    spec!("recurring_invoices_list", h::recurring_invoices_list),
+    spec!("recurring_invoices_get", h::recurring_invoices_get),
+    spec!("recurring_invoices_create", h::recurring_invoices_create),
+    spec!("recurring_invoices_update", h::recurring_invoices_update),
+    spec!(
+        "recurring_invoices_set_active",
+        h::recurring_invoices_set_active
+    ),
+    spec!("recurring_invoices_run_now", h::recurring_invoices_run_now),
+    spec!(
+        "recurring_invoices_run_due_check",
+        h::recurring_invoices_run_due_check
+    ),
+    spec!("seller_profile_get", h::seller_profile_get),
+    spec!("seller_profile_upsert", h::seller_profile_upsert),
+    spec!("seller_logo_set", h::seller_logo_set),
+    spec!("seller_logo_clear", h::seller_logo_clear),
+    spec!("seller_logo_data", h::seller_logo_data),
+    spec!("pdf_templates_list", h::pdf_templates_list),
+    spec!("pdf_template_preview", h::pdf_template_preview),
+    spec!(
+        "seller_default_template_set",
+        h::seller_default_template_set
+    ),
+    spec!("paragraph_19_info", h::paragraph_19_info),
+    spec!("travel_settings_get", h::travel_settings_get),
+    spec!("travel_settings_set", h::travel_settings_set),
+    spec!("travel_compute", h::travel_compute),
+    spec!("seller_signature_set", h::seller_signature_set),
+    spec!("seller_signature_clear", h::seller_signature_clear),
+    spec!("seller_signature_data", h::seller_signature_data),
+    spec!("quote_signature_get", h::quote_signature_get),
+    spec!("quote_signature_set", h::quote_signature_set),
+    spec!("seller_owner_get", h::seller_owner_get),
+    spec!("seller_owner_set", h::seller_owner_set),
+    spec!("document_terms_get", h::document_terms_get),
+    spec!("document_terms_set", h::document_terms_set),
+    spec!("drop_folder_settings_get", h::drop_folder_settings_get),
+    spec!("drop_folder_settings_set", h::drop_folder_settings_set),
+    spec!("drop_folder_sync_now", h::drop_folder_sync_now),
+    spec!("audit_trail_list", h::audit_trail_list),
+    spec!("archive_integrity_run", h::archive_integrity_run),
+    spec!("archive_integrity_history", h::archive_integrity_history),
+    spec!("app_info", h::app_info),
+    spec!("third_party_licenses_path", h::third_party_licenses_path),
+];
+
+mod h {
+    use super::*;
+
+    pub fn assets_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_afa_table(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsAfaTableArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_afa_table(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_suggest_method(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsSuggestMethodArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_suggest_method(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_dispose(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsDisposeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_dispose(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn attachments_open(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::attachments::AttachmentsOpenArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::attachments::attachments_open(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn attachments_reveal(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::attachments::AttachmentsRevealArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::attachments::attachments_reveal(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn attachments_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::attachments::AttachmentsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::attachments::attachments_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn attachments_add(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::attachments::AttachmentsAddArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::attachments::attachments_add(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_needs_onboarding(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupNeedsOnboardingArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_needs_onboarding(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_is_unlocked(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupIsUnlockedArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_is_unlocked(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_get_settings(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupGetSettingsArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_get_settings(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_setup_passphrase(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupSetupPassphraseArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_setup_passphrase(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_unlock(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupUnlockArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_unlock(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_create_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupCreateNowArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_create_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_set_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupSetTargetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_set_target(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_test_sftp(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupTestSftpArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_test_sftp(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_set_sftp_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupSetSftpTargetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_set_sftp_target(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_open_folder(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupOpenFolderArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_open_folder(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupRevealPathArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_reveal_path(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_log_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupLogListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_log_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_log_search(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupLogSearchArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_log_search(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_restore_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupRestorePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_restore_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_restore_apply(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_restore_apply(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_archive(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsArchiveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_archive(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_unarchive(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsUnarchiveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_unarchive(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_search(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsSearchArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_search(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_anonymize_check(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsAnonymizeCheckArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_anonymize_check(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn contacts_anonymize(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::contacts::ContactsAnonymizeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::contacts::contacts_anonymize(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn depreciation_accrue_year(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::depreciation::DepreciationAccrueYearArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::depreciation::depreciation_accrue_year(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn depreciation_reset_asset(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::depreciation::DepreciationResetAssetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::depreciation::depreciation_reset_asset(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn depreciation_list_for_year(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::depreciation::DepreciationListForYearArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::depreciation::depreciation_list_for_year(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn dsgvo_export(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::dsgvo::DsgvoExportArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::dsgvo::dsgvo_export(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_compute_report(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerComputeReportArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_compute_report(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_available_years(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerAvailableYearsArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_available_years(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_package(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerPackageArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_package(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_export_detail_zip(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerExportDetailZipArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_export_detail_zip(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_export_elster(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerExportElsterArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_export_elster(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_export_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerExportPdfArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_export_pdf(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_export_datev(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerExportDatevArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_export_datev(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_export_stb_zip(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerExportStbZipArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_export_stb_zip(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_afa_pending(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerAfaPendingArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_afa_pending(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn euer_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::euer::EuerRevealPathArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::euer::euer_reveal_path(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_cancel(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesCancelArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_set_payment(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesSetPaymentArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_set_payment(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_parse_einvoice(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesParseEinvoiceArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_parse_einvoice(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_create_from_einvoice(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesCreateFromEinvoiceArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_create_from_einvoice(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn expenses_receipt_xml_text(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::expenses::ExpensesReceiptXmlTextArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::expenses::expenses_receipt_xml_text(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn factory_reset_check(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::factory_reset::FactoryResetCheckArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::factory_reset::factory_reset_check(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn factory_reset(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::factory_reset::FactoryResetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::factory_reset::factory_reset(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn fiscal_year_overview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::fiscal_year::FiscalYearOverviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::fiscal_year::fiscal_year_overview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn fiscal_year_close(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::fiscal_year::FiscalYearCloseArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::fiscal_year::fiscal_year_close(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn fiscal_year_closed_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::fiscal_year::FiscalYearClosedListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::fiscal_year::fiscal_year_closed_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn fiscal_year_auto_close_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::fiscal_year::FiscalYearAutoCloseGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::fiscal_year::fiscal_year_auto_close_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn fiscal_year_auto_close_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::fiscal_year::FiscalYearAutoCloseSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::fiscal_year::fiscal_year_auto_close_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_open_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesOpenPdfArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_open_pdf(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_reveal_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesRevealPdfArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_reveal_pdf(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_create_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesCreateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_create_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_validate_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesValidateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_validate_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_lock_and_issue(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesLockAndIssueArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_lock_and_issue(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_record_payment(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesRecordPaymentArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_record_payment(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_cancel(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesCancelArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn legal_documents_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::legal_documents::LegalDocumentsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::legal_documents::legal_documents_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn legal_documents_upload(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::legal_documents::LegalDocumentsUploadArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::legal_documents::legal_documents_upload(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn legal_documents_activate(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::legal_documents::LegalDocumentsActivateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::legal_documents::legal_documents_activate(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn legal_documents_deactivate(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::legal_documents::LegalDocumentsDeactivateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::legal_documents::legal_documents_deactivate(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_accounts_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_accounts_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_account_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_account_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_account_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_account_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_account_delete(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountDeleteArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_account_delete(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_account_test_connection(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountTestConnectionArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_account_test_connection(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_oauth_status(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailOauthStatusArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_oauth_status(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_oauth_connect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailOauthConnectArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_oauth_connect(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_oauth_disconnect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailOauthDisconnectArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_oauth_disconnect(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn email_log_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::EmailLogListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::email_log_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn email_log_for(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::EmailLogForArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::email_log_for(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn email_log_search(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::EmailLogSearchArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::email_log_search(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_invoice_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailInvoicePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_invoice_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_send_invoice(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendInvoiceArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_send_invoice(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_send_test(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendTestArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_send_test(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_quote_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailQuotePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_quote_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_send_quote(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendQuoteArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_send_quote(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn migration_export_run(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::migration_export::MigrationExportRunArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::migration_export::migration_export_run(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notifications_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notifications_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notifications_unread_count(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationsUnreadCountArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notifications_unread_count(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notifications_dismiss(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationsDismissArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notifications_dismiss(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notifications_dismiss_all(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationsDismissAllArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notifications_dismiss_all(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notification_rules_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationRulesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notification_rules_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notification_rules_set_enabled(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationRulesSetEnabledArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notification_rules_set_enabled(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn notifications_run_checks(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::notifications::NotificationsRunChecksArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::notifications::notifications_run_checks(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_categories_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCategoriesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_categories_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_category_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCategoryCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_category_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_category_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCategoryUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_category_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_categories_reorder(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCategoriesReorderArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_categories_reorder(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_update_as_new_revision(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesUpdateAsNewRevisionArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_update_as_new_revision(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_archive(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesArchiveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_archive(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn packages_reactivate(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagesReactivateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::packages_reactivate(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_revisions_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageRevisionsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_revisions_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_revisions_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageRevisionsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_revisions_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_revisions_rollback(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageRevisionsRollbackArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_revisions_rollback(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackagePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_materialize_item(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageMaterializeItemArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_materialize_item(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_catalog_render(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCatalogRenderArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_catalog_render(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn package_catalog_send(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::packages::PackageCatalogSendArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::packages::package_catalog_send(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn payment_accounts_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::payment_accounts::PaymentAccountsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::payment_accounts::payment_accounts_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn payment_accounts_ensure_defaults(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::payment_accounts::PaymentAccountsEnsureDefaultsArgs =
+                parse(v)?;
+            let out =
+                crate::commands::payment_accounts::payment_accounts_ensure_defaults(&ctx, args)
+                    .await?;
+            Ok(serde_json::to_value(out)?)
+        })
+    }
+
+    pub fn payment_accounts_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::payment_accounts::PaymentAccountsCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::payment_accounts::payment_accounts_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn payment_accounts_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::payment_accounts::PaymentAccountsUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::payment_accounts::payment_accounts_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn payment_accounts_set_active(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::payment_accounts::PaymentAccountsSetActiveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::payment_accounts::payment_accounts_set_active(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn private_movements_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::private_movements::PrivateMovementsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::private_movements::private_movements_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn private_movements_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::private_movements::PrivateMovementsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::private_movements::private_movements_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn private_movements_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::private_movements::PrivateMovementsCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::private_movements::private_movements_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_attachments_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesAttachmentsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_attachments_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_create_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesCreateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_create_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_validate_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesValidateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_validate_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_issue(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesIssueArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_issue(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_accept(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesAcceptArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_accept(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_reject(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesRejectArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_reject(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_cancel(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesCancelArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_convert_to_invoice(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesConvertToInvoiceArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_convert_to_invoice(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_generate_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesGeneratePdfArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_generate_pdf(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_open_bundle(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesOpenBundleArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_open_bundle(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_legal_bindings(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesLegalBindingsArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_legal_bindings(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_set_active(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringSetActiveArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_set_active(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_run_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringRunNowArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_run_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_run_due_check(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringRunDueCheckArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_run_due_check(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesCreateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_create(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_update(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesUpdateArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_update(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_set_active(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesSetActiveArgs =
+                parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_set_active(&ctx, args)
+                    .await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_run_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesRunNowArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_run_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_run_due_check(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesRunDueCheckArgs =
+                parse(v)?;
+            let out =
+                crate::commands::recurring_invoice::recurring_invoices_run_due_check(&ctx, args)
+                    .await?;
+            Ok(serde_json::to_value(out)?)
+        })
+    }
+
+    pub fn seller_profile_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerProfileGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_profile_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_profile_upsert(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerProfileUpsertArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_profile_upsert(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_logo_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerLogoSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_logo_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_logo_clear(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerLogoClearArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_logo_clear(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_logo_data(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerLogoDataArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_logo_data(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn pdf_templates_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::PdfTemplatesListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::pdf_templates_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn pdf_template_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::PdfTemplatePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::pdf_template_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_default_template_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerDefaultTemplateSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_default_template_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn paragraph_19_info(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::Paragraph19InfoArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::paragraph_19_info(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn travel_settings_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::TravelSettingsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::travel_settings_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn travel_settings_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::TravelSettingsSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::travel_settings_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn travel_compute(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::TravelComputeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::travel_compute(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_signature_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerSignatureSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_signature_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_signature_clear(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerSignatureClearArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_signature_clear(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_signature_data(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerSignatureDataArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_signature_data(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quote_signature_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::QuoteSignatureGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::quote_signature_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quote_signature_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::QuoteSignatureSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::quote_signature_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_owner_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerOwnerGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_owner_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn seller_owner_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::SellerOwnerSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::seller_owner_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn document_terms_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::DocumentTermsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::document_terms_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn document_terms_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::DocumentTermsSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::document_terms_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn drop_folder_settings_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::DropFolderSettingsGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::drop_folder_settings_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn drop_folder_settings_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::DropFolderSettingsSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::drop_folder_settings_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn drop_folder_sync_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::DropFolderSyncNowArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::drop_folder_sync_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn audit_trail_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::AuditTrailListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::audit_trail_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn archive_integrity_run(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::ArchiveIntegrityRunArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::archive_integrity_run(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn archive_integrity_history(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::ArchiveIntegrityHistoryArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::archive_integrity_history(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn app_info(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::AppInfoArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::app_info(&ctx, args).await,
+            )?)
+        })
+    }
+
+    pub fn third_party_licenses_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::ThirdPartyLicensesPathArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::third_party_licenses_path(&ctx, args).await?,
+            )?)
+        })
+    }
+}

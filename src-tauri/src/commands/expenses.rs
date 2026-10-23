@@ -16,10 +16,11 @@
 //!   Diese Pipeline erzwingt daher keine USt-Freiheit (siehe domain::expense).
 //! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
 
+use crate::app_ctx::AppCtx;
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -107,35 +108,59 @@ pub struct EInvoiceCreateArgs {
 // Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<expenses::ListFilter>,
-) -> Result<Vec<ExpenseListItem>> {
-    expenses::list(pool.inner(), &filter.unwrap_or_default()).await
+/// Argumente von [`expenses_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesListArgs {
+    #[serde(default)]
+    pub filter: Option<expenses::ListFilter>,
 }
 
-#[tauri::command]
+pub async fn expenses_list(
+    ctx: &Arc<AppCtx>,
+    args: ExpensesListArgs,
+) -> Result<Vec<ExpenseListItem>> {
+    let ExpensesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    expenses::list(&pool, &filter.unwrap_or_default()).await
+}
+
+/// Argumente von [`expenses_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesGetArgs {
+    pub id: String,
+}
+
 pub async fn expenses_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesGetArgs,
 ) -> Result<Option<ExpenseDetail>> {
-    expenses::get_detail(pool.inner(), &id).await
+    let ExpensesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    expenses::get_detail(&pool, &id).await
 }
 
 // =============================================================================
 // Create
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_create(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: ExpenseCreateArgs,
-) -> Result<ExpenseDetail> {
-    let paths = Paths::from_handle(&app)?;
-    create_core(pool.inner(), &paths, session.inner(), args).await
+/// Argumente von [`expenses_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCreateArgs {
+    pub args: ExpenseCreateArgs,
+}
+
+pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Result<ExpenseDetail> {
+    let ExpensesCreateArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    create_core(&pool, &paths, session, args).await
 }
 
 /// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
@@ -242,15 +267,20 @@ pub async fn create_core(
 // Cancel (Storno statt Löschung)
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_cancel(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: ExpenseCancelArgs,
-) -> Result<ExpenseRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+/// Argumente von [`expenses_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCancelArgs {
+    pub args: ExpenseCancelArgs,
+}
+
+pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Result<ExpenseRow> {
+    let ExpensesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     if args.reason.trim().is_empty() {
         return Err(Error::Domain("Storno-Grund ist erforderlich.".into()));
@@ -279,7 +309,7 @@ pub async fn expenses_cancel(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "expense.cancel")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "expense.cancel")
         .await
         .ok();
 
@@ -292,12 +322,21 @@ pub async fn expenses_cancel(
 // Zahlung markieren (paid_date / Konto — kein Kernfeld, nach Lock erlaubt)
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`expenses_set_payment`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesSetPaymentArgs {
+    pub args: ExpenseSetPaymentArgs,
+}
+
 pub async fn expenses_set_payment(
-    pool: State<'_, SqlitePool>,
-    args: ExpenseSetPaymentArgs,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesSetPaymentArgs,
 ) -> Result<ExpenseRow> {
-    let pool = pool.inner();
+    let ExpensesSetPaymentArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if let Some(d) = args.paid_date {
         if d > today_berlin() {
             return Err(Error::Domain(
@@ -355,6 +394,14 @@ pub async fn expenses_set_payment(
 // E-Rechnung-Empfang: Parsen (Schritt 1) + Festschreiben (Schritt 2)
 // =============================================================================
 
+/// Argumente von [`expenses_parse_einvoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesParseEinvoiceArgs {
+    pub file_bytes: Vec<u8>,
+    pub file_name: String,
+}
+
 /// Schritt 1 — eine eingehende E-Rechnung (XRechnung-XML **oder** ZUGFeRD-PDF)
 /// einlesen, extrahieren und validieren, OHNE etwas zu persistieren.
 ///
@@ -364,13 +411,16 @@ pub async fn expenses_set_payment(
 ///
 /// Die KoSIT-Validierung ist **beratend** — schlägt sie fehl oder kann sie
 /// nicht laufen, geht der Import trotzdem weiter (`validation = None`/`failed`).
-#[tauri::command]
 pub async fn expenses_parse_einvoice(
-    app: AppHandle,
-    file_bytes: Vec<u8>,
-    file_name: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesParseEinvoiceArgs,
 ) -> Result<EInvoiceParseResult> {
-    let paths = Paths::from_handle(&app)?;
+    let ExpensesParseEinvoiceArgs {
+        file_bytes,
+        file_name,
+    } = args;
+
+    let paths = ctx.paths.clone();
     parse_einvoice_with_paths(&paths, file_bytes, file_name).await
 }
 
@@ -448,22 +498,30 @@ pub async fn parse_einvoice_with_paths(
     })
 }
 
+/// Argumente von [`expenses_create_from_einvoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCreateFromEinvoiceArgs {
+    pub args: EInvoiceCreateArgs,
+}
+
 /// Schritt 2 — die (ggf. korrigierte) Eingabe als Kosten **festschreiben**.
 ///
 /// Reihenfolge: Domain-Validation (Hard-Block) → Lieferanten-Snapshot →
 /// Belegnummer → **Original write-once als `ReceivedEinvoice` archivieren**
 /// (GoBD-Originalformat) → `expenses::create` (sofort gelockt) →
 /// KoSIT-Befund persistieren → Audit → Auto-Critical-Backup.
-#[tauri::command]
 pub async fn expenses_create_from_einvoice(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: EInvoiceCreateArgs,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesCreateFromEinvoiceArgs,
 ) -> Result<ExpenseDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
-    create_from_einvoice_with(pool, &paths, session.inner(), args).await
+    let ExpensesCreateFromEinvoiceArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
+    create_from_einvoice_with(pool, &paths, session, args).await
 }
 
 /// Headless-Helfer hinter [`expenses_create_from_einvoice`]: identische
@@ -713,17 +771,25 @@ where
     }))
 }
 
+/// Argumente von [`expenses_receipt_xml_text`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesReceiptXmlTextArgs {
+    pub expense_id: String,
+}
+
 /// Tauri-Wrapper um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
 /// für ZUGFeRD-PDF-Extraktion ein.
-#[tauri::command]
 pub async fn expenses_receipt_xml_text(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    expense_id: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesReceiptXmlTextArgs,
 ) -> Result<Option<XmlViewerPayload>> {
-    let paths = Paths::from_handle(&app)?;
+    let ExpensesReceiptXmlTextArgs { expense_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let sidecar_dir = paths.sidecar_dir.clone();
-    load_receipt_xml(pool.inner(), &expense_id, move |bytes| async move {
+    load_receipt_xml(&pool, &expense_id, move |bytes| async move {
         mustang_bridge::extract_xml(&bytes, &sidecar_dir).await
     })
     .await

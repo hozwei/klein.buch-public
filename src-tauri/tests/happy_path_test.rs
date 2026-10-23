@@ -117,6 +117,8 @@ async fn setup_env() -> Env {
         backups_dir,
         inputs_dir,
         sidecar_dir: PathBuf::from("/non/existent/sidecar"),
+        resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+        web_dir: std::path::PathBuf::from("/non/existent/web"),
     };
 
     Env {

@@ -43,6 +43,10 @@ pub enum Error {
     #[error("Backup: {0}")]
     Backup(String),
 
+    /// Die Instanz ist gesperrt (kein offener DB-Pool) — erst entsperren (W4/W5: HTTP 423).
+    #[error("Datenbank gesperrt — bitte zuerst entsperren.")]
+    Locked,
+
     #[error("Verschlüsselung: {0}")]
     Crypto(String),
 

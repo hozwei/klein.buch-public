@@ -12,11 +12,10 @@
 //! GoBD-Beleg). Die daraus erzeugte Rechnung ist nach dem Festschreiben
 //! unveränderlich (invoices-Trigger). Belegdatum = Erstellungstag.
 
+use crate::app_ctx::AppCtx;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
-use crate::backup;
-use crate::config::Paths;
 use crate::db::models::{RecurringInvoiceDetail, RecurringInvoiceRow};
 use crate::db::repo::{audit_log, recurring_invoice, seller_profile};
 use crate::domain::invoice::compute_totals;
@@ -29,36 +28,64 @@ use crate::scheduler::recurring_invoice::{process_due, run_now, ProcessReport};
 // Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn recurring_invoices_list(
-    pool: State<'_, SqlitePool>,
-    include_inactive: Option<bool>,
-) -> Result<Vec<RecurringInvoiceRow>> {
-    recurring_invoice::list(pool.inner(), include_inactive.unwrap_or(false)).await
+/// Argumente von [`recurring_invoices_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesListArgs {
+    #[serde(default)]
+    pub include_inactive: Option<bool>,
 }
 
-#[tauri::command]
+pub async fn recurring_invoices_list(
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesListArgs,
+) -> Result<Vec<RecurringInvoiceRow>> {
+    let RecurringInvoicesListArgs { include_inactive } = args;
+    let pool = ctx.pool()?;
+
+    recurring_invoice::list(&pool, include_inactive.unwrap_or(false)).await
+}
+
+/// Argumente von [`recurring_invoices_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesGetArgs {
+    pub id: String,
+}
+
 pub async fn recurring_invoices_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesGetArgs,
 ) -> Result<Option<RecurringInvoiceDetail>> {
-    recurring_invoice::get(pool.inner(), &id).await
+    let RecurringInvoicesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    recurring_invoice::get(&pool, &id).await
 }
 
 // =============================================================================
 // Create / Update / Pause
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`recurring_invoices_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesCreateArgs {
+    pub input: RecurringInvoiceInput,
+}
+
 pub async fn recurring_invoices_create(
-    pool: State<'_, SqlitePool>,
-    input: RecurringInvoiceInput,
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesCreateArgs,
 ) -> Result<RecurringInvoiceDetail> {
+    let RecurringInvoicesCreateArgs { input } = args;
+    let pool = ctx.pool()?;
+
     validate(&input)?;
-    assert_no_vat_when_kleinunternehmer(pool.inner(), &input).await?;
-    let detail = recurring_invoice::create(pool.inner(), &input).await?;
+    assert_no_vat_when_kleinunternehmer(&pool, &input).await?;
+    let detail = recurring_invoice::create(&pool, &input).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "recurring_invoice.create",
         "recurring_invoice",
         &detail.template.id,
@@ -68,17 +95,26 @@ pub async fn recurring_invoices_create(
     Ok(detail)
 }
 
-#[tauri::command]
+/// Argumente von [`recurring_invoices_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesUpdateArgs {
+    pub id: String,
+    pub input: RecurringInvoiceInput,
+}
+
 pub async fn recurring_invoices_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: RecurringInvoiceInput,
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesUpdateArgs,
 ) -> Result<RecurringInvoiceDetail> {
+    let RecurringInvoicesUpdateArgs { id, input } = args;
+    let pool = ctx.pool()?;
+
     validate(&input)?;
-    assert_no_vat_when_kleinunternehmer(pool.inner(), &input).await?;
-    let detail = recurring_invoice::update(pool.inner(), &id, &input).await?;
+    assert_no_vat_when_kleinunternehmer(&pool, &input).await?;
+    let detail = recurring_invoice::update(&pool, &id, &input).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "recurring_invoice.update",
         "recurring_invoice",
         &detail.template.id,
@@ -88,15 +124,24 @@ pub async fn recurring_invoices_update(
     Ok(detail)
 }
 
-#[tauri::command]
+/// Argumente von [`recurring_invoices_set_active`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesSetActiveArgs {
+    pub id: String,
+    pub active: bool,
+}
+
 pub async fn recurring_invoices_set_active(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    active: bool,
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesSetActiveArgs,
 ) -> Result<RecurringInvoiceRow> {
-    recurring_invoice::set_active(pool.inner(), &id, active).await?;
+    let RecurringInvoicesSetActiveArgs { id, active } = args;
+    let pool = ctx.pool()?;
+
+    recurring_invoice::set_active(&pool, &id, active).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         if active {
             "recurring_invoice.activate"
         } else {
@@ -107,7 +152,7 @@ pub async fn recurring_invoices_set_active(
         None,
     )
     .await?;
-    recurring_invoice::get_row(pool.inner(), &id)
+    recurring_invoice::get_row(&pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))
 }
@@ -116,47 +161,46 @@ pub async fn recurring_invoices_set_active(
 // Auslösen (manuell einzeln + Due-Check für alle)
 // =============================================================================
 
+/// Argumente von [`recurring_invoices_run_now`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesRunNowArgs {
+    pub id: String,
+}
+
 /// „Jetzt erstellen" für eine fällige Vorlage — legt eine Rechnung für den
 /// aktuellen Stichtag an (je `auto_mode` Entwurf oder festgeschrieben) und rückt
 /// die Vorlage um eine Periode vor. Liefert die Rechnungs-ID (Frontend navigiert
 /// dorthin).
-#[tauri::command]
 pub async fn recurring_invoices_run_now(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesRunNowArgs,
 ) -> Result<String> {
-    let paths = Paths::from_handle(&app)?;
-    run_now(
-        pool.inner(),
-        &paths,
-        session.inner(),
-        Some(&app),
-        &id,
-        today_berlin(),
-    )
-    .await
+    let RecurringInvoicesRunNowArgs { id } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    run_now(&pool, &paths, session, ctx.notifier(), &id, today_berlin()).await
 }
+
+/// Argumente von [`recurring_invoices_run_due_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesRunDueCheckArgs {}
 
 /// Manueller Due-Check für ALLE fälligen Vorlagen (gleiche Logik wie der
 /// Scheduler-Tick). Nützlich direkt nach dem Entsperren, ohne auf den nächsten
 /// Tick zu warten.
-#[tauri::command]
 pub async fn recurring_invoices_run_due_check(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
+    ctx: &Arc<AppCtx>,
+    _args: RecurringInvoicesRunDueCheckArgs,
 ) -> Result<ProcessReport> {
-    let paths = Paths::from_handle(&app)?;
-    process_due(
-        pool.inner(),
-        &paths,
-        session.inner(),
-        Some(&app),
-        today_berlin(),
-    )
-    .await
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    process_due(&pool, &paths, session, ctx.notifier(), today_berlin()).await
 }
 
 // =============================================================================

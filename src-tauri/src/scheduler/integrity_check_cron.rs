@@ -11,13 +11,17 @@
 
 use crate::archive::integrity_check;
 use crate::error::Result;
+use crate::notify::Notifier;
 use crate::notify::{self, rules, NewNotification};
 use chrono::NaiveDate;
 use sqlx::SqlitePool;
-use tauri::AppHandle;
 
 /// Führt den Monats-Scan aus, falls in diesem Kalendermonat noch keiner lief.
-pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -> Result<()> {
+pub async fn run(
+    pool: &SqlitePool,
+    notifier: Option<&dyn Notifier>,
+    today: NaiveDate,
+) -> Result<()> {
     let this_month = today.format("%Y-%m").to_string();
     let last: Option<String> =
         // Review W2 S2-2: nur abgeschlossene Läufe zählen — ein abgebrochener
@@ -46,7 +50,7 @@ pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -
         summary.files_passed,
         summary.files_failed
     );
-    notify_summary(pool, app, &summary, &this_month).await
+    notify_summary(pool, notifier, &summary, &this_month).await
 }
 
 /// Hinweise zum Ergebnis eines Scans — vom Monats-Cron und vom manuellen Lauf
@@ -54,7 +58,7 @@ pub async fn run(pool: &SqlitePool, app: Option<&AppHandle>, today: NaiveDate) -
 /// Scan gar nicht).
 pub async fn notify_summary(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     summary: &integrity_check::IntegrityCheckSummary,
     this_month: &str,
 ) -> Result<()> {
@@ -72,7 +76,7 @@ pub async fn notify_summary(
             );
             notify::emit(
                 pool,
-                app,
+                notifier,
                 NewNotification {
                     rule_id: Some(&rule.id),
                     title: "Archiv-Integrität gestört",
@@ -99,7 +103,7 @@ pub async fn notify_summary(
         );
         notify::emit(
             pool,
-            app,
+            notifier,
             NewNotification {
                 title: "Archiv-Dateien nicht lesbar",
                 body: &body,

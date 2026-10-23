@@ -15,9 +15,10 @@
 //! - Das ZUGFeRD-PDF wird vor dem Anhängen per SHA-256 gegen das Archiv
 //!   verifiziert ([`crate::archive::read_and_verify`]) — Tamper-Schutz.
 
+use crate::app_ctx::AppCtx;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive;
 use crate::config::Paths;
@@ -29,7 +30,6 @@ use crate::domain::kleinunternehmer;
 use crate::error::{Error, Result};
 use crate::mail::templates::RenderedMail;
 use crate::mail::{keyring, oauth_ms, smtp, templates};
-use tauri_plugin_opener::OpenerExt;
 
 // =============================================================================
 // DTOs
@@ -104,20 +104,39 @@ pub struct OauthStatus {
 // Commands — Accounts
 // =============================================================================
 
-#[tauri::command]
-pub async fn mail_accounts_list(pool: State<'_, SqlitePool>) -> Result<Vec<MailAccountRow>> {
-    mail_accounts::list(pool.inner()).await
+/// Argumente von [`mail_accounts_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountsListArgs {}
+
+pub async fn mail_accounts_list(
+    ctx: &Arc<AppCtx>,
+    _args: MailAccountsListArgs,
+) -> Result<Vec<MailAccountRow>> {
+    let pool = ctx.pool()?;
+
+    mail_accounts::list(&pool).await
+}
+
+/// Argumente von [`mail_account_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountCreateArgs {
+    pub input: mail_accounts::MailAccountInput,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 /// Legt einen Mail-Account an und speichert (falls vorhanden) die Passwort
 /// im OS-Keychain. Die Passwort verlässt diesen Command nie Richtung DB.
-#[tauri::command]
 pub async fn mail_account_create(
-    pool: State<'_, SqlitePool>,
-    input: mail_accounts::MailAccountInput,
-    password: Option<String>,
+    ctx: &Arc<AppCtx>,
+    args: MailAccountCreateArgs,
 ) -> Result<MailAccountRow> {
-    let pool = pool.inner();
+    let MailAccountCreateArgs { input, password } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let row = mail_accounts::create(pool, &input).await?;
 
     if let (Some(service_id), Some(pass)) =
@@ -146,17 +165,31 @@ pub async fn mail_account_create(
     Ok(row)
 }
 
+/// Argumente von [`mail_account_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountUpdateArgs {
+    pub id: String,
+    pub input: mail_accounts::MailAccountInput,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
 /// Aktualisiert einen Mail-Account. Ein nicht-leeres `password` überschreibt
 /// das im Keychain hinterlegte Passwort; bleibt das Feld leer, bleibt das
 /// bestehende Passwort unverändert.
-#[tauri::command]
 pub async fn mail_account_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: mail_accounts::MailAccountInput,
-    password: Option<String>,
+    ctx: &Arc<AppCtx>,
+    args: MailAccountUpdateArgs,
 ) -> Result<MailAccountRow> {
-    let pool = pool.inner();
+    let MailAccountUpdateArgs {
+        id,
+        input,
+        password,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let row = mail_accounts::update(pool, &id, &input).await?;
 
     if let (Some(service_id), Some(pass)) =
@@ -184,10 +217,19 @@ pub async fn mail_account_update(
     Ok(row)
 }
 
+/// Argumente von [`mail_account_delete`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountDeleteArgs {
+    pub id: String,
+}
+
 /// Löscht einen Mail-Account inkl. seines Keychain-Eintrags (best-effort).
-#[tauri::command]
-pub async fn mail_account_delete(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    let pool = pool.inner();
+pub async fn mail_account_delete(ctx: &Arc<AppCtx>, args: MailAccountDeleteArgs) -> Result<()> {
+    let MailAccountDeleteArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
@@ -213,10 +255,21 @@ pub async fn mail_account_delete(pool: State<'_, SqlitePool>, id: String) -> Res
     Ok(())
 }
 
+/// Argumente von [`mail_account_test_connection`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountTestConnectionArgs {
+    pub args: TestConnectionArgs,
+}
+
 /// Testet eine SMTP-Verbindung mit Ad-hoc-Daten (vor dem Speichern eines
 /// Accounts). Gibt bei Erfolg `()` zurück, sonst einen sprechenden Fehler.
-#[tauri::command]
-pub async fn mail_account_test_connection(args: TestConnectionArgs) -> Result<()> {
+pub async fn mail_account_test_connection(
+    _ctx: &Arc<AppCtx>,
+    args: MailAccountTestConnectionArgs,
+) -> Result<()> {
+    let MailAccountTestConnectionArgs { args } = args;
+
     let config = smtp::SmtpConfig {
         host: args.smtp_host,
         port: args.smtp_port,
@@ -231,16 +284,32 @@ pub async fn mail_account_test_connection(args: TestConnectionArgs) -> Result<()
 // Commands — OAuth (Block 16, Microsoft Exchange Online)
 // =============================================================================
 
+/// Argumente von [`mail_oauth_status`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthStatusArgs {
+    pub account_id: String,
+}
+
 /// Liest den OAuth-Verbindungsstatus eines Accounts (verbunden? Postfach? Ablauf?).
-#[tauri::command]
 pub async fn mail_oauth_status(
-    pool: State<'_, SqlitePool>,
-    account_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailOauthStatusArgs,
 ) -> Result<OauthStatus> {
-    let account = mail_accounts::get(pool.inner(), &account_id)
+    let MailOauthStatusArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let account = mail_accounts::get(&pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
     Ok(oauth_status_for(&account))
+}
+
+/// Argumente von [`mail_oauth_connect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthConnectArgs {
+    pub account_id: String,
 }
 
 /// Startet den OAuth-Auth-Code-Flow (PKCE) für ein Microsoft-Konto: öffnet den
@@ -249,13 +318,14 @@ pub async fn mail_oauth_status(
 /// speichert die nicht-geheimen Metadaten (Postfach, Scopes, Ablauf) in der DB.
 ///
 /// Blockiert bis zum Abschluss bzw. bis zur Zeitüberschreitung (5 min).
-#[tauri::command]
 pub async fn mail_oauth_connect(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    account_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailOauthConnectArgs,
 ) -> Result<OauthStatus> {
-    let pool = pool.inner();
+    let MailOauthConnectArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -295,9 +365,7 @@ pub async fn mail_oauth_connect(
     )?;
 
     // Browser zur Microsoft-Anmeldung öffnen.
-    app.opener()
-        .open_url(auth_url, None::<&str>)
-        .map_err(|e| Error::Mail(format!("Browser konnte nicht geöffnet werden: {e}")))?;
+    ctx.open_url(&auth_url)?;
 
     // Auf den Redirect warten (max. 5 Minuten), Query parsen, state prüfen.
     let query = oauth_ms::capture_redirect(&listener, std::time::Duration::from_secs(300)).await?;
@@ -362,11 +430,20 @@ pub async fn mail_oauth_connect(
     Ok(oauth_status_for(&account))
 }
 
+/// Argumente von [`mail_oauth_disconnect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthDisconnectArgs {
+    pub account_id: String,
+}
+
 /// Trennt die Microsoft-Verbindung eines Accounts: löscht das Token-Bundle aus
 /// dem Keychain und die Session-Metadaten aus der DB.
-#[tauri::command]
-pub async fn mail_oauth_disconnect(pool: State<'_, SqlitePool>, account_id: String) -> Result<()> {
-    let pool = pool.inner();
+pub async fn mail_oauth_disconnect(ctx: &Arc<AppCtx>, args: MailOauthDisconnectArgs) -> Result<()> {
+    let MailOauthDisconnectArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -389,61 +466,102 @@ pub async fn mail_oauth_disconnect(pool: State<'_, SqlitePool>, account_id: Stri
 // Commands — E-Mail-Protokoll (Block 16b)
 // =============================================================================
 
+/// Argumente von [`email_log_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogListArgs {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 /// Die jüngsten Protokoll-Einträge, neueste zuerst. `limit` Default 200 (1–1000).
-#[tauri::command]
 pub async fn email_log_list(
-    pool: State<'_, SqlitePool>,
-    limit: Option<i64>,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogListArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
+    let EmailLogListArgs { limit } = args;
+    let pool = ctx.pool()?;
+
     let limit = limit.unwrap_or(200).clamp(1, 1000);
-    email_log::list(pool.inner(), limit).await
+    email_log::list(&pool, limit).await
+}
+
+/// Argumente von [`email_log_for`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogForArgs {
+    pub kind: String,
+    pub id: String,
 }
 
 /// Versand-Historie eines Belegs (`kind` = "invoice" | "quote", `id` = dessen ID).
-#[tauri::command]
 pub async fn email_log_for(
-    pool: State<'_, SqlitePool>,
-    kind: String,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogForArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
-    email_log::list_for(pool.inner(), &kind, &id).await
+    let EmailLogForArgs { kind, id } = args;
+    let pool = ctx.pool()?;
+
+    email_log::list_for(&pool, &kind, &id).await
+}
+
+/// Argumente von [`email_log_search`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogSearchArgs {
+    pub filter: email_log::EmailLogFilter,
 }
 
 /// Serverseitige Suche/Filterung über das Protokoll (Volltext + Zeitfenster +
 /// Status/Art/Kanal). Für die Protokoll-Seite.
-#[tauri::command]
 pub async fn email_log_search(
-    pool: State<'_, SqlitePool>,
-    filter: email_log::EmailLogFilter,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogSearchArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
-    email_log::search(pool.inner(), &filter).await
+    let EmailLogSearchArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    email_log::search(&pool, &filter).await
 }
 
 // =============================================================================
 // Commands — Versand
 // =============================================================================
 
-/// Erzeugt die Body-Vorschau (Betreff + Text) für eine Rechnung aus dem
-/// `invoice-de`-Template — für die Send-UI.
-#[tauri::command]
-pub async fn mail_invoice_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    invoice_id: String,
-) -> Result<RenderedMail> {
-    let paths = Paths::from_handle(&app)?;
-    render_invoice_mail(pool.inner(), &paths, &invoice_id).await
+/// Argumente von [`mail_invoice_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailInvoicePreviewArgs {
+    pub invoice_id: String,
 }
 
-#[tauri::command]
-pub async fn mail_send_invoice(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: SendInvoiceArgs,
-) -> Result<SendResult> {
-    let paths = Paths::from_handle(&app)?;
+/// Erzeugt die Body-Vorschau (Betreff + Text) für eine Rechnung aus dem
+/// `invoice-de`-Template — für die Send-UI.
+pub async fn mail_invoice_preview(
+    ctx: &Arc<AppCtx>,
+    args: MailInvoicePreviewArgs,
+) -> Result<RenderedMail> {
+    let MailInvoicePreviewArgs { invoice_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    render_invoice_mail(&pool, &paths, &invoice_id).await
+}
+
+/// Argumente von [`mail_send_invoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendInvoiceArgs {
+    pub args: SendInvoiceArgs,
+}
+
+pub async fn mail_send_invoice(ctx: &Arc<AppCtx>, args: MailSendInvoiceArgs) -> Result<SendResult> {
+    let MailSendInvoiceArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     send_invoice_core(
-        pool.inner(),
+        &pool,
         &paths,
         &args.account_id,
         &args.invoice_id,
@@ -454,17 +572,23 @@ pub async fn mail_send_invoice(
     .await
 }
 
+/// Argumente von [`mail_send_test`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendTestArgs {
+    pub account_id: String,
+    pub to: String,
+}
+
 /// Sendet eine kurze Test-Mail über ein **gespeichertes** Konto an `to`.
 /// Im Gegensatz zu `mail_account_test_connection` (nur Connect/Login) prüft das
 /// den vollständigen echten Pfad: Credential aus dem Keychain → Versandkanal
 /// (SMTP oder Microsoft Graph) → Zustellung.
-#[tauri::command]
-pub async fn mail_send_test(
-    pool: State<'_, SqlitePool>,
-    account_id: String,
-    to: String,
-) -> Result<()> {
-    let pool = pool.inner();
+pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result<()> {
+    let MailSendTestArgs { account_id, to } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let recipient = to.trim();
     if recipient.is_empty() {
         return Err(Error::Mail("Bitte eine Empfänger-Adresse angeben.".into()));
@@ -514,31 +638,47 @@ pub async fn mail_send_test(
     Ok(())
 }
 
+/// Argumente von [`mail_quote_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailQuotePreviewArgs {
+    pub quote_id: String,
+}
+
 /// Erzeugt die Body-Vorschau (Betreff + Text) für eine Angebots-Mail aus dem
 /// `quote-de`-Template — für die Send-UI.
-#[tauri::command]
 pub async fn mail_quote_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailQuotePreviewArgs,
 ) -> Result<RenderedMail> {
-    let paths = Paths::from_handle(&app)?;
-    render_quote_mail(pool.inner(), &paths, &quote_id).await
+    let MailQuotePreviewArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    render_quote_mail(&pool, &paths, &quote_id).await
+}
+
+/// Argumente von [`mail_send_quote`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendQuoteArgs {
+    pub args: SendQuoteArgs,
 }
 
 /// Angebotsversand (Block 8). Hängt das **Bundle** als Multi-Attachment an:
 /// Angebots-PDF + aktive AGB + aktive Datenschutz-Version. Bindet die
 /// ausgegebenen Legal-Versionen append-only ans Angebot (rechtlicher Nachweis)
 /// und verlangt aktive AGB + Datenschutz (Pflicht für Versand).
-#[tauri::command]
 pub async fn mail_send_quote(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: SendQuoteArgs,
+    ctx: &Arc<AppCtx>,
+    args: MailSendQuoteArgs,
 ) -> Result<SendQuoteResult> {
-    let paths = Paths::from_handle(&app)?;
+    let MailSendQuoteArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     send_quote_core(
-        pool.inner(),
+        &pool,
         &paths,
         &args.account_id,
         &args.quote_id,

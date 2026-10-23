@@ -106,6 +106,8 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
         backups_dir,
         inputs_dir,
         sidecar_dir: PathBuf::from("/non/existent/sidecar"), // Mock-Mode ignoriert das
+        resource_dir: PathBuf::from("/non/existent/resources"),
+        web_dir: PathBuf::from("/non/existent/web"),
     };
 
     Env {

@@ -27,10 +27,10 @@
 //!   Nummernlücke, identisch zum manuell angelegten Entwurf.
 //! - **Unlock-Gate + ein Backup pro Burst** wie beim Kosten-Abo.
 
+use crate::notify::Notifier;
 use chrono::{Datelike, Days, NaiveDate};
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::AppHandle;
 
 use crate::backup::{self, BackupSession};
 use crate::commands::invoices::{create_invoice_draft_from_input, run_lock_pipeline};
@@ -83,7 +83,7 @@ pub async fn process_due(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     today: NaiveDate,
 ) -> Result<ProcessReport> {
     if !session.is_unlocked() {
@@ -109,7 +109,7 @@ pub async fn process_due(
                 continue;
             }
         };
-        match catch_up(pool, paths, app, &tmpl, today).await {
+        match catch_up(pool, paths, notifier, &tmpl, today).await {
             Ok(0) => {}
             Ok(n) => {
                 report.processed_templates += 1;
@@ -137,7 +137,7 @@ pub async fn run_now(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     id: &str,
     today: NaiveDate,
 ) -> Result<String> {
@@ -163,7 +163,7 @@ pub async fn run_now(
         )));
     }
 
-    let invoice_id = process_one(pool, paths, app, &tmpl, &items, occurrence, today).await?;
+    let invoice_id = process_one(pool, paths, notifier, &tmpl, &items, occurrence, today).await?;
     let following = compute_next_due_date(freq, day, occurrence);
     recurring_invoice::advance(
         pool,
@@ -187,7 +187,7 @@ pub async fn run_now(
 async fn catch_up(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     tmpl: &RecurringInvoiceRow,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -208,7 +208,7 @@ async fn catch_up(
     let mut created = 0usize;
 
     while next <= today && end.map(|e| next <= e).unwrap_or(true) && created < CATCH_UP_CAP {
-        let invoice_id = process_one(pool, paths, app, tmpl, &items, next, today).await?;
+        let invoice_id = process_one(pool, paths, notifier, tmpl, &items, next, today).await?;
         let following = compute_next_due_date(freq, day, next);
         recurring_invoice::advance(
             pool,
@@ -236,7 +236,7 @@ async fn catch_up(
 async fn process_one(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     tmpl: &RecurringInvoiceRow,
     items: &[RecurringInvoiceItemRow],
     occurrence: NaiveDate,
@@ -274,7 +274,7 @@ async fn process_one(
         AutoMode::Draft => {
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung als Entwurf bereit",
                 &format!(
                     "„{}“: Rechnungs-Entwurf {} angelegt — bitte prüfen und festschreiben.",
@@ -297,7 +297,7 @@ async fn process_one(
                 );
                 emit_notice(
                     pool,
-                    app,
+                    notifier,
                     "Abo-Rechnung: Auto-Festschreiben übersprungen",
                     &format!(
                         "„{}“: Entwurf {} liegt vor, kann aber nicht automatisch festgeschrieben werden, weil das Geschäftsjahr {} bereits abgeschlossen ist. Bitte den Beleg manuell prüfen.",
@@ -313,12 +313,20 @@ async fn process_one(
             match run_lock_pipeline(pool, paths, &invoice_id, "N/A").await {
                 Ok(_) => {
                     if matches!(mode, AutoMode::IssueSend) {
-                        try_auto_send(pool, paths, app, &tmpl.label, &invoice_id, &number, &dedup)
-                            .await;
+                        try_auto_send(
+                            pool,
+                            paths,
+                            notifier,
+                            &tmpl.label,
+                            &invoice_id,
+                            &number,
+                            &dedup,
+                        )
+                        .await;
                     } else {
                         emit_notice(
                             pool,
-                            app,
+                            notifier,
                             "Abo-Rechnung erstellt",
                             &format!(
                                 "„{}“: Rechnung {} automatisch festgeschrieben.",
@@ -339,7 +347,7 @@ async fn process_one(
                     );
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung: Festschreiben fehlgeschlagen",
                         &format!(
                             "„{}“: Entwurf {} liegt vor, konnte aber nicht automatisch festgeschrieben werden ({e}). Bitte manuell festschreiben.",
@@ -365,7 +373,7 @@ async fn process_one(
 async fn try_auto_send(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     label: &str,
     invoice_id: &str,
     number: &str,
@@ -377,7 +385,7 @@ async fn try_auto_send(
                 Ok(_) => {
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung erstellt & versendet",
                         &format!(
                             "„{label}“: Rechnung {number} automatisch festgeschrieben und per E-Mail versendet."
@@ -392,7 +400,7 @@ async fn try_auto_send(
                     tracing::warn!("Abo-Rechnung {number}: Auto-Versand fehlgeschlagen: {e}");
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung: Versand fehlgeschlagen",
                         &format!(
                             "„{label}“: Rechnung {number} ist festgeschrieben, der automatische Versand schlug fehl ({e}). Bitte manuell versenden."
@@ -408,7 +416,7 @@ async fn try_auto_send(
         Ok(None) => {
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung erstellt — Versand offen",
                 &format!(
                     "„{label}“: Rechnung {number} festgeschrieben. Kein Standard-Mail-Konto gesetzt — bitte manuell versenden (Einstellungen → E-Mail)."
@@ -423,7 +431,7 @@ async fn try_auto_send(
             tracing::warn!("Abo-Rechnung {number}: Mail-Konto-Abruf fehlgeschlagen: {e}");
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung erstellt — Versand offen",
                 &format!(
                     "„{label}“: Rechnung {number} festgeschrieben, Versand nicht möglich ({e})."
@@ -525,7 +533,7 @@ fn freq_and_day(tmpl: &RecurringInvoiceRow) -> Result<(Frequency, u32)> {
 
 async fn emit_notice(
     pool: &SqlitePool,
-    _app: Option<&AppHandle>,
+    _app: Option<&dyn Notifier>,
     title: &str,
     body: &str,
     severity: &str,
@@ -718,6 +726,8 @@ mod pipeline_tests {
             backups_dir: backups,
             inputs_dir: dir.join("inputs"),
             sidecar_dir: dir.join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
         }
     }
 

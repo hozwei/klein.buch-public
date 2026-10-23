@@ -23,13 +23,14 @@
 //! bleiben unangetastet. [`factory_reset_check`] nennt das Off-Site-Ziel, damit das
 //! UI vorab darauf hinweisen kann.
 
+use crate::app_ctx::AppCtx;
 use crate::backup;
 use crate::config::Paths;
 use crate::domain::factory_reset as fr;
 use crate::error::{Error, Result};
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 /// Pre-Flight-Status für das Reset-UI.
 #[derive(Debug, Clone, Serialize)]
@@ -48,16 +49,22 @@ pub struct FactoryResetCheck {
     pub retention_receipt_text: String,
 }
 
+/// Argumente von [`factory_reset_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FactoryResetCheckArgs {}
+
 /// Pre-Flight: liefert Belege-Zählung + Off-Site-Hinweis + die exakten
 /// Bestätigungstexte fürs Reset-UI. Verlangt eine entsperrte Session (Pool im
 /// State).
-#[tauri::command]
 pub async fn factory_reset_check(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: FactoryResetCheckArgs,
 ) -> Result<FactoryResetCheck> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     let locked = count_locked_documents(pool).await?;
     let off_site = backup::target::offsite_target(pool, &paths.backups_dir).await?;
     let (has_off_site_target, off_site_label) = match &off_site {
@@ -73,6 +80,16 @@ pub async fn factory_reset_check(
     })
 }
 
+/// Argumente von [`factory_reset`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FactoryResetArgs {
+    pub passphrase: String,
+    pub confirm_word: String,
+    pub export_confirmed: bool,
+    pub retention_receipt: String,
+}
+
 /// Führt den Factory Reset aus: prüft die Freigabe, merkt den Reset vor und
 /// **startet die App neu**. Der eigentliche Nuke läuft beim Neustart vor dem
 /// Pool-Open.
@@ -81,18 +98,18 @@ pub async fn factory_reset_check(
 /// `restart()` divergiert (`-> !`); auf dem Erfolgspfad kehrt die Command daher
 /// nicht zum Frontend zurück. Fehler (falsche Passphrase, Gating) entstehen
 /// **vor** dem Neustart und werden normal ans UI propagiert.
-#[tauri::command]
-pub async fn factory_reset(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    passphrase: String,
-    confirm_word: String,
-    export_confirmed: bool,
-    retention_receipt: String,
-) -> Result<()> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn factory_reset(ctx: &Arc<AppCtx>, args: FactoryResetArgs) -> Result<()> {
+    let FactoryResetArgs {
+        passphrase,
+        confirm_word,
+        export_confirmed,
+        retention_receipt,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     factory_reset_request(
-        pool.inner(),
+        &pool,
         &paths,
         &passphrase,
         &confirm_word,
@@ -101,7 +118,7 @@ pub async fn factory_reset(
     )
     .await?;
     // Sauberer Neustart → Phase B (apply_pending) löscht vor dem Pool-Open.
-    app.restart()
+    ctx.desktop.restart()
 }
 
 /// Testbarer Kern (Phase A, ohne `AppHandle`/Neustart): verifiziert die
@@ -214,6 +231,8 @@ mod tests {
             backups_dir: dir.join("backups"),
             inputs_dir: dir.join("inputs"),
             sidecar_dir: dir.join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
         }
     }
 

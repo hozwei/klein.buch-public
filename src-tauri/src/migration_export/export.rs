@@ -342,6 +342,8 @@ mod tests {
             backups_dir: dir.join("backups"),
             inputs_dir: dir.join("inputs"),
             sidecar_dir: dir.join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
         }
     }
 

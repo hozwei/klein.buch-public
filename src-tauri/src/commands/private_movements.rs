@@ -4,9 +4,10 @@
 //! nur der Vollständigkeit der Kasse. Erfassung schreibt sofort fest (Lock-Event
 //! → Backup-Hook). Kein Storno/Edit — Korrektur via Gegenbewegung (append-only).
 
+use crate::app_ctx::AppCtx;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -30,31 +31,58 @@ pub struct PrivateMovementCreateArgs {
     pub receipt_filename: Option<String>,
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsListArgs {
+    #[serde(default)]
+    pub filter: Option<private_movements::ListFilter>,
+}
+
 pub async fn private_movements_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<private_movements::ListFilter>,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsListArgs,
 ) -> Result<Vec<PrivateMovementListItem>> {
-    private_movements::list(pool.inner(), &filter.unwrap_or_default()).await
+    let PrivateMovementsListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    private_movements::list(&pool, &filter.unwrap_or_default()).await
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsGetArgs {
+    pub id: String,
+}
+
 pub async fn private_movements_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsGetArgs,
 ) -> Result<Option<PrivateMovementRow>> {
-    private_movements::get(pool.inner(), &id).await
+    let PrivateMovementsGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    private_movements::get(&pool, &id).await
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsCreateArgs {
+    pub args: PrivateMovementCreateArgs,
+}
+
 pub async fn private_movements_create(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: PrivateMovementCreateArgs,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsCreateArgs,
 ) -> Result<PrivateMovementRow> {
-    let paths = Paths::from_handle(&app)?;
-    create_core(pool.inner(), &paths, session.inner(), args).await
+    let PrivateMovementsCreateArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    create_core(&pool, &paths, session, args).await
 }
 
 /// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).

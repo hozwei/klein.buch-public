@@ -69,6 +69,22 @@ Arbeitszweig `phase-w`.
 - **Migrations-Export** blockiert keine Schreiber mehr und hinterlässt bei
   Fehlern keine offene Transaktion. (W2)
 
+### Changed (Umbau)
+
+- **Kern-Schnitt (W4):** Die 183 Commands sind als Kerne
+  `commands::<bereich>::<name>(ctx, args)` von Tauri getrennt: gemeinsamer
+  Anwendungskontext `AppCtx` (Pfade, schließbarer DB-Pool, Sitzung,
+  Restore-Audit, Benachrichtigungen, Zugangsdaten), Args-Structs mit den
+  bisherigen camelCase-Schlüsseln, Registry aller Kerne mit Metadaten für den
+  späteren HTTP-Dispatcher; die Tauri-App nutzt bis zum Umbau generierte dünne
+  Wrapper. Pfade für den Server kommen aus `KLEIN_BUCH_DATA_DIR`,
+  `KLEIN_BUCH_INPUTS_DIR`, `KLEIN_BUCH_RESOURCE_DIR`, `KLEIN_BUCH_WEB_DIR`
+  (Pflicht); `inputs/` wird bei jedem Start ergänzt, nie überschrieben. Der
+  ungenutzte Command `invoices_archive_paths` entfällt.
+- Neue Tests: Storno über den Kern, §19-Prüfung in der Vorlagen-Vorschau,
+  UTF-8-Prüfung beim Rechnungseingang, Restore-Audit über den Kontext,
+  Registry = Frontend-Aufrufe, kein Tauri-Bezug außerhalb der Hülle.
+
 ### Documentation
 
 - **ADR 0039 „Web-/Docker-Betrieb“:** Entscheidungen E1–E17, Bedrohungsmodell

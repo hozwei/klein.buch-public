@@ -10,11 +10,11 @@
 
 use crate::error::Result;
 use crate::fiscal_year::guard;
+use crate::notify::Notifier;
 use crate::notify::{self, rules, NewNotification};
 use chrono::{Datelike, NaiveDate};
 use sqlx::SqlitePool;
 use std::path::Path;
-use tauri::AppHandle;
 
 /// Führt alle aktiven Reminder-Regeln aus. Liefert die Anzahl neu erzeugter
 /// Hinweise (Dedup-Treffer zählen nicht).
@@ -24,39 +24,42 @@ use tauri::AppHandle;
 /// Floor zu unterscheiden (G1-NOTIFY).
 pub async fn run(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     today: NaiveDate,
     floor_dir: &Path,
 ) -> Result<usize> {
     let mut created = 0usize;
 
     if let Some(rule) = rules::get_enabled_by_type(pool, "monthly_doc_check").await? {
-        created += monthly_doc_check(pool, app, &rule, today).await?;
+        created += monthly_doc_check(pool, notifier, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "fiscal_year_lock_pending").await? {
-        created += fiscal_year_lock_pending(pool, app, &rule, today).await?;
+        created += fiscal_year_lock_pending(pool, notifier, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "backup_overdue").await? {
-        created += backup_overdue(pool, app, &rule, today, floor_dir).await?;
+        created += backup_overdue(pool, notifier, &rule, today, floor_dir).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "invoice_overdue").await? {
-        created += invoice_overdue(pool, app, &rule, today).await?;
+        created += invoice_overdue(pool, notifier, &rule, today).await?;
     }
     Ok(created)
 }
 
 async fn emit_one(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     n: NewNotification<'_>,
 ) -> Result<usize> {
-    Ok(notify::emit(pool, app, n).await?.map(|_| 1).unwrap_or(0))
+    Ok(notify::emit(pool, notifier, n)
+        .await?
+        .map(|_| 1)
+        .unwrap_or(0))
 }
 
 /// Monatlicher Doku-Check ab Tag N (Default 10.). Dedup pro Kalendermonat.
 async fn monthly_doc_check(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -67,7 +70,7 @@ async fn monthly_doc_check(
     let key = format!("monthly_doc_check:{:04}-{:02}", today.year(), today.month());
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Belege erfassen",
@@ -85,7 +88,7 @@ async fn monthly_doc_check(
 /// solange es nicht abgeschlossen ist. Dedup pro Zieljahr.
 async fn fiscal_year_lock_pending(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -108,7 +111,7 @@ async fn fiscal_year_lock_pending(
     );
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Geschäftsjahr abschließen",
@@ -133,7 +136,7 @@ async fn fiscal_year_lock_pending(
 ///   wenn überhaupt keine Sicherung mehr lief (App lange nicht geöffnet).
 async fn backup_overdue(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
     floor_dir: &Path,
@@ -189,7 +192,7 @@ async fn backup_overdue(
     }
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title,
@@ -207,7 +210,7 @@ async fn backup_overdue(
 /// Rechnung (nur ein Hinweis, bis abgehakt).
 async fn invoice_overdue(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -235,7 +238,7 @@ async fn invoice_overdue(
         let action = format!("/invoices/{id}");
         created += emit_one(
             pool,
-            app,
+            notifier,
             NewNotification {
                 rule_id: Some(&rule.id),
                 title: "Rechnung überfällig",

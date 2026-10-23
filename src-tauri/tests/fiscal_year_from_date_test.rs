@@ -106,6 +106,8 @@ async fn setup() -> Env {
         backups_dir,
         inputs_dir: tmp.path().join("inputs"),
         sidecar_dir: PathBuf::from("/non/existent/sidecar"),
+        resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+        web_dir: std::path::PathBuf::from("/non/existent/web"),
     };
     Env {
         pool,

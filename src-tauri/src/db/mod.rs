@@ -14,16 +14,12 @@ pub mod schema_version;
 pub mod triggers;
 
 use crate::backup::restore::AppliedInfo;
-use crate::{
-    config::Paths,
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
 
 /// Migrations werden zur Compile-Zeit in die Binary eingebettet.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -32,7 +28,7 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// (nach dem Entsperren) offen ist und der Audit-Eintrag geschrieben werden
 /// kann. Der Restore-Swap selbst passiert filesystem-only **vor** dem Öffnen
 /// des Pools (Windows-File-Lock), der zugehörige Audit-Eintrag braucht aber den
-/// geöffneten Pool — daher dieser Zwischenspeicher im Tauri-State.
+/// geöffneten Pool — daher dieser Zwischenspeicher im [`crate::app_ctx::AppCtx`].
 #[derive(Default)]
 pub struct PendingRestoreAudit(pub Mutex<Option<AppliedInfo>>);
 
@@ -130,8 +126,8 @@ pub fn db_file_is_plaintext(path: &Path) -> bool {
 /// Der Restore-Swap muss vor jedem Pool-Open passieren (Windows-File-Lock); der
 /// zugehörige Audit-Eintrag wird im [`PendingRestoreAudit`]-State gepuffert und
 /// nach dem Entsperren in [`run_migrations`] geschrieben.
-pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
-    let paths = Paths::from_handle(app)?;
+pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
+    let paths = &ctx.paths;
 
     // `archive/` und `backups/` erst NACH dem Restore-Recovery anlegen (Review
     // W2 S0-2): ein leeres neues `archive/` neben `archive.rollback` sah für ein
@@ -144,21 +140,22 @@ pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
     // PDF-Template-Loader bei jeder Production-Installation eine voll
     // bestueckte `inputs/` vorfinden — sonst crasht das AfA-Formular sofort
     // beim Mount (Bug V2026.5).
-    crate::config::ensure_inputs_seeded(app, &paths)?;
+    crate::config::ensure_inputs_seeded(paths)?;
 
     // G1-RESET (ADR 0036): einen vorgemerkten Factory Reset JETZT anwenden — vor
     // dem Öffnen des Pools (race-frei, kein Windows-File-Lock). Er löscht das
     // gesamte data_dir; ein gleichzeitig vorgemerkter Restore ist damit
     // gegenstandslos → früher Rücksprung in den leeren Onboarding-Zustand.
-    if crate::backup::factory_reset::apply_pending(&paths)? {
+    if crate::backup::factory_reset::apply_pending(paths)? {
         return Ok(());
     }
 
     // Block 4: Vorgemerkten Restore JETZT anwenden — vor dem Öffnen des Pools.
-    if let Some(info) = crate::backup::restore::apply_pending(&paths)? {
-        if let Some(holder) = app.try_state::<PendingRestoreAudit>() {
-            *holder.0.lock().expect("PendingRestoreAudit poisoned") = Some(info);
-        }
+    if let Some(info) = crate::backup::restore::apply_pending(paths)? {
+        *ctx.pending_restore
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(info);
     }
     std::fs::create_dir_all(&paths.archive_dir)?;
     std::fs::create_dir_all(&paths.backups_dir)?;
@@ -168,15 +165,16 @@ pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
 /// Migrationen anwenden (forward-only) + Schema-Version verifizieren + einen
 /// ggf. gepufferten Restore-Audit-Eintrag schreiben. Setzt einen offenen Pool
 /// voraus (für die verschlüsselte DB nach erfolgreichem `PRAGMA key`).
-pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
+pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> Result<()> {
     MIGRATOR.run(pool).await?;
     schema_version::check_compatible(pool).await?;
 
-    if let Some(holder) = app.try_state::<PendingRestoreAudit>() {
+    {
+        let holder = &ctx.pending_restore;
         let info = holder
             .0
             .lock()
-            .expect("PendingRestoreAudit poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(info) = info {
             // R1-010 (v2026.5-Re-Review): Restore-Audit-Append-Fehler NICHT
@@ -218,11 +216,11 @@ pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
 /// (Migrationen + Schema-Check + Restore-Audit). Genutzt vom Onboarding
 /// (`key = Some` → frische verschlüsselte DB) und vom Entsperren über den
 /// Klartext-Übergangspfad (`key = None`).
-pub async fn open_and_init(app: &AppHandle, key: Option<&str>) -> Result<SqlitePool> {
-    let paths = Paths::from_handle(app)?;
+pub async fn open_and_init(ctx: &crate::app_ctx::AppCtx, key: Option<&str>) -> Result<SqlitePool> {
+    let paths = &ctx.paths;
     tracing::info!("Öffne DB: {}", paths.db_file.to_string_lossy());
     let pool = open_pool(&paths.db_file, key).await?;
-    run_migrations(app, &pool).await?;
+    run_migrations(ctx, &pool).await?;
     Ok(pool)
 }
 
@@ -373,11 +371,11 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
 /// hängen). Ist die DB bereits verschlüsselt, wird der übergebene Pool unverändert
 /// zurückgegeben (kein Pre-Backup, kein Swap).
 pub async fn migrate_plaintext_to_encrypted(
-    app: &AppHandle,
+    ctx: &crate::app_ctx::AppCtx,
     plaintext_pool: SqlitePool,
     passphrase: &str,
 ) -> Result<SqlitePool> {
-    let paths = Paths::from_handle(app)?;
+    let paths = &ctx.paths;
     if !db_file_is_plaintext(&paths.db_file) {
         return Ok(plaintext_pool);
     }
@@ -385,7 +383,7 @@ pub async fn migrate_plaintext_to_encrypted(
     // 1. Pflicht-Pre-Migration-Backup. Bei Fehler: Pool schließen + abbrechen,
     //    die Klartext-DB bleibt unverändert (sicher wiederholbar).
     let pre =
-        match crate::backup::create_now(&plaintext_pool, &paths, passphrase, "pre_restore").await {
+        match crate::backup::create_now(&plaintext_pool, paths, passphrase, "pre_restore").await {
             Ok(outcome) => outcome,
             Err(e) => {
                 plaintext_pool.close().await;
@@ -413,7 +411,7 @@ pub async fn migrate_plaintext_to_encrypted(
 
     // 4. Verschlüsselt neu öffnen + Schema-Check + Erfolgs-Audit.
     let pool = open_pool(&paths.db_file, Some(passphrase)).await?;
-    run_migrations(app, &pool).await?;
+    run_migrations(ctx, &pool).await?;
     crate::db::repo::audit_log::append(
         &pool,
         "encryption.migration.applied",

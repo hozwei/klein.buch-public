@@ -13,14 +13,13 @@
 //! `ArchiveKind::ExpenseOriginal`-Klassifizierung). Hier nur **zusätzliche**
 //! Anhänge.
 
+use crate::app_ctx::AppCtx;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
-use crate::config::Paths;
 use crate::db::models::AttachmentView;
 use crate::db::repo::{attachments, audit_log};
 use crate::error::{Error, Result};
@@ -58,53 +57,79 @@ async fn archive_file_path(pool: &SqlitePool, archive_entry_id: &str) -> Result<
     Ok(row.try_get("file_path")?)
 }
 
+/// Argumente von [`attachments_open`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentsOpenArgs {
+    pub archive_entry_id: String,
+}
+
 /// Öffnet den archivierten Anhang im Standard-Programm des Betriebssystems.
-#[tauri::command]
-pub async fn attachments_open(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    archive_entry_id: String,
-) -> Result<()> {
-    let path = archive_file_path(pool.inner(), &archive_entry_id).await?;
-    app.opener()
-        .open_path(path, None::<&str>)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Anhang konnte nicht geöffnet werden: {e}")))?;
+pub async fn attachments_open(ctx: &Arc<AppCtx>, args: AttachmentsOpenArgs) -> Result<()> {
+    let AttachmentsOpenArgs { archive_entry_id } = args;
+    let pool = ctx.pool()?;
+
+    let path = archive_file_path(&pool, &archive_entry_id).await?;
+    ctx.open_path(path)?;
     Ok(())
+}
+
+/// Argumente von [`attachments_reveal`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentsRevealArgs {
+    pub archive_entry_id: String,
 }
 
 /// Zeigt den archivierten Anhang im Datei-Explorer/Finder.
-#[tauri::command]
-pub async fn attachments_reveal(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    archive_entry_id: String,
-) -> Result<()> {
-    let path = archive_file_path(pool.inner(), &archive_entry_id).await?;
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
+pub async fn attachments_reveal(ctx: &Arc<AppCtx>, args: AttachmentsRevealArgs) -> Result<()> {
+    let AttachmentsRevealArgs { archive_entry_id } = args;
+    let pool = ctx.pool()?;
+
+    let path = archive_file_path(&pool, &archive_entry_id).await?;
+    ctx.reveal(&path)?;
     Ok(())
 }
 
+/// Argumente von [`attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentsListArgs {
+    pub parent_type: String,
+    pub parent_id: String,
+}
+
 /// Listet die Anhänge einer Eltern-Entität (Anzeige-Sicht).
-#[tauri::command]
 pub async fn attachments_list(
-    pool: State<'_, SqlitePool>,
-    parent_type: String,
-    parent_id: String,
+    ctx: &Arc<AppCtx>,
+    args: AttachmentsListArgs,
 ) -> Result<Vec<AttachmentView>> {
-    attachments::list_for_parent(pool.inner(), &parent_type, &parent_id).await
+    let AttachmentsListArgs {
+        parent_type,
+        parent_id,
+    } = args;
+    let pool = ctx.pool()?;
+
+    attachments::list_for_parent(&pool, &parent_type, &parent_id).await
+}
+
+/// Argumente von [`attachments_add`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentsAddArgs {
+    pub args: AddAttachmentArgs,
 }
 
 /// Generischer Anhang-Upload (Block 9): Datei write-once archivieren und mit der
 /// Eltern-Entität verknüpfen. Liefert die aktualisierte Anhang-Liste.
-#[tauri::command]
 pub async fn attachments_add(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: AddAttachmentArgs,
+    ctx: &Arc<AppCtx>,
+    args: AttachmentsAddArgs,
 ) -> Result<Vec<AttachmentView>> {
-    let pool = pool.inner();
+    let AttachmentsAddArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if !VALID_PARENT_TYPES.contains(&args.parent_type.as_str()) {
         return Err(Error::Domain(format!(
             "Unbekannter Anhang-Typ '{}'.",
@@ -115,7 +140,7 @@ pub async fn attachments_add(
         return Err(Error::Domain("Datei ist leer.".into()));
     }
 
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     let sanitized = sanitize_filename(&args.file_name);
     let token = &uuid::Uuid::now_v7().to_string()[..8];
     let archive_name = format!("{}-{token}-{sanitized}", args.parent_type);

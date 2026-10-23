@@ -3,14 +3,13 @@
 //! Die Passphrase wird ausschließlich als Funktionsargument durchgereicht und in
 //! der Session ([`backup::BackupSession`]) gehalten — **nie** in DB/Logs/Audit.
 
-use crate::backup::{self, restore, BackupOutcome, BackupSession};
+use crate::app_ctx::AppCtx;
+use crate::backup::{self, restore, BackupOutcome};
 use crate::config::Paths;
 use crate::db;
 use crate::error::{Error, Result};
 use serde::Serialize;
-use sqlx::SqlitePool;
-use tauri::{AppHandle, Manager, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 /// Status fürs Onboarding/Settings-UI.
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +72,11 @@ fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
+/// Argumente von [`backup_needs_onboarding`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupNeedsOnboardingArgs {}
+
 /// Onboarding-Gate.
 ///
 /// G1-ENC Schritt 2 (Bootstrap-Inversion): primäres Signal ist die
@@ -87,9 +91,11 @@ fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
 ///   eingerichtet). Sonst Entsperren. Das verhindert ein Aussperren von
 ///   Bestands-Installationen, in denen die DB existiert, aber noch kein
 ///   Verifier geschrieben wurde.
-#[tauri::command]
-pub async fn backup_needs_onboarding(app: AppHandle) -> Result<bool> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn backup_needs_onboarding(
+    ctx: &Arc<AppCtx>,
+    _args: BackupNeedsOnboardingArgs,
+) -> Result<bool> {
+    let paths = ctx.paths.clone();
     if !paths.db_file.exists() {
         ensure_no_pending_restore(&paths)?;
         return Ok(true);
@@ -106,24 +112,33 @@ pub async fn backup_needs_onboarding(app: AppHandle) -> Result<bool> {
     Ok(!has)
 }
 
+/// Argumente von [`backup_is_unlocked`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupIsUnlockedArgs {}
+
 /// Ist die Session aktuell entsperrt (Passphrase im Memory)?
-#[tauri::command]
-pub async fn backup_is_unlocked(session: State<'_, BackupSession>) -> Result<bool> {
+pub async fn backup_is_unlocked(ctx: &Arc<AppCtx>, _args: BackupIsUnlockedArgs) -> Result<bool> {
+    let session = &ctx.session;
+
     Ok(session.is_unlocked())
 }
 
-#[tauri::command]
+/// Argumente von [`backup_get_settings`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupGetSettingsArgs {}
+
 pub async fn backup_get_settings(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, BackupSession>,
+    ctx: &Arc<AppCtx>,
+    _args: BackupGetSettingsArgs,
 ) -> Result<BackupSettings> {
-    let floor_path = Paths::from_handle(&app)?
-        .backups_dir
-        .to_string_lossy()
-        .to_string();
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let floor_path = ctx.paths.clone().backups_dir.to_string_lossy().to_string();
     // Konfiguriertes Ziel → Directory-Pfad bzw. SFTP-View aufteilen.
-    let (target_path, sftp) = match backup::target::get_target(pool.inner()).await? {
+    let (target_path, sftp) = match backup::target::get_target(&pool).await? {
         Some(backup::target::BackupTarget::Directory { path }) => (Some(path), None),
         Some(backup::target::BackupTarget::Sftp {
             host,
@@ -144,7 +159,7 @@ pub async fn backup_get_settings(
         None => (None, None),
     };
     Ok(BackupSettings {
-        passphrase_set: backup::is_passphrase_set(pool.inner()).await?,
+        passphrase_set: backup::is_passphrase_set(&pool).await?,
         unlocked: session.is_unlocked(),
         floor_path,
         target_path,
@@ -154,6 +169,13 @@ pub async fn backup_get_settings(
         detected_targets: backup::target::detect_cloud_targets(),
         sftp,
     })
+}
+
+/// Argumente von [`backup_setup_passphrase`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSetupPassphraseArgs {
+    pub passphrase: String,
 }
 
 /// Onboarding: legt die DB **verschlüsselt** an (SQLCipher, Passphrase = DB-Key,
@@ -168,13 +190,14 @@ pub async fn backup_get_settings(
 /// adoptiert (legitimer pre-G1-Zustand), so wird sie nach dem Setzen des
 /// Verifiers einmalig nach SQLCipher migriert (inkl. Pflicht-Pre-Migration-
 /// Backup). Eine frisch verschlüsselt angelegte DB durchläuft das als No-op.
-#[tauri::command]
 pub async fn backup_setup_passphrase(
-    app: AppHandle,
-    session: State<'_, BackupSession>,
-    passphrase: String,
+    ctx: &Arc<AppCtx>,
+    args: BackupSetupPassphraseArgs,
 ) -> Result<BackupOutcome> {
-    let paths = Paths::from_handle(&app)?;
+    let BackupSetupPassphraseArgs { passphrase } = args;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
     ensure_no_pending_restore(&paths)?;
     // R5-005: Passphrase-Floor von 8 auf 16 Zeichen gehoben. Verlust = Total-
     // verlust by design (ADR 0035) — 8-Zeichen-Passwörter sind gegen
@@ -198,7 +221,7 @@ pub async fn backup_setup_passphrase(
                     .into(),
             ));
         }
-        let pool = db::open_and_init(&app, None).await?;
+        let pool = db::open_and_init(ctx, None).await?;
         if backup::is_passphrase_set(&pool).await? {
             pool.close().await;
             return Err(Error::Backup(
@@ -209,24 +232,31 @@ pub async fn backup_setup_passphrase(
         pool
     } else {
         // Frische DB verschlüsselt anlegen (Key = Passphrase) + Migrationen.
-        db::open_and_init(&app, Some(passphrase.as_str())).await?
+        db::open_and_init(ctx, Some(passphrase.as_str())).await?
     };
 
     // Verifier + passphrase_set + Session setzen (im jetzt offenen Pool).
-    backup::setup_passphrase(&pool, session.inner(), &passphrase).await?;
+    backup::setup_passphrase(&pool, session, &passphrase).await?;
 
     // G1-ENC Schritt 3: Eine adoptierte Klartext-Bestands-DB jetzt einmalig
     // verschlüsseln (inkl. Pflicht-Pre-Migration-Backup). Eine frisch
     // verschlüsselt angelegte DB ist hier ein No-op. Erst danach den (nun
     // verschlüsselten) Pool in den State hängen.
-    let pool = db::migrate_plaintext_to_encrypted(&app, pool, &passphrase).await?;
-    app.manage(pool.clone());
+    let pool = db::migrate_plaintext_to_encrypted(ctx, pool, &passphrase).await?;
+    ctx.set_pool(pool.clone());
 
     // Scheduler erst jetzt starten (Pool liegt im State).
-    crate::scheduler::tick::ensure_started(&app);
+    crate::scheduler::tick::ensure_started(ctx);
 
     // Erst-Backup direkt nach Setup (PRD Done-Check).
     backup::create_now(&pool, &paths, &passphrase, "manual").await
+}
+
+/// Argumente von [`backup_unlock`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupUnlockArgs {
+    pub passphrase: String,
 }
 
 /// Entsperrt die App: öffnet den DB-Pool mit der Passphrase und hängt ihn in den
@@ -242,13 +272,11 @@ pub async fn backup_setup_passphrase(
 ///
 /// Bei Erfolg: Pool einhängen, Session entsperren, Scheduler starten, ein
 /// fälliges Auto-Daily-Backup auslösen.
-#[tauri::command]
-pub async fn backup_unlock(
-    app: AppHandle,
-    session: State<'_, BackupSession>,
-    passphrase: String,
-) -> Result<bool> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<bool> {
+    let BackupUnlockArgs { passphrase } = args;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
     ensure_no_pending_restore(&paths)?;
     if !paths.db_file.exists() {
         return Err(Error::Backup(
@@ -258,7 +286,7 @@ pub async fn backup_unlock(
 
     let pool = if db::db_file_is_plaintext(&paths.db_file) {
         // Klartext-Übergangspfad: Pool ohne Key, Passphrase via Verifier prüfen.
-        let pool = db::open_and_init(&app, None).await?;
+        let pool = db::open_and_init(ctx, None).await?;
         if !backup::verify_passphrase(&pool, &passphrase).await? {
             // R2-026: Pflicht-Audit (Security-Event). Wenn das Schreiben
             // fehlschlägt, lieber zusätzlich loggen und trotzdem die Unlock-
@@ -283,7 +311,7 @@ pub async fn backup_unlock(
         // jetzt einmalig verschlüsseln (inkl. Pflicht-Pre-Migration-Backup) und
         // den verschlüsselten Pool übernehmen. Beim nächsten Start greift der
         // verschlüsselte Zweig unten.
-        db::migrate_plaintext_to_encrypted(&app, pool, &passphrase).await?
+        db::migrate_plaintext_to_encrypted(ctx, pool, &passphrase).await?
     } else {
         // Verschlüsselte DB: mit Key öffnen, Probe-Read als Verifier.
         let pool = db::open_pool(&paths.db_file, Some(passphrase.as_str())).await?;
@@ -292,13 +320,13 @@ pub async fn backup_unlock(
             pool.close().await;
             return Ok(false);
         }
-        db::run_migrations(&app, &pool).await?;
+        db::run_migrations(ctx, &pool).await?;
         pool
     };
 
-    app.manage(pool.clone());
+    ctx.set_pool(pool.clone());
     session.set(passphrase);
-    crate::scheduler::tick::ensure_started(&app);
+    crate::scheduler::tick::ensure_started(ctx);
     // R2-026: Pflicht-Audit (Security-Event), Fehler propagieren.
     crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
         .await?;
@@ -309,25 +337,51 @@ pub async fn backup_unlock(
     Ok(true)
 }
 
+/// Argumente von [`backup_create_now`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupCreateNowArgs {}
+
 /// Manuelles Backup (Trigger `manual`). Verlangt entsperrte Session.
-#[tauri::command]
 pub async fn backup_create_now(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, BackupSession>,
+    ctx: &Arc<AppCtx>,
+    _args: BackupCreateNowArgs,
 ) -> Result<BackupOutcome> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     let passphrase = session
         .get()
         .ok_or_else(|| Error::Backup("Session gesperrt — bitte zuerst entsperren".into()))?;
     backup::create_now(pool, &paths, &passphrase, "manual").await
 }
 
+/// Argumente von [`backup_set_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSetTargetArgs {
+    pub path: String,
+}
+
 /// Setzt das Backup-Ziel (Verzeichnis).
-#[tauri::command]
-pub async fn backup_set_target(pool: State<'_, SqlitePool>, path: String) -> Result<()> {
-    backup::target::set_directory_target(pool.inner(), &path).await
+pub async fn backup_set_target(ctx: &Arc<AppCtx>, args: BackupSetTargetArgs) -> Result<()> {
+    let BackupSetTargetArgs { path } = args;
+    let pool = ctx.pool()?;
+
+    backup::target::set_directory_target(&pool, &path).await
+}
+
+/// Argumente von [`backup_test_sftp`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTestSftpArgs {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub remote_dir: String,
+    pub password: String,
 }
 
 /// Testet eine SFTP-Verbindung (G1-BKP.3): Handshake + Auth + Schreibrechte.
@@ -337,14 +391,18 @@ pub async fn backup_set_target(pool: State<'_, SqlitePool>, path: String) -> Res
 ///
 /// Ist `password` leer, wird ein bereits im Keychain hinterlegtes Passwort
 /// genutzt (Test eines gespeicherten Ziels ohne erneute Eingabe).
-#[tauri::command]
 pub async fn backup_test_sftp(
-    host: String,
-    port: u16,
-    user: String,
-    remote_dir: String,
-    password: String,
+    _ctx: &Arc<AppCtx>,
+    args: BackupTestSftpArgs,
 ) -> Result<backup::sftp::SftpProbe> {
+    let BackupTestSftpArgs {
+        host,
+        port,
+        user,
+        remote_dir,
+        password,
+    } = args;
+
     if host.trim().is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
@@ -373,6 +431,18 @@ pub async fn backup_test_sftp(
     .await
 }
 
+/// Argumente von [`backup_set_sftp_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSetSftpTargetArgs {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub remote_dir: String,
+    pub host_fingerprint: String,
+    pub password: String,
+}
+
 /// Setzt ein SFTP-Backup-Ziel (G1-BKP.3). Speichert Host/Port/User/Ordner +
 /// gepinnten Fingerprint als Ziel und legt das Passwort im OS-Keychain ab
 /// (**nie** in DB/Log/audit). Ist `password` leer, bleibt ein bereits
@@ -380,16 +450,20 @@ pub async fn backup_test_sftp(
 ///
 /// `host_fingerprint` ist Pflicht — er stammt aus [`backup_test_sftp`] und ist
 /// der MITM-Schutz: ohne ihn lehnt der spätere Upload ab.
-#[tauri::command]
 pub async fn backup_set_sftp_target(
-    pool: State<'_, SqlitePool>,
-    host: String,
-    port: u16,
-    user: String,
-    remote_dir: String,
-    host_fingerprint: String,
-    password: String,
+    ctx: &Arc<AppCtx>,
+    args: BackupSetSftpTargetArgs,
 ) -> Result<()> {
+    let BackupSetSftpTargetArgs {
+        host,
+        port,
+        user,
+        remote_dir,
+        host_fingerprint,
+        password,
+    } = args;
+    let pool = ctx.pool()?;
+
     if host.trim().is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
@@ -414,97 +488,156 @@ pub async fn backup_set_sftp_target(
         remote_dir: remote_dir.trim().to_string(),
         host_fingerprint: Some(host_fingerprint.trim().to_string()),
     };
-    backup::target::set_target(pool.inner(), &target).await
+    backup::target::set_target(&pool, &target).await
+}
+
+/// Argumente von [`backup_open_folder`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupOpenFolderArgs {
+    pub path: String,
 }
 
 /// Öffnet einen lokalen Backup-**Ordner** im Datei-Explorer/Finder (Floor oder
 /// Off-Site-Verzeichnis). Für SFTP-Ziele nicht verfügbar (Remote-Pfad).
-#[tauri::command]
-pub async fn backup_open_folder(app: AppHandle, path: String) -> Result<()> {
+pub async fn backup_open_folder(ctx: &Arc<AppCtx>, args: BackupOpenFolderArgs) -> Result<()> {
+    let BackupOpenFolderArgs { path } = args;
+
     let p = path.trim();
     if p.is_empty() || p.starts_with("sftp://") {
         return Err(Error::Backup(
             "Für SFTP-Ziele ist kein lokaler Ordner verfügbar.".into(),
         ));
     }
-    app.opener()
-        .open_path(p.to_string(), None::<&str>)
-        .map_err(|e| Error::Backup(format!("Ordner konnte nicht geöffnet werden: {e}")))?;
+    ctx.open_path(p)?;
     Ok(())
+}
+
+/// Argumente von [`backup_reveal_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRevealPathArgs {
+    pub path: String,
 }
 
 /// Zeigt eine lokale Backup-**Datei** im enthaltenden Ordner (markiert sie) — für
 /// die Verlaufs-Zeilen. Für SFTP-Backups nicht verfügbar (erst herunterladen).
-#[tauri::command]
-pub async fn backup_reveal_path(app: AppHandle, path: String) -> Result<()> {
+pub async fn backup_reveal_path(ctx: &Arc<AppCtx>, args: BackupRevealPathArgs) -> Result<()> {
+    let BackupRevealPathArgs { path } = args;
+
     let p = path.trim();
     if p.is_empty() || p.starts_with("sftp://") {
         return Err(Error::Backup(
             "SFTP-Backups erst herunterladen — kein lokaler Ordner verfügbar.".into(),
         ));
     }
-    app.opener()
-        .reveal_item_in_dir(p)
-        .map_err(|e| Error::Backup(format!("Ordner konnte nicht geöffnet werden: {e}")))?;
+    ctx.reveal(p)?;
     Ok(())
 }
 
+/// Argumente von [`backup_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupListArgs {}
+
 /// Backup-Historie (neueste zuerst).
-#[tauri::command]
-pub async fn backup_list(pool: State<'_, SqlitePool>) -> Result<Vec<BackupHistoryItem>> {
+pub async fn backup_list(
+    ctx: &Arc<AppCtx>,
+    _args: BackupListArgs,
+) -> Result<Vec<BackupHistoryItem>> {
+    let pool = ctx.pool()?;
+
     let rows = sqlx::query_as::<_, BackupHistoryItem>(
         "SELECT id, created_at, target_path, file_size_bytes, retention_tag, trigger_reason,
                 db_schema_version, app_version, verified_at
          FROM backup_history
          ORDER BY created_at DESC",
     )
-    .fetch_all(pool.inner())
+    .fetch_all(&pool)
     .await?;
     Ok(rows)
 }
 
+/// Argumente von [`backup_log_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupLogListArgs {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 /// Backup-Protokoll: die jüngsten Einträge (neueste zuerst). G1-LOG / ADR 0034.
-#[tauri::command]
 pub async fn backup_log_list(
-    pool: State<'_, SqlitePool>,
-    limit: Option<i64>,
+    ctx: &Arc<AppCtx>,
+    args: BackupLogListArgs,
 ) -> Result<Vec<crate::db::models::BackupLogRow>> {
+    let BackupLogListArgs { limit } = args;
+    let pool = ctx.pool()?;
+
     let limit = limit.unwrap_or(200).clamp(1, 5000);
-    db::repo::backup_log::list(pool.inner(), limit).await
+    db::repo::backup_log::list(&pool, limit).await
+}
+
+/// Argumente von [`backup_log_search`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupLogSearchArgs {
+    pub filter: db::repo::backup_log::BackupLogFilter,
 }
 
 /// Serverseitige Suche/Filterung über das Backup-Protokoll (Volltext +
 /// Zeitfenster + Status/Auslöser/Ziel-Typ). G1-LOG / ADR 0034.
-#[tauri::command]
 pub async fn backup_log_search(
-    pool: State<'_, SqlitePool>,
-    filter: db::repo::backup_log::BackupLogFilter,
+    ctx: &Arc<AppCtx>,
+    args: BackupLogSearchArgs,
 ) -> Result<Vec<crate::db::models::BackupLogRow>> {
-    db::repo::backup_log::search(pool.inner(), &filter).await
+    let BackupLogSearchArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    db::repo::backup_log::search(&pool, &filter).await
+}
+
+/// Argumente von [`backup_restore_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRestorePreviewArgs {
+    pub path: String,
 }
 
 /// Restore-Vorschau (Plain-Header, ohne Passphrase).
-#[tauri::command]
-pub async fn backup_restore_preview(path: String) -> Result<restore::RestorePreview> {
+pub async fn backup_restore_preview(
+    _ctx: &Arc<AppCtx>,
+    args: BackupRestorePreviewArgs,
+) -> Result<restore::RestorePreview> {
+    let BackupRestorePreviewArgs { path } = args;
+
     restore::preview(std::path::Path::new(&path))
+}
+
+/// Argumente von [`backup_restore_apply`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRestoreApplyArgs {
+    pub path: String,
+    pub passphrase: String,
 }
 
 /// Restore Phase A: Pre-Restore-Backup, entschlüsseln, ins Staging entpacken,
 /// Neustart anfordern.
-#[tauri::command]
 pub async fn backup_restore_apply(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, BackupSession>,
-    path: String,
-    passphrase: String,
+    ctx: &Arc<AppCtx>,
+    args: BackupRestoreApplyArgs,
 ) -> Result<restore::RestoreReport> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let BackupRestoreApplyArgs { path, passphrase } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     restore::apply(
         pool,
         &paths,
-        session.inner(),
+        session,
         std::path::Path::new(&path),
         &passphrase,
     )

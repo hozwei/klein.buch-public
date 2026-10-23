@@ -27,14 +27,13 @@
 //! `validate_quote` blockt jeden USt-Ausweis bei `is_kleinunternehmer = true`
 //! (über `kleinunternehmer::assert_no_vat`) — §14c-Schutz auch im Angebot.
 
+use crate::app_ctx::AppCtx;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use std::fs;
-
-use tauri_plugin_opener::OpenerExt;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -131,37 +130,71 @@ pub struct ConvertArgs {
 // Commands — Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn quotes_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<quotes::ListFilter>,
-) -> Result<Vec<QuoteListItem>> {
-    quotes::list(pool.inner(), &filter.unwrap_or_default()).await
+/// Argumente von [`quotes_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesListArgs {
+    #[serde(default)]
+    pub filter: Option<quotes::ListFilter>,
 }
 
-#[tauri::command]
-pub async fn quotes_get(pool: State<'_, SqlitePool>, id: String) -> Result<Option<QuoteDetail>> {
-    quotes::get_detail(pool.inner(), &id).await
+pub async fn quotes_list(ctx: &Arc<AppCtx>, args: QuotesListArgs) -> Result<Vec<QuoteListItem>> {
+    let QuotesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    quotes::list(&pool, &filter.unwrap_or_default()).await
 }
 
-#[tauri::command]
+/// Argumente von [`quotes_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesGetArgs {
+    pub id: String,
+}
+
+pub async fn quotes_get(ctx: &Arc<AppCtx>, args: QuotesGetArgs) -> Result<Option<QuoteDetail>> {
+    let QuotesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    quotes::get_detail(&pool, &id).await
+}
+
+/// Argumente von [`quotes_attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesAttachmentsListArgs {
+    pub quote_id: String,
+}
+
 pub async fn quotes_attachments_list(
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesAttachmentsListArgs,
 ) -> Result<Vec<AttachmentView>> {
-    attachments::list_for_parent(pool.inner(), "quote", &quote_id).await
+    let QuotesAttachmentsListArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    attachments::list_for_parent(&pool, "quote", &quote_id).await
 }
 
 // =============================================================================
 // Commands — Draft
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`quotes_create_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesCreateDraftArgs {
+    pub args: CreateDraftArgs,
+}
+
 pub async fn quotes_create_draft(
-    pool: State<'_, SqlitePool>,
-    args: CreateDraftArgs,
+    ctx: &Arc<AppCtx>,
+    args: QuotesCreateDraftArgs,
 ) -> Result<QuoteDetail> {
-    create_draft_core(pool.inner(), args).await
+    let QuotesCreateDraftArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    create_draft_core(&pool, args).await
 }
 
 /// Testbarer Kern von [`quotes_create_draft`] (ohne Tauri-State).
@@ -280,12 +313,21 @@ pub async fn create_draft_core(
         .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
 }
 
-#[tauri::command]
+/// Argumente von [`quotes_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesValidateDraftArgs {
+    pub id: String,
+}
+
 pub async fn quotes_validate_draft(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesValidateDraftArgs,
 ) -> Result<Vec<ValidationIssueDto>> {
-    let pool = pool.inner();
+    let QuotesValidateDraftArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let detail = quotes::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
@@ -319,17 +361,22 @@ pub async fn quotes_validate_draft(
 // Commands — State Transitions
 // =============================================================================
 
+/// Argumente von [`quotes_issue`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesIssueArgs {
+    pub id: String,
+}
+
 /// Festschreiben ("issue"): validiert hart, lockt das Angebot und setzt
 /// Status `sent`. Triggert ein Auto-Critical-Backup (Backup-Hardline).
-#[tauri::command]
-pub async fn quotes_issue(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-) -> Result<QuoteRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<QuoteRow> {
+    let QuotesIssueArgs { id } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     let detail = quotes::get_detail(pool, &id)
         .await?
@@ -388,7 +435,7 @@ pub async fn quotes_issue(
     .await?;
 
     // Backup-Hardline: lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "quote.issue")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "quote.issue")
         .await
         .ok();
 
@@ -397,16 +444,21 @@ pub async fn quotes_issue(
         .ok_or_else(|| Error::Domain("issue: post-UPDATE SELECT leer".into()))
 }
 
+/// Argumente von [`quotes_accept`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesAcceptArgs {
+    pub args: AcceptArgs,
+}
+
 /// Annahme durch den Kunden. Optional wird der unterschriebene Vertrag
 /// write-once archiviert und als Attachment (`parent_type='quote'`) verknüpft.
-#[tauri::command]
-pub async fn quotes_accept(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: AcceptArgs,
-) -> Result<QuoteDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<QuoteDetail> {
+    let QuotesAcceptArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     let quote_row = quotes::get(pool, &args.quote_id)
         .await?
@@ -496,9 +548,18 @@ pub async fn quotes_accept(
         .ok_or_else(|| Error::Domain("accept: detail-load leer".into()))
 }
 
-#[tauri::command]
-pub async fn quotes_reject(pool: State<'_, SqlitePool>, args: RejectArgs) -> Result<QuoteRow> {
-    let pool = pool.inner();
+/// Argumente von [`quotes_reject`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesRejectArgs {
+    pub args: RejectArgs,
+}
+
+pub async fn quotes_reject(ctx: &Arc<AppCtx>, args: QuotesRejectArgs) -> Result<QuoteRow> {
+    let QuotesRejectArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     quotes::reject(pool, &args.quote_id).await?;
     audit_log::append(
         pool,
@@ -516,9 +577,18 @@ pub async fn quotes_reject(pool: State<'_, SqlitePool>, args: RejectArgs) -> Res
         .ok_or_else(|| Error::Domain("reject: post-UPDATE SELECT leer".into()))
 }
 
-#[tauri::command]
-pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Result<QuoteRow> {
-    let pool = pool.inner();
+/// Argumente von [`quotes_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesCancelArgs {
+    pub args: CancelArgs,
+}
+
+pub async fn quotes_cancel(ctx: &Arc<AppCtx>, args: QuotesCancelArgs) -> Result<QuoteRow> {
+    let QuotesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     quotes::cancel(pool, &args.quote_id, &args.reason).await?;
     audit_log::append(
         pool,
@@ -537,6 +607,13 @@ pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Res
 // Commands — Konvertierung (Block 7)
 // =============================================================================
 
+/// Argumente von [`quotes_convert_to_invoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesConvertToInvoiceArgs {
+    pub args: ConvertArgs,
+}
+
 /// Konvertiert ein **angenommenes** Angebot in eine Rechnungs-**Draft**.
 ///
 /// **Hard-Rule (Manuel):** nur aus `status='accepted'` — aus dem
@@ -554,12 +631,14 @@ pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Res
 /// KoSIT-Validierung, ZUGFeRD/Mustang und §19-Klausel-Check. Damit greift die
 /// §19-Hardline beim Festschreiben unverändert; die Konvertierung übernimmt
 /// die USt-Felder 1:1 (bei §19: Category `E`, Rate `0`).
-#[tauri::command]
 pub async fn quotes_convert_to_invoice(
-    pool: State<'_, SqlitePool>,
-    args: ConvertArgs,
+    ctx: &Arc<AppCtx>,
+    args: QuotesConvertToInvoiceArgs,
 ) -> Result<InvoiceDetail> {
-    let pool = pool.inner();
+    let QuotesConvertToInvoiceArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
 
     let detail = quotes::get_detail(pool, &args.quote_id)
         .await?
@@ -878,35 +957,48 @@ pub async fn prepare_quote_dispatch(
     })
 }
 
+/// Argumente von [`quotes_generate_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesGeneratePdfArgs {
+    pub id: String,
+}
+
 /// Erzeugt (falls nötig) das Angebots-PDF und liefert das aktualisierte Angebot
 /// (mit `pdfArchiveId`). Das Frontend öffnet das PDF danach via
 /// `attachments_open(pdfArchiveId)`.
-#[tauri::command]
 pub async fn quotes_generate_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesGeneratePdfArgs,
 ) -> Result<QuoteRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let QuotesGeneratePdfArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     ensure_quote_pdf(pool, &paths, &id).await?;
     quotes::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain("generate_pdf: post-SELECT leer".into()))
 }
 
+/// Argumente von [`quotes_open_bundle`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesOpenBundleArgs {
+    pub id: String,
+}
+
 /// Erzeugt das **zusammengeführte** Bundle-PDF (Angebot + AGB + Datenschutz),
 /// bindet die Legal-Versionen (Pflicht) und öffnet es im Standard-PDF-Viewer —
 /// für „Drucken/Ansehen" als ein Dokument. Das Bundle ist abgeleitet und wird
 /// nicht archiviert (kanonisch sind die Einzel-PDFs + die Bindung).
-#[tauri::command]
-pub async fn quotes_open_bundle(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+pub async fn quotes_open_bundle(ctx: &Arc<AppCtx>, args: QuotesOpenBundleArgs) -> Result<()> {
+    let QuotesOpenBundleArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     let dispatch = prepare_quote_dispatch(pool, &paths, &id).await?;
 
     let mut parts: Vec<Vec<u8>> = Vec::new();
@@ -926,9 +1018,7 @@ pub async fn quotes_open_bundle(
     let path = dir.join(file_name);
     fs::write(&path, &merged)?;
 
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Bundle konnte nicht geöffnet werden: {e}")))?;
+    ctx.open_path(path.to_string_lossy().to_string())?;
 
     audit_log::append(
         pool,
@@ -941,13 +1031,22 @@ pub async fn quotes_open_bundle(
     Ok(())
 }
 
+/// Argumente von [`quotes_legal_bindings`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesLegalBindingsArgs {
+    pub quote_id: String,
+}
+
 /// Liefert die fest mit einem Angebot verknüpften Legal-Versionen (Anzeige).
-#[tauri::command]
 pub async fn quotes_legal_bindings(
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesLegalBindingsArgs,
 ) -> Result<Vec<QuoteLegalDocumentView>> {
-    legal_documents::list_for_quote(pool.inner(), &quote_id).await
+    let QuotesLegalBindingsArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    legal_documents::list_for_quote(&pool, &quote_id).await
 }
 
 // =============================================================================

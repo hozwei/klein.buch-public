@@ -322,7 +322,7 @@ und verweigert sonst den Dienst (W5).
 
 ## Entscheidungen während der Umsetzung
 
-Nachgetragen aus W0–W2, je mit Begründung.
+Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
 
 1. **XRechnung BG-6/BT-29 (W1).** Ohne USt-IdNr. wird die Steuernummer als BT-29 ausgegeben —
    eine vorhandene Kennung, nichts erfunden; sonst lehnt KoSIT jede Rechnung eines
@@ -378,6 +378,23 @@ Nachgetragen aus W0–W2, je mit Begründung.
     Tauri (W5).
 18. **Offen: Storno-Geschäftsjahr (W2).** Ein Storno im Folgejahr behält Geschäftsjahr und
     Nummernkreis der Originalrechnung (unverändertes Verhalten). Wird in W14 fachlich geprüft.
+19. **Command-Kerne bleiben im Modul `commands::` (W4).** Der Plan nennt `api::<bereich>::<fn>`;
+    die 23 Dateien zu verschieben brächte nichts, der HTTP-Namensraum `/api/cmd/{name}` ist davon
+    unabhängig. Jeder Kern ist `async fn name(ctx: &Arc<AppCtx>, args: NameArgs) -> Result<T>`;
+    die Args-Structs übernehmen die camelCase-Schlüssel der bisherigen Aufrufe, damit das
+    Frontend unverändert bleibt. Eine Registry (`commands::registry`) listet alle Kerne mit den
+    Metadaten `auth`, `cost` und `body_limit`.
+20. **`&Arc<AppCtx>` statt `&AppCtx` (W4):** Entsperren startet den Scheduler, der einen eigenen
+    Verweis auf den Kontext braucht.
+21. **Desktop-Nebenwirkungen über einen Trait (W4):** Datei öffnen, im Ordner zeigen, Browser
+    öffnen und Neustart laufen über `DesktopActions`; die Tauri-Hülle setzt sie um, der Server
+    hat keine. Die betroffenen Commands entfallen im Server oder liefern dort Bytes (W5/W7).
+22. **`SecretStore` zunächst nur als Schnittstelle (W4):** Die Keychain-Fassung hängt im Kontext;
+    Mail und SFTP stellt erst W8 um, zusammen mit der Tabelle in der verschlüsselten DB.
+23. **`Paths` aus der Umgebung (W4):** `KLEIN_BUCH_DATA_DIR`, `KLEIN_BUCH_INPUTS_DIR`,
+    `KLEIN_BUCH_RESOURCE_DIR`, `KLEIN_BUCH_WEB_DIR` sind Pflicht, ohne Sonderwege für
+    Debug-Builds; `/inputs` und `/data` dürfen nicht ineinander liegen. Das Ergänzen von
+    `/inputs` aus `RESOURCE_DIR/inputs` läuft bei jedem Start und überschreibt nie.
 
 ## Konsequenzen
 

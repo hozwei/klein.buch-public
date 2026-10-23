@@ -33,11 +33,11 @@
 //! getriggert. Block 4 implementiert die Backup-Schicht; bis dahin ist
 //! das ein Trace-Log + Audit-Eintrag (`invoice.lock.backup_pending`).
 
+use crate::app_ctx::AppCtx;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -130,91 +130,98 @@ pub struct ArchivePathsDto {
 // Commands — Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn invoices_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<invoices::ListFilter>,
-) -> Result<Vec<InvoiceListItem>> {
-    let f = filter.unwrap_or_default();
-    invoices::list(pool.inner(), &f).await
+/// Argumente von [`invoices_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesListArgs {
+    #[serde(default)]
+    pub filter: Option<invoices::ListFilter>,
 }
 
-#[tauri::command]
+pub async fn invoices_list(
+    ctx: &Arc<AppCtx>,
+    args: InvoicesListArgs,
+) -> Result<Vec<InvoiceListItem>> {
+    let InvoicesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    let f = filter.unwrap_or_default();
+    invoices::list(&pool, &f).await
+}
+
+/// Argumente von [`invoices_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesGetArgs {
+    pub id: String,
+}
+
 pub async fn invoices_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesGetArgs,
 ) -> Result<Option<InvoiceDetail>> {
-    invoices::get_detail(pool.inner(), &id).await
+    let InvoicesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    invoices::get_detail(&pool, &id).await
+}
+
+/// Argumente von [`invoices_open_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesOpenPdfArgs {
+    pub id: String,
 }
 
 /// Öffnet das archivierte ZUGFeRD-PDF einer ausgestellten Rechnung im
 /// Standard-PDF-Viewer des Betriebssystems.
-#[tauri::command]
-pub async fn invoices_open_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let path = pdf_archive_path(pool.inner(), &id).await?;
-    app.opener()
-        .open_path(path, None::<&str>)
-        .map_err(|e| Error::Other(anyhow::anyhow!("PDF konnte nicht geöffnet werden: {e}")))?;
+pub async fn invoices_open_pdf(ctx: &Arc<AppCtx>, args: InvoicesOpenPdfArgs) -> Result<()> {
+    let InvoicesOpenPdfArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let path = pdf_archive_path(&pool, &id).await?;
+    ctx.open_path(path)?;
     Ok(())
+}
+
+/// Argumente von [`invoices_reveal_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesRevealPdfArgs {
+    pub id: String,
 }
 
 /// Zeigt das archivierte PDF im Datei-Explorer/Finder (zum Anhängen an
 /// eine E-Mail, solange der SMTP-Versand aus Block 5 noch nicht da ist).
-#[tauri::command]
-pub async fn invoices_reveal_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let path = pdf_archive_path(pool.inner(), &id).await?;
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
-    Ok(())
-}
+pub async fn invoices_reveal_pdf(ctx: &Arc<AppCtx>, args: InvoicesRevealPdfArgs) -> Result<()> {
+    let InvoicesRevealPdfArgs { id } = args;
+    let pool = ctx.pool()?;
 
-/// Liefert die Archiv-Pfade (PDF + XML) einer Rechnung — für Anzeige im UI.
-#[tauri::command]
-pub async fn invoices_archive_paths(
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<ArchivePathsDto> {
-    let pool = pool.inner();
-    let inv = invoices::get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
-    let pdf_path = match inv.pdf_archive_id {
-        Some(aid) => Some(archive_file_path(pool, &aid).await?),
-        None => None,
-    };
-    let xml_path = match inv.xml_archive_id {
-        Some(aid) => Some(archive_file_path(pool, &aid).await?),
-        None => None,
-    };
-    Ok(ArchivePathsDto { pdf_path, xml_path })
+    let path = pdf_archive_path(&pool, &id).await?;
+    ctx.reveal(&path)?;
+    Ok(())
 }
 
 // =============================================================================
 // Commands — Draft
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_create_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesCreateDraftArgs {
+    pub args: CreateDraftArgs,
+}
+
 pub async fn invoices_create_draft(
-    pool: State<'_, SqlitePool>,
-    args: CreateDraftArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesCreateDraftArgs,
 ) -> Result<InvoiceDetail> {
-    create_invoice_draft_from_input(
-        pool.inner(),
-        &args.contact_id,
-        args.fiscal_year,
-        &args.input,
-        None,
-    )
-    .await
+    let InvoicesCreateDraftArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    create_invoice_draft_from_input(&pool, &args.contact_id, args.fiscal_year, &args.input, None)
+        .await
 }
 
 /// Gemeinsame Draft-Erzeugung für Ausgangsrechnungen. Genutzt von
@@ -367,12 +374,21 @@ pub async fn create_invoice_draft_from_input(
         .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
 }
 
-#[tauri::command]
+/// Argumente von [`invoices_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesValidateDraftArgs {
+    pub id: String,
+}
+
 pub async fn invoices_validate_draft(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesValidateDraftArgs,
 ) -> Result<Vec<ValidationIssueDto>> {
-    let pool = pool.inner();
+    let InvoicesValidateDraftArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let detail = invoices::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
@@ -405,16 +421,28 @@ pub async fn invoices_validate_draft(
 // Commands — Lock & Issue
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_lock_and_issue`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesLockAndIssueArgs {
+    pub id: String,
+    #[serde(default)]
+    pub buyer_reference: Option<String>,
+}
+
 pub async fn invoices_lock_and_issue(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-    buyer_reference: Option<String>,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesLockAndIssueArgs,
 ) -> Result<LockResponse> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let InvoicesLockAndIssueArgs {
+        id,
+        buyer_reference,
+    } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     // GJ-Festschreibung (Block 15): eine Rechnung mit Datum in einem
     // abgeschlossenen Geschäftsjahr kann nicht (mehr) ausgestellt werden.
     let draft = invoices::get_detail(pool, &id)
@@ -431,7 +459,7 @@ pub async fn invoices_lock_and_issue(
     // Block 4 — Auto-Critical-Backup nach erfolgreichem Lock. Best-effort:
     // ein nicht erreichbares Backup-Ziel darf die festgeschriebene Rechnung
     // nicht zurückrollen.
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "invoice.lock")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "invoice.lock")
         .await
         .ok();
     Ok(resp)
@@ -759,12 +787,21 @@ async fn run_lock_pipeline_inner(
 // Commands — Payment
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_record_payment`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesRecordPaymentArgs {
+    pub args: RecordPaymentArgs,
+}
+
 pub async fn invoices_record_payment(
-    pool: State<'_, SqlitePool>,
-    args: RecordPaymentArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesRecordPaymentArgs,
 ) -> Result<InvoiceRow> {
-    let pool = pool.inner();
+    let InvoicesRecordPaymentArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     // R5-002: Future-Datum verbieten (Symmetrie zu `expenses_set_payment`).
     // Cash-Basis-EÜR rechnet jede Einnahme im paid_at-Jahr (§11 EStG Zufluss-
     // Prinzip) — ein versehentliches Zukunftsdatum verschiebt die Einnahme ins
@@ -807,15 +844,23 @@ pub async fn invoices_record_payment(
 // Commands — Cancel (Storno)
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesCancelArgs {
+    pub args: CancelArgs,
+}
+
 pub async fn invoices_cancel(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: CancelArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesCancelArgs,
 ) -> Result<CancelResponse> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let InvoicesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     // Zwei Storno-Anfragen für dieselbe Rechnung laufen nacheinander; die zweite
     // sieht dann „bereits storniert“ (Review W2, Sperre je Beleg).
     let _original_guard = crate::locks::INVOICES.lock(&args.invoice_id).await;
@@ -965,7 +1010,7 @@ pub async fn invoices_cancel(
     .await?;
 
     // Block 4 — Auto-Critical-Backup nach Storno-Lock (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "storno.create")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "storno.create")
         .await
         .ok();
 

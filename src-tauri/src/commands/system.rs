@@ -13,37 +13,48 @@
 //!   `resources/handbook/third-party-licenses.html` (cargo-about + pnpm licenses
 //!   im Release-CI; im Dev-Build steht dort der eingecheckte Stub).
 
+use crate::app_ctx::AppCtx;
 use crate::archive::integrity_check::{self, IntegrityCheckSummary};
 use crate::db::repo::audit_log::{self, AuditEntry};
 use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
 use crate::error::{Error, Result};
 use serde::Serialize;
-use sqlx::SqlitePool;
-use tauri::{AppHandle, Manager, State};
+use std::sync::Arc;
 
-#[tauri::command]
-pub async fn audit_trail_list(
-    pool: State<'_, SqlitePool>,
-    limit: Option<i64>,
-) -> Result<Vec<AuditEntry>> {
-    let limit = limit.unwrap_or(200).clamp(1, 2000);
-    audit_log::recent(pool.inner(), limit).await
+/// Argumente von [`audit_trail_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditTrailListArgs {
+    #[serde(default)]
+    pub limit: Option<i64>,
 }
 
-#[tauri::command]
+pub async fn audit_trail_list(
+    ctx: &Arc<AppCtx>,
+    args: AuditTrailListArgs,
+) -> Result<Vec<AuditEntry>> {
+    let AuditTrailListArgs { limit } = args;
+    let pool = ctx.pool()?;
+
+    let limit = limit.unwrap_or(200).clamp(1, 2000);
+    audit_log::recent(&pool, limit).await
+}
+
+/// Argumente von [`archive_integrity_run`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveIntegrityRunArgs {}
+
 pub async fn archive_integrity_run(
-    app: tauri::AppHandle,
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: ArchiveIntegrityRunArgs,
 ) -> Result<IntegrityCheckSummary> {
-    let summary = integrity_check::run_full_scan(pool.inner()).await?;
+    let pool = ctx.pool()?;
+
+    let summary = integrity_check::run_full_scan(&pool).await?;
     let month = crate::clock::today_berlin().format("%Y-%m").to_string();
-    crate::scheduler::integrity_check_cron::notify_summary(
-        pool.inner(),
-        Some(&app),
-        &summary,
-        &month,
-    )
-    .await?;
+    crate::scheduler::integrity_check_cron::notify_summary(&pool, ctx.notifier(), &summary, &month)
+        .await?;
     Ok(summary)
 }
 
@@ -59,11 +70,21 @@ pub struct IntegrityCheckRow {
     pub failed_archive_ids_json: Option<String>,
 }
 
-#[tauri::command]
+/// Argumente von [`archive_integrity_history`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveIntegrityHistoryArgs {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 pub async fn archive_integrity_history(
-    pool: State<'_, SqlitePool>,
-    limit: Option<i64>,
+    ctx: &Arc<AppCtx>,
+    args: ArchiveIntegrityHistoryArgs,
 ) -> Result<Vec<IntegrityCheckRow>> {
+    let ArchiveIntegrityHistoryArgs { limit } = args;
+    let pool = ctx.pool()?;
+
     let limit = limit.unwrap_or(50).clamp(1, 500);
     let rows = sqlx::query_as::<_, IntegrityCheckRow>(
         "SELECT id, started_at, finished_at, files_checked, files_passed,
@@ -72,7 +93,7 @@ pub async fn archive_integrity_history(
           ORDER BY id DESC LIMIT ?",
     )
     .bind(limit)
-    .fetch_all(pool.inner())
+    .fetch_all(&pool)
     .await?;
     Ok(rows)
 }
@@ -102,12 +123,16 @@ pub struct AppInfo {
     pub build_commit: String,
 }
 
-#[tauri::command]
-pub fn app_info(app: AppHandle) -> AppInfo {
+/// Argumente von [`app_info`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfoArgs {}
+
+pub async fn app_info(ctx: &Arc<AppCtx>, _args: AppInfoArgs) -> AppInfo {
     AppInfo {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         schema_version: EXPECTED_SCHEMA_VERSION,
-        identifier: app.config().identifier.clone(),
+        identifier: ctx.app_identifier.clone(),
         license_spdx: "AGPL-3.0-or-later".to_string(),
         repository_url: "https://github.com/hozwei/klein.buch-public".to_string(),
         build_commit: option_env!("KLEINBUCH_BUILD_COMMIT")
@@ -115,6 +140,11 @@ pub fn app_info(app: AppHandle) -> AppInfo {
             .to_string(),
     }
 }
+
+/// Argumente von [`third_party_licenses_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThirdPartyLicensesPathArgs {}
 
 /// Auflöst den Bundle-Pfad zur generierten Drittanbieter-Lizenz-Übersicht.
 ///
@@ -125,19 +155,27 @@ pub fn app_info(app: AppHandle) -> AppInfo {
 ///
 /// Existiert die Datei nicht, gibt es einen `Error::Config`, damit der
 /// Frontend-Caller einen sauberen Toast statt einen leeren Pfad bekommt.
-#[tauri::command]
-pub fn third_party_licenses_path(app: AppHandle) -> Result<String> {
-    let base = if cfg!(debug_assertions) {
-        std::env::current_dir().map_err(|e| Error::Config(format!("current_dir: {e}")))?
-    } else {
-        app.path()
-            .resource_dir()
-            .map_err(|e| Error::Config(format!("resource_dir: {e}")))?
-    };
-    let path = base
-        .join("resources")
-        .join("handbook")
-        .join("third-party-licenses.html");
+pub async fn third_party_licenses_path(
+    ctx: &Arc<AppCtx>,
+    _args: ThirdPartyLicensesPathArgs,
+) -> Result<String> {
+    // Release-Bundle: `<resource_dir>/handbook/…`; Desktop-Dev (resource_dir =
+    // Repo `klein-buch/`): `src-tauri/resources/handbook/…`. Entfällt in W5
+    // (Lizenzseite unter `/legal/`, W12).
+    let rel = std::path::Path::new("handbook").join("third-party-licenses.html");
+    let candidates = [
+        ctx.paths.resource_dir.join(&rel),
+        ctx.paths
+            .resource_dir
+            .join("src-tauri")
+            .join("resources")
+            .join(&rel),
+    ];
+    let path = candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| candidates[0].clone());
     if !path.exists() {
         return Err(Error::Config(format!(
             "Drittanbieter-Lizenz-Datei nicht gefunden: {}",

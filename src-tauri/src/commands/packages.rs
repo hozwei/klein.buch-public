@@ -4,6 +4,7 @@
 //! (normaler Audit-Log-Eintrag genügt). Revisionen sind append-only (DB-Trigger);
 //! „Bearbeiten" erzeugt eine neue Revision, „Rollback" ebenfalls.
 
+use crate::app_ctx::AppCtx;
 use crate::config::Paths;
 use crate::db::models::{PackageCategoryRow, PackageRevisionRow, PackageRow, SellerProfileRow};
 use crate::db::repo::{audit_log, contacts, mail_accounts, packages, seller_profile};
@@ -14,8 +15,7 @@ use crate::error::{Error, Result};
 use crate::pdf::{templates, typst_render};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 /// §19-Hardline + Validierung: bei Kleinunternehmer wird die USt-Kategorie auf
 /// `'E'` (Exempt) gezwungen; danach strukturelle Validierung. Preis bleibt Netto.
@@ -44,26 +44,42 @@ async fn prepare_revision(
 
 // ---- Kategorien ------------------------------------------------------------
 
-#[tauri::command]
+/// Argumente von [`package_categories_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCategoriesListArgs {}
+
 pub async fn package_categories_list(
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: PackageCategoriesListArgs,
 ) -> Result<Vec<PackageCategoryRow>> {
-    packages::categories_list(pool.inner()).await
+    let pool = ctx.pool()?;
+
+    packages::categories_list(&pool).await
 }
 
-#[tauri::command]
+/// Argumente von [`package_category_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCategoryCreateArgs {
+    pub name: String,
+}
+
 pub async fn package_category_create(
-    pool: State<'_, SqlitePool>,
-    name: String,
+    ctx: &Arc<AppCtx>,
+    args: PackageCategoryCreateArgs,
 ) -> Result<PackageCategoryRow> {
+    let PackageCategoryCreateArgs { name } = args;
+    let pool = ctx.pool()?;
+
     if name.trim().is_empty() {
         return Err(Error::Domain(
             "Der Kategorie-Name darf nicht leer sein.".into(),
         ));
     }
-    let row = packages::category_create(pool.inner(), name.trim()).await?;
+    let row = packages::category_create(&pool, name.trim()).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "package_category.create",
         "package_category",
         &row.id,
@@ -74,20 +90,29 @@ pub async fn package_category_create(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`package_category_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCategoryUpdateArgs {
+    pub id: String,
+    pub name: String,
+}
+
 pub async fn package_category_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    name: String,
+    ctx: &Arc<AppCtx>,
+    args: PackageCategoryUpdateArgs,
 ) -> Result<()> {
+    let PackageCategoryUpdateArgs { id, name } = args;
+    let pool = ctx.pool()?;
+
     if name.trim().is_empty() {
         return Err(Error::Domain(
             "Der Kategorie-Name darf nicht leer sein.".into(),
         ));
     }
-    packages::category_update(pool.inner(), &id, name.trim()).await?;
+    packages::category_update(&pool, &id, name.trim()).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "package_category.update",
         "package_category",
         &id,
@@ -98,34 +123,69 @@ pub async fn package_category_update(
     Ok(())
 }
 
-#[tauri::command]
+/// Argumente von [`package_categories_reorder`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCategoriesReorderArgs {
+    pub ordered_ids: Vec<String>,
+}
+
 pub async fn package_categories_reorder(
-    pool: State<'_, SqlitePool>,
-    ordered_ids: Vec<String>,
+    ctx: &Arc<AppCtx>,
+    args: PackageCategoriesReorderArgs,
 ) -> Result<()> {
-    packages::categories_reorder(pool.inner(), &ordered_ids).await
+    let PackageCategoriesReorderArgs { ordered_ids } = args;
+    let pool = ctx.pool()?;
+
+    packages::categories_reorder(&pool, &ordered_ids).await
 }
 
 // ---- Pakete ----------------------------------------------------------------
 
-#[tauri::command]
-pub async fn packages_list(pool: State<'_, SqlitePool>) -> Result<Vec<PackageRow>> {
-    packages::list(pool.inner()).await
+/// Argumente von [`packages_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesListArgs {}
+
+pub async fn packages_list(ctx: &Arc<AppCtx>, _args: PackagesListArgs) -> Result<Vec<PackageRow>> {
+    let pool = ctx.pool()?;
+
+    packages::list(&pool).await
 }
 
-#[tauri::command]
-pub async fn packages_get(pool: State<'_, SqlitePool>, id: String) -> Result<Option<PackageRow>> {
-    packages::get(pool.inner(), &id).await
+/// Argumente von [`packages_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesGetArgs {
+    pub id: String,
 }
 
-#[tauri::command]
-pub async fn packages_create(
-    pool: State<'_, SqlitePool>,
-    category_id: Option<String>,
-    name: String,
-    revision: PackageRevisionInput,
-) -> Result<PackageRow> {
-    let pool = pool.inner();
+pub async fn packages_get(ctx: &Arc<AppCtx>, args: PackagesGetArgs) -> Result<Option<PackageRow>> {
+    let PackagesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    packages::get(&pool, &id).await
+}
+
+/// Argumente von [`packages_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesCreateArgs {
+    #[serde(default)]
+    pub category_id: Option<String>,
+    pub name: String,
+    pub revision: PackageRevisionInput,
+}
+
+pub async fn packages_create(ctx: &Arc<AppCtx>, args: PackagesCreateArgs) -> Result<PackageRow> {
+    let PackagesCreateArgs {
+        category_id,
+        name,
+        revision,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if name.trim().is_empty() {
         return Err(Error::Domain("Der Paket-Name darf nicht leer sein.".into()));
     }
@@ -143,15 +203,30 @@ pub async fn packages_create(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`packages_update_as_new_revision`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesUpdateAsNewRevisionArgs {
+    pub id: String,
+    #[serde(default)]
+    pub category_id: Option<String>,
+    pub name: String,
+    pub revision: PackageRevisionInput,
+}
+
 pub async fn packages_update_as_new_revision(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    category_id: Option<String>,
-    name: String,
-    revision: PackageRevisionInput,
+    ctx: &Arc<AppCtx>,
+    args: PackagesUpdateAsNewRevisionArgs,
 ) -> Result<PackageRow> {
-    let pool = pool.inner();
+    let PackagesUpdateAsNewRevisionArgs {
+        id,
+        category_id,
+        name,
+        revision,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if name.trim().is_empty() {
         return Err(Error::Domain("Der Paket-Name darf nicht leer sein.".into()));
     }
@@ -174,48 +249,99 @@ pub async fn packages_update_as_new_revision(
     Ok(row)
 }
 
-#[tauri::command]
-pub async fn packages_archive(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    packages::set_status(pool.inner(), &id, "archived").await?;
+/// Argumente von [`packages_archive`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesArchiveArgs {
+    pub id: String,
+}
+
+pub async fn packages_archive(ctx: &Arc<AppCtx>, args: PackagesArchiveArgs) -> Result<()> {
+    let PackagesArchiveArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    packages::set_status(&pool, &id, "archived").await?;
     // R2-026: Pflicht-Audit (Status-Wechsel auf Paket = fachlicher Vorgang).
-    audit_log::append(pool.inner(), "package.archive", "package", &id, None).await?;
+    audit_log::append(&pool, "package.archive", "package", &id, None).await?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn packages_reactivate(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    packages::set_status(pool.inner(), &id, "active").await?;
+/// Argumente von [`packages_reactivate`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagesReactivateArgs {
+    pub id: String,
+}
+
+pub async fn packages_reactivate(ctx: &Arc<AppCtx>, args: PackagesReactivateArgs) -> Result<()> {
+    let PackagesReactivateArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    packages::set_status(&pool, &id, "active").await?;
     // R2-026: Pflicht-Audit (Status-Wechsel auf Paket = fachlicher Vorgang).
-    audit_log::append(pool.inner(), "package.reactivate", "package", &id, None).await?;
+    audit_log::append(&pool, "package.reactivate", "package", &id, None).await?;
     Ok(())
 }
 
 // ---- Revisionen ------------------------------------------------------------
 
-#[tauri::command]
+/// Argumente von [`package_revisions_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRevisionsListArgs {
+    pub package_id: String,
+}
+
 pub async fn package_revisions_list(
-    pool: State<'_, SqlitePool>,
-    package_id: String,
+    ctx: &Arc<AppCtx>,
+    args: PackageRevisionsListArgs,
 ) -> Result<Vec<PackageRevisionRow>> {
-    packages::revisions_list(pool.inner(), &package_id).await
+    let PackageRevisionsListArgs { package_id } = args;
+    let pool = ctx.pool()?;
+
+    packages::revisions_list(&pool, &package_id).await
 }
 
-#[tauri::command]
+/// Argumente von [`package_revisions_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRevisionsGetArgs {
+    pub package_id: String,
+    pub revision: i64,
+}
+
 pub async fn package_revisions_get(
-    pool: State<'_, SqlitePool>,
-    package_id: String,
-    revision: i64,
+    ctx: &Arc<AppCtx>,
+    args: PackageRevisionsGetArgs,
 ) -> Result<Option<PackageRevisionRow>> {
-    packages::revision_get(pool.inner(), &package_id, revision).await
+    let PackageRevisionsGetArgs {
+        package_id,
+        revision,
+    } = args;
+    let pool = ctx.pool()?;
+
+    packages::revision_get(&pool, &package_id, revision).await
 }
 
-#[tauri::command]
+/// Argumente von [`package_revisions_rollback`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageRevisionsRollbackArgs {
+    pub package_id: String,
+    pub to_revision: i64,
+}
+
 pub async fn package_revisions_rollback(
-    pool: State<'_, SqlitePool>,
-    package_id: String,
-    to_revision: i64,
+    ctx: &Arc<AppCtx>,
+    args: PackageRevisionsRollbackArgs,
 ) -> Result<PackageRow> {
-    let pool = pool.inner();
+    let PackageRevisionsRollbackArgs {
+        package_id,
+        to_revision,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let row = packages::rollback(pool, &package_id, to_revision).await?;
     audit_log::append(
         pool,
@@ -235,19 +361,28 @@ pub async fn package_revisions_rollback(
 
 // ---- Vorschau (PDF) --------------------------------------------------------
 
+/// Argumente von [`package_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagePreviewArgs {
+    pub title: String,
+    pub body_markup: String,
+    pub default_unit_price_cents: i64,
+}
+
 /// Rendert eine Beispiel-Position als PDF (Editor-„PDF-Vorschau"). Reine Vorschau:
 /// schreibt nach `data/preview/`, nichts wird archiviert oder validiert. Der
 /// formatierte Block kommt aus `domain::package::to_typst` und wird im Template
 /// via `eval(mode: "markup")` eingebettet.
-#[tauri::command]
-pub async fn package_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    title: String,
-    body_markup: String,
-    default_unit_price_cents: i64,
-) -> Result<()> {
-    let pool = pool.inner();
+pub async fn package_preview(ctx: &Arc<AppCtx>, args: PackagePreviewArgs) -> Result<()> {
+    let PackagePreviewArgs {
+        title,
+        body_markup,
+        default_unit_price_cents,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let body_typst = package::to_typst(&package::parse_markup(&body_markup));
     let is_klein = seller_profile::get(pool)
         .await?
@@ -268,7 +403,7 @@ pub async fn package_preview(
     let json =
         serde_json::to_string(&data).map_err(|e| Error::Config(format!("Vorschau-JSON: {e}")))?;
 
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     let branding_dir = paths.inputs_dir.join("branding");
     let branding_opt = if branding_dir.is_dir() {
         Some(branding_dir.as_path())
@@ -283,9 +418,7 @@ pub async fn package_preview(
     std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("Vorschau-Ordner: {e}")))?;
     let file = dir.join("paket-vorschau.pdf");
     std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Vorschau schreiben: {e}")))?;
-    app.opener()
-        .open_path(file.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| Error::Config(format!("Vorschau öffnen: {e}")))?;
+    ctx.open_path(file.to_string_lossy().to_string())?;
     Ok(())
 }
 
@@ -315,6 +448,13 @@ pub struct MaterializedPackageItem {
     pub package_name: String,
 }
 
+/// Argumente von [`package_materialize_item`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageMaterializeItemArgs {
+    pub package_id: String,
+}
+
 /// Materialisiert eine Beleg-Position aus der **aktiven** Revision eines Pakets
 /// (Block P3). Reine Lese-/Aufbereitungs-Operation — schreibt nichts.
 ///
@@ -323,12 +463,14 @@ pub struct MaterializedPackageItem {
 ///   Fallback = Titel, falls der Body leer ist (BT-154 darf nicht leer sein).
 /// - `description_markup` = fetter Titel + Body-Markup → der formatierte PDF-Block.
 /// - §19-Hardline: bei Kleinunternehmer `tax_category_code = 'E'`, Rate 0.
-#[tauri::command]
 pub async fn package_materialize_item(
-    pool: State<'_, SqlitePool>,
-    package_id: String,
+    ctx: &Arc<AppCtx>,
+    args: PackageMaterializeItemArgs,
 ) -> Result<MaterializedPackageItem> {
-    let pool = pool.inner();
+    let PackageMaterializeItemArgs { package_id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let pkg = packages::get(pool, &package_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Paket nicht gefunden: {package_id}")))?;
@@ -508,25 +650,31 @@ async fn render_catalog_pdf(
     .await
 }
 
+/// Argumente von [`package_catalog_render`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCatalogRenderArgs {
+    pub package_ids: Vec<String>,
+}
+
 /// Druck/Vorschau: rendert die Broschüre für die gewählten Pakete und öffnet sie.
 /// Schreibt nach `data/preview/` (reine Vorschau, kein Archiv).
-#[tauri::command]
 pub async fn package_catalog_render(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    package_ids: Vec<String>,
+    ctx: &Arc<AppCtx>,
+    args: PackageCatalogRenderArgs,
 ) -> Result<()> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let PackageCatalogRenderArgs { package_ids } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     let pdf = render_catalog_pdf(pool, &paths, &package_ids, None).await?;
 
     let dir = paths.data_dir.join("preview");
     std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("Broschüren-Ordner: {e}")))?;
     let file = dir.join("paket-broschuere.pdf");
     std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Broschüre schreiben: {e}")))?;
-    app.opener()
-        .open_path(file.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| Error::Config(format!("Broschüre öffnen: {e}")))?;
+    ctx.open_path(file.to_string_lossy().to_string())?;
 
     audit_log::append(
         pool,
@@ -540,18 +688,26 @@ pub async fn package_catalog_render(
     Ok(())
 }
 
+/// Argumente von [`package_catalog_send`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCatalogSendArgs {
+    pub args: SendPackageCatalogArgs,
+}
+
 /// Versand: rendert die Broschüre (mit persönlicher Anrede) und mailt sie als
 /// **einzelnen** PDF-Anhang an den gewählten Kontakt. Protokoll ausschließlich
 /// im append-only `email_log` (`related_kind = 'package_catalog'`) — KEIN
 /// §14-Status, KEIN write-once-Archiv.
-#[tauri::command]
 pub async fn package_catalog_send(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: SendPackageCatalogArgs,
+    ctx: &Arc<AppCtx>,
+    args: PackageCatalogSendArgs,
 ) -> Result<SendPackageCatalogResult> {
-    let paths = Paths::from_handle(&app)?;
-    send_catalog_core(pool.inner(), &paths, &args).await
+    let PackageCatalogSendArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    send_catalog_core(&pool, &paths, &args).await
 }
 
 /// Kern-Pipeline für den Broschüren-Versand (ohne Tauri-State). Public, damit

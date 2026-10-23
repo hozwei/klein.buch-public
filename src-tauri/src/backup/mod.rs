@@ -910,6 +910,8 @@ mod tests {
             backups_dir: data.join("backups"),
             inputs_dir: dir.path().join("inputs"),
             sidecar_dir: dir.path().join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
         };
         std::fs::create_dir_all(&paths.backups_dir).unwrap();
         let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();

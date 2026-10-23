@@ -17,11 +17,11 @@
 //! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne
 //! Tauri-/Opener-Hülle.
 
+use crate::app_ctx::AppCtx;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::io::Write;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::config::Paths;
 use crate::db::repo::{audit_log, dsgvo as dsgvo_repo, seller_profile};
@@ -208,24 +208,27 @@ pub async fn export_core(
     })
 }
 
+/// Argumente von [`dsgvo_export`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsgvoExportArgs {
+    pub contact_id: String,
+}
+
 /// Erzeugt die DSGVO-Auskunft (Art. 15) zu einem Kontakt als ZIP und öffnet den
 /// Ablage-Ordner. Read-only.
-#[tauri::command]
-pub async fn dsgvo_export(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    contact_id: String,
-) -> Result<DsgvoExportResult> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn dsgvo_export(ctx: &Arc<AppCtx>, args: DsgvoExportArgs) -> Result<DsgvoExportResult> {
+    let DsgvoExportArgs { contact_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let now = crate::clock::now_berlin();
     let generated_at = now.format("%Y-%m-%d %H:%M").to_string();
     let file_date = now.format("%Y-%m-%d").to_string();
 
-    let res = export_core(pool.inner(), &paths, &contact_id, &generated_at, &file_date).await?;
+    let res = export_core(&pool, &paths, &contact_id, &generated_at, &file_date).await?;
 
-    app.opener()
-        .reveal_item_in_dir(&res.zip_path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
+    ctx.reveal(&res.zip_path)?;
     Ok(res)
 }
 

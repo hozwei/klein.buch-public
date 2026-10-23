@@ -13,14 +13,13 @@
 //! Anlegen → (bei Bedarf korrigieren, solange unlocked) → AfA buchen (lockt) →
 //! ggf. veräußern. Gelöscht wird nie (GoBD-Hardline).
 
+use crate::app_ctx::AppCtx;
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::assets::afa_tabellen::{self, AfaTabellen};
 use crate::backup;
-use crate::config::Paths;
 use crate::db::models::AssetDetail;
 use crate::db::numbering;
 use crate::db::repo::{assets, audit_log, depreciation as depreciation_repo, expenses};
@@ -49,35 +48,70 @@ pub struct AssetDisposeArgs {
 // Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn assets_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<assets::ListFilter>,
-) -> Result<Vec<crate::db::models::AssetListItem>> {
-    assets::list(pool.inner(), &filter.unwrap_or_default()).await
+/// Argumente von [`assets_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsListArgs {
+    #[serde(default)]
+    pub filter: Option<assets::ListFilter>,
 }
 
-#[tauri::command]
-pub async fn assets_get(pool: State<'_, SqlitePool>, id: String) -> Result<Option<AssetDetail>> {
-    assets::get_detail(pool.inner(), &id).await
+pub async fn assets_list(
+    ctx: &Arc<AppCtx>,
+    args: AssetsListArgs,
+) -> Result<Vec<crate::db::models::AssetListItem>> {
+    let AssetsListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    assets::list(&pool, &filter.unwrap_or_default()).await
 }
+
+/// Argumente von [`assets_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsGetArgs {
+    pub id: String,
+}
+
+pub async fn assets_get(ctx: &Arc<AppCtx>, args: AssetsGetArgs) -> Result<Option<AssetDetail>> {
+    let AssetsGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    assets::get_detail(&pool, &id).await
+}
+
+/// Argumente von [`assets_afa_table`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsAfaTableArgs {}
 
 /// Liefert die geladene BMF-AfA-Tabelle (Kategorien + GWG-Grenze) fürs Formular.
-#[tauri::command]
-pub async fn assets_afa_table(app: AppHandle) -> Result<AfaTabellen> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn assets_afa_table(ctx: &Arc<AppCtx>, _args: AssetsAfaTableArgs) -> Result<AfaTabellen> {
+    let paths = ctx.paths.clone();
     afa_tabellen::load(&paths.inputs_dir)
+}
+
+/// Argumente von [`assets_suggest_method`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsSuggestMethodArgs {
+    #[serde(default)]
+    pub expense_category: Option<String>,
+    pub acquisition_cost_cents: i64,
 }
 
 /// Schlägt AfA-Methode + Nutzungsdauer vor (PRD §6.17). `expense_category` ist die
 /// EÜR-Kategorie der Quell-Kosten (falls vorhanden).
-#[tauri::command]
 pub async fn assets_suggest_method(
-    app: AppHandle,
-    expense_category: Option<String>,
-    acquisition_cost_cents: i64,
+    ctx: &Arc<AppCtx>,
+    args: AssetsSuggestMethodArgs,
 ) -> Result<MethodSuggestion> {
-    let paths = Paths::from_handle(&app)?;
+    let AssetsSuggestMethodArgs {
+        expense_category,
+        acquisition_cost_cents,
+    } = args;
+
+    let paths = ctx.paths.clone();
     let table = afa_tabellen::load(&paths.inputs_dir)?;
     Ok(asset::suggest_method(
         expense_category.as_deref(),
@@ -90,15 +124,20 @@ pub async fn assets_suggest_method(
 // Create
 // =============================================================================
 
-#[tauri::command]
-pub async fn assets_create(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    input: AssetInput,
-) -> Result<AssetDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+/// Argumente von [`assets_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsCreateArgs {
+    pub input: AssetInput,
+}
+
+pub async fn assets_create(ctx: &Arc<AppCtx>, args: AssetsCreateArgs) -> Result<AssetDetail> {
+    let AssetsCreateArgs { input } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     // Hard-Block bei Validierungsfehlern.
     if let Err(errs) = asset::validate_asset(&input, today_berlin()) {
@@ -167,7 +206,7 @@ pub async fn assets_create(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "asset.create")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.create")
         .await
         .ok();
 
@@ -180,16 +219,21 @@ pub async fn assets_create(
 // Update (nur solange unlocked / nicht veräußert)
 // =============================================================================
 
-#[tauri::command]
-pub async fn assets_update(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-    input: AssetInput,
-) -> Result<AssetDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+/// Argumente von [`assets_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsUpdateArgs {
+    pub id: String,
+    pub input: AssetInput,
+}
+
+pub async fn assets_update(ctx: &Arc<AppCtx>, args: AssetsUpdateArgs) -> Result<AssetDetail> {
+    let AssetsUpdateArgs { id, input } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     if let Err(errs) = asset::validate_asset(&input, today_berlin()) {
         return Err(Error::Domain(format!(
@@ -241,7 +285,7 @@ pub async fn assets_update(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "asset.update")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.update")
         .await
         .ok();
 
@@ -254,15 +298,20 @@ pub async fn assets_update(
 // Dispose (Veräußerung/Verschrottung — kein Löschen)
 // =============================================================================
 
-#[tauri::command]
-pub async fn assets_dispose(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: AssetDisposeArgs,
-) -> Result<AssetDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+/// Argumente von [`assets_dispose`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsDisposeArgs {
+    pub args: AssetDisposeArgs,
+}
+
+pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Result<AssetDetail> {
+    let AssetsDisposeArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     let dtype = DisposalType::from_db(&args.disposal_type).ok_or_else(|| {
         Error::Domain(format!("Ungültige Veräußerungsart: {}", args.disposal_type))
@@ -399,7 +448,7 @@ pub async fn assets_dispose(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "asset.dispose")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.dispose")
         .await
         .ok();
 
