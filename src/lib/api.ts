@@ -39,7 +39,6 @@ import type {
   LockResponse,
   MailAccount,
   MailAccountInput,
-  OauthStatus,
   EmailLogEntry,
   EmailLogFilter,
   Paragraph19Info,
@@ -381,23 +380,13 @@ export function mailAccountTestConnection(args: TestConnectionArgs): Promise<voi
   return invoke<void>("mail_account_test_connection", { args });
 }
 
+/** Testet ein gespeichertes Konto mit seinem gespeicherten Passwort (Re-Auth, Plan W8). */
+export function mailAccountTestSaved(id: string): Promise<void> {
+  return invoke<void>("mail_account_test_saved", { id });
+}
+
 export function mailSendTest(accountId: string, to: string): Promise<void> {
   return invoke<void>("mail_send_test", { accountId, to });
-}
-
-// ---- Mail OAuth (Block 16) -------------------------------------------------
-
-export function mailOauthStatus(accountId: string): Promise<OauthStatus> {
-  return invoke<OauthStatus>("mail_oauth_status", { accountId });
-}
-
-/** Öffnet den Browser zur Microsoft-Anmeldung und wartet auf den Abschluss. */
-export function mailOauthConnect(accountId: string): Promise<OauthStatus> {
-  return invoke<OauthStatus>("mail_oauth_connect", { accountId });
-}
-
-export function mailOauthDisconnect(accountId: string): Promise<void> {
-  return invoke<void>("mail_oauth_disconnect", { accountId });
 }
 
 // ---- E-Mail-Versandprotokoll (Block 16b) -----------------------------------
@@ -1047,15 +1036,21 @@ export function backupTargetRemove(id: string): Promise<void> {
   return invoke<void>("backup_target_remove", { id });
 }
 
+/** Testet einen neuen SFTP-Server (Re-Auth, Passwort Pflicht) und liefert den
+ *  Host-Fingerprint, den `backupTargetAddSftp` danach übernimmt (Plan W8). */
 export function backupTestSftp(
   host: string,
   port: number,
   user: string,
   remoteDir: string,
   password: string,
-  targetId: string | null = null,
 ): Promise<SftpProbe> {
-  return invoke<SftpProbe>("backup_test_sftp", { host, port, user, remoteDir, password, targetId });
+  return invoke<SftpProbe>("backup_test_sftp", { host, port, user, remoteDir, password });
+}
+
+/** Testet ein gespeichertes SFTP-Ziel per ID (gespeichertes Passwort, gepinnter Fingerprint). */
+export function backupTestSftpSaved(id: string): Promise<SftpProbe> {
+  return invoke<SftpProbe>("backup_test_sftp_saved", { id });
 }
 
 export function backupList(): Promise<BackupHistoryItem[]> {

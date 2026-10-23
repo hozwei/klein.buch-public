@@ -10,6 +10,7 @@
     backupGetSettings,
     backupCreateNow,
     backupTestSftp,
+    backupTestSftpSaved,
     backupTargetAddDirectory,
     backupTargetAddSftp,
     backupTargetRemove,
@@ -38,9 +39,15 @@
   let sftpUser = $state("");
   let sftpRemoteDir = $state("");
   let sftpPassword = $state("");
-  // Bestätigter/gepinnter Host-Key-Fingerprint (Pflicht zum Speichern).
+  // Host-Key-Fingerprint aus dem letzten Test (Pflicht zum Speichern). Der
+  // Server übernimmt nur den Fingerprint seiner letzten Probe für Host + Port
+  // (Plan W8); ändern sich Host oder Port, ist ein neuer Test nötig.
   let sftpFingerprint = $state("");
   let sftpProbe = $state<SftpProbe | null>(null);
+  let sftpProbedFor = $state("");
+  const sftpEndpoint = $derived(`${sftpHost.trim().toLowerCase()}:${sftpPort}`);
+  const sftpProbeValid = $derived(sftpFingerprint !== "" && sftpProbedFor === sftpEndpoint);
+  let testingTargetId = $state<string | null>(null);
 
   // Restore (Plan W7): hochgeladene .kbk oder lokales Backup aus der Liste.
   let restoreFile = $state<File | null>(null);
@@ -163,6 +170,7 @@
       );
       sftpProbe = p;
       sftpFingerprint = p.fingerprint;
+      sftpProbedFor = sftpEndpoint;
       if (p.writeOk) {
         flash("Verbindung ok — Host-Fingerprint bitte prüfen und speichern.");
       } else {
@@ -177,7 +185,7 @@
 
   // SFTP: als Backup-Ziel hinzufügen (Passwort je Ziel, Fingerprint → Pin).
   async function addSftp() {
-    if (!sftpFingerprint) {
+    if (!sftpProbeValid) {
       flash("Bitte zuerst die Verbindung testen, um den Host-Fingerprint zu bestätigen.", "error");
       return;
     }
@@ -195,12 +203,31 @@
       sftpPassword = "";
       sftpProbe = null;
       sftpFingerprint = "";
+      sftpProbedFor = "";
       flash("SFTP-Ziel hinzugefügt.");
       await load();
     } catch (e) {
       flash(String(e), "error");
     } finally {
       busy = false;
+    }
+  }
+
+  // Gespeichertes SFTP-Ziel testen (nur per ID: gespeichertes Passwort,
+  // gepinnter Fingerprint — Plan W8).
+  async function testSavedSftp(t: TargetView) {
+    testingTargetId = t.id;
+    try {
+      const p = await backupTestSftpSaved(t.id);
+      if (p.writeOk) {
+        flash(`Verbindung zu „${t.label}“ ok, Fingerprint stimmt.`);
+      } else {
+        flash(`Login ok, aber Schreiben auf „${t.label}“ schlug fehl: ${p.writeError ?? ""}`, "error");
+      }
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      testingTargetId = null;
     }
   }
 
@@ -356,7 +383,18 @@
                 <div class="hint">Noch kein Backup auf dieses Ziel.</div>
               {/if}
             </div>
-            <button class="link" onclick={() => removeTarget(t)} disabled={busy}>Entfernen</button>
+            <div class="target-actions">
+              {#if t.kind === "sftp"}
+                <button
+                  class="link"
+                  onclick={() => testSavedSftp(t)}
+                  disabled={busy || testingTargetId === t.id}
+                >
+                  {testingTargetId === t.id ? "Teste …" : "Testen"}
+                </button>
+              {/if}
+              <button class="link" onclick={() => removeTarget(t)} disabled={busy}>Entfernen</button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -397,7 +435,9 @@
     <p class="muted">
       Kopie auf einen eigenen Server per SSH/SFTP. Beim Test zeigt der Server seinen
       „Fingerabdruck“; bitte prüfen und bestätigen (Schutz vor manipulierten
-      Verbindungen).
+      Verbindungen). Das Passwort wird verschlüsselt in der Datenbank dieser Instanz
+      gespeichert und gilt nur für dieses Ziel; für einen anderen Server oder
+      Benutzer das Ziel entfernen und neu anlegen.
     </p>
 
     <label>
@@ -428,15 +468,18 @@
     </label>
 
     <div class="row" style="margin-top:0.6rem">
-      <button onclick={testSftp} disabled={busy || !sftpHost.trim() || !sftpUser.trim()}>
+      <button
+        onclick={testSftp}
+        disabled={busy || !sftpHost.trim() || !sftpUser.trim() || !sftpPassword}
+      >
         Verbindung testen
       </button>
-      <button class="primary" onclick={addSftp} disabled={busy || !sftpFingerprint || !sftpPassword}>
+      <button class="primary" onclick={addSftp} disabled={busy || !sftpProbeValid || !sftpPassword}>
         Als SFTP-Ziel hinzufügen
       </button>
     </div>
 
-    {#if sftpProbe}
+    {#if sftpProbe && sftpProbeValid}
       <div class="preview">
         <p class:bad={!sftpProbe.writeOk}>
           Schreibtest im Zielordner: {sftpProbe.writeOk ? "ok" : "FEHLGESCHLAGEN"}
@@ -448,14 +491,10 @@
         <p class="fingerprint">{sftpProbe.fingerprint}</p>
       </div>
     {:else if sftpFingerprint}
-      <div class="preview">
-        <p class="muted">Gepinnter Host-Fingerprint:</p>
-        <p class="fingerprint">{sftpFingerprint}</p>
-        <p class="hint">
-          Host geändert? Bitte erneut „Verbindung testen", damit der Fingerabdruck
-          zum neuen Server passt.
-        </p>
-      </div>
+      <p class="hint">
+        Server oder Port geändert — bitte erneut „Verbindung testen“, damit der
+        Fingerabdruck zum neuen Server passt.
+      </p>
     {/if}
   </section>
 
@@ -703,6 +742,11 @@
     gap: 1rem;
     padding: 0.5rem 0;
     border-bottom: 1px solid var(--c-border);
+  }
+  .target-actions {
+    display: flex;
+    gap: 0.75rem;
+    white-space: nowrap;
   }
   .fingerprint {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

@@ -197,7 +197,6 @@ async fn serve_main() -> Result<()> {
     let ctx = Arc::new(AppCtx::new(
         paths,
         Arc::new(crate::notify::InboxOnly),
-        Arc::new(crate::secrets::KeyringSecretStore),
         Arc::new(NoDesktop),
         APP_IDENTIFIER,
     ));
@@ -259,6 +258,7 @@ pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<Serve
         );
     }
     ctx.uploads.set_limits(cfg.uploads);
+    ctx.net_tests.set_allowed_ports(cfg.test_ports.clone());
     let state = ServerState::new(ctx, csp, Some(lock), cfg.policy.clone(), ratelimit);
     if state.needs_setup_token() {
         state.ensure_setup_token();

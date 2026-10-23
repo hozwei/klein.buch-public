@@ -6,11 +6,9 @@
 //!
 //! ## Hard-Rules
 //!
-//! - **Passwort nie in DB/Log/audit.** Es lebt ausschließlich im OS-Keychain
-//!   (Windows Credential Manager / macOS Keychain / Linux Secret Service), genau
-//!   wie die SMTP-Passphrase (siehe [`crate::mail::keyring`]), je Ziel-ID ein
-//!   Eintrag (mehrere Ziele, Plan W7); der alte Einzel-Eintrag dient als
-//!   Rückfall. Ab W8 liegt es im `SecretStore` der Datenbank.
+//! - **Passwort nie im Ziel-JSON, Log oder Audit.** Es liegt je Ziel-ID in der
+//!   verschlüsselten Datenbank (`crate::secrets::sftp_key`, Plan W8) und wird
+//!   dem Upload übergeben.
 //! - **Host-Key-Pinning (MITM-Schutz).** Der Server-Host-Key wird über einen
 //!   gepinnten SHA-256-Fingerprint (`SHA256:…`) verifiziert. Ein Upload ohne
 //!   passenden Pin wird **abgelehnt**. Den Fingerprint ermittelt der einmalige
@@ -32,15 +30,6 @@ use crate::error::{Error, Result};
 
 /// Gesamt-Timeout für Handshake + Auth + SFTP-Open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Keychain-Service-ID der SFTP-Backup-Passwörter.
-const KEYRING_SERVICE: &str = "kleinbuch::backup::sftp";
-/// `user`-Teil des alten Einzel-Eintrags (vor mehreren Zielen).
-const KEYRING_USER: &str = "sftp-password";
-
-fn keyring_user(target_id: &str) -> String {
-    format!("{KEYRING_USER}:{target_id}")
-}
 
 /// Name der temporären Probe-Datei für den Schreibrechte-Test.
 const PROBE_FILE: &str = ".klein-buch-write-test";
@@ -89,56 +78,6 @@ pub fn sftp_uri(user: &str, host: &str, port: u16, remote_path: &str) -> String 
 /// Upstream-`ssh-key`-Crate oder ihren internen Fork re-exportiert.
 fn fingerprint_of(key: &PublicKey) -> String {
     key.fingerprint(Default::default()).to_string()
-}
-
-// ---------------------------------------------------------------------------
-// Keychain (Imperative Shell) — Passwort nie in DB/Log/audit
-// ---------------------------------------------------------------------------
-
-/// Speichert das SFTP-Passwort des Ziels im OS-Credential-Manager.
-pub fn set_password(target_id: &str, password: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &keyring_user(target_id))
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht erstellbar: {e}")))?;
-    entry
-        .set_password(password)
-        .map_err(|e| Error::Backup(format!("SFTP-Passwort nicht speicherbar: {e}")))?;
-    Ok(())
-}
-
-/// Liest das SFTP-Passwort des Ziels (Rückfall: alter Einzel-Eintrag).
-/// `Ok(None)`, wenn keines hinterlegt ist; andere Store-Fehler werden
-/// propagiert (defekter Keychain ≠ „kein Passwort").
-pub fn get_password(target_id: &str) -> Result<Option<String>> {
-    if target_id.is_empty() {
-        return Ok(None);
-    }
-    // Rückfall auf den alten Einzel-Eintrag nur für das übernommene Altziel
-    // (ID „sftp“, Gegenprüfung W7).
-    let mut users = vec![keyring_user(target_id)];
-    if target_id == "sftp" {
-        users.push(KEYRING_USER.to_string());
-    }
-    for user in users {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, &user)
-            .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht lesbar: {e}")))?;
-        match entry.get_password() {
-            Ok(p) => return Ok(Some(p)),
-            Err(keyring::Error::NoEntry) => continue,
-            Err(e) => return Err(Error::Backup(format!("SFTP-Passwort nicht lesbar: {e}"))),
-        }
-    }
-    Ok(None)
-}
-
-/// Löscht das SFTP-Passwort des Ziels. Idempotent (fehlender Eintrag = Ok).
-pub fn delete_password(target_id: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, &keyring_user(target_id))
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht adressierbar: {e}")))?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(Error::Backup(format!("SFTP-Passwort nicht löschbar: {e}"))),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,12 +315,12 @@ pub async fn probe(
 
 /// Lädt einen Backup-Blob per SFTP hoch und liefert die `sftp://`-URI zurück.
 ///
-/// Erzwingt einen gepinnten Host-Fingerprint (sonst Abbruch) und liest das
-/// Passwort aus dem Keychain. Bei Host-Key-Abweichung bricht der Upload mit einer
+/// Erzwingt einen gepinnten Host-Fingerprint (sonst Abbruch); das Passwort
+/// kommt vom Aufrufer (aus `secrets`). Bei Host-Key-Abweichung bricht der Upload mit einer
 /// expliziten MITM-Warnung ab (kein Blind-Trust).
 #[allow(clippy::too_many_arguments)]
 pub async fn upload(
-    target_id: &str,
+    password: Option<&str>,
     host: &str,
     port: u16,
     user: &str,
@@ -401,12 +340,12 @@ pub async fn upload(
                     .into(),
             )
         })?;
-    let password = get_password(target_id)?
+    let password = password
         .filter(|p| !p.is_empty())
+        .map(str::to_string)
         .ok_or_else(|| {
             Error::Backup(
-                "Kein SFTP-Passwort im Schlüsselbund — bitte das SFTP-Ziel erneut speichern."
-                    .into(),
+                "Kein SFTP-Passwort gespeichert — bitte das SFTP-Ziel neu anlegen.".into(),
             )
         })?;
 
@@ -454,18 +393,6 @@ pub async fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Once;
-
-    static MOCK_INIT: Once = Once::new();
-
-    /// Erzwingt den plattform-unabhängigen Keyring-Mock-Store für den Test-Prozess
-    /// (CI ohne echten Keychain/Secret-Service).
-    fn use_mock_store() {
-        MOCK_INIT.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        });
-    }
-
     #[test]
     fn normalize_remote_dir_cases() {
         assert_eq!(normalize_remote_dir(""), ".");
@@ -494,16 +421,5 @@ mod tests {
             sftp_uri("kb", "host.de", 2222, "/srv/a.kbk"),
             "sftp://kb@host.de:2222/srv/a.kbk"
         );
-    }
-
-    #[test]
-    fn keyring_wrapper_contract_against_mock() {
-        use_mock_store();
-        // Frischer Eintrag → Ok(None) (NoEntry-Mapping).
-        assert_eq!(get_password("ziel-1").unwrap(), None);
-        // set + delete dürfen nicht hart fehlschlagen; delete ist idempotent.
-        set_password("ziel-1", "s3cr3t-sftp").unwrap();
-        delete_password("ziel-1").unwrap();
-        delete_password("ziel-1").unwrap();
     }
 }

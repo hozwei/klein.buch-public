@@ -485,47 +485,47 @@ pub async fn create_now(
     let floor_target = target::BackupTarget::Directory {
         path: paths.backups_dir.to_string_lossy().to_string(),
     };
-    let floor_path =
-        match target::write_backup(&floor_target, "floor", &file_name, &file_bytes).await {
-            Ok(p) => p,
-            Err(e) => {
-                // Floor-Fehlschlag protokollieren (best-effort), dann hart melden:
-                // ohne Floor gibt es keine Sicherheits-Kopie (G1-LOG: jeder Lauf wird
-                // protokolliert, Erfolg UND Fehlschlag).
-                crate::db::repo::backup_log::insert(
-                    pool,
-                    &crate::db::repo::backup_log::BackupLogEntry {
-                        trigger: trigger_reason.to_string(),
-                        target_kind: "local".to_string(),
-                        target_label: None,
-                        file_name: file_name.clone(),
-                        full_path: paths
-                            .backups_dir
-                            .join(&file_name)
-                            .to_string_lossy()
-                            .to_string(),
-                        size_bytes,
-                        status: "failed".to_string(),
-                        detail: Some(e.to_string()),
-                    },
-                )
-                .await
-                .ok();
-                notify_backup_result(
-                    pool,
-                    "warning",
-                    "Backup fehlgeschlagen",
-                    "Die lokale Pflicht-Sicherung konnte nicht geschrieben werden. \
+    let floor_path = match target::write_backup(&floor_target, None, &file_name, &file_bytes).await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            // Floor-Fehlschlag protokollieren (best-effort), dann hart melden:
+            // ohne Floor gibt es keine Sicherheits-Kopie (G1-LOG: jeder Lauf wird
+            // protokolliert, Erfolg UND Fehlschlag).
+            crate::db::repo::backup_log::insert(
+                pool,
+                &crate::db::repo::backup_log::BackupLogEntry {
+                    trigger: trigger_reason.to_string(),
+                    target_kind: "local".to_string(),
+                    target_label: None,
+                    file_name: file_name.clone(),
+                    full_path: paths
+                        .backups_dir
+                        .join(&file_name)
+                        .to_string_lossy()
+                        .to_string(),
+                    size_bytes,
+                    status: "failed".to_string(),
+                    detail: Some(e.to_string()),
+                },
+            )
+            .await
+            .ok();
+            notify_backup_result(
+                pool,
+                "warning",
+                "Backup fehlgeschlagen",
+                "Die lokale Pflicht-Sicherung konnte nicht geschrieben werden. \
                  Prüfe Speicherplatz und Schreibrechte. Details im Backup-Protokoll.",
-                    &format!(
-                        "backup_result_failed_floor:{}",
-                        crate::clock::now_berlin().format("%Y-%m-%d")
-                    ),
-                )
-                .await;
-                return Err(e);
-            }
-        };
+                &format!(
+                    "backup_result_failed_floor:{}",
+                    crate::clock::now_berlin().format("%Y-%m-%d")
+                ),
+            )
+            .await;
+            return Err(e);
+        }
+    };
 
     let history_id = uuid::Uuid::now_v7().to_string();
     insert_history_row(
@@ -607,10 +607,19 @@ pub async fn create_now(
             // weiteren Backups (Gegenprüfung W7).
             let limit =
                 std::time::Duration::from_secs(60 + file_bytes.len() as u64 / (1024 * 1024));
+            let password = match &entry.target {
+                target::BackupTarget::Sftp { .. } => {
+                    crate::secrets::get(pool, &crate::secrets::sftp_key(&entry.id))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                target::BackupTarget::Directory { .. } => None,
+            };
             let written = match target::resolve(entry, &paths.backup_targets_dir) {
                 Ok(resolved) => match tokio::time::timeout(
                     limit,
-                    target::write_backup(&resolved, &entry.id, &file_name, &file_bytes),
+                    target::write_backup(&resolved, password.as_deref(), &file_name, &file_bytes),
                 )
                 .await
                 {

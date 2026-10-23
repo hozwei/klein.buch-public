@@ -341,11 +341,11 @@ fn write_file_durable(full: &std::path::Path, bytes: &[u8]) -> Result<()> {
 
 /// Schreibt einen Backup-Blob ans Ziel und liefert den vollständigen Pfad/URI
 /// (für `backup_history.target_path` und `backup_log.full_path`). Verzeichnisse
-/// müssen absolut sein (vorher [`resolve`]); der SFTP-Arm liest das Passwort
-/// des Ziels `target_id` und prüft den gepinnten Host-Fingerprint.
+/// müssen absolut sein (vorher [`resolve`]); der SFTP-Arm bekommt das Passwort
+/// des Ziels (aus `crate::secrets`) und prüft den gepinnten Host-Fingerprint.
 pub async fn write_backup(
     target: &BackupTarget,
-    target_id: &str,
+    password: Option<&str>,
     file_name: &str,
     bytes: &[u8],
 ) -> Result<String> {
@@ -372,7 +372,7 @@ pub async fn write_backup(
             host_fingerprint,
         } => {
             super::sftp::upload(
-                target_id,
+                password,
                 host,
                 *port,
                 user,
@@ -582,7 +582,7 @@ mod tests {
         let target = BackupTarget::Directory {
             path: dir.to_string_lossy().to_string(),
         };
-        let full = write_backup(&target, "floor", "klein-buch-test.kbk", b"hello")
+        let full = write_backup(&target, None, "klein-buch-test.kbk", b"hello")
             .await
             .unwrap();
         assert!(Path::new(&full).is_file());

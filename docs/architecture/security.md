@@ -8,7 +8,7 @@
 
 ADR-Basis: 0035 (Verschlüsselung at Rest), 0034 (Backup-Ziele/Retention/Log),
 0036 (Factory Reset), 0009 (Backup als First-Class), 0011 + 0028
-(Mail-Credentials im Keychain), 0039 (Web-/Docker-Betrieb).
+(Mail-Credentials; seit W8 im SecretStore der DB), 0039 (Web-/Docker-Betrieb).
 
 **Stand des Codes.** Beschrieben ist der Stand nach den Phase-W-Blöcken W1 und
 W2: Die Desktop-Shell ist noch vorhanden, eine HTTP-Schnittstelle gibt es noch
@@ -142,7 +142,8 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Halbe Datei auf SFTP | Upload unter `.<name>.part`, dann `rename` | umgesetzt (W7) |
 | Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / ok | umgesetzt (W7) |
 | MITM zum SFTP-Server | Host-Key-Pinning (SHA-256, TOFU) | umgesetzt |
-| SSRF und Abgreifen gespeicherter Zugangsdaten über Test-Verbindungen | Zugangsdaten an (Host, Port, Benutzer) gebunden; Tests gespeicherter Ziele nur per ID; Port-Allowlist; ≤ 10 Tests je Minute; Re-Auth | geplant (W8) |
+| SSRF und Abgreifen gespeicherter Zugangsdaten über Test-Verbindungen | Zugangsdaten an (Host, Port, Benutzer) gebunden; Tests gespeicherter Ziele nur per ID; Ad-hoc-Tests nur mit eingegebenem Passwort; Port-Allowlist; ≤ 10 Tests je Minute (instanzweit); einheitliche Fehlermeldung; Re-Auth | umgesetzt (W8) |
+| Fremder Fingerprint beim Anlegen | `backup_target_add_sftp` übernimmt nur den Fingerprint der letzten Probe für (Host, Port), höchstens 10 min alt | umgesetzt (W8) |
 
 **Lieferkette des Images**
 
@@ -409,16 +410,20 @@ Ziel gespeichert (`app_settings.backup_targets`, Feld `host_fingerprint`). Ein
 Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz).
 Verbindungsaufbau mit 20 s Timeout.
 
-Das Passwort liegt je Ziel-ID im **OS-Keychain** (bis W8, danach im
-SecretStore, §4), nie im Ziel-JSON, in Logs oder im Audit.
+Das Passwort liegt je Ziel-ID im **SecretStore** der verschlüsselten DB (§4,
+seit W8), nie im Ziel-JSON, in Logs oder im Audit.
 
 Der Upload schreibt unter `.<name>.part` und benennt danach um (W7); ein
 abgebrochener Upload hinterlässt keine `.kbk` unter dem endgültigen Namen.
 
-**Server-Betrieb (geplant W8):** Zugangsdaten an (Host, Port, Benutzer)
-gebunden — wer eines davon ändert, muss das Passwort neu eingeben; Tests
-gespeicherter Ziele nur per ID; der gespeicherte Fingerprint muss der letzten
-Probe dieser Sitzung entsprechen; Port-Allowlist; alles mit Re-Auth.
+**Server-Betrieb (W8):** Ein SFTP-Ziel lässt sich nicht ändern, nur entfernen
+und neu anlegen — Zugangsdaten bleiben so an (Host, Port, Benutzer) gebunden.
+`backup_test_sftp` verlangt das Passwort und merkt sich den gesehenen
+Fingerprint je (Host, Port) für 10 Minuten (instanzweit, ADR 0039 Nr. 86);
+`backup_target_add_sftp` übernimmt nur genau diesen. Gespeicherte Ziele testet
+`backup_test_sftp_saved(id)` (prüft auch den Pin). Port-Allowlist (22, 2222 bzw.
+`KLEIN_BUCH_ALLOWED_TEST_PORTS`), höchstens 10 Tests je Minute, alles mit
+Re-Auth.
 
 ### 3.5 Rotation
 
@@ -434,37 +439,34 @@ prüfen diese Invariante explizit.
 
 ---
 
-## 4. Keychain-Topologie (bis W8, danach SecretStore in SQLCipher)
+## 4. SecretStore (Zugangsdaten in SQLCipher, seit W8)
 
-> **Gilt bis Block W8.** Danach liegen die Zugangsdaten in einer STRICT-Tabelle
-> der SQLCipher-DB (`SecretStore`, Migration `0031`, Schlüssel je Mailkonto-
-> bzw. Ziel-ID), sind damit nur mit der Passphrase lesbar und Teil des
-> verschlüsselten Backups, aber nicht des Migrations- und DSGVO-Exports. Die
-> `keyring`-Crate (und mit ihr `libdbus`) entfällt (E6, Amendment ADR 0011/0028).
+Zugangsdaten liegen in der Tabelle `secrets` der verschlüsselten DB (Migration
+`0031`, STRICT; E6, Amendment ADR 0011/0028). Den OS-Schlüsselbund der
+Desktop-Fassung (`keyring`, `libdbus`) gibt es nicht mehr.
 
-Was heute im OS-Keychain liegt (`keyring`-Crate, native Backends —
-`apple-native`/`windows-native`/`sync-secret-service`):
-
-| Service | User | Inhalt |
-|---|---|---|
-| `kleinbuch::mail::{mail_account_id}` | `smtp` | SMTP-Passwort |
-| `kleinbuch::mail::{mail_account_id}` | `oauth` | Kopf des OAuth-Token-Bündels (Anzahl der Teile) |
-| `kleinbuch::mail::{mail_account_id}::oauth.{i}` | `oauth` | Refresh-Token, gechunkt (Windows-Limit 2560 Zeichen pro Eintrag) |
-| `kleinbuch::backup::sftp` | `sftp-password` | SFTP-Passwort (genau ein Ziel) |
+| Schlüssel | Inhalt |
+|---|---|
+| `smtp:{mail_account_id}` | SMTP-Passwort |
+| `oauth:{mail_account_id}` | OAuth-Token-Bündel (nur Desktop-Bestand; im Server ohne Funktion, E9) |
+| `sftp:{target_id}` | SFTP-Passwort je Ziel |
 
 **Disziplin.**
 
-- Access-Token (OAuth) liegen **nie** im Keychain — sie werden bei Bedarf
-  aus dem Refresh-Token frisch geholt und im RAM gehalten.
-- App-/Daten-Passphrase liegt **nicht** im Keychain — sie kommt vom Benutzer.
-- In Tests (`#[cfg(test)]`) ist der Mock-Store aktiv; **Produktion** hat
-  keinen In-Memory-Fallback (G1-HARDEN.3).
+- Lesbar nur bei offener DB (Passphrase); Teil jedes verschlüsselten Backups,
+  nicht des Migrations-Exports (`EXCLUDED_TABLES`) und nie der DSGVO-Auskunft.
+- Werte stehen nie in Log, Audit, Antworten oder im Konto-/Ziel-JSON;
+  `mail_accounts.keychain_service_id` ist nur noch eine Markierung.
+- Bindung an (Host, Port, Benutzer): `mail_account_update` löscht das
+  Passwort, wenn sich eins davon ändert; mit Benutzer ist ein neues Pflicht
+  (sonst 422 ohne Änderung). SFTP-Ziele sind unveränderlich (§3.4).
+- Löschen eines Kontos bzw. Ziels löscht seine Einträge.
+- App-/Daten-Passphrase liegt **nicht** hier — sie kommt vom Benutzer.
+- Kein Übernehmen alter Schlüsselbund-Einträge aus der Desktop-Fassung (E17).
 
-**Factory Reset** (nur Desktop) wischt die Keychain-Einträge best-effort
-(`backup::factory_reset::apply_pending` löscht SMTP-Passwort und OAuth-Token je
-bekanntem Mailkonto sowie das SFTP-Passwort). „Best-effort" heißt: Fehler beim
-Wischen blockieren den Reset nicht (der wäre sonst nicht durchzubekommen, wenn
-der OS-Keychain gerade meckert).
+Test: `tests/server_secrets_test.rs` (Klartext weder in DB-Datei, Audit,
+Migrations- noch DSGVO-ZIP; Bindung; Port-Allowlist; Kontingent; SFTP gegen
+einen Testserver auf `127.0.0.1` mit Fingerprint).
 
 ---
 
@@ -672,14 +674,19 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
 ## 9. Versand-Sicherheit
 
 - **SMTP** läuft über `lettre` async, standardmäßig mit **TLS** (Port 465)
-  oder **STARTTLS**. Ist im Konto TLS abgeschaltet, wird unverschlüsselt
-  gesendet — heute auch mit Zugangsdaten; im Server-Betrieb nur noch ohne
-  Zugangsdaten (geplant W8). Passwort aus dem Keychain (bis W8), Audit-Eintrag
-  `mail.sent` ohne Passwort.
+  oder **STARTTLS**. Ohne TLS nur ohne Benutzer und Passwort (anlegen, ändern,
+  testen; der Transport prüft es zusätzlich, W8). Eigene CA nur als PEM-Datei
+  (`KLEIN_BUCH_SMTP_CA_FILE`, ergänzt die eingebauten Wurzeln), keine Option
+  „Zertifikat ignorieren“; EHLO-Name über `KLEIN_BUCH_SMTP_HELO_NAME`. Passwort
+  aus dem SecretStore (§4), Audit-Eintrag `mail.sent` ohne Passwort.
+- **Verbindungstests** (Verbindung testen, Testmail): nur freigegebene Ports
+  (SMTP 25/465/587/2525), höchstens 10 je Minute, einheitliche Fehlermeldung,
+  Re-Auth; gespeicherte Konten nur per ID (`mail_account_test_saved`).
 - **OAuth/Graph** läuft über `oauth2` mit **PKCE-S256**, Loopback-Capture
-  des Redirects auf `127.0.0.1:<random>`. Refresh-Token ins Keychain gechunkt,
+  des Redirects auf `127.0.0.1:<random>`. Refresh-Token in `secrets` (Desktop: Keychain),
   Access-Token nur im Memory. **Im Server-Modus ausgeblendet** (E9; Commands
-  gesperrt ab W5).
+  gesperrt ab W5, aus der Oberfläche entfernt und neue Microsoft-Konten
+  abgelehnt ab W8).
 - Jeder Versand-Versuch (erfolgreich oder nicht) landet im append-only
   `email_log`. Provider-Antwort wird kanonisiert (Header-Stripping) und
   gespeichert — kein OAuth-Token darin.
@@ -781,11 +788,11 @@ dieser Benutzer nicht erreicht.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-23 (Phase W nach W1/W2, Version 2026.5.1, Schema v30), ADRs
+Stand: 2026-10-24 (Phase W nach W8, Version 2026.5.1, Schema v31), ADRs
 0009/0034/0035/0036/0039. Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`,
 `restore.rs`, `target.rs`, `sftp.rs`, `manifest.rs`, `encrypt.rs`,
 `rotation.rs`), `src/db/mod.rs` (Pool-Open, Bootstrap, Verschlüsselungs-
 Migration), `src/archive/store.rs`, `src/archive/integrity_check.rs`,
 `src/scheduler/integrity_check_cron.rs`, `src/limits.rs`, `src/locks.rs`,
-`src/mail/keyring.rs`, `src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin);
+`src/secrets.rs`, `src/nettest.rs`, `src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin);
 Planwerte aus dem Arbeitsplan Phase W (Blöcke W5–W13).

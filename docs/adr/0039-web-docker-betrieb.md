@@ -670,6 +670,49 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Angebots-Bundle mit hochgeladenen Rechtsdokumenten weiter inline (nur eigene Uploads des
     Inhabers), Status `offsite` veraltet nicht (die Regel `backup_overdue` deckt veraltete Kopien
     ab).
+84. **`SecretStore` (W8).** Migration `0031`: Tabelle `secrets (key, value, updated_at)` STRICT,
+    Schlüssel `smtp:<Konto-ID>`, `oauth:<Konto-ID>`, `sftp:<Ziel-ID>`; Zugriff nur über
+    `crate::secrets` bei offenem Pool. Die Tabelle fehlt im Migrations-Export (`EXCLUDED_TABLES`);
+    die DSGVO-Auskunft ist kontaktbezogen und liest sie nie. In Backups ist sie enthalten (ganze
+    verschlüsselte DB, ein Restore bringt die Zugangsdaten mit). `keyring` und damit `libdbus`
+    entfallen (`mail/keyring.rs` gelöscht, CI ohne `libdbus-1-dev`). Kein Übernehmen alter
+    Schlüsselbund-Einträge (E17): Das Altziel `sftp` aus der Desktop-Fassung und Desktop-Mailkonten
+    haben im Server kein Passwort und melden das beim Versand bzw. Test; die Spalte
+    `mail_accounts.keychain_service_id` bleibt nur als Markierung „Passwort-Konto“ (kein
+    Schema-Umbau).
+85. **Bindung an (Host, Port, Benutzer) (W8).** `mail_account_update` vergleicht Host, Port und
+    Benutzer (getrimmt) mit dem gespeicherten Konto. Ändert sich eines, löscht der Server das
+    Passwort; mit Benutzer ist dann ein neues Pflicht, sonst 422 ohne Änderung. SFTP-Ziele lassen
+    sich nicht ändern (nur entfernen und neu anlegen, Nr. 77), `backup_set_sftp_target` ist ersetzt
+    — die Bindung ergibt sich dort aus der Ziel-ID. Gespeicherte Konten und Ziele testen nur
+    `mail_account_test_saved(id)` und `backup_test_sftp_saved(id)` (Re-Auth, beide neu in der
+    Allowlist, 188 Commands); die Ad-hoc-Tests verlangen ein eingegebenes Passwort, sobald ein
+    Benutzer angegeben ist, und nehmen keine ID an — ein gespeichertes Passwort erreicht nie einen
+    frei gewählten Host. `backup_test_sftp_saved` prüft zusätzlich den gepinnten Fingerprint.
+86. **Verbindungstests (W8, Abweichung vom Plan).** Kontingent 10 je Minute **instanzweit** statt
+    je Sitzung (eine Instanz = ein Mandant, mehrere Sitzungen desselben Inhabers sollen das Limit
+    nicht vervielfachen). Ebenso merkt sich der Server die SFTP-Probe je (Host, Port) instanzweit
+    für 10 Minuten statt je Sitzung; `backup_target_add_sftp` übernimmt nur genau diesen
+    Fingerprint (Host in Kleinbuchstaben, sonst Fehler „Verbindungstest erneut“). Ports aus
+    `KLEIN_BUCH_ALLOWED_TEST_PORTS` werden beim Start gelesen (ungültig → Start abgebrochen) und
+    ersetzen die Standardlisten beider Arten. Port-Prüfung, Klartext-Prüfung und Passwort-Pflicht
+    laufen vor dem Kontingent und vor jedem Verbindungsaufbau. Gescheiterte Verbindungen melden
+    einheitlich „Verbindung zu Host:Port fehlgeschlagen (Host, Port, Zugangsdaten und Firewall
+    prüfen).“; die Einzelheiten stehen nur im Debug-Log. Das gilt auch für die Testmail
+    (`mail_send_test`, Port-Prüfung + Kontingent).
+87. **SMTP im Server (W8).** `use_tls = false` nur ohne Benutzer und Passwort (anlegen, ändern —
+    auch mit bereits gespeichertem Passwort — und testen); der Transport lehnt Klartext mit
+    Zugangsdaten zusätzlich selbst ab. `KLEIN_BUCH_SMTP_HELO_NAME` setzt den EHLO-Namen (Standard
+    lettre: Hostname des Containers), `KLEIN_BUCH_SMTP_CA_FILE` eine eigene CA (PEM-Datei im
+    Volume, ergänzt die eingebauten Wurzeln); eine Option „Zertifikat ignorieren“ gibt es nicht.
+    Neue oder geänderte Konten mit `auth_type = oauth_microsoft` lehnt der Server ab (E9); ein
+    übernommenes Microsoft-Konto lässt sich auf SMTP umstellen (der Token wird dabei gelöscht) oder
+    löschen. `mail_oauth_*` sind gesperrt (404) und aus `api.ts` entfernt; der Code entfällt in W11.
+88. **SFTP-Testserver (W8).** Für den Done-Check „SFTP-Ziel mit Fingerprint“ startet
+    `tests/sftp_mock` einen russh-SFTP-Server auf `127.0.0.1` mit einem im Test erzeugten
+    Ed25519-Schlüssel (keine Fixture-Datei) und Passwort-Login; er kann nur, was der Upload braucht.
+    CI braucht dafür keinen zusätzlichen Dienst. Der SMTP-E2E gegen MailHog (`tests/e2e_test.rs`,
+    CI-Dienst) bleibt; lokal überspringt er sich.
 
 ## Konsequenzen
 

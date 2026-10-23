@@ -1,75 +1,83 @@
-//! Ablage für Zugangsdaten (SMTP-/SFTP-Passwörter), Plan W4.
+//! Zugangsdaten (SMTP-/SFTP-Passwörter, OAuth-Refresh-Token) in der
+//! SQLCipher-Datenbank (Plan W8, Amendment ADR 0011/0028, Migration 0031).
 //!
-//! Bis W8 liegen Passwörter im OS-Keychain (`mail::keyring`, `backup::sftp`);
-//! W8 ersetzt das durch eine STRICT-Tabelle in der SQLCipher-DB (Amendment
-//! ADR 0011/0028). Der Trait trennt die Kerne von der Ablage.
+//! Bis W7 lagen sie im OS-Schlüsselbund (`keyring`), den es im Container nicht
+//! gibt. Jetzt: Tabelle `secrets` (STRICT), verschlüsselt mit der DB
+//! (Passphrase = DB-Key, ADR 0035). Werte erscheinen nie in Log, Audit,
+//! Migrations- oder DSGVO-Export; der Pool muss offen sein (entsperrt).
 
 use crate::error::Result;
-use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use sqlx::SqlitePool;
 
-pub trait SecretStore: Send + Sync {
-    fn get(&self, key: &str) -> Result<Option<String>>;
-    fn set(&self, key: &str, value: &str) -> Result<()>;
-    fn delete(&self, key: &str) -> Result<()>;
+/// Schlüssel des SMTP-Passworts eines Mailkontos.
+pub fn smtp_key(account_id: &str) -> String {
+    format!("smtp:{account_id}")
 }
 
-/// OS-Keychain über das bestehende `mail::keyring`-Modul (Desktop bis W8).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct KeyringSecretStore;
-
-impl SecretStore for KeyringSecretStore {
-    fn get(&self, key: &str) -> Result<Option<String>> {
-        crate::mail::keyring::get_password(key)
-    }
-    fn set(&self, key: &str, value: &str) -> Result<()> {
-        crate::mail::keyring::set_password(key, value)
-    }
-    fn delete(&self, key: &str) -> Result<()> {
-        crate::mail::keyring::delete_password(key)
-    }
+/// Schlüssel des OAuth-Refresh-Tokens eines Mailkontos.
+pub fn oauth_key(account_id: &str) -> String {
+    format!("oauth:{account_id}")
 }
 
-/// Nur im Arbeitsspeicher (Tests).
-#[derive(Debug, Default)]
-pub struct MemorySecretStore(Mutex<HashMap<String, String>>);
+/// Schlüssel des SFTP-Passworts eines Backup-Ziels.
+pub fn sftp_key(target_id: &str) -> String {
+    format!("sftp:{target_id}")
+}
 
-impl SecretStore for MemorySecretStore {
-    fn get(&self, key: &str) -> Result<Option<String>> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-            .cloned())
-    }
-    fn set(&self, key: &str, value: &str) -> Result<()> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key.to_string(), value.to_string());
-        Ok(())
-    }
-    fn delete(&self, key: &str) -> Result<()> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(key);
-        Ok(())
-    }
+pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM secrets WHERE key = ?")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+pub async fn set(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO secrets (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                        updated_at = datetime('now','utc')",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Löscht einen Eintrag (fehlender Eintrag ist kein Fehler).
+pub async fn delete(pool: &SqlitePool, key: &str) -> Result<()> {
+    sqlx::query("DELETE FROM secrets WHERE key = ?")
+        .bind(key)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn memory_store_roundtrip() {
-        let s = MemorySecretStore::default();
-        assert_eq!(s.get("a").unwrap(), None);
-        s.set("a", "geheim").unwrap();
-        assert_eq!(s.get("a").unwrap().as_deref(), Some("geheim"));
-        s.delete("a").unwrap();
-        assert_eq!(s.get("a").unwrap(), None);
+    #[tokio::test]
+    async fn roundtrip() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+        assert_eq!(get(&pool, &smtp_key("a")).await.unwrap(), None);
+        set(&pool, &smtp_key("a"), "geheim").await.unwrap();
+        set(&pool, &smtp_key("a"), "neu").await.unwrap();
+        assert_eq!(
+            get(&pool, &smtp_key("a")).await.unwrap().as_deref(),
+            Some("neu")
+        );
+        delete(&pool, &smtp_key("a")).await.unwrap();
+        delete(&pool, &smtp_key("a")).await.unwrap();
+        assert_eq!(get(&pool, &smtp_key("a")).await.unwrap(), None);
+        assert_eq!(sftp_key("t"), "sftp:t");
+        assert_eq!(oauth_key("m"), "oauth:m");
     }
 }

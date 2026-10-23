@@ -55,7 +55,11 @@ fn api_ts_commands() -> BTreeSet<String> {
 #[test]
 fn registry_matches_frontend_api() {
     let mut api = api_ts_commands();
-    assert_eq!(api.len(), 172, "api.ts ruft 172 Commands auf (Plan W5, W7)");
+    assert_eq!(
+        api.len(),
+        171,
+        "api.ts ruft 171 Commands auf (Plan W5, W7, W8)"
+    );
     // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
     for name in [
         "invoices_open_pdf",
@@ -68,6 +72,10 @@ fn registry_matches_frontend_api() {
         "backup_restore_preview",
         "backup_set_target",
         "backup_set_sftp_target",
+        // seit W8 auch aus api.ts (E9, MS-Graph im Server ausgeblendet)
+        "mail_oauth_status",
+        "mail_oauth_connect",
+        "mail_oauth_disconnect",
     ] {
         let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
         assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");

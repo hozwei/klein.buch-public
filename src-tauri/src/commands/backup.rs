@@ -547,7 +547,7 @@ pub async fn backup_target_remove(ctx: &Arc<AppCtx>, args: BackupTargetRemoveArg
         .iter()
         .any(|t| matches!(t.target, backup::target::BackupTarget::Sftp { .. }))
     {
-        backup::sftp::delete_password(&id).ok();
+        crate::secrets::delete(&pool, &crate::secrets::sftp_key(&id)).await?;
     }
     Ok(())
 }
@@ -560,21 +560,17 @@ pub struct BackupTestSftpArgs {
     pub port: u16,
     pub user: String,
     pub remote_dir: String,
+    /// Pflicht: nie ein gespeichertes Passwort an einen frei gewählten Host
+    /// (Plan W8; gespeicherte Ziele testet `backup_test_sftp_saved`).
     pub password: String,
-    /// Gespeichertes Ziel, dessen Passwort bei leerer Eingabe genutzt wird.
-    #[serde(default)]
-    pub target_id: Option<String>,
 }
 
-/// Testet eine SFTP-Verbindung (G1-BKP.3): Handshake + Auth + Schreibrechte.
-/// Liefert den SHA-256-Host-Key-Fingerprint (zum Bestätigen/Pinnen) und ob im
-/// Zielordner geschrieben werden konnte. Schreibt **nichts** in die Konfiguration
-/// und lädt **kein** Backup hoch.
-///
-/// Ist `password` leer, wird ein bereits im Keychain hinterlegtes Passwort
-/// genutzt (Test eines gespeicherten Ziels ohne erneute Eingabe).
+/// Testet eine neue SFTP-Verbindung (G1-BKP.3): Handshake + Auth +
+/// Schreibrechte. Liefert den SHA-256-Host-Key-Fingerprint zum Bestätigen und
+/// merkt ihn 10 min für (Host, Port) — nur dieser lässt sich speichern
+/// (Plan W8). Port-Allowlist und Kontingent wie alle Verbindungstests.
 pub async fn backup_test_sftp(
-    _ctx: &Arc<AppCtx>,
+    ctx: &Arc<AppCtx>,
     args: BackupTestSftpArgs,
 ) -> Result<backup::sftp::SftpProbe> {
     let BackupTestSftpArgs {
@@ -583,36 +579,76 @@ pub async fn backup_test_sftp(
         user,
         remote_dir,
         password,
-        target_id,
     } = args;
-
-    if host.trim().is_empty() || user.trim().is_empty() {
+    let host = host.trim().to_string();
+    if host.is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
         ));
     }
-    if port == 0 {
-        return Err(Error::Backup("Ungültiger SFTP-Port.".into()));
+    if password.is_empty() {
+        return Err(Error::Backup("Bitte das SFTP-Passwort eingeben.".into()));
     }
-    let effective = if password.is_empty() {
-        let id = target_id.unwrap_or_default();
-        backup::sftp::get_password(&id)?.ok_or_else(|| {
-            Error::Backup(
-                "Kein Passwort eingegeben und keines gespeichert — bitte SFTP-Passwort eingeben."
-                    .into(),
-            )
-        })?
-    } else {
-        password
-    };
-    backup::sftp::probe(
-        host.trim(),
+    ctx.net_tests
+        .check_port(crate::nettest::TestKind::Sftp, port)?;
+    ctx.net_tests.admit()?;
+    let probe = backup::sftp::probe(&host, port, user.trim(), &password, remote_dir.trim())
+        .await
+        .map_err(|e| crate::nettest::connect_failed(&host, port, &e))?;
+    ctx.net_tests
+        .remember_probe(&host, port, &probe.fingerprint);
+    Ok(probe)
+}
+
+/// Argumente von [`backup_test_sftp_saved`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupTestSftpSavedArgs {
+    pub id: String,
+}
+
+/// Testet ein gespeichertes SFTP-Ziel mit seinem gespeicherten Passwort und
+/// prüft den gepinnten Host-Fingerprint (Plan W8, nur per ID).
+pub async fn backup_test_sftp_saved(
+    ctx: &Arc<AppCtx>,
+    args: BackupTestSftpSavedArgs,
+) -> Result<backup::sftp::SftpProbe> {
+    let BackupTestSftpSavedArgs { id } = args;
+    let pool = ctx.pool()?;
+    let entry = backup::target::list_targets(&pool, &ctx.paths.backup_targets_dir)
+        .await?
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| Error::Domain(format!("Backup-Ziel nicht gefunden: {id}")))?;
+    let backup::target::BackupTarget::Sftp {
+        host,
         port,
-        user.trim(),
-        &effective,
-        remote_dir.trim(),
-    )
-    .await
+        user,
+        remote_dir,
+        host_fingerprint,
+    } = entry.target
+    else {
+        return Err(Error::Domain("Kein SFTP-Ziel.".into()));
+    };
+    let password = crate::secrets::get(&pool, &crate::secrets::sftp_key(&id))
+        .await?
+        .ok_or_else(|| {
+            Error::Backup("Kein SFTP-Passwort gespeichert — Ziel neu anlegen.".into())
+        })?;
+    ctx.net_tests
+        .check_port(crate::nettest::TestKind::Sftp, port)?;
+    ctx.net_tests.admit()?;
+    let probe = backup::sftp::probe(&host, port, &user, &password, &remote_dir)
+        .await
+        .map_err(|e| crate::nettest::connect_failed(&host, port, &e))?;
+    if host_fingerprint.as_deref() != Some(probe.fingerprint.as_str()) {
+        return Err(Error::Backup(format!(
+            "SFTP-Host-Schlüssel weicht vom gespeicherten Fingerprint ab (erhalten {}) — \
+             möglicher Man-in-the-Middle. Ziel prüfen und neu anlegen.",
+            probe.fingerprint
+        )));
+    }
+    Ok(probe)
 }
 
 /// Argumente von [`backup_set_sftp_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -629,9 +665,8 @@ pub struct BackupSetSftpTargetArgs {
 }
 
 /// Setzt ein SFTP-Backup-Ziel (G1-BKP.3). Speichert Host/Port/User/Ordner +
-/// gepinnten Fingerprint als Ziel und legt das Passwort im OS-Keychain ab
-/// (**nie** in DB/Log/audit). Ist `password` leer, bleibt ein bereits
-/// gespeichertes Passwort erhalten.
+/// gepinnten Fingerprint als Ziel (Desktop-Fassung). Im Server ersetzt durch
+/// [`backup_target_add_sftp`].
 ///
 /// `host_fingerprint` ist Pflicht — er stammt aus [`backup_test_sftp`] und ist
 /// der MITM-Schutz: ohne ihn lehnt der spätere Upload ab.
@@ -658,8 +693,8 @@ pub struct BackupTargetAddSftpArgs {
 }
 
 /// Neues SFTP-Ziel (Plan W7, Re-Auth). `host_fingerprint` ist Pflicht (aus
-/// [`backup_test_sftp`], MITM-Schutz); das Passwort liegt je Ziel im
-/// Schlüsselspeicher, **nie** in DB/Log/Audit.
+/// [`backup_test_sftp`], MITM-Schutz); das Passwort liegt je Ziel in der
+/// verschlüsselten DB (`secrets`), **nie** im Ziel-JSON, Log oder Audit.
 pub async fn backup_target_add_sftp(
     ctx: &Arc<AppCtx>,
     args: BackupTargetAddSftpArgs,
@@ -690,6 +725,22 @@ pub async fn backup_target_add_sftp(
     if password.is_empty() {
         return Err(Error::Backup("Bitte das SFTP-Passwort eingeben.".into()));
     }
+    ctx.net_tests
+        .check_port(crate::nettest::TestKind::Sftp, port)?;
+    // Plan W8: nur der Fingerprint, den die letzte Probe für (Host, Port)
+    // geliefert hat (kein frei eingegebener Pin).
+    if ctx
+        .net_tests
+        .probed_fingerprint(host.trim(), port)
+        .as_deref()
+        != Some(host_fingerprint.trim())
+    {
+        return Err(Error::Backup(
+            "Der Fingerprint stammt nicht aus dem letzten Verbindungstest für diesen Server — \
+             bitte die Verbindung erneut testen."
+                .into(),
+        ));
+    }
     let id = uuid::Uuid::now_v7().to_string();
     let entry = backup::target::TargetEntry {
         id: id.clone(),
@@ -702,11 +753,13 @@ pub async fn backup_target_add_sftp(
             host_fingerprint: Some(host_fingerprint.trim().to_string()),
         },
     };
-    backup::sftp::set_password(&id, &password)?;
+    crate::secrets::set(&pool, &crate::secrets::sftp_key(&id), &password).await?;
     match add_target(&pool, &ctx.paths.backup_targets_dir, entry).await {
         Ok(entry) => Ok(entry),
         Err(e) => {
-            backup::sftp::delete_password(&id).ok();
+            crate::secrets::delete(&pool, &crate::secrets::sftp_key(&id))
+                .await
+                .ok();
             Err(e)
         }
     }

@@ -49,24 +49,24 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      # Seit W5 ohne Tauri: kein WebKitGTK mehr. Gebraucht werden libdbus (bis W8,
-      # secret-service-Zweig von `keyring`) und liblzma (`zip` → `lzma-sys` linkt
-      # die System-Bibliothek, sobald pkg-config sie findet; bisher kam sie über
-      # die WebKit-Pakete mit). Die Ubuntu-Spiegel lieferten im Oktober 2026
+      # Seit W5 ohne Tauri (kein WebKitGTK), seit W8 ohne `keyring` (kein libdbus).
+      # Gebraucht wird nur noch liblzma (`zip` → `lzma-sys` linkt die
+      # System-Bibliothek, sobald pkg-config sie findet; bisher kam sie über die
+      # WebKit-Pakete mit). Die Ubuntu-Spiegel lieferten im Oktober 2026
       # zeitweise nur mit Timeouts: .deb-Pakete im Actions-Cache, Spiegelliste mit
       # Fallback, festes Limit.
       - name: Cache apt-Pakete
         uses: actions/cache@v4
         with:
           path: ~/apt-debs
-          key: apt-debs-${{ runner.os }}-24.04-dbus-lzma-v1
+          key: apt-debs-${{ runner.os }}-24.04-lzma-v1
 
-      - name: System-Deps (libdbus bis W8, liblzma)
+      - name: System-Deps (liblzma)
         timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          if pkg-config --exists dbus-1 liblzma; then echo "libdbus + liblzma vorhanden"; exit 0; fi
+          if pkg-config --exists liblzma; then echo "liblzma vorhanden"; exit 0; fi
           printf '%s\n' \
             http://azure.archive.ubuntu.com/ubuntu \
             http://archive.ubuntu.com/ubuntu \
@@ -77,7 +77,7 @@ jobs:
           sudo -E apt-get $APT_OPTS update
           mkdir -p ~/apt-debs
           sudo cp ~/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          sudo -E apt-get $APT_OPTS install -y --no-install-recommends libdbus-1-dev liblzma-dev pkg-config
+          sudo -E apt-get $APT_OPTS install -y --no-install-recommends liblzma-dev pkg-config
           cp /var/cache/apt/archives/*.deb ~/apt-debs/ 2>/dev/null || true
 
       - name: Setup Rust toolchain

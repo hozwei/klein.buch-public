@@ -58,7 +58,6 @@ struct Env {
 
 async fn setup_env() -> Env {
     std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1");
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");

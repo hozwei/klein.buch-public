@@ -58,7 +58,6 @@ pub fn ctx_for(paths: Paths) -> Arc<AppCtx> {
     Arc::new(AppCtx::new(
         paths,
         Arc::new(klein_buch_lib::notify::InboxOnly),
-        Arc::new(klein_buch_lib::secrets::MemorySecretStore::default()),
         Arc::new(NoDesktop),
         "test",
     ))
@@ -84,6 +83,7 @@ pub fn local_config() -> ServerConfig {
             min_free_bytes: 0,
             ..Default::default()
         },
+        test_ports: None,
     }
 }
 

@@ -216,6 +216,23 @@ Arbeitszweig `phase-w`.
   `KLEIN_BUCH_BACKUP_TARGETS_DIR` (Standard `/backup-targets`),
   `KLEIN_BUCH_MAX_RESTORE_BYTES` (Standard 4 GiB), `KLEIN_BUCH_MIN_FREE_BYTES`
   (Standard 2 GiB).
+- **Zugangsdaten in der verschlüsselten Datenbank (W8):** SMTP- und
+  SFTP-Passwörter liegen in einer eigenen Tabelle der SQLCipher-Datenbank
+  (Migration 0031, Schema 31) statt im Schlüsselbund des Betriebssystems; nie im
+  Migrations-Export, in der DSGVO-Auskunft, in Protokollen oder im Audit. Die
+  Abhängigkeiten `keyring` und `libdbus` entfallen.
+- **Passwort gilt nur für Server, Port und Benutzer (W8):** Ändert sich eins
+  davon, wird das gespeicherte Passwort gelöscht, mit Benutzer ist ein neues
+  Pflicht. Gespeicherte Postfächer und SFTP-Ziele testet „Testen“ in der Liste
+  (nur per ID); Ad-hoc-Tests brauchen das eingegebene Passwort.
+- **Verbindungstests begrenzt (W8):** nur freigegebene Ports (SMTP 25, 465, 587,
+  2525; SFTP 22, 2222; anpassbar über `KLEIN_BUCH_ALLOWED_TEST_PORTS`), höchstens
+  10 Tests je Minute, eine einheitliche Fehlermeldung. Ein SFTP-Ziel übernimmt
+  nur den Host-Fingerprint aus dem letzten Test dieses Servers.
+- **SMTP (W8):** unverschlüsselt nur ohne Benutzer und Passwort; EHLO-Name über
+  `KLEIN_BUCH_SMTP_HELO_NAME`, eigene CA über `KLEIN_BUCH_SMTP_CA_FILE` (PEM-Datei
+  im Volume). Die Microsoft-Anmeldung (Graph) ist im Server ausgeblendet;
+  Microsoft-Konten lassen sich auf SMTP umstellen.
 
 ### Documentation
 

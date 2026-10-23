@@ -28,7 +28,7 @@ use crate::error::{Error, Result};
 
 /// Verbindungsdaten für einen SMTP-Versand. `password` wird **niemals**
 /// geloggt oder persistiert — es kommt aus dem OS-Keychain
-/// ([`crate::mail::keyring`]) und lebt nur für die Dauer des Sendevorgangs.
+/// ([`crate::secrets`], W8) und lebt nur für die Dauer des Sendevorgangs.
 ///
 /// `Debug` ist bewusst manuell implementiert und **redigiert** das Passwort
 /// (Credentials nie in Logs, ADR 0011).
@@ -124,9 +124,49 @@ pub fn build_message(mail: &OutgoingMail) -> Result<Message> {
     }
 }
 
+/// Eigener EHLO-Name (`KLEIN_BUCH_SMTP_HELO_NAME`, Plan W8; Standard: lettre).
+pub const ENV_HELO_NAME: &str = "KLEIN_BUCH_SMTP_HELO_NAME";
+/// Zusätzliche CA (PEM-Datei im Volume, `KLEIN_BUCH_SMTP_CA_FILE`) für eigene
+/// Mailserver; eine Option „Zertifikat ignorieren“ gibt es nicht (Plan W8).
+pub const ENV_CA_FILE: &str = "KLEIN_BUCH_SMTP_CA_FILE";
+
+/// TLS-Parameter mit der zusätzlichen CA aus [`ENV_CA_FILE`] (falls gesetzt).
+fn tls_parameters(host: &str) -> Result<Option<lettre::transport::smtp::client::TlsParameters>> {
+    use lettre::transport::smtp::client::{Certificate, TlsParameters};
+    let Some(path) = std::env::var_os(ENV_CA_FILE).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let pem = std::fs::read(&path).map_err(|e| {
+        Error::Mail(format!(
+            "{ENV_CA_FILE} ({}) nicht lesbar: {e}",
+            std::path::Path::new(&path).display()
+        ))
+    })?;
+    let cert = Certificate::from_pem(&pem)
+        .map_err(|e| Error::Mail(format!("{ENV_CA_FILE}: kein gültiges PEM-Zertifikat: {e}")))?;
+    let params = TlsParameters::builder(host.to_string())
+        .add_root_certificate(cert)
+        .build_rustls()
+        .map_err(|e| Error::Mail(format!("TLS-Einstellungen für {host}: {e}")))?;
+    Ok(Some(params))
+}
+
 /// Baut den async SMTP-Transport nach der TLS-Strategie aus dem Modul-Header.
+/// Klartext (`use_tls = false`) nur ohne Zugangsdaten (Plan W8).
 fn build_transport(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
-    let builder = if !config.use_tls {
+    use lettre::transport::smtp::client::Tls;
+    let credentials = match (config.username.as_ref(), config.password.as_ref()) {
+        (Some(user), Some(pass)) if !user.trim().is_empty() && !pass.is_empty() => {
+            Some(Credentials::new(user.clone(), pass.clone()))
+        }
+        _ => None,
+    };
+    if !config.use_tls && credentials.is_some() {
+        return Err(Error::Mail(
+            "Unverschlüsseltes SMTP mit Zugangsdaten abgelehnt — bitte TLS einschalten.".into(),
+        ));
+    }
+    let mut builder = if !config.use_tls {
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
     } else if config.port == 465 {
         AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
@@ -135,10 +175,26 @@ fn build_transport(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Execu
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
             .map_err(|e| Error::Mail(format!("SMTP-STARTTLS-Setup ({}): {e}", config.host)))?
     };
+    if config.use_tls {
+        if let Some(params) = tls_parameters(&config.host)? {
+            builder = builder.tls(if config.port == 465 {
+                Tls::Wrapper(params)
+            } else {
+                Tls::Required(params)
+            });
+        }
+    }
+    if let Some(name) = std::env::var(ENV_HELO_NAME)
+        .ok()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+    {
+        builder = builder.hello_name(lettre::transport::smtp::extension::ClientId::Domain(name));
+    }
 
     let mut builder = builder.port(config.port);
-    if let (Some(user), Some(pass)) = (config.username.as_ref(), config.password.as_ref()) {
-        builder = builder.credentials(Credentials::new(user.clone(), pass.clone()));
+    if let Some(c) = credentials {
+        builder = builder.credentials(c);
     }
     Ok(builder.build())
 }
@@ -262,5 +318,30 @@ mod tests {
             "anhanglose Mail darf kein Multipart sein"
         );
         assert!(raw.contains("Anbei die Rechnung"), "Body fehlt");
+    }
+
+    /// Plan W8: Klartext nur ohne Zugangsdaten — abgelehnt vor jeder Verbindung.
+    #[tokio::test]
+    async fn plaintext_with_credentials_is_refused() {
+        let cfg = SmtpConfig {
+            host: "mail.example.org".into(),
+            port: 25,
+            use_tls: false,
+            username: Some("kb".into()),
+            password: Some("geheim".into()),
+        };
+        assert!(build_transport(&cfg).is_err());
+        let open = SmtpConfig {
+            username: None,
+            password: None,
+            ..cfg.clone()
+        };
+        assert!(build_transport(&open).is_ok());
+        let tls = SmtpConfig {
+            use_tls: true,
+            port: 587,
+            ..cfg
+        };
+        assert!(build_transport(&tls).is_ok());
     }
 }

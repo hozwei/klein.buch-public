@@ -120,6 +120,8 @@ fn auth_of(name: &str) -> Auth {
         | "backup_target_add_sftp"
         | "backup_target_remove"
         | "backup_test_sftp"
+        | "backup_test_sftp_saved"
+        | "mail_account_test_saved"
         | "backup_restore_apply"
         | "mail_account_create"
         | "mail_account_update"
@@ -296,6 +298,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ),
     ("backup_target_add_sftp", h::backup_target_add_sftp),
     ("backup_target_remove", h::backup_target_remove),
+    ("backup_test_sftp_saved", h::backup_test_sftp_saved),
     ("backup_open_folder", h::backup_open_folder),
     ("backup_reveal_path", h::backup_reveal_path),
     ("backup_list", h::backup_list),
@@ -365,6 +368,7 @@ static ENTRIES: &[(&str, Handler)] = &[
         "mail_account_test_connection",
         h::mail_account_test_connection,
     ),
+    ("mail_account_test_saved", h::mail_account_test_saved),
     ("mail_oauth_status", h::mail_oauth_status),
     ("mail_oauth_connect", h::mail_oauth_connect),
     ("mail_oauth_disconnect", h::mail_oauth_disconnect),
@@ -676,6 +680,24 @@ mod h {
             let args: crate::commands::backup::BackupTargetRemoveArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_target_remove(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_test_sftp_saved(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupTestSftpSavedArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_test_sftp_saved(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn mail_account_test_saved(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailAccountTestSavedArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::mail::mail_account_test_saved(&ctx, args).await?,
             )?)
         })
     }

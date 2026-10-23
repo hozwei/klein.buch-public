@@ -551,6 +551,104 @@ async fn pre_migration_backup_on_unlock() {
     assert_eq!(m.schema_version, old);
 }
 
+/// Plan W7/W8: `.kbk` mit Schema 30 → Restore → beim Entsperren
+/// Pflicht-Backup (Schema 30) → Vorwärtsmigration (0031).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_30_backup_is_restored_and_migrated_forward() {
+    let old = EXPECTED_SCHEMA_VERSION - 1;
+    assert!(old >= MIN_RESTORE_SCHEMA_VERSION);
+    // Instanz A auf den Stand vor der letzten Migration zurücksetzen
+    let a = test_server();
+    let cookie_a = setup(&a).await;
+    {
+        let pool = a.state.ctx.pool().unwrap();
+        let last = klein_buch_lib::db::MIGRATOR.migrations.last().unwrap();
+        assert!(
+            last.description.contains("secrets"),
+            "Test setzt 0031 zurück: {}",
+            last.description
+        );
+        sqlx::query("DROP TABLE secrets")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
+            .bind(last.version)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE app_settings SET value = ? WHERE key = 'schema_version'")
+            .bind(old.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let kbk = backup_bytes(&a, &cookie_a).await;
+    let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
+    assert_eq!(m.schema_version, old, "Backup trägt Schema {old}");
+
+    // Instanz B stellt es wieder her
+    let b = test_server();
+    let cookie_b = setup(&b).await;
+    assert_eq!(reauth(&b, &cookie_b).await.status, StatusCode::OK);
+    let r = restore_upload(&b, &cookie_b, &kbk, PASS).await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    assert_eq!(r.json()["result"]["schemaVersion"], old, "{}", r.text());
+    let b = restart(b).await;
+    let r = login(&b, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'schema_version'"
+        )
+        .await,
+        EXPECTED_SCHEMA_VERSION as i64
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'secrets'"
+        )
+        .await,
+        1,
+        "0031 angewendet"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT db_schema_version FROM backup_history WHERE trigger_reason = 'manual'
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        )
+        .await,
+        old as i64,
+        "Pflicht-Backup mit Schema {old}"
+    );
+    let details: String = {
+        let pool = b.state.ctx.pool().unwrap();
+        sqlx::query_scalar(
+            "SELECT details_json FROM audit_log WHERE action = 'backup.pre_migration'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert!(
+        details.contains(&format!("\"from\":{old}"))
+            && details.contains(&format!("\"to\":{EXPECTED_SCHEMA_VERSION}")),
+        "{details}"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.restore.applied'"
+        )
+        .await,
+        1
+    );
+}
+
 /// Gegenprüfung W7: Backup einer Instanz mit anderem Datenpfad (Archivpfade
 /// passen nicht) wird in Phase A abgelehnt, statt die Instanz nach dem Tausch
 /// dauerhaft zu sperren.

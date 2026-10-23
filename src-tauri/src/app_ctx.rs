@@ -7,7 +7,6 @@ use crate::config::Paths;
 use crate::db::PendingRestoreAudit;
 use crate::error::{Error, Result};
 use crate::notify::Notifier;
-use crate::secrets::SecretStore;
 use sqlx::SqlitePool;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,8 +58,9 @@ pub struct AppCtx {
     pub pending_restore: PendingRestoreAudit,
     /// Benachrichtigungen außerhalb der Inbox (im Server keine).
     pub notifier: Arc<dyn Notifier>,
-    /// Ablage für Zugangsdaten (bis W8 Keychain, danach SQLCipher-Tabelle).
-    pub secrets: Arc<dyn SecretStore>,
+    /// Verbindungstests: Kontingent und SFTP-Probe-Speicher (W8). Zugangsdaten
+    /// selbst liegen in der DB (`crate::secrets`).
+    pub net_tests: crate::nettest::NetTests,
     /// Desktop-Nebenwirkungen (im Server [`NoDesktop`]).
     pub desktop: Arc<dyn DesktopActions>,
     /// Einmal-Guard für den Scheduler (genau ein Start pro Prozess).
@@ -80,7 +80,6 @@ impl AppCtx {
     pub fn new(
         paths: Paths,
         notifier: Arc<dyn Notifier>,
-        secrets: Arc<dyn SecretStore>,
         desktop: Arc<dyn DesktopActions>,
         app_identifier: impl Into<String>,
     ) -> Self {
@@ -92,7 +91,7 @@ impl AppCtx {
             session: BackupSession::default(),
             pending_restore: PendingRestoreAudit::default(),
             notifier,
-            secrets,
+            net_tests: crate::nettest::NetTests::default(),
             desktop,
             scheduler_started: AtomicBool::new(false),
             scheduler_gate: tokio::sync::Mutex::new(false),
@@ -158,7 +157,6 @@ impl AppCtx {
         Arc::new(Self::new(
             paths,
             Arc::new(crate::notify::InboxOnly),
-            Arc::new(crate::secrets::MemorySecretStore::default()),
             Arc::new(NoDesktop),
             "test",
         ))

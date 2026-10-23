@@ -143,19 +143,10 @@ reqwest = { version = "0.12", default-features = false, features = [
 base64 = "0.22"
 url = "2"
 
-# --- OS-Keychain ---
-# keyring 3 hat KEINE Default-Backends — ohne Feature-Flags fällt die Crate
-# auf den In-Memory-Mock-Store zurück, d. h. die SMTP-Passphrase wäre nach
-# App-Neustart weg (Backup-Hardline gebrochen). Wir aktivieren die nativen
-# OS-Stores pro Plattform + secret-service (Linux) mit Rust-Crypto statt
-# openssl (konsistent mit dem rustls-only-Stack, keine System-libssl-Pflicht).
-# Doku: https://docs.rs/keyring/3.6.1/keyring/#credential-store-features
-keyring = { version = "3", default-features = false, features = [
-    "apple-native",
-    "windows-native",
-    "sync-secret-service",
-    "crypto-rust",
-] }
+# --- Zugangsdaten ---
+# Seit Plan W8 in der SQLCipher-DB (Tabelle `secrets`, Migration 0031); die
+# `keyring`-Crate (OS-Schlüsselbund, im Container nicht vorhanden) und damit
+# libdbus entfallen.
 
 # --- SFTP-Backup-Ziel (ADR 0034, Block G1-BKP.3) ---
 # russh = reine-Rust-SSH (RustCrypto), KEIN OpenSSL/libssh → konsistent mit dem

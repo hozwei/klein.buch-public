@@ -82,7 +82,6 @@ async fn setup(unlocked: bool) -> Env {
     let ctx = Arc::new(AppCtx::new(
         paths,
         Arc::new(klein_buch_lib::notify::InboxOnly),
-        Arc::new(klein_buch_lib::secrets::MemorySecretStore::default()),
         desktop.clone(),
         "test",
     ));

@@ -53,11 +53,15 @@ pub async fn create_statements(pool: &SqlitePool) -> Result<Vec<(String, String)
 // Tabelle B beim Insert", was bei großer DB unter Last echte Inkonsistenz
 // erzeugen würde).
 
-/// Listet alle Anwendungstabellen über eine bestehende Verbindung.
+/// Tabellen, die nie in einen Klartext-Export gehören (Plan W8): Zugangsdaten.
+pub const EXCLUDED_TABLES: &[&str] = &["secrets"];
+
+/// Listet alle Anwendungstabellen über eine bestehende Verbindung (ohne
+/// [`EXCLUDED_TABLES`]).
 pub async fn list_tables_in_conn(conn: &mut SqliteConnection) -> Result<Vec<String>> {
     let rows = sqlx::query(
         "SELECT name FROM sqlite_master
-         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'secrets'
          ORDER BY name",
     )
     .fetch_all(&mut *conn)

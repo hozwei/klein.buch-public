@@ -68,15 +68,10 @@ pub fn apply_pending(paths: &Paths) -> Result<bool> {
     fs::create_dir_all(&paths.archive_dir)?;
     fs::create_dir_all(&paths.backups_dir)?;
 
-    // Keychain best-effort (Geräte-Weitergabe): Mail-SMTP/OAuth je Konto +
-    // SFTP-Backup-Passwort. Ein Fehler hier darf den Reset nicht scheitern lassen.
-    for svc in &marker.mail_services {
-        let _ = crate::mail::keyring::delete_password(svc);
-        let _ = crate::mail::keyring::delete_oauth_tokens(svc);
-    }
-    // SFTP-Passwörter liegen seit W7 je Ziel-ID; der Reset ist im
-    // Server-Betrieb abgeschaltet (E7) und entfällt in W11, die Passwörter
-    // wandern in W8 in den SecretStore der Datenbank (mit ihr gelöscht).
+    // Zugangsdaten (SMTP, OAuth, SFTP) liegen seit W8 in der gelöschten
+    // Datenbank; der Reset ist im Server-Betrieb abgeschaltet (E7) und
+    // entfällt in W11.
+    let _ = &marker.mail_services;
 
     tracing::warn!("Factory Reset angewandt — lokale Instanz geleert (Onboarding).");
     Ok(true)

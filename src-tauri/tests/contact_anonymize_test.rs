@@ -20,7 +20,6 @@ use klein_buch_lib::db::MIGRATOR;
 use klein_buch_lib::domain::contact::{ContactInput, ContactType};
 
 async fn setup_pool() -> (SqlitePool, tempfile::TempDir) {
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
     let tmp = tempfile::tempdir().expect("tempdir");
     let db_file = tmp.path().join("test.sqlite");
     let url = format!("sqlite://{}", db_file.to_string_lossy());

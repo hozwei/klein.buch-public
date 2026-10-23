@@ -28,8 +28,6 @@ struct Env {
 }
 
 async fn setup_env() -> Env {
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");
     let archive_dir = data_dir.join("archive");

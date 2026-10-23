@@ -36,6 +36,10 @@ const DROPPED_FROM_FRONTEND: &[&str] = &[
     "backup_restore_preview",
     "backup_set_target",
     "backup_set_sftp_target",
+    // W8: MS-Graph im Server ausgeblendet (E9)
+    "mail_oauth_status",
+    "mail_oauth_connect",
+    "mail_oauth_disconnect",
 ];
 
 /// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,
@@ -73,11 +77,13 @@ const REAUTH: &[&str] = &[
     "backup_target_add_sftp",
     "backup_target_remove",
     "backup_test_sftp",
+    "backup_test_sftp_saved",
     "backup_restore_apply",
     "mail_account_create",
     "mail_account_update",
     "mail_account_delete",
     "mail_account_test_connection",
+    "mail_account_test_saved",
     "mail_send_test",
     "migration_export_run",
     "dsgvo_export",
@@ -152,8 +158,8 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        186,
-        "183 (W4) + 3 Backup-Ziel-Commands (W7)"
+        188,
+        "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8)"
     );
 
     for spec in REGISTRY.iter() {

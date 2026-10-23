@@ -26,6 +26,7 @@ pub mod limits;
 pub mod locks;
 pub mod mail;
 pub mod migration_export;
+pub mod nettest;
 pub mod notify;
 pub mod pdf;
 pub mod scheduler;

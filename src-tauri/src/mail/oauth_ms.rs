@@ -23,7 +23,7 @@
 //! ## Hard-Rule (Backup-Hardline)
 //!
 //! Access- und Refresh-Token werden hier nur für die Dauer eines Vorgangs
-//! gehalten und ausschließlich über [`crate::mail::keyring`] persistiert —
+//! gehalten und ausschließlich über [`crate::secrets`] persistiert —
 //! niemals in DB, Log oder `audit_log`.
 
 use base64::Engine;
