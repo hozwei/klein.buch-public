@@ -48,8 +48,8 @@ pub async fn seller_profile_upsert(
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SellerLogoSetArgs {
-    pub file_bytes: Vec<u8>,
-    pub file_name: String,
+    /// Aus `POST /api/upload/logo` (Plan W7).
+    pub upload_id: String,
 }
 
 /// Logo hochladen: Bytes nach `data/branding/logo.<ext>` schreiben (NICHT
@@ -58,16 +58,22 @@ pub async fn seller_logo_set(
     ctx: &Arc<AppCtx>,
     args: SellerLogoSetArgs,
 ) -> Result<SellerProfileRow> {
-    let SellerLogoSetArgs {
-        file_bytes,
-        file_name,
-    } = args;
+    let SellerLogoSetArgs { upload_id } = args;
     let pool = ctx.pool()?;
 
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::Logo])?;
     let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    let stored = branding::store_logo(&dir, &file_bytes, &file_name)?;
+    // Endung aus der Inhaltsprüfung, nicht aus dem Dateinamen (Plan W7).
+    let stored = branding::store_logo(
+        &dir,
+        &upload.bytes,
+        &format!("logo.{}", upload.file_type.ext()),
+    )?;
     seller_profile::set_logo_filename(&pool, Some(&stored)).await?;
+    ctx.uploads.consume(&upload_id);
     seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Logo-Upload nicht gefunden.".into()))
@@ -156,7 +162,10 @@ pub struct PdfTemplatePreviewArgs {
 /// Rendert eine Beispiel-Rechnung (Dummy-Daten „Max Mustermann“ + Dummy-Logo) mit
 /// der gewählten Vorlage und öffnet sie im Standard-PDF-Viewer. Reine Vorschau:
 /// schreibt nach `data/preview/`, nichts wird validiert oder archiviert. Block 17a.
-pub async fn pdf_template_preview(ctx: &Arc<AppCtx>, args: PdfTemplatePreviewArgs) -> Result<()> {
+pub async fn pdf_template_preview(
+    ctx: &Arc<AppCtx>,
+    args: PdfTemplatePreviewArgs,
+) -> Result<crate::downloads::DownloadTicket> {
     let PdfTemplatePreviewArgs { name } = args;
     let pool = ctx.pool()?;
 
@@ -304,8 +313,8 @@ pub async fn pdf_template_preview(ctx: &Arc<AppCtx>, args: PdfTemplatePreviewArg
     .compile_async()
     .await?;
 
-    let dir = paths.data_dir.join("preview");
-    std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("preview-Ordner: {e}")))?;
+    // Plan W7: Vorschau als Download-Ticket (inline im Browser), keine Datei
+    // mit festem Namen.
     let safe: String = name
         .chars()
         .map(|c| {
@@ -316,11 +325,11 @@ pub async fn pdf_template_preview(ctx: &Arc<AppCtx>, args: PdfTemplatePreviewArg
             }
         })
         .collect();
-    let file = dir.join(format!("vorschau-{safe}.pdf"));
-    std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Vorschau schreiben: {e}")))?;
-
-    ctx.open_path(file.to_string_lossy().to_string())?;
-    Ok(())
+    ctx.downloads.put_bytes(
+        &format!("Vorschau-{safe}.pdf"),
+        &pdf,
+        crate::downloads::DownloadKind::Preview,
+    )
 }
 
 /// Argumente von [`seller_default_template_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -516,8 +525,8 @@ pub async fn travel_compute(
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SellerSignatureSetArgs {
-    pub file_bytes: Vec<u8>,
-    pub file_name: String,
+    /// Aus `POST /api/upload/unterschrift` (Plan W7).
+    pub upload_id: String,
 }
 
 /// Unterschrift-Bild hochladen → `data/branding/signature.<ext>` (NICHT inputs/).
@@ -526,14 +535,20 @@ pub async fn seller_signature_set(
     ctx: &Arc<AppCtx>,
     args: SellerSignatureSetArgs,
 ) -> Result<Option<String>> {
-    let SellerSignatureSetArgs {
-        file_bytes,
-        file_name,
-    } = args;
+    let SellerSignatureSetArgs { upload_id } = args;
 
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::Signature])?;
     let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    let stored = branding::store_signature(&dir, &file_bytes, &file_name)?;
+    // Endung aus der Inhaltsprüfung, nicht aus dem Dateinamen (Plan W7).
+    let stored = branding::store_signature(
+        &dir,
+        &upload.bytes,
+        &format!("signature.{}", upload.file_type.ext()),
+    )?;
+    ctx.uploads.consume(&upload_id);
     branding::read_logo_data_url(&dir, &stored)
 }
 

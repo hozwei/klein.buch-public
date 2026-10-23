@@ -33,8 +33,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-use std::fs;
-
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
 use crate::config::Paths;
@@ -82,12 +80,11 @@ pub struct AcceptArgs {
     pub quote_id: String,
     /// Fachliches Annahmedatum. `None` → heute (Europe/Berlin).
     pub accepted_date: Option<NaiveDate>,
-    /// Roh-Bytes des hochgeladenen, unterschriebenen Vertrags (Upload aus dem
-    /// Frontend, `<input type="file">`). Wird write-once archiviert und als
-    /// Attachment verknüpft. `None` → Annahme ohne Doc.
-    pub signed_contract_bytes: Option<Vec<u8>>,
-    /// Original-Dateiname des Uploads (für Endung/MIME + Anhang-Name).
-    pub signed_contract_filename: Option<String>,
+    /// Unterschriebener Vertrag aus `POST /api/upload/vertrag` (Plan W7).
+    /// Wird write-once archiviert und als Attachment verknüpft. `None` →
+    /// Annahme ohne Doc.
+    #[serde(default)]
+    pub signed_contract_upload_id: Option<String>,
     /// Optionales Label für den Anhang (Default: Original-Dateiname).
     pub attachment_label: Option<String>,
 }
@@ -464,28 +461,32 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {}", args.quote_id)))?;
 
-    // 1. Optionaler Vertrags-Upload (Roh-Bytes) → Archiv + Attachment.
-    if let Some(bytes) = args.signed_contract_bytes.as_deref() {
-        if bytes.is_empty() {
-            return Err(Error::Domain("Vertrags-Datei ist leer".into()));
-        }
-
+    // 1. Optionaler Vertrags-Upload → Archiv + Attachment.
+    let upload_id = args
+        .signed_contract_upload_id
+        .as_deref()
+        .filter(|id| !id.is_empty());
+    let contract = match upload_id {
+        Some(id) => Some(
+            ctx.uploads
+                .read(id, &[crate::uploads::UploadKind::Contract])?,
+        ),
+        None => None,
+    };
+    if let Some(contract) = contract.as_ref() {
         // R2-024 (GJ-Guard): Beilagen werden mit `quote_row.fiscal_year` ins
         // write-once-Archiv abgelegt. Liegt das Angebot in einem festgeschrieben
         // GJ, würden wir nachträglich an dessen Archiv anhängen — also den
         // Lock-Snapshot rückwirkend erweitern. Vor dem Archiv-Schreiben blocken.
         guard::ensure_year_open(pool, quote_row.fiscal_year).await?;
 
-        let original_name = sanitize_filename(
-            args.signed_contract_filename
-                .as_deref()
-                .unwrap_or("vertrag.pdf"),
-        );
+        let original_name = sanitize_filename(&contract.file_name);
         // Eindeutiger Archiv-Dateiname (write-once, UNIQUE-Pfad): mit
         // Angebotsnummer prefixen, damit gleiche Original-Namen kollisionsfrei
         // bleiben.
         let file_name = format!("{}-{}", quote_row.quote_number, original_name);
-        let mime = guess_mime(&original_name);
+        // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+        let mime = contract.mime;
 
         let stored = archive::store_bytes(
             pool,
@@ -494,7 +495,7 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
             ArchiveKind::Attachment,
             &file_name,
             mime,
-            bytes,
+            &contract.bytes,
         )
         .await?;
 
@@ -538,10 +539,13 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
             r#"{{"number":"{}","accepted_at":"{}","with_contract":{}}}"#,
             quote_row.quote_number,
             accepted_iso,
-            args.signed_contract_bytes.is_some()
+            contract.is_some()
         )),
     )
     .await?;
+    if let Some(id) = upload_id {
+        ctx.uploads.consume(id);
+    }
 
     quotes::get_detail(pool, &args.quote_id)
         .await?
@@ -990,10 +994,14 @@ pub struct QuotesOpenBundleArgs {
 }
 
 /// Erzeugt das **zusammengeführte** Bundle-PDF (Angebot + AGB + Datenschutz),
-/// bindet die Legal-Versionen (Pflicht) und öffnet es im Standard-PDF-Viewer —
-/// für „Drucken/Ansehen" als ein Dokument. Das Bundle ist abgeleitet und wird
-/// nicht archiviert (kanonisch sind die Einzel-PDFs + die Bindung).
-pub async fn quotes_open_bundle(ctx: &Arc<AppCtx>, args: QuotesOpenBundleArgs) -> Result<()> {
+/// bindet die Legal-Versionen (Pflicht) und liefert es als Download-Ticket
+/// (Plan W7, inline im Browser) — für „Drucken/Ansehen" als ein Dokument. Das
+/// Bundle ist abgeleitet und wird nicht archiviert (kanonisch sind die
+/// Einzel-PDFs + die Bindung).
+pub async fn quotes_open_bundle(
+    ctx: &Arc<AppCtx>,
+    args: QuotesOpenBundleArgs,
+) -> Result<crate::downloads::DownloadTicket> {
     let QuotesOpenBundleArgs { id } = args;
     let pool = ctx.pool()?;
 
@@ -1009,16 +1017,13 @@ pub async fn quotes_open_bundle(ctx: &Arc<AppCtx>, args: QuotesOpenBundleArgs) -
     let part_count = parts.len();
     let merged = bundle::merge_pdfs(&parts)?;
 
-    let dir = std::env::temp_dir().join("klein-buch");
-    fs::create_dir_all(&dir)?;
     let file_name = format!(
         "{}-Angebot-Bundle.pdf",
         sanitize_filename(&dispatch.quote.quote_number)
     );
-    let path = dir.join(file_name);
-    fs::write(&path, &merged)?;
-
-    ctx.open_path(path.to_string_lossy().to_string())?;
+    let ticket =
+        ctx.downloads
+            .put_bytes(&file_name, &merged, crate::downloads::DownloadKind::Preview)?;
 
     audit_log::append(
         pool,
@@ -1028,7 +1033,7 @@ pub async fn quotes_open_bundle(ctx: &Arc<AppCtx>, args: QuotesOpenBundleArgs) -
         Some(&format!(r#"{{"parts":{part_count}}}"#)),
     )
     .await?;
-    Ok(())
+    Ok(ticket)
 }
 
 /// Argumente von [`quotes_legal_bindings`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -1184,19 +1189,6 @@ fn sanitize_filename(name: &str) -> String {
         "vertrag.pdf".to_string()
     } else {
         trimmed.to_string()
-    }
-}
-
-fn guess_mime(file_name: &str) -> &'static str {
-    let lower = file_name.to_lowercase();
-    if lower.ends_with(".pdf") {
-        "application/pdf"
-    } else if lower.ends_with(".png") {
-        "image/png"
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "image/jpeg"
-    } else {
-        "application/octet-stream"
     }
 }
 

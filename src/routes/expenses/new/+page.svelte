@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
-  import { contactsList, paymentAccountsList, expensesCreate } from "$lib/api";
+  import { contactsList, paymentAccountsList, expensesCreate, uploadFile } from "$lib/api";
   import type { Contact, PaymentAccount, ExpenseCategory, ExpenseInputDto } from "$lib/types";
   import { EXPENSE_CATEGORIES } from "$lib/labels";
   import { euro } from "$lib/format";
@@ -79,13 +79,8 @@
     }
     busy = true;
     try {
-      let receiptBytes: number[] | null = null;
-      let receiptFilename: string | null = null;
-      if (receiptFile) {
-        const buf = await receiptFile.arrayBuffer();
-        receiptBytes = Array.from(new Uint8Array(buf));
-        receiptFilename = receiptFile.name;
-      }
+      // Plan W7: Beleg zuerst hochladen (Größe/Typ prüft der Server).
+      const receiptUploadId = receiptFile ? (await uploadFile("beleg", receiptFile)).uploadId : null;
       const input: ExpenseInputDto = {
         expenseDate,
         paidDate: notPaidYet ? null : paidDate || null,
@@ -105,8 +100,7 @@
       const detail = await expensesCreate({
         input,
         fiscalYear: null, // Backend leitet aus dem Beleg-Datum ab
-        receiptBytes,
-        receiptFilename,
+        receiptUploadId,
       });
       flash("Kosten erfasst: " + detail.expense.expenseNumber);
       await goto(`/expenses/${detail.expense.id}`);

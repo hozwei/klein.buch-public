@@ -6,7 +6,8 @@
     legalDocumentsUpload,
     legalDocumentsActivate,
     legalDocumentsDeactivate,
-    attachmentsOpen,
+    saveArchiveFile,
+    uploadFile as sendUpload,
   } from "$lib/api";
   import type { LegalDocument } from "$lib/types";
   import { date } from "$lib/format";
@@ -57,14 +58,8 @@
     }
     busy = true;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      await legalDocumentsUpload(
-        docType,
-        uploadTitle[docType].trim() || null,
-        bytes,
-        file.name,
-      );
+      const { uploadId } = await sendUpload("rechtsdokument", file);
+      await legalDocumentsUpload(docType, uploadTitle[docType].trim() || null, uploadId);
       uploadFile[docType] = null;
       uploadTitle[docType] = "";
       flash("Version hochgeladen. Zum Verwenden noch aktivieren.");
@@ -102,12 +97,8 @@
     }
   }
 
-  async function open(archiveEntryId: string) {
-    try {
-      await attachmentsOpen(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  function open(archiveEntryId: string) {
+    saveArchiveFile(archiveEntryId);
   }
 
   function fmtBytes(n: number): string {
@@ -192,7 +183,7 @@
                   {#if d.isActive === 1}<span class="badge ok">aktiv</span>{:else}<span class="badge muted-badge">inaktiv</span>{/if}
                 </td>
                 <td class="row-actions">
-                  <button class="btn-secondary btn-sm" onclick={() => open(d.archiveEntryId)}>Öffnen</button>
+                  <button class="btn-secondary btn-sm" onclick={() => open(d.archiveEntryId)}>Herunterladen</button>
                   {#if d.isActive === 1}
                     <button class="btn-secondary btn-sm" onclick={() => deactivate(d.id)} disabled={busy}>Deaktivieren</button>
                   {:else}

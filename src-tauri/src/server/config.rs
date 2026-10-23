@@ -37,6 +37,8 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub startup: StartupOptions,
     pub policy: HttpPolicy,
+    /// Upload-Grenzen (`KLEIN_BUCH_MIN_FREE_BYTES`, `KLEIN_BUCH_MAX_RESTORE_BYTES`, W7).
+    pub uploads: crate::uploads::UploadLimits,
 }
 
 /// Adresse aus `KLEIN_BUCH_LISTEN` (Standard [`DEFAULT_LISTEN`]).
@@ -78,6 +80,7 @@ impl ServerConfig {
             None => Vec::new(),
         };
         let insecure_http = get(ENV_INSECURE_HTTP).is_some_and(|v| v == "1");
+        let uploads = crate::uploads::UploadLimits::from_env_with(&get)?;
         Ok(Self {
             listen,
             startup: StartupOptions {
@@ -89,6 +92,7 @@ impl ServerConfig {
                 trusted_proxies,
                 insecure_http,
             },
+            uploads,
         })
     }
 }

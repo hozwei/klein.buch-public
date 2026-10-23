@@ -8,6 +8,7 @@
     paymentAccountsList,
     expensesParseEinvoice,
     expensesCreateFromEinvoice,
+    uploadFile,
   } from "$lib/api";
   import type {
     Contact,
@@ -31,8 +32,8 @@
 
   // Datei + Parse-Ergebnis.
   let file = $state<File | null>(null);
-  let originalBytes = $state<number[]>([]);
-  let originalFileName = $state("");
+  // Plan W7: Upload des Originals aus Schritt 1, in Schritt 2 archiviert.
+  let uploadId = $state("");
   let sourceFormat = $state("");
   let validation = $state<ValidationSummary | null>(null);
   let parsed = $state<EInvoiceParseResult["parsed"] | null>(null);
@@ -76,10 +77,8 @@
     }
     busy = true;
     try {
-      const buf = await file.arrayBuffer();
-      originalBytes = Array.from(new Uint8Array(buf));
-      originalFileName = file.name;
-      const res: EInvoiceParseResult = await expensesParseEinvoice(originalBytes, file.name);
+      uploadId = (await uploadFile("erechnung", file)).uploadId;
+      const res: EInvoiceParseResult = await expensesParseEinvoice(uploadId);
 
       parsed = res.parsed;
       sourceFormat = res.sourceFormat;
@@ -159,8 +158,7 @@
       const detail = await expensesCreateFromEinvoice({
         input,
         fiscalYear: null,
-        originalBytes,
-        originalFileName,
+        uploadId,
         sourceFormat,
         validation,
       });
@@ -176,7 +174,7 @@
   function reset() {
     phase = "select";
     file = null;
-    originalBytes = [];
+    uploadId = "";
     parsed = null;
     validation = null;
   }

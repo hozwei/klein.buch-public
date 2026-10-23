@@ -273,8 +273,7 @@ async fn expense_fiscal_year_from_expense_date() {
         serde_json::from_value(json!({
             "input": expense_input("2027-01-01"),
             "fiscalYear": fy,
-            "receiptBytes": null,
-            "receiptFilename": null
+            "receiptUploadId": null
         }))
         .unwrap()
     };
@@ -294,15 +293,23 @@ async fn expense_from_einvoice_fiscal_year_from_expense_date() {
     let env = setup().await;
     let _clock = silvester_late_evening_utc();
     let args = |fy: Option<i64>| -> expenses::EInvoiceCreateArgs {
-        serde_json::from_value(json!({
+        let mut a: expenses::EInvoiceCreateArgs = serde_json::from_value(json!({
             "input": expense_input("2027-01-01"),
             "fiscalYear": fy,
-            "originalBytes": b"<Invoice/>".to_vec(),
-            "originalFileName": "eingang.xml",
+            "uploadId": "",
             "sourceFormat": "xrechnung-ubl",
             "validation": null
         }))
-        .unwrap()
+        .unwrap();
+        a.original = Some(
+            klein_buch_lib::uploads::UploadedFile::from_bytes(
+                klein_buch_lib::uploads::UploadKind::EInvoice,
+                "eingang.xml",
+                b"<Invoice/>".to_vec(),
+            )
+            .unwrap(),
+        );
+        a
     };
     let err =
         expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(Some(2026)))
@@ -332,8 +339,7 @@ async fn private_movement_fiscal_year_from_movement_date() {
                 "notes": null
             },
             "fiscalYear": fy,
-            "receiptBytes": null,
-            "receiptFilename": null
+            "receiptUploadId": null
         }))
         .unwrap()
     };

@@ -6,92 +6,10 @@
 mod server_support;
 
 use axum::http::StatusCode;
-use klein_buch_lib::commands::invoices as inv_cmd;
-use klein_buch_lib::db::repo::{contacts, seller_profile};
-use klein_buch_lib::domain::contact::{ContactInput, ContactType};
-use klein_buch_lib::domain::invoice::{InvoiceDirection, InvoiceInput, InvoiceItemInput};
 use klein_buch_lib::error::Error;
 use klein_buch_lib::server::errors::ApiError;
 use server_support::*;
 use tower::ServiceExt as _;
-
-/// Verkäuferprofil, Kunde und ein Rechnungsentwurf (direkt über die DB).
-async fn draft_invoice(srv: &TestServer) -> String {
-    let pool = srv.state.ctx.pool().unwrap();
-    seller_profile::upsert(
-        &pool,
-        &seller_profile::SellerProfileInput {
-            name: "Beispiel IT-Service".into(),
-            legal_form: None,
-            street: "Beispielweg 1".into(),
-            postal_code: "12345".into(),
-            city: "Musterstadt".into(),
-            country_code: "DE".into(),
-            tax_number: Some("123/456/78901".into()),
-            vat_id: None,
-            email: "kontakt@example.org".into(),
-            phone: Some("+49 000 000000".into()),
-            iban: None,
-            bic: None,
-            logo_filename: None,
-            is_kleinunternehmer: true,
-            default_pdf_template: Some("default".into()),
-            default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: None,
-        },
-    )
-    .await
-    .unwrap();
-    let contact_id = contacts::create(
-        &pool,
-        &ContactInput {
-            contact_type: ContactType::Customer,
-            name: "Kunde GmbH".into(),
-            legal_form: Some("GmbH".into()),
-            street: "Hauptstr. 7".into(),
-            postal_code: "12345".into(),
-            city: "Musterstadt".into(),
-            country_code: "DE".into(),
-            email: Some("kunde@example.org".into()),
-            accepts_einvoice: true,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap()
-    .id;
-    let today = klein_buch_lib::clock::today_berlin();
-    let input = InvoiceInput {
-        direction: InvoiceDirection::Issued,
-        invoice_date: today,
-        delivery_date: Some(today),
-        due_date: None,
-        currency_code: "EUR".into(),
-        items: vec![InvoiceItemInput {
-            position: 1,
-            description: "Beratung".into(),
-            quantity: 2.0,
-            unit_code: "HUR".into(),
-            unit_price_cents: 30_000,
-            tax_rate_percent: 0.0,
-            tax_category_code: "E".into(),
-            description_title: None,
-            description_markup: None,
-            source_package_id: None,
-            source_package_revision: None,
-        }],
-        notes: None,
-        payment_note: None,
-        pdf_template: "default".into(),
-        is_storno_for: None,
-        cancel_reason: None,
-    };
-    inv_cmd::create_invoice_draft_from_input(&pool, &contact_id, None, &input, None)
-        .await
-        .unwrap()
-        .invoice
-        .id
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn aborted_lock_request_finishes_and_replays() {

@@ -14,8 +14,6 @@
     backupTestSftp,
     backupSetSftpTarget,
     backupList,
-    backupOpenFolder,
-    backupRevealPath,
     backupRestorePreview,
     backupRestoreApply,
     type BackupSettings,
@@ -101,24 +99,6 @@
   // Nur lokale Pfade kann der Restore-Assistent direkt lesen (SFTP erst laden).
   function isLocalPath(targetPath: string): boolean {
     return !targetPath.startsWith("sftp://");
-  }
-
-  // Lokalen Ordner im Explorer/Finder öffnen (Floor / Off-Site-Verzeichnis).
-  async function openFolder(path: string) {
-    try {
-      await backupOpenFolder(path);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-
-  // Eine Backup-Datei im enthaltenden Ordner anzeigen (Verlaufs-Zeile).
-  async function revealBackup(path: string) {
-    try {
-      await backupRevealPath(path);
-    } catch (e) {
-      flash(String(e), "error");
-    }
   }
 
   async function saveTarget() {
@@ -325,7 +305,6 @@
     </p>
     <div class="pathline">
       <code class="path">{settings.floorPath}</code>
-      <button class="link" onclick={() => openFolder(settings!.floorPath)}>Ordner öffnen</button>
     </div>
     <p class="muted">
       Zusätzlich kann jede Sicherung in einen <strong>zweiten Ordner</strong>
@@ -351,12 +330,6 @@
         placeholder={settings.defaultSuggestion}
       />
       <button onclick={browseFolder} disabled={busy}>Durchsuchen…</button>
-      <button
-        onclick={() => openFolder(targetInput.trim())}
-        disabled={busy || !targetInput.trim()}
-      >
-        Ordner öffnen
-      </button>
       <button class="primary" onclick={saveTarget} disabled={busy}>Speichern</button>
     </div>
     <p class="hint">Vorschlag: {settings.defaultSuggestion}</p>
@@ -483,7 +456,6 @@
               <td class="actions">
                 {#if isLocalPath(item.targetPath)}
                   <button class="link" onclick={() => pickForRestore(item)}>Auswählen ↓</button>
-                  <button class="link" onclick={() => revealBackup(item.targetPath)}>Ordner öffnen</button>
                 {:else}
                   <span class="hint" title="SFTP-Backup erst herunterladen, dann unten den Pfad einfügen.">erst laden</span>
                 {/if}
@@ -593,9 +565,6 @@
   }
   .actions {
     white-space: nowrap;
-  }
-  .actions button.link + button.link {
-    margin-left: 0.6rem;
   }
   .row {
     display: flex;

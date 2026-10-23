@@ -78,6 +78,12 @@ pub fn local_config() -> ServerConfig {
             trusted_proxies: Vec::new(),
             insecure_http: true,
         },
+        // /tmp der Testumgebung ist klein; die Platzprüfung testet
+        // server_uploads_test ausdrücklich.
+        uploads: klein_buch_lib::uploads::UploadLimits {
+            min_free_bytes: 0,
+            ..Default::default()
+        },
     }
 }
 
@@ -161,6 +167,68 @@ pub fn get(uri: &str, cookie: Option<&str>) -> Request<Body> {
         b = b.header(header::COOKIE, format!("__Host-kb_session={c}"));
     }
     b.body(Body::empty()).unwrap()
+}
+
+/// Multipart-Upload (`POST /api/upload/{art}`, Feld `file`).
+pub fn upload_request(
+    art: &str,
+    cookie: Option<&str>,
+    file_name: &str,
+    bytes: &[u8],
+) -> Request<Body> {
+    let boundary = "kb-test-boundary-7f3a";
+    let mut body = Vec::with_capacity(bytes.len() + 256);
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+             filename=\"{file_name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/upload/{art}"))
+        .header(header::HOST, HOST)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::CONTENT_LENGTH, body.len())
+        .header("x-kleinbuch-request", "1");
+    if let Some(c) = cookie {
+        b = b.header(header::COOKIE, format!("__Host-kb_session={c}"));
+    }
+    b.body(Body::from(body)).unwrap()
+}
+
+/// Lädt eine Datei hoch und liefert die Antwort.
+pub async fn upload(
+    srv: &TestServer,
+    cookie: &str,
+    art: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Reply {
+    send(
+        &srv.app,
+        upload_request(art, Some(cookie), file_name, bytes),
+    )
+    .await
+}
+
+/// Lädt hoch und liefert die `uploadId` (Status 200 erwartet).
+pub async fn upload_id(
+    srv: &TestServer,
+    cookie: &str,
+    art: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> String {
+    let r = upload(srv, cookie, art, file_name, bytes).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    r.json()["uploadId"].as_str().unwrap().to_string()
 }
 
 /// Sitzungs-Cookie aus `Set-Cookie`.
@@ -311,4 +379,88 @@ pub async fn wait_job(app: &Router, cookie: &str, id: &str) -> Reply {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     panic!("Job {id} nicht fertig");
+}
+
+/// Verkäuferprofil, Kunde und ein Rechnungsentwurf (direkt über die DB).
+pub async fn draft_invoice(srv: &TestServer) -> String {
+    let pool = srv.state.ctx.pool().unwrap();
+    klein_buch_lib::db::repo::seller_profile::upsert(
+        &pool,
+        &klein_buch_lib::db::repo::seller_profile::SellerProfileInput {
+            name: "Beispiel IT-Service".into(),
+            legal_form: None,
+            street: "Beispielweg 1".into(),
+            postal_code: "12345".into(),
+            city: "Musterstadt".into(),
+            country_code: "DE".into(),
+            tax_number: Some("123/456/78901".into()),
+            vat_id: None,
+            email: "kontakt@example.org".into(),
+            phone: Some("+49 000 000000".into()),
+            iban: None,
+            bic: None,
+            logo_filename: None,
+            is_kleinunternehmer: true,
+            default_pdf_template: Some("default".into()),
+            default_currency: Some("EUR".into()),
+            confirm_waive_paragraph_19: None,
+        },
+    )
+    .await
+    .unwrap();
+    let contact_id = klein_buch_lib::db::repo::contacts::create(
+        &pool,
+        &klein_buch_lib::domain::contact::ContactInput {
+            contact_type: klein_buch_lib::domain::contact::ContactType::Customer,
+            name: "Kunde GmbH".into(),
+            legal_form: Some("GmbH".into()),
+            street: "Hauptstr. 7".into(),
+            postal_code: "12345".into(),
+            city: "Musterstadt".into(),
+            country_code: "DE".into(),
+            email: Some("kunde@example.org".into()),
+            accepts_einvoice: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    let today = klein_buch_lib::clock::today_berlin();
+    let input = klein_buch_lib::domain::invoice::InvoiceInput {
+        direction: klein_buch_lib::domain::invoice::InvoiceDirection::Issued,
+        invoice_date: today,
+        delivery_date: Some(today),
+        due_date: None,
+        currency_code: "EUR".into(),
+        items: vec![klein_buch_lib::domain::invoice::InvoiceItemInput {
+            position: 1,
+            description: "Beratung".into(),
+            quantity: 2.0,
+            unit_code: "HUR".into(),
+            unit_price_cents: 30_000,
+            tax_rate_percent: 0.0,
+            tax_category_code: "E".into(),
+            description_title: None,
+            description_markup: None,
+            source_package_id: None,
+            source_package_revision: None,
+        }],
+        notes: None,
+        payment_note: None,
+        pdf_template: "default".into(),
+        is_storno_for: None,
+        cancel_reason: None,
+    };
+    klein_buch_lib::commands::invoices::create_invoice_draft_from_input(
+        &pool,
+        &contact_id,
+        None,
+        &input,
+        None,
+    )
+    .await
+    .unwrap()
+    .invoice
+    .id
 }

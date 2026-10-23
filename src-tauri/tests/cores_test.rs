@@ -254,7 +254,7 @@ async fn cores_report_locked_without_pool() {
 }
 
 /// R3-004: Bei §19 lehnt die Vorschau eine Vorlage ohne Klausel-Marker ab und
-/// rendert eine korrekte Vorlage (Datei wird zum Öffnen übergeben).
+/// rendert eine korrekte Vorlage (seit W7 als Download-Ticket, kein Öffnen).
 #[tokio::test]
 async fn template_preview_enforces_paragraph_19_clause() {
     let env = setup(true).await;
@@ -267,9 +267,9 @@ async fn template_preview_enforces_paragraph_19_clause() {
     .await
     .unwrap_err();
     assert!(err.to_string().contains("nicht §19-kompatibel"), "{err}");
-    assert!(env.desktop.0.lock().unwrap().is_empty(), "nichts geöffnet");
+    assert!(env.ctx.downloads.is_empty(), "keine Vorschau");
 
-    settings::pdf_template_preview(
+    let ticket = settings::pdf_template_preview(
         &env.ctx,
         settings::PdfTemplatePreviewArgs {
             name: "default".into(),
@@ -277,10 +277,13 @@ async fn template_preview_enforces_paragraph_19_clause() {
     )
     .await
     .unwrap();
-    let calls = env.desktop.0.lock().unwrap().clone();
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    let file = calls[0].strip_prefix("open:").unwrap();
-    assert!(std::fs::read(file).unwrap().starts_with(b"%PDF"));
+    assert!(
+        env.desktop.0.lock().unwrap().is_empty(),
+        "kein Desktop-Öffner"
+    );
+    assert!(ticket.file_name.ends_with(".pdf"));
+    let entry = env.ctx.downloads.take(&ticket.download_id).unwrap();
+    assert!(std::fs::read(&entry.path).unwrap().starts_with(b"%PDF"));
 }
 
 /// R3-006: Eine XRechnung in ISO-8859-1 („Müller“ als 0xFC) wird mit klarer
@@ -291,15 +294,21 @@ async fn einvoice_parse_rejects_non_utf8_xml() {
     let mut bytes = b"<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><Invoice><Name>M".to_vec();
     bytes.push(0xFC);
     bytes.extend_from_slice(b"ller</Name></Invoice>");
-    let err = expenses::expenses_parse_einvoice(
-        &env.ctx,
-        expenses::ExpensesParseEinvoiceArgs {
-            file_bytes: bytes,
-            file_name: "eingang.xml".into(),
-        },
-    )
-    .await
-    .unwrap_err();
+    // Seit W7 lehnt schon der Upload (Art „erechnung“) die Datei ab.
+    let err = env
+        .ctx
+        .uploads
+        .put_bytes(
+            klein_buch_lib::uploads::UploadKind::EInvoice,
+            "eingang.xml",
+            &bytes,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("nicht UTF-8-codiert"), "{err}");
+    // Der Kern selbst (Ablage-Ordner) prüft weiterhin.
+    let err = expenses::parse_einvoice_with_paths(&env.ctx.paths, bytes, "eingang.xml".into())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("nicht UTF-8-codiert"), "{err}");
 }
 

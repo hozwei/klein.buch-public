@@ -1,5 +1,6 @@
 <script lang="ts">
   // Block P2b — Neues Paket anlegen (= erste Revision).
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import PageBar from "$lib/PageBar.svelte";
@@ -11,6 +12,7 @@
     packageCategoriesList,
     packagesCreate,
     packagePreview,
+    downloadUrl,
     sellerProfileGet,
   } from "$lib/api";
   import type { PackageCategory } from "$lib/types";
@@ -87,7 +89,8 @@
     }
     previewing = true;
     try {
-      await packagePreview(title.trim(), body, cents());
+      const ticket = await packagePreview(title.trim(), body, cents());
+      openPdfPreview(downloadUrl(ticket), "Paket-Vorschau", ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {

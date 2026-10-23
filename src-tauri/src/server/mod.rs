@@ -22,6 +22,7 @@ pub mod auth;
 pub mod config;
 pub mod dispatch;
 pub mod errors;
+pub mod files;
 pub mod headers;
 pub mod health;
 pub mod http;
@@ -36,6 +37,7 @@ pub mod session;
 pub mod startup;
 pub mod state;
 pub mod totp;
+pub mod uploads;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -74,10 +76,21 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/public/info", get(public_info))
         .fallback(errors::not_found)
         .route_layer(middleware::from_fn(limits::request_timeout));
+    // Uploads ohne Gesamt-Timeout und ohne axum-Körperlimit: Größe je Art und
+    // Leerlauf-Timeout je Datenblock prüft der Handler (Plan W7).
+    let upload = Router::new()
+        .route(
+            "/api/upload/{art}",
+            post(uploads::upload).fallback(errors::not_found),
+        )
+        .layer(axum::extract::DefaultBodyLimit::disable());
     Router::new()
+        .merge(upload)
         .nest("/api", api)
         .route("/healthz", get(health::healthz))
-        // Archiv-Download folgt in W7; bis dahin kein SPA-Fallback unter /files.
+        .route("/files/download/{id}", get(files::download))
+        .route("/files/archive/{id}", get(files::archive))
+        // sonst kein SPA-Fallback unter /files
         .route("/files/{*rest}", any(errors::not_found))
         .fallback_service(headers::spa_service(&state.ctx.paths.web_dir))
         .layer(middleware::from_fn_with_state(
@@ -217,6 +230,7 @@ pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<Serve
              HTTP — nur für Tests und CI, nie im Betrieb"
         );
     }
+    ctx.uploads.set_limits(cfg.uploads);
     let state = ServerState::new(ctx, csp, Some(lock), cfg.policy.clone(), ratelimit);
     if state.needs_setup_token() {
         state.ensure_setup_token();

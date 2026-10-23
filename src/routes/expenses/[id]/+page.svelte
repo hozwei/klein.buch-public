@@ -8,8 +8,7 @@
     expensesSetPayment,
     expensesReceiptXmlText,
     paymentAccountsList,
-    attachmentsOpen,
-    attachmentsReveal,
+    saveArchiveFile,
   } from "$lib/api";
   import type { ExpenseDetail, AttachmentView, PaymentAccount } from "$lib/types";
   import { euro, date } from "$lib/format";
@@ -164,19 +163,9 @@
     if (detail) detail.attachments = list;
   }
 
-  async function openReceipt(archiveId: string) {
-    try {
-      await attachmentsOpen(archiveId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-  async function revealReceipt(archiveId: string) {
-    try {
-      await attachmentsReveal(archiveId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  // Plan W7: Beleg-Original (Fremddatei) als Download, hash-geprüft.
+  function openReceipt(archiveId: string) {
+    saveArchiveFile(archiveId);
   }
 </script>
 
@@ -272,8 +261,7 @@
     <h2>Beleg</h2>
     {#if e.receiptArchiveId}
       <div class="row">
-        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg öffnen</button>
-        <button class="btn-secondary btn-sm" onclick={() => revealReceipt(e.receiptArchiveId!)}>Im Ordner zeigen</button>
+        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
       </div>
     {:else}
       <p class="muted">Kein primärer Beleg hinterlegt.</p>

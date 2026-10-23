@@ -33,7 +33,11 @@ use crate::pdf::{templates, typst_render};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsgvoExportResult {
+    /// Serverpfad (intern, nie an den Browser — Plan W7).
+    #[serde(skip_serializing)]
     pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (vom Command gesetzt).
+    pub download: Option<crate::downloads::DownloadTicket>,
     pub file_name: String,
     pub invoice_count: usize,
     pub quote_count: usize,
@@ -198,6 +202,7 @@ pub async fn export_core(
 
     Ok(DsgvoExportResult {
         zip_path: zip_path.to_string_lossy().to_string(),
+        download: None,
         file_name,
         invoice_count: report.invoices.len(),
         quote_count: report.quotes.len(),
@@ -226,9 +231,16 @@ pub async fn dsgvo_export(ctx: &Arc<AppCtx>, args: DsgvoExportArgs) -> Result<Ds
     let generated_at = now.format("%Y-%m-%d %H:%M").to_string();
     let file_date = now.format("%Y-%m-%d").to_string();
 
-    let res = export_core(&pool, &paths, &contact_id, &generated_at, &file_date).await?;
+    let mut res = export_core(&pool, &paths, &contact_id, &generated_at, &file_date).await?;
 
-    ctx.reveal(&res.zip_path)?;
+    // Plan W7: als Download ausliefern (kein Öffnen im Dateimanager).
+    let (download_id, target) = ctx.downloads.prepare(&res.file_name)?;
+    std::fs::rename(&res.zip_path, &target)?;
+    res.download = Some(ctx.downloads.register(
+        download_id,
+        &target,
+        crate::downloads::DownloadKind::Export,
+    )?);
     Ok(res)
 }
 

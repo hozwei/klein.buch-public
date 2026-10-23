@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -6,8 +7,8 @@
     invoicesGet,
     invoicesValidateDraft,
     invoicesLockAndIssue,
-    invoicesOpenPdf,
-    invoicesRevealPdf,
+    archiveUrl,
+    saveArchiveFile,
     emailLogFor,
   } from "$lib/api";
   import type { InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "$lib/types";
@@ -67,22 +68,16 @@
     }
   }
 
-  async function openPdf() {
-    if (!detail) return;
-    try {
-      await invoicesOpenPdf(detail.invoice.id);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  // Plan W7: das archivierte PDF kommt hash-geprüft über `/files/archive/{id}`.
+  function openPdf() {
+    const id = detail?.invoice.pdfArchiveId;
+    if (!detail || !id) return;
+    openPdfPreview(archiveUrl(id), `Rechnung ${detail.invoice.invoiceNumber}`, "");
   }
 
-  async function revealPdf() {
-    if (!detail) return;
-    try {
-      await invoicesRevealPdf(detail.invoice.id);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  function downloadPdf() {
+    const id = detail?.invoice.pdfArchiveId;
+    if (id) saveArchiveFile(id);
   }
 
   async function lockAndIssue() {
@@ -150,7 +145,7 @@
         {/if}
         {#if detail.invoice.pdfArchiveId}
           <button class="btn-secondary" onclick={openPdf}>PDF öffnen</button>
-          <button class="btn-secondary" onclick={revealPdf}>Im Ordner zeigen</button>
+          <button class="btn-secondary" onclick={downloadPdf}>PDF herunterladen</button>
           {#if detail.invoice.status !== "canceled"}
             <a class="btn-secondary" href={`/invoices/${detail.invoice.id}/send`}>Senden</a>
           {/if}

@@ -82,20 +82,12 @@ pub struct CommandSpec {
 /// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
 pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
 
-/// Übergangs-Limit für Commands, die Dateien noch als JSON-Zahlenfeld
-/// übertragen (bis W7 auf `POST /api/upload/{art}` umstellt; ein Byte wird im
-/// JSON zu bis zu 4 Zeichen).
-pub const LEGACY_UPLOAD_BODY_LIMIT: usize = 32 * 1024 * 1024;
-
 /// Weg im Server (Plan W5.2).
 fn route_of(name: &str) -> Route {
     match name {
         "backup_needs_onboarding" | "backup_is_unlocked" => Route::Replaced("GET /api/auth/status"),
         "backup_setup_passphrase" => Route::Replaced("POST /api/auth/setup"),
         "backup_unlock" => Route::Replaced("POST /api/auth/login"),
-        "expenses_parse_einvoice" | "seller_signature_set" => {
-            Route::Replaced("POST /api/upload/{art} (W7)")
-        }
         "invoices_open_pdf" | "attachments_open" => Route::Replaced("GET /files/archive/{id} (W7)"),
         "backup_restore_preview"
         | "backup_open_folder"
@@ -219,17 +211,9 @@ fn kind_of(name: &str) -> Kind {
     }
 }
 
-fn body_limit_of(name: &str) -> usize {
-    match name {
-        "attachments_add"
-        | "expenses_create"
-        | "private_movements_create"
-        | "quotes_accept"
-        | "legal_documents_upload"
-        | "seller_logo_set"
-        | "expenses_create_from_einvoice" => LEGACY_UPLOAD_BODY_LIMIT,
-        _ => DEFAULT_BODY_LIMIT,
-    }
+fn body_limit_of(_name: &str) -> usize {
+    // Seit W7 keine Bytes mehr im JSON (Uploads über POST /api/upload/{art}).
+    DEFAULT_BODY_LIMIT
 }
 
 impl CommandSpec {

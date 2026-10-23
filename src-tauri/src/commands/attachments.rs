@@ -39,8 +39,8 @@ const VALID_PARENT_TYPES: &[&str] = &[
 pub struct AddAttachmentArgs {
     pub parent_type: String,
     pub parent_id: String,
-    pub file_bytes: Vec<u8>,
-    pub file_name: String,
+    /// Aus `POST /api/upload/anhang` (Plan W7).
+    pub upload_id: String,
     pub label: Option<String>,
 }
 
@@ -136,15 +136,16 @@ pub async fn attachments_add(
             args.parent_type
         )));
     }
-    if args.file_bytes.is_empty() {
-        return Err(Error::Domain("Datei ist leer.".into()));
-    }
+    let upload = ctx
+        .uploads
+        .read(&args.upload_id, &[crate::uploads::UploadKind::Attachment])?;
 
     let paths = ctx.paths.clone();
-    let sanitized = sanitize_filename(&args.file_name);
+    let sanitized = sanitize_filename(&upload.file_name);
     let token = &uuid::Uuid::now_v7().to_string()[..8];
     let archive_name = format!("{}-{token}-{sanitized}", args.parent_type);
-    let mime = guess_mime(&sanitized);
+    // Typ aus der Inhaltsprüfung des Uploads, nicht aus der Endung (Plan W7).
+    let mime = upload.mime;
     let fiscal_year = crate::clock::today_berlin().year();
 
     let stored = archive::store_bytes(
@@ -154,9 +155,10 @@ pub async fn attachments_add(
         ArchiveKind::Attachment,
         &archive_name,
         mime,
-        &args.file_bytes,
+        &upload.bytes,
     )
     .await?;
+    ctx.uploads.consume(&args.upload_id);
 
     let label = args
         .label
@@ -215,24 +217,6 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     }
 }
 
-/// Grobe MIME-Erkennung anhand der Dateiendung — für Belege (PDF/Bild/XML).
-pub(crate) fn guess_mime(name: &str) -> &'static str {
-    let lower = name.to_ascii_lowercase();
-    let ext = lower.rsplit('.').next().unwrap_or("");
-    match ext {
-        "pdf" => "application/pdf",
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "tif" | "tiff" => "image/tiff",
-        "xml" => "application/xml",
-        "txt" => "text/plain",
-        "csv" => "text/csv",
-        _ => "application/octet-stream",
-    }
-}
-
 pub(crate) fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
@@ -246,13 +230,5 @@ mod tests {
         assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
         assert_eq!(sanitize_filename("C:\\temp\\beleg.pdf"), "beleg.pdf");
         assert_eq!(sanitize_filename("   "), "datei");
-    }
-
-    #[test]
-    fn guess_mime_maps_common_types() {
-        assert_eq!(guess_mime("beleg.PDF"), "application/pdf");
-        assert_eq!(guess_mime("scan.jpeg"), "image/jpeg");
-        assert_eq!(guess_mime("rechnung.xml"), "application/xml");
-        assert_eq!(guess_mime("unbekannt"), "application/octet-stream");
     }
 }

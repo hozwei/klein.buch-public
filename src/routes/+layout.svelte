@@ -7,6 +7,7 @@
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import AboutDialog from "$lib/AboutDialog.svelte";
   import XmlViewerDialog from "$lib/XmlViewerDialog.svelte";
+  import PdfPreviewDialog from "$lib/PdfPreviewDialog.svelte";
   import ReauthDialog from "$lib/ReauthDialog.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
   import { flash } from "$lib/toast.svelte";
@@ -300,6 +301,7 @@
 <ConfirmDialog />
 <AboutDialog />
 <XmlViewerDialog />
+<PdfPreviewDialog />
 
 <style>
   :global(body) {

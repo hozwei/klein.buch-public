@@ -23,15 +23,26 @@ const REPLACED_BY_AUTH: &[&str] = &[
     "backup_unlock",
 ];
 
-/// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Upload-Routen,
-/// Archiv-Download, entfallene Desktop-Funktionen, Gesperrtes.
+/// Seit W7 nicht mehr im Frontend: Archiv-Download über `/files/archive/{id}`,
+/// Explorer-Funktionen entfallen.
+const DROPPED_FROM_FRONTEND: &[&str] = &[
+    "invoices_open_pdf",
+    "invoices_reveal_pdf",
+    "attachments_open",
+    "attachments_reveal",
+    "euer_reveal_path",
+    "backup_open_folder",
+    "backup_reveal_path",
+];
+
+/// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,
+/// entfallene Desktop-Funktionen, Gesperrtes. (Die Upload-Commands nehmen seit
+/// W7 eine `uploadId` und sind wieder freigegeben.)
 const NOT_ON_CMD: &[&str] = &[
     "backup_needs_onboarding",
     "backup_is_unlocked",
     "backup_setup_passphrase",
     "backup_unlock",
-    "expenses_parse_einvoice",
-    "seller_signature_set",
     "invoices_open_pdf",
     "attachments_open",
     "backup_restore_preview",
@@ -119,6 +130,7 @@ fn exposed_names() -> BTreeSet<String> {
 fn allowlist_is_exactly_plan_point_2() {
     let mut frontend = api_ts_commands();
     frontend.extend(REPLACED_BY_AUTH.iter().map(|s| s.to_string()));
+    frontend.extend(DROPPED_FROM_FRONTEND.iter().map(|s| s.to_string()));
     let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
     assert_eq!(
         registry, frontend,
@@ -291,12 +303,19 @@ async fn public_route_inventory() {
         "/api/unbekannt",
         "/api",
         "/api/upload/beleg",
-        "/files/archive/1",
+        "/files/unbekannt",
     ] {
         let r = send(app, get(path, None)).await;
         assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
         assert_eq!(r.json()["code"], "not_found", "{path}: JSON statt SPA");
     }
+    // Datei-Routen (W7) nur mit Sitzung
+    for path in ["/files/archive/1", "/files/download/1"] {
+        let r = send(app, get(path, None)).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let r = send(app, post("/api/upload/beleg", "", None, None)).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

@@ -12,10 +12,9 @@
     euerExportPdf,
     euerExportDatev,
     euerExportStbZip,
-    euerRevealPath,
     euerAfaPending,
     depreciationAccrueYear,
-    backupGetSettings,
+    saveDownload,
   } from "$lib/api";
   import type { EuerPackage } from "$lib/types";
   import { euro } from "$lib/format";
@@ -32,22 +31,18 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  let defaultDir = $state("");
-  let pdfPath = $state("");
-  let csvPath = $state("");
-  let zipPath = $state("");
-  let datevPath = $state("");
-  let stbPath = $state("");
   let busyPdf = $state(false);
   let busyCsv = $state(false);
   let busyZip = $state(false);
   let busyDatev = $state(false);
   let busyStb = $state(false);
-  let lastPdfPath = $state<string | null>(null);
-  let lastCsvPath = $state<string | null>(null);
-  let lastZipPath = $state<string | null>(null);
-  let lastDatevPath = $state<string | null>(null);
-  let lastStbPath = $state<string | null>(null);
+  // Plan W7: Exporte kommen als Download (kein Serverpfad); angezeigt wird der
+  // Dateiname des letzten Downloads.
+  let lastPdf = $state<string | null>(null);
+  let lastCsv = $state<string | null>(null);
+  let lastZip = $state<string | null>(null);
+  let lastDatev = $state<string | null>(null);
+  let lastStb = $state<string | null>(null);
   let afaPending = $state(0);
   let bookingAfa = $state(false);
 
@@ -70,12 +65,6 @@
       error = String(e);
       loading = false;
     }
-    try {
-      const s = await backupGetSettings();
-      defaultDir = s.defaultSuggestion;
-    } catch {
-      defaultDir = "";
-    }
   });
 
   $effect(() => {
@@ -97,18 +86,6 @@
       });
   });
 
-  $effect(() => {
-    const y = selectedYear;
-    if (y == null) return;
-    const sep = defaultDir.includes("\\") ? "\\" : "/";
-    const base = defaultDir ? `${defaultDir}${sep}` : "";
-    pdfPath = `${base}klein-buch-EUER-${y}.pdf`;
-    csvPath = `${base}klein-buch-EUER-${y}-ELSTER.csv`;
-    zipPath = `${base}klein-buch-EUER-${y}-Einzelaufstellung.zip`;
-    datevPath = `${base}klein-buch-EUER-${y}-DATEV.csv`;
-    stbPath = `${base}klein-buch-EUER-${y}-Steuerberater.zip`;
-  });
-
   let form = $derived(pkg?.form ?? null);
   let entryLines = $derived(form ? form.lines.filter((l) => l.isEntry) : []);
   let sumLines = $derived(form ? form.lines.filter((l) => !l.isEntry) : []);
@@ -119,9 +96,10 @@
     if (selectedYear == null) return;
     busyPdf = true;
     try {
-      const r = await euerExportPdf(selectedYear, pdfPath.trim());
-      lastPdfPath = r.pdfPath;
-      flash(`PDF gespeichert (${(r.sizeBytes / 1024).toFixed(0)} KB).`);
+      const r = await euerExportPdf(selectedYear);
+      saveDownload(r.download);
+      lastPdf = r.download.fileName;
+      flash(`PDF erstellt (${(r.sizeBytes / 1024).toFixed(0)} KB).`);
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -133,9 +111,10 @@
     if (selectedYear == null) return;
     busyDatev = true;
     try {
-      const r = await euerExportDatev(selectedYear, skr, datevPath.trim());
-      lastDatevPath = r.csvPath;
-      flash(`DATEV-Buchungsstapel gespeichert (${r.bookingCount} Buchungen, ${skr}).`);
+      const r = await euerExportDatev(selectedYear, skr);
+      saveDownload(r.download);
+      lastDatev = r.download.fileName;
+      flash(`DATEV-Buchungsstapel erstellt (${r.bookingCount} Buchungen, ${skr}).`);
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -147,9 +126,10 @@
     if (selectedYear == null) return;
     busyStb = true;
     try {
-      const r = await euerExportStbZip(selectedYear, skr, stbPath.trim());
-      lastStbPath = r.zipPath;
-      flash(`Steuerberater-Paket gespeichert (${r.fileCount} Dateien).`);
+      const r = await euerExportStbZip(selectedYear, skr);
+      saveDownload(r.download);
+      lastStb = r.download.fileName;
+      flash(`Steuerberater-Paket erstellt (${r.fileCount} Dateien).`);
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -161,9 +141,10 @@
     if (selectedYear == null) return;
     busyCsv = true;
     try {
-      const r = await euerExportElster(selectedYear, csvPath.trim());
-      lastCsvPath = r.csvPath;
-      flash(`ELSTER-CSV gespeichert (${r.entryCount} Positionen).`);
+      const r = await euerExportElster(selectedYear);
+      saveDownload(r.download);
+      lastCsv = r.download.fileName;
+      flash(`ELSTER-CSV erstellt (${r.entryCount} Positionen).`);
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -175,32 +156,16 @@
     if (selectedYear == null) return;
     busyZip = true;
     try {
-      const r = await euerExportDetailZip(selectedYear, zipPath.trim());
-      lastZipPath = r.zipPath;
+      const r = await euerExportDetailZip(selectedYear);
+      saveDownload(r.download);
+      lastZip = r.download.fileName;
       flash(
-        `Einzelaufstellung gespeichert (${r.incomeCount} Einnahmen, ${r.expenseCount} Ausgaben, ${r.assetCount} Anlagen).`,
+        `Einzelaufstellung erstellt (${r.incomeCount} Einnahmen, ${r.expenseCount} Ausgaben, ${r.assetCount} Anlagen).`,
       );
     } catch (e) {
       flash(String(e), "error");
     } finally {
       busyZip = false;
-    }
-  }
-
-  async function revealPath(p: string) {
-    try {
-      await euerRevealPath(p);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-
-  async function copyPath(p: string) {
-    try {
-      await navigator.clipboard.writeText(p);
-      flash("Pfad kopiert.");
-    } catch {
-      flash("Kopieren nicht möglich.", "error");
     }
   }
 
@@ -283,49 +248,35 @@
   <section class="card export">
     <h2>Exportieren</h2>
     <div class="exp-row">
-      <label>Vollständige EÜR (PDF) <input type="text" bind:value={pdfPath} /></label>
-      <Button variant="primary" onclick={exportPdf} disabled={busyPdf || !pdfPath.trim()}>
-        {busyPdf ? "…" : "PDF speichern"}
+      <span class="exp-label">Vollständige EÜR (PDF)</span>
+      <Button variant="primary" onclick={exportPdf} disabled={busyPdf}>
+        {busyPdf ? "…" : "PDF herunterladen"}
       </Button>
     </div>
-    {#if lastPdfPath}
-      <p class="saved">
-        <span class="ok">✓ Gespeichert:</span> <code>{lastPdfPath}</code>
-        <Button variant="secondary" size="sm" onclick={() => revealPath(lastPdfPath!)}>Ordner öffnen</Button>
-        <Button variant="secondary" size="sm" onclick={() => copyPath(lastPdfPath!)}>Pfad kopieren</Button>
-      </p>
+    {#if lastPdf}
+      <p class="saved"><span class="ok">✓ Heruntergeladen:</span> <code>{lastPdf}</code></p>
     {/if}
     <div class="exp-row">
-      <label>ELSTER-Ausfüllhilfe (CSV) <input type="text" bind:value={csvPath} /></label>
-      <Button variant="primary" onclick={exportCsv} disabled={busyCsv || !csvPath.trim()}>
-        {busyCsv ? "…" : "CSV speichern"}
+      <span class="exp-label">ELSTER-Ausfüllhilfe (CSV)</span>
+      <Button variant="primary" onclick={exportCsv} disabled={busyCsv}>
+        {busyCsv ? "…" : "CSV herunterladen"}
       </Button>
     </div>
-    {#if lastCsvPath}
-      <p class="saved">
-        <span class="ok">✓ Gespeichert:</span> <code>{lastCsvPath}</code>
-        <Button variant="secondary" size="sm" onclick={() => revealPath(lastCsvPath!)}>Ordner öffnen</Button>
-        <Button variant="secondary" size="sm" onclick={() => copyPath(lastCsvPath!)}>Pfad kopieren</Button>
-      </p>
+    {#if lastCsv}
+      <p class="saved"><span class="ok">✓ Heruntergeladen:</span> <code>{lastCsv}</code></p>
     {/if}
     <div class="exp-row">
-      <label>Einzelaufstellung (ZIP) <input type="text" bind:value={zipPath} /></label>
-      <Button variant="primary" onclick={exportZip} disabled={busyZip || !zipPath.trim()}>
-        {busyZip ? "…" : "ZIP speichern"}
+      <span class="exp-label">Einzelaufstellung (ZIP)</span>
+      <Button variant="primary" onclick={exportZip} disabled={busyZip}>
+        {busyZip ? "…" : "ZIP herunterladen"}
       </Button>
     </div>
-    {#if lastZipPath}
-      <p class="saved">
-        <span class="ok">✓ Gespeichert:</span> <code>{lastZipPath}</code>
-        <Button variant="secondary" size="sm" onclick={() => revealPath(lastZipPath!)}>Ordner öffnen</Button>
-        <Button variant="secondary" size="sm" onclick={() => copyPath(lastZipPath!)}>Pfad kopieren</Button>
-      </p>
+    {#if lastZip}
+      <p class="saved"><span class="ok">✓ Heruntergeladen:</span> <code>{lastZip}</code></p>
     {/if}
 
     <div class="exp-row">
-      <label
-        >DATEV-Buchungsstapel (Steuerberater) <input type="text" bind:value={datevPath} /></label
-      >
+      <span class="exp-label">DATEV-Buchungsstapel (Steuerberater)</span>
       <label class="skr"
         >Kontenrahmen
         <select bind:value={skr}>
@@ -333,32 +284,22 @@
           <option value="SKR04">SKR04</option>
         </select>
       </label>
-      <Button variant="primary" onclick={exportDatev} disabled={busyDatev || !datevPath.trim()}>
-        {busyDatev ? "…" : "DATEV speichern"}
+      <Button variant="primary" onclick={exportDatev} disabled={busyDatev}>
+        {busyDatev ? "…" : "DATEV herunterladen"}
       </Button>
     </div>
-    {#if lastDatevPath}
-      <p class="saved">
-        <span class="ok">✓ Gespeichert:</span> <code>{lastDatevPath}</code>
-        <Button variant="secondary" size="sm" onclick={() => revealPath(lastDatevPath!)}>Ordner öffnen</Button>
-        <Button variant="secondary" size="sm" onclick={() => copyPath(lastDatevPath!)}>Pfad kopieren</Button>
-      </p>
+    {#if lastDatev}
+      <p class="saved"><span class="ok">✓ Heruntergeladen:</span> <code>{lastDatev}</code></p>
     {/if}
 
     <div class="exp-row">
-      <label
-        >Steuerberater-Paket (ZIP, alles in einem) <input type="text" bind:value={stbPath} /></label
-      >
-      <Button variant="primary" onclick={exportStb} disabled={busyStb || !stbPath.trim()}>
-        {busyStb ? "…" : "Paket speichern"}
+      <span class="exp-label">Steuerberater-Paket (ZIP, alles in einem)</span>
+      <Button variant="primary" onclick={exportStb} disabled={busyStb}>
+        {busyStb ? "…" : "Paket herunterladen"}
       </Button>
     </div>
-    {#if lastStbPath}
-      <p class="saved">
-        <span class="ok">✓ Gespeichert:</span> <code>{lastStbPath}</code>
-        <Button variant="secondary" size="sm" onclick={() => revealPath(lastStbPath!)}>Ordner öffnen</Button>
-        <Button variant="secondary" size="sm" onclick={() => copyPath(lastStbPath!)}>Pfad kopieren</Button>
-      </p>
+    {#if lastStb}
+      <p class="saved"><span class="ok">✓ Heruntergeladen:</span> <code>{lastStb}</code></p>
     {/if}
 
     <p class="muted hint">
@@ -538,7 +479,8 @@
   tfoot tr.sum td { border-top: 2px solid var(--c-border-strong); border-bottom: none; padding-top: 0.55rem; font-weight: 600; color: var(--c-text); }
   .tag { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.4rem; background: var(--c-warning-50); border: 1px solid #f3dcae; border-radius: var(--r-sm); font-size: 0.7rem; color: var(--c-warning-700); }
   .export .exp-row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  .export label { flex: 1; min-width: 18rem; font-weight: 600; font-size: 0.8rem; display: block; }
+  .export .exp-label { flex: 1; min-width: 18rem; font-weight: 600; font-size: 0.9rem; align-self: center; }
+  .export label { font-weight: 600; font-size: 0.8rem; display: block; }
   .export label.skr { flex: 0 0 auto; min-width: 0; }
   .export label.skr select {
     display: block;
@@ -550,12 +492,6 @@
     font-family: inherit;
     background: var(--c-surface);
     color: var(--c-text);
-  }
-  .export input {
-    width: 100%; box-sizing: border-box; margin-top: 0.2rem;
-    padding: 0.45rem 0.6rem; border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md); font-size: 0.9rem; font-weight: 400;
-    background: var(--c-surface); color: var(--c-text); font-family: inherit;
   }
   .afa-action { margin-top: 0.5rem; }
   .hint { font-size: 0.8rem; margin: 0.3rem 0 0; }

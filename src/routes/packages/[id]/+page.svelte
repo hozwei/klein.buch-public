@@ -1,6 +1,7 @@
 <script lang="ts">
   // Block P2b — Paket bearbeiten (= neue Revision) + Revisions-Panel
   // (Vergleich zweier Versionen + Rollback). Append-only: nichts wird überschrieben.
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -18,6 +19,7 @@
     packageRevisionsRollback,
     packageCategoriesList,
     packagePreview,
+    downloadUrl,
     sellerProfileGet,
   } from "$lib/api";
   import type { Package, PackageRevision, PackageCategory } from "$lib/types";
@@ -133,7 +135,8 @@
   async function preview() {
     previewing = true;
     try {
-      await packagePreview(title.trim(), body, cents());
+      const ticket = await packagePreview(title.trim(), body, cents());
+      openPdfPreview(downloadUrl(ticket), "Paket-Vorschau", ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {

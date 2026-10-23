@@ -7,6 +7,7 @@ import {
   newIdempotencyKey,
   onAuthRequired,
   setReauthHandler,
+  uploadFile,
 } from "./transport";
 
 type Call = { url: string; init: RequestInit };
@@ -151,5 +152,32 @@ describe("transport.auth", () => {
 
   it("erzeugt unterschiedliche Schlüssel", () => {
     expect(newIdempotencyKey()).not.toBe(newIdempotencyKey());
+  });
+});
+
+describe("transport.uploadFile", () => {
+  it("schickt multipart mit Pflicht-Header, ohne Idempotenz-Schlüssel", async () => {
+    const ticket = { uploadId: "u1", fileName: "beleg.pdf", mimeType: "application/pdf", sizeBytes: 8 };
+    const calls = mockFetch([json(200, ticket)]);
+    const file = new File(["%PDF-1.7"], "beleg.pdf", { type: "application/pdf" });
+    await expect(uploadFile("beleg", file)).resolves.toEqual(ticket);
+    expect(calls[0].url).toBe("/api/upload/beleg");
+    expect(calls[0].init.method).toBe("POST");
+    expect(header(calls[0], REQUEST_HEADER)).toBe("1");
+    expect(header(calls[0], IDEMPOTENCY_HEADER)).toBeUndefined();
+    const body = calls[0].init.body as FormData;
+    expect((body.get("file") as File).name).toBe("beleg.pdf");
+  });
+
+  it("liefert 413/415 als Meldung und meldet 401", async () => {
+    mockFetch([json(415, { code: "unsupported_media_type", message: "Dateityp nicht erlaubt." })]);
+    const file = new File(["<html>"], "x.pdf");
+    await expect(uploadFile("beleg", file)).rejects.toBe("Dateityp nicht erlaubt.");
+    const seen: string[] = [];
+    const off = onAuthRequired((r) => seen.push(r));
+    mockFetch([json(401, { code: "unauthenticated", message: "Bitte anmelden" })]);
+    await expect(uploadFile("anhang", file)).rejects.toBe("Bitte anmelden");
+    expect(seen).toEqual(["login"]);
+    off();
   });
 });

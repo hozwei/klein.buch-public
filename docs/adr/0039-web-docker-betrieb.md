@@ -535,6 +535,42 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
 64. **Setup-Token nach `totp-reset` beim Statusabruf (W6, Gegenprüfung),** nicht erst beim Login —
     die Oberfläche zeigt sofort die Neueinrichtung. Der Healthcheck-Subcommand schickt den Host der
     öffentlichen URL (fest gebundene IP).
+65. **Downloads über eine Ablage mit Ticket (W7, E10).** Exporte und Vorschauen entstehen in
+    `<data>/tmp/downloads/<uuid>/<Dateiname>`; der Command liefert `{downloadId, fileName,
+    sizeBytes}`, der Browser holt die Datei über `GET /files/download/{id}` (Sitzung). Exporte sind
+    einmalig abrufbar (danach gelöscht, auch bei abgebrochenem Abruf) und verfallen nach 1 h,
+    Vorschauen sind 10 min mehrfach abrufbar (die PDF-Ansicht lädt nach). Die Ablage lebt im RAM;
+    Reste nach einem Neustart räumt die `tmp`-Bereinigung beim Start.
+66. **Inline nur für eigene PDFs (W7).** `/files/archive/{id}` liefert `issued_invoice_pdf` und
+    `issued_quote_pdf` inline (CSP `frame-ancestors 'self'`), Vorschauen aus der Download-Ablage
+    ebenso; alle anderen Quellen (Belege, Anhänge, Rechtsdokumente, empfangene E-Rechnungen, XML)
+    als `attachment` mit CSP `sandbox`. Der Inhaltstyp kommt nur aus einer Allowlist
+    (`application/octet-stream` sonst), der Pfad wird per `canonicalize` gegen `archive_dir`
+    geprüft (Fehler ohne Pfad in der Antwort), der Abruf ist hash-geprüft und auditiert.
+67. **PDF-Vorschau als Dialog mit iframe (W7)** statt neuem Fenster: ein `window.open` nach einem
+    `await` würde vom Popup-Blocker abgefangen. Der Dialog bietet „In neuem Tab öffnen“ und
+    „Herunterladen“ als echte Links. Anhänge und Beleg-Originale werden heruntergeladen.
+68. **Explorer-Funktionen ersatzlos (W7).** „Im Ordner zeigen“, „Ordner öffnen“, „Pfad kopieren“
+    entfallen in der Oberfläche (Rechnung, Kosten, Angebot, EÜR-Export, Backup-Seite); die
+    Commands bleiben bis W11 in der Registry als `Dropped`/`Replaced`.
+69. **Uploads: Ablage mit Ticket, Verbrauch erst nach Erfolg (W7).** `POST /api/upload/{art}`
+    schreibt nach `<data>/tmp/uploads/<uuid>/datei` und liefert `{uploadId, fileName, mimeType,
+    sizeBytes}`. Commands lesen den Upload und geben ihn erst nach Erfolg frei; ein abgelehnter
+    Versuch (z. B. Validierungsfehler im Formular) kann dieselbe Datei erneut verwenden. Das
+    Einlesen einer E-Rechnung verbraucht den Upload nicht (Schritt 2 archiviert dasselbe Original).
+    Höchstens 100 offene Uploads, Ablauf nach 1 h. Die Upload-Route liegt außerhalb des
+    Gesamt-Timeouts von `/api/*`; stattdessen 60 s Leerlauf-Timeout je Datenblock.
+70. **Typprüfung am Inhalt (W7).** PDF, PNG, JPEG, WebP, GIF, TIFF per Magic Bytes; XML nur als
+    gültiges UTF-8 mit Wurzelelement, HTML/XHTML (auch eingebettet per Namensraum) wird abgelehnt;
+    SVG nur für Logo und Unterschrift; die Backup-Art nur mit dem Backup-Header. Erlaubt je Art:
+    Beleg/Anhang/Vertrag alle Dokumenttypen inkl. XML, Rechtsdokument nur PDF, E-Rechnung PDF oder
+    XML, Logo/Unterschrift PNG/JPEG/WebP/GIF/SVG. Der MIME-Typ im Archiv kommt aus dieser Prüfung;
+    Logo und Unterschrift bekommen die Endung des erkannten Typs. XML in falscher Kodierung bekommt
+    die genaue Meldung aus R3-006 schon beim Upload.
+71. **Platzprüfung vor dem Upload (W7).** Abgelehnt mit 507, wenn der freie Platz unter
+    `KLEIN_BUCH_MIN_FREE_BYTES` (Standard 2 GiB) plus der angekündigten Größe (höchstens dem
+    Limit der Art) liegt; ungültige Werte der beiden Upload-Variablen brechen den Start ab.
+    `statvfs` über `rustix` (kein `unsafe`).
 
 ## Konsequenzen
 

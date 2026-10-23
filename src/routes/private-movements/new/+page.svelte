@@ -2,7 +2,7 @@
   import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { paymentAccountsList, privateMovementsCreate } from "$lib/api";
+  import { paymentAccountsList, privateMovementsCreate, uploadFile } from "$lib/api";
   import type { PaymentAccount, MovementType, PrivateMovementInputDto } from "$lib/types";
   import { MOVEMENT_TYPES } from "$lib/labels";
   import { euro } from "$lib/format";
@@ -43,13 +43,8 @@
     }
     busy = true;
     try {
-      let receiptBytes: number[] | null = null;
-      let receiptFilename: string | null = null;
-      if (receiptFile) {
-        const buf = await receiptFile.arrayBuffer();
-        receiptBytes = Array.from(new Uint8Array(buf));
-        receiptFilename = receiptFile.name;
-      }
+      // Plan W7: Beleg zuerst hochladen (Größe/Typ prüft der Server).
+      const receiptUploadId = receiptFile ? (await uploadFile("beleg", receiptFile)).uploadId : null;
       const input: PrivateMovementInputDto = {
         movementDate,
         movementType,
@@ -61,8 +56,7 @@
       const row = await privateMovementsCreate({
         input,
         fiscalYear: null,
-        receiptBytes,
-        receiptFilename,
+        receiptUploadId,
       });
       flash("Erfasst: " + row.movementNumber);
       await goto("/private-movements");

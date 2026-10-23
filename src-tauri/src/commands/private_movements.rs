@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
-use crate::commands::attachments::{guess_mime, sanitize_filename};
+use crate::commands::attachments::sanitize_filename;
 use crate::config::Paths;
 use crate::db::models::{PrivateMovementListItem, PrivateMovementRow};
 use crate::db::numbering;
@@ -26,9 +26,12 @@ pub struct PrivateMovementCreateArgs {
     pub input: PrivateMovementInput,
     /// Optional — sonst aus dem Bewegungs-Datum (Kalenderjahr) abgeleitet.
     pub fiscal_year: Option<i64>,
-    /// Optionaler Beleg (z. B. Quittung). `None` → ohne Beleg.
-    pub receipt_bytes: Option<Vec<u8>>,
-    pub receipt_filename: Option<String>,
+    /// Optionaler Beleg (z. B. Quittung) aus `POST /api/upload/beleg` (Plan W7).
+    #[serde(default)]
+    pub receipt_upload_id: Option<String>,
+    /// Vom Command aus dem Upload gelesen, nie vom Client.
+    #[serde(skip)]
+    pub receipt: Option<crate::uploads::UploadedFile>,
 }
 
 /// Argumente von [`private_movements_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -77,12 +80,23 @@ pub async fn private_movements_create(
     ctx: &Arc<AppCtx>,
     args: PrivateMovementsCreateArgs,
 ) -> Result<PrivateMovementRow> {
-    let PrivateMovementsCreateArgs { args } = args;
+    let PrivateMovementsCreateArgs { mut args } = args;
     let pool = ctx.pool()?;
     let session = &ctx.session;
 
+    let upload_id = args.receipt_upload_id.take().filter(|id| !id.is_empty());
+    if let Some(id) = upload_id.as_deref() {
+        args.receipt = Some(
+            ctx.uploads
+                .read(id, &[crate::uploads::UploadKind::Receipt])?,
+        );
+    }
     let paths = ctx.paths.clone();
-    create_core(&pool, &paths, session, args).await
+    let row = create_core(&pool, &paths, session, args).await?;
+    if let Some(id) = upload_id.as_deref() {
+        ctx.uploads.consume(id);
+    }
+    Ok(row)
 }
 
 /// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).
@@ -116,19 +130,19 @@ pub async fn create_core(
     let movement_number =
         numbering::next_number(pool, DocType::PrivateMovement, fiscal_year as i32).await?;
 
-    let receipt_archive_id = match args.receipt_bytes {
-        Some(bytes) if !bytes.is_empty() => {
-            let sanitized = sanitize_filename(args.receipt_filename.as_deref().unwrap_or("beleg"));
+    let receipt_archive_id = match args.receipt {
+        Some(file) if !file.bytes.is_empty() => {
+            let sanitized = sanitize_filename(&file.file_name);
             let archive_name = format!("{movement_number}-{sanitized}");
-            let mime = guess_mime(&sanitized);
             let stored = archive::store_bytes(
                 pool,
                 &paths.archive_dir,
                 fiscal_year as i32,
                 ArchiveKind::Attachment,
                 &archive_name,
-                mime,
-                &bytes,
+                // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+                file.mime,
+                &file.bytes,
             )
             .await?;
             Some(stored.archive_id)

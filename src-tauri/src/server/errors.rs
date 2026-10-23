@@ -99,6 +99,24 @@ impl ApiError {
         )
     }
 
+    /// Upload-Typ nicht erlaubt (Plan W7).
+    pub fn unsupported_media_type(message: impl Into<String>) -> Self {
+        Self::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_media_type",
+            message,
+        )
+    }
+
+    /// Zu wenig freier Platz für einen Upload (Plan W7).
+    pub fn insufficient_storage() -> Self {
+        Self::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "insufficient_storage",
+            "Zu wenig freier Speicherplatz auf dem Server — Upload abgelehnt.",
+        )
+    }
+
     pub fn busy(retry_after_secs: u64) -> Self {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Block P4 — Paket-Katalog-Broschüre. KEIN §14-Beleg: Pakete auswählen →
   // PDF drucken/öffnen ODER per Kunden-Dropdown an einen Kontakt mailen.
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import Button from "$lib/Button.svelte";
@@ -12,6 +13,7 @@
     contactsList,
     mailAccountsList,
     packageCatalogRender,
+    downloadUrl,
     packageCatalogSend,
   } from "$lib/api";
   import type { Package, PackageCategory, Contact, MailAccount } from "$lib/types";
@@ -89,8 +91,8 @@
     }
     printing = true;
     try {
-      await packageCatalogRender(selectedIds);
-      flash("Broschüre erstellt — sie wird geöffnet.");
+      const ticket = await packageCatalogRender(selectedIds);
+      openPdfPreview(downloadUrl(ticket), "Paket-Broschüre", ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {

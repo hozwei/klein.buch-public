@@ -55,7 +55,24 @@ fn api_ts_commands() -> BTreeSet<String> {
 #[test]
 fn registry_matches_frontend_api() {
     let mut api = api_ts_commands();
-    assert_eq!(api.len(), 179, "api.ts ruft 179 Commands auf (Plan W5)");
+    assert_eq!(api.len(), 172, "api.ts ruft 172 Commands auf (Plan W5, W7)");
+    // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
+    for name in [
+        "invoices_open_pdf",
+        "invoices_reveal_pdf",
+        "attachments_open",
+        "attachments_reveal",
+        "euer_reveal_path",
+        "backup_open_folder",
+        "backup_reveal_path",
+    ] {
+        let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
+        assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");
+        assert!(
+            api.insert(name.to_string()),
+            "{name} ruft api.ts noch per invoke auf"
+        );
+    }
     // seit W5 über /api/auth/* (transport.ts)
     for name in [
         "backup_needs_onboarding",

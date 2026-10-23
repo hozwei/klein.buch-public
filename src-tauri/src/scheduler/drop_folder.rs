@@ -272,6 +272,11 @@ pub async fn import_einvoice_from_file(
         ))
     })?;
     let parsed = parse_einvoice_with_paths(paths, bytes.clone(), file_name.to_string()).await?;
+    let original = crate::uploads::UploadedFile::from_bytes(
+        crate::uploads::UploadKind::EInvoice,
+        file_name,
+        bytes,
+    )?;
     let detail = create_from_einvoice_with(
         pool,
         paths,
@@ -279,8 +284,8 @@ pub async fn import_einvoice_from_file(
         EInvoiceCreateArgs {
             input: parsed.input,
             fiscal_year: None,
-            original_bytes: bytes,
-            original_file_name: file_name.to_string(),
+            upload_id: String::new(),
+            original: Some(original),
             source_format: parsed.source_format,
             validation: parsed.validation,
         },

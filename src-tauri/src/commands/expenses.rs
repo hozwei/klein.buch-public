@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
-use crate::commands::attachments::{guess_mime, sanitize_filename};
+use crate::commands::attachments::sanitize_filename;
 use crate::config::Paths;
 use crate::db::models::{ExpenseDetail, ExpenseListItem, ExpenseRow};
 use crate::db::numbering;
@@ -36,6 +36,7 @@ use crate::einvoice::types::ValidationSummary;
 use crate::einvoice::{mustang_bridge, validator};
 use crate::error::{Error, Result};
 use crate::fiscal_year::guard;
+use crate::uploads::UploadKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,9 +44,12 @@ pub struct ExpenseCreateArgs {
     pub input: ExpenseInput,
     /// Optional — sonst aus dem Beleg-Datum (Kalenderjahr) abgeleitet.
     pub fiscal_year: Option<i64>,
-    /// Roh-Bytes des primären Belegs (PDF/Bild). `None` → ohne Beleg.
-    pub receipt_bytes: Option<Vec<u8>>,
-    pub receipt_filename: Option<String>,
+    /// Primärer Beleg aus `POST /api/upload/beleg` (Plan W7). `None` → ohne Beleg.
+    #[serde(default)]
+    pub receipt_upload_id: Option<String>,
+    /// Vom Command aus dem Upload gelesen, nie vom Client.
+    #[serde(skip)]
+    pub receipt: Option<crate::uploads::UploadedFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,17 +91,21 @@ pub struct EInvoiceParseResult {
 }
 
 /// Argumente für [`expenses_create_from_einvoice`]. Das Frontend schickt die
-/// (ggf. korrigierte) Eingabe **und** die Original-Bytes erneut mit, damit das
-/// Original GoBD-konform unverändert archiviert werden kann.
+/// (ggf. korrigierte) Eingabe **und** die `uploadId` des Originals aus dem
+/// Einlesen, damit das Original GoBD-konform unverändert archiviert wird.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EInvoiceCreateArgs {
     pub input: ExpenseInput,
     pub fiscal_year: Option<i64>,
-    /// Original-Datei (XRechnung-XML oder ZUGFeRD-PDF) — wird write-once
-    /// als `ReceivedEinvoice` archiviert (Originalformat-Aufbewahrung §147 AO).
-    pub original_bytes: Vec<u8>,
-    pub original_file_name: String,
+    /// Original-Datei (XRechnung-XML oder ZUGFeRD-PDF) aus
+    /// `POST /api/upload/erechnung` (Plan W7) — wird write-once als
+    /// `ReceivedEinvoice` archiviert (Originalformat-Aufbewahrung §147 AO).
+    #[serde(default)]
+    pub upload_id: String,
+    /// Vom Command aus dem Upload gelesen (bzw. vom Ablage-Ordner), nie vom Client.
+    #[serde(skip)]
+    pub original: Option<crate::uploads::UploadedFile>,
     /// `zugferd` | `xrechnung-cii` | `xrechnung-ubl` (aus dem Parse-Schritt).
     pub source_format: String,
     /// Beratender KoSIT-Befund aus dem Parse-Schritt (wird mitgespeichert).
@@ -155,12 +163,20 @@ pub struct ExpensesCreateArgs {
 }
 
 pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Result<ExpenseDetail> {
-    let ExpensesCreateArgs { args } = args;
+    let ExpensesCreateArgs { mut args } = args;
     let pool = ctx.pool()?;
     let session = &ctx.session;
 
+    let upload_id = args.receipt_upload_id.take().filter(|id| !id.is_empty());
+    if let Some(id) = upload_id.as_deref() {
+        args.receipt = Some(ctx.uploads.read(id, &[UploadKind::Receipt])?);
+    }
     let paths = ctx.paths.clone();
-    create_core(&pool, &paths, session, args).await
+    let detail = create_core(&pool, &paths, session, args).await?;
+    if let Some(id) = upload_id.as_deref() {
+        ctx.uploads.consume(id);
+    }
+    Ok(detail)
 }
 
 /// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
@@ -208,19 +224,19 @@ pub async fn create_core(
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
     // Optionalen Beleg write-once archivieren.
-    let receipt_archive_id = match args.receipt_bytes {
-        Some(bytes) if !bytes.is_empty() => {
-            let sanitized = sanitize_filename(args.receipt_filename.as_deref().unwrap_or("beleg"));
+    let receipt_archive_id = match args.receipt {
+        Some(file) if !file.bytes.is_empty() => {
+            let sanitized = sanitize_filename(&file.file_name);
             let archive_name = format!("{expense_number}-{sanitized}");
-            let mime = guess_mime(&sanitized);
             let stored = archive::store_bytes(
                 pool,
                 &paths.archive_dir,
                 fiscal_year as i32,
                 ArchiveKind::ExpenseOriginal,
                 &archive_name,
-                mime,
-                &bytes,
+                // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+                file.mime,
+                &file.bytes,
             )
             .await?;
             Some(stored.archive_id)
@@ -398,8 +414,8 @@ pub async fn expenses_set_payment(
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpensesParseEinvoiceArgs {
-    pub file_bytes: Vec<u8>,
-    pub file_name: String,
+    /// Aus `POST /api/upload/erechnung` (Plan W7); bleibt für Schritt 2 liegen.
+    pub upload_id: String,
 }
 
 /// Schritt 1 — eine eingehende E-Rechnung (XRechnung-XML **oder** ZUGFeRD-PDF)
@@ -415,13 +431,11 @@ pub async fn expenses_parse_einvoice(
     ctx: &Arc<AppCtx>,
     args: ExpensesParseEinvoiceArgs,
 ) -> Result<EInvoiceParseResult> {
-    let ExpensesParseEinvoiceArgs {
-        file_bytes,
-        file_name,
-    } = args;
+    let ExpensesParseEinvoiceArgs { upload_id } = args;
+    let upload = ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?;
 
     let paths = ctx.paths.clone();
-    parse_einvoice_with_paths(&paths, file_bytes, file_name).await
+    parse_einvoice_with_paths(&paths, upload.bytes, upload.file_name).await
 }
 
 /// Headless-Helfer hinter [`expenses_parse_einvoice`]: identische Logik, aber
@@ -515,13 +529,17 @@ pub async fn expenses_create_from_einvoice(
     ctx: &Arc<AppCtx>,
     args: ExpensesCreateFromEinvoiceArgs,
 ) -> Result<ExpenseDetail> {
-    let ExpensesCreateFromEinvoiceArgs { args } = args;
+    let ExpensesCreateFromEinvoiceArgs { mut args } = args;
     let pool = ctx.pool()?;
     let session = &ctx.session;
 
     let pool = &pool;
+    let upload_id = std::mem::take(&mut args.upload_id);
+    args.original = Some(ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?);
     let paths = ctx.paths.clone();
-    create_from_einvoice_with(pool, &paths, session, args).await
+    let detail = create_from_einvoice_with(pool, &paths, session, args).await?;
+    ctx.uploads.consume(&upload_id);
+    Ok(detail)
 }
 
 /// Headless-Helfer hinter [`expenses_create_from_einvoice`]: identische
@@ -536,9 +554,10 @@ pub async fn create_from_einvoice_with(
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
-    if args.original_bytes.is_empty() {
-        return Err(Error::Domain("Die Original-E-Rechnung fehlt.".into()));
-    }
+    let original = match args.original {
+        Some(file) if !file.bytes.is_empty() => file,
+        _ => return Err(Error::Domain("Die Original-E-Rechnung fehlt.".into())),
+    };
 
     // Lieferanten-Snapshot: bei verknüpftem Kontakt dessen Namen sicherstellen.
     if let Some(cid) = input.vendor_contact_id.as_deref() {
@@ -577,12 +596,9 @@ pub async fn create_from_einvoice_with(
 
     // Original-E-Rechnung GoBD-konform unverändert archivieren (write-once).
     // Das ist zugleich der „Beleg" der Kosten-Position (receipt_archive_id).
-    let mime = if args.source_format == "zugferd" {
-        "application/pdf"
-    } else {
-        "application/xml"
-    };
-    let sanitized = sanitize_filename(&args.original_file_name);
+    // Typ aus der Inhaltsprüfung des Uploads (Plan W7).
+    let mime = original.mime;
+    let sanitized = sanitize_filename(&original.file_name);
     let archive_name = format!("{expense_number}-{sanitized}");
     let stored = archive::store_bytes(
         pool,
@@ -591,7 +607,7 @@ pub async fn create_from_einvoice_with(
         ArchiveKind::ReceivedEinvoice,
         &archive_name,
         mime,
-        &args.original_bytes,
+        &original.bytes,
     )
     .await?;
 

@@ -172,6 +172,22 @@ Arbeitszweig `phase-w`.
   Einmal-Codes, `totp-reset`, Wartezeiten je IP/Gerät, Proxy-Header, Host/Origin,
   HTTPS-Regel, HSTS, Re-Auth über alle 13 betroffenen Commands, Sperren,
   Abmelden, Passwort-Wechsel mit Datenerhalt, Log ohne Geheimnisse.
+- **Downloads statt Speicherort (W7):** EÜR-PDF, ELSTER-CSV, Einzelaufstellung,
+  DATEV-Stapel, Steuerberater-Paket, Migrations-Export und DSGVO-Auskunft
+  entstehen auf dem Server und kommen als Browser-Download (einmal abrufbar,
+  nach 1 h gelöscht); kein Pfad mehr vom Browser.
+- **PDF-Vorschau im Browser (W7):** Vorlagen-, Paket- und Broschüren-Vorschau,
+  Angebots-Bundle sowie Rechnungs- und Angebots-PDFs öffnen in einem
+  Vorschau-Dialog (mit „In neuem Tab öffnen“ und „Herunterladen“).
+- **Archivdateien hash-geprüft (W7):** Jeder Abruf prüft SHA-256 und wird
+  protokolliert (`archive.read`); eine veränderte Datei wird nicht ausgeliefert.
+  Belege, Anhänge und andere fremde Dateien kommen nur als Download.
+- **Uploads (W7):** Belege, Anhänge, Verträge, Rechtsdokumente, E-Rechnungen,
+  Logo und Unterschrift werden gestreamt hochgeladen; Größe je Art (20 MiB,
+  E-Rechnung 10 MiB, Logo/Unterschrift 2 MiB), Typ am Inhalt geprüft (SVG nur
+  für Logo/Unterschrift, kein HTML), zu wenig freier Platz wird abgelehnt
+  (`KLEIN_BUCH_MIN_FREE_BYTES`).
+- Entfernt: „Im Ordner zeigen“, „Ordner öffnen“ und „Pfad kopieren“.
 
 ### Documentation
 

@@ -10,6 +10,7 @@
     contactsAnonymize,
     contactsAnonymizeCheck,
     dsgvoExport,
+    saveDownload,
   } from "$lib/api";
   import ContactForm from "$lib/ContactForm.svelte";
   import Banner from "$lib/Banner.svelte";
@@ -68,7 +69,7 @@
     if (
       !(await confirmDialog({
         title: "DSGVO-Auskunft erstellen?",
-        body: "Erzeugt ein ZIP mit allen gespeicherten Daten zu diesem Kontakt (lesbares PDF, maschinenlesbares JSON und die archivierten Originaldateien) und öffnet den Ordner. Vor einer Herausgabe an die Person bitte prüfen — Angaben Dritter beachten (Art. 15 Abs. 4 DSGVO). Keine Rechtsberatung.",
+        body: "Erzeugt ein ZIP mit allen gespeicherten Daten zu diesem Kontakt (lesbares PDF, maschinenlesbares JSON und die archivierten Originaldateien) zum Herunterladen. Vor einer Herausgabe an die Person bitte prüfen — Angaben Dritter beachten (Art. 15 Abs. 4 DSGVO). Keine Rechtsberatung.",
         confirmLabel: "Auskunft erstellen",
       }))
     )
@@ -76,6 +77,7 @@
     exporting = true;
     try {
       const res = await dsgvoExport(id);
+      if (res.download) saveDownload(res.download);
       flash(
         `Auskunft erstellt: ${res.fileName} — ${res.invoiceCount} Rechnungen, ` +
           `${res.quoteCount} Angebote, ${res.expenseCount} Kosten, ` +

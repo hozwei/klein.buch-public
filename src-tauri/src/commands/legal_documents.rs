@@ -43,8 +43,8 @@ pub struct LegalDocumentsUploadArgs {
     pub doc_type: String,
     #[serde(default)]
     pub title: Option<String>,
-    pub file_bytes: Vec<u8>,
-    pub file_name: String,
+    /// Aus `POST /api/upload/rechtsdokument` (Plan W7, nur PDF).
+    pub upload_id: String,
 }
 
 /// Lädt eine neue Version eines Rechtsdokuments hoch. Das PDF wird write-once
@@ -56,8 +56,7 @@ pub async fn legal_documents_upload(
     let LegalDocumentsUploadArgs {
         doc_type,
         title,
-        file_bytes,
-        file_name,
+        upload_id,
     } = args;
     let pool = ctx.pool()?;
 
@@ -67,14 +66,12 @@ pub async fn legal_documents_upload(
             "Unbekannter Dokumenttyp '{doc_type}' (erlaubt: agb, privacy)"
         )));
     }
-    if file_bytes.is_empty() {
-        return Err(Error::Domain("Datei ist leer.".into()));
-    }
-    if !file_bytes.starts_with(b"%PDF") {
-        return Err(Error::Domain(
-            "Es werden nur PDF-Dateien akzeptiert (die Datei beginnt nicht mit %PDF).".into(),
-        ));
-    }
+    // Upload-Art „rechtsdokument“ lässt nur PDF zu (Magic Bytes, Plan W7).
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::LegalDocument])?;
+    let file_name = upload.file_name;
+    let file_bytes = upload.bytes;
 
     let paths = ctx.paths.clone();
     let sanitized = sanitize_filename(&file_name);
@@ -116,6 +113,7 @@ pub async fn legal_documents_upload(
         )),
     )
     .await?;
+    ctx.uploads.consume(&upload_id);
 
     Ok(row)
 }

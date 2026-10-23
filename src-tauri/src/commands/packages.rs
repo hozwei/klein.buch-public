@@ -374,7 +374,10 @@ pub struct PackagePreviewArgs {
 /// schreibt nach `data/preview/`, nichts wird archiviert oder validiert. Der
 /// formatierte Block kommt aus `domain::package::to_typst` und wird im Template
 /// via `eval(mode: "markup")` eingebettet.
-pub async fn package_preview(ctx: &Arc<AppCtx>, args: PackagePreviewArgs) -> Result<()> {
+pub async fn package_preview(
+    ctx: &Arc<AppCtx>,
+    args: PackagePreviewArgs,
+) -> Result<crate::downloads::DownloadTicket> {
     let PackagePreviewArgs {
         title,
         body_markup,
@@ -414,12 +417,12 @@ pub async fn package_preview(ctx: &Arc<AppCtx>, args: PackagePreviewArgs) -> Res
         .compile_async()
         .await?;
 
-    let dir = paths.data_dir.join("preview");
-    std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("Vorschau-Ordner: {e}")))?;
-    let file = dir.join("paket-vorschau.pdf");
-    std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Vorschau schreiben: {e}")))?;
-    ctx.open_path(file.to_string_lossy().to_string())?;
-    Ok(())
+    // Plan W7: Vorschau als Download-Ticket (inline im Browser).
+    ctx.downloads.put_bytes(
+        "Paket-Vorschau.pdf",
+        &pdf,
+        crate::downloads::DownloadKind::Preview,
+    )
 }
 
 // ---- Materialisierung in eine Beleg-Position (Block P3) ---------------------
@@ -657,12 +660,12 @@ pub struct PackageCatalogRenderArgs {
     pub package_ids: Vec<String>,
 }
 
-/// Druck/Vorschau: rendert die Broschüre für die gewählten Pakete und öffnet sie.
-/// Schreibt nach `data/preview/` (reine Vorschau, kein Archiv).
+/// Druck/Vorschau: rendert die Broschüre für die gewählten Pakete als
+/// Download-Ticket (Plan W7; reine Vorschau, kein Archiv).
 pub async fn package_catalog_render(
     ctx: &Arc<AppCtx>,
     args: PackageCatalogRenderArgs,
-) -> Result<()> {
+) -> Result<crate::downloads::DownloadTicket> {
     let PackageCatalogRenderArgs { package_ids } = args;
     let pool = ctx.pool()?;
 
@@ -670,11 +673,11 @@ pub async fn package_catalog_render(
     let paths = ctx.paths.clone();
     let pdf = render_catalog_pdf(pool, &paths, &package_ids, None).await?;
 
-    let dir = paths.data_dir.join("preview");
-    std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("Broschüren-Ordner: {e}")))?;
-    let file = dir.join("paket-broschuere.pdf");
-    std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Broschüre schreiben: {e}")))?;
-    ctx.open_path(file.to_string_lossy().to_string())?;
+    let ticket = ctx.downloads.put_bytes(
+        "Paket-Broschuere.pdf",
+        &pdf,
+        crate::downloads::DownloadKind::Preview,
+    )?;
 
     audit_log::append(
         pool,
@@ -685,7 +688,7 @@ pub async fn package_catalog_render(
     )
     .await
     .ok();
-    Ok(())
+    Ok(ticket)
 }
 
 /// Argumente von [`package_catalog_send`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

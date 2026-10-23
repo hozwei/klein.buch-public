@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
@@ -12,8 +13,10 @@
     quotesGeneratePdf,
     quotesOpenBundle,
     quotesLegalBindings,
-    attachmentsOpen,
-    attachmentsReveal,
+    archiveUrl,
+    downloadUrl,
+    saveArchiveFile,
+    uploadFile,
     emailLogFor,
   } from "$lib/api";
   import type {
@@ -98,7 +101,8 @@
     busy = true;
     try {
       const q = await quotesGeneratePdf(detail.quote.id);
-      if (q.pdfArchiveId) await attachmentsOpen(q.pdfArchiveId);
+      if (q.pdfArchiveId)
+        openPdfPreview(archiveUrl(q.pdfArchiveId), `Angebot ${q.quoteNumber}`, "");
       await load();
     } catch (e) {
       flash(String(e), "error");
@@ -111,7 +115,8 @@
     if (!detail) return;
     busy = true;
     try {
-      await quotesOpenBundle(detail.quote.id);
+      const ticket = await quotesOpenBundle(detail.quote.id);
+      openPdfPreview(downloadUrl(ticket), "Angebot mit AGB und Datenschutz", ticket.fileName);
       await loadBindings();
     } catch (e) {
       flash(String(e), "error");
@@ -156,18 +161,13 @@
   async function accept() {
     if (!detail) return;
     await run(async () => {
-      let bytes: number[] | null = null;
-      let filename: string | null = null;
-      if (signedContractFile) {
-        const buf = await signedContractFile.arrayBuffer();
-        bytes = Array.from(new Uint8Array(buf));
-        filename = signedContractFile.name;
-      }
+      const signedContractUploadId = signedContractFile
+        ? (await uploadFile("vertrag", signedContractFile)).uploadId
+        : null;
       return quotesAccept({
         quoteId: detail!.quote.id,
         acceptedDate: acceptedDate || null,
-        signedContractBytes: bytes,
-        signedContractFilename: filename,
+        signedContractUploadId,
         attachmentLabel: attachmentLabel.trim() || null,
       });
     }, "Angebot angenommen.");
@@ -226,20 +226,9 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  async function openAttachment(archiveEntryId: string) {
-    try {
-      await attachmentsOpen(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-
-  async function revealAttachment(archiveEntryId: string) {
-    try {
-      await attachmentsReveal(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  // Plan W7: Anlagen und gebundene Rechtsdokumente als Download.
+  function openAttachment(archiveEntryId: string) {
+    saveArchiveFile(archiveEntryId);
   }
 </script>
 
@@ -487,8 +476,7 @@
               <span class="muted">— {a.fileName} · {fmtBytes(a.fileSizeBytes)} · {date(a.createdAt)}</span>
             </div>
             <div class="att-actions">
-              <button class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Öffnen</button>
-              <button class="btn-secondary btn-sm" onclick={() => revealAttachment(a.archiveEntryId)}>Im Ordner</button>
+              <button class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Herunterladen</button>
             </div>
           </li>
         {/each}
@@ -514,7 +502,7 @@
                 <span class="muted">— {b.title} · gebunden {date(b.boundAt)}</span>
               </div>
               <div class="att-actions">
-                <button class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Öffnen</button>
+                <button class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Herunterladen</button>
               </div>
             </li>
           {/each}

@@ -31,7 +31,11 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportReport {
+    /// Serverpfad (intern, nie an den Browser — Plan W7).
+    #[serde(skip_serializing)]
     pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (vom Command gesetzt).
+    pub download: Option<crate::downloads::DownloadTicket>,
     pub table_count: usize,
     pub total_rows: i64,
     pub archive_file_count: usize,
@@ -239,6 +243,7 @@ pub async fn export_all(
 
     Ok(ExportReport {
         zip_path: target_zip_path.to_string_lossy().to_string(),
+        download: None,
         table_count: tables.len(),
         total_rows,
         archive_file_count: archive_files.len(),

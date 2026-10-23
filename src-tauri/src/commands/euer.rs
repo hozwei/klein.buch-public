@@ -107,7 +107,8 @@ pub async fn euer_available_years(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElsterExportResult {
-    pub csv_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     /// Anzahl aller Positionen (inkl. Kontrollsummen).
     pub line_count: usize,
     /// Anzahl der ins ELSTER-Formular einzutragenden Positionen.
@@ -168,7 +169,8 @@ pub async fn euer_package(ctx: &Arc<AppCtx>, args: EuerPackageArgs) -> Result<Eu
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EuerDetailExport {
-    pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub income_count: usize,
     pub expense_count: usize,
     pub asset_count: usize,
@@ -179,19 +181,15 @@ pub struct EuerDetailExport {
 #[serde(rename_all = "camelCase")]
 pub struct EuerExportDetailZipArgs {
     pub fiscal_year: i64,
-    pub target_path: String,
 }
 
 /// Schreibt die Einzelaufstellung als ZIP (einnahmen.csv, ausgaben.csv,
-/// anlageverzeichnis.csv) an den gewählten Pfad. Read-only.
+/// anlageverzeichnis.csv) in den Download-Ordner (Plan W7). Read-only.
 pub async fn euer_export_detail_zip(
     ctx: &Arc<AppCtx>,
     args: EuerExportDetailZipArgs,
 ) -> Result<EuerDetailExport> {
-    let EuerExportDetailZipArgs {
-        fiscal_year,
-        target_path,
-    } = args;
+    let EuerExportDetailZipArgs { fiscal_year } = args;
     let pool = ctx.pool()?;
 
     use std::io::Write;
@@ -202,12 +200,11 @@ pub async fn euer_export_detail_zip(
     let expenses = euer_repo::expense_detail(pool, y).await?;
     let assets = euer_repo::aveeur_items(pool, y).await?;
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("EUER-{fiscal_year}-Einzelaufstellung.zip"))?;
+    let path = download_path.as_path();
     let file = std::fs::File::create(path)?;
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
@@ -222,7 +219,11 @@ pub async fn euer_export_detail_zip(
     zw.finish()?;
 
     Ok(EuerDetailExport {
-        zip_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         income_count: income.len(),
         expense_count: expenses.len(),
         asset_count: assets.len(),
@@ -234,34 +235,33 @@ pub async fn euer_export_detail_zip(
 #[serde(rename_all = "camelCase")]
 pub struct EuerExportElsterArgs {
     pub fiscal_year: i64,
-    pub target_path: String,
 }
 
-/// Schreibt die ELSTER-Ausfüllhilfe als CSV an den gewählten Pfad. Read-only
+/// Schreibt die ELSTER-Ausfüllhilfe als CSV in den Download-Ordner (Plan W7). Read-only
 /// (kein Lock/Backup/Audit — eine reine Auswertung).
 pub async fn euer_export_elster(
     ctx: &Arc<AppCtx>,
     args: EuerExportElsterArgs,
 ) -> Result<ElsterExportResult> {
-    let EuerExportElsterArgs {
-        fiscal_year,
-        target_path,
-    } = args;
+    let EuerExportElsterArgs { fiscal_year } = args;
     let pool = ctx.pool()?;
 
     let form = build_form_for_year(&pool, fiscal_year as i32).await?;
     let csv = elster_csv::to_csv(&form);
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("EUER-{fiscal_year}-ELSTER.csv"))?;
+    let path = download_path.as_path();
     std::fs::write(path, csv.as_bytes())?;
 
     Ok(ElsterExportResult {
-        csv_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         line_count: form.lines.len(),
         entry_count: form.lines.iter().filter(|l| l.is_entry).count(),
     })
@@ -271,7 +271,8 @@ pub async fn euer_export_elster(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EuerPdfExport {
-    pub pdf_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub size_bytes: i64,
 }
 
@@ -389,28 +390,25 @@ async fn build_euer_pdf_bytes(
 #[serde(rename_all = "camelCase")]
 pub struct EuerExportPdfArgs {
     pub fiscal_year: i64,
-    pub target_path: String,
 }
 
 /// Erzeugt das vollständige EÜR-Dokument als PDF und schreibt es an den gewählten
 /// Pfad. Read-only.
 pub async fn euer_export_pdf(ctx: &Arc<AppCtx>, args: EuerExportPdfArgs) -> Result<EuerPdfExport> {
-    let EuerExportPdfArgs {
-        fiscal_year,
-        target_path,
-    } = args;
+    let EuerExportPdfArgs { fiscal_year } = args;
     let pool = ctx.pool()?;
 
     let pdf_bytes = build_euer_pdf_bytes(&ctx.paths, &pool, fiscal_year).await?;
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx.downloads.prepare(&format!("EUER-{fiscal_year}.pdf"))?;
+    let path = download_path.as_path();
     std::fs::write(path, &pdf_bytes)?;
     Ok(EuerPdfExport {
-        pdf_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         size_bytes: pdf_bytes.len() as i64,
     })
 }
@@ -419,7 +417,8 @@ pub async fn euer_export_pdf(ctx: &Arc<AppCtx>, args: EuerExportPdfArgs) -> Resu
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatevExport {
-    pub csv_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub booking_count: usize,
 }
 
@@ -429,21 +428,16 @@ pub struct DatevExport {
 pub struct EuerExportDatevArgs {
     pub fiscal_year: i64,
     pub skr: String,
-    pub target_path: String,
 }
 
 /// Erzeugt den DATEV-Buchungsstapel (EXTF) eines Geschäftsjahres für die
-/// Steuerberater-Übergabe und schreibt ihn an den gewählten Pfad. `skr` =
+/// Steuerberater-Übergabe und schreibt ihn in den Download-Ordner (Plan W7). `skr` =
 /// "SKR03" (Default) oder "SKR04". Read-only.
 pub async fn euer_export_datev(
     ctx: &Arc<AppCtx>,
     args: EuerExportDatevArgs,
 ) -> Result<DatevExport> {
-    let EuerExportDatevArgs {
-        fiscal_year,
-        skr,
-        target_path,
-    } = args;
+    let EuerExportDatevArgs { fiscal_year, skr } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
@@ -478,16 +472,19 @@ pub async fn euer_export_datev(
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("DATEV-{fiscal_year}-{skr}.csv"))?;
+    let path = download_path.as_path();
     std::fs::write(path, &bytes)?;
 
     Ok(DatevExport {
-        csv_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         booking_count: bookings.len(),
     })
 }
@@ -496,7 +493,8 @@ pub async fn euer_export_datev(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StbExport {
-    pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub file_count: usize,
 }
 
@@ -506,7 +504,6 @@ pub struct StbExport {
 pub struct EuerExportStbZipArgs {
     pub fiscal_year: i64,
     pub skr: String,
-    pub target_path: String,
 }
 
 /// Erzeugt das **Steuerberater-Paket** als ZIP: Deckblatt-PDF, vollständiges
@@ -521,11 +518,7 @@ pub async fn euer_export_stb_zip(
     ctx: &Arc<AppCtx>,
     args: EuerExportStbZipArgs,
 ) -> Result<StbExport> {
-    let EuerExportStbZipArgs {
-        fiscal_year,
-        skr,
-        target_path,
-    } = args;
+    let EuerExportStbZipArgs { fiscal_year, skr } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
@@ -646,12 +639,11 @@ pub async fn euer_export_stb_zip(
     let liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum);
 
     // ZIP zusammenstellen.
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("Steuerberater-{fiscal_year}.zip"))?;
+    let path = download_path.as_path();
     let file = std::fs::File::create(path)?;
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
@@ -768,7 +760,11 @@ pub async fn euer_export_stb_zip(
     .await?;
 
     Ok(StbExport {
-        zip_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         file_count,
     })
 }

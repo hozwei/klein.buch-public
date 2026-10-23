@@ -92,10 +92,9 @@ async fn parallel_previews_are_limited() {
         "{by_status:?}"
     );
     for status in by_status.keys() {
-        // 422: gerendert, Öffnen im Server nicht verfügbar (Bytes ab W7);
-        // 503: keine Zulassung binnen 5 s
+        // 200: Download-Ticket (W7); 503: keine Zulassung binnen 5 s
         assert!(
-            [422u16, 429, 503].contains(status),
+            [200u16, 429, 503].contains(status),
             "unerwarteter Status {status}: {by_status:?}"
         );
     }

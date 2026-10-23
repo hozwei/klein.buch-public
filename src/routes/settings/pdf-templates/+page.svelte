@@ -1,5 +1,6 @@
 <script lang="ts">
   // Block 17a — PDF-Vorlagen-Switcher (globale Standard-Vorlage).
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import Badge from "$lib/Badge.svelte";
@@ -11,7 +12,9 @@
     sellerProfileGet,
     sellerDefaultTemplateSet,
     pdfTemplatePreview,
+    downloadUrl,
     sellerLogoSet,
+    uploadFile,
     sellerLogoClear,
     sellerLogoData,
     sellerSignatureSet,
@@ -80,9 +83,8 @@
     if (!file) return;
     logoBusy = true;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      await sellerLogoSet(bytes, file.name);
+      const { uploadId } = await uploadFile("logo", file);
+      await sellerLogoSet(uploadId);
       logoUrl = await sellerLogoData();
       flash("Logo gespeichert.");
     } catch (err) {
@@ -112,9 +114,8 @@
     if (!file) return;
     signatureBusy = true;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      signatureUrl = await sellerSignatureSet(bytes, file.name);
+      const { uploadId } = await uploadFile("unterschrift", file);
+      signatureUrl = await sellerSignatureSet(uploadId);
       flash("Unterschrift gespeichert.");
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), "error");
@@ -156,7 +157,8 @@
     if (previewing) return;
     previewing = t.name;
     try {
-      await pdfTemplatePreview(t.name);
+      const ticket = await pdfTemplatePreview(t.name);
+      openPdfPreview(downloadUrl(ticket), `Vorschau: ${t.name}`, ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {

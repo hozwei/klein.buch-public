@@ -205,6 +205,96 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 
 // ---- Anmeldung (Plan W6: Setup-Token, TOTP + Passphrase, Sitzungen) --------
 
+/** Upload-Arten (`POST /api/upload/{art}`, Plan W7). */
+export type UploadArt =
+  | "beleg"
+  | "anhang"
+  | "vertrag"
+  | "rechtsdokument"
+  | "erechnung"
+  | "logo"
+  | "unterschrift"
+  | "restore";
+
+/** Antwort des Upload-Endpunkts; Commands nehmen die `uploadId`. */
+export interface UploadTicket {
+  uploadId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/** Upload mit Fortschritt (XMLHttpRequest; `fetch` meldet keinen). */
+function xhrUpload(
+  url: string,
+  form: FormData,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader(REQUEST_HEADER, "1");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () =>
+      resolve(
+        new Response(xhr.responseText, {
+          status: xhr.status,
+          headers: { "Content-Type": xhr.getResponseHeader("Content-Type") ?? "application/json" },
+        }),
+      );
+    xhr.onerror = () => reject("Server nicht erreichbar (Upload abgebrochen).");
+    xhr.send(form);
+  });
+}
+
+/**
+ * Plan W7: lädt eine Datei hoch (multipart, Feld `file`). Größe, Typ (am
+ * Inhalt) und freien Platz prüft der Server; Fehler kommen als Meldung.
+ * Kein automatisches Wiederholen (ein neuer Versuch ist ein neuer Upload).
+ */
+export async function uploadFile(
+  art: UploadArt,
+  file: File,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<UploadTicket> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const url = `/api/upload/${encodeURIComponent(art)}`;
+  const res = onProgress
+    ? await xhrUpload(url, form, onProgress)
+    : await sendOnce(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { [REQUEST_HEADER]: "1" },
+        body: form,
+      });
+  if (!res.ok) {
+    handleAuthStatus(res);
+    throw await errorMessage(res);
+  }
+  return (await res.json()) as UploadTicket;
+}
+
+/** Plan W7: Datei vom Server im Browser speichern. Der Browser holt sie selbst
+ *  (Sitzungs-Cookie, `Content-Disposition: attachment`), ohne sie in den
+ *  Speicher der Seite zu laden — auch große Exporte. */
+export function saveFile(url: string, fileName: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  // Immer setzen (leer = Name aus `Content-Disposition`): ohne `download`
+  // fängt der SvelteKit-Router den Klick als Seitenwechsel ab.
+  a.setAttribute("download", fileName);
+  a.setAttribute("data-sveltekit-reload", "");
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export type AuthState = "setup_required" | "totp_setup_required" | "login_required" | "ok";
 
 export interface AuthStatus {

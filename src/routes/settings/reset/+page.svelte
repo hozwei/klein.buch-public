@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
   // Block G1-RESET — Factory Reset (ADR 0036).
   //
   // Die EINE sanktionierte Total-Löschung: nukt die gesamte lokale Instanz und
@@ -13,8 +12,8 @@
   import { flash } from "$lib/toast.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
   import {
-    backupGetSettings,
     migrationExportRun,
+    saveDownload,
     factoryResetCheck,
     factoryReset,
     type FactoryResetCheck,
@@ -24,7 +23,6 @@
   let loadError = $state<string | null>(null);
 
   // Export-First.
-  let exportPath = $state("");
   let exporting = $state(false);
   let exportDone = $state(false);
   let exportedTo = $state<string | null>(null);
@@ -41,14 +39,6 @@
     } catch (e) {
       loadError = String(e);
       return;
-    }
-    try {
-      const s = await backupGetSettings();
-      const stamp = todayBerlin();
-      const sep = s.defaultSuggestion.includes("\\") ? "\\" : "/";
-      exportPath = `${s.defaultSuggestion}${sep}klein-buch-export-${stamp}.zip`;
-    } catch {
-      exportPath = "klein-buch-export.zip";
     }
   });
 
@@ -70,12 +60,12 @@
   );
 
   async function runExport() {
-    if (!exportPath.trim()) return;
     exporting = true;
     try {
-      const r = await migrationExportRun(exportPath.trim());
+      const r = await migrationExportRun();
+      if (r.download) saveDownload(r.download);
       exportDone = true;
-      exportedTo = r.zipPath;
+      exportedTo = r.download?.fileName ?? null;
       flash("Daten exportiert.");
     } catch (e) {
       flash(String(e), "error");
@@ -170,19 +160,11 @@
       Archiv oder einen Programmwechsel. Die Datei ist
       <strong>nicht verschlüsselt</strong>; bewahre sie sicher auf.
     </p>
-    <label>
-      Speicherort (.zip-Datei)
-      <input type="text" bind:value={exportPath} />
-    </label>
-    <button
-      class="btn-secondary"
-      onclick={runExport}
-      disabled={exporting || !exportPath.trim()}
-    >
+    <button class="btn-secondary" onclick={runExport} disabled={exporting}>
       {exporting ? "Exportiere …" : "Alle Daten exportieren"}
     </button>
     {#if exportDone}
-      <p class="ok-line">Export erstellt: <strong>{exportedTo}</strong></p>
+      <p class="ok-line">Export heruntergeladen: <strong>{exportedTo}</strong></p>
     {/if}
 
     {#if check.lockedDocuments > 0 && !exportDone}

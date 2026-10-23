@@ -70,6 +70,10 @@ pub struct AppCtx {
     pub scheduler_gate: tokio::sync::Mutex<bool>,
     /// Kennung der Anwendung für die Info-Anzeige (z. B. `de.wildbach.kleinbuch`).
     pub app_identifier: String,
+    /// Exporte und Vorschauen zum Abruf über `/files/download/{id}` (W7).
+    pub downloads: crate::downloads::DownloadStore,
+    /// Uploads aus `POST /api/upload/{art}` bis zum Verbrauch (W7).
+    pub uploads: crate::uploads::UploadStore,
 }
 
 impl AppCtx {
@@ -81,6 +85,8 @@ impl AppCtx {
         app_identifier: impl Into<String>,
     ) -> Self {
         Self {
+            downloads: crate::downloads::DownloadStore::new(&paths.data_dir),
+            uploads: crate::uploads::UploadStore::new(&paths.data_dir),
             paths,
             pool: RwLock::new(None),
             session: BackupSession::default(),

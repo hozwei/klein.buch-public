@@ -613,10 +613,8 @@ export interface QuoteAcceptArgs {
   quoteId: Uuid;
   /** Fachliches Annahmedatum (YYYY-MM-DD). null → heute (Backend). */
   acceptedDate: string | null;
-  /** Roh-Bytes des hochgeladenen unterschriebenen Vertrags. null → ohne Doc. */
-  signedContractBytes: number[] | null;
-  /** Original-Dateiname des Uploads (für MIME/Anhang-Name). */
-  signedContractFilename: string | null;
+  /** Upload (Art `vertrag`) des unterschriebenen Vertrags. null → ohne Doc. */
+  signedContractUploadId: string | null;
   attachmentLabel: string | null;
 }
 
@@ -919,8 +917,8 @@ export interface ExpenseListFilter {
 export interface ExpenseCreateArgs {
   input: ExpenseInputDto;
   fiscalYear: number | null;
-  receiptBytes: number[] | null;
-  receiptFilename: string | null;
+  /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
+  receiptUploadId: string | null;
 }
 
 export interface ExpenseCancelArgs {
@@ -988,9 +986,9 @@ export interface EInvoiceParseResult {
 export interface EInvoiceCreateArgs {
   input: ExpenseInputDto;
   fiscalYear: number | null;
-  /** Original-Datei (XML oder ZUGFeRD-PDF) — wird unverändert archiviert. */
-  originalBytes: number[];
-  originalFileName: string;
+  /** Upload des Originals aus Schritt 1 (XML oder ZUGFeRD-PDF) — wird
+   *  unverändert archiviert. */
+  uploadId: string;
   sourceFormat: string;
   validation: ValidationSummary | null;
 }
@@ -1043,8 +1041,8 @@ export interface PrivateMovementListFilter {
 export interface PrivateMovementCreateArgs {
   input: PrivateMovementInputDto;
   fiscalYear: number | null;
-  receiptBytes: number[] | null;
-  receiptFilename: string | null;
+  /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
+  receiptUploadId: string | null;
 }
 
 // ---- Generischer Anhang-Upload (Block 9) -----------------------------------
@@ -1052,8 +1050,8 @@ export interface PrivateMovementCreateArgs {
 export interface AddAttachmentArgs {
   parentType: string;
   parentId: Uuid;
-  fileBytes: number[];
-  fileName: string;
+  /** Upload der Art `anhang` (Plan W7). */
+  uploadId: string;
   label: string | null;
 }
 
@@ -1360,9 +1358,17 @@ export interface ElsterForm {
   surplusCents: Cents;
 }
 
+/** Download-Ticket (Plan W7, `downloads::DownloadTicket`): die Datei liegt kurz
+ *  auf dem Server und wird über `GET /files/download/{downloadId}` geholt. */
+export interface DownloadTicket {
+  downloadId: string;
+  fileName: string;
+  sizeBytes: number;
+}
+
 /** Ergebnis des CSV-Exports (`commands::euer::ElsterExportResult`). */
 export interface ElsterExportResult {
-  csvPath: string;
+  download: DownloadTicket;
   lineCount: number;
   entryCount: number;
 }
@@ -1435,7 +1441,7 @@ export interface EuerPackage {
 
 /** Ergebnis des Einzelaufstellung-ZIP-Exports (`commands::euer::EuerDetailExport`). */
 export interface EuerDetailExport {
-  zipPath: string;
+  download: DownloadTicket;
   incomeCount: number;
   expenseCount: number;
   assetCount: number;
@@ -1449,19 +1455,19 @@ export interface AfaPending {
 
 /** Ergebnis des PDF-Exports „Anlage EÜR" (`commands::euer::EuerPdfExport`). */
 export interface EuerPdfExport {
-  pdfPath: string;
+  download: DownloadTicket;
   sizeBytes: number;
 }
 
 /** Ergebnis des DATEV-Buchungsstapel-Exports (`commands::euer::DatevExport`). */
 export interface DatevExport {
-  csvPath: string;
+  download: DownloadTicket;
   bookingCount: number;
 }
 
 /** Ergebnis des Steuerberater-Paket-Exports (`commands::euer::StbExport`). */
 export interface StbExport {
-  zipPath: string;
+  download: DownloadTicket;
   fileCount: number;
 }
 
