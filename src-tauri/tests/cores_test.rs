@@ -153,7 +153,7 @@ async fn locked_invoice(env: &Env) -> String {
         direction: InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),
-        due_date: None,
+        due_date: today.checked_add_days(chrono::Days::new(14)),
         currency_code: "EUR".into(),
         items: vec![InvoiceItemInput {
             position: 1,

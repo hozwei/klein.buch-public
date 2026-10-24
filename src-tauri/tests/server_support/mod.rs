@@ -472,7 +472,7 @@ pub async fn draft_invoice(srv: &TestServer) -> String {
         direction: klein_buch_lib::domain::invoice::InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),
-        due_date: None,
+        due_date: today.checked_add_days(chrono::Days::new(14)),
         currency_code: "EUR".into(),
         items: vec![klein_buch_lib::domain::invoice::InvoiceItemInput {
             position: 1,

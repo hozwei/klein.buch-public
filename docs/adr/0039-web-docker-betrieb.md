@@ -796,7 +796,10 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `jdk.crypto.mscapi`, JDK-Hersteller/Version/Image-Digest, Basis-Images, Angaben der
     Windows-Releases unter `desktop_releases_2026_5`) und `klein-buch-java.sh`. Der Image-Workflow
     lädt die Originale und vergleicht SHA-256 bzw. den entpackten Baum. Windows-JRE, `.bat` und
-    `scripts/build-sidecar.ps1` sind entfernt.
+    `scripts/build-sidecar.ps1` sind entfernt. `.gitattributes` schließt `sidecar/lib` und
+    `sidecar/xrechnung-config` von der Zeilenend-Umwandlung aus (der Veröffentlichungs-Klon nutzt
+    `core.autocrlf=input`; vier Dateien des ZIPs haben CRLF — der erste Image-Lauf meldete
+    deshalb Abweichungen).
 100. **Launcher (W11).** `klein-buch-java.sh` (POSIX-sh, LF) reicht das Subcommand-Wort nicht an das
     JAR weiter; Java aus `sidecar/jre`, sonst `JAVA_HOME`, `KLEIN_BUCH_JAVA` (Tests) oder `java`;
     JVM `-XX:-UsePerfData -Xmx512m -Djava.io.tmpdir=$TMPDIR -Djava.awt.headless=true`. Der Server
@@ -842,6 +845,12 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Migration 0029 bleibt), `src-tauri/resources/inputs/`, `src-tauri/gen/`,
     `.github/workflows/release.yml`, `config::sidecar_target_triple`. Die Registry hat 183
     Commands.
+106. **BR-CO-25 (W11-Fund im Image-Smoke).** KoSIT verlangt bei offenem Betrag ein
+    Fälligkeitsdatum (BT-9) oder Zahlungsbedingungen (BT-20). `validate_for_issue` lehnt eine
+    positive Rechnung ohne Fälligkeitsdatum jetzt vorab mit klarer Meldung ab
+    (`XRechnungDueDateMissing`), wie W1.11 bei der Telefonnummer; Zahlungsbedingungen werden
+    nicht erfunden. Die Oberfläche belegt das Fälligkeitsdatum ohnehin vor, Abo-Rechnungen
+    setzen es aus dem Zahlungsziel, Storno-Belege sind ausgenommen.
 
 ## Konsequenzen
 

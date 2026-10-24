@@ -10,6 +10,9 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **Rechnung ohne Fälligkeitsdatum:** Der echte Validator lehnt eine
+  E-Rechnung mit offenem Betrag ohne Fälligkeitsdatum ab (BR-CO-25). Das
+  Festschreiben meldet das jetzt vorab mit klarer Meldung. (W11)
 - **XRechnung von KoSIT abgelehnt (Schemafehler):** In der Notiz mit der
   §19-Klausel stand der Code `REG` vor dem Text; das CII-Schema verlangt die
   umgekehrte Reihenfolge. Mit dem echten Validator ließ sich deshalb keine

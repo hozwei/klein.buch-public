@@ -1258,6 +1258,7 @@ fn variant_name(e: &invoice::InvoiceValidationError) -> &'static str {
         E::SellerAddressIncomplete => "SellerAddressIncomplete",
         E::SellerMissingTaxIdAndVatId => "SellerMissingTaxIdAndVatId",
         E::XRechnungSellerPhoneMissing => "XRechnungSellerPhoneMissing",
+        E::XRechnungDueDateMissing => "XRechnungDueDateMissing",
         E::XRechnungSellerIdMissing => "XRechnungSellerIdMissing",
         E::BuyerNameMissing => "BuyerNameMissing",
         E::BuyerAddressIncomplete => "BuyerAddressIncomplete",

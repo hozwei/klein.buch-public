@@ -125,6 +125,7 @@ def main():
     print("Einrichtung ok", flush=True)
 
     today = time.strftime("%Y-%m-%d")
+    due = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 14 * 86400))
     cmd("seller_profile_upsert", {"input": {
         "name": "Beispiel IT-Service", "legalForm": None, "street": "Beispielweg 1",
         "postalCode": "12345", "city": "Beispielstadt", "countryCode": "DE",
@@ -139,7 +140,7 @@ def main():
         "iban": None, "bic": None, "acceptsEinvoice": False, "notes": None}}, cookie)
     draft = cmd("invoices_create_draft", {"args": {
         "contactId": contact["id"], "buyerReference": None, "input": {
-            "direction": "issued", "invoiceDate": today, "deliveryDate": today, "dueDate": None,
+            "direction": "issued", "invoiceDate": today, "deliveryDate": today, "dueDate": due,
             "currencyCode": "EUR", "items": [{
                 "position": 1, "description": "Einrichtung Notebook", "quantity": 2,
                 "unitCode": "HUR", "unitPriceCents": 4500, "taxRatePercent": 0,

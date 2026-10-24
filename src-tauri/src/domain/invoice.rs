@@ -232,6 +232,9 @@ pub enum InvoiceValidationError {
     // XRechnung-XML, auch Kleinbetragsrechnungen. ---
     /// BR-DE-6: Telefon des Verkäufers (BT-42) ist Pflicht.
     XRechnungSellerPhoneMissing,
+    /// BR-CO-25: offener Betrag ohne Fälligkeitsdatum (BT-9) und ohne
+    /// Zahlungsbedingungen (BT-20) — Zahlungsbedingungen werden nicht erfunden.
+    XRechnungDueDateMissing,
     /// BR-CO-26: ohne USt-IdNr. braucht es eine Kennung (BT-29 = Steuernummer).
     /// Nur bei Kleinbetragsrechnungen eigener Fehler, sonst greift
     /// [`Self::SellerMissingTaxIdAndVatId`].
@@ -301,6 +304,9 @@ pub fn message(e: &InvoiceValidationError) -> String {
         }
         E::XRechnungSellerPhoneMissing => {
             "Telefonnummer fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-DE-6) Pflicht.".into()
+        }
+        E::XRechnungDueDateMissing => {
+            "Fälligkeitsdatum fehlt — für die E-Rechnung (XRechnung, BR-CO-25) Pflicht, wenn ein Betrag offen ist.".into()
         }
         E::XRechnungSellerIdMissing => {
             "Steuernummer oder USt-IdNr. fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-CO-26) Pflicht, auch bei Kleinbetragsrechnungen.".into()
@@ -464,6 +470,12 @@ pub fn validate_for_issue(
 
     // Kleinbetrag-Modus: nutzt brutto-Gesamtsumme aus compute_totals.
     let totals = compute_totals(&input.items);
+
+    // XRechnung BR-CO-25 (W11-Fund mit dem echten KoSIT): ist ein Betrag offen,
+    // braucht es ein Fälligkeitsdatum (Zahlungsbedingungen erfinden wir nicht).
+    if !is_storno && input.due_date.is_none() && totals.gross_amount_cents > 0 {
+        errs.push(E::XRechnungDueDateMissing);
+    }
 
     // Gesamtbetrag muss positiv sein — außer bei Storno-Belegen (negativ per
     // Konstruktion). `NoItems` deckt den leeren Fall bereits ab.
@@ -668,6 +680,18 @@ mod tests {
         assert!(err
             .iter()
             .any(|e| matches!(e, InvoiceValidationError::DueDateBeforeInvoiceDate { .. })));
+    }
+
+    #[test]
+    fn validate_requires_due_date_for_open_amount() {
+        let mut inv = good_invoice();
+        inv.due_date = None;
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(
+            err.contains(&InvoiceValidationError::XRechnungDueDateMissing),
+            "{err:?}"
+        );
     }
 
     #[test]
