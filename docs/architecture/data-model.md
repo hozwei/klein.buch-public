@@ -102,8 +102,8 @@ oder Benutzer, verfällt das gespeicherte Passwort (Amendment ADR 0011).
 **`invoices`** — Ausgangsrechnungen. Felder: `id`, `invoice_number`
 (`RE-{YYYY}-{NNNN}` oder `ST-…` für Storno), `date`, `delivery_date`,
 `contact_id`, `is_kleinunternehmer`, `direction` (`outgoing`/`incoming`),
-`fiscal_year`, `status` (`draft`/`issued`/`sent`/`canceled`), `is_storno_for`
-(FK, NULL bei Original), `derived_from_quote_id`, `subtotal_cents`,
+`fiscal_year` (Jahr des Belegdatums, auch beim Storno — ADR 0039 Nr. 122), `status`
+(`draft`/`issued`/`sent`/`canceled`), `is_storno_for` (FK, NULL bei Original), `derived_from_quote_id`, `subtotal_cents`,
 `tax_amount_cents`, `total_cents`, `paid_amount_cents`, `paid_at`, `sent_at`,
 `canceled_at`, `locked_at`, `pdf_archive_id`, `xml_archive_id`, Buyer-Snapshot
 (`buyer_name`, `buyer_address_*`, `buyer_tax_number`, `buyer_vat_id`, …),

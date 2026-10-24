@@ -110,6 +110,44 @@ async fn sidecar_real_kosit_accepts_generated_xrechnung() {
     );
 }
 
+/// Lauf E: Storno-XML mit BT-25 (Nummer) und BT-26 (Rechnungsdatum) des
+/// Originals besteht den echten Validator.
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_kosit_accepts_storno_with_preceding_invoice() {
+    let mut storno = invoice();
+    storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+    for it in &mut storno.items {
+        it.unit_price_cents = -it.unit_price_cents;
+    }
+    storno.due_date = None;
+    let preceding = klein_buch_lib::domain::storno::PrecedingInvoice {
+        number: "RE-2025-0042".into(),
+        issue_date: NaiveDate::from_ymd_opt(2025, 12, 10).unwrap(),
+    };
+    let xml = generator::to_xrechnung_with_preceding(
+        "ST-2026-0001",
+        &storno,
+        &seller(),
+        &buyer(),
+        "N/A",
+        &[],
+        Some(&preceding),
+    )
+    .expect("Generator");
+    assert!(xml.contains("<qdt:DateTimeString format=\"102\">20251210</qdt:DateTimeString>"));
+    let report = validator::validate(&xml, &sidecar_dir())
+        .await
+        .expect("KoSIT läuft");
+    assert!(
+        matches!(
+            report.status,
+            ValidationStatus::Passed | ValidationStatus::Warning
+        ),
+        "{report:?}"
+    );
+}
+
 #[tokio::test]
 #[ignore = "braucht Java-Laufzeit (sidecar_real)"]
 async fn sidecar_real_kosit_rejects_broken_xrechnung() {

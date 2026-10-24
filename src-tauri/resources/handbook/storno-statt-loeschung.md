@@ -31,9 +31,12 @@ Klein.Buch öffnet ein Storno-Panel; trag einen Storno-Grund ein
 und bestätige. Klein.Buch erzeugt einen neuen Beleg mit:
 
 1. Eigenem Datum (Tag des Stornos)
-2. Eigener Storno-Nummer (Form "ST-JJJJ-NNNN")
+2. Eigener Storno-Nummer (Form "ST-JJJJ-NNNN") — Jahr und Geschäftsjahr
+   richten sich nach dem Storno-Datum: Ein Storno vom Januar 2027 zu einer
+   Rechnung vom Dezember 2026 heißt `ST-2027-…` und gehört ins Jahr 2027
 3. Den Positionen der Original-Rechnung mit umgekehrtem Vorzeichen
-4. Einer Notiz, welche Original-Rechnung storniert wurde
+4. Dem Verweis „Storno zur Rechnung <Nummer> vom <Datum>“ unter der
+   Überschrift „Stornorechnung“ — auch in der E-Rechnung (XML)
 
 Der Original-Beleg bleibt unverändert in der Datenbank. Beide
 Belege sind sichtbar und werden gemeinsam in der EÜR
@@ -102,4 +105,4 @@ Erinnern weißt, was passiert ist.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

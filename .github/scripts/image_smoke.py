@@ -226,6 +226,35 @@ def main():
         fail(f"ungültige XRechnung nicht abgelehnt: {validation}")
     print(f"ungültige XRechnung abgelehnt ({validation.get('errorCount')} Fehler)", flush=True)
 
+    # Storno mit echtem Validator (Lauf E): zweite Rechnung festschreiben und
+    # stornieren; Storno-XML trägt Nummer und Datum des Originals (BT-25/BT-26).
+    draft2 = cmd("invoices_create_draft", {"args": {
+        "contactId": contact["id"], "buyerReference": None, "input": {
+            "direction": "issued", "invoiceDate": today, "deliveryDate": today, "dueDate": due,
+            "currencyCode": "EUR", "items": [{
+                "position": 1, "description": "Fehlbuchung", "quantity": 1,
+                "unitCode": "HUR", "unitPriceCents": 1000, "taxRatePercent": 0,
+                "taxCategoryCode": "E"}],
+            "notes": None, "paymentNote": None, "pdfTemplate": "default",
+            "isStornoFor": None, "cancelReason": None}}}, cookie)
+    locked2 = cmd("invoices_lock_and_issue", {"id": draft2["invoice"]["id"], "buyerReference": None}, cookie)
+    number2 = locked2["invoice"]["invoiceNumber"]
+    canceled = cmd("invoices_cancel", {"args": {
+        "invoiceId": locked2["invoice"]["id"], "reason": "Abnahme-Storno", "stornoDate": today}}, cookie)
+    storno = canceled["storno"]
+    if storno.get("validationStatus") not in ("passed", "warning"):
+        fail(f"Storno ohne gültige Prüfung: {storno.get('validationStatus')}")
+    if not storno["invoice"]["invoiceNumber"].startswith(f"ST-{today[:4]}-"):
+        fail(f"Storno-Nummer: {storno['invoice']['invoiceNumber']}")
+    if canceled["original"].get("status") != "canceled":
+        fail(f"Original nicht storniert: {canceled['original'].get('status')}")
+    s, _, sxml = request("GET", f"/files/archive/{storno['xmlArchiveId']}", cookie=cookie, raw=True)
+    if s != 200 or f"<ram:IssuerAssignedID>{number2}</ram:IssuerAssignedID>".encode() not in sxml:
+        fail("Storno-XML ohne Nummer des Originals (BT-25)")
+    if f'format="102">{today.replace("-", "")}</qdt:DateTimeString>'.encode() not in sxml:
+        fail("Storno-XML ohne Datum des Originals (BT-26)")
+    print(f"Storno {storno['invoice']['invoiceNumber']} zu {number2} ({storno['validationStatus']})", flush=True)
+
     # Abnahme (W14): Zahlung → Backup → Restore (Neustart, Anmeldung) → Export
     invoice_id = locked["invoice"]["id"]
     paid = cmd("invoices_record_payment", {"args": {

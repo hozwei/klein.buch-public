@@ -3,6 +3,71 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
 `JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
+## [Unreleased]
+
+Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
+
+### Changed
+
+- **Storno im Folgejahr:** Ein Storno-Beleg bekommt Geschäftsjahr und Nummer aus
+  seinem eigenen Datum (`ST-2027-0001` vom Januar 2027 zu einer Rechnung vom
+  Dezember 2026) statt aus der Original-Rechnung (GoBD Rz. 51). Ein
+  abgeschlossenes Vorjahr bekommt keine neuen Belege mehr. Bereits erzeugte
+  Stornos bleiben unverändert.
+- **Storno-PDF:** Überschrift „Stornorechnung“, Zeile „Storno zur Rechnung
+  <Nummer> vom <Datum>“, Betrag als „Stornobetrag“ und kein
+  Überweisungshinweis mehr — in allen vier Rechnungsvorlagen. Eigene Vorlagen
+  können das neue Feld `data.invoice.storno_of` nutzen und rendern ohne es
+  unverändert.
+
+- **Beiträge Dritter:** `CONTRIBUTING.md` formuliert „vorerst keine
+  Code-Beiträge“ als Entscheidung (Fehlerberichte, Wünsche, Sicherheitsmeldungen
+  willkommen; ADR 0014, Amendment 2026-10-24).
+- **Quellangebot:** Das Release mit dem Quelltext der Komponenten Dritter wird vor
+  dem Image veröffentlicht (nicht mehr als Entwurf); das Image nennt die
+  Adresse seines Quellarchivs im Label `de.klein-buch.source-archive`; README
+  und Handbuch weisen darauf hin; Release-Assets werden nie ersetzt.
+- **Abhängigkeiten:** Rust-Bibliotheken auf aktuelle Minor-/Patch-Stände (u. a.
+  hyper 1.12, uuid 1.29, serde_json 1.0.154, lettre 0.11.23, chrono 0.4.45),
+  Svelte 5.57 und svelte-check 4.7, GitHub Actions auf die Fassungen mit
+  Node 24 (checkout 7, setup-node 7, upload-artifact 7, build-push 7, setup-buildx
+  4, pnpm/action-setup 6). Basis-Images bleiben auf den LTS-Linien Node 22 und
+  Java 21; Dependabot schlägt dort keine Major-Sprünge mehr vor.
+
+### Fixed
+
+- **Storno-Absicherung:** Ein liegengebliebener Storno-Entwurf (nach einem
+  gescheiterten Festschreiben) lässt sich nicht mehr über „Rechnung ausstellen“
+  ohne das Original festschreiben — sonst wäre ein zweiter Storno möglich
+  gewesen und die EÜR hätte die Erstattung doppelt gezählt. „Stornieren“
+  verwendet einen solchen Entwurf wieder statt eine neue Nummer zu ziehen.
+  Storno-Entwürfe entstehen nur noch über „Stornieren“, und ein Entwurf mit
+  Datum in einem abgeschlossenen Geschäftsjahr wird abgelehnt (dort entsteht
+  keine Nummer mehr).
+- **Storno-Mail:** Stornorechnungen gehen mit eigenem Text raus (Nummer und
+  Datum der stornierten Rechnung, kein negativer Betrag); eigene Fassung per
+  `/inputs/mail-templates/storno-de.txt`. Storno-PDFs enden mit „Dieser Beleg
+  storniert die genannte Rechnung vollständig.“ statt „Vielen Dank für Ihren
+  Auftrag.“
+- **Release-Lauf:** Eine Wiederholung ersetzt Quellarchiv und Notes nur, wenn
+  zum früheren Build nie ein Image veröffentlicht wurde; Registry-Fehler gelten
+  nicht mehr als „Image fehlt“. Der Prüfbefehl für die Signatur (README,
+  `SECURITY.md`, Handbuch) erkennt nur noch den Release-Workflow auf Tags.
+- **Stornieren mit echtem Validator:** Stornos scheiterten mit dem KoSIT-Validator
+  des Images an BR-27 („Einzelpreis darf nicht negativ sein“): Das Storno-XML
+  trug negative Einzelpreise, das Festschreiben brach ab. Jetzt steht das
+  Vorzeichen in der Menge (BT-129), der Preis ist positiv, Zeilen- und
+  Gesamtbeträge bleiben negativ. Die Abnahme gegen das Image storniert jetzt
+  eine Rechnung mit dem echten Validator.
+- **E-Rechnung des Stornos:** Der Verweis auf die stornierte Rechnung (BT-25)
+  enthielt die interne Datenbank-ID statt der Rechnungsnummer; jetzt stehen
+  Nummer (BT-25) und Rechnungsdatum (BT-26) des Originals im XML. Bereits
+  festgeschriebene Storno-XML bleiben unverändert (das PDF nennt die Nummer).
+
+### Removed
+
+- Testrest `sandbox-write-test.txt`.
+
 ## [2026.10.0] — Web-/Docker-Fassung, veröffentlicht 2026-10-24
 
 Erstes Release als Webapp im öffentlichen Docker-Image

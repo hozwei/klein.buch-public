@@ -384,8 +384,8 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Version, die Paketspiegel lieferten zeitweise nur mit Timeouts; fester Runner, Paket-Cache,
     Spiegel-Fallback und Zeitlimit machen die CI reproduzierbar. Der apt-Schritt entfällt mit
     Tauri (W5).
-18. **Offen: Storno-Geschäftsjahr (W2).** Ein Storno im Folgejahr behält Geschäftsjahr und
-    Nummernkreis der Originalrechnung (unverändertes Verhalten). Wird in W14 fachlich geprüft.
+18. **Storno-Geschäftsjahr (W2; entschieden in Lauf E, siehe Nr. 122).** Bis v2026.10.0 behielt ein
+    Storno im Folgejahr Geschäftsjahr und Nummernkreis der Originalrechnung.
 19. **Command-Kerne bleiben im Modul `commands::` (W4).** Der Plan nennt `api::<bereich>::<fn>`;
     die 23 Dateien zu verschieben brächte nichts, der HTTP-Namensraum `/api/cmd/{name}` ist davon
     unabhängig. Jeder Kern ist `async fn name(ctx: &Arc<AppCtx>, args: NameArgs) -> Result<T>`;
@@ -1008,6 +1008,48 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     (ein neuer Test meldete sich ohne die KDF-Serialisierung der Testhilfen an, behoben), sonst ein
     Artefakt des überbuchten Test-Hosts (PBKDF2 je neuer Verbindung, viele parallele Testserver; in CI
     nie): kein automatischer Wiederholversuch im Produktcode.
+
+122. **Storno-Geschäftsjahr und Bezug aufs Original (Lauf E, 2026-10-24; löst Nr. 18 ab).** Ein
+    Storno-Beleg bekommt Geschäftsjahr und Nummer aus seinem **Storno-Datum** (`ST-2026-0001`
+    vom 15.01.2026 zu `RE-2025-0042`), nicht mehr aus dem Original. Grundlage (Rechtsprüfung mit
+    Gegenprüfung, `Buchhaltung/docs/ENTSCHEIDUNGEN-UMSETZUNG-PLAN.md` §3): GoBD Rz. 51 („Zwingend
+    ist die Zuordnung zum jeweiligen Geschäftsjahr“, in dem der Vorgang anfällt), §4a Abs. 1 S. 2
+    Nr. 3 EStG, §11 EStG, §17 Abs. 1 S. 7 UStG (bei Verzicht auf §19), §147 Abs. 4 AO; den
+    Nummernkreis regelt das Gesetz nicht (UStAE 14.5 Abs. 10/11, §34a UStDV ohne Nummernpflicht
+    bei §19). Ein abgeschlossenes Vorjahr bekommt damit keine neuen Belege. Der Bezug aufs
+    Original (§31 Abs. 5 und §34a S. 2 UStDV, GoBD Rz. 64) steht im XML als **BT-25 = Nummer**
+    und **BT-26 = Rechnungsdatum** der stornierten Rechnung — bisher stand in BT-25 die interne
+    ID (`is_storno_for`), korrigiert — und auf dem PDF als „Storno zur Rechnung <Nr> vom <Datum>“
+    unter der Überschrift „Stornorechnung“, mit „Stornobetrag“ und ohne Überweisungshinweis
+    (alle vier Rechnungsvorlagen; eigene Vorlagen lesen `data.invoice.storno_of` über
+    `.at(…, default: none)` und rendern unverändert weiter). Die EÜR rechnete schon nach Datum
+    (§11 EStG) und bleibt unverändert. Bestehende Stornos bleiben, wie sie sind (festgeschrieben).
+    Beim Prüfen mit dem echten KoSIT-Validator fiel auf, dass jedes Storno an **BR-27** scheiterte
+    (negativer Einzelpreis BT-146; bis W10 lief alles mit dem Sidecar-Mock, die Abnahme in W14 hat
+    nicht storniert). Der Generator schreibt bei negativem Preis das Vorzeichen in die Menge
+    (BT-129) und den Betrag des Preises; `image_smoke.py` storniert seither mit dem echten
+    Validator (Release-Trockenlauf, Security-Scan). Nach der Gegenprüfung: Storno-Entwürfe entstehen
+    nur über `invoices_cancel` (`invoices_create_draft` lehnt `is_storno_for` ab),
+    `invoices_lock_and_issue` schreibt keinen Storno-Entwurf fest (sonst Storno ohne Original und
+    doppelte Erstattung in der EÜR), `invoices_cancel` verwendet einen liegengebliebenen Entwurf
+    desselben Jahres wieder; `create_invoice_draft_from_input` prüft `ensure_year_open` vor der
+    Nummernvergabe. Storno-Mails nutzen eine eigene Vorlage (`storno-de`, eingebettet).
+123. **Quellangebot der Komponenten Dritter (Lauf E, 2026-10-24).** Das Quellarchiv am Release
+    genügt den Lizenzen (GPLv2 §3 letzter Absatz und LGPL-2.1 §4 Abs. 2 „from the same place“ —
+    nach FSF-FAQ genügt ein Verweis neben dem Programm; GPLv3 §6(d) anderer Server mit klarem
+    Hinweis; MPL-2.0 §3.2, EPL-2.0 §3.1, EUPL-1.2 Art. 5); ein schriftliches Angebot nach GPLv2
+    §3(b) gibt es nicht — es wäre bei GPLv3 §6(b) nur für physische Produkte zulässig und bei
+    LGPL-2.1 §4 nicht vorgesehen. Gehärtet: (1) Der Release-Job veröffentlicht das Release mit
+    Quellarchiv, SBOM und Digest **vor** dem Image-Push (bei v2026.10.0 war das Image rund
+    25 Minuten öffentlich, während das Archiv noch im Entwurf lag); Wiederholungen laden nur
+    fehlende Assets hoch, ersetzen nie. (2) Hinweis dort, wo das Image geladen wird: README
+    (erscheint auf der GHCR-Paketseite) und Label `de.klein-buch.source-archive` mit der direkten
+    Archiv-Adresse. (3) Aufbewahrung: Release-Assets bleiben, solange ein zugehöriges Image
+    abrufbar ist; das Repository bleibt öffentlich (`build-and-release.md`,
+    `tools/veroeffentlichen/LIESMICH.md`, Handbuch „Lizenz und Quellcode“). Wiederholungen: Weicht
+    der Digest eines bestehenden Releases vom neuen Build ab, wird nur ersetzt, wenn zum alten
+    Digest nie ein Image in GHCR lag; sonst Abbruch. Registry-Abfragen unterscheiden „nicht
+    vorhanden“ von Fehlern; der Release-Checkout hält kein Schreib-Token für git.
 
 ## Konsequenzen
 

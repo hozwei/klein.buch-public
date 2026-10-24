@@ -136,6 +136,11 @@ Betreff und Nachricht kommen aus einer Mail-Vorlage. Du kannst sie
 vor jedem Versand ändern. Die Vorlage selbst liegt als Textdatei im
 Vorlagen-Ordner `/inputs/mail-templates` Deiner Instanz.
 
+Für eine Stornorechnung nimmt Klein.Buch einen eigenen Text: Er nennt
+die stornierte Rechnung mit Nummer und Datum statt eines negativen
+Betrags. Willst Du ihn anpassen, lege im selben Ordner eine Datei
+`storno-de.txt` an; ohne sie gilt der mitgelieferte Text.
+
 ## E-Mail-Protokoll
 
 Oben rechts auf der Seite "E-Mail-Versand" kommst Du zum
@@ -147,4 +152,4 @@ an wen ging.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

@@ -50,7 +50,9 @@ use crate::domain::invoice::{
     self, BuyerView, InvoiceDirection, InvoiceInput, InvoiceItemInput, SellerView,
 };
 use crate::domain::numbering::DocType;
-use crate::domain::storno::{build_storno_input, OriginalInvoiceView, OriginalItemView};
+use crate::domain::storno::{
+    build_storno_input, OriginalInvoiceView, OriginalItemView, PrecedingInvoice,
+};
 use crate::einvoice::generator;
 use crate::einvoice::mustang_bridge;
 use crate::einvoice::types::ValidationStatus;
@@ -216,7 +218,16 @@ pub async fn invoices_create_draft(
     let InvoicesCreateDraftArgs { args } = args;
     let pool = ctx.pool()?;
 
-    create_invoice_draft_from_input(&pool, &args.contact_id, &args.input, None).await
+    // Storno-Belege entstehen nur über `invoices_cancel` (Prüfungen, Paar-Lock,
+    // Audit; Gegenprüfung Lauf E).
+    if args.input.is_storno_for.is_some() {
+        return Err(Error::Domain(
+            "Storno-Belege entstehen nur über „Stornieren“ der Original-Rechnung.".into(),
+        ));
+    }
+    let mut input = args.input;
+    input.cancel_reason = None;
+    create_invoice_draft_from_input(&pool, &args.contact_id, &input, None).await
 }
 
 /// Gemeinsame Draft-Erzeugung für Ausgangsrechnungen. Genutzt von
@@ -297,6 +308,10 @@ pub async fn create_invoice_draft_from_input(
             )));
         }
     }
+
+    // Kein Entwurf (und keine Nummer) in einem abgeschlossenen Geschäftsjahr
+    // (Gegenprüfung Lauf E; wie bei Kosten und Privatbewegungen).
+    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
 
     // Counter allokieren — Draft "verbraucht" eine Nummer (siehe
     // db::repo::invoices::create_draft Docs).
@@ -441,6 +456,16 @@ pub async fn invoices_lock_and_issue(
     let draft = invoices::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
+    // Ein liegengebliebener Storno-Entwurf (gescheiterte Pipeline) darf nicht ohne
+    // das Original festgeschrieben werden — sonst bliebe das Original offen und ein
+    // zweiter Storno zählte die Erstattung doppelt. „Stornieren“ verwendet den
+    // Entwurf wieder (Gegenprüfung Lauf E).
+    if draft.invoice.is_storno_for.is_some() {
+        return Err(Error::Domain(
+            "Dieser Storno-Beleg wird über „Stornieren“ der Original-Rechnung abgeschlossen."
+                .into(),
+        ));
+    }
     crate::fiscal_year::guard::ensure_year_open(pool, draft.invoice.fiscal_year).await?;
     let resp = run_lock_pipeline(
         pool,
@@ -551,6 +576,20 @@ async fn run_lock_pipeline_inner(
     };
     let buyer_view = effective_buyer.view();
     let input = detail_to_input(&detail)?;
+    // Storno: Bezug auf die stornierte Rechnung über deren Nummer und Datum
+    // (BT-25/BT-26, PDF-Zeile), nicht über die interne ID (Lauf E).
+    let preceding = match detail.invoice.is_storno_for.as_deref() {
+        Some(original_id) => {
+            let original = invoices::get(pool, original_id)
+                .await?
+                .ok_or_else(|| Error::Domain("Storno: Original-Rechnung fehlt".into()))?;
+            Some(PrecedingInvoice {
+                number: original.invoice_number,
+                issue_date: parse_date(&original.invoice_date)?,
+            })
+        }
+        None => None,
+    };
     let today = today_berlin();
 
     // 1. Domain-Validation — Hard-Block bei §14/§19-Fehlern.
@@ -610,13 +649,14 @@ async fn run_lock_pipeline_inner(
     };
 
     // 2. XRechnung-XML erzeugen.
-    let xml = generator::to_xrechnung(
+    let xml = generator::to_xrechnung_with_preceding(
         &detail.invoice.invoice_number,
         &xml_input,
         &seller_view,
         &buyer_view,
         buyer_reference,
         &bank_accounts,
+        preceding.as_ref(),
     )
     .map_err(|e| Error::Domain(format!("Generator: {e}")))?;
 
@@ -666,7 +706,7 @@ async fn run_lock_pipeline_inner(
         (Some(vp), Some((_, bytes))) => Some((vp, bytes.as_slice())),
         _ => None,
     };
-    let pdf_bytes = typst_render::invoice_job(
+    let pdf_bytes = typst_render::invoice_job_with_storno(
         &template_source,
         &detail.invoice.invoice_number,
         &input,
@@ -677,6 +717,7 @@ async fn run_lock_pipeline_inner(
         owner_name.as_deref(),
         &accounts_json,
         service_date_fallback,
+        preceding.as_ref(),
     )?
     .compile_async()
     .await?;
@@ -927,59 +968,70 @@ pub async fn invoices_cancel(
         Some(args.reason.clone()),
     );
 
-    // Storno-Counter allokieren (eigener Sequenz-Block ST-YYYY-NNNN).
-    let storno_number = numbering::next_number(
-        pool,
-        DocType::StornoInvoice,
-        original.invoice.fiscal_year as i32,
-    )
-    .await?;
-    let totals = invoice::compute_totals(&storno_input.items);
-    let snapshot = invoices::SellerSnapshot {
-        name: seller_row.name.as_str(),
-        street: seller_row.street.as_str(),
-        postal_code: seller_row.postal_code.as_str(),
-        city: seller_row.city.as_str(),
-        tax_number: seller_row.tax_number.as_deref(),
-        vat_id: seller_row.vat_id.as_deref(),
+    // Storno-Counter allokieren (eigener Sequenz-Block ST-YYYY-NNNN). Geschäftsjahr
+    // und Nummernkreis folgen dem Storno-Datum, nicht dem Original (GoBD Rz. 51,
+    // Lauf E): ein Storno vom Januar gehört ins neue Jahr, ein abgeschlossenes
+    // Vorjahr bekommt keine neuen Belege.
+    let storno_fy = crate::domain::storno::storno_fiscal_year(&storno_date);
+    // Ein liegengebliebener Storno-Entwurf (gescheiterte Pipeline) desselben Jahres
+    // wird wiederverwendet: keine zweite ST-Nummer, kein weiterer Entwurf. Aus
+    // einem anderen Jahr bleibt er liegen (festschreiben lässt er sich nicht).
+    let reuse = invoices::open_storno_draft(pool, &original.invoice.id)
+        .await?
+        .filter(|(_, _, fy)| *fy == i64::from(storno_fy));
+    let (storno_id, storno_number) = if let Some((id, number, _)) = reuse {
+        invoices::refresh_storno_draft(pool, &id, storno_date, &args.reason).await?;
+        (id, number)
+    } else {
+        let storno_number = numbering::next_number(pool, DocType::StornoInvoice, storno_fy).await?;
+        let totals = invoice::compute_totals(&storno_input.items);
+        let snapshot = invoices::SellerSnapshot {
+            name: seller_row.name.as_str(),
+            street: seller_row.street.as_str(),
+            postal_code: seller_row.postal_code.as_str(),
+            city: seller_row.city.as_str(),
+            tax_number: seller_row.tax_number.as_deref(),
+            vat_id: seller_row.vat_id.as_deref(),
+        };
+        // Buyer-Snapshot für den Storno-Beleg aus dem Original übernehmen —
+        // selber Empfänger-Stand wie auf der Original-Rechnung.
+        let buyer_snapshot = invoices::BuyerSnapshot {
+            name: original.invoice.buyer_name.as_deref().unwrap_or(
+                original
+                    .buyer
+                    .as_ref()
+                    .map(|b| b.name.as_str())
+                    .unwrap_or(""),
+            ),
+            street: original.invoice.buyer_street.as_deref(),
+            postal_code: original.invoice.buyer_postal_code.as_deref(),
+            city: original.invoice.buyer_city.as_deref(),
+            country_code: original
+                .invoice
+                .buyer_country_code
+                .as_deref()
+                .unwrap_or("DE"),
+            vat_id: original.invoice.buyer_vat_id.as_deref(),
+            email: original.invoice.buyer_email.as_deref(),
+        };
+        let payload = invoices::DraftCreatePayload {
+            contact_id: original.invoice.contact_id.clone(),
+            fiscal_year: i64::from(storno_fy),
+            is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
+            input: storno_input,
+            derived_from_quote_id: None,
+        };
+        let storno_draft = invoices::create_draft(
+            pool,
+            &payload,
+            &storno_number,
+            &snapshot,
+            &buyer_snapshot,
+            &totals,
+        )
+        .await?;
+        (storno_draft.id, storno_number)
     };
-    // Buyer-Snapshot für den Storno-Beleg aus dem Original übernehmen —
-    // selber Empfänger-Stand wie auf der Original-Rechnung.
-    let buyer_snapshot = invoices::BuyerSnapshot {
-        name: original.invoice.buyer_name.as_deref().unwrap_or(
-            original
-                .buyer
-                .as_ref()
-                .map(|b| b.name.as_str())
-                .unwrap_or(""),
-        ),
-        street: original.invoice.buyer_street.as_deref(),
-        postal_code: original.invoice.buyer_postal_code.as_deref(),
-        city: original.invoice.buyer_city.as_deref(),
-        country_code: original
-            .invoice
-            .buyer_country_code
-            .as_deref()
-            .unwrap_or("DE"),
-        vat_id: original.invoice.buyer_vat_id.as_deref(),
-        email: original.invoice.buyer_email.as_deref(),
-    };
-    let payload = invoices::DraftCreatePayload {
-        contact_id: original.invoice.contact_id.clone(),
-        fiscal_year: original.invoice.fiscal_year,
-        is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
-        input: storno_input,
-        derived_from_quote_id: None,
-    };
-    let storno_draft = invoices::create_draft(
-        pool,
-        &payload,
-        &storno_number,
-        &snapshot,
-        &buyer_snapshot,
-        &totals,
-    )
-    .await?;
 
     // Storno locken (Pipeline läuft inkl. KoSIT + Mustang + Archive). Der
     // DB-Lock + die Original-Cancel-Markierung laufen im SELBEN DB-TX
@@ -989,7 +1041,7 @@ pub async fn invoices_cancel(
     let lock = run_lock_pipeline_with_pair(
         pool,
         &paths,
-        &storno_draft.id,
+        &storno_id,
         "N/A",
         LockCancelPair {
             original_id: &original.invoice.id,
@@ -1008,7 +1060,7 @@ pub async fn invoices_cancel(
         &original.invoice.id,
         Some(&format!(
             r#"{{"storno_id":"{}","storno_number":"{}","reason":"{}"}}"#,
-            storno_draft.id,
+            storno_id,
             storno_number,
             escape(&args.reason)
         )),

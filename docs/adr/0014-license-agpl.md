@@ -49,3 +49,22 @@ Lizenzpflichten. Festgelegt wird:
 - **Beiträge Dritter** werden vorerst nicht angenommen (`CONTRIBUTING.md`), bis der Urheber als
   Rechteinhaber über CLA bzw. Rechteübertragung entschieden hat. Nur so bleibt die
   Dual-Licensing-Option (Konsequenzen oben) offen.
+
+## Amendment 2026-10-24 — Beiträge Dritter und Quellangebot (Lauf E)
+
+**Status:** Akzeptiert · 2026-10-24 · Lauf E (ADR 0039 Nr. 122/123).
+
+- **Beiträge Dritter: vorerst keine Code-Beiträge** — jetzt als Entscheidung, nicht mehr als
+  offene Frage. Kein Gesetz schreibt eine Beitragsregel vor; der Rechteinhaber entscheidet.
+  Ohne Rechteeinräumung würde ein Beitragender Urheber bzw. Bearbeiter seines Beitrags (§§ 7, 8,
+  69c Nr. 2 UrhG); eine zusätzliche kommerzielle Lizenz wäre dann ohne seine Zustimmung
+  ausgeschlossen (AGPL §5 c, §8 Abs. 2 UrhG), und für übernommenen Fremdcode haftet der
+  Rechteinhaber selbst (§97 UrhG). Fehlerberichte, Wünsche und Sicherheitsmeldungen sind
+  willkommen; Ideen setzt der Rechteinhaber selbst um, fremder Code wird nicht übernommen
+  (auch nicht aus Dependabot-Vorschlägen — übernommen werden nur Versionsnummern). Sollen später
+  Beiträge möglich sein, wäre für Code ein Contributor License Agreement mit einfachem
+  Nutzungsrecht je Beitrag und ausdrücklicher Erlaubnis zur Unterlizenz rechtlich gangbar
+  (§69a Abs. 5 UrhG schließt §§ 32 ff. für Computerprogramme aus; §31 Abs. 5 UrhG).
+- **Quellangebot:** Quellarchiv am Release ohne schriftliches Angebot; das Release erscheint vor
+  dem Image, Assets werden nie ersetzt und bleiben, solange ein zugehöriges Image abrufbar ist
+  (ADR 0039 Nr. 123).

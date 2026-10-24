@@ -853,12 +853,7 @@ pub async fn render_invoice_mail(
     let invoice = invoices::get(pool, invoice_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {invoice_id}")))?;
-    let seller = seller_profile::get(pool)
-        .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
-    let ctx = templates::build_invoice_context(&invoice, &seller, kleinunternehmer::hinweis_text());
-    let source = templates::load_template(&paths.inputs_dir, "invoice-de")?;
-    templates::render(&source, &ctx)
+    render_invoice_mail_from(pool, paths, &invoice).await
 }
 
 /// Kern-Pipeline für den Rechnungsversand. Public, damit E2E-Tests sie ohne
@@ -1315,6 +1310,8 @@ async fn resolve_recipient(
 }
 
 /// Wie [`render_invoice_mail`], aber mit bereits geladener Rechnung.
+/// Storno-Belege bekommen den Storno-Text (`storno-de` bzw. eingebettet) mit
+/// Nummer und Datum der stornierten Rechnung (Lauf E).
 async fn render_invoice_mail_from(
     pool: &SqlitePool,
     paths: &Paths,
@@ -1323,8 +1320,21 @@ async fn render_invoice_mail_from(
     let seller = seller_profile::get(pool)
         .await?
         .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
-    let ctx = templates::build_invoice_context(invoice, &seller, kleinunternehmer::hinweis_text());
-    let source = templates::load_template(&paths.inputs_dir, "invoice-de")?;
+    let mut ctx =
+        templates::build_invoice_context(invoice, &seller, kleinunternehmer::hinweis_text());
+    let source = match invoice.is_storno_for.as_deref() {
+        Some(original_id) => {
+            let original = invoices::get(pool, original_id)
+                .await?
+                .ok_or_else(|| Error::Domain("Storno: Original-Rechnung fehlt".into()))?;
+            ctx.invoice.storno_of = Some(templates::StornoRefCtx {
+                number: original.invoice_number,
+                date: templates::format_german_date(&original.invoice_date),
+            });
+            templates::load_storno_template(&paths.inputs_dir)
+        }
+        None => templates::load_template(&paths.inputs_dir, "invoice-de")?,
+    };
     templates::render(&source, &ctx)
 }
 

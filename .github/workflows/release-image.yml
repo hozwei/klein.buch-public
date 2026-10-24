@@ -4,10 +4,11 @@
 # SBOM (syft), Scan (trivy), Quellarchiv „Quellen Dritter“ — Ergebnisse als
 # Workflow-Artefakt. KEIN Push, KEINE Signatur, nur `contents: read`.
 #
-# Release auf Tags `v*`: dieselben Schritte, danach Push nach
-# ghcr.io/<owner>/klein-buch:<CalVer>, cosign keyless, Digest + Quellarchiv + SBOM in den
-# Release-Entwurf. Reihenfolge bauen → testen → Quellarchiv → Push → Signatur; ohne
-# Quellarchiv kein Push.
+# Release auf Tags `v*`: dieselben Schritte, danach das Release (Quellarchiv, SBOM, Digest,
+# Notes) VERÖFFENTLICHEN und erst dann Push nach ghcr.io/<owner>/klein-buch:<CalVer> und cosign
+# keyless. Reihenfolge bauen → testen → Quellarchiv → Release → Push → Signatur: Das Paket ist
+# öffentlich, der Quelltext der Komponenten Dritter muss es vor dem Image sein (GPLv2 §3,
+# GPLv3 §6(d); Lauf E, ADR 0039 Nr. 123). Release-Assets werden nie überschrieben.
 #
 # Gebaut wird ein OCI-Layout samt Attestierungen (der `docker`-Exporter von `--load`
 # behält sie ohne containerd-Store nicht). Getestet wird derselbe Inhalt, per skopeo in
@@ -45,7 +46,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Plattenplatz freigeben
         run: |
@@ -78,10 +79,10 @@ jobs:
             echo "description=EÜR-Buchhaltung für §19-Kleinunternehmer (selbst gehostet). Lizenzen und Hinweise unter /legal/ der laufenden Instanz und in /usr/share/doc/klein-buch im Image. Quelltext der Komponenten Dritter im Archiv klein-buch-${version}-quellen-dritter.tar.zst (Trockenlauf; nicht veröffentlicht)."
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Image bauen (OCI-Layout mit SBOM + Provenance, ohne Push)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -152,7 +153,7 @@ jobs:
         run: bash .github/scripts/build_sources_archive.sh --image klein-buch:ci --version "$VERSION" --out "$RUNNER_TEMP/dist"
 
       - name: Artefakt (SBOM + Quellarchiv)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-trockenlauf-${{ steps.meta.outputs.version }}
           path: ${{ runner.temp }}/dist/
@@ -161,7 +162,7 @@ jobs:
           retention-days: 14
 
   release:
-    name: Release (Push, Signatur, Release-Entwurf)
+    name: Release (Quellen, Push, Signatur)
     if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'hozwei/klein.buch-public'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -170,9 +171,10 @@ jobs:
       packages: write
       id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Releases nur aus main: ein Tag auf einem Arbeitszweig (z. B. phase-w) baut kein Image.
       - name: Tag-Commit liegt auf main
@@ -217,13 +219,14 @@ jobs:
           {
             echo "version=$version"
             echo "description=EÜR-Buchhaltung für §19-Kleinunternehmer (selbst gehostet). Lizenzen und Hinweise unter /legal/ der laufenden Instanz und in /usr/share/doc/klein-buch im Image. Quelltext der Komponenten Dritter: Release-Asset klein-buch-${version}-quellen-dritter.tar.zst unter ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+            echo "archive_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${TAG}/klein-buch-${version}-quellen-dritter.tar.zst"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # Ohne Cache: Das Release-Image entsteht vollständig aus dem Tag.
       - name: Image bauen (OCI-Layout mit SBOM + Provenance)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -244,12 +247,14 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             org.opencontainers.image.licenses=AGPL-3.0-or-later
+            de.klein-buch.source-archive=${{ steps.meta.outputs.archive_url }}
           annotations: |
             index:org.opencontainers.image.description=${{ steps.meta.outputs.description }}
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             index:org.opencontainers.image.revision=${{ github.sha }}
             index:org.opencontainers.image.version=${{ steps.meta.outputs.version }}
             index:org.opencontainers.image.licenses=AGPL-3.0-or-later
+            index:de.klein-buch.source-archive=${{ steps.meta.outputs.archive_url }}
 
       - name: Attestierungen prüfen, Image in Docker laden
         id: load
@@ -302,6 +307,94 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           echo "$GH_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
 
+      # Erst das Release mit Quellarchiv, SBOM und Digest veröffentlichen, dann das Image
+      # pushen (Lauf E, ADR 0039 Nr. 123). Der Digest steht schon fest: Der Push prüft ihn
+      # gegen den gebauten Index. Bei einer Wiederholung werden nur fehlende Assets
+      # hochgeladen, vorhandene nie ersetzt.
+      - name: Release veröffentlichen (Quellarchiv, SBOM, Digest — vor dem Image)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          ARCHIVE: ${{ steps.sources.outputs.archive }}
+          DIGEST: ${{ steps.load.outputs.digest }}
+          CERT_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          test -n "$ARCHIVE" && test -s "$ARCHIVE" || { echo "Kein Quellarchiv — kein Release, kein Push"; exit 1; }
+          repo="ghcr.io/${OWNER,,}/klein-buch"
+          dist="$RUNNER_TEMP/dist"
+          printf '%s:%s\n%s@%s\n' "$repo" "$VERSION" "$repo" "$DIGEST" > "$dist/klein-buch-${VERSION}-image.txt"
+          intro=$(awk -v h="## [${VERSION}]" 'index($0, h) == 1 {f = 1; next} f && /^(## |### )/ {exit} f {print}' CHANGELOG.md \
+            | sed -e '/./,$!d' | sed -e ':a' -e '/^\n*$/{$d;N;ba' -e '}')
+          {
+            echo "## Klein.Buch ${VERSION}"
+            echo
+            if [ -n "$intro" ]; then echo "$intro"; echo; fi
+            echo "Alle Änderungen: [CHANGELOG.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md)"
+            echo
+            echo "## Image"
+            echo
+            echo '```'
+            echo "${repo}:${VERSION}"
+            echo "${repo}@${DIGEST}"
+            echo '```'
+            echo
+            echo "Nur linux/amd64. Signatur prüfen:"
+            echo
+            echo '```'
+            echo "cosign verify --certificate-identity ${CERT_IDENTITY} \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com ${repo}@${DIGEST}"
+            echo '```'
+            echo
+            echo "## Lizenzen und Quellen"
+            echo
+            echo "- Quelltext von Klein.Buch (AGPL-3.0-or-later): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}"
+            echo "- Quelltext der Komponenten Dritter (GPL, LGPL, MPL, EPL, EUPL u. a.): \`klein-buch-${VERSION}-quellen-dritter.tar.zst\` (dieses Release, mit Prüfsumme)"
+            echo "- SBOM (SPDX-JSON): \`klein-buch-${VERSION}-sbom.spdx.json\`; SBOM und Provenance zusätzlich als Attestierung im Image-Index"
+            echo "- Lizenzseite der laufenden Instanz: \`/legal/\`"
+          } > "$RUNNER_TEMP/notes.md"
+          shopt -s nullglob
+          files=("$dist"/*)
+          test "${#files[@]}" -ge 4
+          # 0 = vorhanden, 1 = sicher nicht vorhanden; jeder andere Fehler bricht ab.
+          present() {
+            if skopeo inspect --raw "docker://$1" >/dev/null 2>"$RUNNER_TEMP/inspect.err"; then return 0; fi
+            if grep -qiE 'manifest unknown|name unknown|not found' "$RUNNER_TEMP/inspect.err"; then return 1; fi
+            cat "$RUNNER_TEMP/inspect.err"; exit 1
+          }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            old=$(gh release download "$TAG" -p "klein-buch-${VERSION}-image.txt" -O - 2>/dev/null | sed -n 's/.*@//p' | head -1 || true)
+            if [ -n "$old" ] && [ "$old" != "$DIGEST" ]; then
+              # Wiederholung mit neuem Build: Ersetzen nur, wenn zum alten Build nie ein
+              # Image öffentlich war — sonst gehörten Quellen und Image nicht zusammen.
+              if present "${repo}@${old}"; then
+                echo "Release $TAG gehört zu ${repo}@${old}, gebaut wurde $DIGEST — Abbruch, veröffentlichte Quellen werden nicht ersetzt"
+                exit 1
+              fi
+              echo "Release $TAG stammt aus einem früheren Lauf ohne veröffentlichtes Image ($old) — Assets und Notes werden ersetzt"
+              gh release upload "$TAG" "${files[@]}" --clobber
+              gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            else
+              have=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+              for f in "${files[@]}"; do
+                if grep -qxF "$(basename "$f")" <<<"$have"; then
+                  echo "vorhanden, nicht ersetzt: $(basename "$f")"
+                else
+                  gh release upload "$TAG" "$f"
+                fi
+              done
+            fi
+            gh release edit "$TAG" --draft=false
+          else
+            gh release create "$TAG" --verify-tag --latest --title "Klein.Buch ${VERSION}" \
+              --notes-file "$RUNNER_TEMP/notes.md" "${files[@]}"
+          fi
+          gh release view "$TAG" --json isDraft --jq '.isDraft' | grep -qx false \
+            || { echo "Release ist noch ein Entwurf — kein Push"; exit 1; }
+
       - name: Image pushen (nur mit Quellarchiv)
         id: push
         env:
@@ -313,11 +406,13 @@ jobs:
           set -euo pipefail
           test -n "$ARCHIVE" && test -s "$ARCHIVE" || { echo "Kein Quellarchiv — kein Push"; exit 1; }
           repo="ghcr.io/${OWNER,,}/klein-buch"
-          if skopeo inspect --raw "docker://${repo}:${VERSION}" > "$RUNNER_TEMP/remote.json" 2>/dev/null; then
+          if skopeo inspect --raw "docker://${repo}:${VERSION}" > "$RUNNER_TEMP/remote.json" 2>"$RUNNER_TEMP/inspect.err"; then
             remote="sha256:$(sha256sum < "$RUNNER_TEMP/remote.json" | cut -d' ' -f1)"
             test "$remote" = "$BUILT_DIGEST" || { echo "${repo}:${VERSION} existiert schon mit anderem Inhalt ($remote)"; exit 1; }
             echo "${repo}:${VERSION} ist bereits dieser Build — kein erneuter Push"
             digest=$remote
+          elif ! grep -qiE 'manifest unknown|name unknown|not found' "$RUNNER_TEMP/inspect.err"; then
+            cat "$RUNNER_TEMP/inspect.err"; echo "Registry-Abfrage fehlgeschlagen — kein Push"; exit 1
           else
             skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/digest" \
               "oci:$RUNNER_TEMP/image-oci" "docker://${repo}:${VERSION}"
@@ -338,47 +433,3 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "${REPO}@${DIGEST}" >/dev/null
           echo "Signatur geprüft: ${REPO}@${DIGEST}"
 
-      - name: Release-Entwurf (Digest, Quellarchiv, SBOM)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          REPO: ${{ steps.push.outputs.repo }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-          CERT_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
-        run: |
-          set -euo pipefail
-          dist="$RUNNER_TEMP/dist"
-          printf '%s:%s\n%s@%s\n' "$REPO" "$VERSION" "$REPO" "$DIGEST" > "$dist/klein-buch-${VERSION}-image.txt"
-          {
-            echo "## Image"
-            echo
-            echo '```'
-            echo "${REPO}:${VERSION}"
-            echo "${REPO}@${DIGEST}"
-            echo '```'
-            echo
-            echo "Nur linux/amd64. Signatur prüfen:"
-            echo
-            echo '```'
-            echo "cosign verify --certificate-identity ${CERT_IDENTITY} \\"
-            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com ${REPO}@${DIGEST}"
-            echo '```'
-            echo
-            echo "## Lizenzen und Quellen"
-            echo
-            echo "- Quelltext von Klein.Buch (AGPL-3.0-or-later): ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/${GITHUB_SHA}"
-            echo "- Quelltext der Komponenten Dritter: \`klein-buch-${VERSION}-quellen-dritter.tar.zst\` (dieses Release)"
-            echo "- SBOM (SPDX-JSON): \`klein-buch-${VERSION}-sbom.spdx.json\`; SBOM und Provenance zusätzlich als Attestierung im Image-Index"
-            echo "- Lizenzseite der laufenden Instanz: \`/legal/\`"
-          } > "$RUNNER_TEMP/notes.md"
-          shopt -s nullglob
-          files=("$dist"/*)
-          test "${#files[@]}" -ge 4
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --clobber
-          else
-            gh release create "$TAG" --draft --verify-tag --title "Klein.Buch ${VERSION}" \
-              --notes-file "$RUNNER_TEMP/notes.md" "${files[@]}"
-          fi

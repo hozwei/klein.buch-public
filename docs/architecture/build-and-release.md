@@ -164,21 +164,33 @@ HTTP-Schritte des Smoke-Tests dieselben Wege ab.
 3. Build **ohne Cache** mit `pull: true`, SBOM- und Provenance-Attestierung,
    Build-Argumente mit Commit und Tag.
 4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf.
-5. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
+5. **Release zuerst** (Lauf E, ADR 0039 Nr. 123): `gh release create --verify-tag
+   --latest` — veröffentlicht, kein Entwurf — mit Notizen (Einleitung des
+   CHANGELOG-Abschnitts, Tag und Digest, Prüfbefehl, Quellen) und den Assets
+   `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
+   `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Der Digest steht
+   vor dem Push fest (gebauter Index). Bei einer Wiederholung werden nur fehlende
+   Assets hochgeladen, vorhandene nie ersetzt. Ist das Release danach noch ein
+   Entwurf, bricht der Lauf vor dem Push ab.
+6. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
    `ghcr.io/<owner>/klein-buch:<Version>`; der gepushte Digest muss dem
    gebauten Index entsprechen. Gibt es das Tag schon mit anderem Inhalt, bricht
-   der Lauf ab; mit gleichem Inhalt wird nicht erneut gepusht.
-6. **Signatur:** `cosign sign` auf den Digest, danach `cosign verify` mit der
+   der Lauf ab; mit gleichem Inhalt wird nicht erneut gepusht. Das Image trägt
+   die direkte Adresse seines Quellarchivs im Label `de.klein-buch.source-archive`.
+7. **Signatur:** `cosign sign` auf den Digest, danach `cosign verify` mit der
    genauen Workflow-Identität.
-7. **Release-Entwurf** (`gh release create --draft --verify-tag`) mit Notizen
-   (Tag und Digest, Prüfbefehl, Quellen) und den Assets
-   `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
-   `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Veröffentlicht
-   wird der Entwurf von Hand nach Durchsicht.
 
 Feste Regeln (E15): nur volle Versionen als Tag, kein `:latest`, kein gleitender
 Minor-Tag; Images und Tags `v*` werden nie gelöscht oder verschoben — sie sind
 Quellbezug älterer Images und der Rückfall nach einem gescheiterten Update.
+
+**Quellangebot (Lauf E, ADR 0039 Nr. 123):** Der Quelltext der Komponenten Dritter liegt je
+Version als Release-Asset bereit, **bevor** das Image öffentlich wird, und bleibt so lange,
+wie ein zugehöriges Image abrufbar ist (GPLv2 §3 „from the same place“, GPLv3 §6(d)). Deshalb:
+Release-Assets nie löschen oder ersetzen; wenn überhaupt, erst Image-Versionen in GHCR
+löschen, dann frühestens das Archiv. Das Repository bleibt öffentlich. In die Registry gehen
+nur Tag-Builds von `main` (`phase-w` pusht nie). Wird das Image auf einem Datenträger oder
+vorinstalliert weitergegeben, gehört der Quelltext mit dazu.
 
 Beim ersten Release: Existiert das Paket `ghcr.io/hozwei/klein-buch` schon, ohne
 mit dem Repository verknüpft zu sein, braucht der Workflow Schreibrechte unter
@@ -220,8 +232,9 @@ Entwicklungsordner (`CONTRIBUTING.md`).
 3. Auf `phase-w` veröffentlichen; CI, `image.yml` und Trockenlauf grün (Smoke,
    Scan, Quellarchiv).
 4. Stand nach `main` bringen und mit `-Tag v<Version>` veröffentlichen.
-5. Release-Lauf grün, Signatur mit dem Befehl aus `SECURITY.md` prüfen,
-   Release-Entwurf durchsehen und veröffentlichen.
+5. Release-Lauf grün; Release-Seite (Notes, vier Assets, Digest in
+   `image.txt`) und Signatur mit dem Befehl aus `SECURITY.md` prüfen. Das Release
+   ist schon veröffentlicht (vor dem Image, ADR 0039 Nr. 123).
 
 ---
 

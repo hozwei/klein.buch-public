@@ -26,6 +26,10 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # Typen müssen zur Laufzeit passen (Node 22 LTS im Image und in CI).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       js:
         patterns: ["*"]
@@ -49,6 +53,11 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # Basis-Images bleiben auf LTS-Linien (Node 22, Java 21); ein Wechsel der Linie
+      # (z. B. Node 24, Java 25) ist eine bewusste Entscheidung, kein Routine-Update.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       basis-images:
         patterns: ["*"]

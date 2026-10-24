@@ -22,7 +22,9 @@ Trigger-Stand nach Migration `0028_append_only_hardening` (R1-Review).
    selbst lässt sich weder zurücksetzen noch ändern.
 2. **Storno statt Löschung.** Ein fehlerhafter Beleg wird durch einen Storno-
    Beleg neutralisiert. Das Original bleibt erhalten und wird als `canceled`
-   markiert. `DELETE` auf Rechnungen, Angeboten, Kosten, Privatbewegungen und
+   markiert. Der Storno-Beleg bekommt Geschäftsjahr und Nummer
+   (`ST-JJJJ-NNNN`) aus seinem eigenen Datum (GoBD Rz. 51) und verweist auf
+   Nummer und Datum des Originals (XML BT-25/BT-26, PDF; ADR 0039 Nr. 122). `DELETE` auf Rechnungen, Angeboten, Kosten, Privatbewegungen und
    Anlagen scheitert immer am Trigger, auch bei Entwürfen.
 3. **Archive ist write-once.** Beleg-PDF und -XML werden mit SHA-256 in
    `archive/` abgelegt, `chmod 0o400`, `trg_archive_no_update` schützt Hash,

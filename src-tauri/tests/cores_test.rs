@@ -291,10 +291,287 @@ async fn storno_date_must_be_in_an_open_year_after_the_invoice() {
         err.to_string().contains("abgeschlossen"),
         "geschlossenes Jahr: {err}"
     );
+    // Gegenprüfung Lauf E: Die Ablehnungen hinterlassen weder Beleg noch Zählerstand.
+    let stornos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices WHERE is_storno_for = ?")
+        .bind(&id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stornos, 0, "kein Storno-Entwurf nach Ablehnung");
+    assert_eq!(
+        klein_buch_lib::db::numbering::peek_seq(
+            &pool,
+            klein_buch_lib::domain::numbering::DocType::StornoInvoice,
+            last_year
+        )
+        .await
+        .unwrap(),
+        0,
+        "kein Zählerstand im abgeschlossenen Jahr"
+    );
     let resp = cancel(Some(today)).await.unwrap();
     assert_eq!(
         resp.original.status, "canceled",
         "Storno im offenen Jahr geht"
+    );
+    // Lauf E: das abgeschlossene Jahr bekommt keinen neuen Beleg.
+    assert_eq!(resp.storno.invoice.fiscal_year, i64::from(today.year()));
+    assert!(resp
+        .storno
+        .invoice
+        .invoice_number
+        .starts_with(&format!("ST-{}-", today.year())));
+}
+
+#[tokio::test]
+async fn storno_takes_year_and_number_from_the_storno_date() {
+    // Lauf E (GoBD Rz. 51): Geschäftsjahr und Nummernkreis des Stornos folgen
+    // dem Storno-Datum; der Bezug aufs Original steht als Nummer + Datum im XML.
+    use chrono::Datelike as _;
+    use klein_buch_lib::db::numbering::peek_seq;
+    use klein_buch_lib::domain::numbering::DocType;
+    let env = setup(true).await;
+    let pool = env.ctx.pool().unwrap();
+    let today = klein_buch_lib::clock::today_berlin();
+    let this_year = today.year();
+    let last_year = this_year - 1;
+    let cancel = |id: String| {
+        inv_cmd::invoices_cancel(
+            &env.ctx,
+            inv_cmd::InvoicesCancelArgs {
+                args: inv_cmd::CancelArgs {
+                    invoice_id: id,
+                    reason: "Fehler im Betrag".into(),
+                    storno_date: Some(today),
+                },
+            },
+        )
+    };
+
+    // Original aus dem (offenen) Vorjahr, Storno heute.
+    let old = locked_invoice_on(&env, NaiveDate::from_ymd_opt(last_year, 12, 10).unwrap()).await;
+    let old_row = klein_buch_lib::db::repo::invoices::get(&pool, &old)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_row.fiscal_year, i64::from(last_year));
+    let resp = cancel(old.clone()).await.unwrap();
+    assert_eq!(resp.storno.invoice.fiscal_year, i64::from(this_year));
+    assert_eq!(
+        resp.storno.invoice.invoice_number,
+        format!("ST-{this_year}-0001")
+    );
+    assert_eq!(
+        peek_seq(&pool, DocType::StornoInvoice, last_year)
+            .await
+            .unwrap(),
+        0,
+        "Nummernkreis des Vorjahres bleibt unberührt"
+    );
+    let xml = String::from_utf8(
+        klein_buch_lib::archive::store::read_and_verify_silent(&pool, &resp.storno.xml_archive_id)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        xml.contains(&format!(
+            "<ram:IssuerAssignedID>{}</ram:IssuerAssignedID>",
+            old_row.invoice_number
+        )),
+        "BT-25 = Nummer des Originals"
+    );
+    assert!(
+        xml.contains(&format!(
+            "<qdt:DateTimeString format=\"102\">{last_year}1210</qdt:DateTimeString>"
+        )),
+        "BT-26 = Rechnungsdatum des Originals"
+    );
+    assert!(!xml.contains(&old), "keine interne ID im XML");
+
+    // Storno im selben Jahr: fortlaufend im Kreis des Storno-Jahres.
+    let fresh = locked_invoice_on(&env, today).await;
+    let resp2 = cancel(fresh).await.unwrap();
+    assert_eq!(resp2.storno.invoice.fiscal_year, i64::from(this_year));
+    assert_eq!(
+        resp2.storno.invoice.invoice_number,
+        format!("ST-{this_year}-0002")
+    );
+}
+
+#[tokio::test]
+async fn storno_drafts_only_complete_through_cancel_and_are_reused() {
+    // Gegenprüfung Lauf E (S1/S2): Ein liegengebliebener Storno-Entwurf lässt
+    // sich nicht ohne das Original festschreiben; „Stornieren“ verwendet ihn
+    // wieder (keine zweite ST-Nummer); über die API entsteht kein Storno-Entwurf.
+    use klein_buch_lib::db::numbering::peek_seq;
+    use klein_buch_lib::domain::numbering::DocType;
+    let env = setup(true).await;
+    let pool = env.ctx.pool().unwrap();
+    let today = klein_buch_lib::clock::today_berlin();
+    let fy = chrono::Datelike::year(&today);
+    let id = locked_invoice_on(&env, today).await;
+    let original = klein_buch_lib::db::repo::invoices::get(&pool, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let storno_like = InvoiceInput {
+        direction: InvoiceDirection::Issued,
+        invoice_date: today,
+        delivery_date: Some(today),
+        due_date: None,
+        currency_code: "EUR".into(),
+        items: vec![InvoiceItemInput {
+            position: 1,
+            description: "Storno".into(),
+            quantity: 2.0,
+            unit_code: "HUR".into(),
+            unit_price_cents: -30_000,
+            tax_rate_percent: 0.0,
+            tax_category_code: "E".into(),
+            description_title: None,
+            description_markup: None,
+            source_package_id: None,
+            source_package_revision: None,
+        }],
+        notes: None,
+        payment_note: None,
+        pdf_template: "default".into(),
+        is_storno_for: Some(id.clone()),
+        cancel_reason: Some("liegengeblieben".into()),
+    };
+
+    // Über die API: abgelehnt.
+    let err = inv_cmd::invoices_create_draft(
+        &env.ctx,
+        inv_cmd::InvoicesCreateDraftArgs {
+            args: inv_cmd::CreateDraftArgs {
+                contact_id: original.contact_id.clone(),
+                buyer_reference: None,
+                input: storno_like.clone(),
+            },
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("Stornieren"), "{err}");
+
+    // Liegengebliebener Entwurf (wie nach einer gescheiterten Pipeline).
+    let stale =
+        inv_cmd::create_invoice_draft_from_input(&pool, &original.contact_id, &storno_like, None)
+            .await
+            .unwrap();
+    assert_eq!(
+        peek_seq(&pool, DocType::StornoInvoice, fy).await.unwrap(),
+        1
+    );
+    let err = inv_cmd::invoices_lock_and_issue(
+        &env.ctx,
+        inv_cmd::InvoicesLockAndIssueArgs {
+            id: stale.invoice.id.clone(),
+            buyer_reference: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("Stornieren"), "{err}");
+
+    // „Stornieren“ schließt genau diesen Entwurf ab.
+    let cancel = || {
+        inv_cmd::invoices_cancel(
+            &env.ctx,
+            inv_cmd::InvoicesCancelArgs {
+                args: inv_cmd::CancelArgs {
+                    invoice_id: id.clone(),
+                    reason: "Fehler im Betrag".into(),
+                    storno_date: Some(today),
+                },
+            },
+        )
+    };
+    let resp = cancel().await.unwrap();
+    assert_eq!(
+        resp.storno.invoice.id, stale.invoice.id,
+        "Entwurf wiederverwendet"
+    );
+    assert_eq!(
+        resp.storno.invoice.invoice_number,
+        stale.invoice.invoice_number
+    );
+    assert_eq!(
+        resp.storno.invoice.cancel_reason.as_deref(),
+        Some("Fehler im Betrag")
+    );
+    assert_eq!(resp.original.status, "canceled");
+    assert_eq!(
+        peek_seq(&pool, DocType::StornoInvoice, fy).await.unwrap(),
+        1,
+        "keine zweite ST-Nummer"
+    );
+    let err = cancel().await.unwrap_err();
+    assert!(err.to_string().contains("bereits storniert"), "{err}");
+}
+
+#[tokio::test]
+async fn no_invoice_draft_or_number_in_a_closed_year() {
+    // Gegenprüfung Lauf E (S2): Ein Entwurf mit Datum im abgeschlossenen Jahr
+    // verbraucht dort keine Nummer.
+    use chrono::Datelike as _;
+    use klein_buch_lib::db::numbering::peek_seq;
+    use klein_buch_lib::domain::numbering::DocType;
+    let env = setup(true).await;
+    let pool = env.ctx.pool().unwrap();
+    let today = klein_buch_lib::clock::today_berlin();
+    let last_year = today.year() - 1;
+    let session = klein_buch_lib::backup::BackupSession::default();
+    session.set("passphrase-1234".into());
+    klein_buch_lib::fiscal_year::lock::close_year(
+        &pool,
+        &env.ctx.paths,
+        &session,
+        last_year as i64,
+        today,
+    )
+    .await
+    .unwrap();
+    let id = locked_invoice_on(&env, today).await;
+    let original = klein_buch_lib::db::repo::invoices::get(&pool, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let date = NaiveDate::from_ymd_opt(last_year, 12, 20).unwrap();
+    let input = InvoiceInput {
+        direction: InvoiceDirection::Issued,
+        invoice_date: date,
+        delivery_date: Some(date),
+        due_date: None,
+        currency_code: "EUR".into(),
+        items: vec![InvoiceItemInput {
+            position: 1,
+            description: "Nachtrag".into(),
+            quantity: 1.0,
+            unit_code: "HUR".into(),
+            unit_price_cents: 10_000,
+            tax_rate_percent: 0.0,
+            tax_category_code: "E".into(),
+            description_title: None,
+            description_markup: None,
+            source_package_id: None,
+            source_package_revision: None,
+        }],
+        notes: None,
+        payment_note: None,
+        pdf_template: "default".into(),
+        is_storno_for: None,
+        cancel_reason: None,
+    };
+    let err = inv_cmd::create_invoice_draft_from_input(&pool, &original.contact_id, &input, None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("abgeschlossen"), "{err}");
+    assert_eq!(
+        peek_seq(&pool, DocType::Invoice, last_year).await.unwrap(),
+        0
     );
 }
 

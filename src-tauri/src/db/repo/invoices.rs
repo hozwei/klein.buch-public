@@ -21,6 +21,7 @@
 use crate::db::models::{InvoiceDetail, InvoiceItemRow, InvoiceListItem, InvoiceRow};
 use crate::domain::invoice::{InvoiceInput, Totals};
 use crate::error::{Error, Result};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -593,6 +594,54 @@ pub async fn mark_sent(pool: &SqlitePool, id: &str, sent_at_iso: &str) -> Result
 // ---- Re-Export für Bequemlichkeit ------------------------------------------
 
 pub use crate::db::models::{ContactRow as Buyer, InvoiceDetail as Detail};
+
+/// Offener (nicht festgeschriebener) Storno-Entwurf zu einer Rechnung — bleibt
+/// liegen, wenn die Lock-Pipeline eines Stornos scheitert. `invoices_cancel`
+/// verwendet ihn wieder, statt eine neue ST-Nummer zu ziehen (Lauf E).
+/// Liefert `(id, invoice_number, fiscal_year)` des ältesten.
+pub async fn open_storno_draft(
+    pool: &SqlitePool,
+    original_id: &str,
+) -> Result<Option<(String, String, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, invoice_number, fiscal_year FROM invoices
+          WHERE is_storno_for = ? AND locked_at IS NULL
+          ORDER BY created_at, invoice_number LIMIT 1",
+    )
+    .bind(original_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Frischt Datum und Grund eines offenen Storno-Entwurfs auf (Wiederholung
+/// eines gescheiterten Stornos). Nur für nicht festgeschriebene Storno-Belege.
+pub async fn refresh_storno_draft(
+    pool: &SqlitePool,
+    id: &str,
+    storno_date: NaiveDate,
+    reason: &str,
+) -> Result<()> {
+    let date = storno_date.to_string();
+    let res = sqlx::query(
+        "UPDATE invoices
+            SET invoice_date = ?, delivery_date = ?, cancel_reason = ?, notes = ?,
+                updated_at = datetime('now','utc')
+          WHERE id = ? AND locked_at IS NULL AND is_storno_for IS NOT NULL",
+    )
+    .bind(&date)
+    .bind(&date)
+    .bind(reason)
+    .bind(reason)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() != 1 {
+        return Err(Error::Domain(format!(
+            "Storno-Entwurf {id} ist nicht mehr offen"
+        )));
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {

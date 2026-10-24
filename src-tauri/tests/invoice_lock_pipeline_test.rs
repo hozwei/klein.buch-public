@@ -454,7 +454,9 @@ async fn storno_creates_new_invoice_and_marks_original() {
     // Storno-Datum: heute (Europe/Berlin) — sonst löst validate_for_issue
     // einen `InvoiceDateInFuture`-Fehler aus, wenn der Test vor dem
     // hardgecodeten 2026-05-25 ausgeführt wird.
-    let today = chrono::Local::now().date_naive();
+    let today = klein_buch_lib::clock::today_berlin();
+    // Lauf E: Geschäftsjahr und Nummernkreis folgen dem Storno-Datum.
+    let storno_fy = klein_buch_lib::domain::storno::storno_fiscal_year(&today);
     let storno_input = build_storno_input(
         &original_view,
         detail.invoice.id.clone(),
@@ -467,11 +469,11 @@ async fn storno_creates_new_invoice_and_marks_original() {
     let storno_number = klein_buch_lib::db::numbering::next_number(
         &env.pool,
         klein_buch_lib::domain::numbering::DocType::StornoInvoice,
-        2026,
+        storno_fy,
     )
     .await
     .unwrap();
-    assert!(storno_number.starts_with("ST-2026-"));
+    assert!(storno_number.starts_with(&format!("ST-{storno_fy}-")));
 
     let snapshot = invoices::SellerSnapshot {
         name: &seller.name,
@@ -496,7 +498,7 @@ async fn storno_creates_new_invoice_and_marks_original() {
     };
     let payload = invoices::DraftCreatePayload {
         contact_id: contact_id.clone(),
-        fiscal_year: 2026,
+        fiscal_year: i64::from(storno_fy),
         is_kleinunternehmer: true,
         input: storno_input,
         derived_from_quote_id: None,

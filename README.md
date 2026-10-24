@@ -63,7 +63,9 @@ für diesen Hostname, lokale Datenträger für Datenbank und Archiv (kein NFS/SM
    - `image:` auf eine **feste Version** setzen,
      `ghcr.io/hozwei/klein-buch:<Version>` (Versionen auf der
      [Releases-Seite](https://github.com/hozwei/klein.buch-public/releases);
-     es gibt kein `:latest`);
+     es gibt kein `:latest`); zu jeder Version liegt dort auch der
+     Quelltext aller Komponenten Dritter (GPL, LGPL, MPL, EPL, EUPL u. a.) als
+     `klein-buch-<Version>-quellen-dritter.tar.zst`;
    - `KLEIN_BUCH_PUBLIC_URL` auf die öffentliche Adresse;
    - `KLEIN_BUCH_TRUSTED_PROXIES` auf die Adresse, unter der der Reverse-Proxy
      beim Container ankommt (`docs/operations-guide.md` §6);
@@ -73,7 +75,7 @@ für diesen Hostname, lokale Datenträger für Datenbank und Archiv (kein NFS/SM
 3. **Signatur prüfen** (empfohlen, `SECURITY.md`):
 
    ```sh
-   cosign verify ghcr.io/hozwei/klein-buch:<Version> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+   cosign verify ghcr.io/hozwei/klein-buch:<Version> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 
 4. **Starten und den Setup-Token aus dem Log holen:**

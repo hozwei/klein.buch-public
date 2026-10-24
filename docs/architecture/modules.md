@@ -36,7 +36,7 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 | `domain::contact` | Kontakt-Validierung | `validate`, `validate_vat_id` |
 | `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), 5-Jahres-Bindung nach Verzicht, USt-Sperre je Position | `HINWEIS_TEXT`, `KleinunternehmerStatus`, `waiver_deadline`, `assert_no_vat` |
 | `domain::kleinbetragsrechnung` | §33 UStDV — vereinfachte Pflichtangaben bei ≤ 250 € Brutto | `KLEINBETRAG_THRESHOLD_CENTS`, `is_applicable` |
-| `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer) | `build_storno_input` |
+| `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer); Geschäftsjahr aus dem Storno-Datum, Bezug aufs Original (Nummer, Datum) für XML und PDF (Lauf E) | `build_storno_input`, `storno_fiscal_year`, `PrecedingInvoice` |
 | `domain::numbering` | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) | `DocType`, `format`, `format_invoice`, `format_storno`, `format_quote`, `format_expense` |
 | `domain::quote` | Angebots-Validierung und -Totals, Konvertierung zu Rechnung | `validate_quote`, `compute_totals`, `convert_to_invoice` |
 | `domain::expense` | Kosten-Validierung, §13b nur als Hinweis-Flag, Brutto in die EÜR | `validate_expense`, `compute_gross` |
@@ -318,7 +318,7 @@ ADRs: 0027, 0034, 0039.
 |---|---|---|
 | `fiscal_year::lock` | Shell | `close_year(year)` — nur abgelaufene Jahre, nur entsperrt: AfA buchen, Anlagen + Abschreibung sperren, EÜR-Snapshot ins `fiscal_year_locks` (append-only), Audit, Auto-Backup; `get`, `list_closed` |
 | `fiscal_year::transition` | Shell | GJ-Übergang: `open_receivables` (offene Forderungen, die der Abschluss-Dialog anzeigt); Nummernkreise starten lazy je GJ |
-| `fiscal_year::guard` | Shell | `ensure_year_open(year)`-Guard in den Command-Kernen, `is_closed`. Storno-Pfad bleibt explizit erlaubt (Korrektur in Folgejahr möglich). |
+| `fiscal_year::guard` | Shell | `ensure_year_open(year)`-Guard in den Command-Kernen, `is_closed`. Ein Storno zu einer Rechnung aus einem abgeschlossenen Jahr bleibt möglich; er entsteht im (offenen) Jahr seines Storno-Datums (ADR 0039 Nr. 122). |
 
 **Hardline (ADR 0027).** `close_year` ist **unumkehrbar**. Versuche, danach
 Belege im geschlossenen Jahr zu ändern, scheitern am Guard auf Command-Ebene

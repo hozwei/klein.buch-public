@@ -23,6 +23,23 @@ pub struct OriginalInvoiceView<'a> {
     pub items: Vec<OriginalItemView<'a>>,
 }
 
+/// Bezug eines Storno-Belegs auf die stornierte Rechnung: Nummer (BT-25) und
+/// Rechnungsdatum (BT-26) des Originals, auf dem PDF als „Storno zur Rechnung
+/// <Nr> vom <Datum>“ (§31 Abs. 5 UStDV, GoBD Rz. 64; Lauf E). Die interne ID
+/// (`is_storno_for`) taugt dafür nicht — der Empfänger kennt nur die Nummer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrecedingInvoice {
+    pub number: String,
+    pub issue_date: NaiveDate,
+}
+
+/// Geschäftsjahr und Nummernkreis eines Storno-Belegs folgen dem
+/// Storno-Datum, nicht dem Original (GoBD Rz. 51: Zuordnung zum
+/// Geschäftsjahr, in dem der Vorgang anfällt; Lauf E, ADR 0039 Nr. 122).
+pub fn storno_fiscal_year(storno_date: &NaiveDate) -> i32 {
+    crate::domain::fiscal_year::fiscal_year_for(storno_date)
+}
+
 #[derive(Debug, Clone)]
 pub struct OriginalItemView<'a> {
     pub position: u32,
@@ -211,5 +228,14 @@ mod tests {
         );
         assert_eq!(storno.is_storno_for.as_deref(), Some("uuid-orig"));
         assert_eq!(storno.cancel_reason.as_deref(), Some("Reason"));
+    }
+
+    #[test]
+    fn storno_fiscal_year_follows_the_storno_date() {
+        // Original vom Dezember, Storno im Januar: Geschäftsjahr des Stornos.
+        let jan = NaiveDate::from_ymd_opt(2027, 1, 15).unwrap();
+        assert_eq!(storno_fiscal_year(&jan), 2027);
+        let dec = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+        assert_eq!(storno_fiscal_year(&dec), 2026);
     }
 }

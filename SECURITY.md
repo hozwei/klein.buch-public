@@ -52,7 +52,7 @@ cosign ohne Schlüssel (keyless, OIDC-Identität des Workflows) signiert.
 ### Signatur
 
 ```sh
-cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 `<v>` ist die Version ohne führendes `v`, z. B. das Tag aus dem Release. Die

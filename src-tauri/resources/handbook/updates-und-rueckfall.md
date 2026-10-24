@@ -85,7 +85,7 @@ GitHub gebaut wurde und unterwegs nicht verändert wurde. Prüfen kannst
 Du sie mit dem Werkzeug cosign:
 
 ```
-cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 Ersetze `<v>` durch die Version, zum Beispiel `2026.11.0`. Meldet cosign
@@ -137,4 +137,4 @@ neueren Version nimmt eine ältere dagegen nie an.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

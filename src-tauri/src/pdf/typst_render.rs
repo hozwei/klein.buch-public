@@ -30,6 +30,7 @@ use crate::domain::invoice::{compute_totals, BuyerView, InvoiceInput, SellerView
 use crate::domain::kleinunternehmer::HINWEIS_TEXT;
 use crate::domain::package;
 use crate::domain::quote::{compute_totals as quote_compute_totals, QuoteItemInput};
+use crate::domain::storno::PrecedingInvoice;
 use crate::error::{Error, Result};
 
 #[derive(Debug, thiserror::Error)]
@@ -107,6 +108,39 @@ pub fn invoice_job(
     accounts: &serde_json::Value,
     service_date_fallback: bool,
 ) -> Result<PdfJob> {
+    invoice_job_with_storno(
+        template_source,
+        invoice_number,
+        input,
+        seller,
+        buyer,
+        branding_dir,
+        logo,
+        owner_name,
+        accounts,
+        service_date_fallback,
+        None,
+    )
+}
+
+/// Wie [`invoice_job`], für einen Storno-Beleg mit `data.invoice.storno_of =
+/// {number, date}` (Nummer und Rechnungsdatum der stornierten Rechnung). Die
+/// Vorlagen zeigen dann „Stornorechnung“ und „Storno zur Rechnung … vom …“ und
+/// keinen Überweisungshinweis (Lauf E).
+#[allow(clippy::too_many_arguments)]
+pub fn invoice_job_with_storno(
+    template_source: &str,
+    invoice_number: &str,
+    input: &InvoiceInput,
+    seller: &SellerView<'_>,
+    buyer: &BuyerView<'_>,
+    branding_dir: Option<&Path>,
+    logo: Option<(&str, &[u8])>,
+    owner_name: Option<&str>,
+    accounts: &serde_json::Value,
+    service_date_fallback: bool,
+    storno_of: Option<&PrecedingInvoice>,
+) -> Result<PdfJob> {
     let data = build_data_json(
         invoice_number,
         input,
@@ -117,6 +151,10 @@ pub fn invoice_job(
         accounts,
         service_date_fallback,
     )?;
+    let data = match storno_of {
+        Some(p) => with_storno_of(&data, p)?,
+        None => data,
+    };
     // PDF/A-3b erzwingen: Mustang's ZUGFeRDExporterFromPDFA liest die
     // PDF/A-Kennung aus den XMP-Metadaten. Ein Plain-PDF (keine Kennung)
     // wird mit "PDF-A version not supported" abgelehnt — auch mit
@@ -462,6 +500,21 @@ pub fn build_data_json(
         "payment_accounts": accounts.clone(),
     });
     serde_json::to_string(&data)
+}
+
+/// Ergänzt die Daten-JSON einer Rechnung um `invoice.storno_of`.
+fn with_storno_of(
+    data: &str,
+    p: &PrecedingInvoice,
+) -> std::result::Result<String, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(data)?;
+    if let Some(inv) = value.get_mut("invoice").and_then(|v| v.as_object_mut()) {
+        inv.insert(
+            "storno_of".into(),
+            json!({ "number": p.number, "date": p.issue_date.to_string() }),
+        );
+    }
+    serde_json::to_string(&value)
 }
 
 /// Eingabe für [`render_quote`] — analog [`InvoiceInput`], aber mit
@@ -1681,5 +1734,99 @@ mod tests {
         )
         .expect("Angebot-Default Regel");
         ok(&pdf, "angebot-default Regel");
+    }
+
+    /// Lauf E: Storno-Belege tragen in allen vier Rechnungsvorlagen die
+    /// Überschrift „Stornorechnung“, den Bezug „Storno zur Rechnung <Nr> vom
+    /// <Datum>“ und „Stornobetrag“, aber keinen Überweisungshinweis; eine
+    /// normale Rechnung bleibt unverändert.
+    #[test]
+    fn storno_pdfs_show_title_reference_and_no_transfer_request() {
+        use crate::pdf::templates::{TEMPLATE_KLASSISCH, TEMPLATE_MINIMAL, TEMPLATE_MODERN};
+        let default_src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../inputs/pdf-templates/default.typ"
+        ))
+        .expect("default.typ");
+        let accounts = serde_json::json!([
+            {"type":"bank","label":"Geschäftskonto","holder":"Manuel Schmid","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
+        ]);
+        let mut storno = invoice();
+        storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+        storno.items[0].unit_price_cents = -10_000;
+        let preceding = PrecedingInvoice {
+            number: "RE-2025-0042".into(),
+            issue_date: NaiveDate::from_ymd_opt(2025, 12, 10).unwrap(),
+        };
+        let laid_out = |tpl: &str, input: &InvoiceInput, p: Option<&PrecedingInvoice>| {
+            let job = invoice_job_with_storno(
+                tpl,
+                "ST-2026-0001",
+                input,
+                &seller(),
+                &buyer(),
+                None,
+                None,
+                Some("Manuel Schmid"),
+                &accounts,
+                true,
+                p,
+            )
+            .unwrap();
+            let world = TemplateWorld::new(tpl, &job.data_json, None, &[]).unwrap();
+            let document = typst::compile::<PagedDocument>(&world)
+                .output
+                .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
+            let mut text = String::new();
+            for page in &document.pages {
+                frame_text(&page.frame, &mut text);
+            }
+            without_whitespace(&text)
+        };
+        for (name, tpl) in [
+            ("default", default_src.as_str()),
+            ("modern", TEMPLATE_MODERN),
+            ("klassisch", TEMPLATE_KLASSISCH),
+            ("minimal", TEMPLATE_MINIMAL),
+        ] {
+            let t = laid_out(tpl, &storno, Some(&preceding));
+            assert!(
+                t.contains("Stornorechnung") || t.contains("STORNORECHNUNG"),
+                "{name}: Überschrift"
+            );
+            assert!(
+                t.contains(&without_whitespace(
+                    "Storno zur Rechnung RE-2025-0042 vom 10.12.2025"
+                )),
+                "{name}: Bezug aufs Original"
+            );
+            assert!(t.contains("Stornobetrag:"), "{name}: Betragslabel");
+            assert!(
+                t.contains("DieserBelegstorniertdiegenannteRechnungvollständig."),
+                "{name}: Schlusssatz"
+            );
+            assert!(
+                !t.contains("VielenDank"),
+                "{name}: kein Dank für einen Auftrag"
+            );
+            assert!(
+                !t.contains("Bitteüberweisen"),
+                "{name}: kein Überweisungshinweis"
+            );
+            assert!(
+                t.contains(&without_whitespace(HINWEIS_TEXT)),
+                "{name}: §19-Hinweis auch auf dem Storno"
+            );
+
+            let normal = laid_out(tpl, &invoice(), None);
+            assert!(
+                !normal.contains("Storno"),
+                "{name}: normale Rechnung ohne Storno"
+            );
+            assert!(
+                normal.contains("Bitteüberweisen"),
+                "{name}: Überweisungshinweis"
+            );
+        }
     }
 }

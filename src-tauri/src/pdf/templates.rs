@@ -877,7 +877,9 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
 #let data = json.decode(sys.inputs.at("data-json"))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -956,6 +958,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
       #num_label: *#doc.number* \
       #if is_invoice [
         Rechnungsdatum: #format_date(doc.date) \
+        #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
         #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
         #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
       ] else [
@@ -1012,7 +1015,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
       #v(2mm)
     ]
     #grid(columns: (1fr, auto), align: (left, right),
-      [#text(weight: "bold")[#if doc.is_kleinunternehmer [#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]] else [#if is_invoice [Brutto-Betrag:] else [Gesamtbetrag:]]]],
+      [#text(weight: "bold")[#if doc.is_kleinunternehmer [#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]] else [#if is_invoice [Brutto-Betrag:] else [Gesamtbetrag:]]]],
       [#text(weight: "bold", fill: accent, size: 12pt)[#format_euro(doc.gross_amount)]],
     )
   ]
@@ -1036,7 +1039,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1060,7 +1063,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
 
 #v(5mm)
 #text(size: 9pt, fill: luma(110))[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
@@ -1081,7 +1084,9 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 #let data = json.decode(sys.inputs.at("data-json"))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -1149,6 +1154,9 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
   [#num_label: *#doc.number*],
   [#if is_invoice [Rechnungsdatum] else [Angebotsdatum]: #format_date(doc.date)],
 )
+#if storno_of != none [
+  #align(right)[Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date)]
+]
 #if is_invoice [
   #align(right)[
     #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
@@ -1189,7 +1197,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 // §19: kein USt-Ausweis → nur Gesamt. Regelbesteuerung → Netto/USt/Brutto.
 #align(right)[#if doc.is_kleinunternehmer [
   #table(columns: (auto, auto), align: (left, right), stroke: none, inset: 4pt,
-    [#text(weight: "bold")[#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
+    [#text(weight: "bold")[#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
   )
 ] else [
   #table(columns: (auto, auto), align: (left, right), stroke: none, inset: 4pt,
@@ -1214,7 +1222,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1237,7 +1245,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 ]
 #v(4mm)
 #text(size: 9pt, style: "italic")[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
@@ -1258,7 +1266,9 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 #let data = json.decode(sys.inputs.at("data-json"))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -1331,6 +1341,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
     #num_label: #doc.number \
     #if is_invoice [
       Rechnungsdatum: #format_date(doc.date) \
+      #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
       #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
       #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
     ] else [
@@ -1374,7 +1385,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 // §19: kein USt-Ausweis → nur Gesamt. Regelbesteuerung → Netto/USt/Brutto.
 #align(right)[#if doc.is_kleinunternehmer [
   #grid(columns: (auto, auto), column-gutter: 14pt, row-gutter: 3pt, align: (left, right),
-    [#text(weight: "bold")[#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
+    [#text(weight: "bold")[#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
   )
 ] else [
   #grid(columns: (auto, auto), column-gutter: 14pt, row-gutter: 3pt, align: (left, right),
@@ -1400,7 +1411,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1423,7 +1434,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 ]
 #v(4mm)
 #text(size: 8pt, fill: muted)[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
