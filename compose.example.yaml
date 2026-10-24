@@ -1,0 +1,48 @@
+# Klein.Buch — Beispiel für Docker Compose (Plan W11). Generisch: Pfade,
+# Adresse und UID an den eigenen Host anpassen. Das Image läuft ohne Root;
+# eine andere UID setzt `user:` (die Volumes müssen ihr gehören).
+#
+# Erster Start: Setup-Token steht im Container-Log (`docker compose logs`),
+# Einrichtung im Browser über die öffentliche Adresse (HTTPS über den
+# Reverse-Proxy des Betreibers).
+
+services:
+  klein-buch:
+    # Feste Version eintragen (Tags = Release-Versionen, z. B. 2026.11.0; kein 'latest').
+    image: ghcr.io/hozwei/klein-buch:VERSION
+    container_name: klein-buch
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      # Pflicht: öffentliche Adresse, unter der der Reverse-Proxy die App ausliefert.
+      KLEIN_BUCH_PUBLIC_URL: "https://buch.example.org"
+      # Adressen der vertrauten Reverse-Proxys (CIDR), sonst gelten Weiterleitungs-Header nicht.
+      KLEIN_BUCH_TRUSTED_PROXIES: "198.51.100.10/32"
+    volumes:
+      - /srv/klein-buch/data:/data
+      - /srv/klein-buch/inputs:/inputs
+      # Externe Backup-Ziele: je Ziel ein Ordner unter /backup-targets
+      # (z. B. NAS-Freigabe oder Ordner eines Sync-Clients).
+      - /mnt/nas/backups:/backup-targets/nas
+    ports:
+      # Nur lokal; nach außen über den Reverse-Proxy (TLS).
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777,noexec,nosuid,nodev
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+    ulimits:
+      core: 0
+    pids_limit: 256
+    # Faustregel: 512 MiB Grundbedarf + 3 × größtes Backup für einen Restore
+    # (ADR 0039 Nr. 72); Java-Sidecar höchstens 512 MiB je Lauf.
+    mem_limit: 2g
+    # Laufende Jobs (Festschreiben, Backup) dürfen zu Ende laufen.
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

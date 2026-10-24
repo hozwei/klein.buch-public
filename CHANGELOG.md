@@ -10,6 +10,11 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **XRechnung von KoSIT abgelehnt (Schemafehler):** In der Notiz mit der
+  §19-Klausel stand der Code `REG` vor dem Text; das CII-Schema verlangt die
+  umgekehrte Reihenfolge. Mit dem echten Validator ließ sich deshalb keine
+  §19-Rechnung festschreiben. Jetzt Text vor Code; echte Validator-Tests
+  (`sidecar_real`) sichern das ab. (W11)
 - **Sporadischer Absturz beim Beenden:** Das von SQLCipher genutzte OpenSSL
   räumte sich beim Prozessende per `atexit` auf, während Hintergrund-Threads
   noch Datenbankverbindungen schlossen („double free or corruption“, in CI
@@ -257,6 +262,18 @@ Arbeitszweig `phase-w`.
   einen Proxy auf den lokalen Server.
 - Backup-Protokoll: Auslöser „Täglich (automatisch)“ statt „Täglich
   (App-Start)“ (der Tageslauf kommt seit W2 aus dem Scheduler). (W9)
+- **Docker-Image (W11):** `Dockerfile` (Node → Rust → jlink-JRE → Debian
+  trixie-slim, Basis-Images mit Digest, ohne Root, Healthcheck) und
+  `compose.example.yaml` mit gehärteten Laufzeit-Einstellungen. Der Java-Sidecar
+  liegt unter `src-tauri/sidecar/` (KoSIT-Validator 1.6.2, Mustang 2.23.0,
+  XRechnung-Konfiguration 2026-01-31, Quellen und SHA-256 in `versions.json`,
+  in CI geprüft); die Windows-Laufzeit ist entfernt.
+- **Vorlagen in `/inputs` bleiben aktuell (W11):** Ein Seed-Manifest ersetzt
+  unveränderte mitgelieferte Dateien durch neue Fassungen; vom Nutzer geänderte
+  bleiben unangetastet, die neue Fassung liegt daneben als `<name>.neu`
+  (Hinweis in der Inbox).
+- Entfernt: Factory Reset und Rechnungs-Eingangsordner samt Code (seit W5 im
+  Server gesperrt), Windows-Release-Workflow. (W11)
 - **Auf dem Smartphone bedienbar (W10):** Navigation als ausklappbares Menü,
   Listen und Positionen als Karten, einspaltige Formulare, größere Schaltflächen
   (mind. 44 px), Meldungen unten. PDFs öffnen auf dem Handy in der PDF-Ansicht

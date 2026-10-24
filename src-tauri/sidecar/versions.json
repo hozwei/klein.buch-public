@@ -1,0 +1,45 @@
+{
+  "schema": 2,
+  "note": "Java-Sidecar des Docker-Images (Plan W11): JARs und XRechnung-Konfiguration unverändert aus den angegebenen Quellen (SHA-256 prüft CI), Laufzeit per jlink im Image-Build.",
+  "kosit_validator": {
+    "version": "1.6.2",
+    "file": "lib/kosit-validator.jar",
+    "source_url": "https://github.com/itplr-kosit/validator/releases/download/v1.6.2/validator-1.6.2-standalone.jar",
+    "sha256": "244978514ad48f67c7573acfffc8f4fd73d81feda6f276710033f9913579857e",
+    "license": "Apache-2.0"
+  },
+  "mustang": {
+    "version": "2.23.0",
+    "file": "lib/mustang.jar",
+    "source_url": "https://repo1.maven.org/maven2/org/mustangproject/Mustang-CLI/2.23.0/Mustang-CLI-2.23.0.jar",
+    "sha256": "344c88b8d9bddccae23899a87d1ef31c4d38532383faa6303c381ee489cabe07",
+    "license": "Apache-2.0"
+  },
+  "xrechnung_config": {
+    "version": "2026-01-31",
+    "xrechnung": "3.0.2",
+    "dir": "xrechnung-config",
+    "source_url": "https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/download/v2026-01-31/xrechnung-3.0.2-validator-configuration-2026-01-31.zip",
+    "sha256": "6a5a5911a421b25fbc423f62f93f894df7b236f5d73ca4f84bb222a945082704",
+    "license": "Apache-2.0"
+  },
+  "jlink_modules": "java.base,java.compiler,java.datatransfer,java.desktop,java.instrument,java.logging,java.management,java.naming,java.net.http,java.prefs,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.transaction.xa,java.xml,java.xml.crypto,java.rmi,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported,jdk.zipfs,jdk.charsets,jdk.localedata,jdk.security.auth,jdk.security.jgss",
+  "jdk": {
+    "vendor": "Eclipse Adoptium (Temurin)",
+    "version": "21.0.12+8",
+    "image": "eclipse-temurin:21.0.12_8-jdk@sha256:92a2a4d7a928d057e7bd999c418d66c26a34eb9a0442f3ab67721c3f88110b2d",
+    "source_url": "https://github.com/adoptium/jdk21u/tree/jdk-21.0.12+8",
+    "license": "GPL-2.0-with-classpath-exception"
+  },
+  "images": {
+    "runtime": "debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad",
+    "rust": "rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc",
+    "node": "node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf"
+  },
+  "desktop_releases_2026_5": {
+    "note": "Die Windows-Releases v2026.5.0/v2026.5.1 lieferten eine jlink-JRE aus Microsoft Build of OpenJDK mit (Modulliste zusätzlich jdk.crypto.mscapi).",
+    "jdk_vendor": "Microsoft (Microsoft Build of OpenJDK)",
+    "jdk_version": "21.0.11+10-LTS",
+    "jdk_source_url": "https://github.com/microsoft/openjdk-jdk21u/tree/jdk-21.0.11%2B10"
+  }
+}

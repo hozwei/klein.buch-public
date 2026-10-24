@@ -159,14 +159,16 @@ pub fn to_xrechnung(
     // BT-22 §19-Klausel. EN-16931 verlangt SubjectCode (UNTDID 4451) für jede
     // IncludedNote — `REG` (Regulatory information) ist der EN-16931-konforme
     // Code für regulatorische Hinweise wie die Kleinunternehmer-Klausel.
-    // Fix R3-001 (v2026.5-Re-Review).
+    // Fix R3-001 (v2026.5-Re-Review). Reihenfolge laut CII-Schema (NoteType):
+    // ContentCode?, Content*, SubjectCode? — `SubjectCode` vor `Content` lehnte
+    // KoSIT als Schemafehler ab (W11-Fund mit dem echten Sidecar).
     if is_klein {
         x.push_str("    <ram:IncludedNote>\n");
-        x.push_str("      <ram:SubjectCode>REG</ram:SubjectCode>\n");
         x.push_str(&format!(
             "      <ram:Content>{}</ram:Content>\n",
             esc(HINWEIS_TEXT)
         ));
+        x.push_str("      <ram:SubjectCode>REG</ram:SubjectCode>\n");
         x.push_str("    </ram:IncludedNote>\n");
     }
     // BT-22 Custom-Notes. Dedup R3-003 — wenn der Nutzer in `notes` den

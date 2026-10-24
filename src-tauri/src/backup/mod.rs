@@ -18,7 +18,6 @@
 //! - [`auto_backup_if_unlocked`] — best-effort Auto-Hook für `lock`-Events.
 
 pub mod encrypt;
-pub mod factory_reset;
 pub mod manifest;
 pub mod restore;
 pub mod rotation;

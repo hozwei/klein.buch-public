@@ -141,6 +141,14 @@ pub fn main_entry(args: Vec<OsString>) -> ExitCode {
     // Zugriff auf die Zeitzone.
     std::env::set_var("TZ", "UTC");
     crate::db::init_crypto();
+    // Plan W11: kein Core-Dump und kein ptrace-Zugriff anderer Prozesse
+    // desselben Nutzers auf den Speicher (Passphrase, Schlüssel).
+    #[cfg(target_os = "linux")]
+    if let Err(e) =
+        rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+    {
+        eprintln!("PR_SET_DUMPABLE nicht gesetzt: {e}");
+    }
     let sub = args.first().and_then(|a| a.to_str()).unwrap_or("serve");
     match sub {
         "serve" => run_server(),

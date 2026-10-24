@@ -20,18 +20,21 @@ use std::path::{Path, PathBuf};
 use crate::einvoice::types::{ValidationFinding, ValidationReport, ValidationStatus};
 use crate::error::{Error, Result};
 
-/// Sub-Verzeichnisse / Files im Sidecar-Bundle.
-pub const LAUNCHER_FILE_WINDOWS: &str = "klein-buch-java.bat";
-pub const LAUNCHER_FILE_UNIX: &str = "klein-buch-java.sh";
+/// Sub-Verzeichnisse / Files im Sidecar-Bundle (Plan W11: `src-tauri/sidecar/`).
+pub const LAUNCHER_FILE: &str = "klein-buch-java.sh";
 pub const SCENARIOS_REL_PATH: &str = "xrechnung-config/scenarios.xml";
 
-/// Liefert den plattform-spezifischen Launcher-Pfad im Sidecar-Bundle.
+/// Launcher-Pfad im Sidecar-Bundle.
 pub fn launcher_path(sidecar_dir: &Path) -> PathBuf {
-    if cfg!(target_os = "windows") {
-        sidecar_dir.join(LAUNCHER_FILE_WINDOWS)
-    } else {
-        sidecar_dir.join(LAUNCHER_FILE_UNIX)
-    }
+    sidecar_dir.join(LAUNCHER_FILE)
+}
+
+/// Prozess für den Launcher: über `/bin/sh`, weil Nextcloud und das
+/// Veröffentlichen kein Ausführbar-Bit übertragen (Plan W11).
+pub(crate) fn launcher_command(launcher: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.arg(launcher);
+    cmd
 }
 
 /// Argumente für den Validator-Aufruf. Pure Funktion — testbar ohne I/O.
@@ -222,7 +225,7 @@ pub async fn validate(xml: &str, sidecar_dir: &Path) -> Result<ValidationReport>
         .acquire()
         .await
         .map_err(|e| Error::Sidecar(format!("JVM-Semaphore: {e}")))?;
-    let mut cmd = tokio::process::Command::new(&launcher);
+    let mut cmd = launcher_command(&launcher);
     cmd.args(&args)
         // cwd auf tmpdir — verhindert dass etwaige relative File-Outputs
         // des Java-Sidecars im Sidecar-Bundle landen (Tauri-Dev-Mode-
@@ -307,14 +310,9 @@ mod tests {
     }
 
     #[test]
-    fn launcher_path_is_platform_specific() {
+    fn launcher_is_shell_script_in_sidecar_dir() {
         let p = launcher_path(Path::new("/sidecar"));
-        let s = p.to_string_lossy().to_string();
-        if cfg!(target_os = "windows") {
-            assert!(s.ends_with("klein-buch-java.bat"), "got {s}");
-        } else {
-            assert!(s.ends_with("klein-buch-java.sh"), "got {s}");
-        }
+        assert_eq!(p, Path::new("/sidecar/klein-buch-java.sh"));
     }
 
     #[test]

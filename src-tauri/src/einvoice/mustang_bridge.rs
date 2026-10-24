@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use crate::einvoice::validator::launcher_path;
+use crate::einvoice::validator::{launcher_command, launcher_path};
 use crate::error::{Error, Result};
 
 /// Konstruiert die Args für den `combine`-Sub-Aufruf. Pure.
@@ -221,7 +221,7 @@ async fn run_launcher(
         .acquire()
         .await
         .map_err(|e| Error::Sidecar(format!("JVM-Semaphore: {e}")))?;
-    let mut cmd = tokio::process::Command::new(launcher);
+    let mut cmd = launcher_command(launcher);
     cmd.args(args).current_dir(cwd).kill_on_drop(true);
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(MUSTANG_TIMEOUT_SECS),

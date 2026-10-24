@@ -788,6 +788,60 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     (`open_pool`, Snapshot, Serverstart); `openssl-sys` ist dafür direkte Abhängigkeit (dieselbe
     Version wie über `libsqlite3-sys`). Die Testhilfe setzt `KLEIN_BUCH_SIDECAR_MOCK` nur noch
     einmal je Prozess.
+99. **Sidecar aus geprüften Quellen (W11).** `src-tauri/sidecar/` enthält `lib/` (KoSIT-Validator
+    1.6.2 = `validator-1.6.2-standalone.jar` von GitHub, Mustang 2.23.0 = `Mustang-CLI-2.23.0.jar`
+    von Maven Central — beide bytegleich mit den bisher gebündelten JARs), `xrechnung-config/`
+    (Release-ZIP 2026-01-31 entpackt; der bisherige Stand war bis auf CRLF-Zeilenenden gleich),
+    `versions.json` (Schema 2: je Komponente Quelle + SHA-256, jlink-Module ohne
+    `jdk.crypto.mscapi`, JDK-Hersteller/Version/Image-Digest, Basis-Images, Angaben der
+    Windows-Releases unter `desktop_releases_2026_5`) und `klein-buch-java.sh`. Der Image-Workflow
+    lädt die Originale und vergleicht SHA-256 bzw. den entpackten Baum. Windows-JRE, `.bat` und
+    `scripts/build-sidecar.ps1` sind entfernt.
+100. **Launcher (W11).** `klein-buch-java.sh` (POSIX-sh, LF) reicht das Subcommand-Wort nicht an das
+    JAR weiter; Java aus `sidecar/jre`, sonst `JAVA_HOME`, `KLEIN_BUCH_JAVA` (Tests) oder `java`;
+    JVM `-XX:-UsePerfData -Xmx512m -Djava.io.tmpdir=$TMPDIR -Djava.awt.headless=true`. Der Server
+    startet ihn über `/bin/sh <launcher>` — Nextcloud und das Veröffentlichen übertragen kein
+    Ausführbar-Bit (im Image zusätzlich `chmod 0755`).
+101. **XRechnung-Fund (W11, S1).** Mit dem echten KoSIT-Validator (`sidecar_real`-Tests gegen eine
+    lokal per `jlink` gebaute JRE) lehnte KoSIT jede §19-Rechnung als Schemafehler ab: In
+    `IncludedNote` stand `SubjectCode` (R3-001) vor `Content`, das CII-Schema verlangt
+    `Content*, SubjectCode?`. Das Festschreiben bricht bei `failed` ab — im Image wäre keine
+    Rechnung ausstellbar gewesen (bis W10 liefen alle Tests mit dem Sidecar-Mock). Behoben im
+    Generator, `r3_review_test` nachgezogen; die Desktop-Releases v2026.5.x enthalten dieselbe
+    Reihenfolge (wie sich das dort auswirkte, ist nicht nachgeprüft).
+102. **Image (W11).** `klein-buch/Dockerfile`: Stufen Node (`pnpm install --frozen-lockfile`,
+    Build der SPA samt Handbuch) → Rust (`rust-toolchain.toml` 1.99.1, `cargo auditable build
+    --release --locked`, cargo-auditable 0.7.7, Commit als spätes `ARG`) → JRE (`jlink` aus
+    `eclipse-temurin:21.0.12_8-jdk`) → `debian:trixie-slim` mit `tzdata`, `fontconfig`,
+    `fonts-dejavu-core`, `libfreetype6`; alle Basis-Images mit Digest. `/opt/klein-buch`
+    enthält `web/`, `inputs/` (Seed-Quelle aus `klein-buch/inputs`), `sidecar/` (+ `jre/`) und
+    `legal/`; `KLEIN_BUCH_*`-Pfade, `TZ=Europe/Berlin`, `HOME=/tmp`, `TMPDIR=/data/tmp` als
+    `ENV`; kein `VOLUME`, `USER 65532:65532`, `HEALTHCHECK` über den Subcommand. Der Server setzt
+    beim Start `PR_SET_DUMPABLE=0`. `compose.example.yaml` mit `read_only`, `tmpfs /tmp`,
+    `cap_drop: [ALL]`, `no-new-privileges`, `ulimits.core: 0`, `pids_limit`, `mem_limit`,
+    `stop_grace_period`, Log-Rotation.
+103. **Seed-Manifest (W11).** `/inputs/.seed-manifest.json` (Pfad → SHA-256 der zuletzt
+    geseedeten Fassung, Image-Version, offene Hinweise): fehlt eine Datei → kopieren;
+    unverändert und das Image bringt eine neue Fassung → ersetzen; vom Nutzer geändert (auch
+    ohne Manifest-Eintrag, wenn abweichend) → nie anfassen, neue Fassung als `<name>.neu`. Die
+    Hinweise wandern beim nächsten Entsperren in die Inbox (die DB ist beim Start zu). Dateien
+    werden über Temp-Datei + `rename` geschrieben.
+104. **Image-CI (W11).** `.github/workflows/image.yml` auf `phase-w`: nur `contents: read`, kein
+    Push, Build mit buildx-GHA-Cache und `load: true`; Smoke im selben Job: Größe < 400 MB,
+    Mock-Schalter verweigert den Start, Container `--read-only --tmpfs /tmp --cap-drop ALL
+    --security-opt no-new-privileges --user 568:568` mit Bind-Mounts, Healthcheck,
+    `id -u`, `date` in Europe/Berlin, Schreibversuch auf `/`, `CapEff` 0, Seed-Manifest; dann
+    über HTTP (`.github/scripts/image_smoke.py`): Einrichtung mit Setup-Token + TOTP,
+    Festschreiben mit echtem KoSIT + Mustang (PDF/A-3), ZUGFeRD-PDF im Rechnungseingang
+    extrahiert und gültig, manipulierte XRechnung abgelehnt. Abweichung vom Plan: Die
+    `sidecar_real`-Tests laufen lokal gegen die jlink-JRE; im Image-Job decken die HTTP-Schritte
+    dieselben Wege ab (im Image gibt es keine Rust-Toolchain).
+105. **Altbestand (W11).** Entfernt: Factory-Reset-Code (`commands/`, `backup/`,
+    `domain/factory_reset.rs`; der Start verweigert einen gefundenen Reset-Marker weiterhin),
+    Drop-Folder (`scheduler/`, `domain/drop_folder.rs`, Commands, `drop_folder_sync_test.rs`;
+    Migration 0029 bleibt), `src-tauri/resources/inputs/`, `src-tauri/gen/`,
+    `.github/workflows/release.yml`, `config::sidecar_target_triple`. Die Registry hat 183
+    Commands.
 
 ## Konsequenzen
 

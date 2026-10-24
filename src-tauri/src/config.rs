@@ -8,8 +8,8 @@
 //! - **Seed-Quelle (read-only):** `resource_dir/inputs/` — im Image
 //!   `KLEIN_BUCH_RESOURCE_DIR/inputs`, auf dem Desktop der Bundle-Mirror.
 //! - **User-editable:** `inputs_dir` — im Container das Volume `/inputs`. Beim
-//!   Start kopiert [`ensure_inputs_seeded`] fehlende Dateien aus der Quelle
-//!   dorthin — idempotent, ohne Überschreiben (`inputs/`-Hardline).
+//!   Start gleicht [`ensure_inputs_seeded`] mit der Quelle ab (Seed-Manifest, W11);
+//!   vom Nutzer geänderte Dateien bleiben unangetastet (`inputs/`-Hardline).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -130,13 +130,10 @@ impl Paths {
     }
 }
 
-/// First-Run-Copy aus `resource_dir/inputs` nach `inputs_dir` (R7-INPUTS,
-/// Plan W4: läuft immer, auch im Debug-Build).
-///
-/// - **Idempotent**, **No-Overwrite:** existierende Dateien werden NIE
-///   überschrieben — die `inputs/`-Hardline schützt User-Edits.
-/// - Sind Quelle und Ziel derselbe Ordner (Desktop-Dev: Repo-`inputs/`), ist das
-///   ein No-op.
+/// Seed von `resource_dir/inputs` nach `inputs_dir` mit Manifest (Plan W11,
+/// [`crate::seed`]): fehlende Dateien kopieren, unveränderte durch neue
+/// Fassungen ersetzen, vom Nutzer geänderte nie anfassen (neue Fassung als
+/// `<name>.neu`). Sind Quelle und Ziel derselbe Ordner, ist das ein No-op.
 ///
 /// Wird in `db::prepare_filesystem` aufgerufen, vor jedem Pool-Open.
 pub fn ensure_inputs_seeded(paths: &Paths) -> crate::error::Result<()> {
@@ -158,57 +155,22 @@ pub fn ensure_inputs_seeded(paths: &Paths) -> crate::error::Result<()> {
         return Ok(());
     }
 
-    std::fs::create_dir_all(&paths.inputs_dir)?;
-    seed_dir_recursive(&bundled, &paths.inputs_dir)?;
+    let report = crate::seed::seed(&bundled, &paths.inputs_dir, env!("CARGO_PKG_VERSION"))?;
     tracing::info!(
         target: "klein_buch_lib::config",
-        "inputs/ aus {} nach {} ergänzt",
+        "inputs/ aus {}: {} kopiert, {} aktualisiert, {} geändert (neue Fassung als .neu)",
         bundled.display(),
-        paths.inputs_dir.display()
+        report.copied.len(),
+        report.updated.len(),
+        report.kept_with_new.len()
     );
     Ok(())
 }
 
-/// Rekursive Helfer-Funktion fuer `ensure_inputs_seeded`. **Existierende Dateien
-/// werden NICHT ueberschrieben.** Fehlende Subdirs werden angelegt.
-fn seed_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
-        if entry.file_type()?.is_dir() {
-            seed_dir_recursive(&src_path, &dst_path)?;
-        } else if !dst_path.exists() {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
-}
-
-/// Test-only: macht [`seed_dir_recursive`] für Integrations-Tests aufrufbar.
-/// Nicht für Production gedacht.
+/// Test-only: Seed ohne `Paths` (Integrations-Tests).
 #[doc(hidden)]
-pub fn seed_inputs_for_test(bundled: &Path, target: &Path) -> std::io::Result<()> {
-    seed_dir_recursive(bundled, target)
-}
-
-/// Target-Triple für die mitgelieferte Sidecar-Bundle-Struktur.
-/// Block 0 baut nur Windows-x86_64; macOS/Linux folgen in Block 17 via CI-Matrix.
-pub fn sidecar_target_triple() -> &'static str {
-    if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        "x86_64-pc-windows-msvc"
-    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        "x86_64-apple-darwin"
-    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "aarch64-apple-darwin"
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "x86_64-unknown-linux-gnu"
-    } else {
-        // Fallback — wird beim Sidecar-Resolve einen Fehler werfen.
-        "unknown-target"
-    }
+pub fn seed_inputs_for_test(bundled: &Path, target: &Path) -> crate::error::Result<()> {
+    crate::seed::seed(bundled, target, env!("CARGO_PKG_VERSION")).map(|_| ())
 }
 
 #[cfg(test)]

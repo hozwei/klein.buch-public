@@ -394,6 +394,10 @@ pub async fn activate_unlocked(
     // R2-026: Pflicht-Audit (Security-Event), Fehler propagieren.
     crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
         .await?;
+    // Hinweise des Seeds von /inputs (Plan W11) in die Inbox.
+    if let Err(e) = crate::seed::deliver_notices(&pool, &ctx.paths.inputs_dir).await {
+        tracing::warn!("Seed-Hinweise nicht übernommen: {e}");
+    }
 
     // „Täglich beim App-Start“: das fällige Tages-Backup legt der erste
     // Scheduler-Tick an (läuft sofort nach `ensure_started`, Plan W2.4). Ein

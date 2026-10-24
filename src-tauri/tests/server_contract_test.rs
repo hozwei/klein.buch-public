@@ -40,14 +40,8 @@ const DROPPED_FROM_FRONTEND: &[&str] = &[
     "mail_oauth_status",
     "mail_oauth_connect",
     "mail_oauth_disconnect",
-    // W9: Lizenzliste unter /legal/ (W12); Routen Reset und Drop-Folder
-    // entfallen (E7, E11)
+    // W9: Lizenzliste unter /legal/ (W12)
     "third_party_licenses_path",
-    "factory_reset_check",
-    "factory_reset",
-    "drop_folder_settings_get",
-    "drop_folder_settings_set",
-    "drop_folder_sync_now",
 ];
 
 /// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,
@@ -69,11 +63,6 @@ const NOT_ON_CMD: &[&str] = &[
     "invoices_reveal_pdf",
     "attachments_reveal",
     "third_party_licenses_path",
-    "factory_reset_check",
-    "factory_reset",
-    "drop_folder_settings_get",
-    "drop_folder_settings_set",
-    "drop_folder_sync_now",
     "mail_oauth_status",
     "mail_oauth_connect",
     "mail_oauth_disconnect",
@@ -166,8 +155,9 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        188,
-        "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8)"
+        183,
+        "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
+         - 5 Reset-/Drop-Folder-Commands (W11)"
     );
 
     for spec in REGISTRY.iter() {
@@ -194,10 +184,9 @@ fn allowlist_is_exactly_plan_point_2() {
         );
     }
     for blocked in [
-        "factory_reset",
-        "factory_reset_check",
-        "drop_folder_sync_now",
+        "mail_oauth_status",
         "mail_oauth_connect",
+        "mail_oauth_disconnect",
     ] {
         assert_eq!(
             REGISTRY.iter().find(|c| c.name == blocked).unwrap().route,
@@ -614,5 +603,6 @@ async fn header_snapshot_per_route_class() {
     let r = send(app, get("/api/auth/status", None)).await;
     assert!(r.headers.get("access-control-allow-origin").is_none());
     // die Registry-Funktion für den Dispatcher findet nur Freigegebenes
-    assert!(find_exposed("factory_reset").is_none());
+    assert!(find_exposed("mail_oauth_connect").is_none());
+    assert!(find_exposed("factory_reset").is_none(), "seit W11 entfernt");
 }

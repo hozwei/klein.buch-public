@@ -71,6 +71,10 @@ pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 /// Das `key`-Pragma muss vor jedem anderen Statement laufen; sqlx wendet die
 /// via [`SqliteConnectOptions::pragma`] gesetzten Pragmas beim Verbindungs-
 /// aufbau zuerst an.
+/// Marker eines vorgemerkten Factory Resets der Desktop-Fassung (ADR 0036);
+/// im Server verweigert er den Start (E7).
+const FACTORY_RESET_MARKER: &str = "FACTORY_RESET_PENDING.json";
+
 /// Initialisiert das von SQLCipher genutzte OpenSSL **ohne** Aufräumen per
 /// `atexit`: sqlx schließt Verbindungen in eigenen Threads, die beim
 /// Prozessende noch laufen können; das `atexit`-Aufräumen von OpenSSL gab dann
@@ -155,10 +159,8 @@ pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
     // E7 (ADR 0036/0039, Plan W5): Factory Reset ist im Server-Betrieb
     // abgeschaltet. Ein vorgemerkter Reset (Marker der Desktop-Fassung oder von
     // außen angelegt) wird nie angewendet — der Start bricht ab, nichts wird
-    // gelöscht. Der Reset-Code selbst entfällt in W11.
-    let reset_marker = paths
-        .data_dir
-        .join(crate::backup::factory_reset::RESET_MARKER);
+    // gelöscht. Der Reset-Code selbst ist seit W11 entfernt.
+    let reset_marker = paths.data_dir.join(FACTORY_RESET_MARKER);
     if reset_marker.exists() {
         return Err(Error::Config(format!(
             "{} gefunden — Factory Reset ist im Server-Betrieb abgeschaltet (E7). \

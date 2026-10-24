@@ -186,8 +186,13 @@ fn empty_bundle_directory_is_noop() {
     seed_inputs_for_test(&bundle, &target).unwrap();
 
     assert!(target.is_dir(), "Ziel-Verzeichnis muss angelegt werden");
-    let mut entries = fs::read_dir(&target).unwrap();
-    assert!(entries.next().is_none(), "Ziel darf nicht befüllt sein");
+    // Nur das Seed-Manifest (Plan W11), keine Dateien.
+    let names: Vec<String> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n != klein_buch_lib::seed::MANIFEST)
+        .collect();
+    assert!(names.is_empty(), "Ziel darf nicht befüllt sein: {names:?}");
 }
 
 /// Plan W4: `ensure_inputs_seeded` läuft immer (auch im Debug-Build) und liest

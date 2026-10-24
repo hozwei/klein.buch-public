@@ -41,7 +41,7 @@ tower = { version = "0.5", features = ["util"] }
 # Nur ServeDir/ServeFile für die SPA; kein CorsLayer (Plan W5.7).
 tower-http = { version = "0.6", features = ["fs"] }
 # Freier Platz vor Uploads (statvfs, Plan W7); ohne unsafe.
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 
 # --- Persistence ---
 sqlx = { version = "0.8", default-features = false, features = [

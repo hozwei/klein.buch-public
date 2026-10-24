@@ -1,0 +1,5 @@
+# Feste Rust-Version für Image-Build, CI und lokale Builds (Plan W11).
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

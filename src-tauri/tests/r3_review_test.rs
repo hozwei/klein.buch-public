@@ -97,10 +97,13 @@ fn r3_001_bt22_carries_subject_code_reg_for_kleinunternehmer() {
         &[],
     )
     .unwrap();
-    // Note mit SubjectCode REG muss exakt einmal vorkommen.
-    let note_block = "<ram:IncludedNote>\n      <ram:SubjectCode>REG</ram:SubjectCode>";
+    // Note mit SubjectCode REG — nach Content (CII-Schema, W11-Fund).
+    let note_block = format!(
+        "<ram:IncludedNote>\n      <ram:Content>{HINWEIS_TEXT}</ram:Content>\n      \
+         <ram:SubjectCode>REG</ram:SubjectCode>\n    </ram:IncludedNote>"
+    );
     assert!(
-        xml.contains(note_block),
+        xml.contains(&note_block),
         "BT-22 muss mit SubjectCode REG emittiert werden, gefundenes XML:\n{xml}"
     );
     // Klausel-Text muss im Content stehen.

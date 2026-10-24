@@ -100,7 +100,7 @@ nicht (E1).
 | Hängende oder ausufernde Prüfung präparierter XML/PDF | eigener Prozess, Timeout + `kill_on_drop` | umgesetzt |
 | | höchstens 2 JVM-Starts gleichzeitig (`limits::JVM`) | umgesetzt (W2) |
 | Mock-Modus im Produktivbetrieb | Release-Build mit gesetztem `KLEIN_BUCH_SIDECAR_MOCK` startet nicht | umgesetzt (W1) |
-| Manipulierte Java-Komponenten, zu viel Speicher | Linux-Sidecar mit SHA-256 der Original-JARs in `sidecar/versions.json`, `-Xmx512m`, Temp unter `/data/tmp` | geplant (W11) |
+| Manipulierte Java-Komponenten, zu viel Speicher | Linux-Sidecar mit SHA-256 der Original-JARs in `sidecar/versions.json` (CI vergleicht mit den Quellen), `-Xmx512m`, Temp unter `/data/tmp` | umgesetzt (W11) |
 
 Fehler in den Parsern der Drittkomponenten bleiben ein Restrisiko; begrenzt wird
 es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
@@ -123,7 +123,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
 | | alle Temp-Dateien unter `/data/tmp`, `TMPDIR` im Image | geplant (W7/W11) |
 | Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | umgesetzt (W5; Stichprobe beim Entsperren, die DB ist vorher verschlüsselt) |
-| Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | geplant (W11) |
+| Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | umgesetzt (W11; Image-Smoke prüft UID, read-only Root-FS und `CapEff` 0) |
 
 **Backups**
 
@@ -149,7 +149,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
-| Kompromittierte Abhängigkeit | `Cargo.lock` + `pnpm-lock.yaml`; Build mit `--locked` bzw. `--frozen-lockfile`, `cargo auditable` | Lockfiles umgesetzt, Rest geplant (W11) |
+| Kompromittierte Abhängigkeit | `Cargo.lock` + `pnpm-lock.yaml`; Build mit `--locked` bzw. `--frozen-lockfile`, `cargo auditable` | umgesetzt (W11) |
 | | `cargo deny`, `cargo audit`, `pnpm audit`, gitleaks, `trivy`-Gate, SBOM; Actions per Commit-SHA, Basis-Images per Digest; Renovate/Dependabot | geplant (W12) |
 | Untergeschobenes Image | Build nur aus dem öffentlichen Repo, cosign-Signatur (keyless), feste Tags ohne `:latest`, Tags und Images nie löschen | geplant (W12) |
 | Selbst-Update als Einfallstor | kein Update-Knopf in der App (bräuchte `docker.sock`, also praktisch root auf dem Host); opt-in Versionsprüfung ohne weitere Daten | Entscheidung E14, Umsetzung geplant (W12) |

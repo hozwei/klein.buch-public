@@ -99,14 +99,7 @@ fn route_of(name: &str) -> Route {
         | "invoices_reveal_pdf"
         | "attachments_reveal"
         | "third_party_licenses_path" => Route::Dropped,
-        "factory_reset_check"
-        | "factory_reset"
-        | "drop_folder_settings_get"
-        | "drop_folder_settings_set"
-        | "drop_folder_sync_now"
-        | "mail_oauth_status"
-        | "mail_oauth_connect"
-        | "mail_oauth_disconnect" => Route::Blocked,
+        "mail_oauth_status" | "mail_oauth_connect" | "mail_oauth_disconnect" => Route::Blocked,
         _ => Route::Cmd,
     }
 }
@@ -340,8 +333,6 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::expenses_create_from_einvoice,
     ),
     ("expenses_receipt_xml_text", h::expenses_receipt_xml_text),
-    ("factory_reset_check", h::factory_reset_check),
-    ("factory_reset", h::factory_reset),
     ("fiscal_year_overview", h::fiscal_year_overview),
     ("fiscal_year_close", h::fiscal_year_close),
     ("fiscal_year_closed_list", h::fiscal_year_closed_list),
@@ -482,9 +473,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("seller_owner_set", h::seller_owner_set),
     ("document_terms_get", h::document_terms_get),
     ("document_terms_set", h::document_terms_set),
-    ("drop_folder_settings_get", h::drop_folder_settings_get),
-    ("drop_folder_settings_set", h::drop_folder_settings_set),
-    ("drop_folder_sync_now", h::drop_folder_sync_now),
     ("audit_trail_list", h::audit_trail_list),
     ("archive_integrity_run", h::archive_integrity_run),
     ("archive_integrity_history", h::archive_integrity_history),
@@ -1058,24 +1046,6 @@ mod h {
             let args: crate::commands::expenses::ExpensesReceiptXmlTextArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::expenses::expenses_receipt_xml_text(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn factory_reset_check(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::factory_reset::FactoryResetCheckArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::factory_reset::factory_reset_check(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn factory_reset(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::factory_reset::FactoryResetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::factory_reset::factory_reset(&ctx, args).await?,
             )?)
         })
     }
@@ -2117,33 +2087,6 @@ mod h {
             let args: crate::commands::settings::DocumentTermsSetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::settings::document_terms_set(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn drop_folder_settings_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::settings::DropFolderSettingsGetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::settings::drop_folder_settings_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn drop_folder_settings_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::settings::DropFolderSettingsSetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::settings::drop_folder_settings_set(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn drop_folder_sync_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::settings::DropFolderSyncNowArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::settings::drop_folder_sync_now(&ctx, args).await?,
             )?)
         })
     }

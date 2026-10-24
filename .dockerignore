@@ -1,0 +1,19 @@
+# Build-Kontext klein; nur was das Dockerfile kopiert (Plan W11).
+**/node_modules
+**/target
+build
+.svelte-kit
+data
+memory
+tests
+docs
+.git
+.github
+src-tauri/sidecar/jre
+src-tauri/gen
+src-tauri/resources/inputs
+*.log
+*.sqlite*
+*.kbk
+.env
+.env.*

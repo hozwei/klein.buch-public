@@ -3,7 +3,6 @@
 //! Reminders, Integrity-Checks und AfA-Year-Close anstößt.
 
 pub mod depreciation_year_close;
-pub mod drop_folder;
 pub mod integrity_check_cron;
 pub mod recurring;
 pub mod recurring_invoice;

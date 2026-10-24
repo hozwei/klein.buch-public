@@ -76,14 +76,8 @@ fn registry_matches_frontend_api() {
         "mail_oauth_status",
         "mail_oauth_connect",
         "mail_oauth_disconnect",
-        // seit W9: Lizenzliste unter /legal/ (W12); Routen Reset und
-        // Drop-Folder entfallen (E7, E11)
+        // seit W9: Lizenzliste unter /legal/ (W12)
         "third_party_licenses_path",
-        "factory_reset_check",
-        "factory_reset",
-        "drop_folder_settings_get",
-        "drop_folder_settings_set",
-        "drop_folder_sync_now",
     ] {
         let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
         assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");
@@ -120,6 +114,16 @@ fn registry_matches_frontend_api() {
         find("invoices_archive_paths").is_none(),
         "entfällt laut Plan W4"
     );
+    // Plan W11: Factory Reset (E7) und Drop-Folder (E11) samt Code entfernt
+    for gone in [
+        "factory_reset_check",
+        "factory_reset",
+        "drop_folder_settings_get",
+        "drop_folder_settings_set",
+        "drop_folder_sync_now",
+    ] {
+        assert!(find(gone).is_none(), "{gone} entfällt laut Plan W11");
+    }
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
