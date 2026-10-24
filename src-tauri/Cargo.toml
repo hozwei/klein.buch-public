@@ -92,7 +92,7 @@ zeroize = "1"
 # TOTP (RFC 6238, Plan W6): HMAC-SHA1 über den Zeitschritt, konstantzeitiger
 # Vergleich, Base32-Geheimnis, QR-Code als SVG (lokal erzeugt, kein Dienst).
 hmac = "0.12"
-sha1 = "0.10"
+sha1 = "0.11"
 subtle = "2"
 data-encoding = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
