@@ -26,7 +26,7 @@
 # ---------------------------------------------------------------------------
 # SPA
 # ---------------------------------------------------------------------------
-FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS web
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b AS web
 WORKDIR /src
 ENV CI=true \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -70,7 +70,7 @@ RUN cargo auditable build --release --locked --bin klein-buch-server \
 # ---------------------------------------------------------------------------
 # Java-Laufzeit (jlink) für KoSIT-Validator und Mustang
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:21.0.12_8-jdk@sha256:92a2a4d7a928d057e7bd999c418d66c26a34eb9a0442f3ab67721c3f88110b2d AS jre
+FROM eclipse-temurin:24.0.2_12-jdk@sha256:7493205ffe6caa8074fa8a06a276bb1c5ac41d3dd0fd43a0db66d7f776e80b3e AS jre
 COPY src-tauri/sidecar/versions.json /tmp/versions.json
 RUN MODULES=$(sed -n 's/.*"jlink_modules": *"\([^"]*\)".*/\1/p' /tmp/versions.json) \
  && test -n "$MODULES" \
