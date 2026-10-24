@@ -22,6 +22,9 @@ use lopdf::{Document, Object, ObjectId};
 
 use crate::error::{Error, Result};
 
+/// Obergrenze je Stream beim Laden fremder PDFs (Plan W14).
+const MAX_DECOMPRESSED_STREAM: usize = 64 * 1024 * 1024;
+
 /// Führt mehrere PDF-Dokumente (als Bytes) zu einem zusammen. Leere Teile
 /// werden übersprungen. Bei genau einem (nicht-leeren) Teil werden dessen
 /// Bytes unverändert durchgereicht (kein unnötiges Re-Encoding).
@@ -42,7 +45,10 @@ pub fn merge_pdfs(parts: &[Vec<u8>]) -> Result<Vec<u8>> {
     let mut document = Document::with_version("1.7");
 
     for bytes in inputs {
-        let mut doc = Document::load_mem(bytes)
+        // W14: Rechtsdokumente sind hochgeladene PDFs — Objekt-/Xref-Streams
+        // beim Laden höchstens 64 MiB entpacken (Dekompressionsbombe).
+        let options = lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_STREAM);
+        let mut doc = Document::load_mem_with_options(bytes, options)
             .map_err(|e| Error::Domain(format!("merge_pdfs: PDF nicht ladbar: {e}")))?;
 
         // Objekt-IDs versatzfrei hinter die bisherigen schieben.

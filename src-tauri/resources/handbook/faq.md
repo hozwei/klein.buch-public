@@ -21,27 +21,50 @@ Rechnung. Mehr im Kapitel "Storno statt Löschung".
 
 ## Was passiert, wenn ich meine Passphrase vergesse?
 
-Deine Daten sind dann unwiederbringlich verloren. Es gibt
-absichtlich keine Hintertür. Der einzige Weg zurück in die App ist
-ein Factory Reset, der die gesamte Klein.Buch-Instanz auf
-Werkszustand setzt und einen Daten-Neuanfang erzwingt. Notiere
-die Passphrase in einem Passwort-Manager.
+Deine Daten sind dann unwiederbringlich verloren. Die Passphrase
+heißt in der Oberfläche "Daten-Passwort" und ist zugleich der
+Schlüssel Deiner Datenbank und Deiner Backups. Es gibt absichtlich
+keine Hintertür. Einen Knopf zum Zurücksetzen gibt es in Klein.Buch
+auch nicht. Ein Neuanfang geht nur mit einer neuen Instanz und einem
+leeren Daten-Volume, die Du als Betreiber auf dem Server anlegst.
+Notiere die Passphrase deshalb in einem Passwort-Manager.
 
-## Kann ich Klein.Buch auf mehrere Rechner verteilen?
+Kennst Du die Passphrase noch und willst sie nur wechseln, geht das
+unter "Einstellungen → Sicherheit & Anmeldung" im Abschnitt
+"Daten-Passwort ändern".
 
-Nein, nicht parallel. Klein.Buch ist Single-User-Software. Du
-kannst die App auf einen neuen Rechner umziehen, indem Du das
-aktuelle Backup mitnimmst und beim Onboarding statt einer leeren
-Datenbank den Pfad zum Backup auswählst. Parallel-Nutzung würde die Datenbank zerstören.
+## Ich habe das Handy mit der Authenticator-App verloren. Was nun?
+
+Melde Dich mit einem Deiner zehn Einmal-Codes an, die Du bei der
+Einrichtung bekommen hast. Dazu klickst Du in der Anmeldung auf
+"Gerät verloren? Einmal-Code verwenden". Danach richtest Du unter "Einstellungen →
+Sicherheit & Anmeldung" mit "Zweiten Faktor neu einrichten" Dein
+neues Handy ein. Hast Du auch keinen Einmal-Code mehr, setzt Du den
+zweiten Faktor als Betreiber über die Container-Shell zurück. Wie das
+geht, steht im Kapitel "Zweiter Faktor (TOTP) einrichten und
+wiederherstellen".
+Deine Passphrase brauchst Du in jedem Fall.
+
+## Kann ich Klein.Buch von mehreren Geräten aus nutzen?
+
+Ja. Klein.Buch läuft auf Deinem Server, und Du öffnest es im Browser
+von jedem Gerät aus: am Schreibtisch, auf dem Tablet oder auf dem
+Handy. Alle Geräte sehen denselben Datenbestand, es muss nichts
+abgeglichen werden. Eine Instanz ist für genau ein Unternehmen und
+eine Person gedacht. Mehrere Benutzer mit eigenen Zugängen gibt es
+nicht.
 
 ## Wie kommt meine Rechnung zum Steuerberater?
 
 Am bequemsten über das Steuerberater-Paket. Klick im Hauptmenü auf
-"Einstellungen", dann "Daten exportieren" und löse den Export aus.
-Klein.Buch packt PDFs, XRechnung-XMLs, DATEV-Stapel, ELSTER-
-Ausfüllhilfe als CSV und Manifest mit SHA-256-Prüfwerten in ein
-ZIP. Das ZIP sendest Du Deinem Steuerberater per E-Mail oder
-Daten-Übergabe-Dienst.
+"Steuer (EÜR)", dann auf "Für die Steuererklärung exportieren →" und
+bei "Steuerberater-Paket (ZIP, alles in einem)" auf "Paket
+herunterladen". Klein.Buch fragt vorher noch einmal Dein
+Daten-Passwort und den App-Code ab. Dein Browser speichert dann ein
+ZIP mit PDFs, XRechnung-XMLs, DATEV-Stapel, ELSTER-Ausfüllhilfe als
+CSV und einem Manifest mit SHA-256-Prüfwerten. Das ZIP sendest Du
+Deinem Steuerberater per E-Mail oder Daten-Übergabe-Dienst. Mehr im
+Kapitel "EÜR-Export".
 
 ## Darf ich als Kleinunternehmer Umsatzsteuer ausweisen?
 
@@ -51,12 +74,17 @@ umsatzsteuerpflichtig bist (§14c UStG). Klein.Buch sperrt aus
 diesem Grund alle Umsatzsteuer-Felder, solange der
 Kleinunternehmer-Schalter angeschaltet ist.
 
-## Kann ich die Datenbank zwischen Rechnern umziehen?
+## Kann ich Klein.Buch auf einen anderen Server umziehen?
 
-Ja, über die Backup-Funktion. Mache auf dem alten Rechner ein
-Backup, kopiere die Backup-Datei auf den neuen Rechner, installiere
-Klein.Buch dort und spiele das Backup zurück. Mehr im Kapitel
-"Backup und Wiederherstellen".
+Ja, über ein Backup. Du richtest auf dem neuen Server eine neue
+Instanz ein und spielst dort unter "Einstellungen → Backups" im
+Abschnitt "Wiederherstellen" die Backup-Datei (Endung `.kbk`) ein.
+Dafür brauchst Du die Passphrase, mit der das Backup verschlüsselt
+wurde. Backups einer älteren Klein.Buch-Version nimmt die neue
+Instanz an und bringt sie auf den aktuellen Stand, Backups einer
+neueren Version nicht. Die Einzelheiten stehen in den Kapiteln
+"Backup und Wiederherstellen" und "Notfall: Instanz neu aufsetzen und
+wiederherstellen".
 
 ## Warum lehnt Klein.Buch manche ZUGFeRD-Rechnungen ab?
 
@@ -68,26 +96,15 @@ vollständigen Pflichtangaben einer Rechnung und gelten seit 2025 nur
 noch als maschinenlesbare Beilage zu einer Papier- oder PDF-Rechnung.
 Wenn ein Lieferant Dir so eine Datei schickt, frag ihn nach einer
 richtigen E-Rechnung. Notfalls trägst Du die Position selbst über
-"Kosten" und "Neue Kosten-Position" ein.
+"Kosten" und "+ Neue Kosten" ein.
 
 ## Wie kommen Rechnungen aus meinem Mail-Postfach in Klein.Buch?
 
-Auf zwei Arten.
-
-**Manuell.** Lade den Anhang aus der E-Mail auf Deine Festplatte
-(zum Beispiel in den Ordner "Downloads"). Klick dann in der
-Kosten-Liste auf "E-Rechnung importieren" und wähle die
-heruntergeladene Datei aus.
-
-**Automatisch.** Richte einmalig den Rechnungs-Eingang in den
-Einstellungen ein. Das ist ein Ordner auf Deiner Festplatte, den
-Klein.Buch im Hintergrund überwacht. Speicherst Du Deine
-Eingangsrechnungen direkt in diesen Ordner, übernimmt Klein.Buch
-sie ohne weiteren Klick. Wenn Du dafür einen Cloud-Ordner wie
-OneDrive nimmst, kannst Du Rechnungen auch vom Handy aus dort
-hineinwerfen.
-
-Details im Kapitel "Eingangsrechnungen via Ordner".
+Per Upload im Browser. Speichere den Anhang aus der E-Mail auf dem
+Gerät, an dem Du gerade sitzt. Klick dann in der Kosten-Liste auf
+"E-Rechnung importieren", wähle die Datei aus und klick auf
+"Einlesen & prüfen". Einen Ordner, den Klein.Buch selbst überwacht,
+gibt es nicht. Details im Kapitel "Rechnungseingang per Upload".
 
 ## Kann ich die Original-XML einer empfangenen Rechnung sehen?
 
@@ -100,14 +117,15 @@ Beleg.
 
 ## Was tun bei einer fehlgeschlagenen E-Rechnung-Validierung?
 
-Klein.Buch zeigt die Fehlermeldung des KoSIT-Validators. Bei
-Ausgangs-Rechnungen (also Deinen eigenen): Klein.Buch lässt das
-Festschreiben in der Regel zu, weil Klein.Buch die Rechnung selbst
-erzeugt und Standard-konform aufbaut. Wenn doch ein Fehler kommt,
-ist das ein Klein.Buch-Bug, den Du melden solltest. Bei Eingangs-
-Rechnungen: Du importierst die Datei trotzdem. Der Fehler liegt
-beim Absender; Du bist nicht verpflichtet, eine fehlerhafte
-Eingangs-XRechnung abzulehnen.
+Klein.Buch zeigt die Meldungen des KoSIT-Validators. Bei Deinen
+eigenen Rechnungen bricht das Ausstellen ab, wenn KoSIT die Rechnung
+ablehnt; sie bleibt dann ein Entwurf. Fehlende Angaben wie die
+Telefonnummer in Deinen Firmendaten oder das Fälligkeitsdatum meldet
+Klein.Buch schon vorher mit einem klaren Satz. Kommt trotzdem eine
+KoSIT-Ablehnung, ist das ein Klein.Buch-Fehler, den Du melden
+solltest. Bei Eingangs-Rechnungen: Du erfasst die Datei trotzdem.
+Der Fehler liegt beim Absender; Du bist nicht verpflichtet, eine
+fehlerhafte Eingangs-XRechnung abzulehnen.
 
 ## Was ist der Unterschied zwischen Storno und Löschen?
 
@@ -121,17 +139,41 @@ das Storno.
 ## Wie oft macht Klein.Buch ein Backup?
 
 Automatisch nach jeder Festschreibung (Lock-Event) und einmal pro
-Tag beim App-Start. Zusätzlich kannst Du jederzeit manuell ein
-Backup auslösen. Wenn ein Backup-Ziel zeitweise nicht erreichbar
-ist, holt Klein.Buch es beim nächsten Versuch nach.
+Tag im Hintergrund, solange Klein.Buch entsperrt ist. Zusätzlich
+kannst Du jederzeit unter "Einstellungen → Backups" im Abschnitt
+"Backup jetzt erstellen" mit "Jetzt sichern" eines auslösen. Jedes Backup geht an alle
+eingerichteten externen Ziele. Scheitert ein Ziel, bekommst Du einen
+Hinweis, und das nächste Backup versucht es wieder.
+
+## Warum ist Klein.Buch nach einem Neustart gesperrt?
+
+Weil Deine Passphrase nirgends gespeichert wird. Sie ist der
+Schlüssel zur Datenbank. Nach jedem Neustart des Containers kann
+Klein.Buch die Datenbank erst öffnen, wenn Du Dich im Browser mit
+Daten-Passwort und App-Code anmeldest. Bis dahin laufen auch keine
+Hintergrund-Aufgaben. Fällige Arbeiten wie das Tages-Backup oder
+Abo-Rechnungen holt Klein.Buch nach der Anmeldung nach.
+
+## Wie spiele ich ein Update ein?
+
+Nicht in Klein.Buch selbst, sondern in Deiner Container-Verwaltung:
+Du trägst die neue Versionsnummer als Image-Tag ein und startest den
+Container neu. Vor einer nötigen Umstellung der Datenbank legt
+Klein.Buch beim Entsperren selbst ein Backup an. Auf Wunsch meldet
+Klein.Buch neue Versionen als Hinweis; den Schalter "Nach neuen
+Versionen suchen" findest Du unter "Einstellungen → Sicherheit &
+Anmeldung". Mehr im Kapitel "Updates und Rückfall".
 
 ## Wer hat Zugriff auf meine Daten?
 
-Niemand außer Dir. Klein.Buch ist Local-First. Es gibt keinen
-zentralen Server, kein Konto bei einem Anbieter, keinen
-Telemetrie-Kanal. Deine Daten liegen ausschließlich auf Deiner
-Festplatte und in den Backup-Zielen, die Du selbst eingerichtet
-hast.
+Nur Du. Klein.Buch ist Local-First: Deine Daten liegen auf Deiner
+eigenen Instanz, nicht bei einem Anbieter. Es gibt kein Konto bei
+einem Hersteller und keinen Telemetrie-Kanal. Datenbank und Backups
+sind verschlüsselt, und anmelden kann sich nur, wer Daten-Passwort
+und App-Code hat. Bedenke aber: Wer Administrator-Rechte auf dem
+Server hat, auf dem Klein.Buch läuft, kann eine entsperrte Instanz
+grundsätzlich auslesen. Wähle den Server deshalb so sorgfältig wie
+einen Aktenschrank.
 
 ## Kann ich Rechnungen in fremde Sprachen schreiben?
 
@@ -141,13 +183,14 @@ englische Leistungs-Beschreibung), aber die Klein.Buch-Labels
 ("Rechnungs-Nummer", "Leistungsdatum") sind Deutsch. Volle
 Mehrsprachigkeit kommt in einer späteren Version.
 
-## Was bedeutet "Sidecar startet nicht"?
+## Was bedeutet "Prüf- und Konvertierungsdienst nicht verfügbar"?
 
-Klein.Buch startet im Hintergrund einen Java-Hilfsprozess für die
-XRechnung-Erzeugung und -Prüfung (Mustang + KoSIT). Wenn der nicht
-hochkommt, kann Klein.Buch keine XRechnung erzeugen oder prüfen.
-Beende die App komplett und starte sie neu. Hilft das nicht, lies
-das Kapitel "Sidecar-Probleme" unter Troubleshooting.
+Klein.Buch startet im Container einen Java-Hilfsprozess für die
+XRechnung-Erzeugung und -Prüfung (Mustang und KoSIT). Diesen Prozess
+nennen wir Sidecar. Antwortet er nicht, kann Klein.Buch keine
+Rechnung ausstellen und kein ZUGFeRD-PDF einlesen. Versuch es nach
+einer Minute noch einmal. Hilft das nicht, lies das Kapitel
+"Sidecar-Probleme" unter Troubleshooting.
 
 ## Wie sind meine Daten verschlüsselt?
 
@@ -161,19 +204,22 @@ Daten-Müll.
 ## Was kostet Klein.Buch?
 
 Klein.Buch ist Open-Source-Software unter der AGPL-3.0-Lizenz.
-Die Nutzung ist kostenlos. Wenn Du die Software weiterentwickeln
-oder selbst gehostet verbreiten willst, gelten die AGPL-Pflichten;
-für die normale persönliche Nutzung ist nichts zu beachten.
+Die Nutzung ist kostenlos. Betreibst Du Klein.Buch unverändert, ist
+nichts weiter zu beachten. Veränderst Du Klein.Buch und lässt andere
+Menschen Deine Fassung über das Netz nutzen, musst Du ihnen den
+Quelltext dieser Fassung anbieten. Mehr im Kapitel "Lizenz und Quellcode: wenn Du Klein.Buch veränderst".
 
-## Wo finde ich die Programm-Daten?
+## Wo liegen meine Daten?
 
-Auf Windows liegen die Klein.Buch-Daten standardmäßig unter
-`%APPDATA%\de.wildbach.kleinbuch\`. Dort befinden sich die
-verschlüsselte Datenbank, das Beleg-Archiv und die Floor-Backups.
-Achte darauf, dass dieser Ordner nicht mit einer Cloud
-synchronisiert wird; das könnte die Datenbank korrumpieren. Den
-Cloud-Sync nimmst Du nur für die separat eingerichteten
-Off-Site-Backups.
+In den Volumes, die Du beim Einrichten des Containers angegeben
+hast. Ein Volume ist ein Ordner auf dem Server, den der Container als
+eigenes Verzeichnis sieht. Im Container heißen sie `/data` (die
+verschlüsselte Datenbank, das Beleg-Archiv und die lokalen Backups),
+`/inputs` (Vorlagen, Tabellen und Spezifikationen) und optional
+`/backup-targets` (die externen Backup-Ziele). Das Daten-Volume
+gehört auf ein lokales Laufwerk des Servers, nicht auf eine
+Netzwerk-Freigabe und nicht in einen Cloud-Sync-Ordner. Mehr im
+Kapitel "Volumes und Rechte".
 
 ## Wie melde ich einen Fehler?
 
@@ -185,10 +231,12 @@ findest Du im Hauptmenü unter "Über".
 
 ## Funktioniert Klein.Buch ohne Internet?
 
-Ja. Die App ist offline-fähig. Internet brauchst Du nur, wenn Du
-Rechnungen per E-Mail versenden oder Off-Site-Backups in die Cloud
-beziehungsweise auf einen SFTP-Server schreiben willst. Sonst läuft
-alles lokal.
+Teilweise. Dein Browser muss Deinen Server erreichen. Steht der
+Server bei Dir im Haus, klappt das im eigenen Netz auch ohne
+Internet. Internet braucht Klein.Buch selbst nur, wenn Du Rechnungen
+per E-Mail versendest, Backups auf einen SFTP-Server außer Haus
+schreibst oder die Versionsprüfung eingeschaltet hast. Und natürlich,
+wenn Du unterwegs auf Deine Instanz zugreifen willst.
 
 ## Kann ich mehrere Geschäftsjahre gleichzeitig verwalten?
 
@@ -226,4 +274,4 @@ Steuerberater ab.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

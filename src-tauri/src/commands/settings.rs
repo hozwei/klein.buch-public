@@ -4,76 +4,127 @@
 //! mit 5-Jahres-Bindungs-Schutz. Weitere Settings (mail, payment-accounts, pdf,
 //! backup) folgen in Blöcken 4, 5, 9.
 
-use crate::backup::BackupSession;
+use crate::app_ctx::AppCtx;
 use crate::branding;
-use crate::config::Paths;
 use crate::db::models::SellerProfileRow;
 use crate::db::repo::seller_profile::{self, SellerProfileInput};
 use crate::domain::kleinunternehmer::{hinweis_text, waiver_deadline};
 use crate::error::{Error, Result};
-use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use serde::Serialize;
+use std::sync::Arc;
 
-#[tauri::command]
-pub async fn seller_profile_get(pool: State<'_, SqlitePool>) -> Result<Option<SellerProfileRow>> {
-    seller_profile::get(pool.inner()).await
+/// Argumente von [`seller_profile_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerProfileGetArgs {}
+
+pub async fn seller_profile_get(
+    ctx: &Arc<AppCtx>,
+    _args: SellerProfileGetArgs,
+) -> Result<Option<SellerProfileRow>> {
+    let pool = ctx.pool()?;
+
+    seller_profile::get(&pool).await
 }
 
-#[tauri::command]
+/// Argumente von [`seller_profile_upsert`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerProfileUpsertArgs {
+    pub input: SellerProfileInput,
+}
+
 pub async fn seller_profile_upsert(
-    pool: State<'_, SqlitePool>,
-    input: SellerProfileInput,
+    ctx: &Arc<AppCtx>,
+    args: SellerProfileUpsertArgs,
 ) -> Result<SellerProfileRow> {
-    seller_profile::upsert(pool.inner(), &input).await
+    let SellerProfileUpsertArgs { input } = args;
+    let pool = ctx.pool()?;
+
+    seller_profile::upsert(&pool, &input).await
+}
+
+/// Argumente von [`seller_logo_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerLogoSetArgs {
+    /// Aus `POST /api/upload/logo` (Plan W7).
+    pub upload_id: String,
 }
 
 /// Logo hochladen: Bytes nach `data/branding/logo.<ext>` schreiben (NICHT
 /// `inputs/` — Hard-Rule), Dateinamen im Profil merken. Profil muss existieren.
-#[tauri::command]
 pub async fn seller_logo_set(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    file_bytes: Vec<u8>,
-    file_name: String,
+    ctx: &Arc<AppCtx>,
+    args: SellerLogoSetArgs,
 ) -> Result<SellerProfileRow> {
-    let paths = Paths::from_handle(&app)?;
+    let SellerLogoSetArgs { upload_id } = args;
+    let pool = ctx.pool()?;
+
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::Logo])?;
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    let stored = branding::store_logo(&dir, &file_bytes, &file_name)?;
-    seller_profile::set_logo_filename(pool.inner(), Some(&stored)).await?;
-    seller_profile::get(pool.inner())
+    // Endung aus der Inhaltsprüfung, nicht aus dem Dateinamen (Plan W7).
+    let stored = branding::store_logo(
+        &dir,
+        &upload.bytes,
+        &format!("logo.{}", upload.file_type.ext()),
+    )?;
+    seller_profile::set_logo_filename(&pool, Some(&stored)).await?;
+    ctx.uploads.consume(&upload_id);
+    seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Logo-Upload nicht gefunden.".into()))
 }
 
+/// Argumente von [`seller_logo_clear`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerLogoClearArgs {}
+
 /// Logo entfernen: Datei löschen + `logo_filename` auf NULL.
-#[tauri::command]
 pub async fn seller_logo_clear(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: SellerLogoClearArgs,
 ) -> Result<SellerProfileRow> {
-    let paths = Paths::from_handle(&app)?;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    if let Some(p) = seller_profile::get(pool.inner()).await? {
-        if let Some(fname) = p.logo_filename.as_deref() {
+    if let Some(p) = seller_profile::get(&pool).await? {
+        // Ein ungültiger Altwert wird nur aus dem Profil entfernt, nie als
+        // Pfad benutzt (Plan W7, Gegenprüfung).
+        if let Some(fname) = p
+            .logo_filename
+            .as_deref()
+            .filter(|f| branding::is_asset_name(f))
+        {
             branding::clear_logo(&dir, fname)?;
         }
     }
-    seller_profile::set_logo_filename(pool.inner(), None).await?;
-    seller_profile::get(pool.inner())
+    seller_profile::set_logo_filename(&pool, None).await?;
+    seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Logo-Entfernen nicht gefunden.".into()))
 }
 
+/// Argumente von [`seller_logo_data`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerLogoDataArgs {}
+
 /// Liefert das Logo als Data-URL für die In-App-Vorschau (oder `None`).
-#[tauri::command]
 pub async fn seller_logo_data(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: SellerLogoDataArgs,
 ) -> Result<Option<String>> {
-    let paths = Paths::from_handle(&app)?;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    let Some(p) = seller_profile::get(pool.inner()).await? else {
+    let Some(p) = seller_profile::get(&pool).await? else {
         return Ok(None);
     };
     match p.logo_filename.as_deref() {
@@ -82,13 +133,18 @@ pub async fn seller_logo_data(
     }
 }
 
+/// Argumente von [`pdf_templates_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTemplatesListArgs {}
+
 /// Listet alle wählbaren PDF-Vorlagen (eingebettete Built-ins + `inputs/`-
 /// Overrides) inkl. §19-Kompatibilität. Block 17a.
-#[tauri::command]
 pub async fn pdf_templates_list(
-    app: AppHandle,
+    ctx: &Arc<AppCtx>,
+    _args: PdfTemplatesListArgs,
 ) -> Result<Vec<crate::pdf::templates::TemplateMeta>> {
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     crate::pdf::templates::list_templates(&paths.inputs_dir)
 }
 
@@ -102,20 +158,28 @@ const PREVIEW_LOGO_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width
   <rect x="44" y="70" width="20" height="6" rx="3" fill="#176b87"/>
 </svg>"##;
 
+/// Argumente von [`pdf_template_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTemplatePreviewArgs {
+    pub name: String,
+}
+
 /// Rendert eine Beispiel-Rechnung (Dummy-Daten „Max Mustermann“ + Dummy-Logo) mit
 /// der gewählten Vorlage und öffnet sie im Standard-PDF-Viewer. Reine Vorschau:
 /// schreibt nach `data/preview/`, nichts wird validiert oder archiviert. Block 17a.
-#[tauri::command]
 pub async fn pdf_template_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    name: String,
-) -> Result<()> {
+    ctx: &Arc<AppCtx>,
+    args: PdfTemplatePreviewArgs,
+) -> Result<crate::downloads::DownloadTicket> {
+    let PdfTemplatePreviewArgs { name } = args;
+    let pool = ctx.pool()?;
+
     use crate::domain::invoice::{
         BuyerView, InvoiceDirection, InvoiceInput, InvoiceItemInput, SellerView,
     };
 
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     let source = crate::pdf::templates::resolve_invoice_template(&paths.inputs_dir, &name)?;
 
     // R3-004: Vorschau ist der einzige Render-Pfad, der den §19-Klausel-Check
@@ -124,7 +188,7 @@ pub async fn pdf_template_preview(
     // nehmer ist (analoge Seller-aware-Logik). Die Vorschau hat es bisher still
     // gerendert. Symmetrisch zur Speichern-Logik machen: bei §19 vorab prüfen,
     // bei Regelbesteuerung weiterhin frei vorab-render-bar.
-    let seller_is_klein = seller_profile::get(pool.inner())
+    let seller_is_klein = seller_profile::get(&pool)
         .await?
         .map(|p| p.is_kleinunternehmer == 1)
         .unwrap_or(true);
@@ -146,6 +210,8 @@ pub async fn pdf_template_preview(
         tax_number: Some("133/456/7890"),
         vat_id: None,
         email: "kontakt@mustermann-it.example",
+        phone: None,
+        contact_name: None,
         iban: Some("DE02 1203 0000 0000 2020 51"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
@@ -238,7 +304,7 @@ pub async fn pdf_template_preview(
         }
     ]);
 
-    let pdf = crate::pdf::typst_render::render_invoice(
+    let pdf = crate::pdf::typst_render::invoice_job(
         &source,
         "MUSTER-2026-0001",
         &input,
@@ -249,10 +315,12 @@ pub async fn pdf_template_preview(
         Some("Max Mustermann"),
         &accounts_json,
         true,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
-    let dir = paths.data_dir.join("preview");
-    std::fs::create_dir_all(&dir).map_err(|e| Error::Config(format!("preview-Ordner: {e}")))?;
+    // Plan W7: Vorschau als Download-Ticket (inline im Browser), keine Datei
+    // mit festem Namen.
     let safe: String = name
         .chars()
         .map(|c| {
@@ -263,33 +331,38 @@ pub async fn pdf_template_preview(
             }
         })
         .collect();
-    let file = dir.join(format!("vorschau-{safe}.pdf"));
-    std::fs::write(&file, &pdf).map_err(|e| Error::Config(format!("Vorschau schreiben: {e}")))?;
+    ctx.downloads.put_bytes(
+        &format!("Vorschau-{safe}.pdf"),
+        &pdf,
+        crate::downloads::DownloadKind::Preview,
+    )
+}
 
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_path(file.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| Error::Config(format!("Vorschau öffnen: {e}")))?;
-    Ok(())
+/// Argumente von [`seller_default_template_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerDefaultTemplateSetArgs {
+    pub name: String,
 }
 
 /// Setzt die globale Standard-PDF-Vorlage (gilt für neu gerenderte Rechnungen
 /// und Angebote). §19-Schutz: bei Kleinunternehmer darf nur eine §19-kompatible
 /// Vorlage gewählt werden (Marker + Hinweis-Text). Block 17a.
-#[tauri::command]
 pub async fn seller_default_template_set(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    name: String,
+    ctx: &Arc<AppCtx>,
+    args: SellerDefaultTemplateSetArgs,
 ) -> Result<SellerProfileRow> {
-    let paths = Paths::from_handle(&app)?;
+    let SellerDefaultTemplateSetArgs { name } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let templates = crate::pdf::templates::list_templates(&paths.inputs_dir)?;
     let meta = templates
         .iter()
         .find(|t| t.name == name)
         .ok_or_else(|| Error::Domain(format!("Unbekannte Vorlage: {name}")))?;
 
-    let profile = seller_profile::get(pool.inner())
+    let profile = seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Bitte zuerst die Firmendaten speichern.".into()))?;
     if profile.is_kleinunternehmer == 1 && !meta.klausel_status.is_klein_compatible {
@@ -298,8 +371,8 @@ pub async fn seller_default_template_set(
         )));
     }
 
-    seller_profile::set_default_pdf_template(pool.inner(), &name).await?;
-    seller_profile::get(pool.inner())
+    seller_profile::set_default_pdf_template(&pool, &name).await?;
+    seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Vorlagen-Wahl nicht gefunden.".into()))
 }
@@ -314,9 +387,18 @@ pub struct Paragraph19Info {
     pub return_date_after_waiver: Option<String>,
 }
 
-#[tauri::command]
-pub async fn paragraph_19_info(pool: State<'_, SqlitePool>) -> Result<Paragraph19Info> {
-    let profile = seller_profile::get(pool.inner()).await?;
+/// Argumente von [`paragraph_19_info`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Paragraph19InfoArgs {}
+
+pub async fn paragraph_19_info(
+    ctx: &Arc<AppCtx>,
+    _args: Paragraph19InfoArgs,
+) -> Result<Paragraph19Info> {
+    let pool = ctx.pool()?;
+
+    let profile = seller_profile::get(&pool).await?;
     let return_date = profile
         .and_then(|p| p.waived_paragraph_19_since)
         .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
@@ -337,50 +419,62 @@ pub struct TravelSettings {
     pub round_trip_default: bool,
 }
 
-#[tauri::command]
-pub async fn travel_settings_get(pool: State<'_, SqlitePool>) -> Result<TravelSettings> {
-    let cost_per_km_cents =
-        crate::db::repo::app_settings::get(pool.inner(), "travel_cost_per_km_cents")
-            .await?
-            .and_then(|v| v.parse::<i64>().ok())
-            .unwrap_or(0);
+/// Argumente von [`travel_settings_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelSettingsGetArgs {}
+
+pub async fn travel_settings_get(
+    ctx: &Arc<AppCtx>,
+    _args: TravelSettingsGetArgs,
+) -> Result<TravelSettings> {
+    let pool = ctx.pool()?;
+
+    let cost_per_km_cents = crate::db::repo::app_settings::get(&pool, "travel_cost_per_km_cents")
+        .await?
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
     let round_trip_default =
-        crate::db::repo::app_settings::get_bool(pool.inner(), "travel_round_trip_default", false)
-            .await?;
+        crate::db::repo::app_settings::get_bool(&pool, "travel_round_trip_default", false).await?;
     Ok(TravelSettings {
         cost_per_km_cents,
         round_trip_default,
     })
 }
 
-#[tauri::command]
-pub async fn travel_settings_set(
-    pool: State<'_, SqlitePool>,
-    cost_per_km_cents: i64,
-    round_trip_default: bool,
-) -> Result<()> {
+/// Argumente von [`travel_settings_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelSettingsSetArgs {
+    pub cost_per_km_cents: i64,
+    pub round_trip_default: bool,
+}
+
+pub async fn travel_settings_set(ctx: &Arc<AppCtx>, args: TravelSettingsSetArgs) -> Result<()> {
+    let TravelSettingsSetArgs {
+        cost_per_km_cents,
+        round_trip_default,
+    } = args;
+    let pool = ctx.pool()?;
+
     if cost_per_km_cents < 0 {
         return Err(Error::Domain(
             "Der Kilometersatz darf nicht negativ sein.".into(),
         ));
     }
     crate::db::repo::app_settings::set(
-        pool.inner(),
+        &pool,
         "travel_cost_per_km_cents",
         &cost_per_km_cents.to_string(),
     )
     .await?;
-    crate::db::repo::app_settings::set_bool(
-        pool.inner(),
-        "travel_round_trip_default",
-        round_trip_default,
-    )
-    .await?;
+    crate::db::repo::app_settings::set_bool(&pool, "travel_round_trip_default", round_trip_default)
+        .await?;
     // R2-026: Audit-Schreiben hier rein kosmetisch (Reisesatz-Update ist
     // kein GoBD-Beleg, sondern Settings). Fehler werden geloggt, sperren
     // den Settings-Save aber nicht.
     if let Err(e) = crate::db::repo::audit_log::append(
-        pool.inner(),
+        &pool,
         "settings.travel.update",
         "settings",
         "travel",
@@ -395,15 +489,24 @@ pub async fn travel_settings_set(
     Ok(())
 }
 
+/// Argumente von [`travel_compute`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelComputeArgs {
+    pub km: f64,
+    pub round_trip: bool,
+}
+
 /// Berechnet eine Anfahrts-Position aus km + gespeichertem Satz. Geld-Mathematik
 /// bleibt in Rust (autoritativ), das Frontend fügt das Ergebnis als Position ein.
-#[tauri::command]
 pub async fn travel_compute(
-    pool: State<'_, SqlitePool>,
-    km: f64,
-    round_trip: bool,
+    ctx: &Arc<AppCtx>,
+    args: TravelComputeArgs,
 ) -> Result<crate::domain::travel::TravelLine> {
-    let cents = crate::db::repo::app_settings::get(pool.inner(), "travel_cost_per_km_cents")
+    let TravelComputeArgs { km, round_trip } = args;
+    let pool = ctx.pool()?;
+
+    let cents = crate::db::repo::app_settings::get(&pool, "travel_cost_per_km_cents")
         .await?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(0);
@@ -424,24 +527,48 @@ pub async fn travel_compute(
 
 // ---- Angebots-Unterschrift (Block „Angebots-Signatur") ---------------------
 
+/// Argumente von [`seller_signature_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerSignatureSetArgs {
+    /// Aus `POST /api/upload/unterschrift` (Plan W7).
+    pub upload_id: String,
+}
+
 /// Unterschrift-Bild hochladen → `data/branding/signature.<ext>` (NICHT inputs/).
 /// Gibt die Data-URL für die sofortige Vorschau zurück.
-#[tauri::command]
 pub async fn seller_signature_set(
-    app: AppHandle,
-    file_bytes: Vec<u8>,
-    file_name: String,
+    ctx: &Arc<AppCtx>,
+    args: SellerSignatureSetArgs,
 ) -> Result<Option<String>> {
-    let paths = Paths::from_handle(&app)?;
+    let SellerSignatureSetArgs { upload_id } = args;
+
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::Signature])?;
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
-    let stored = branding::store_signature(&dir, &file_bytes, &file_name)?;
+    // Endung aus der Inhaltsprüfung, nicht aus dem Dateinamen (Plan W7).
+    let stored = branding::store_signature(
+        &dir,
+        &upload.bytes,
+        &format!("signature.{}", upload.file_type.ext()),
+    )?;
+    ctx.uploads.consume(&upload_id);
     branding::read_logo_data_url(&dir, &stored)
 }
 
+/// Argumente von [`seller_signature_clear`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerSignatureClearArgs {}
+
 /// Unterschrift-Bild entfernen (idempotent).
-#[tauri::command]
-pub async fn seller_signature_clear(app: AppHandle) -> Result<()> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn seller_signature_clear(
+    ctx: &Arc<AppCtx>,
+    _args: SellerSignatureClearArgs,
+) -> Result<()> {
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
     if let Some((name, _)) = branding::find_signature(&dir) {
         branding::clear_logo(&dir, &name)?;
@@ -449,10 +576,17 @@ pub async fn seller_signature_clear(app: AppHandle) -> Result<()> {
     Ok(())
 }
 
+/// Argumente von [`seller_signature_data`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerSignatureDataArgs {}
+
 /// Unterschrift als Data-URL für die In-App-Vorschau (oder `None`).
-#[tauri::command]
-pub async fn seller_signature_data(app: AppHandle) -> Result<Option<String>> {
-    let paths = Paths::from_handle(&app)?;
+pub async fn seller_signature_data(
+    ctx: &Arc<AppCtx>,
+    _args: SellerSignatureDataArgs,
+) -> Result<Option<String>> {
+    let paths = ctx.paths.clone();
     let dir = branding::branding_dir(&paths.data_dir);
     match branding::find_signature(&dir) {
         Some((name, _)) => branding::read_logo_data_url(&dir, &name),
@@ -460,41 +594,72 @@ pub async fn seller_signature_data(app: AppHandle) -> Result<Option<String>> {
     }
 }
 
+/// Argumente von [`quote_signature_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSignatureGetArgs {}
+
 /// Globaler Schalter „Unterschriftenfelder auf Angeboten".
-#[tauri::command]
-pub async fn quote_signature_get(pool: State<'_, SqlitePool>) -> Result<bool> {
-    crate::db::repo::app_settings::get_bool(pool.inner(), "quote_signature_enabled", false).await
+pub async fn quote_signature_get(ctx: &Arc<AppCtx>, _args: QuoteSignatureGetArgs) -> Result<bool> {
+    let pool = ctx.pool()?;
+
+    crate::db::repo::app_settings::get_bool(&pool, "quote_signature_enabled", false).await
 }
 
-#[tauri::command]
-pub async fn quote_signature_set(pool: State<'_, SqlitePool>, enabled: bool) -> Result<()> {
-    crate::db::repo::app_settings::set_bool(pool.inner(), "quote_signature_enabled", enabled).await
+/// Argumente von [`quote_signature_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuoteSignatureSetArgs {
+    pub enabled: bool,
+}
+
+pub async fn quote_signature_set(ctx: &Arc<AppCtx>, args: QuoteSignatureSetArgs) -> Result<()> {
+    let QuoteSignatureSetArgs { enabled } = args;
+    let pool = ctx.pool()?;
+
+    crate::db::repo::app_settings::set_bool(&pool, "quote_signature_enabled", enabled).await
 }
 
 // ---- Inhaber-Name + Standard-Fristen ---------------------------------------
 
+/// Argumente von [`seller_owner_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerOwnerGetArgs {}
+
 /// Inhaber (Vor- und Nachname) — §14-Pflicht bei Einzelunternehmern/Freiberuflern.
 /// Leerer Wert → None.
-#[tauri::command]
-pub async fn seller_owner_get(pool: State<'_, SqlitePool>) -> Result<Option<String>> {
+pub async fn seller_owner_get(
+    ctx: &Arc<AppCtx>,
+    _args: SellerOwnerGetArgs,
+) -> Result<Option<String>> {
+    let pool = ctx.pool()?;
+
     Ok(
-        crate::db::repo::app_settings::get(pool.inner(), "seller_owner_name")
+        crate::db::repo::app_settings::get(&pool, "seller_owner_name")
             .await?
             .filter(|s| !s.trim().is_empty()),
     )
 }
 
-#[tauri::command]
-pub async fn seller_owner_set(
-    pool: State<'_, SqlitePool>,
-    owner_name: Option<String>,
-) -> Result<()> {
+/// Argumente von [`seller_owner_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SellerOwnerSetArgs {
+    #[serde(default)]
+    pub owner_name: Option<String>,
+}
+
+pub async fn seller_owner_set(ctx: &Arc<AppCtx>, args: SellerOwnerSetArgs) -> Result<()> {
+    let SellerOwnerSetArgs { owner_name } = args;
+    let pool = ctx.pool()?;
+
     let v = owner_name
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .unwrap_or("");
-    crate::db::repo::app_settings::set(pool.inner(), "seller_owner_name", v).await
+    crate::db::repo::app_settings::set(&pool, "seller_owner_name", v).await
 }
 
 /// Standard-Fristen: wie viele Tage ein Angebot gültig ist und in wie vielen
@@ -506,13 +671,22 @@ pub struct DocumentTerms {
     pub invoice_due_days: i64,
 }
 
-#[tauri::command]
-pub async fn document_terms_get(pool: State<'_, SqlitePool>) -> Result<DocumentTerms> {
-    let quote_valid_days = crate::db::repo::app_settings::get(pool.inner(), "quote_valid_days")
+/// Argumente von [`document_terms_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentTermsGetArgs {}
+
+pub async fn document_terms_get(
+    ctx: &Arc<AppCtx>,
+    _args: DocumentTermsGetArgs,
+) -> Result<DocumentTerms> {
+    let pool = ctx.pool()?;
+
+    let quote_valid_days = crate::db::repo::app_settings::get(&pool, "quote_valid_days")
         .await?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(30);
-    let invoice_due_days = crate::db::repo::app_settings::get(pool.inner(), "invoice_due_days")
+    let invoice_due_days = crate::db::repo::app_settings::get(&pool, "invoice_due_days")
         .await?
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(14);
@@ -522,20 +696,29 @@ pub async fn document_terms_get(pool: State<'_, SqlitePool>) -> Result<DocumentT
     })
 }
 
-#[tauri::command]
-pub async fn document_terms_set(
-    pool: State<'_, SqlitePool>,
-    quote_valid_days: i64,
-    invoice_due_days: i64,
-) -> Result<()> {
+/// Argumente von [`document_terms_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentTermsSetArgs {
+    pub quote_valid_days: i64,
+    pub invoice_due_days: i64,
+}
+
+pub async fn document_terms_set(ctx: &Arc<AppCtx>, args: DocumentTermsSetArgs) -> Result<()> {
+    let DocumentTermsSetArgs {
+        quote_valid_days,
+        invoice_due_days,
+    } = args;
+    let pool = ctx.pool()?;
+
     crate::db::repo::app_settings::set(
-        pool.inner(),
+        &pool,
         "quote_valid_days",
         &quote_valid_days.max(0).to_string(),
     )
     .await?;
     crate::db::repo::app_settings::set(
-        pool.inner(),
+        &pool,
         "invoice_due_days",
         &invoice_due_days.max(0).to_string(),
     )
@@ -543,128 +726,54 @@ pub async fn document_terms_set(
     Ok(())
 }
 
-// ---- Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP) -------------
+// ---- Versionsprüfung (Plan W12, ADR 0039 E14) -------------------------------
 
-/// Konfiguration des Watched-Folders fuer eingehende E-Rechnungen.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DropFolderSettings {
-    /// Ist der periodische Sync (Tick + App-Start) aktiv?
-    pub enabled: bool,
-    /// Absoluter Ordner-Pfad. Leer = noch nicht gewaehlt.
-    pub path: String,
-}
-
-#[tauri::command]
-pub async fn drop_folder_settings_get(pool: State<'_, SqlitePool>) -> Result<DropFolderSettings> {
-    let enabled =
-        crate::db::repo::app_settings::get_bool(pool.inner(), "drop_folder_enabled", false).await?;
-    let path = crate::db::repo::app_settings::get(pool.inner(), "drop_folder_path")
-        .await?
-        .unwrap_or_default();
-    Ok(DropFolderSettings { enabled, path })
-}
-
-#[tauri::command]
-pub async fn drop_folder_settings_set(
-    pool: State<'_, SqlitePool>,
-    args: DropFolderSettings,
-) -> Result<DropFolderSettings> {
-    let pool = pool.inner();
-    let trimmed = args.path.trim().to_string();
-
-    // Pre-Check beim Aktivieren: leerer Pfad oder fehlender/unzugaenglicher
-    // Ordner blockt das Einschalten. Das verhindert den haeufigsten Fehler
-    // (Toggle on, Pfad noch nicht gepickt) und macht den Sync danach
-    // deterministisch — kein silent-disable mehr.
-    if args.enabled {
-        if trimmed.is_empty() {
-            return Err(Error::Domain(
-                "Bitte zuerst einen Ordner auswaehlen, bevor der Drop-Folder aktiviert wird."
-                    .into(),
-            ));
-        }
-        let p = std::path::Path::new(&trimmed);
-        if !p.is_dir() {
-            return Err(Error::Domain(format!(
-                "Der gewaehlte Ordner existiert nicht oder ist kein Verzeichnis: {trimmed}"
-            )));
-        }
-        // Schreibbarkeit testen: temporaere Datei anlegen + sofort loeschen.
-        // `processed/`/`failed/` werden beim ersten Sync erst angelegt — wir
-        // wollen den Fehler aber jetzt im Settings-Save sehen, nicht erst
-        // beim Tick.
-        let probe = p.join(".klein-buch-write-probe");
-        match std::fs::write(&probe, b"probe") {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&probe);
-            }
-            Err(e) => {
-                return Err(Error::Domain(format!(
-                    "Im gewaehlten Ordner kann nicht geschrieben werden ({trimmed}): {e}"
-                )));
-            }
-        }
-    }
-
-    crate::db::repo::app_settings::set_bool(pool, "drop_folder_enabled", args.enabled).await?;
-    crate::db::repo::app_settings::set(pool, "drop_folder_path", &trimmed).await?;
-
-    // Settings-Update protokollieren (kein GoBD-Beleg, aber audit-relevant fuer
-    // „wer hat den Drop-Folder umgestellt?"). Fehler werden geloggt, sperren
-    // den Save nicht — Pattern wie bei travel_settings_set.
-    if let Err(e) = crate::db::repo::audit_log::append(
-        pool,
-        "settings.drop_folder.update",
-        "settings",
-        "drop_folder",
-        Some(&format!(
-            r#"{{"enabled":{},"path":"{}"}}"#,
-            args.enabled,
-            trimmed.replace('\\', "\\\\").replace('"', "\\\"")
-        )),
-    )
-    .await
-    {
-        tracing::warn!("audit_log.settings.drop_folder.update fehlgeschlagen: {e}");
-    }
-
-    Ok(DropFolderSettings {
-        enabled: args.enabled,
-        path: trimmed,
-    })
-}
-
-/// Manueller Trigger fuer den Drop-Folder-Sync — nuetzlich, wenn Manuel nicht
-/// 5 Minuten auf den naechsten Tick warten will (Settings-Page-Button „Jetzt
-/// synchronisieren"). Liefert dem Frontend Kurz-Counter zurueck, damit es
-/// einen Toast schreiben kann.
+/// Opt-in Versionsprüfung gegen die GitHub-Releases (Standard aus).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DropFolderSyncResult {
-    pub skipped_disabled: bool,
-    pub imported: usize,
-    pub failed: usize,
-    pub ignored_hidden: usize,
+pub struct UpdateCheckSettings {
+    pub enabled: bool,
+    /// Letzte Abfrage (RFC 3339, UTC); `None`, solange keine lief.
+    pub last_check_at: Option<String>,
 }
 
-#[tauri::command]
-pub async fn drop_folder_sync_now(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, BackupSession>,
-) -> Result<DropFolderSyncResult> {
-    let paths = Paths::from_handle(&app)?;
-    let today = chrono::Local::now().date_naive();
-    let report =
-        crate::scheduler::drop_folder::run_sync(pool.inner(), &paths, session.inner(), today)
-            .await?;
-    Ok(DropFolderSyncResult {
-        skipped_disabled: report.skipped_disabled,
-        imported: report.imported,
-        failed: report.failed,
-        ignored_hidden: report.ignored_hidden,
+/// Argumente von [`update_check_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckGetArgs {}
+
+pub async fn update_check_get(
+    ctx: &Arc<AppCtx>,
+    _args: UpdateCheckGetArgs,
+) -> Result<UpdateCheckSettings> {
+    use crate::scheduler::update_check::{SETTING_ENABLED, SETTING_LAST_CHECK};
+    let pool = ctx.pool()?;
+
+    Ok(UpdateCheckSettings {
+        enabled: crate::db::repo::app_settings::get_bool(&pool, SETTING_ENABLED, false).await?,
+        last_check_at: crate::db::repo::app_settings::get(&pool, SETTING_LAST_CHECK).await?,
     })
+}
+
+/// Argumente von [`update_check_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckSetArgs {
+    pub enabled: bool,
+}
+
+/// Schaltet die Versionsprüfung ein oder aus; die erste Abfrage nach dem
+/// Einschalten macht der nächste Scheduler-Tick (höchstens täglich).
+pub async fn update_check_set(ctx: &Arc<AppCtx>, args: UpdateCheckSetArgs) -> Result<()> {
+    let UpdateCheckSetArgs { enabled } = args;
+    let pool = ctx.pool()?;
+
+    crate::db::repo::app_settings::set_bool(
+        &pool,
+        crate::scheduler::update_check::SETTING_ENABLED,
+        enabled,
+    )
+    .await
 }
 
 #[cfg(test)]

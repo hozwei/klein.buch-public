@@ -42,8 +42,32 @@ impl From<TemplateKlauselStatus> for TemplateKlauselStatusDto {
     }
 }
 
+/// Vorlagenname als einzelner Dateiname in `inputs/pdf-templates` (W14): kein
+/// Pfadtrenner, kein führender Punkt, keine Steuerzeichen, höchstens 100
+/// Zeichen. Sonst könnte ein Name wie `/data/archive/…/x` oder `../…` eine
+/// hochgeladene Datei als Typst-Vorlage laufen lassen.
+pub fn is_safe_template_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= 100
+        && !name.starts_with('.')
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+fn check_template_name(name: &str) -> Result<()> {
+    if is_safe_template_name(name) {
+        Ok(())
+    } else {
+        Err(Error::Domain(format!(
+            "Unzulässiger Vorlagenname: {name:?}"
+        )))
+    }
+}
+
 /// Liest `inputs/pdf-templates/{name}.typ` und gibt den Quelltext zurück.
 pub fn load_source(inputs_dir: &Path, template_name: &str) -> Result<String> {
+    check_template_name(template_name)?;
     let path = inputs_dir
         .join("pdf-templates")
         .join(format!("{template_name}.typ"));
@@ -1424,6 +1448,7 @@ pub fn builtin_unified(name: &str) -> Option<&'static str> {
 /// → eingebettete Unified-Built-in → sonst [`load_source`] (Fehler, wenn weder
 /// Datei noch Built-in existiert).
 pub fn resolve_invoice_template(inputs_dir: &Path, name: &str) -> Result<String> {
+    check_template_name(name)?;
     let override_path = inputs_dir.join("pdf-templates").join(format!("{name}.typ"));
     if let Ok(s) = std::fs::read_to_string(&override_path) {
         return Ok(s);
@@ -1440,7 +1465,7 @@ pub fn resolve_invoice_template(inputs_dir: &Path, name: &str) -> Result<String>
 /// [`DEFAULT_QUOTE_TEMPLATE`]). Für `modern`/`klassisch`/`minimal` gilt:
 /// `inputs/{name}.typ`-Override gewinnt, sonst die eingebettete Unified-Vorlage.
 pub fn resolve_quote_template(inputs_dir: &Path, name: &str) -> String {
-    if name != "default" {
+    if name != "default" && is_safe_template_name(name) {
         let override_path = inputs_dir.join("pdf-templates").join(format!("{name}.typ"));
         if let Ok(s) = std::fs::read_to_string(&override_path) {
             return s;
@@ -1719,5 +1744,39 @@ mod tests {
         let src = load_euer_source(dir.path());
         assert!(src.contains("Anlage EÜR"));
         assert!(src.contains("data-json"));
+    }
+
+    #[test]
+    fn template_names_cannot_escape_the_template_folder() {
+        // W14: kein Pfad als Vorlagenname (hochgeladene Datei als Typst-Vorlage).
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("x.typ");
+        std::fs::write(&outside, "// §19-KLAUSEL-BLOCK: REQUIRED\n").unwrap();
+        let inputs = dir.path().join("inputs");
+        std::fs::create_dir_all(inputs.join("pdf-templates")).unwrap();
+        for bad in [
+            "../x",
+            "../../x",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            ".versteckt",
+            "",
+            "a\nb",
+        ] {
+            assert!(!is_safe_template_name(bad), "{bad:?}");
+            assert!(resolve_invoice_template(&inputs, bad).is_err(), "{bad:?}");
+            assert!(load_source(&inputs, bad).is_err(), "{bad:?}");
+        }
+        let abs = outside.with_extension("").to_string_lossy().to_string();
+        assert!(resolve_invoice_template(&inputs, &abs).is_err());
+        // Angebote fallen bei unzulässigen Namen auf die Standardvorlage zurück.
+        assert_eq!(
+            resolve_quote_template(&inputs, "../x"),
+            load_quote_source(&inputs)
+        );
+        for ok in ["default", "modern", "Meine Vorlage", "rechnung-2026_v2"] {
+            assert!(is_safe_template_name(ok), "{ok}");
+        }
     }
 }

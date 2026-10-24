@@ -154,7 +154,7 @@
   /* .card entfernt — globale Definition aus tokens.css. */
   .summary { display: flex; flex-direction: column; gap: 0.25rem; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem 1rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #374151; gap: 0.25rem; margin-bottom: 0.75rem; }
+  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #374151; gap: 0.25rem; margin-bottom: 0.75rem; min-width: 0; }
   label.full { width: 100%; }
   input, select, textarea {
     padding: 0.45rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem;

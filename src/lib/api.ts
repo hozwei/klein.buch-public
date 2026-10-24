@@ -1,10 +1,32 @@
-// Tauri-Command-Bridge. Frontend ruft Backend via `invoke<T>(name, args)`.
+// Backend-Aufrufe. Jede Funktion ruft einen Command-Kern über
+// `invoke<T>(name, args)` auf — seit Plan W5 per HTTP (`src/lib/transport.ts`,
+// `POST /api/cmd/{name}`), vorher über die Tauri-Bridge.
 // Block 2: contacts_* + seller_profile_* + paragraph_19_info.
 // Block 3b: invoices_* — Draft, Lock-and-Issue, Cancel, Payment.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, saveFile } from "./transport";
+export { uploadFile } from "./transport";
+export type { UploadArt, UploadTicket } from "./transport";
+
+// Anmeldung und Sitzung (Plan W6) laufen über `/api/auth/*`.
+export {
+  authStatus,
+  authSetupOffer,
+  authSetupFinish,
+  authLogin,
+  authReauth,
+  authLogout,
+  authLock,
+  authSecurity,
+  authTotpRenewOffer,
+  authTotpRenewFinish,
+  authRecoveryRenew,
+  authChangePassphrase,
+} from "./transport";
+export type { AuthState, AuthStatus, TotpOffer, SecondFactor, LoginResult } from "./transport";
 import type {
   AnonymizeCheck,
+  DownloadTicket,
   CancelArgs,
   CancelResponse,
   Contact,
@@ -17,15 +39,12 @@ import type {
   LockResponse,
   MailAccount,
   MailAccountInput,
-  OauthStatus,
   EmailLogEntry,
   EmailLogFilter,
   Paragraph19Info,
   PdfTemplateMeta,
   TravelSettings,
   TravelLine,
-  DropFolderSettings,
-  DropFolderSyncResult,
   RecordPaymentArgs,
   RenderedMail,
   SellerProfile,
@@ -104,6 +123,7 @@ import type {
   IntegrityCheckSummary,
   IntegrityCheckRow,
   AppInfo,
+  UpdateCheckSettings,
 } from "./types";
 
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -156,8 +176,9 @@ export function contactsAnonymize(id: string): Promise<Contact> {
 // ---- DSGVO-Auskunft (Art. 15, Block 18) ------------------------------------
 
 export interface DsgvoExportResult {
-  zipPath: string;
   fileName: string;
+  /** Abruf über `/files/download/{id}` (Plan W7). */
+  download: DownloadTicket | null;
   invoiceCount: number;
   quoteCount: number;
   expenseCount: number;
@@ -167,7 +188,7 @@ export interface DsgvoExportResult {
 }
 
 /** Erzeugt die DSGVO-Auskunft (Art. 15) zu einem Kontakt als ZIP (PDF + JSON +
- *  Originaldateien) nach data/export/dsgvo und öffnet den Ordner. Read-only. */
+ *  Originaldateien) zum Herunterladen. Read-only. */
 export function dsgvoExport(contactId: string): Promise<DsgvoExportResult> {
   return invoke<DsgvoExportResult>("dsgvo_export", { contactId });
 }
@@ -186,8 +207,9 @@ export function paragraph19Info(): Promise<Paragraph19Info> {
   return invoke<Paragraph19Info>("paragraph_19_info");
 }
 
-export function sellerLogoSet(fileBytes: number[], fileName: string): Promise<SellerProfile> {
-  return invoke<SellerProfile>("seller_logo_set", { fileBytes, fileName });
+/** Logo aus einem Upload der Art `logo` (Plan W7). */
+export function sellerLogoSet(uploadId: string): Promise<SellerProfile> {
+  return invoke<SellerProfile>("seller_logo_set", { uploadId });
 }
 
 export function sellerLogoClear(): Promise<SellerProfile> {
@@ -199,8 +221,9 @@ export function sellerLogoData(): Promise<string | null> {
 }
 
 // Angebots-Unterschrift (Bild-Upload wie Logo) + globaler Toggle
-export function sellerSignatureSet(fileBytes: number[], fileName: string): Promise<string | null> {
-  return invoke<string | null>("seller_signature_set", { fileBytes, fileName });
+/** Unterschrift aus einem Upload der Art `unterschrift` (Plan W7). */
+export function sellerSignatureSet(uploadId: string): Promise<string | null> {
+  return invoke<string | null>("seller_signature_set", { uploadId });
 }
 
 export function sellerSignatureClear(): Promise<void> {
@@ -217,6 +240,15 @@ export function quoteSignatureGet(): Promise<boolean> {
 
 export function quoteSignatureSet(enabled: boolean): Promise<void> {
   return invoke<void>("quote_signature_set", { enabled });
+}
+
+// Opt-in Versionsprüfung gegen die GitHub-Releases (Plan W12, E14)
+export function updateCheckGet(): Promise<UpdateCheckSettings> {
+  return invoke<UpdateCheckSettings>("update_check_get");
+}
+
+export function updateCheckSet(enabled: boolean): Promise<void> {
+  return invoke<void>("update_check_set", { enabled });
 }
 
 // Inhaber (Vor-/Nachname) + Standard-Fristen
@@ -253,8 +285,9 @@ export function sellerDefaultTemplateSet(name: string): Promise<SellerProfile> {
   return invoke<SellerProfile>("seller_default_template_set", { name });
 }
 
-export function pdfTemplatePreview(name: string): Promise<void> {
-  return invoke<void>("pdf_template_preview", { name });
+/** Musterrechnung mit der Vorlage (PDF-Vorschau, Plan W7). */
+export function pdfTemplatePreview(name: string): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("pdf_template_preview", { name });
 }
 
 // ---- Anfahrtspauschale (Block P1) ------------------------------------------
@@ -273,23 +306,6 @@ export function travelSettingsSet(
 /** Berechnet eine Anfahrts-Position aus km + gespeichertem Kilometersatz. */
 export function travelCompute(km: number, roundTrip: boolean): Promise<TravelLine> {
   return invoke<TravelLine>("travel_compute", { km, roundTrip });
-}
-
-// ---- Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP) -------------
-
-export function dropFolderSettingsGet(): Promise<DropFolderSettings> {
-  return invoke<DropFolderSettings>("drop_folder_settings_get");
-}
-
-export function dropFolderSettingsSet(
-  args: DropFolderSettings,
-): Promise<DropFolderSettings> {
-  return invoke<DropFolderSettings>("drop_folder_settings_set", { args });
-}
-
-/** Manueller Trigger fuer den Drop-Folder-Sync (gegen den 5-min-Tick). */
-export function dropFolderSyncNow(): Promise<DropFolderSyncResult> {
-  return invoke<DropFolderSyncResult>("drop_folder_sync_now");
 }
 
 // ---- Invoices (Block 3b) ---------------------------------------------------
@@ -325,13 +341,6 @@ export function invoicesCancel(args: CancelArgs): Promise<CancelResponse> {
   return invoke<CancelResponse>("invoices_cancel", { args });
 }
 
-export function invoicesOpenPdf(id: string): Promise<void> {
-  return invoke<void>("invoices_open_pdf", { id });
-}
-
-export function invoicesRevealPdf(id: string): Promise<void> {
-  return invoke<void>("invoices_reveal_pdf", { id });
-}
 
 // ---- Mail (Block 5) --------------------------------------------------------
 
@@ -362,23 +371,13 @@ export function mailAccountTestConnection(args: TestConnectionArgs): Promise<voi
   return invoke<void>("mail_account_test_connection", { args });
 }
 
+/** Testet ein gespeichertes Konto mit seinem gespeicherten Passwort (Re-Auth, Plan W8). */
+export function mailAccountTestSaved(id: string): Promise<void> {
+  return invoke<void>("mail_account_test_saved", { id });
+}
+
 export function mailSendTest(accountId: string, to: string): Promise<void> {
   return invoke<void>("mail_send_test", { accountId, to });
-}
-
-// ---- Mail OAuth (Block 16) -------------------------------------------------
-
-export function mailOauthStatus(accountId: string): Promise<OauthStatus> {
-  return invoke<OauthStatus>("mail_oauth_status", { accountId });
-}
-
-/** Öffnet den Browser zur Microsoft-Anmeldung und wartet auf den Abschluss. */
-export function mailOauthConnect(accountId: string): Promise<OauthStatus> {
-  return invoke<OauthStatus>("mail_oauth_connect", { accountId });
-}
-
-export function mailOauthDisconnect(accountId: string): Promise<void> {
-  return invoke<void>("mail_oauth_disconnect", { accountId });
 }
 
 // ---- E-Mail-Versandprotokoll (Block 16b) -----------------------------------
@@ -504,8 +503,8 @@ export function packagePreview(
   title: string,
   bodyMarkup: string,
   defaultUnitPriceCents: number,
-): Promise<void> {
-  return invoke<void>("package_preview", { title, bodyMarkup, defaultUnitPriceCents });
+): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("package_preview", { title, bodyMarkup, defaultUnitPriceCents });
 }
 
 // ---- Paket → Beleg-Position (Block P3) --------------------------------------
@@ -519,10 +518,10 @@ export function packageMaterializeItem(packageId: string): Promise<MaterializedP
 
 // ---- Paket-Katalog-Broschüre (Block P4) -------------------------------------
 
-/** Rendert die Broschüre für die gewählten Pakete und öffnet sie (Druck/Vorschau).
+/** Rendert die Broschüre für die gewählten Pakete (PDF-Vorschau, Plan W7).
  *  Kein §14-Beleg — kein Nummernkreis, kein Archiv. */
-export function packageCatalogRender(packageIds: string[]): Promise<void> {
-  return invoke<void>("package_catalog_render", { packageIds });
+export function packageCatalogRender(packageIds: string[]): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("package_catalog_render", { packageIds });
 }
 
 /** Versendet die Broschüre als PDF-Anhang an einen Kontakt. Protokolliert im
@@ -535,16 +534,16 @@ export function packageCatalogSend(
 
 // ---- Angebots-PDF + Bundle + Versand (Block 8) -----------------------------
 
-/** Erzeugt (falls nötig) das Angebots-PDF; das Frontend öffnet es danach via
- *  attachmentsOpen(quote.pdfArchiveId). */
+/** Erzeugt (falls nötig) das Angebots-PDF; das Frontend zeigt es danach über
+ *  `archiveUrl(quote.pdfArchiveId)`. */
 export function quotesGeneratePdf(id: string): Promise<Quote> {
   return invoke<Quote>("quotes_generate_pdf", { id });
 }
 
-/** Erzeugt das zusammengeführte Bundle-PDF (Angebot + AGB + Datenschutz) und
- *  öffnet es im PDF-Viewer. Bindet die Legal-Versionen (Pflicht). */
-export function quotesOpenBundle(id: string): Promise<void> {
-  return invoke<void>("quotes_open_bundle", { id });
+/** Erzeugt das zusammengeführte Bundle-PDF (Angebot + AGB + Datenschutz) als
+ *  PDF-Vorschau (Plan W7). Bindet die Legal-Versionen (Pflicht). */
+export function quotesOpenBundle(id: string): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("quotes_open_bundle", { id });
 }
 
 export function quotesLegalBindings(quoteId: string): Promise<QuoteLegalBinding[]> {
@@ -568,10 +567,9 @@ export function legalDocumentsList(): Promise<LegalDocument[]> {
 export function legalDocumentsUpload(
   docType: string,
   title: string | null,
-  fileBytes: number[],
-  fileName: string,
+  uploadId: string,
 ): Promise<LegalDocument> {
-  return invoke<LegalDocument>("legal_documents_upload", { docType, title, fileBytes, fileName });
+  return invoke<LegalDocument>("legal_documents_upload", { docType, title, uploadId });
 }
 
 export function legalDocumentsActivate(id: string): Promise<void> {
@@ -582,14 +580,29 @@ export function legalDocumentsDeactivate(id: string): Promise<void> {
   return invoke<void>("legal_documents_deactivate", { id });
 }
 
-// ---- Attachments (Block 6) -------------------------------------------------
+// ---- Dateien (Plan W7) -----------------------------------------------------
+// Archivdateien und Downloads holt der Browser direkt (`GET /files/…`, mit
+// Sitzungs-Cookie); eigene Rechnungs-/Angebots-PDFs kommen inline, alles andere
+// als Anhang.
 
-export function attachmentsOpen(archiveEntryId: string): Promise<void> {
-  return invoke<void>("attachments_open", { archiveEntryId });
+/** Adresse eines Downloads (Export einmalig, Vorschau mehrfach abrufbar). */
+export function downloadUrl(ticket: DownloadTicket): string {
+  return `/files/download/${encodeURIComponent(ticket.downloadId)}`;
 }
 
-export function attachmentsReveal(archiveEntryId: string): Promise<void> {
-  return invoke<void>("attachments_reveal", { archiveEntryId });
+/** Adresse einer Archivdatei (Hash-geprüft, Audit `archive.read`). */
+export function archiveUrl(archiveEntryId: string): string {
+  return `/files/archive/${encodeURIComponent(archiveEntryId)}`;
+}
+
+/** Speichert einen Export im Browser (Download, nicht in den Speicher geladen). */
+export function saveDownload(ticket: DownloadTicket): void {
+  saveFile(downloadUrl(ticket), ticket.fileName);
+}
+
+/** Speichert eine Archivdatei (Anlage, Beleg-Original) im Browser. */
+export function saveArchiveFile(archiveEntryId: string, fileName = ""): void {
+  saveFile(archiveUrl(archiveEntryId), fileName);
 }
 
 // ---- Generischer Anhang-Upload + Liste (Block 9) ---------------------------
@@ -654,13 +667,11 @@ export function expensesSetPayment(args: ExpenseSetPaymentArgs): Promise<Expense
 
 // ---- E-Rechnung-Empfang / Receive (Block 11) -------------------------------
 
-/** Schritt 1: E-Rechnung (XML oder ZUGFeRD-PDF) einlesen, parsen, validieren —
- *  ohne zu speichern. Liefert einen editierbaren Kosten-Vorschlag. */
-export function expensesParseEinvoice(
-  fileBytes: number[],
-  fileName: string,
-): Promise<EInvoiceParseResult> {
-  return invoke<EInvoiceParseResult>("expenses_parse_einvoice", { fileBytes, fileName });
+/** Schritt 1: E-Rechnung (XML oder ZUGFeRD-PDF, Upload der Art `erechnung`)
+ *  einlesen, parsen, validieren — ohne zu speichern. Liefert einen
+ *  editierbaren Kosten-Vorschlag; der Upload bleibt für Schritt 2 liegen. */
+export function expensesParseEinvoice(uploadId: string): Promise<EInvoiceParseResult> {
+  return invoke<EInvoiceParseResult>("expenses_parse_einvoice", { uploadId });
 }
 
 /** Schritt 2: die (ggf. korrigierte) Eingabe als Kosten festschreiben; das
@@ -842,25 +853,14 @@ export function euerPackage(fiscalYear: number): Promise<EuerPackage> {
   return invoke<EuerPackage>("euer_package", { fiscalYear });
 }
 
-/** Schreibt die ELSTER-Ausfüllhilfe (Zeilen-Summen) als CSV an den gewählten Pfad. */
-export function euerExportElster(
-  fiscalYear: number,
-  targetPath: string,
-): Promise<ElsterExportResult> {
-  return invoke<ElsterExportResult>("euer_export_elster", { fiscalYear, targetPath });
+/** ELSTER-Ausfüllhilfe (Zeilen-Summen) als CSV zum Herunterladen. */
+export function euerExportElster(fiscalYear: number): Promise<ElsterExportResult> {
+  return invoke<ElsterExportResult>("euer_export_elster", { fiscalYear });
 }
 
-/** Schreibt die Einzelaufstellung (Einnahmen/Ausgaben/AVEÜR) als ZIP. */
-export function euerExportDetailZip(
-  fiscalYear: number,
-  targetPath: string,
-): Promise<EuerDetailExport> {
-  return invoke<EuerDetailExport>("euer_export_detail_zip", { fiscalYear, targetPath });
-}
-
-/** Zeigt eine exportierte Datei im Datei-Explorer/Finder (markiert sie). */
-export function euerRevealPath(path: string): Promise<void> {
-  return invoke<void>("euer_reveal_path", { path });
+/** Einzelaufstellung (Einnahmen/Ausgaben/AVEÜR) als ZIP zum Herunterladen. */
+export function euerExportDetailZip(fiscalYear: number): Promise<EuerDetailExport> {
+  return invoke<EuerDetailExport>("euer_export_detail_zip", { fiscalYear });
 }
 
 /** Wie viele aktive Anlagen für das GJ noch keine gebuchte AfA haben. */
@@ -869,44 +869,35 @@ export function euerAfaPending(fiscalYear: number): Promise<AfaPending> {
 }
 
 /** Erzeugt das vollständige EÜR-PDF (Anlage EÜR + AVEÜR + Einzelaufstellung). */
-export function euerExportPdf(
-  fiscalYear: number,
-  targetPath: string,
-): Promise<EuerPdfExport> {
-  return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear, targetPath });
+export function euerExportPdf(fiscalYear: number): Promise<EuerPdfExport> {
+  return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear });
 }
 
 /** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe. */
-export function euerExportDatev(
-  fiscalYear: number,
-  skr: string,
-  targetPath: string,
-): Promise<DatevExport> {
-  return invoke<DatevExport>("euer_export_datev", { fiscalYear, skr, targetPath });
+export function euerExportDatev(fiscalYear: number, skr: string): Promise<DatevExport> {
+  return invoke<DatevExport>("euer_export_datev", { fiscalYear, skr });
 }
 
 /** Erzeugt das komplette Steuerberater-Paket (ZIP). */
-export function euerExportStbZip(
-  fiscalYear: number,
-  skr: string,
-  targetPath: string,
-): Promise<StbExport> {
-  return invoke<StbExport>("euer_export_stb_zip", { fiscalYear, skr, targetPath });
+export function euerExportStbZip(fiscalYear: number, skr: string): Promise<StbExport> {
+  return invoke<StbExport>("euer_export_stb_zip", { fiscalYear, skr });
 }
 
 // ---- Backup + Restore (Block 4) --------------------------------------------
 
-export interface DetectedTarget {
+/** Off-Site-Ziel (Plan W7, mehrere Ziele; ohne Passwort). */
+export interface TargetView {
+  id: string;
   label: string;
-  path: string;
-}
-
-export interface SftpTargetView {
-  host: string;
-  port: number;
-  user: string;
-  remoteDir: string;
+  kind: "directory" | "sftp";
+  /** Verzeichnis-Ziel: Ordner relativ zu `targetsRoot`. */
+  directory: string | null;
+  host: string | null;
+  port: number | null;
+  user: string | null;
+  remoteDir: string | null;
   hostFingerprint: string | null;
+  lastResult: { ok: boolean; at: string; error: string | null } | null;
 }
 
 export interface SftpProbe {
@@ -920,11 +911,13 @@ export interface BackupSettings {
   unlocked: boolean;
   /** Lokaler Floor-Ordner (immer geschrieben, G1-BKP.4). */
   floorPath: string;
-  /** Off-Site-Ziel (Verzeichnis), falls konfiguriert. */
-  targetPath: string | null;
-  defaultSuggestion: string;
-  detectedTargets: DetectedTarget[];
-  sftp: SftpTargetView | null;
+  /** Wurzel der Verzeichnis-Ziele (`/backup-targets`). */
+  targetsRoot: string;
+  /** Eingebundene Unterordner der Wurzel. */
+  availableDirs: string[];
+  targets: TargetView[];
+  /** `missing` | `failing` | `ok`. */
+  offsiteStatus: "missing" | "failing" | "ok";
 }
 
 export interface BackupOutcome {
@@ -935,10 +928,8 @@ export interface BackupOutcome {
   retentionTag: string;
   triggerReason: string;
   createdAt: string;
-  /** Off-Site-Pfad/URI bei erfolgreicher Spiegelung (sonst null). */
-  mirrorTarget: string | null;
-  /** Fehlertext, falls die Off-Site-Spiegelung fehlschlug (sonst null). */
-  mirrorError: string | null;
+  /** Ergebnis je Off-Site-Ziel (Plan W7). */
+  offsite: { targetId: string; label: string; location: string | null; error: string | null }[];
 }
 
 export interface BackupHistoryItem {
@@ -978,60 +969,66 @@ export interface BackupLogFilter {
   limit?: number | null;
 }
 
-export interface RestorePreview {
-  filePath: string;
-  createdAt: string;
-  appVersion: string;
-  formatVersion: number;
-  schemaVersion: number;
-  currentSchemaVersion: number;
-  compatible: boolean;
-  contentSizeBytes: number;
-}
-
 export interface RestoreReport {
   requiresRestart: boolean;
-  preRestoreBackupPath: string;
-  sourceFile: string;
+  /** Dateiname des Sicherheits-Backups vor dem Restore. */
+  preRestoreBackup: string;
+  /** Quelle (Upload-Dateiname bzw. Backup aus der Historie). */
+  source: string;
   stagedAt: string;
+  /** Backup-Format (1 = ohne Logo/Unterschrift, 2 = mit). */
+  formatVersion: number;
+  /** Schema-Version des Backups (ältere werden beim Entsperren migriert). */
+  schemaVersion: number;
+  /** Logo und Unterschrift werden mit eingespielt. */
+  brandingRestored: boolean;
+  /** Hinweis für die Anzeige, z. B. bei Format-1-Backups. */
+  notice: string | null;
 }
 
 export interface ExportReport {
-  zipPath: string;
+  /** Abruf über `/files/download/{id}` (Plan W7). */
+  download: DownloadTicket | null;
   tableCount: number;
   totalRows: number;
   archiveFileCount: number;
   zipSizeBytes: number;
 }
 
-export function backupNeedsOnboarding(): Promise<boolean> {
-  return invoke<boolean>("backup_needs_onboarding");
-}
-
-export function backupIsUnlocked(): Promise<boolean> {
-  return invoke<boolean>("backup_is_unlocked");
-}
 
 export function backupGetSettings(): Promise<BackupSettings> {
   return invoke<BackupSettings>("backup_get_settings");
-}
-
-export function backupSetupPassphrase(passphrase: string): Promise<BackupOutcome> {
-  return invoke<BackupOutcome>("backup_setup_passphrase", { passphrase });
-}
-
-export function backupUnlock(passphrase: string): Promise<boolean> {
-  return invoke<boolean>("backup_unlock", { passphrase });
 }
 
 export function backupCreateNow(): Promise<BackupOutcome> {
   return invoke<BackupOutcome>("backup_create_now");
 }
 
-export function backupSetTarget(path: string): Promise<void> {
-  return invoke<void>("backup_set_target", { path });
+/** Verzeichnis-Ziel unter `/backup-targets` hinzufügen (Re-Auth). */
+export function backupTargetAddDirectory(label: string, directory: string): Promise<TargetView> {
+  return invoke<TargetView>("backup_target_add_directory", { label, directory });
 }
 
+/** SFTP-Ziel hinzufügen (Re-Auth; Fingerprint aus `backupTestSftp`). */
+export function backupTargetAddSftp(args: {
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  remoteDir: string;
+  hostFingerprint: string;
+  password: string;
+}): Promise<TargetView> {
+  return invoke<TargetView>("backup_target_add_sftp", args);
+}
+
+/** Off-Site-Ziel entfernen (Re-Auth; Dateien am Ziel bleiben). */
+export function backupTargetRemove(id: string): Promise<void> {
+  return invoke<void>("backup_target_remove", { id });
+}
+
+/** Testet einen neuen SFTP-Server (Re-Auth, Passwort Pflicht) und liefert den
+ *  Host-Fingerprint, den `backupTargetAddSftp` danach übernimmt (Plan W8). */
 export function backupTestSftp(
   host: string,
   port: number,
@@ -1042,22 +1039,9 @@ export function backupTestSftp(
   return invoke<SftpProbe>("backup_test_sftp", { host, port, user, remoteDir, password });
 }
 
-export function backupSetSftpTarget(
-  host: string,
-  port: number,
-  user: string,
-  remoteDir: string,
-  hostFingerprint: string,
-  password: string,
-): Promise<void> {
-  return invoke<void>("backup_set_sftp_target", {
-    host,
-    port,
-    user,
-    remoteDir,
-    hostFingerprint,
-    password,
-  });
+/** Testet ein gespeichertes SFTP-Ziel per ID (gespeichertes Passwort, gepinnter Fingerprint). */
+export function backupTestSftpSaved(id: string): Promise<SftpProbe> {
+  return invoke<SftpProbe>("backup_test_sftp_saved", { id });
 }
 
 export function backupList(): Promise<BackupHistoryItem[]> {
@@ -1074,63 +1058,23 @@ export function backupLogSearch(filter: BackupLogFilter): Promise<BackupLogEntry
   return invoke<BackupLogEntry[]>("backup_log_search", { filter });
 }
 
-/** Öffnet einen lokalen Backup-Ordner (Floor/Off-Site-Verzeichnis) im Explorer. */
-export function backupOpenFolder(path: string): Promise<void> {
-  return invoke<void>("backup_open_folder", { path });
-}
+/** Quelle eines Restores (Plan W7): hochgeladene `.kbk` oder lokales Backup
+ *  aus der Historie. */
+export type RestoreSource = { uploadId: string } | { backupId: string };
 
-/** Zeigt eine lokale Backup-Datei im enthaltenden Ordner (markiert sie). */
-export function backupRevealPath(path: string): Promise<void> {
-  return invoke<void>("backup_reveal_path", { path });
-}
-
-export function backupRestorePreview(path: string): Promise<RestorePreview> {
-  return invoke<RestorePreview>("backup_restore_preview", { path });
-}
-
-export function backupRestoreApply(path: string, passphrase: string): Promise<RestoreReport> {
-  return invoke<RestoreReport>("backup_restore_apply", { path, passphrase });
+/** Restore Phase A (Job, Re-Auth); danach startet der Server neu. */
+export function backupRestoreApply(
+  source: RestoreSource,
+  passphrase: string,
+): Promise<RestoreReport> {
+  return invoke<RestoreReport>("backup_restore_apply", { ...source, passphrase });
 }
 
 // ---- Migrations-Export (Block 4) -------------------------------------------
 
-export function migrationExportRun(targetPath: string): Promise<ExportReport> {
-  return invoke<ExportReport>("migration_export_run", { targetPath });
-}
-
-// ---- Factory Reset (G1-RESET, ADR 0036) ------------------------------------
-
-/** Pre-Flight-Status fürs Reset-UI. */
-export interface FactoryResetCheck {
-  /** Anzahl festgeschriebener Belege; > 0 ⇒ Export oder Quittung Pflicht. */
-  lockedDocuments: number;
-  /** Ist ein Off-Site-Ziel konfiguriert (bleibt bestehen)? */
-  hasOffSiteTarget: boolean;
-  /** Off-Site-Label (Pfad bzw. sftp://…), falls vorhanden. */
-  offSiteLabel: string | null;
-  /** Exaktes Tipp-Bestätigungswort. */
-  confirmWord: string;
-  /** Exakter Wortlaut der Aufbewahrungs-Quittung. */
-  retentionReceiptText: string;
-}
-
-/** Liest Belege-Zählung, Off-Site-Hinweis und die exakten Bestätigungstexte. */
-export function factoryResetCheck(): Promise<FactoryResetCheck> {
-  return invoke<FactoryResetCheck>("factory_reset_check");
-}
-
-/**
- * Führt den Factory Reset aus: merkt ihn vor und startet die App neu (der Nuke
- * läuft beim Neustart vor dem Pool-Open). Auf dem Erfolgspfad kehrt der Aufruf
- * nicht zurück (die App startet neu); nur Fehler resolven/rejecten.
- */
-export function factoryReset(args: {
-  passphrase: string;
-  confirmWord: string;
-  exportConfirmed: boolean;
-  retentionReceipt: string;
-}): Promise<void> {
-  return invoke<void>("factory_reset", args);
+/** Migrations-Export (alle Tabellen + Archiv) als ZIP zum Herunterladen. */
+export function migrationExportRun(): Promise<ExportReport> {
+  return invoke<ExportReport>("migration_export_run", {});
 }
 
 // ---- Notifications / Hinweise (Block 15) -----------------------------------
@@ -1205,13 +1149,4 @@ export function archiveIntegrityHistory(limit?: number): Promise<IntegrityCheckR
 /** Statische App-Metadaten (Version, Schema-Version, Build-Commit, Lizenz). */
 export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
-}
-
-/**
- * Bundle-Pfad zur generierten Drittanbieter-Lizenz-Übersicht. Im Release
- * stehen dort cargo-about- + pnpm-licenses-Output, im Dev-Build der Stub.
- * Falls die Datei fehlt, wirft das Backend eine sprechende Fehlermeldung.
- */
-export function thirdPartyLicensesPath(): Promise<string> {
-  return invoke<string>("third_party_licenses_path");
 }

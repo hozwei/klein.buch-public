@@ -11,52 +11,47 @@
 //! bleibt zusätzlich session-gated (defensiv). Manuell lässt sich der Lauf
 //! jederzeit über `recurring_run_due_check` auslösen.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Manager};
 
+use crate::app_ctx::AppCtx;
 use crate::backup::BackupSession;
 use crate::config::Paths;
 use crate::error::Result;
+use crate::notify::Notifier;
+use crate::scheduler::update_check::{self, Outcome};
 
 /// Tick-Intervall in Sekunden (5 Minuten).
 const TICK_INTERVAL_SECS: u64 = 300;
 
-/// Einmal-Guard für den Scheduler. Seit der Bootstrap-Inversion (G1-ENC
-/// Schritt 2) startet der Scheduler nicht mehr im `setup`-Closure, sondern erst
-/// nach dem ersten erfolgreichen Entsperren — wenn der Pool im Tauri-State
-/// liegt. [`ensure_started`] sorgt dafür, dass er genau einmal pro Prozess
-/// startet, auch bei mehreren Unlock-Aufrufen.
-#[derive(Default)]
-pub struct SchedulerStarted(AtomicBool);
+/// Wartet einen laufenden Tick ab und pausiert weitere (Herunterfahren,
+/// Restore; Plan W5.6).
+pub async fn stop(ctx: &AppCtx) {
+    *ctx.scheduler_gate.lock().await = true;
+}
 
-impl SchedulerStarted {
-    /// `true`, wenn dieser Aufruf den Start übernehmen darf (vorher noch nicht
-    /// gestartet). Folgeaufrufe liefern `false`.
-    fn try_begin(&self) -> bool {
-        !self.0.swap(true, Ordering::SeqCst)
-    }
+/// Hebt eine Pause wieder auf (z. B. nach gescheitertem Restore).
+pub async fn resume(ctx: &AppCtx) {
+    *ctx.scheduler_gate.lock().await = false;
 }
 
 /// Startet die Scheduler-Schleife genau einmal pro Prozess. Muss NACH dem
-/// Entsperren aufgerufen werden (der Pool muss im Tauri-State liegen). Mehrfache
-/// Aufrufe (z. B. erneutes Unlock) sind dank [`SchedulerStarted`] no-ops.
-pub fn ensure_started(app: &AppHandle) {
-    let flag = app.state::<SchedulerStarted>();
-    if flag.try_begin() {
-        start(app.clone());
+/// Entsperren aufgerufen werden (der Pool liegt dann im [`AppCtx`]). Mehrfache
+/// Aufrufe (z. B. erneutes Entsperren) sind no-ops.
+pub fn ensure_started(ctx: &Arc<AppCtx>) {
+    if ctx.begin_scheduler() {
+        start(ctx.clone());
     } else {
         tracing::debug!("Scheduler läuft bereits — kein erneuter Start.");
     }
 }
 
-/// Startet die Scheduler-Schleife als Hintergrund-Task. Muss NACH dem
-/// Entsperren aufgerufen werden (der Pool muss im Tauri-State liegen). In der
-/// Regel über [`ensure_started`] aufrufen, nicht direkt.
-pub fn start(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
+/// Startet die Scheduler-Schleife als Hintergrund-Task. In der Regel über
+/// [`ensure_started`] aufrufen, nicht direkt.
+pub fn start(ctx: Arc<AppCtx>) {
+    tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
         // Verpasste Ticks (z. B. Standby) nicht nachfeuern — der nächste reguläre
         // Tick deckt den Rückstand ohnehin ab (Due-Check ist idempotent über das
@@ -64,26 +59,61 @@ pub fn start(app: AppHandle) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await; // erster Tick: sofort; danach alle 5 min
-            if let Err(e) = run_tick(&app).await {
+            let gate = ctx.scheduler_gate.lock().await;
+            if *gate {
+                tracing::debug!("Scheduler pausiert — Tick ausgelassen");
+                continue;
+            }
+            if let Err(e) = run_tick(&ctx).await {
                 tracing::warn!("Scheduler-Tick fehlgeschlagen: {e}");
             }
+            drop(gate);
         }
     });
 }
 
 /// Ein Durchlauf: Recurring-Kosten (Block 10) + Auto-AfA, Integrity-Check und
 /// Reminder-Regeln (Block 15). Jeder Job ist isoliert — der Fehler eines Jobs
-/// bricht die anderen nicht ab.
-async fn run_tick(app: &AppHandle) -> Result<()> {
-    let pool = app.state::<SqlitePool>();
-    let session = app.state::<BackupSession>();
-    let paths = Paths::from_handle(app)?;
-    let today = chrono::Local::now().date_naive();
-    let pool = pool.inner();
-    let session = session.inner();
+/// bricht die anderen nicht ab. Gesperrte Instanz → nichts zu tun.
+async fn run_tick(ctx: &Arc<AppCtx>) -> Result<()> {
+    let Ok(pool) = ctx.pool() else {
+        return Ok(());
+    };
+    let today = crate::clock::today_berlin();
+    let result = run_jobs(&pool, &ctx.paths, &ctx.session, ctx.notifier(), today).await;
+
+    // 6. Opt-in Versionsprüfung (Plan W12, E14): ohne Opt-in keine Verbindung,
+    //    sonst höchstens täglich. Außerhalb von `run_jobs`, damit die
+    //    DB-Jobs (und ihre Tests) nie ins Netz gehen.
+    let url = update_check::endpoint();
+    let now = crate::clock::now_utc();
+    match update_check::run_if_due(&pool, ctx.notifier(), &url, now).await {
+        Ok(Outcome::NewVersion { tag, created: true }) => {
+            tracing::info!("Versionsprüfung: neue Version {tag} — Hinweis angelegt");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("{e}"),
+    }
+    result
+}
+
+/// Die Jobs eines Ticks — ohne Tauri-State testbar (`app = None`).
+pub async fn run_jobs(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &BackupSession,
+    notifier: Option<&dyn Notifier>,
+    today: chrono::NaiveDate,
+) -> Result<()> {
+    // 0. Tages-Backup (Plan W2.4): fällig, wenn das letzte Backup älter als 24 h
+    //    ist — im laufenden Betrieb, nicht nur beim Entsperren. Fehler landen im
+    //    Backup-Protokoll; der Tick läuft weiter.
+    if let Err(e) = crate::backup::auto_daily_if_due(pool, paths, session).await {
+        tracing::warn!("Tages-Backup fehlgeschlagen: {e}");
+    }
 
     // 1. Recurring-Kosten (Block 10).
-    match crate::scheduler::recurring::process_due(pool, &paths, session, today).await {
+    match crate::scheduler::recurring::process_due(pool, paths, session, today).await {
         Ok(report) if report.created_expenses > 0 => tracing::info!(
             "Scheduler: {} Recurring-Kosten aus {} Abo(s) angelegt",
             report.created_expenses,
@@ -95,26 +125,25 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
 
     // 2. Auto-AfA zur GJ-Wende (Block 15).
     if let Err(e) =
-        crate::scheduler::depreciation_year_close::run(pool, &paths, session, Some(app), today)
-            .await
+        crate::scheduler::depreciation_year_close::run(pool, paths, session, notifier, today).await
     {
         tracing::warn!("Auto-AfA-Lauf fehlgeschlagen: {e}");
     }
 
     // 3. Monatlicher Archiv-Integrity-Check (Block 15).
-    if let Err(e) = crate::scheduler::integrity_check_cron::run(pool, Some(app), today).await {
+    if let Err(e) = crate::scheduler::integrity_check_cron::run(pool, notifier, today).await {
         tracing::warn!("Integrity-Check fehlgeschlagen: {e}");
     }
 
     // 4. Reminder-Regeln (Block 15; backup_overdue Off-Site-bewusst seit G1-NOTIFY).
-    match crate::scheduler::reminders::run(pool, Some(app), today, &paths.backups_dir).await {
+    match crate::scheduler::reminders::run(pool, notifier, today, &paths.backup_targets_dir).await {
         Ok(n) if n > 0 => tracing::info!("Scheduler: {n} neue Hinweis(e) erzeugt"),
         Ok(_) => {}
         Err(e) => tracing::warn!("Reminder-Lauf fehlgeschlagen: {e}"),
     }
 
     // 5. Wiederkehrende Ausgangsrechnungen (Block RI-2).
-    match crate::scheduler::recurring_invoice::process_due(pool, &paths, session, Some(app), today)
+    match crate::scheduler::recurring_invoice::process_due(pool, paths, session, notifier, today)
         .await
     {
         Ok(report) if report.created_invoices > 0 => tracing::info!(
@@ -126,34 +155,72 @@ async fn run_tick(app: &AppHandle) -> Result<()> {
         Err(e) => tracing::warn!("Abo-Rechnungs-Lauf fehlgeschlagen: {e}"),
     }
 
-    // 6. Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP).
-    // Inbox-only (R4-007-Pattern) — keine AppHandle-Bindung im Scheduler-Pfad.
-    match crate::scheduler::drop_folder::run_sync(pool, &paths, session, today).await {
-        Ok(report) if report.imported > 0 || report.failed > 0 => tracing::info!(
-            "Scheduler: Drop-Folder {} importiert / {} fehlerhaft / {} versteckt",
-            report.imported,
-            report.failed,
-            report.ignored_hidden
-        ),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("Drop-Folder-Sync fehlgeschlagen: {e}"),
-    }
+    // Der Drop-Folder (Block PV1-DROP) läuft im Server nicht (E11, Plan W5.2);
+    // Rechnungseingang per Upload (W7).
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SchedulerStarted;
+
+    /// Plan W2.4: der Tick legt das fällige Tages-Backup selbst an — ohne
+    /// Entsperr-Ereignis; ein zweiter Tick am selben Tag nicht noch einmal.
+    #[tokio::test]
+    async fn tick_creates_daily_backup_without_unlock_event() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        let paths = super::Paths {
+            data_dir: data.clone(),
+            db_file: data.join("klein-buch.sqlite"),
+            archive_dir: data.join("archive"),
+            backups_dir: data.join("backups"),
+            inputs_dir: dir.path().join("inputs"),
+            sidecar_dir: dir.path().join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
+        };
+        std::fs::create_dir_all(&paths.backups_dir).unwrap();
+        std::fs::create_dir_all(&paths.archive_dir).unwrap();
+        let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+        let session = super::BackupSession::default();
+        session.set("passphrase-1234567890".into());
+        let today = crate::clock::today_berlin();
+
+        super::run_jobs(&pool, &paths, &session, None, today)
+            .await
+            .unwrap();
+        let daily: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_daily'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(daily, 1, "Tages-Backup aus dem Tick");
+
+        super::run_jobs(&pool, &paths, &session, None, today)
+            .await
+            .unwrap();
+        let daily: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_daily'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(daily, 1, "nicht doppelt innerhalb von 24 h");
+    }
 
     /// Der Einmal-Guard erlaubt genau einen Start; Folgeaufrufe sind no-ops.
     #[test]
     fn scheduler_starts_only_once() {
-        let flag = SchedulerStarted::default();
-        assert!(flag.try_begin(), "erster Aufruf darf starten");
+        let dir = tempfile::TempDir::new().unwrap();
+        let ctx = crate::app_ctx::AppCtx::for_tests(crate::config::Paths::under(dir.path()));
+        assert!(ctx.begin_scheduler(), "erster Aufruf darf starten");
         assert!(
-            !flag.try_begin(),
+            !ctx.begin_scheduler(),
             "zweiter Aufruf darf nicht erneut starten"
         );
-        assert!(!flag.try_begin(), "weitere Aufrufe bleiben no-ops");
+        assert!(!ctx.begin_scheduler(), "weitere Aufrufe bleiben no-ops");
     }
 }

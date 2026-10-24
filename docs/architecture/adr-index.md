@@ -1,18 +1,20 @@
 # ADR-Index
 
 > Vertiefung zu „ADR-Liste in `docs/adr/`" aus `../ARCHITECTURE.md`. Diese
-> Datei ist die navigations-freundliche Sicht auf alle 38 Architecture
+> Datei ist die navigations-freundliche Sicht auf alle 39 Architecture
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0038-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0039-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** alle 38 ADRs sind im Stand v1.0-RC **akzeptiert**.
+**Status-Konvention:** alle 39 ADRs sind **akzeptiert** (Stand 2026-10-23);
+ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
+bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
 (Beispiel: ADR-0035-Amendment 2026-05-24, SQLCipher-PBKDF2 statt
-Argon2id-Raw-Key).
+Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 
 ---
 
@@ -21,7 +23,7 @@ Argon2id-Raw-Key).
 | Nr. | Titel | Themenkreis | Vertiefung |
 |---:|---|---|---|
 | 0001 | Cross-OS-Sidecar-Bundles in Block 17 statt Block 0 | Sidecar / Build | `build-and-release.md` §2 |
-| 0002 | App-Shell Tauri 2 + Rust-Backend | Plattform | `../ARCHITECTURE.md` §1 |
+| 0002 | App-Shell Tauri 2 + Rust-Backend (abgelöst durch 0039) | Plattform | `../ARCHITECTURE.md` §1 |
 | 0003 | SQLite (WAL + STRICT), Integer-Cents, UUIDv7 | DB-Konvention | `data-model.md` §0 |
 | 0004 | Functional Core / Imperative Shell | Architektur-Stil | `modules.md` §1 (domain/) |
 | 0005 | §19-Kleinunternehmer als Hardline-Default | §19 / GoBD | `paragraph-19.md` |
@@ -30,7 +32,7 @@ Argon2id-Raw-Key).
 | 0008 | PDF via Typst, ZUGFeRD via Mustang im Java-Sidecar | PDF / Sidecar | `modules.md` §3 (pdf/) + `../ARCHITECTURE.md` §6 |
 | 0009 | Backup als First-Class-Feature (Argon2id + AES-256-GCM) | Backup | `security.md` §3 |
 | 0010 | EÜR auf Cash-Basis (§4 Abs. 3 EStG) | EÜR | `modules.md` §13 (euer/) |
-| 0011 | Mail (Phase 1): SMTP via lettre, Credentials im OS-Keychain | Mail | `security.md` §4 |
+| 0011 | Mail (Phase 1): SMTP via lettre, Credentials im OS-Keychain (Amendment 2026-10-23: seit W8 in der Tabelle `secrets` der SQLCipher-DB, Migration 0031) | Mail | `security.md` §4 |
 | 0012 | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` pro Geschäftsjahr | Belegnummern | `modules.md` §1 (domain/numbering) |
 | 0013 | Local-First strict: keine Telemetrie, kein Auto-Update, kein Cloud-Sync | Privacy / Local-First | `../ARCHITECTURE.md` §7 |
 | 0014 | Lizenz AGPL-3.0-or-later | Lizenz | `../README.md` (LICENSE) |
@@ -56,8 +58,9 @@ Argon2id-Raw-Key).
 | 0034 | Backup-Ziele, Aufbewahrung + Backup-Log | Backup-Tiers | `security.md` §3 + `data-model.md` §2e (backup_log) |
 | 0035 | Verschlüsselung at Rest + Passphrase = App-Login | SQLCipher | `security.md` §2 |
 | 0036 | Factory Reset (vollständiges Zurücksetzen) | Factory Reset | `security.md` §6 + `gobd.md` §7 |
-| 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/) + §6 (scheduler/drop_folder) |
-| 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) | Release / Build | `build-and-release.md` (G4.3) |
+| 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/); Drop-Folder im Server entfallen (E11, §6 Hinweis) |
+| 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
+| 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 
 ---
 
@@ -65,7 +68,8 @@ Argon2id-Raw-Key).
 
 Wer ein Thema verstehen will, hier die ADR-Cluster:
 
-**Foundation / Architektur-Stil:** 0002, 0003, 0004, 0013, 0014, 0015.
+**Foundation / Architektur-Stil:** 0002 (abgelöst), 0039, 0003, 0004, 0013,
+0014, 0015.
 
 **GoBD-Substanz:** 0006, 0027 (GJ-Lock), 0036 (Factory Reset als Ausnahme).
 Plus auf Beleg-Ebene: 0016 (Quote-Lock), 0019 (Expense sofort gelockt),
@@ -78,7 +82,8 @@ Plus auf Beleg-Ebene: 0016 (Quote-Lock), 0019 (Expense sofort gelockt),
 Viewer). Plus Sidecar: 0001 (Sidecar-Bundle-Block), 0008.
 
 **Backup + Security:** 0009 (Basis), 0034 (Tiers + Log), 0035 (At-Rest-
-Encryption), 0036 (Factory Reset). Plus Mail-Credentials: 0011, 0028
+Encryption), 0036 (Factory Reset), 0039 (Bedrohungsmodell Internetbetrieb).
+Plus Mail-Credentials: 0011, 0028
 (OAuth-Refresh-Token-Chunking).
 
 **EÜR + Export:** 0010 (Cash-Basis), 0022 (Zufluss/Abfluss), 0026 (Export).
@@ -93,7 +98,8 @@ Plus AfA: 0025.
 **UX/Design:** 0021, 0029.
 
 **Scheduler/Notifications:** 0023, 0027, 0037 (Drop-Folder als sechster
-Tick-Job, Inbox-only-Regeln).
+Tick-Job, Inbox-only-Regeln; im Server-Betrieb entfällt der Drop-Folder-Job,
+Amendment 0037 / ADR 0039 E11).
 
 ---
 
@@ -111,21 +117,47 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
   PBKDF2-HMAC-SHA512 (Salt im DB-Header) statt Argon2id-Raw-Key. Begründung:
   Self-Describing-Format, cross-OS-portabel. Backup-Hülle bleibt Argon2id.
 
+**Amendments 2026-10-23 — Web-/Docker-Betrieb (ADR 0039):**
+
+- **ADR 0001 / 0008** — Sidecar nur noch für Linux; Bezugsquellen mit SHA-256
+  in `sidecar/versions.json`.
+- **ADR 0009** — Backup-`FORMAT_VERSION` 2 (Branding aus `data_dir` im
+  Content-ZIP; Restore nimmt Format 1 und 2).
+- **ADR 0011 / 0028** — Secrets in einer STRICT-Tabelle in SQLCipher statt im
+  OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP).
+- **ADR 0013** — eingehender Listener, opt-in Versionsprüfung, keine
+  Auto-Updates.
+- **ADR 0014** — Verteilung als öffentliches Image (Lizenzseite, Quellarchiv
+  Dritter, OCI-Labels, §13-Quelle konfigurierbar, Tags und Images nie löschen);
+  vorerst keine Beiträge Dritter.
+- **ADR 0023** — Scheduler 24/7 im Server, nach Neustart gesperrt bis zur
+  Entsperrung im Browser; Tages-Backup im Tick; Drop-Folder-Job entfällt.
+- **ADR 0034** — Off-Site Pflicht (Warnung, Festschreiben nicht blockiert);
+  Verzeichnis-Ziele nur unter `/backup-targets` + SFTP; mehrere Ziele; keine
+  OneDrive-/iCloud-Erkennung.
+- **ADR 0035** — Entsperren der DB ≠ Anmeldung eines Clients: TOTP +
+  Passphrase, Sitzungen, Re-Auth, Passphrase ändern; Bedrohungsmodell
+  Netzwerk-Angreifer; Klartext-Übergangspfad entfällt.
+- **ADR 0036** — Factory Reset im Server-Betrieb abgeschaltet.
+- **ADR 0037** — Rechnungseingang per Upload im Browser statt Drop-Folder.
+
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
-explizit ersetzt. Das ist bisher noch nicht passiert.
+explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
+(Web-/Docker-Betrieb) ersetzt ADR 0002 (App-Shell Tauri) und ADR 0038
+(NSIS-Bundle); beide bleiben mit Status „Abgelöst durch ADR 0039“ stehen.
 
 ---
 
 ## 4. Lesepfade
 
-**Für neue Maintainer:** 0002 → 0004 → 0003 → 0006 → 0005 → 0009 → 0035 →
-0036. Dann nach Themen-Interesse weiter.
+**Für neue Maintainer:** 0002 → 0039 → 0004 → 0003 → 0006 → 0005 → 0009 →
+0035 → 0036. Dann nach Themen-Interesse weiter.
 
 **Für Steuerberater-Audit:** 0006, 0005, 0010, 0019, 0022, 0025, 0026,
 0027, 0032.
 
-**Für Security-Audit:** 0009, 0011, 0013, 0028, 0034, 0035, 0036.
+**Für Security-Audit:** 0039, 0009, 0011, 0013, 0028, 0034, 0035, 0036.
 
 **Für UX-/Frontend-Arbeit:** 0021, 0029, 0030.
 
@@ -133,5 +165,5 @@ explizit ersetzt. Das ist bisher noch nicht passiert.
 
 ## Letzte Verifikation
 
-Stand: 2026-05-27, ADR-Files 0001–0037. Bei einer neuen ADR diese Tabelle
+Stand: 2026-10-23, ADR-Files 0001–0039. Bei einer neuen ADR diese Tabelle
 am Ende verlängern und das passende Vertiefungs-Dokument verlinken.

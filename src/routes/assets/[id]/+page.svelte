@@ -160,7 +160,7 @@
         Anschaffungs-Übersicht.
       </p>
     {:else}
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Jahr</th>
@@ -173,11 +173,11 @@
         <tbody>
           {#each detail.depreciationEntries as e (e.id)}
             <tr>
-              <td>{e.fiscalYear}{#if e.isFullWriteoff === 1}<span class="badge ok">Sofort</span>{/if}</td>
-              <td class="num">{e.monthsInYear}</td>
-              <td class="num">{euro(e.bookValueBeforeCents)}</td>
-              <td class="num">{euro(e.depreciationAmountCents)}</td>
-              <td class="num">{euro(e.bookValueAfterCents)}</td>
+              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}<span class="badge ok">Sofort</span>{/if}</td>
+              <td class="num" data-label="Monate">{e.monthsInYear}</td>
+              <td class="num" data-label="Restbuchwert davor">{euro(e.bookValueBeforeCents)}</td>
+              <td class="num" data-label="Abschreibung">{euro(e.depreciationAmountCents)}</td>
+              <td class="num" data-label="Restbuchwert danach">{euro(e.bookValueAfterCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -193,7 +193,8 @@
   dl div { display: flex; flex-direction: column; }
   .span2 { grid-column: 1 / -1; }
   dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; }
+  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
   dd.gain { color: #065f46; font-weight: 600; }
   dd.loss { color: #b91c1c; font-weight: 600; }
   table { width: 100%; border-collapse: collapse; }

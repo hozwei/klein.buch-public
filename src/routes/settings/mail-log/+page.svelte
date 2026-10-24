@@ -81,8 +81,7 @@
 
 <p class="lead">
   Lückenloser, unveränderlicher Nachweis jedes Versand­versuchs (Erfolg und
-  Fehlschlag) mit Anbieter-Antwort (SMTP-Code bzw. Microsoft-Status + Anfrage-Nummer)
-  und Fehlermeldung. Such- und Filterfelder helfen, auch nach Jahren schnell den
+  Fehlschlag) mit Antwort des Mailservers (SMTP-Code) und Fehlermeldung. Such- und Filterfelder helfen, auch nach Jahren schnell den
   richtigen Vorgang zu finden.
 </p>
 
@@ -153,7 +152,7 @@
   {#if entries.length === 0}
     <p class="muted">Keine Einträge gefunden.</p>
   {:else}
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>Zeitpunkt</th>
@@ -168,22 +167,22 @@
       <tbody>
         {#each entries as e (e.id)}
           <tr class:bad={e.status === "failed"}>
-            <td class="ts">{fmtDateTime(e.createdAt)}</td>
-            <td>
+            <td class="ts" data-label="Zeitpunkt">{fmtDateTime(e.createdAt)}</td>
+            <td data-label="Status">
               {#if e.status === "success"}
                 <span class="ok">✓ versendet</span>
               {:else}
                 <span class="fail">✗ fehlgeschlagen</span>
               {/if}
             </td>
-            <td>
-              {kindLabel(e.relatedKind)}
-              {#if e.relatedNumber}<span class="muted">· {e.relatedNumber}</span>{/if}
+            <td data-label="Beleg">
+              <span>{kindLabel(e.relatedKind)}
+              {#if e.relatedNumber}<span class="muted">· {e.relatedNumber}</span>{/if}</span>
             </td>
-            <td>{e.toEmail}</td>
-            <td class="subj">{e.subject}</td>
-            <td>{channelLabel(e.channel)}</td>
-            <td class="resp">
+            <td data-label="Empfänger">{e.toEmail}</td>
+            <td class="subj cards-full" data-label="Betreff">{e.subject}</td>
+            <td data-label="Kanal">{channelLabel(e.channel)}</td>
+            <td class="resp cards-full" data-label="Antwort des Anbieters">
               {#if e.status === "success"}
                 {#if e.providerCode}<span class="code">{e.providerCode}</span>{/if}
                 {#if e.providerMessage}<span class="msg">{e.providerMessage}</span>{/if}
@@ -207,9 +206,9 @@
   .filterbar .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
   .filterbar .row + .row { margin-top: 0.6rem; }
   .filterbar label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; color: #6b7280; }
-  .filterbar label.grow { flex: 1 1 18rem; }
+  .filterbar label.grow { flex: 1 1 18rem; min-width: 0; max-width: 100%; }
   .filterbar input, .filterbar select { padding: 0.4rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
-  .btns { display: flex; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
+  .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #f3f4f6; font-size: 0.85rem; text-align: left; vertical-align: top; }
@@ -224,4 +223,8 @@
   .resp .msg { display: block; }
   .resp .rid { display: block; font-family: ui-monospace, monospace; font-size: 0.72rem; color: #9ca3af; }
   .resp .errtext { color: #b91c1c; }
+  @media (max-width: 820px) {
+    .subj { max-width: none; white-space: normal; }
+    td { overflow-wrap: anywhere; }
+  }
 </style>

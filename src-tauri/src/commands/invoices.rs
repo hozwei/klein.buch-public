@@ -33,11 +33,11 @@
 //! getriggert. Block 4 implementiert die Backup-Schicht; bis dahin ist
 //! das ein Trace-Log + Audit-Eintrag (`invoice.lock.backup_pending`).
 
-use chrono::{Local, NaiveDate};
+use crate::app_ctx::AppCtx;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -66,7 +66,6 @@ use crate::pdf::{klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    pub fiscal_year: i64,
     /// Buyer-Reference (BT-10). Default `"N/A"` für B2C; B2G muss
     /// Leitweg-ID setzen.
     pub buyer_reference: Option<String>,
@@ -127,91 +126,97 @@ pub struct ArchivePathsDto {
 // Commands — Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn invoices_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<invoices::ListFilter>,
-) -> Result<Vec<InvoiceListItem>> {
-    let f = filter.unwrap_or_default();
-    invoices::list(pool.inner(), &f).await
+/// Argumente von [`invoices_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesListArgs {
+    #[serde(default)]
+    pub filter: Option<invoices::ListFilter>,
 }
 
-#[tauri::command]
+pub async fn invoices_list(
+    ctx: &Arc<AppCtx>,
+    args: InvoicesListArgs,
+) -> Result<Vec<InvoiceListItem>> {
+    let InvoicesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    let f = filter.unwrap_or_default();
+    invoices::list(&pool, &f).await
+}
+
+/// Argumente von [`invoices_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesGetArgs {
+    pub id: String,
+}
+
 pub async fn invoices_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesGetArgs,
 ) -> Result<Option<InvoiceDetail>> {
-    invoices::get_detail(pool.inner(), &id).await
+    let InvoicesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    invoices::get_detail(&pool, &id).await
+}
+
+/// Argumente von [`invoices_open_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesOpenPdfArgs {
+    pub id: String,
 }
 
 /// Öffnet das archivierte ZUGFeRD-PDF einer ausgestellten Rechnung im
 /// Standard-PDF-Viewer des Betriebssystems.
-#[tauri::command]
-pub async fn invoices_open_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let path = pdf_archive_path(pool.inner(), &id).await?;
-    app.opener()
-        .open_path(path, None::<&str>)
-        .map_err(|e| Error::Other(anyhow::anyhow!("PDF konnte nicht geöffnet werden: {e}")))?;
+pub async fn invoices_open_pdf(ctx: &Arc<AppCtx>, args: InvoicesOpenPdfArgs) -> Result<()> {
+    let InvoicesOpenPdfArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let path = pdf_archive_path(&pool, &id).await?;
+    ctx.open_path(path)?;
     Ok(())
+}
+
+/// Argumente von [`invoices_reveal_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesRevealPdfArgs {
+    pub id: String,
 }
 
 /// Zeigt das archivierte PDF im Datei-Explorer/Finder (zum Anhängen an
 /// eine E-Mail, solange der SMTP-Versand aus Block 5 noch nicht da ist).
-#[tauri::command]
-pub async fn invoices_reveal_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let path = pdf_archive_path(pool.inner(), &id).await?;
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
-    Ok(())
-}
+pub async fn invoices_reveal_pdf(ctx: &Arc<AppCtx>, args: InvoicesRevealPdfArgs) -> Result<()> {
+    let InvoicesRevealPdfArgs { id } = args;
+    let pool = ctx.pool()?;
 
-/// Liefert die Archiv-Pfade (PDF + XML) einer Rechnung — für Anzeige im UI.
-#[tauri::command]
-pub async fn invoices_archive_paths(
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<ArchivePathsDto> {
-    let pool = pool.inner();
-    let inv = invoices::get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
-    let pdf_path = match inv.pdf_archive_id {
-        Some(aid) => Some(archive_file_path(pool, &aid).await?),
-        None => None,
-    };
-    let xml_path = match inv.xml_archive_id {
-        Some(aid) => Some(archive_file_path(pool, &aid).await?),
-        None => None,
-    };
-    Ok(ArchivePathsDto { pdf_path, xml_path })
+    let path = pdf_archive_path(&pool, &id).await?;
+    ctx.reveal(&path)?;
+    Ok(())
 }
 
 // =============================================================================
 // Commands — Draft
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_create_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesCreateDraftArgs {
+    pub args: CreateDraftArgs,
+}
+
 pub async fn invoices_create_draft(
-    pool: State<'_, SqlitePool>,
-    args: CreateDraftArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesCreateDraftArgs,
 ) -> Result<InvoiceDetail> {
-    create_invoice_draft_from_input(
-        pool.inner(),
-        &args.contact_id,
-        args.fiscal_year,
-        &args.input,
-        None,
-    )
-    .await
+    let InvoicesCreateDraftArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    create_invoice_draft_from_input(&pool, &args.contact_id, &args.input, None).await
 }
 
 /// Gemeinsame Draft-Erzeugung für Ausgangsrechnungen. Genutzt von
@@ -230,10 +235,14 @@ pub async fn invoices_create_draft(
 pub async fn create_invoice_draft_from_input(
     pool: &SqlitePool,
     contact_id: &str,
-    fiscal_year: i64,
     input: &InvoiceInput,
     derived_from_quote_id: Option<&str>,
 ) -> Result<InvoiceDetail> {
+    // GJ = Jahr des Rechnungsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
+    // den Nummernkreis.
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &input.invoice_date,
+    ));
     // P3: Positionen mit Markdown-Body → `description` (XRechnung-BT-154) aus dem
     // Markup als Klartext neu berechnen, damit das XML auch nach Edits stimmt.
     let owned_input;
@@ -358,12 +367,21 @@ pub async fn create_invoice_draft_from_input(
         .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
 }
 
-#[tauri::command]
+/// Argumente von [`invoices_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesValidateDraftArgs {
+    pub id: String,
+}
+
 pub async fn invoices_validate_draft(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesValidateDraftArgs,
 ) -> Result<Vec<ValidationIssueDto>> {
-    let pool = pool.inner();
+    let InvoicesValidateDraftArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let detail = invoices::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
@@ -396,16 +414,28 @@ pub async fn invoices_validate_draft(
 // Commands — Lock & Issue
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_lock_and_issue`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesLockAndIssueArgs {
+    pub id: String,
+    #[serde(default)]
+    pub buyer_reference: Option<String>,
+}
+
 pub async fn invoices_lock_and_issue(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-    buyer_reference: Option<String>,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesLockAndIssueArgs,
 ) -> Result<LockResponse> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let InvoicesLockAndIssueArgs {
+        id,
+        buyer_reference,
+    } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     // GJ-Festschreibung (Block 15): eine Rechnung mit Datum in einem
     // abgeschlossenen Geschäftsjahr kann nicht (mehr) ausgestellt werden.
     let draft = invoices::get_detail(pool, &id)
@@ -422,7 +452,7 @@ pub async fn invoices_lock_and_issue(
     // Block 4 — Auto-Critical-Backup nach erfolgreichem Lock. Best-effort:
     // ein nicht erreichbares Backup-Ziel darf die festgeschriebene Rechnung
     // nicht zurückrollen.
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "invoice.lock")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "invoice.lock")
         .await
         .ok();
     Ok(resp)
@@ -474,6 +504,9 @@ async fn run_lock_pipeline_inner(
     buyer_reference: &str,
     cancel_pair: Option<LockCancelPair<'_>>,
 ) -> Result<LockResponse> {
+    // Review W2 S0-1: Festschreiben derselben Rechnung läuft nie doppelt
+    // (Doppelklick, zwei Browser-Tabs); der zweite Lauf sieht danach `locked_at`.
+    let _invoice_guard = crate::locks::INVOICES.lock(invoice_id).await;
     let detail = invoices::get_detail(pool, invoice_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {invoice_id}")))?;
@@ -491,7 +524,12 @@ async fn run_lock_pipeline_inner(
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
 
-    let seller_view = make_seller_view(&seller_row);
+    // BT-41 (Ansprechpartner) = gepflegter Inhaber-Name, sonst der Verkäufer-Name.
+    let owner_name = crate::db::repo::app_settings::get(pool, "seller_owner_name")
+        .await?
+        .filter(|s| !s.trim().is_empty());
+    let mut seller_view = make_seller_view(&seller_row);
+    seller_view.contact_name = owner_name.as_deref();
 
     // Block 19: Generator + PDF aus dem Buyer-SNAPSHOT (nicht dem Live-Kontakt),
     // damit eine spätere DSGVO-Anonymisierung des Kontakts den festgeschriebenen
@@ -628,7 +666,7 @@ async fn run_lock_pipeline_inner(
         (Some(vp), Some((_, bytes))) => Some((vp, bytes.as_slice())),
         _ => None,
     };
-    let pdf_bytes = typst_render::render_invoice(
+    let pdf_bytes = typst_render::invoice_job(
         &template_source,
         &detail.invoice.invoice_number,
         &input,
@@ -639,15 +677,19 @@ async fn run_lock_pipeline_inner(
         owner_name.as_deref(),
         &accounts_json,
         service_date_fallback,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
     // 6. Mustang: ZUGFeRD-PDF/A-3 mit eingebettetem XML.
     let zugferd_bytes =
         mustang_bridge::create_zugferd(&pdf_bytes, &xml, &paths.sidecar_dir).await?;
 
-    // 7. Archivierung — PDF + XML in `archive_entries`.
+    // 7. Archivierung — PDF + XML in `archive_entries`. Bei einer Wiederholung
+    //    nach Abbruch (Datei schon registriert, Rechnung nicht festgeschrieben)
+    //    weicht der Name auf eine neue Version aus (Review W2 S1-1).
     let fy = detail.invoice.fiscal_year as i32;
-    let pdf_archive = archive::store_bytes(
+    let pdf_archive = archive::store_bytes_new_version(
         pool,
         &paths.archive_dir,
         fy,
@@ -657,7 +699,7 @@ async fn run_lock_pipeline_inner(
         &zugferd_bytes,
     )
     .await?;
-    let xml_archive = archive::store_bytes(
+    let xml_archive = archive::store_bytes_new_version(
         pool,
         &paths.archive_dir,
         fy,
@@ -738,12 +780,21 @@ async fn run_lock_pipeline_inner(
 // Commands — Payment
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_record_payment`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesRecordPaymentArgs {
+    pub args: RecordPaymentArgs,
+}
+
 pub async fn invoices_record_payment(
-    pool: State<'_, SqlitePool>,
-    args: RecordPaymentArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesRecordPaymentArgs,
 ) -> Result<InvoiceRow> {
-    let pool = pool.inner();
+    let InvoicesRecordPaymentArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     // R5-002: Future-Datum verbieten (Symmetrie zu `expenses_set_payment`).
     // Cash-Basis-EÜR rechnet jede Einnahme im paid_at-Jahr (§11 EStG Zufluss-
     // Prinzip) — ein versehentliches Zukunftsdatum verschiebt die Einnahme ins
@@ -786,15 +837,26 @@ pub async fn invoices_record_payment(
 // Commands — Cancel (Storno)
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`invoices_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesCancelArgs {
+    pub args: CancelArgs,
+}
+
 pub async fn invoices_cancel(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: CancelArgs,
+    ctx: &Arc<AppCtx>,
+    args: InvoicesCancelArgs,
 ) -> Result<CancelResponse> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let InvoicesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
+    // Zwei Storno-Anfragen für dieselbe Rechnung laufen nacheinander; die zweite
+    // sieht dann „bereits storniert“ (Review W2, Sperre je Beleg).
+    let _original_guard = crate::locks::INVOICES.lock(&args.invoice_id).await;
 
     let original = invoices::get_detail(pool, &args.invoice_id)
         .await?
@@ -825,6 +887,19 @@ pub async fn invoices_cancel(
         .await?
         .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
     let storno_date = args.storno_date.unwrap_or_else(today_berlin);
+    // W14 (GoBD): Das Storno wirkt in der EÜR im Jahr seines Datums. Nicht vor
+    // der Original-Rechnung, nicht in der Zukunft und nur in einem offenen
+    // Geschäftsjahr — sonst änderte sich ein festgeschriebenes Jahr nachträglich
+    // (wie beim Kosten-Storno, R2-003, und bei Zahlungen).
+    let original_date = parse_date(&original.invoice.invoice_date)?;
+    if storno_date < original_date || storno_date > today_berlin() {
+        return Err(Error::Domain(format!(
+            "Das Storno-Datum muss zwischen dem Rechnungsdatum ({}) und heute liegen.",
+            original_date.format("%d.%m.%Y")
+        )));
+    }
+    crate::fiscal_year::guard::ensure_year_open(pool, chrono::Datelike::year(&storno_date) as i64)
+        .await?;
 
     // Domain-Storno bauen.
     let original_view = OriginalInvoiceView {
@@ -941,7 +1016,7 @@ pub async fn invoices_cancel(
     .await?;
 
     // Block 4 — Auto-Critical-Backup nach Storno-Lock (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "storno.create")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "storno.create")
         .await
         .ok();
 
@@ -996,11 +1071,8 @@ fn effective_delivery_date(
 }
 
 fn today_berlin() -> NaiveDate {
-    // Europe/Berlin via chrono-tz wäre sauberer, aber zieht weitere
-    // Dependency. Local::now() folgt dem System-TZ; Block 0 hat
-    // Europe/Berlin als Host-TZ gepinnt (CLAUDE.md). Wenn das ein
-    // Problem wird, migrieren wir auf chrono-tz.
-    Local::now().date_naive()
+    // Europe/Berlin unabhängig von der Prozess-TZ (Plan W1.8).
+    crate::clock::today_berlin()
 }
 
 fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
@@ -1013,6 +1085,8 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         tax_number: row.tax_number.as_deref(),
         vat_id: row.vat_id.as_deref(),
         email: &row.email,
+        phone: row.phone.as_deref(),
+        contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
         is_kleinunternehmer: row.is_kleinunternehmer == 1,
@@ -1196,6 +1270,9 @@ fn variant_name(e: &invoice::InvoiceValidationError) -> &'static str {
         E::SellerNameMissing => "SellerNameMissing",
         E::SellerAddressIncomplete => "SellerAddressIncomplete",
         E::SellerMissingTaxIdAndVatId => "SellerMissingTaxIdAndVatId",
+        E::XRechnungSellerPhoneMissing => "XRechnungSellerPhoneMissing",
+        E::XRechnungDueDateMissing => "XRechnungDueDateMissing",
+        E::XRechnungSellerIdMissing => "XRechnungSellerIdMissing",
         E::BuyerNameMissing => "BuyerNameMissing",
         E::BuyerAddressIncomplete => "BuyerAddressIncomplete",
         E::ItemDescriptionMissing(_) => "ItemDescriptionMissing",

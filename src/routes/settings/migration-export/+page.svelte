@@ -1,35 +1,19 @@
 <script lang="ts">
-  // Block 4 — Migrations-Export (offenes ZIP aller Daten).
-  import { onMount } from "svelte";
+  // Block 4 — Migrations-Export (offenes ZIP aller Daten); seit Plan W7 als
+  // Download (einmalig abrufbar, 1 h).
   import PageBar from "$lib/PageBar.svelte";
   import { flash } from "$lib/toast.svelte";
-  import {
-    backupGetSettings,
-    migrationExportRun,
-    type ExportReport,
-  } from "$lib/api";
+  import { migrationExportRun, saveDownload, type ExportReport } from "$lib/api";
 
-  let targetPath = $state("");
   let busy = $state(false);
   let report = $state<ExportReport | null>(null);
-
-  onMount(async () => {
-    try {
-      const s = await backupGetSettings();
-      const stamp = new Date().toISOString().slice(0, 10);
-      const sep = s.defaultSuggestion.includes("\\") ? "\\" : "/";
-      // Standard-Vorschlag: neben dem Backup-Ordner ablegen.
-      targetPath = `${s.defaultSuggestion}${sep}klein-buch-export-${stamp}.zip`;
-    } catch {
-      targetPath = "klein-buch-export.zip";
-    }
-  });
 
   async function runExport() {
     busy = true;
     report = null;
     try {
-      report = await migrationExportRun(targetPath.trim());
+      report = await migrationExportRun();
+      if (report.download) saveDownload(report.download);
       flash("Export erstellt.");
     } catch (e) {
       flash(String(e), "error");
@@ -53,17 +37,13 @@
     deine Daten lesbar. Bewahre sie sicher auf.
   </p>
 
-  <label>
-    Speicherort (.zip-Datei)
-    <input type="text" bind:value={targetPath} />
-  </label>
-  <button class="primary" onclick={runExport} disabled={busy || !targetPath.trim()}>
-    {busy ? "Exportiere …" : "Export erstellen"}
+  <button class="primary" onclick={runExport} disabled={busy}>
+    {busy ? "Exportiere …" : "Export erstellen und herunterladen"}
   </button>
 
   {#if report}
     <div class="report">
-      <p>Export erstellt: <strong>{report.zipPath}</strong></p>
+      <p>Export heruntergeladen: <strong>{report.download?.fileName ?? ""}</strong></p>
       <ul>
         <li>{report.tableCount} Datenbereiche, {report.totalRows} Einträge gesamt</li>
         <li>{report.archiveFileCount} Belege/Dateien</li>
@@ -82,20 +62,6 @@
     color: var(--c-text);
     font-size: 0.92rem;
     line-height: 1.5;
-  }
-  label {
-    display: block;
-    margin: 0.8rem 0 0.2rem;
-    font-weight: 600;
-    font-size: 0.85rem;
-  }
-  input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 0.5rem 0.65rem;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 0.95rem;
   }
   button.primary {
     margin-top: 0.9rem;

@@ -27,14 +27,11 @@
 //! `validate_quote` blockt jeden USt-Ausweis bei `is_kleinunternehmer = true`
 //! (über `kleinunternehmer::assert_no_vat`) — §14c-Schutz auch im Angebot.
 
-use chrono::{Datelike, Local, NaiveDate};
+use crate::app_ctx::AppCtx;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-
-use std::fs;
-
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
@@ -63,7 +60,6 @@ use crate::pdf::{bundle, klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    pub fiscal_year: i64,
     pub input: QuoteInput,
 }
 
@@ -80,12 +76,11 @@ pub struct AcceptArgs {
     pub quote_id: String,
     /// Fachliches Annahmedatum. `None` → heute (Europe/Berlin).
     pub accepted_date: Option<NaiveDate>,
-    /// Roh-Bytes des hochgeladenen, unterschriebenen Vertrags (Upload aus dem
-    /// Frontend, `<input type="file">`). Wird write-once archiviert und als
-    /// Attachment verknüpft. `None` → Annahme ohne Doc.
-    pub signed_contract_bytes: Option<Vec<u8>>,
-    /// Original-Dateiname des Uploads (für Endung/MIME + Anhang-Name).
-    pub signed_contract_filename: Option<String>,
+    /// Unterschriebener Vertrag aus `POST /api/upload/vertrag` (Plan W7).
+    /// Wird write-once archiviert und als Attachment verknüpft. `None` →
+    /// Annahme ohne Doc.
+    #[serde(default)]
+    pub signed_contract_upload_id: Option<String>,
     /// Optionales Label für den Anhang (Default: Original-Dateiname).
     pub attachment_label: Option<String>,
 }
@@ -128,38 +123,78 @@ pub struct ConvertArgs {
 // Commands — Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn quotes_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<quotes::ListFilter>,
-) -> Result<Vec<QuoteListItem>> {
-    quotes::list(pool.inner(), &filter.unwrap_or_default()).await
+/// Argumente von [`quotes_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesListArgs {
+    #[serde(default)]
+    pub filter: Option<quotes::ListFilter>,
 }
 
-#[tauri::command]
-pub async fn quotes_get(pool: State<'_, SqlitePool>, id: String) -> Result<Option<QuoteDetail>> {
-    quotes::get_detail(pool.inner(), &id).await
+pub async fn quotes_list(ctx: &Arc<AppCtx>, args: QuotesListArgs) -> Result<Vec<QuoteListItem>> {
+    let QuotesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    quotes::list(&pool, &filter.unwrap_or_default()).await
 }
 
-#[tauri::command]
+/// Argumente von [`quotes_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesGetArgs {
+    pub id: String,
+}
+
+pub async fn quotes_get(ctx: &Arc<AppCtx>, args: QuotesGetArgs) -> Result<Option<QuoteDetail>> {
+    let QuotesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    quotes::get_detail(&pool, &id).await
+}
+
+/// Argumente von [`quotes_attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesAttachmentsListArgs {
+    pub quote_id: String,
+}
+
 pub async fn quotes_attachments_list(
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesAttachmentsListArgs,
 ) -> Result<Vec<AttachmentView>> {
-    attachments::list_for_parent(pool.inner(), "quote", &quote_id).await
+    let QuotesAttachmentsListArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    attachments::list_for_parent(&pool, "quote", &quote_id).await
 }
 
 // =============================================================================
 // Commands — Draft
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`quotes_create_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesCreateDraftArgs {
+    pub args: CreateDraftArgs,
+}
+
 pub async fn quotes_create_draft(
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    args: QuotesCreateDraftArgs,
+) -> Result<QuoteDetail> {
+    let QuotesCreateDraftArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    create_draft_core(&pool, args).await
+}
+
+/// Testbarer Kern von [`quotes_create_draft`] (ohne Tauri-State).
+pub async fn create_draft_core(
+    pool: &SqlitePool,
     mut args: CreateDraftArgs,
 ) -> Result<QuoteDetail> {
-    let pool = pool.inner();
-
     // P3: Positionen mit Markdown-Body → `description` aus dem Markup als Klartext
     // neu berechnen (konsistente Beschreibung, auch nach Body-Edits).
     recompute_markup_descriptions(&mut args.input.items);
@@ -208,8 +243,12 @@ pub async fn quotes_create_draft(
         }
     }
 
-    let quote_number =
-        numbering::next_number(pool, DocType::Quote, args.fiscal_year as i32).await?;
+    // GJ = Jahr des Angebotsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
+    // den Nummernkreis.
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &args.input.quote_date,
+    ));
+    let quote_number = numbering::next_number(pool, DocType::Quote, fiscal_year as i32).await?;
     let totals = quote::compute_totals(&args.input.items);
     let snapshot = SellerSnapshot {
         name: seller_row.name.as_str(),
@@ -232,7 +271,7 @@ pub async fn quotes_create_draft(
 
     let payload = quotes::DraftCreatePayload {
         contact_id: args.contact_id.clone(),
-        fiscal_year: args.fiscal_year,
+        fiscal_year,
         is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
         input: args.input.clone(),
     };
@@ -266,12 +305,21 @@ pub async fn quotes_create_draft(
         .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
 }
 
-#[tauri::command]
+/// Argumente von [`quotes_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesValidateDraftArgs {
+    pub id: String,
+}
+
 pub async fn quotes_validate_draft(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesValidateDraftArgs,
 ) -> Result<Vec<ValidationIssueDto>> {
-    let pool = pool.inner();
+    let QuotesValidateDraftArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let detail = quotes::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
@@ -305,17 +353,22 @@ pub async fn quotes_validate_draft(
 // Commands — State Transitions
 // =============================================================================
 
+/// Argumente von [`quotes_issue`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesIssueArgs {
+    pub id: String,
+}
+
 /// Festschreiben ("issue"): validiert hart, lockt das Angebot und setzt
 /// Status `sent`. Triggert ein Auto-Critical-Backup (Backup-Hardline).
-#[tauri::command]
-pub async fn quotes_issue(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-) -> Result<QuoteRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<QuoteRow> {
+    let QuotesIssueArgs { id } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     let detail = quotes::get_detail(pool, &id)
         .await?
@@ -374,7 +427,7 @@ pub async fn quotes_issue(
     .await?;
 
     // Backup-Hardline: lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "quote.issue")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "quote.issue")
         .await
         .ok();
 
@@ -383,43 +436,60 @@ pub async fn quotes_issue(
         .ok_or_else(|| Error::Domain("issue: post-UPDATE SELECT leer".into()))
 }
 
+/// Argumente von [`quotes_accept`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesAcceptArgs {
+    pub args: AcceptArgs,
+}
+
 /// Annahme durch den Kunden. Optional wird der unterschriebene Vertrag
 /// write-once archiviert und als Attachment (`parent_type='quote'`) verknüpft.
-#[tauri::command]
-pub async fn quotes_accept(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: AcceptArgs,
-) -> Result<QuoteDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<QuoteDetail> {
+    let QuotesAcceptArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     let quote_row = quotes::get(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {}", args.quote_id)))?;
 
-    // 1. Optionaler Vertrags-Upload (Roh-Bytes) → Archiv + Attachment.
-    if let Some(bytes) = args.signed_contract_bytes.as_deref() {
-        if bytes.is_empty() {
-            return Err(Error::Domain("Vertrags-Datei ist leer".into()));
-        }
-
+    // 1. Optionaler Vertrags-Upload → Archiv + Attachment.
+    let upload_id = args
+        .signed_contract_upload_id
+        .as_deref()
+        .filter(|id| !id.is_empty());
+    let contract = match upload_id {
+        Some(id) => Some(
+            ctx.uploads
+                .read(id, &[crate::uploads::UploadKind::Contract])?,
+        ),
+        None => None,
+    };
+    // Status vor dem Archivieren prüfen — sonst bleibt bei einem schon
+    // angenommenen Angebot ein unlöschbarer Anhang zurück (Gegenprüfung W7).
+    if quote_row.status != "sent" {
+        return Err(Error::Domain(format!(
+            "Annahme nur für versendete Angebote möglich (status={})",
+            quote_row.status
+        )));
+    }
+    if let Some(contract) = contract.as_ref() {
         // R2-024 (GJ-Guard): Beilagen werden mit `quote_row.fiscal_year` ins
         // write-once-Archiv abgelegt. Liegt das Angebot in einem festgeschrieben
         // GJ, würden wir nachträglich an dessen Archiv anhängen — also den
         // Lock-Snapshot rückwirkend erweitern. Vor dem Archiv-Schreiben blocken.
         guard::ensure_year_open(pool, quote_row.fiscal_year).await?;
 
-        let original_name = sanitize_filename(
-            args.signed_contract_filename
-                .as_deref()
-                .unwrap_or("vertrag.pdf"),
-        );
+        let original_name = sanitize_filename(&contract.file_name);
         // Eindeutiger Archiv-Dateiname (write-once, UNIQUE-Pfad): mit
         // Angebotsnummer prefixen, damit gleiche Original-Namen kollisionsfrei
         // bleiben.
         let file_name = format!("{}-{}", quote_row.quote_number, original_name);
-        let mime = guess_mime(&original_name);
+        // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+        let mime = contract.mime;
 
         let stored = archive::store_bytes(
             pool,
@@ -428,7 +498,7 @@ pub async fn quotes_accept(
             ArchiveKind::Attachment,
             &file_name,
             mime,
-            bytes,
+            &contract.bytes,
         )
         .await?;
 
@@ -472,19 +542,31 @@ pub async fn quotes_accept(
             r#"{{"number":"{}","accepted_at":"{}","with_contract":{}}}"#,
             quote_row.quote_number,
             accepted_iso,
-            args.signed_contract_bytes.is_some()
+            contract.is_some()
         )),
     )
     .await?;
+    if let Some(id) = upload_id {
+        ctx.uploads.consume(id);
+    }
 
     quotes::get_detail(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain("accept: detail-load leer".into()))
 }
 
-#[tauri::command]
-pub async fn quotes_reject(pool: State<'_, SqlitePool>, args: RejectArgs) -> Result<QuoteRow> {
-    let pool = pool.inner();
+/// Argumente von [`quotes_reject`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesRejectArgs {
+    pub args: RejectArgs,
+}
+
+pub async fn quotes_reject(ctx: &Arc<AppCtx>, args: QuotesRejectArgs) -> Result<QuoteRow> {
+    let QuotesRejectArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     quotes::reject(pool, &args.quote_id).await?;
     audit_log::append(
         pool,
@@ -502,9 +584,18 @@ pub async fn quotes_reject(pool: State<'_, SqlitePool>, args: RejectArgs) -> Res
         .ok_or_else(|| Error::Domain("reject: post-UPDATE SELECT leer".into()))
 }
 
-#[tauri::command]
-pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Result<QuoteRow> {
-    let pool = pool.inner();
+/// Argumente von [`quotes_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesCancelArgs {
+    pub args: CancelArgs,
+}
+
+pub async fn quotes_cancel(ctx: &Arc<AppCtx>, args: QuotesCancelArgs) -> Result<QuoteRow> {
+    let QuotesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     quotes::cancel(pool, &args.quote_id, &args.reason).await?;
     audit_log::append(
         pool,
@@ -523,6 +614,13 @@ pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Res
 // Commands — Konvertierung (Block 7)
 // =============================================================================
 
+/// Argumente von [`quotes_convert_to_invoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesConvertToInvoiceArgs {
+    pub args: ConvertArgs,
+}
+
 /// Konvertiert ein **angenommenes** Angebot in eine Rechnungs-**Draft**.
 ///
 /// **Hard-Rule (Manuel):** nur aus `status='accepted'` — aus dem
@@ -540,12 +638,14 @@ pub async fn quotes_cancel(pool: State<'_, SqlitePool>, args: CancelArgs) -> Res
 /// KoSIT-Validierung, ZUGFeRD/Mustang und §19-Klausel-Check. Damit greift die
 /// §19-Hardline beim Festschreiben unverändert; die Konvertierung übernimmt
 /// die USt-Felder 1:1 (bei §19: Category `E`, Rate `0`).
-#[tauri::command]
 pub async fn quotes_convert_to_invoice(
-    pool: State<'_, SqlitePool>,
-    args: ConvertArgs,
+    ctx: &Arc<AppCtx>,
+    args: QuotesConvertToInvoiceArgs,
 ) -> Result<InvoiceDetail> {
-    let pool = pool.inner();
+    let QuotesConvertToInvoiceArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
 
     let detail = quotes::get_detail(pool, &args.quote_id)
         .await?
@@ -594,14 +694,13 @@ pub async fn quotes_convert_to_invoice(
             .unwrap_or_else(|| quote.pdf_template.clone()),
     };
     let input = quote::convert_to_invoice(&items, &opts);
-    let fiscal_year = args.invoice_date.year() as i64;
+    // GJ leitet create_invoice_draft_from_input aus dem Rechnungsdatum ab (W1.2).
 
     // Gemeinsamer Draft-Helper: Snapshots, Belegnummer, derived_from_quote_id,
     // Audit invoice.draft_create.
     let invoice_detail = crate::commands::invoices::create_invoice_draft_from_input(
         pool,
         &quote.contact_id,
-        fiscal_year,
         &input,
         Some(&quote.id),
     )
@@ -764,7 +863,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
             .collect(),
     );
 
-    let pdf_bytes = typst_render::render_quote(
+    let pdf_bytes = typst_render::quote_job(
         &source,
         &quote.quote_number,
         &input,
@@ -776,7 +875,9 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         signature_enabled,
         owner_name.as_deref(),
         &accounts_json,
-    )?;
+    )?
+    .compile_async()
+    .await?;
 
     let stored = archive::store_bytes(
         pool,
@@ -862,35 +963,52 @@ pub async fn prepare_quote_dispatch(
     })
 }
 
+/// Argumente von [`quotes_generate_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesGeneratePdfArgs {
+    pub id: String,
+}
+
 /// Erzeugt (falls nötig) das Angebots-PDF und liefert das aktualisierte Angebot
 /// (mit `pdfArchiveId`). Das Frontend öffnet das PDF danach via
 /// `attachments_open(pdfArchiveId)`.
-#[tauri::command]
 pub async fn quotes_generate_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesGeneratePdfArgs,
 ) -> Result<QuoteRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    let QuotesGeneratePdfArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     ensure_quote_pdf(pool, &paths, &id).await?;
     quotes::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain("generate_pdf: post-SELECT leer".into()))
 }
 
+/// Argumente von [`quotes_open_bundle`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesOpenBundleArgs {
+    pub id: String,
+}
+
 /// Erzeugt das **zusammengeführte** Bundle-PDF (Angebot + AGB + Datenschutz),
-/// bindet die Legal-Versionen (Pflicht) und öffnet es im Standard-PDF-Viewer —
-/// für „Drucken/Ansehen" als ein Dokument. Das Bundle ist abgeleitet und wird
-/// nicht archiviert (kanonisch sind die Einzel-PDFs + die Bindung).
-#[tauri::command]
+/// bindet die Legal-Versionen (Pflicht) und liefert es als Download-Ticket
+/// (Plan W7, inline im Browser) — für „Drucken/Ansehen" als ein Dokument. Das
+/// Bundle ist abgeleitet und wird nicht archiviert (kanonisch sind die
+/// Einzel-PDFs + die Bindung).
 pub async fn quotes_open_bundle(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    id: String,
-) -> Result<()> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+    ctx: &Arc<AppCtx>,
+    args: QuotesOpenBundleArgs,
+) -> Result<crate::downloads::DownloadTicket> {
+    let QuotesOpenBundleArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
     let dispatch = prepare_quote_dispatch(pool, &paths, &id).await?;
 
     let mut parts: Vec<Vec<u8>> = Vec::new();
@@ -901,18 +1019,13 @@ pub async fn quotes_open_bundle(
     let part_count = parts.len();
     let merged = bundle::merge_pdfs(&parts)?;
 
-    let dir = std::env::temp_dir().join("klein-buch");
-    fs::create_dir_all(&dir)?;
     let file_name = format!(
         "{}-Angebot-Bundle.pdf",
         sanitize_filename(&dispatch.quote.quote_number)
     );
-    let path = dir.join(file_name);
-    fs::write(&path, &merged)?;
-
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Bundle konnte nicht geöffnet werden: {e}")))?;
+    let ticket =
+        ctx.downloads
+            .put_bytes(&file_name, &merged, crate::downloads::DownloadKind::Preview)?;
 
     audit_log::append(
         pool,
@@ -922,16 +1035,25 @@ pub async fn quotes_open_bundle(
         Some(&format!(r#"{{"parts":{part_count}}}"#)),
     )
     .await?;
-    Ok(())
+    Ok(ticket)
+}
+
+/// Argumente von [`quotes_legal_bindings`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesLegalBindingsArgs {
+    pub quote_id: String,
 }
 
 /// Liefert die fest mit einem Angebot verknüpften Legal-Versionen (Anzeige).
-#[tauri::command]
 pub async fn quotes_legal_bindings(
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: QuotesLegalBindingsArgs,
 ) -> Result<Vec<QuoteLegalDocumentView>> {
-    legal_documents::list_for_quote(pool.inner(), &quote_id).await
+    let QuotesLegalBindingsArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    legal_documents::list_for_quote(&pool, &quote_id).await
 }
 
 // =============================================================================
@@ -971,8 +1093,7 @@ fn make_buyer_view_from_quote(q: &QuoteRow) -> Option<BuyerView<'_>> {
 }
 
 fn today_berlin() -> NaiveDate {
-    // Wie commands::invoices: System-TZ (Block 0 pinnt Europe/Berlin).
-    Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
@@ -985,6 +1106,8 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         tax_number: row.tax_number.as_deref(),
         vat_id: row.vat_id.as_deref(),
         email: &row.email,
+        phone: row.phone.as_deref(),
+        contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
         is_kleinunternehmer: row.is_kleinunternehmer == 1,
@@ -1068,19 +1191,6 @@ fn sanitize_filename(name: &str) -> String {
         "vertrag.pdf".to_string()
     } else {
         trimmed.to_string()
-    }
-}
-
-fn guess_mime(file_name: &str) -> &'static str {
-    let lower = file_name.to_lowercase();
-    if lower.ends_with(".pdf") {
-        "application/pdf"
-    } else if lower.ends_with(".png") {
-        "image/png"
-    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-        "image/jpeg"
-    } else {
-        "application/octet-stream"
     }
 }
 

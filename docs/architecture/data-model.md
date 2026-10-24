@@ -6,9 +6,10 @@
 > in `klein-buch/src-tauri/migrations/*.sql` und sind die kanonische Quelle —
 > diese Doku ist die navigationsfreundliche Sicht darauf.
 
-**Schema-Stand: v30.** Migrationen 0001–0030, forward-only. Schema-Version
-liegt in `app_settings.schema_version`; Mismatch beim Start ⇒ App stoppt
-(Down-Migration-Schutz).
+**Schema-Stand: v31.** Migrationen 0001–0031, forward-only. Schema-Version
+liegt in `app_settings.schema_version`; geprüft wird beim Entsperren gegen
+`EXPECTED_SCHEMA_VERSION` (31) — eine neuere DB lässt sich nicht entsperren
+(Down-Migration-Schutz, §4).
 
 **Globale Konventionen** (ADR 0003):
 
@@ -40,7 +41,7 @@ liegt in `app_settings.schema_version`; Mismatch beim Start ⇒ App stoppt
 | 0011 | `0011_depreciation.sql` | `depreciation_entries` + Trigger `trg_depreciation_immutable` |
 | 0012 | `0012_notifications.sql` | `notifications` + `notification_rules` (In-App-Inbox) |
 | 0013 | `0013_fiscal_year_locks.sql` | `fiscal_year_locks` (append-only, EÜR-Snapshot pro abgeschlossenes Jahr) |
-| 0014 | `0014_oauth.sql` | `mail_accounts` um OAuth-Felder erweitert (Refresh-Token-Keychain-Referenz, nicht Token selbst) |
+| 0014 | `0014_oauth.sql` | `mail_accounts` um nicht-geheime OAuth-Metadaten erweitert (Tenant, Client-ID, Postfach, Scopes, Token-Ablauf); der Refresh-Token lag in der Desktop-Fassung im OS-Keychain, seit 0031 in `secrets` |
 | 0015 | `0015_email_log.sql` | `email_log` (append-only, Versand-Protokoll inkl. Provider-Antwort) |
 | 0016 | `0016_travel_cost.sql` | Anfahrt-Settings (km-Satz pro `seller_profile`) |
 | 0017 | `0017_payment_on_invoice.sql` | `payment_account_id`-FK in `invoices` (Bankverbindung der Rechnung) |
@@ -55,8 +56,9 @@ liegt in `app_settings.schema_version`; Mismatch beim Start ⇒ App stoppt
 | 0026 | `0026_backup_log.sql` | `backup_log` (append-only) — Backup-Protokoll je Ziel |
 | 0027 | `0027_backup_result_rule.sql` | `notification_rules` um `rule_backup_result` ergänzt (Erfolg/Fehler) |
 | 0028 | `0028_append_only_hardening.sql` | Append-only-Trigger nachgezogen (R1-Review): zusätzliche no-update/no-delete-Trigger auf Audit-relevante Hilfstabellen, Storno-Paar als atomare Transaktion abgesichert |
-| 0029 | `0029_drop_folder.sql` | Drop-Folder-Settings (`drop_folder_enabled`, `drop_folder_path`) + Notification-Regeln `rule_drop_folder_import_ok` (default off, Inbox-only) und `rule_drop_folder_import_failed` (default on, Inbox + OS-Toast) — ADR 0037 |
-| 0030 | `0030_rename_drop_folder_labels.sql` | UI-Label-Update auf den Notification-Regeln aus 0029 (Block PV1-RENAME): „Drop-Folder: …" → „Rechnungs-Eingang: …" (CLAUDE.md-UI-Sprachregel, Plain-Language-Hardline). Code-Identifier (rule_id, Settings-Keys, Route, Module) bleiben englisch. |
+| 0029 | `0029_drop_folder.sql` | Drop-Folder-Settings (`drop_folder_enabled`, `drop_folder_path`) + Notification-Regeln `rule_drop_folder_import_ok` (default off, Inbox-only) und `rule_drop_folder_import_failed` (default on, Inbox + OS-Toast) — ADR 0037. Im Server ohne Wirkung: Drop-Folder entfallen (E11, Code entfernt in W11), OS-Benachrichtigungen gibt es nicht; die Zeilen bleiben (forward-only). |
+| 0030 | `0030_rename_drop_folder_labels.sql` | UI-Label-Update auf den Notification-Regeln aus 0029 (Block PV1-RENAME): „Drop-Folder: …" → „Rechnungs-Eingang: …" (CLAUDE.md-UI-Sprachregel, Plain-Language-Hardline). Code-Identifier (rule_id, Settings-Keys, Route, Module) bleiben englisch. Im Server wie 0029 ohne Wirkung. |
+| 0031 | `0031_secrets.sql` | `secrets` (STRICT) — Zugangsdaten in der verschlüsselten DB statt im OS-Keychain (Plan W8, ADR 0039 E6, Amendment ADR 0011/0028): Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie im Migrations- oder DSGVO-Export, nie in Log oder Audit |
 
 **Down-Migrations gibt es nicht.** Wer eine Migration „rückgängig" braucht,
 muss eine neue, höher nummerierte Migration schreiben, die den Zustand
@@ -84,11 +86,16 @@ eingefrorenen Buyer-Snapshots bleiben (GoBD gewinnt).
 **`payment_accounts`** — Zahlungs-Konten (Bank/Bar/PayPal). Felder: `id`,
 `label`, `kind`, `iban`, `bic`, `bank_name`, `is_active`, `is_default`.
 
-**`mail_accounts`** — SMTP- + OAuth-Mail-Konten. Felder: `id`, `kind`
-(`smtp`/`graph`), `display_name`, `from_address`, `smtp_host`, `smtp_port`,
-`smtp_username` (Passphrase im Keychain), OAuth-Felder (Tenant, Client-ID,
-Scopes; Refresh-Token im Keychain, gechunkt wegen Windows-2560-Limit),
-`last_used_at`.
+**`mail_accounts`** — Versand-Konten. Felder: `id`, `label`, `auth_type`
+(`smtp_password`/`oauth_microsoft`; OAuth ist im Server gesperrt, E9),
+`smtp_host`, `smtp_port`, `smtp_user`, `smtp_use_tls`, `keychain_service_id`
+(Name aus der Keychain-Zeit; heute nur Kennzeichen, dass ein Passwort
+hinterlegt sein kann — das Passwort selbst steht in `secrets` unter
+`smtp:<id>`), `from_email`, `from_name`, `is_default`, `last_used_at`,
+`created_at`, OAuth-Metadaten aus 0014 (`oauth_tenant_id`, `oauth_client_id`,
+`oauth_account_email`, `oauth_scopes`, `oauth_token_expires_at`; der
+Refresh-Token steht in `secrets` unter `oauth:<id>`). Ändern sich Host, Port
+oder Benutzer, verfällt das gespeicherte Passwort (Amendment ADR 0011).
 
 ### 2b. Beleg-Stamm (festschreibbar)
 
@@ -191,22 +198,35 @@ Zeitpunkt des Abschlusses). **Trigger:**
 (`ok`/`failed`), `provider_response` (kanonisiert). **Trigger:**
 `trg_email_log_no_update`/`_no_delete`.
 
-**`backup_log`** (G1-LOG, Migration 0026) — Backup-Protokoll. Felder: `id`,
-`at`, `name` (Backup-Datei-Basisname), `size_bytes`, `path` (voller Pfad
-am Ziel), `target_kind` (`floor`/`directory`/`sftp`), `retention_tag`
-(`daily`/`weekly`/`monthly`), `status` (`ok`/`failed`), `trigger_reason`
-(`manual`/`auto_critical`/`auto_daily`/`onboarding`/…), `error_message`
-(bei `failed`). **Trigger:** `trg_backup_log_no_update`/`_no_delete`.
-**Niemals** die Passphrase.
+**`backup_log`** (G1-LOG, Migration 0026) — Backup-Protokoll, eine Zeile je
+Lauf und Ablage (Erfolg und Fehlschlag). Felder: `id`, `created_at`,
+`trigger` (`manual`/`auto_daily`/`auto_critical`/`pre_restore`),
+`target_kind` (`local` = Floor, `directory`, `sftp`), `target_label` (z. B.
+SFTP-Host), `file_name`, `full_path` (voller Pfad bzw. `sftp://`-URI),
+`size_bytes`, `status` (`ok`/`failed`), `detail` (Fehlertext bei `failed`).
+**Trigger:** `trg_backup_log_no_update`/`_no_delete`. **Niemals** die
+Passphrase.
 
 ### 2f. Infrastruktur
 
 **`app_settings`** — Key-Value-Store. Felder: `key` (PK), `value`, `updated_at`.
-Wichtige Keys: `schema_version`, `fiscal_year_auto_close` (1/0), `last_backup_at`,
-`onboarding_completed_at`, `dsgvo_disclaimer_acknowledged_at`,
-`pdf_template_default` (wenn nicht aus `seller_profile` geliefert),
-`drop_folder_enabled` (1/0, ADR 0037), `drop_folder_path` (absoluter Pfad
-zum überwachten Ordner; leer = inaktiv).
+Wichtige Keys (u. a.): `schema_version`, `depreciation_auto_year_close`
+(Auto-AfA zur GJ-Wende, Standard an), `backup_passphrase_set` und
+`backup_verifier_*` (verschlüsselter Passphrase-Verifier, kein Klartext, kein
+Hash der Passphrase), `backup_targets` (JSON-Liste der Off-Site-Ziele, W7),
+`backup_offsite_results` (Ergebnis je Ziel für den Status `offsite`),
+`update_check_enabled`/`update_check_last_at` (opt-in Versionsprüfung, W12),
+`invoice_due_days`, `quote_valid_days`, `travel_cost_per_km_cents`.
+`drop_folder_enabled`/`drop_folder_path` (Migration 0029) bleiben aus der
+Desktop-Fassung stehen, werden im Server aber nicht mehr gelesen (E11).
+Zugangsdaten stehen **nicht** hier, sondern in `secrets`.
+
+**`secrets`** (Migration 0031, W8) — Zugangsdaten. Felder: `key` (PK:
+`smtp:<mail_account.id>`, `oauth:<mail_account.id>`, `sftp:<Ziel-ID>`),
+`value`, `updated_at`. Liegt wie alle Tabellen in der SQLCipher-verschlüsselten
+DB (Passphrase = DB-Key, ADR 0035), geht damit nur verschlüsselt in Backups
+und ist vom Migrations-Export (`json_dump::EXCLUDED_TABLES`) und vom
+DSGVO-Export ausgenommen. Lesen und Schreiben nur über `crate::secrets`.
 
 **`archive_entries`** — Index aller Archiv-Dateien. Felder: `id` (= ArchiveId),
 `kind` (`InvoicePdf`/`InvoiceXml`/`QuotePdf`/`LegalDocument`/`ReceivedEinvoice`/
@@ -219,10 +239,18 @@ unveränderlich).
 (G1-HARDEN.4: getrennt von `files_failed`), `missing_archive_ids` (JSON),
 `tamper_archive_ids` (JSON).
 
-**`backup_history`** (Altbestand) — vor G1-LOG genutzte Aggregat-Tabelle.
-Wird **nicht** mehr beschrieben; `backup_log` ist die Quelle der Wahrheit ab
-Migration 0026. Lesen ist OK (Migrations-Kompatibilität); Schreiben läuft
-ausschließlich über `backup_log`.
+**`backup_history`** (Migration 0001) — Bestand der vorhandenen
+Backup-Dateien, eine Zeile je erfolgreich geschriebener Datei (Floor und jedes
+Off-Site-Ziel, unterschieden am `target_path`). Felder: `id`, `created_at`,
+`target_path`, `file_hash_sha256`, `file_size_bytes`, `is_encrypted`,
+`retention_tag` (`daily`/`monthly`/`yearly`/`manual`), `trigger_reason`
+(`auto_daily`/`auto_critical`/`manual`/`pre_restore`), `db_schema_version`,
+`app_version`, `verified_at`. `backup::create_now` schreibt sie (nach einem
+Restore trägt `record_existing_backup` das Pre-Restore-Backup nach), die
+Rotation löscht Zeilen zusammen mit den Dateien; sie speist die Backup-Liste, den
+Restore aus der Historie, die Fälligkeit des Tages-Backups und
+`backup_overdue` ohne Off-Site-Ziel. **Nicht** append-only — der lückenlose
+Nachweis aller Läufe ist `backup_log`.
 
 **`doc_number_counters`** — Atomare Nummern-Allokation. Felder:
 `{typ, year}` (PK), `next_n`. Ein einziger UPDATE-RETURNING-Cycle pro Allokation,
@@ -263,26 +291,35 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_email_log_no_update`/`_no_delete` | `email_log` | append-only |
 | `trg_backup_log_no_update`/`_no_delete` | `backup_log` | append-only |
 
-**Reason-Mapping.** `db::triggers::db_trigger_reason()` mappt eine
-verletzte Constraint zurück auf einen sprechenden `trigger_reason` für das
-Audit-Log. Catch-all `_ => auto_critical` ist CHECK-bruchsicher (G1-HARDEN.2).
+**Reason-Mapping.** `backup::db_trigger_reason` (privat in `backup/mod.rs`)
+bildet die Auslöser-Labels der Lock-Events auf die vom CHECK erlaubten Werte
+von `backup_history.trigger_reason` ab (`auto_daily`/`auto_critical`/`manual`/
+`pre_restore`). Catch-all `_ => auto_critical` ist CHECK-bruchsicher
+(G1-HARDEN.2).
 
 ---
 
 ## 4. Schema-Version-Management
 
-Die `app_settings.schema_version`-Zeile wird in der höchsten relevanten
-Migration aktualisiert (per Migration eine Zeile höhergezählt). Beim
-App-Start liest `db::schema_version::read_or_init` den Stand und gleicht
-gegen die in `db::schema_version::EXPECTED_VERSION` einkompilierte Zahl ab.
-Mismatch:
+Jede Migration setzt die `app_settings.schema_version`-Zeile auf ihre Nummer.
+Geprüft wird beim **Entsperren** (`server::auth`, `commands::backup::
+migrate_with_backup`), nicht beim Prozessstart — vorher ist die DB zu:
 
-- **DB-Version < EXPECTED:** sqlx::migrate! läuft die fehlenden Migrationen.
-- **DB-Version > EXPECTED:** App stoppt mit klarer Fehlermeldung (alte App
-  liest neue DB — verboten, weil unklar, welche neuen Constraints existieren).
+- **DB-Version < EXPECTED:** zuerst ein Pflicht-Backup (`manual`) mit der
+  alten Version, vollständig gelesen und geprüft, Audit `backup.pre_migration`
+  (ADR 0039 E15, W7). Scheitert es, wird nicht migriert und die Instanz bleibt
+  gesperrt (409 `pre_migration_backup_failed`). Danach läuft
+  `db::run_migrations` (`sqlx::migrate!`) die fehlenden Migrationen.
+- **Danach** vergleicht `db::schema_version::check_compatible` den Stand mit
+  dem einkompilierten `EXPECTED_SCHEMA_VERSION` (31). **DB-Version >
+  EXPECTED** ⇒ `Error::SchemaMismatch` mit Update-Hinweis, kein Entsperren
+  (alte App liest neue DB — verboten, weil unklar, welche neuen Constraints
+  existieren).
+- **Restore** nimmt Backups mit `MIN_RESTORE_SCHEMA_VERSION` (30) ≤ Schema ≤
+  EXPECTED an und migriert sie beim nächsten Entsperren vorwärts.
 
 Damit kann man **keine Down-Migration aus Versehen** machen. Wer eine ältere
-App-Version mit einer neueren DB startet, wird zum Update gezwungen, nicht zum
+Version mit einer neueren DB startet, wird zum Update gezwungen, nicht zum
 Schaden.
 
 ---
@@ -313,20 +350,29 @@ auf NULL**, keine Löschung des Datensatzes.
 
 Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
-- Es gibt **keine** Spalte für die App-/Daten-Passphrase. Sie lebt nur als
-  PBKDF2-Eingabe in `SQLCipher` (im DB-Header) und in `BackupSession` im
-  Memory der laufenden Session.
-- **Keine** Spalten für SMTP-Passwörter oder OAuth-Refresh-Tokens. Beide
-  leben im OS-Keychain mit einer Referenz-ID im jeweiligen `mail_accounts`-
-  Datensatz.
-- **Keine** SFTP-Backup-Passwörter im Klartext. Auch im Keychain mit
-  Referenz in der Backup-Settings-JSON in `app_settings`.
+- Es gibt **keine** Spalte für die App-/Daten-Passphrase. Sie ist nur
+  Eingabe der SQLCipher-Schlüsselableitung (PBKDF2, Salt im DB-Header) und
+  liegt, solange entsperrt, in `BackupSession` im RAM; `app_settings` hält nur
+  einen verschlüsselten Verifier (`backup_verifier_*`).
+- SMTP-Passwörter, OAuth-Refresh-Tokens und SFTP-Passwörter stehen **nur** in
+  der Tabelle `secrets` (Migration 0031, W8) — also in der verschlüsselten DB,
+  nicht in `mail_accounts`, nicht im Ziel-JSON `app_settings.backup_targets`,
+  nie in Log oder `audit_log`, nie im Migrations- oder DSGVO-Export. Bis W8
+  lagen sie im OS-Keychain der Desktop-Fassung.
+- Das TOTP-Geheimnis und die gehashten Einmal-Codes liegen **außerhalb** der
+  DB in `/data/auth/totp.json` (E5) und gehören nicht zu Snapshot oder
+  Restore.
 
 ---
 
 ## Letzte Verifikation
 
-Stand: 2026-05-27, Schema v30. Quelle: `klein-buch/src-tauri/migrations/
-0001..0030.sql` und die `db::repo`-Module. Bei Schema-Erweiterungen diese
-Datei in der entsprechenden Sektion ergänzen und die Migrations-Tabelle
-verlängern.
+Stand: 2026-10-24 (Phase W, Block W13), Schema v31. Quelle:
+`klein-buch/src-tauri/migrations/0001..0031.sql`,
+`src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
+`src/commands/{mail,backup}.rs`. Gegen den Code geprüft: Migrations-Liste,
+`mail_accounts`, `app_settings`, `secrets`, `backup_log`, `backup_history`,
+§4 und §6. Die übrigen Feldlisten in §2 stammen vom Stand 2026-05-27 und sind
+nicht neu abgeglichen; maßgeblich sind die Migrationen. Bei
+Schema-Erweiterungen diese Datei in der entsprechenden Sektion ergänzen und
+die Migrations-Tabelle verlängern.

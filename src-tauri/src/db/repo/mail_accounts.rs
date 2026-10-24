@@ -1,7 +1,7 @@
 //! Repository für `mail_accounts` (Block 5).
 //!
 //! Schicht: **Imperative Shell**. Die SMTP-Passphrase wird hier NICHT
-//! gespeichert — sie lebt im OS-Keychain (siehe [`crate::mail::keyring`]).
+//! gespeichert — es liegt in der Tabelle `secrets` (siehe [`crate::secrets`], W8).
 //! Diese Tabelle hält nur die Verbindungs-Metadaten + die
 //! `keychain_service_id`, unter der die Passphrase abgelegt ist.
 //!
@@ -48,9 +48,11 @@ pub async fn create(pool: &SqlitePool, input: &MailAccountInput) -> Result<MailA
     let id = Uuid::now_v7().to_string();
     // Keychain-Eintrag für BEIDE Auth-Typen: smtp_password legt dort die
     // Passphrase ab (user "smtp"), oauth_microsoft die Token-Bundle (user "oauth").
-    let keychain_service_id = Some(crate::mail::keyring::service_id(&id));
+    // Markiert ein Konto mit Passwort-Anmeldung; das Passwort selbst liegt seit
+    // W8 unter `secrets::smtp_key(id)` in der Datenbank.
+    let keychain_service_id = Some(format!("kleinbuch::mail::{id}"));
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     if input.is_default {
         sqlx::query("UPDATE mail_accounts SET is_default = 0")
             .execute(&mut *tx)
@@ -130,7 +132,7 @@ pub async fn update(
     id: &str,
     input: &MailAccountInput,
 ) -> Result<MailAccountRow> {
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
     if input.is_default {
         sqlx::query("UPDATE mail_accounts SET is_default = 0 WHERE id != ?")
             .bind(id)

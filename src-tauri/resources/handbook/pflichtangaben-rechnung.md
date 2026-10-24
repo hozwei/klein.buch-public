@@ -42,8 +42,15 @@ Vor dem Ausstellen einer Rechnung prüft Klein.Buch automatisch:
 2. Der gewählte Kunde hat Name und Anschrift.
 3. Die Rechnung hat ein Belegdatum.
 4. Es ist mindestens eine Position eingetragen.
-5. Bei Rechnungen über 250 € brutto ist eine Steuernummer oder
-   USt-IdNr im Profil hinterlegt.
+5. Im Profil ist eine Steuernummer oder USt-IdNr hinterlegt, auch
+   bei Kleinbetragsrechnungen (siehe unten).
+6. Im Profil ist eine Telefonnummer hinterlegt.
+7. Ist ein Betrag offen, hat die Rechnung ein Fälligkeitsdatum.
+
+Die Punkte 6 und 7 verlangt nicht §14 UStG, sondern die XRechnung,
+die Klein.Buch zu jeder Rechnung erzeugt. Ohne sie würde der
+KoSIT-Validator (das amtliche Prüfprogramm für XRechnungen) die
+Rechnung ablehnen.
 
 Wenn etwas fehlt, erscheint oben rechts ein roter Hinweis-Toast,
 der das fehlende Feld benennt. Korrigiere und versuche erneut.
@@ -72,7 +79,10 @@ Umsatzsteuer ausweist.
 
 Klein.Buch erkennt die 250 €-Grenze automatisch und nutzt das
 passende Pflichtangaben-Schema. Du musst Dich nicht aktiv darum
-kümmern.
+kümmern. In einem Punkt ist Klein.Buch strenger als das Gesetz: Auch eine
+Kleinbetragsrechnung bekommt eine XRechnung, und die verlangt eine
+Steuernummer oder USt-IdNr. Ohne sie stellt Klein.Buch auch eine
+Kleinbetragsrechnung nicht aus.
 
 ## Leistungsdatum genauer
 
@@ -113,4 +123,4 @@ vollständig nach §14 UStG.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

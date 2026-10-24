@@ -64,3 +64,22 @@ Block 17 portiert nach Plattform-spezifische Scripts (`build-sidecar.sh`).
 - GitHub-Actions-Runner-Images: https://github.com/actions/runner-images
 - Block-0-Build-Notes: `~/cowork/Buchhaltung/memory/klein-buch/block-0-notes.md`
 - PRD §5.5 Build-Plan / §7.5 Phase 2D Block 17
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039; Umsetzung Block W11). Klein.Buch
+läuft künftig nur noch als Server im Linux-Container, die Desktop-Bundles entfallen
+(ADR 0002, ADR 0038). Damit gibt es genau ein Target-Triple:
+
+- **Nur `x86_64-unknown-linux-gnu`.** Die jlink-JRE entsteht in einer eigenen Stage des
+  Image-Builds (jlink aus Eclipse Temurin 21, per Digest gepinnt) und liegt im Image. Aufruf
+  über den Launcher `klein-buch-java.sh` (POSIX-`sh`) statt `klein-buch-java.bat`.
+- **Entfällt:** das Windows-Bundle (`binaries/klein-buch-java-x86_64-pc-windows-msvc` samt
+  Windows-JRE), die macOS-Triples und die Runner-Matrix aus Block 17;
+  `scripts/build-sidecar.ps1` wird durch die Sidecar-Stage ersetzt.
+- **Herkunft prüfbar:** Die Sidecar-Dateien liegen unter `src-tauri/sidecar/`.
+  `sidecar/versions.json` nennt je JAR/ZIP die Bezugsquelle (URL) und die SHA-256-Prüfsumme,
+  dazu JDK-Hersteller und -Build, jlink-Module und Image-Digests. Ein CI-Schritt lädt die
+  Originale und vergleicht die Prüfsummen; eine Abweichung lässt den Build scheitern.
+- Die Alternative „Runtime-Download“ bleibt verworfen: Der Sidecar ist Teil des Images, KoSIT
+  und Mustang brauchen zur Laufzeit kein Netz.

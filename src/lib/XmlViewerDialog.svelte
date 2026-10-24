@@ -6,6 +6,7 @@
   import { xmlViewerStore, closeXmlViewer } from "$lib/xmlViewerModal.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
   import { flash } from "$lib/toast.svelte";
+  import { copyText } from "$lib/browser";
 
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;
@@ -36,7 +37,7 @@
     const payload = xmlViewerStore.payload;
     if (!payload) return;
     try {
-      await navigator.clipboard.writeText(payload.xml);
+      await copyText(payload.xml);
       flash("Roh-XML in die Zwischenablage kopiert.");
     } catch (e) {
       flash(
@@ -132,6 +133,7 @@
     box-shadow: var(--sh-xl);
     width: min(900px, 100%);
     max-height: calc(100vh - 4rem);
+    max-height: calc(100dvh - 4rem);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -198,5 +200,11 @@
     padding: 0.75rem 1.25rem;
     border-top: 1px solid var(--c-border);
     background: var(--c-surface-2);
+  }
+  /* Plan W10: auf dem Handy fast randlos */
+  @media (max-width: 600px) {
+    .backdrop {
+      padding: 0.5rem;
+    }
   }
 </style>

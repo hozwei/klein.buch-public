@@ -2,7 +2,7 @@
 //!
 //! Reiner **Lese-/Export-Pfad**: sammelt alle Daten zu einem Kontakt
 //! ([`crate::db::repo::dsgvo`]), baut den Report ([`crate::domain::dsgvo`]) und
-//! schreibt ein **Komplett-ZIP** nach `data/export/dsgvo/`:
+//! schreibt ein **Komplett-ZIP** nach `data/tmp/dsgvo/<id>/` (Download, Plan W7):
 //!
 //! - `auskunft.pdf`   — lesbare Auskunft (Typst, Art. 15)
 //! - `auskunft.json`  — maschinenlesbar inkl. SHA-256 (Art. 20)
@@ -17,12 +17,11 @@
 //! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne
 //! Tauri-/Opener-Hülle.
 
-use chrono::Local;
+use crate::app_ctx::AppCtx;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::io::Write;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::config::Paths;
 use crate::db::repo::{audit_log, dsgvo as dsgvo_repo, seller_profile};
@@ -34,7 +33,11 @@ use crate::pdf::{templates, typst_render};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsgvoExportResult {
+    /// Serverpfad (intern, nie an den Browser — Plan W7).
+    #[serde(skip_serializing)]
     pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (vom Command gesetzt).
+    pub download: Option<crate::downloads::DownloadTicket>,
     pub file_name: String,
     pub invoice_count: usize,
     pub quote_count: usize,
@@ -77,6 +80,30 @@ pub async fn export_core(
     generated_at: &str,
     file_date: &str,
 ) -> Result<DsgvoExportResult> {
+    // Eigenes Verzeichnis unter <data>/tmp (beim Start geleert); bei einem
+    // Fehler wird es sofort gelöscht — keine halbe Auskunft mit Personendaten
+    // bleibt liegen (Gegenprüfung W7).
+    let out_dir = paths
+        .data_dir
+        .join("tmp")
+        .join("dsgvo")
+        .join(uuid::Uuid::new_v4().simple().to_string());
+    std::fs::create_dir_all(&out_dir)?;
+    let res = export_core_in(pool, paths, contact_id, generated_at, file_date, &out_dir).await;
+    if res.is_err() {
+        let _ = std::fs::remove_dir_all(&out_dir);
+    }
+    res
+}
+
+async fn export_core_in(
+    pool: &SqlitePool,
+    paths: &Paths,
+    contact_id: &str,
+    generated_at: &str,
+    file_date: &str,
+    out_dir: &std::path::Path,
+) -> Result<DsgvoExportResult> {
     let gathered = dsgvo_repo::gather(pool, contact_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {contact_id}")))?;
@@ -110,9 +137,6 @@ pub async fn export_core(
     };
     let mut report = dsgvo::assemble(&raw);
 
-    // Zielpfad (Maschinen schreiben nur nach data/).
-    let out_dir = paths.data_dir.join("export").join("dsgvo");
-    std::fs::create_dir_all(&out_dir)?;
     let slug = slugify(&gathered.contact.name);
     let file_name = format!("auskunft-{slug}-{file_date}.zip");
     let zip_path = out_dir.join(&file_name);
@@ -158,7 +182,9 @@ pub async fn export_core(
     } else {
         None
     };
-    let pdf_bytes = typst_render::render_pdf(&source, &data_json, branding_opt)?;
+    let pdf_bytes = typst_render::plain_job(&source, &data_json, branding_opt)
+        .compile_async()
+        .await?;
     zw.start_file("auskunft.pdf", opts)?;
     zw.write_all(&pdf_bytes)?;
 
@@ -197,6 +223,7 @@ pub async fn export_core(
 
     Ok(DsgvoExportResult {
         zip_path: zip_path.to_string_lossy().to_string(),
+        download: None,
         file_name,
         invoice_count: report.invoices.len(),
         quote_count: report.quotes.len(),
@@ -207,24 +234,38 @@ pub async fn export_core(
     })
 }
 
+/// Argumente von [`dsgvo_export`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsgvoExportArgs {
+    pub contact_id: String,
+}
+
 /// Erzeugt die DSGVO-Auskunft (Art. 15) zu einem Kontakt als ZIP und öffnet den
 /// Ablage-Ordner. Read-only.
-#[tauri::command]
-pub async fn dsgvo_export(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    contact_id: String,
-) -> Result<DsgvoExportResult> {
-    let paths = Paths::from_handle(&app)?;
-    let now = Local::now();
+pub async fn dsgvo_export(ctx: &Arc<AppCtx>, args: DsgvoExportArgs) -> Result<DsgvoExportResult> {
+    let DsgvoExportArgs { contact_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    let now = crate::clock::now_berlin();
     let generated_at = now.format("%Y-%m-%d %H:%M").to_string();
     let file_date = now.format("%Y-%m-%d").to_string();
 
-    let res = export_core(pool.inner(), &paths, &contact_id, &generated_at, &file_date).await?;
+    let mut res = export_core(&pool, &paths, &contact_id, &generated_at, &file_date).await?;
 
-    app.opener()
-        .reveal_item_in_dir(&res.zip_path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
+    // Plan W7: als Download ausliefern (kein Öffnen im Dateimanager).
+    let source = std::path::PathBuf::from(&res.zip_path);
+    let moved = (|| -> Result<crate::downloads::DownloadTicket> {
+        let (download_id, target) = ctx.downloads.prepare(&res.file_name)?;
+        std::fs::rename(&source, &target)?;
+        ctx.downloads
+            .register(download_id, &target, crate::downloads::DownloadKind::Export)
+    })();
+    if let Some(dir) = source.parent() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    res.download = Some(moved?);
     Ok(res)
 }
 

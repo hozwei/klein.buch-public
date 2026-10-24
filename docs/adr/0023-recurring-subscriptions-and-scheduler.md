@@ -49,3 +49,26 @@ gesperrt (Backup-Hardline), es darf also nicht vor dem Unlock geschrieben werden
 `scheduler::{tick, recurring}`, `db::repo::recurring`, Migration
 `0009_recurring`, Frontend `routes/expenses/recurring/*`; ADR 0027 (weitere
 Cron-Jobs in `run_tick`), ADR 0022 (Cash-Basis). Commit `block-10` (`a743bb25`).
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · Phase W. Die Annahme „Desktop-App ohne Server“ aus dem
+Kontext gilt nicht mehr; Unlock-Gate (Pt. 2) und Catch-up (Pt. 4) bleiben.
+
+- **Scheduler im Server, 24/7.** Der Tick läuft als Hintergrund-Task des
+  Server-Prozesses (`tokio::spawn` + Abbruch-Token), nicht mehr nur, solange die
+  Desktop-App geöffnet ist.
+- **Nach einem Neustart gesperrt.** Nach Neustart oder Update des Containers
+  bleibt die Instanz gesperrt (kein Pool, kein Scheduler), bis der Nutzer im
+  Browser entsperrt — kein Auto-Unlock, die Passphrase wird nirgends abgelegt
+  (ADR 0039, E3). Danach holt der Tick alles Fällige nach (Catch-up wie bisher).
+  „Datenbank sperren“ stoppt den Scheduler, Restore und Passphrase-Wechsel
+  pausieren ihn (Blöcke W6/W7, ADR 0035).
+- **Tages-Backup im Tick** (umgesetzt, Block W2.4): fällig, sobald das letzte
+  Backup älter als 24 h ist, nicht nur beim Entsperren; nach einem Fehlschlag
+  frühestens nach 1 h erneut.
+- **Abo-Rechnungen ohne Doppel** (umgesetzt, Block W1.4, ADR 0033): Sperre je
+  Abo-Vorlage zwischen Tick und „Jetzt ausführen“, Vorrücken per
+  Compare-and-Swap (`UPDATE … WHERE id = ? AND next_due_date = ?`).
+- **Drop-Folder-Job entfällt** (ADR 0039, E11; Amendment ADR 0037): Er verlässt
+  `run_tick` in Block W5, der Code entfällt in Block W11.

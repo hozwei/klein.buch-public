@@ -5,32 +5,66 @@
   // gem. PRD-§G2-DOC.3.5. Wird genau einmal über das Root-Layout gemountet
   // und über `aboutModalStore` (siehe aboutModal.svelte.ts) ein-/ausgeblendet.
   //
-  // Externe Links und der Lizenz-File-Pfad öffnen wir über das opener-Plugin
-  // (Standard-Browser bzw. Standard-Programm des OS). Das Modal selbst hält
-  // keine Eingaben — kein Form-Submit, kein Pflicht-State.
+  // Externe Links sind normale Links (neuer Tab). Quell-URL, Commit, Tag und
+  // der Link auf den exakten Quellstand kommen vom Server (`/api/public/info`,
+  // AGPL §13 — Forks setzen KLEIN_BUCH_SOURCE_URL); ohne bekannten Commit
+  // steht „Entwicklungs-Build, Quellstand unbekannt" (Plan W12). Lizenztexte
+  // und Hinweise liefert der Server unter `/legal/` aus.
+  // Das Modal selbst hält keine Eingaben — kein Form-Submit, kein Pflicht-State.
 
-  import { onMount } from "svelte";
-  import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { aboutModalStore, closeAboutDialog } from "$lib/aboutModal.svelte";
-  import { appInfo, thirdPartyLicensesPath } from "$lib/api";
+  import { appInfo } from "$lib/api";
+  import { publicInfo, type PublicInfo } from "$lib/transport";
   import { formatVersionDisplay } from "$lib/version";
-  import { flash } from "$lib/toast.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
+  import { DEV_SOURCE_TEXT, safeSourceLink, shortCommit, sourceLabel } from "$lib/sourceInfo";
   import type { AppInfo } from "$lib/types";
 
   let info = $state<AppInfo | null>(null);
   let infoError = $state<string | null>(null);
+  let source = $state<PublicInfo | null>(null);
+  let sourceError = $state(false);
+  // Quellangaben aus /api/public/info; scheitert die Abfrage (z. B. 429), aus
+  // app_info (gleiche Quelle im Server) — nie fälschlich „Entwicklungs-Build“.
+  const effectiveSource = $derived<PublicInfo | null>(
+    source ??
+      (info
+        ? {
+            version: info.appVersion,
+            commit: info.buildCommit,
+            tag: info.buildTag,
+            sourceUrl: info.repositoryUrl,
+            sourceLink: info.sourceLink,
+            licenseSpdx: info.licenseSpdx,
+          }
+        : null),
+  );
+  const sourceLink = $derived(safeSourceLink(effectiveSource));
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;
 
-  // App-Info beim ersten Mount einmal laden — die Werte sind Compile-Time-
-  // konstant, ein Refresh pro App-Lauf reicht.
-  onMount(async () => {
-    try {
-      info = await appInfo();
-    } catch (e) {
-      infoError = e instanceof Error ? e.message : String(e);
-    }
+  // App-Info beim ersten Öffnen einmal laden — die Werte sind Compile-Time-
+  // konstant, ein Abruf pro App-Lauf reicht. Seit Plan W5 braucht `app_info`
+  // eine Sitzung; der Dialog ist erst nach der Anmeldung erreichbar, ein
+  // Laden beim Mount (vor der Anmeldung) endete in 401.
+  let infoRequested = false;
+  $effect(() => {
+    if (!aboutModalStore.visible || infoRequested) return;
+    infoRequested = true;
+    appInfo()
+      .then((i) => {
+        info = i;
+      })
+      .catch((e) => {
+        infoError = e instanceof Error ? e.message : String(e);
+      });
+    publicInfo()
+      .then((p) => {
+        source = p;
+      })
+      .catch(() => {
+        sourceError = true;
+      });
   });
 
   // Beim Öffnen: aktuell fokussiertes Element merken, Close-Button fokussieren,
@@ -60,52 +94,27 @@
     }
   }
 
-  async function openExternal(url: string): Promise<void> {
-    try {
-      await openUrl(url);
-    } catch (e) {
-      flash(
-        `Link konnte nicht geöffnet werden: ${e instanceof Error ? e.message : String(e)}`,
-        "error",
-      );
-    }
-  }
-
-  async function openMail(): Promise<void> {
-    await openExternal("mailto:schmidm@wildbach-computerhilfe.de");
-  }
-
-  async function openLicensesFile(): Promise<void> {
-    try {
-      const path = await thirdPartyLicensesPath();
-      await openPath(path);
-    } catch (e) {
-      flash(
-        `Drittanbieter-Lizenzliste konnte nicht geöffnet werden: ${e instanceof Error ? e.message : String(e)}`,
-        "error",
-      );
-    }
-  }
-
   // Drittanbieter-Hauptliste fest verdrahtet (Spec: sichtbar im Dialog selbst,
   // kein Verstecken hinter einem zusätzlichen Klick). Reihenfolge entspricht
-  // den Gruppen in PRD §G2-DOC.3.5.
+  // den Gruppen in PRD §G2-DOC.3.5; Stand Server-Image (Plan W12). Die
+  // vollständige Liste mit Lizenztexten steht unter `/legal/`.
   type ThirdParty = { name: string; license: string; role: string };
   type ThirdPartyGroup = { label: string; items: ThirdParty[] };
   const thirdPartyGroups: ThirdPartyGroup[] = [
     {
       label: "Framework / Sprache",
       items: [
-        { name: "Tauri 2", license: "MIT / Apache-2.0", role: "Desktop-Shell" },
+        { name: "axum / tower-http / hyper", license: "MIT", role: "Web-Server" },
+        { name: "tokio", license: "MIT", role: "Asynchrone Laufzeit" },
         { name: "Rust-Toolchain", license: "MIT / Apache-2.0", role: "Backend" },
-        { name: "Svelte 5", license: "MIT", role: "Frontend" },
+        { name: "Svelte 5 / SvelteKit", license: "MIT", role: "Frontend" },
       ],
     },
     {
       label: "Persistenz + Krypto",
       items: [
         { name: "SQLite", license: "Public Domain", role: "Datenbank-Engine" },
-        { name: "SQLCipher", license: "BSD-3-Clause", role: "Verschlüsselung at Rest" },
+        { name: "SQLCipher (Zetetic)", license: "BSD-3-Clause", role: "Verschlüsselung at Rest" },
         {
           name: "OpenSSL",
           license: "Apache-2.0",
@@ -122,11 +131,13 @@
           license: "Apache-2.0",
           role: "E-Rechnung-Prüfung gegen die offizielle XRechnung-Spezifikation",
         },
+        { name: "Saxon-HE", license: "MPL-2.0", role: "XSLT/Schematron in KoSIT und Mustang" },
+        { name: "Apache PDFBox / Apache FOP", license: "Apache-2.0", role: "PDF/A-3 in Mustang" },
         { name: "Typst", license: "Apache-2.0", role: "PDF-Erzeugung" },
         {
-          name: "OpenJDK",
+          name: "Eclipse Temurin (OpenJDK)",
           license: "GPL-2.0 mit Classpath-Exception",
-          role: "jlink-JRE-Sidecar",
+          role: "Java-Laufzeit (jlink) für KoSIT und Mustang",
         },
       ],
     },
@@ -134,14 +145,22 @@
       label: "Versand + Netz",
       items: [
         { name: "lettre", license: "MIT / Apache-2.0", role: "SMTP" },
-        { name: "russh + russh-sftp", license: "Apache-2.0", role: "SFTP-Backup-Target" },
-        { name: "oauth2", license: "MIT / Apache-2.0", role: "MS-Graph-Authentifizierung" },
+        { name: "russh + russh-sftp", license: "Apache-2.0", role: "SFTP-Backup-Ziel" },
+        {
+          name: "reqwest + rustls",
+          license: "MIT / Apache-2.0",
+          role: "HTTPS-Abfrage der opt-in Versionsprüfung",
+        },
       ],
     },
     {
-      label: "OS-Integration",
+      label: "Laufzeit-Image",
       items: [
-        { name: "keyring", license: "MIT / Apache-2.0", role: "OS-Keychain für Passwörter/Tokens" },
+        {
+          name: "Debian GNU/Linux (trixie-slim)",
+          license: "je Paket, siehe /usr/share/doc/*/copyright",
+          role: "Basis des Docker-Images (u. a. tzdata, fontconfig, FreeType, DejaVu-Schriften)",
+        },
       ],
     },
     {
@@ -193,15 +212,15 @@
             84036 Landshut
           </p>
           <p class="links">
-            <button
-              type="button"
+            <a
               class="linklike"
-              onclick={() => openExternal("https://wildbach-computerhilfe.de")}
-              >wildbach-computerhilfe.de</button
+              href="https://wildbach-computerhilfe.de"
+              target="_blank"
+              rel="noopener noreferrer">wildbach-computerhilfe.de</a
             >
             <span class="sep">·</span>
-            <button type="button" class="linklike" onclick={openMail}
-              >schmidm@wildbach-computerhilfe.de</button
+            <a class="linklike" href="mailto:schmidm@wildbach-computerhilfe.de"
+              >schmidm@wildbach-computerhilfe.de</a
             >
           </p>
         </section>
@@ -221,7 +240,17 @@
               <dt>Schema-Version</dt>
               <dd>{info.schemaVersion}</dd>
               <dt>Build-Commit</dt>
-              <dd><code>{info.buildCommit}</code></dd>
+              <dd>
+                {#if info.buildCommit}
+                  <code title={info.buildCommit}>{shortCommit(info.buildCommit)}</code>
+                {:else}
+                  {DEV_SOURCE_TEXT}
+                {/if}
+              </dd>
+              {#if info.buildTag}
+                <dt>Release</dt>
+                <dd><code>{info.buildTag}</code></dd>
+              {/if}
               <dt>Identifier</dt>
               <dd><code>{info.identifier}</code></dd>
             </dl>
@@ -230,33 +259,43 @@
           {/if}
         </section>
 
-        <!-- Lizenz-Block (AGPL §13 — Source-Link Pflicht) -->
+        <!-- Lizenz-Block (AGPL §13 — Link auf den exakten Quellstand, Plan W12) -->
         <section class="block">
           <h3>Lizenz</h3>
           <p>
             Klein.Buch ist freie Software unter <strong>AGPL-3.0</strong>. Du
-            darfst die Software nutzen, weitergeben und verändern. Wenn du eine
-            veränderte Version öffentlich bereitstellst — z. B. als Webdienst —
-            musst du den Quelltext mitliefern.
+            darfst die Software nutzen, weitergeben und verändern. Wenn du
+            Klein.Buch veränderst und anderen über ein Netzwerk zur Nutzung
+            bereitstellst (z. B. als Webdienst, auch intern), musst du ihnen den
+            Quelltext deiner Fassung anbieten — die Adresse trägst du in
+            <code>KLEIN_BUCH_SOURCE_URL</code> ein.
           </p>
           <p class="links">
-            <button
-              type="button"
+            <a
               class="linklike"
-              onclick={() =>
-                openExternal(
-                  "https://github.com/hozwei/klein.buch-public/blob/main/LICENSE",
-                )}>Lizenztext (LICENSE)</button
+              href="/legal/LICENSE.txt"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-sveltekit-reload>Lizenztext (AGPL-3.0)</a
             >
             <span class="sep">·</span>
-            <button
-              type="button"
-              class="linklike"
-              onclick={() =>
-                openExternal("https://github.com/hozwei/klein.buch-public")}
-              >Quellcode (github.com/hozwei/klein.buch-public)</button
-            >
+            {#if sourceLink}
+              <a class="linklike" href={sourceLink} target="_blank" rel="noopener noreferrer"
+                >Quellcode dieser Version ({sourceLabel(effectiveSource)})</a
+              >
+            {:else if effectiveSource}
+              <span>Quellcode: {DEV_SOURCE_TEXT}</span>
+            {:else if sourceError && infoError}
+              <span class="muted">Quellangaben nicht verfügbar</span>
+            {:else}
+              <span class="muted">Quellangaben werden geladen …</span>
+            {/if}
           </p>
+          {#if effectiveSource}
+            <p class="muted source-url">
+              Quell-Repository: <code>{effectiveSource.sourceUrl.replace(/^https?:\/\//, "")}</code>
+            </p>
+          {/if}
         </section>
 
         <!-- Drittanbieter — Hauptliste sichtbar + Button zur vollen Liste -->
@@ -279,16 +318,41 @@
 
           <p class="notice">
             <strong>Hinweis:</strong>
-            <code>OpenJDK</code> wird unter GPL-2.0 mit Classpath-Exception
-            ausgeliefert — die GPL schlägt durch die Sidecar-Trennung und die
-            Classpath-Ausnahme nicht auf Klein.Buch durch. Für
-            <code>Mustang</code> und den <code>KoSIT-Validator</code> liegen
-            die Apache-NOTICE-Dateien im Sidecar-Bundle bei.
+            Lizenztexte und Hinweise (NOTICE) aller Bestandteile — Rust-Crates,
+            npm-Pakete, Java-Bibliotheken des Sidecars und Debian-Pakete des
+            Images — stehen unter <code>/legal/</code> (auch ohne Anmeldung) und
+            im Image unter <code>/usr/share/doc/klein-buch</code>. Die
+            Java-Laufzeit (Eclipse Temurin, OpenJDK) steht unter GPL-2.0 mit
+            Classpath-Exception; ihre Hinweise liegen im Image unter
+            <code>/opt/klein-buch/sidecar/jre/legal</code>. Für die unveränderten
+            Teile unter MPL-2.0 (Saxon-HE, Rhino, veraPDF), EPL-1.0
+            (logback-core), EUPL-1.2 (CEN-Schematron-Regeln zu EN 16931) und
+            GPL-3.0 mit Font-Ausnahme (Schrift GNU FreeSans in Mustang) sowie für
+            Temurin und die Debian-Pakete liegt jedem Release ein Quellarchiv bei
+            (<code>klein-buch-&lt;Version&gt;-quellen-dritter.tar.zst</code>).
           </p>
 
-          <button type="button" class="btn-secondary" onclick={openLicensesFile}>
-            Vollständige Liste der Open-Source-Bibliotheken öffnen
-          </button>
+          <!-- `/legal/` liefert der Server ohne Sitzung aus (Plan W12). -->
+          <p class="legal-links">
+            <a
+              class="btn-secondary"
+              href="/legal/third-party-licenses.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-sveltekit-reload
+            >
+              Vollständige Liste der Open-Source-Bibliotheken öffnen
+            </a>
+            <a
+              class="btn-secondary"
+              href="/legal/quellen.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-sveltekit-reload
+            >
+              Quellen Dritter
+            </a>
+          </p>
         </section>
 
         <!-- Footer-Disclaimer (Spec: identischer Wortlaut zu G3) -->
@@ -329,6 +393,7 @@
     box-shadow: var(--sh-xl);
     width: min(640px, 100%);
     max-height: calc(100vh - 4rem);
+    max-height: calc(100dvh - 4rem);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -462,6 +527,15 @@
     font-size: var(--fs-xs);
     color: var(--c-text-muted);
   }
+  .legal-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.75rem 0 0;
+  }
+  .source-url code {
+    word-break: break-all;
+  }
   .muted {
     color: var(--c-text-muted);
     margin: 0.25rem 0;
@@ -484,5 +558,11 @@
     padding: 0.75rem 1.25rem;
     border-top: 1px solid var(--c-border);
     background: var(--c-surface-2);
+  }
+  /* Plan W10: auf dem Handy fast randlos */
+  @media (max-width: 600px) {
+    .backdrop {
+      padding: 0.5rem;
+    }
   }
 </style>

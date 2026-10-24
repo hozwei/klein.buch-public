@@ -89,4 +89,15 @@
     from { transform: translateY(-8px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
   }
+  /* Plan W10: auf dem Handy unten über die ganze Breite (oben lägen die
+     Meldungen über Menüleiste und Aktionsknöpfen). */
+  @media (max-width: 600px) {
+    .toast-stack {
+      top: auto;
+      bottom: max(0.75rem, env(safe-area-inset-bottom));
+      left: 0.75rem;
+      right: 0.75rem;
+      max-width: none;
+    }
+  }
 </style>

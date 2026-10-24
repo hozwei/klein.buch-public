@@ -25,13 +25,13 @@
     <span class="s-title">Anfahrtspauschale</span>
     <span class="s-sub">Kilometersatz für Anfahrten in Angeboten und Rechnungen</span>
   </a>
-  <a href="/settings/drop-folder">
-    <span class="s-title">Rechnungs-Eingang</span>
-    <span class="s-sub">Ordner, aus dem eingehende E-Rechnungen automatisch übernommen werden</span>
-  </a>
   <a href="/settings/pdf-templates">
     <span class="s-title">Rechnungs-Layout</span>
     <span class="s-sub">Wie deine PDF-Rechnungen aussehen</span>
+  </a>
+  <a href="/settings/security">
+    <span class="s-title">Sicherheit &amp; Anmeldung</span>
+    <span class="s-sub">Zweiter Faktor, Einmal-Codes, Daten-Passwort und Versionsprüfung</span>
   </a>
   <a href="/settings/backup">
     <span class="s-title">Backups</span>
@@ -45,10 +45,6 @@
     <span class="s-title">Protokoll &amp; Datensicherheit</span>
     <span class="s-sub">Lückenlose Aufzeichnung aller Vorgänge + Archiv-Integrität prüfen</span>
   </a>
-  <a href="/settings/reset" class="danger">
-    <span class="s-title">Zurücksetzen</span>
-    <span class="s-sub">Alle Daten löschen und neu beginnen – z. B. zur Geräte-Weitergabe</span>
-  </a>
 </div>
 
 <style>
@@ -60,9 +56,6 @@
     transition: border-color 0.12s, box-shadow 0.12s;
   }
   .settings-list a:hover { border-color: var(--c-primary-300); box-shadow: var(--sh-md); }
-  .settings-list a.danger { border-color: #fecaca; }
-  .settings-list a.danger:hover { border-color: #f87171; }
-  .settings-list a.danger .s-title { color: #b91c1c; }
   .s-title { font-weight: 600; color: var(--c-text); }
   .s-sub { color: var(--c-text-muted); font-size: 0.85rem; }
 </style>

@@ -61,8 +61,6 @@ struct Env {
 
 async fn setup_env() -> Env {
     std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1");
-    // Plattform-unabhängiger Keychain-Mock (kein Secret-Service-Daemon nötig).
-    keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().join("data");
@@ -104,7 +102,7 @@ async fn setup_env() -> Env {
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de".into(),
-            phone: None,
+            phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
             logo_filename: None,
@@ -124,6 +122,9 @@ async fn setup_env() -> Env {
         backups_dir,
         inputs_dir,
         sidecar_dir: PathBuf::from("/non/existent/sidecar"),
+        resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+        web_dir: std::path::PathBuf::from("/non/existent/web"),
+        backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
     };
 
     Env {

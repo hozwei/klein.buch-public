@@ -3,85 +3,112 @@ slug: troubleshooting-sidecar
 title: Sidecar-Probleme
 category: troubleshooting
 order: 510
-keywords: [sidecar, mustang, kosit, xrechnung, fehler, start, validierung]
+keywords: [sidecar, mustang, kosit, java, xrechnung, fehler, validierung, container-log]
 ---
 
 # Sidecar-Probleme
 
-Klein.Buch startet im Hintergrund einen Hilfs-Prozess für Mustang
-(XRechnung-Erzeugung) und KoSIT (XRechnung-Prüfung). Diesen Prozess
-nennen wir Sidecar. Wenn der Sidecar nicht hochfährt, kann
-Klein.Buch keine XRechnung erzeugen oder prüfen, und das Erstellen
-oder Importieren von E-Rechnungen schlägt fehl.
+Für zwei Aufgaben nutzt Klein.Buch ein Hilfsprogramm in Java: Mustang
+erzeugt die ZUGFeRD-PDF mit eingebetteter XRechnung und holt die XML
+aus empfangenen ZUGFeRD-PDFs heraus. Der KoSIT-Validator prüft
+XRechnungen nach den amtlichen Regeln. Dieses Hilfsprogramm nennen
+wir Sidecar. Es steckt im Container von Klein.Buch, die Java-Laufzeit
+gehört zum Image. Auf dem Server musst Du kein Java installieren.
+Klein.Buch startet den Sidecar bei jedem Vorgang neu und beendet ihn
+danach wieder; höchstens zwei Java-Vorgänge laufen gleichzeitig.
 
-## Symptome
+## Woran Du das Problem erkennst
 
-1. Beim App-Start erscheint die Meldung "Sidecar-Health-Check
-   fehlgeschlagen".
-2. Beim Festschreiben einer Rechnung kommt ein Fehler "XRechnung
-   konnte nicht erzeugt werden".
-3. Beim Import einer fremden XRechnung kommt "KoSIT-Validator
-   nicht erreichbar".
+1. Beim Ausstellen einer Rechnung erscheint die Meldung "Der Prüf-
+   und Konvertierungsdienst (Java) ist nicht verfügbar. Bitte später
+   erneut versuchen." mit einer Kennung in Klammern, zum Beispiel
+   "(Ref 3f2a…)". Die Rechnung bleibt dann ein Entwurf, es ist nichts
+   kaputtgegangen. Angebote brauchen den Sidecar nicht, sie sind keine
+   E-Rechnungen.
+2. Beim Einlesen eines ZUGFeRD-PDFs über "E-Rechnung importieren"
+   kommt dieselbe Meldung.
+3. Beim Einlesen einer XRechnung-XML steht auf der Prüfseite "Die
+   formale Prüfung (KoSIT) war nicht möglich".
 
 ## Erste Schritte
 
-Beende Klein.Buch komplett (Fenster schließen, nicht nur
-minimieren) und starte die App neu. Der Sidecar fährt mit der App
-hoch und prüft seinen Health-Endpunkt; nach erfolgreichem Start
-verschwindet die Fehlermeldung.
+Versuch es nach einer Minute noch einmal. Laufen gerade andere
+Java-Vorgänge, zum Beispiel mehrere Abo-Rechnungen auf einmal, wartet
+Klein.Buch auf einen freien Platz. Bleibt die Meldung, schau ins
+Container-Log. Das ist die Text-Ausgabe, die Klein.Buch im Container
+schreibt. Du liest sie als Betreiber auf dem Server, zum Beispiel mit
+`docker compose logs klein-buch` oder in der Oberfläche Deiner
+Container-Verwaltung. Wie Du das Log liest und filterst, steht im
+Kapitel "Fehlersuche im Container".
 
-Wenn die Meldung bleibt, schau in die Log-Dateien. Den Daten-Pfad
-zeigt Klein.Buch im "Über"-Dialog (Hauptmenü → "Über"). Die
-Sidecar-Logs liegen im Unterordner `logs/sidecar/`.
+Such im Log nach der Kennung aus der Meldung. Die passende Zeile
+enthält `reference=` mit derselben Kennung; hinter "Sidecar:" steht
+in derselben Zeile der eigentliche Grund. Kurz davor stehen Zeilen wie
+"KoSIT-Validator startet" oder "Mustang-Sidecar startet" und, wenn
+der Vorgang zu Ende kam, "fertig (exit …)".
 
 ## Häufige Ursachen
 
-1. Anti-Virus-Software blockiert den Sidecar-Start. Manche
-   Schutz-Programme erkennen die im Sidecar gebündelte Java-
-   Laufzeit fälschlich als verdächtig. Lösung: In den Anti-Virus-
-   Einstellungen die Klein.Buch-Installation als Ausnahme
-   eintragen. Wenn Du im Unternehmens-Netzwerk arbeitest, frag
-   den Administrator.
-2. Datei-Berechtigungen sind falsch. Manchmal verliert die
-   Sidecar-Datei beim Verschieben von Hand ihre Ausführungs-
-   Rechte. Klein.Buch zeigt in diesem Fall den genauen Datei-Pfad.
-   Re-installiere Klein.Buch oder setze die Berechtigungen über
-   das Eigenschaften-Dialog im Windows-Explorer wieder zurück.
-3. Port-Konflikt. Der Sidecar braucht einen lokalen Port. Wenn
-   dieser von einer anderen Software belegt ist, schlägt der Start
-   fehl. Klein.Buch wählt automatisch einen freien Port und
-   protokolliert die Wahl im Log.
+1. Zu wenig Arbeitsspeicher. Jeder Java-Vorgang darf bis zu 512 MB
+   belegen. Ist das Speicherlimit des Containers (in der Compose-Datei
+   `mem_limit`) zu knapp, beendet der Container den Java-Prozess. Im
+   Log steht dann hinter "exit-code" ein Fehlercode oder ein Signal
+   wie "signal: 9". Halte Dich an die Werte
+   aus dem Compose-Beispiel. Mehr dazu im Kapitel "Speicher und
+   Ressourcen".
+2. Zeitüberschreitung. Antwortet Java nicht innerhalb von 120
+   Sekunden, bricht Klein.Buch den Vorgang ab. Im Log steht dann "hat
+   nach 120s nicht geantwortet". Meist ist der Server gerade stark
+   ausgelastet oder hat zu wenig Speicher.
+3. Kein Platz für Zwischendateien. Der Sidecar schreibt seine
+   Zwischendateien unter `/data/tmp` im Daten-Volume. Ist das Volume
+   voll oder nicht beschreibbar, scheitert der Vorgang. Prüfe freien
+   Platz und Rechte des Volumes (Kapitel "Volumes und Rechte").
+4. Zu enge Grenzen in der Compose-Datei. Setzt Du `pids_limit` oder
+   `mem_limit` deutlich enger als im Beispiel, kann Java nicht
+   starten.
+5. "Launcher nicht gefunden" im Log. Dann fehlt das Startskript des
+   Sidecars im Image. Das passiert nur bei einem veränderten oder
+   beschädigten Image. Zieh das offizielle Image mit demselben
+   Versions-Tag neu.
 
-## Wenn ein Re-Start nichts bringt
+## Container neu starten
 
-1. Schließe Klein.Buch komplett (nicht nur minimieren).
-2. Starte den Rechner neu. Das löst die meisten Port- und
-   Berechtigungs-Probleme.
-3. Starte Klein.Buch erneut. Der Sidecar fährt mit der App hoch.
+Hilft das alles nicht, starte den Container neu, zum Beispiel mit
+`docker compose restart klein-buch`. Danach ist Klein.Buch gesperrt,
+bis Du Dich im Browser wieder mit Daten-Passwort und App-Code
+anmeldest. Erst dann laufen auch fällige Hintergrund-Aufgaben wie das
+Tages-Backup weiter.
 
-Wenn auch das nichts bringt, drück die Tastenkombination
-Windows + R, tipp `appwiz.cpl` ein und kontrolliere, ob
-Klein.Buch korrekt installiert ist. Eine Reparatur-Installation
-über den Installer ist möglich.
+## Startet der Container gar nicht
 
-## Eingangs-XRechnungen ohne Validierung importieren
+Steht im Log die Zeile
+`KLEIN_BUCH_SIDECAR_MOCK ist in Release-Builds nicht erlaubt — Start abgebrochen.`,
+ist in der Compose-Datei die Variable
+`KLEIN_BUCH_SIDECAR_MOCK` gesetzt. Sie ist nur für Tests gedacht und
+täuscht eine Prüfung vor, die nicht stattfindet. Entferne die Zeile
+und starte den Container neu.
 
-Wenn der Sidecar dauerhaft nicht laufen will und Du dringend eine
-fremde XRechnung importieren musst, erlaubt Klein.Buch das auch
-ohne KoSIT-Prüfung. Klick beim Import auf "Trotzdem importieren".
-Die App liest die XML-Daten und speichert sie; die formelle
-Prüfung entfällt einmalig.
+## Eingangsrechnungen ohne Prüfung erfassen
 
-Bei Ausgangs-Rechnungen geht das nicht. Eine neue Rechnung
-erzeugen verlangt einen funktionierenden Sidecar.
+Fällt nur die KoSIT-Prüfung aus, kannst Du eine fremde XRechnung-XML
+trotzdem übernehmen. Klein.Buch zeigt den Hinweis "Die formale
+Prüfung (KoSIT) war nicht möglich" und lässt Dich die Rechnung als
+Kosten festschreiben. Ein ZUGFeRD-PDF geht ohne Sidecar nicht, weil
+erst Mustang die XML-Datei aus dem PDF holt.
+
+Bei Deinen eigenen Rechnungen gibt es diese Ausnahme nicht. Ausstellen
+verlangt einen funktionierenden Sidecar, weil jede Rechnung als
+geprüfte E-Rechnung entsteht.
 
 ## Fehler melden
 
-Wenn der Sidecar dauerhaft nicht startet, schau Dir die letzten
-Zeilen der Log-Datei an und melde das Problem im Klein.Buch-
-Repository. Hänge die Log-Auszüge an. Persönliche Daten kommen in
-den Sidecar-Logs nicht vor.
+Bleibt das Problem, melde es im Klein.Buch-Repository auf GitHub. Den
+Link zum Quellcode findest Du im "Über"-Dialog. Füge die Log-Zeilen
+rund um die Kennung bei und die Versionsnummer aus dem "Über"-Dialog.
+Lies die Zeilen vorher durch und entferne Namen oder Beträge, falls
+welche darin auftauchen.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

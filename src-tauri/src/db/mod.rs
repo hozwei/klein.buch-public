@@ -14,16 +14,12 @@ pub mod schema_version;
 pub mod triggers;
 
 use crate::backup::restore::AppliedInfo;
-use crate::{
-    config::Paths,
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
 
 /// Migrations werden zur Compile-Zeit in die Binary eingebettet.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -31,8 +27,9 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// Hält einen beim App-Start angewendeten Restore zwischen, bis der Pool
 /// (nach dem Entsperren) offen ist und der Audit-Eintrag geschrieben werden
 /// kann. Der Restore-Swap selbst passiert filesystem-only **vor** dem Öffnen
-/// des Pools (Windows-File-Lock), der zugehörige Audit-Eintrag braucht aber den
-/// geöffneten Pool — daher dieser Zwischenspeicher im Tauri-State.
+/// des Pools (eine offene Verbindung hielte die alte Datei samt WAL weiter
+/// fest), der zugehörige Audit-Eintrag braucht aber den geöffneten Pool —
+/// daher dieser Zwischenspeicher im [`crate::app_ctx::AppCtx`].
 #[derive(Default)]
 pub struct PendingRestoreAudit(pub Mutex<Option<AppliedInfo>>);
 
@@ -41,9 +38,27 @@ pub struct PendingRestoreAudit(pub Mutex<Option<AppliedInfo>>);
 /// leitet aus dieser Passphrase intern (PBKDF2-HMAC-SHA512) den Seiten-
 /// schlüssel ab; der KDF-Salt liegt im DB-Header → selbstbeschreibende,
 /// cross-OS-portable Datei (ADR 0035, Amendment 2026-05-24).
-fn sqlcipher_key_literal(passphrase: &str) -> String {
+pub(crate) fn sqlcipher_key_literal(passphrase: &str) -> String {
     format!("'{}'", passphrase.replace('\'', "''"))
 }
+
+/// Startet eine Schreib-Transaktion mit `BEGIN IMMEDIATE` (Plan W2.5).
+///
+/// Ein normales `BEGIN` (deferred) nimmt die Schreibsperre erst beim ersten
+/// Schreiben; liest die Transaktion vorher (Lesen-dann-Schreiben, z. B.
+/// Festschreiben, Zahlung, Nummernkreis) und hat inzwischen eine andere
+/// Verbindung geschrieben, scheitert das Hochstufen unter WAL sofort mit
+/// `SQLITE_BUSY` — der `busy_timeout` greift dort nicht. `IMMEDIATE` holt die
+/// Sperre am Anfang und wartet dabei bis zum `busy_timeout`.
+pub async fn begin_immediate(
+    pool: &SqlitePool,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>> {
+    Ok(pool.begin_with("BEGIN IMMEDIATE").await?)
+}
+
+/// Wartezeit auf eine belegte Datenbank, bevor `SQLITE_BUSY` gemeldet wird
+/// (Plan W2.5).
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Öffnet (oder erstellt) den SQLite-Pool für `db_file`.
 ///
@@ -57,13 +72,35 @@ fn sqlcipher_key_literal(passphrase: &str) -> String {
 /// Das `key`-Pragma muss vor jedem anderen Statement laufen; sqlx wendet die
 /// via [`SqliteConnectOptions::pragma`] gesetzten Pragmas beim Verbindungs-
 /// aufbau zuerst an.
+/// Marker eines vorgemerkten Factory Resets der Desktop-Fassung (ADR 0036);
+/// im Server verweigert er den Start (E7).
+const FACTORY_RESET_MARKER: &str = "FACTORY_RESET_PENDING.json";
+
+/// Initialisiert das von SQLCipher genutzte OpenSSL **ohne** Aufräumen per
+/// `atexit`: sqlx schließt Verbindungen in eigenen Threads, die beim
+/// Prozessende noch laufen können; das `atexit`-Aufräumen von OpenSSL gab dann
+/// „double free or corruption“ (CI-Fund W10, Testbinary nach allen grünen
+/// Tests). Muss vor dem ersten SQLCipher-Zugriff laufen; mehrfach aufrufbar.
+pub fn init_crypto() {
+    openssl_sys::init();
+}
+
 pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> {
+    init_crypto();
     let url = format!("sqlite://{}", db_file.to_string_lossy());
 
+    // Statement-Logging aus (Review W2 S0-3, Plan W5.9): sqlx führt
+    // `PRAGMA key = '<Passphrase>'` als normales Statement aus und loggt es auf
+    // DEBUG bzw. als „slow statement“ (ab 1 s, z. B. PBKDF2 beim ersten Lesen)
+    // auf WARN — mit der Passphrase im Text.
+    use sqlx::ConnectOptions as _;
     let mut opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
         .foreign_keys(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(BUSY_TIMEOUT)
+        .log_statements(log::LevelFilter::Off)
+        .log_slow_statements(log::LevelFilter::Off, std::time::Duration::from_secs(3600));
 
     if let Some(passphrase) = key {
         opts = opts.pragma("key", sqlcipher_key_literal(passphrase));
@@ -99,17 +136,21 @@ pub fn db_file_is_plaintext(path: &Path) -> bool {
 }
 
 /// Bereitet das Dateisystem vor (Verzeichnisse + vorgemerkter Restore), **ohne**
-/// den DB-Pool zu öffnen. Wird im `setup`-Closure beim App-Start aufgerufen.
+/// den DB-Pool zu öffnen. Wird beim Serverstart vor dem Port-Bind aufgerufen
+/// (`server::startup::run_checks`).
 ///
-/// Der Restore-Swap muss vor jedem Pool-Open passieren (Windows-File-Lock); der
+/// Der Restore-Swap muss vor jedem Pool-Open passieren: SQLite verträgt keinen
+/// Tausch der Datei unter einer offenen Verbindung (sie arbeitete über ihren
+/// Dateideskriptor und die WAL-/SHM-Dateien mit der alten DB weiter). Der
 /// zugehörige Audit-Eintrag wird im [`PendingRestoreAudit`]-State gepuffert und
 /// nach dem Entsperren in [`run_migrations`] geschrieben.
-pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
-    let paths = Paths::from_handle(app)?;
+pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
+    let paths = &ctx.paths;
 
+    // `archive/` und `backups/` erst NACH dem Restore-Recovery anlegen (Review
+    // W2 S0-2): ein leeres neues `archive/` neben `archive.rollback` sah für ein
+    // älteres Recovery wie „Tausch fertig“ aus.
     std::fs::create_dir_all(&paths.data_dir)?;
-    std::fs::create_dir_all(&paths.archive_dir)?;
-    std::fs::create_dir_all(&paths.backups_dir)?;
 
     // R7-INPUTS: First-Run-Copy vom gebundelten Default-Mirror in den
     // user-editierbaren `paths.inputs_dir`. Idempotent, ohne Ueberschreiben.
@@ -117,37 +158,55 @@ pub fn prepare_filesystem(app: &AppHandle) -> Result<()> {
     // PDF-Template-Loader bei jeder Production-Installation eine voll
     // bestueckte `inputs/` vorfinden — sonst crasht das AfA-Formular sofort
     // beim Mount (Bug V2026.5).
-    crate::config::ensure_inputs_seeded(app, &paths)?;
+    crate::config::ensure_inputs_seeded(paths)?;
 
-    // G1-RESET (ADR 0036): einen vorgemerkten Factory Reset JETZT anwenden — vor
-    // dem Öffnen des Pools (race-frei, kein Windows-File-Lock). Er löscht das
-    // gesamte data_dir; ein gleichzeitig vorgemerkter Restore ist damit
-    // gegenstandslos → früher Rücksprung in den leeren Onboarding-Zustand.
-    if crate::backup::factory_reset::apply_pending(&paths)? {
-        return Ok(());
+    // E7 (ADR 0036/0039, Plan W5): Factory Reset ist im Server-Betrieb
+    // abgeschaltet. Ein vorgemerkter Reset (Marker der Desktop-Fassung oder von
+    // außen angelegt) wird nie angewendet — der Start bricht ab, nichts wird
+    // gelöscht. Der Reset-Code selbst ist seit W11 entfernt.
+    let reset_marker = paths.data_dir.join(FACTORY_RESET_MARKER);
+    if reset_marker.exists() {
+        return Err(Error::Config(format!(
+            "{} gefunden — Factory Reset ist im Server-Betrieb abgeschaltet (E7). \
+             Start abgebrochen, nichts gelöscht; Datei prüfen und entfernen.",
+            reset_marker.display()
+        )));
     }
 
     // Block 4: Vorgemerkten Restore JETZT anwenden — vor dem Öffnen des Pools.
-    if let Some(info) = crate::backup::restore::apply_pending(&paths)? {
-        if let Some(holder) = app.try_state::<PendingRestoreAudit>() {
-            *holder.0.lock().expect("PendingRestoreAudit poisoned") = Some(info);
-        }
+    // Reste eines abgebrochenen Phase-A-Laufs (Staging ohne Marker und ohne
+    // Tausch-Zustand) entfernen (Gegenprüfung W7).
+    crate::backup::restore::clean_stale_staging(paths);
+    // Ein angewendeter Restore, dessen Audit noch aussteht, steht in
+    // RESTORE_APPLIED.json (übersteht Neustarts, Gegenprüfung W7).
+    let applied = match crate::backup::restore::apply_pending(paths)? {
+        Some(info) => Some(info),
+        None => crate::backup::restore::read_applied(paths),
+    };
+    if let Some(info) = applied {
+        *ctx.pending_restore
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(info);
     }
+    std::fs::create_dir_all(&paths.archive_dir)?;
+    std::fs::create_dir_all(&paths.backups_dir)?;
     Ok(())
 }
 
 /// Migrationen anwenden (forward-only) + Schema-Version verifizieren + einen
 /// ggf. gepufferten Restore-Audit-Eintrag schreiben. Setzt einen offenen Pool
 /// voraus (für die verschlüsselte DB nach erfolgreichem `PRAGMA key`).
-pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
+pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> Result<()> {
     MIGRATOR.run(pool).await?;
     schema_version::check_compatible(pool).await?;
 
-    if let Some(holder) = app.try_state::<PendingRestoreAudit>() {
+    {
+        let holder = &ctx.pending_restore;
         let info = holder
             .0
             .lock()
-            .expect("PendingRestoreAudit poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(info) = info {
             // R1-010 (v2026.5-Re-Review): Restore-Audit-Append-Fehler NICHT
@@ -160,11 +219,16 @@ pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
                 "backup.restore.applied",
                 "backup",
                 "restore",
-                Some(&format!(
-                    r#"{{"source":"{}","staged_at":"{}"}}"#,
-                    info.source.replace('"', "'"),
-                    info.staged_at.replace('"', "'")
-                )),
+                Some(
+                    &serde_json::json!({
+                        "source": info.source,
+                        "staged_at": info.staged_at,
+                        "branding_restored": info.branding_restored,
+                        "pre_restore_backup": info.pre_restore_backup,
+                        "schema": info.schema_version,
+                    })
+                    .to_string(),
+                ),
             )
             .await
             .map_err(|e| {
@@ -179,6 +243,18 @@ pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
                 ))
             })?;
             tracing::info!("Restore angewendet (Quelle: {})", info.source);
+            // Das Pre-Restore-Backup stand nur in der verworfenen DB — hier in
+            // die Historie übernehmen (Restore aus der Liste möglich).
+            crate::backup::record_existing_backup(
+                pool,
+                &ctx.paths.backups_dir,
+                &info.pre_restore_backup,
+                "pre_restore",
+            )
+            .await
+            .ok();
+            crate::backup::restore::warn_missing_templates(&ctx.paths, pool, &info.staged_at).await;
+            crate::backup::restore::clear_applied(&ctx.paths);
         }
     }
     Ok(())
@@ -188,12 +264,19 @@ pub async fn run_migrations(app: &AppHandle, pool: &SqlitePool) -> Result<()> {
 /// (Migrationen + Schema-Check + Restore-Audit). Genutzt vom Onboarding
 /// (`key = Some` → frische verschlüsselte DB) und vom Entsperren über den
 /// Klartext-Übergangspfad (`key = None`).
-pub async fn open_and_init(app: &AppHandle, key: Option<&str>) -> Result<SqlitePool> {
-    let paths = Paths::from_handle(app)?;
+pub async fn open_and_init(ctx: &crate::app_ctx::AppCtx, key: Option<&str>) -> Result<SqlitePool> {
+    let paths = &ctx.paths;
     tracing::info!("Öffne DB: {}", paths.db_file.to_string_lossy());
     let pool = open_pool(&paths.db_file, key).await?;
-    run_migrations(app, &pool).await?;
+    run_migrations(ctx, &pool).await?;
     Ok(pool)
+}
+
+/// `SQLITE_NOTADB` (26): mit falschem SQLCipher-Key scheitert schon der
+/// Verbindungsaufbau (die Pragmas beim Connect lesen die Datei), nicht erst der
+/// Probe-Read. Gilt beim Entsperren als „falsche Passphrase“.
+pub fn is_not_a_database(err: &Error) -> bool {
+    matches!(err, Error::Db(sqlx::Error::Database(db)) if db.code().as_deref() == Some("26"))
 }
 
 /// Billiger Probe-Read: schlägt fehl, wenn der SQLCipher-Key falsch ist (oder
@@ -235,14 +318,35 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
 /// neue verschlüsselte Datei anwenden → Korruption) und die Datei atomar ersetzt.
 /// Schlägt etwas vor dem Swap fehl, bleibt die Klartext-DB unverändert.
 ///
-/// Voraussetzung: **kein offener Pool** auf `db_file` (Windows-File-Lock).
+/// Voraussetzung: **kein offener Pool** auf `db_file` (eine offene Verbindung
+/// arbeitete nach dem Tausch mit der alten Datei weiter).
 /// Idempotent: ist die Datei bereits verschlüsselt (oder fehlt sie), passiert nichts.
 pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Result<()> {
     if !db_file_is_plaintext(db_file) {
         // Bereits verschlüsselt (oder nicht vorhanden) → nichts zu tun.
         return Ok(());
     }
+    reencrypt_db_file(db_file, None, passphrase).await
+}
 
+/// Verschlüsselt eine SQLCipher-DB mit neuer Passphrase (Plan W6 „Passphrase
+/// ändern“): Export per `ATTACH … KEY` + `sqlcipher_export` in eine
+/// Temp-Datei, Probe-Read mit der neuen Passphrase, dann atomarer Tausch. Kein
+/// `PRAGMA rekey` (WAL, offene Verbindungen). Voraussetzung: kein offener
+/// Pool auf `db_file`. Scheitert etwas vor dem Tausch, bleibt die Datei mit der
+/// alten Passphrase unverändert.
+pub async fn rekey_db_file(db_file: &Path, old: &str, new: &str) -> Result<()> {
+    if !db_file.exists() || db_file_is_plaintext(db_file) {
+        return Err(Error::Backup(
+            "Neu verschlüsseln nur für eine vorhandene SQLCipher-Datenbank.".into(),
+        ));
+    }
+    reencrypt_db_file(db_file, Some(old), new).await
+}
+
+/// Gemeinsamer Kern: Quelle ohne (`from_key = None`) oder mit Schlüssel öffnen,
+/// in eine mit `passphrase` verschlüsselte Kopie exportieren, prüfen, tauschen.
+async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &str) -> Result<()> {
     let tmp = with_db_suffix(db_file, ".enc-migrating");
     // Reste eines abgebrochenen früheren Laufs entfernen.
     remove_file_if_exists(&tmp)?;
@@ -258,9 +362,16 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
         // setzt SQLITE_OPEN_CREATE auf der Verbindung — und `ATTACH` erbt die
         // Open-Flags der Hauptverbindung. Ohne CREATE schlägt das Anlegen der
         // neuen verschlüsselten Attach-Datei mit SQLITE_CANTOPEN (Code 14) fehl.
-        let opts = SqliteConnectOptions::from_str(&url)?
+        use sqlx::ConnectOptions as _;
+        let mut opts = SqliteConnectOptions::from_str(&url)?
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            // `ATTACH … KEY '<Passphrase>'` darf nicht im Log landen (S0-3).
+            .log_statements(log::LevelFilter::Off)
+            .log_slow_statements(log::LevelFilter::Off, std::time::Duration::from_secs(3600));
+        if let Some(key) = from_key {
+            opts = opts.pragma("key", sqlcipher_key_literal(key));
+        }
         let src = SqlitePoolOptions::new()
             .max_connections(1)
             .connect_with(opts)
@@ -297,13 +408,18 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
     // 2. Verschlüsselte Kopie verifizieren, BEVOR die Klartext-Datei ersetzt wird.
     {
         let check = open_pool(&tmp, Some(passphrase)).await?;
-        let ok = probe_readable(&check).await;
+        // Probe-Read und Integritätsprüfung der neuen Datei (Review W6).
+        let ok = probe_readable(&check).await
+            && sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+                .fetch_one(&check)
+                .await
+                .is_ok_and(|r| r == "ok");
         check.close().await;
         if !ok {
             remove_file_if_exists(&tmp)?;
             return Err(Error::Backup(
                 "Verschlüsselte Kopie ließ sich nicht mit der Passphrase lesen — \
-                 Migration abgebrochen, Klartext-DB unverändert."
+                 abgebrochen, Datenbank unverändert."
                     .into(),
             ));
         }
@@ -320,77 +436,15 @@ pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Resul
     remove_file_if_exists(&with_db_suffix(&tmp, "-shm"))?;
     remove_file_if_exists(&with_db_suffix(db_file, "-wal"))?;
     remove_file_if_exists(&with_db_suffix(db_file, "-shm"))?;
+    // Inhalt auf die Platte, dann atomar tauschen und das Verzeichnis sichern.
+    std::fs::File::open(&tmp)?.sync_all()?;
     std::fs::rename(&tmp, db_file)?;
-    Ok(())
-}
-
-/// G1-ENC Schritt 3 — **Orchestrierung** der Bestands-Migration beim ersten
-/// Entsperren/Onboarding einer Klartext-Bestands-DB:
-///
-/// 1. **Pflicht-Pre-Migration-Backup** (verschlüsselte `.kbk`, Trigger
-///    `pre_restore` → never-prune) mit der gerade bestätigten Passphrase —
-///    schlägt es fehl, wird **nichts** verschlüsselt (DB bleibt Klartext, intakt).
-/// 2. Audit-Marker in die (noch offene) Klartext-DB schreiben — er wandert mit in
-///    den Export → lückenloser Audit-Trail.
-/// 3. Übergebenen Klartext-Pool schließen, Datei verschlüsseln + atomar swappen.
-/// 4. Pool **mit Key** neu öffnen, Schema-Check, Erfolgs-Audit.
-///
-/// Liefert den neuen, verschlüsselten Pool zurück (vom Aufrufer in den State zu
-/// hängen). Ist die DB bereits verschlüsselt, wird der übergebene Pool unverändert
-/// zurückgegeben (kein Pre-Backup, kein Swap).
-pub async fn migrate_plaintext_to_encrypted(
-    app: &AppHandle,
-    plaintext_pool: SqlitePool,
-    passphrase: &str,
-) -> Result<SqlitePool> {
-    let paths = Paths::from_handle(app)?;
-    if !db_file_is_plaintext(&paths.db_file) {
-        return Ok(plaintext_pool);
+    if let Some(dir) = db_file.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
     }
-
-    // 1. Pflicht-Pre-Migration-Backup. Bei Fehler: Pool schließen + abbrechen,
-    //    die Klartext-DB bleibt unverändert (sicher wiederholbar).
-    let pre =
-        match crate::backup::create_now(&plaintext_pool, &paths, passphrase, "pre_restore").await {
-            Ok(outcome) => outcome,
-            Err(e) => {
-                plaintext_pool.close().await;
-                return Err(e);
-            }
-        };
-
-    // 2. Audit-Marker noch in die Klartext-DB (wird mitexportiert).
-    crate::db::repo::audit_log::append(
-        &plaintext_pool,
-        "encryption.migration.started",
-        "db",
-        "at_rest",
-        Some(&format!(
-            r#"{{"pre_migration_backup":"{}"}}"#,
-            pre.file_path.replace('"', "'")
-        )),
-    )
-    .await
-    .ok();
-
-    // 3. Pool schließen (Windows-File-Lock), dann Datei verschlüsseln + swappen.
-    plaintext_pool.close().await;
-    encrypt_db_file_in_place(&paths.db_file, passphrase).await?;
-
-    // 4. Verschlüsselt neu öffnen + Schema-Check + Erfolgs-Audit.
-    let pool = open_pool(&paths.db_file, Some(passphrase)).await?;
-    run_migrations(app, &pool).await?;
-    crate::db::repo::audit_log::append(
-        &pool,
-        "encryption.migration.applied",
-        "db",
-        "at_rest",
-        Some(r#"{"kdf":"sqlcipher-pbkdf2-hmac-sha512"}"#),
-    )
-    .await
-    .ok();
-    tracing::info!("Bestands-DB nach SQLCipher migriert (G1-ENC Schritt 3).");
-    Ok(pool)
+    Ok(())
 }
 
 #[cfg(test)]

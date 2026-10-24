@@ -28,8 +28,11 @@ Daneben pflegst Du im Profil:
 
 1. Bankverbindung (IBAN, BIC, Bankname) — keine §14-Pflicht, aber
    Voraussetzung dafür, dass Kunden Dich bezahlen können.
-2. Kontaktdaten (E-Mail, optional Telefon) — keine §14-Pflicht,
-   aber Klein.Buch druckt sie auf Belege, damit Kunden Dich erreichen.
+2. Kontaktdaten (E-Mail und Telefon) — keine §14-Pflicht, aber
+   Klein.Buch druckt sie auf Belege, damit Kunden Dich erreichen.
+   Die Telefonnummer brauchst Du trotzdem: Die XRechnung, die zu
+   jeder Rechnung entsteht, verlangt sie. Ohne Telefonnummer lässt
+   sich keine Rechnung ausstellen.
 3. Optional eine USt-Identifikations-Nummer, falls Du eine hast.
    Eine USt-IdNr ist nur bei EU-Geschäften Pflicht; für rein
    inländische Kunden reicht die Steuernummer.
@@ -85,10 +88,11 @@ ist gesetzliche Pflicht laut GoBD. Nur neue Rechnungen ab dem
 
 Klein.Buch unterstützt genau ein Verkäuferprofil. Wenn Du mehrere
 Gewerbe parallel betreibst, brauchst Du dafür separate Klein.Buch-
-Installationen oder eine andere Buchhaltungs-Lösung. Das ist eine
+Instanzen (je Gewerbe ein eigener Container mit eigenem
+Daten-Volume) oder eine andere Buchhaltungs-Lösung. Das ist eine
 bewusste Entscheidung: ein Profil pro Datenbank, ein Datensatz pro
 Gewerbe.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

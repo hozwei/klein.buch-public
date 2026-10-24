@@ -33,7 +33,7 @@ pub async fn create(
     let id = Uuid::now_v7().to_string();
     let totals = compute_totals(&input.items);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO recurring_invoices (
@@ -83,7 +83,7 @@ pub async fn update(
 ) -> Result<RecurringInvoiceDetail> {
     let totals = compute_totals(&input.items);
 
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     let res = sqlx::query(
         "UPDATE recurring_invoices SET
@@ -214,9 +214,15 @@ pub async fn list_due(pool: &SqlitePool, today: &str) -> Result<Vec<RecurringInv
 
 /// Schreibt nach einer erzeugten Rechnung den Fortschritt fort:
 /// `last_executed_at`, `last_invoice_id` und den nächsten `next_due_date`.
+///
+/// Compare-and-Swap (Plan W1.4): vorgerückt wird nur, wenn `next_due_date` noch
+/// auf `expected_due_date` steht. Hat ein paralleler Lauf (Tick vs. „Jetzt
+/// erstellen“) die Periode schon vorgerückt, schlägt der Aufruf fehl statt
+/// still zu überschreiben.
 pub async fn advance(
     pool: &SqlitePool,
     id: &str,
+    expected_due_date: &str,
     last_invoice_id: &str,
     next_due_date: &str,
 ) -> Result<()> {
@@ -226,16 +232,17 @@ pub async fn advance(
             last_invoice_id = ?,
             next_due_date = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ?",
+         WHERE id = ? AND next_due_date = ?",
     )
     .bind(last_invoice_id)
     .bind(next_due_date)
     .bind(id)
+    .bind(expected_due_date)
     .execute(pool)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
-            "advance: Vorlage {id} nicht gefunden"
+            "advance: Vorlage {id} nicht gefunden oder bereits über {expected_due_date} hinaus vorgerückt"
         )));
     }
     Ok(())

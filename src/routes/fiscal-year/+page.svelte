@@ -123,7 +123,7 @@
 
   <section class="card">
     <h2>Übersicht</h2>
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>Jahr</th>
@@ -140,8 +140,8 @@
         {/if}
         {#each ov.years as y (y.fiscalYear)}
           <tr>
-            <td><strong>{y.fiscalYear}</strong></td>
-            <td>
+            <td data-label="Jahr"><strong>{y.fiscalYear}</strong></td>
+            <td data-label="Status">
               {#if y.closed}
                 <span class="badge closed">Abgeschlossen</span>
                 <span class="muted small">{fmtDateTime(y.closedAt)}</span>
@@ -149,9 +149,9 @@
                 <span class="badge open">Offen</span>
               {/if}
             </td>
-            <td class="num">{euro(y.incomeTotalCents)}</td>
-            <td class="num">{euro(y.expenseTotalCents)}</td>
-            <td class="num" class:loss={y.surplusCents < 0}>{euro(y.surplusCents)}</td>
+            <td class="num" data-label="Einnahmen">{euro(y.incomeTotalCents)}</td>
+            <td class="num" data-label="Ausgaben">{euro(y.expenseTotalCents)}</td>
+            <td class="num" class:loss={y.surplusCents < 0} data-label="Ergebnis">{euro(y.surplusCents)}</td>
             <td class="act">
               {#if y.closed}
                 <span class="muted small">fest</span>
@@ -184,7 +184,7 @@
         einem Jahresabschluss bestehen — der Zahlungseingang zählt im Jahr des
         tatsächlichen Geldeingangs.
       </p>
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Rechnung</th>
@@ -196,10 +196,10 @@
         <tbody>
           {#each ov.openReceivables as r (r.id)}
             <tr>
-              <td><a href={`/invoices/${r.id}`}>{r.invoiceNumber}</a></td>
-              <td>{date(r.invoiceDate)}</td>
-              <td>{date(r.dueDate)}</td>
-              <td class="num">{euro(r.outstandingCents)}</td>
+              <td data-label="Rechnung"><a href={`/invoices/${r.id}`}>{r.invoiceNumber}</a></td>
+              <td data-label="Datum">{date(r.invoiceDate)}</td>
+              <td data-label="Fällig">{date(r.dueDate)}</td>
+              <td class="num" data-label="Offen">{euro(r.outstandingCents)}</td>
             </tr>
           {/each}
         </tbody>

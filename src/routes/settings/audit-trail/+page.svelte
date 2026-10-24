@@ -44,6 +44,11 @@
           `${s.filesFailed} von ${s.filesChecked} Archiv-Datei(en) beschädigt!`,
           "error",
         );
+      } else if (s.filesUnreadable > 0) {
+        flash(
+          `${s.filesUnreadable} von ${s.filesChecked} Archiv-Datei(en) nicht lesbar (z. B. Dateirechte) — kein Manipulationsbefund, Prüfung aber unvollständig.`,
+          "error",
+        );
       } else {
         flash(`${s.filesChecked} Datei(en) geprüft — alle unverändert.`);
       }
@@ -110,7 +115,7 @@
     {#if history.length === 0}
       <p class="muted small">Noch keine Prüfung gelaufen.</p>
     {:else}
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -122,10 +127,10 @@
         <tbody>
           {#each history as h (h.id)}
             <tr class:bad={h.filesFailed > 0}>
-              <td>{fmtDateTime(h.startedAt)}</td>
-              <td class="num">{h.filesChecked}</td>
-              <td class="num">{h.filesPassed}</td>
-              <td class="num">{h.filesFailed}</td>
+              <td data-label="Zeitpunkt">{fmtDateTime(h.startedAt)}</td>
+              <td class="num" data-label="Geprüft">{h.filesChecked}</td>
+              <td class="num" data-label="Ok">{h.filesPassed}</td>
+              <td class="num" data-label="Fehler">{h.filesFailed}</td>
             </tr>
           {/each}
         </tbody>
@@ -139,7 +144,7 @@
     {#if entries.length === 0}
       <p class="muted small">Noch keine Einträge.</p>
     {:else}
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Zeitpunkt (UTC)</th>
@@ -150,14 +155,14 @@
         <tbody>
           {#each entries as e (e.id)}
             <tr>
-              <td class="ts">{fmtDateTime(e.timestampUtc)}</td>
-              <td>
+              <td class="ts" data-label="Zeitpunkt (UTC)">{fmtDateTime(e.timestampUtc)}</td>
+              <td class="cards-full" data-label="Aktion">
                 {actionLabel(e.action)}
                 <span class="raw">{e.action}</span>
               </td>
-              <td class="ref">
-                {#if e.entityType}{e.entityType}{/if}
-                {#if e.entityId}<span class="muted">· {e.entityId.slice(0, 8)}</span>{/if}
+              <td class="ref" data-label="Bezug">
+                <span>{#if e.entityType}{e.entityType}{/if}
+                {#if e.entityId}<span class="muted">· {e.entityId.slice(0, 8)}</span>{/if}</span>
               </td>
             </tr>
           {/each}
@@ -227,5 +232,13 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  @media (max-width: 820px) {
+    .card-hdr {
+      flex-wrap: wrap;
+    }
+    td {
+      overflow-wrap: anywhere;
+    }
   }
 </style>

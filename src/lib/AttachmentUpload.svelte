@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { attachmentsAdd, attachmentsOpen } from "$lib/api";
+  import { attachmentsAdd, saveArchiveFile, uploadFile } from "$lib/api";
   import type { AttachmentView } from "$lib/types";
   import { flash } from "$lib/toast.svelte";
   import Button from "$lib/Button.svelte";
@@ -34,13 +34,11 @@
     }
     busy = true;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
+      const { uploadId } = await uploadFile("anhang", file);
       const list = await attachmentsAdd({
         parentType,
         parentId,
-        fileBytes: bytes,
-        fileName: file.name,
+        uploadId,
         label: label.trim() || null,
       });
       file = null;
@@ -55,12 +53,8 @@
     }
   }
 
-  async function open(archiveEntryId: string) {
-    try {
-      await attachmentsOpen(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  function open(archiveEntryId: string, fileName: string) {
+    saveArchiveFile(archiveEntryId, fileName);
   }
 </script>
 
@@ -73,7 +67,7 @@
         <li>
           <span class="fname">{a.fileName}</span>
           <span class="kb-subtle meta">· {fmtBytes(a.fileSizeBytes)}{a.label ? ` · ${a.label}` : ""}</span>
-          <Button variant="ghost" size="sm" onclick={() => open(a.archiveEntryId)}>Öffnen</Button>
+          <Button variant="ghost" size="sm" onclick={() => open(a.archiveEntryId, a.fileName)}>Herunterladen</Button>
         </li>
       {/each}
     </ul>

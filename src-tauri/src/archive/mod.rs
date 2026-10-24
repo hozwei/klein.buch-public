@@ -15,7 +15,9 @@ pub mod store;
 
 pub use audit::ArchiveAction;
 pub use integrity_check::{run_full_scan, verify_one, IntegrityCheckSummary};
-pub use store::{read_and_verify, store_bytes, ArchiveKind, StoredArchive};
+pub use store::{
+    read_and_verify, store_bytes, store_bytes_new_version, ArchiveKind, StoredArchive,
+};
 
 #[cfg(test)]
 mod tests {

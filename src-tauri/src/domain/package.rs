@@ -258,23 +258,20 @@ fn skip_until_matching_end(p: &mut Parser<'_>) {
 
 /// Escaped einen Klartext-Run gegen Typst-Steuerzeichen. Kein Zeichen darf als
 /// Typst-Syntax interpretiert werden (Injection-Schutz).
+///
+/// Plan W1.10: **jedes** ASCII-Satzzeichen bekommt ein `\` — nicht nur die
+/// offensichtlichen. Sonst beginnt z. B. `//` einen Kommentar (Text danach fehlt
+/// im PDF, steht aber in BT-154), `=`/`-`/`+`/`/` am Zeilenanfang werden zu
+/// Überschrift/Liste/Aufzählung/Begriff, `~` zum geschützten Leerzeichen,
+/// `--` zum Halbgeviertstrich. Ein Typst-Escape `\<Zeichen>` steht für das
+/// Zeichen selbst; Buchstaben und Ziffern werden nie escaped (kein `\u{…}`).
 fn esc_typst(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '#' => out.push_str("\\#"),
-            '$' => out.push_str("\\$"),
-            '*' => out.push_str("\\*"),
-            '_' => out.push_str("\\_"),
-            '[' => out.push_str("\\["),
-            ']' => out.push_str("\\]"),
-            '<' => out.push_str("\\<"),
-            '>' => out.push_str("\\>"),
-            '@' => out.push_str("\\@"),
-            '`' => out.push_str("\\`"),
-            _ => out.push(c),
+        if c.is_ascii_punctuation() {
+            out.push('\\');
         }
+        out.push(c);
     }
     out
 }
@@ -468,10 +465,15 @@ mod tests {
     fn typst_injection_in_text_is_escaped() {
         // Ein Versuch, Typst-Code einzuschleusen, landet escaped — nie als Aufruf.
         let t = typ(r#"Achtung #read("/etc/passwd") und [link]"#);
-        // Der eingeschleuste Aufruf landet escaped (`\#read(`), nie als echter
-        // Typst-Funktionsaufruf; eckige Klammern ebenfalls escaped.
-        assert!(t.contains("\\#read("), "‚#read(' muss escaped sein: {t}");
+        // Der eingeschleuste Aufruf landet escaped (`\#read\(`), nie als echter
+        // Typst-Funktionsaufruf; eckige Klammern ebenfalls escaped (W1.10: jedes
+        // ASCII-Satzzeichen bekommt ein `\`).
+        assert!(t.contains("\\#read\\("), "‚#read(' muss escaped sein: {t}");
         assert!(t.contains("\\[link\\]"), "‚[link]' muss escaped sein: {t}");
+        assert!(
+            t.contains("\\\"\\/etc\\/passwd\\\""),
+            "Anführungszeichen und Schrägstriche escaped: {t}"
+        );
     }
 
     #[test]

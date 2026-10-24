@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { expensesList, recurringList } from "$lib/api";
   import type { ExpenseListItem } from "$lib/types";
@@ -30,7 +31,7 @@
     try {
       all = await expensesList({ includeCanceled: true });
       const subs = await recurringList(false);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBerlin();
       dueAbos = subs.filter((s) => s.active === 1 && s.nextDueDate <= today).length;
     } catch (e) {
       error = String(e);
@@ -137,7 +138,7 @@
   {#if items.length === 0}
     <p class="muted">Keine Kosten passen zu den Filtern.</p>
   {:else}
-    <table class="kb-table">
+    <table class="kb-table cards">
       <thead>
         <tr>
           <th>Beleg-Nr.</th>
@@ -154,20 +155,20 @@
       <tbody>
         {#each items as e (e.id)}
           <tr class={e.status === "canceled" ? "canceled" : ""}>
-            <td><a href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
-            <td>{date(e.expenseDate)}</td>
-            <td>{e.vendorNameSnapshot}</td>
-            <td class="desc">{e.description}</td>
-            <td>
+            <td data-label="Beleg-Nr."><a href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
+            <td data-label="Datum">{date(e.expenseDate)}</td>
+            <td data-label="Lieferant">{e.vendorNameSnapshot}</td>
+            <td class="desc cards-full" data-label="Beschreibung">{e.description}</td>
+            <td data-label="Kategorie">
               <span class="cat">
                 {expenseCategoryLabel(e.category)}
                 {#if e.recurringSubscriptionId}<Badge tone="info">Abo</Badge>{/if}
                 {#if e.reverseCharge13b === 1}<Badge tone="primary">§13b</Badge>{/if}
               </span>
             </td>
-            <td class="num">{euro(e.grossAmountCents)}</td>
-            <td>{e.paidDate ? date(e.paidDate) : "offen"}</td>
-            <td>
+            <td class="num" data-label="Brutto">{euro(e.grossAmountCents)}</td>
+            <td data-label="Bezahlt">{e.paidDate ? date(e.paidDate) : "offen"}</td>
+            <td data-label="Status">
               <span class="badges">
                 {#if e.status === "canceled"}
                   <Badge tone="neutral" strike>storniert</Badge>
@@ -198,6 +199,7 @@
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.desc { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   td.right { text-align: right; }
+  @media (max-width: 820px) { td.desc { max-width: none; white-space: normal; overflow-wrap: anywhere; } }
   .cat { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
   .badges { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
   tr.canceled td a { color: var(--c-text-subtle); }

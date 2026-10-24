@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -35,7 +36,7 @@
 
   // Formularfelder
   let label = $state("");
-  let acquisitionDate = $state(new Date().toISOString().slice(0, 10));
+  let acquisitionDate = $state(todayBerlin());
   let costEuros = $state<number>(0);
   let vendorContactId = $state<string>("");
   let depreciationMethod = $state<DepreciationMethod>("linear");
@@ -44,7 +45,7 @@
   let businessSharePercent = $state<number>(100);
   let notes = $state("");
 
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
 
   let costCents = $derived(Math.round(costEuros * 100));
   let isLinear = $derived(depreciationMethod === "linear");
@@ -269,6 +270,7 @@
 <style>
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .lbl-hint { font-weight: 400; color: #6b7280; font-size: 0.78rem; }

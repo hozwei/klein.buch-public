@@ -1,7 +1,372 @@
 # Changelog
 
-Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
+`JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
+
+## [2026.10.0] — Web-/Docker-Fassung, veröffentlicht 2026-10-24
+
+Erstes Release als Webapp im öffentlichen Docker-Image
+`ghcr.io/hozwei/klein-buch:2026.10.0` (Phase W, ADR 0039): ein Server
+(`klein-buch-server`) mit Bedienung im Browser, Anmeldung mit Passphrase und TOTP,
+verschlüsselte Datenbank, Backups auf mehrere externe Ziele (Verzeichnis, SFTP),
+Responsive-Oberfläche für Smartphone, Tablet und Desktop. Die Windows-Desktop-App
+(Tauri) entfällt; einen Datenumzug aus v2026.5.x gibt es nicht (E17). Image
+signiert (cosign), mit SBOM und Quellarchiv der Komponenten Dritter am Release.
+
+### Fixed
+
+- **Sicherheit (W14):** Anmeldung lässt sich nicht mehr durch fremde
+  Fehlversuche dauerhaft blockieren (Einmal-Code kommt immer durch,
+  Gerätecookie wird erneuert); langsam gesendete Anfragen belegen den Server
+  nicht mehr; die Bestätigung mit Passphrase und Code (Re-Auth) erneuert die
+  Sitzung, ein gestohlenes Sitzungs-Cookie verliert damit seine Rechte; das
+  Ändern von Bankverbindung, Zahlungskonten und §19-Status, das Anonymisieren
+  und der Geschäftsjahres-Abschluss verlangen diese Bestätigung; Vorlagennamen
+  können keine Pfade mehr sein; Fehlerantworten werden nicht mehr dauerhaft im
+  Browser zwischengespeichert; präparierte ZUGFeRD-PDFs (Dekompressionsbombe)
+  werden abgewiesen.
+- **Storno-Datum:** muss zwischen Rechnungsdatum und heute in einem offenen
+  Geschäftsjahr liegen; vorher konnte ein Storno die EÜR eines bereits
+  abgeschlossenen Jahres ändern. (W14)
+
+- **Rechnung ohne Fälligkeitsdatum:** Der echte Validator lehnt eine
+  E-Rechnung mit offenem Betrag ohne Fälligkeitsdatum ab (BR-CO-25). Das
+  Festschreiben meldet das jetzt vorab mit klarer Meldung. (W11)
+- **XRechnung von KoSIT abgelehnt (Schemafehler):** In der Notiz mit der
+  §19-Klausel stand der Code `REG` vor dem Text; das CII-Schema verlangt die
+  umgekehrte Reihenfolge. Mit dem echten Validator ließ sich deshalb keine
+  §19-Rechnung festschreiben. Jetzt Text vor Code; echte Validator-Tests
+  (`sidecar_real`) sichern das ab. (W11)
+- **Sporadischer Absturz beim Beenden:** Das von SQLCipher genutzte OpenSSL
+  räumte sich beim Prozessende per `atexit` auf, während Hintergrund-Threads
+  noch Datenbankverbindungen schlossen („double free or corruption“, in CI
+  aufgefallen). OpenSSL wird jetzt ohne dieses Aufräumen initialisiert. (W10)
+- **Zeitstempel um 1–2 Stunden zu früh:** Bei einer Prozess-Zeitzone ungleich
+  UTC (z. B. `TZ=Europe/Berlin`; vermutlich auch die Desktop-Fassung) lagen
+  alle von der Datenbank gesetzten Zeitstempel — Audit-Log, Backup- und
+  E-Mail-Protokoll, Anlage- und Änderungszeiten — um den Zeitzonen-Versatz zu
+  früh (SQLite `datetime('now','utc')`). Der Server rechnet jetzt intern immer
+  in UTC; die Datumsfilter der Protokolle gelten in Europe/Berlin. Bereits
+  gespeicherte Zeitstempel bleiben unverändert. (W9)
+- **Logo-Dateiname vom Browser:** Das Profil übernahm den Logo-Dateinamen vom
+  Browser; darüber ließen sich mit einer Sitzung beliebige Dateien lesen oder
+  löschen. Jetzt setzt nur der Logo-Upload den Namen, und nur `logo.*`/
+  `signature.*` im Branding-Ordner werden gelesen. (W7)
+- **Restore-Protokoll:** Der Audit-Eintrag zum Restore ging verloren (er stand
+  in der beim Tausch verworfenen Datenbank) bzw. hing an einem Neustart. Jetzt
+  steht „Restore angefordert“ im Sicherheits-Backup und „Restore angewendet“
+  in der wiederhergestellten Datenbank, auch nach Neustarts. (W7)
+- **Backups trugen immer die aktuelle Schema-Version** statt der der
+  gesicherten Datenbank (relevant für Backups vor einer Umstellung). (W7)
+- **SFTP-Backups** wurden direkt unter dem Endnamen geschrieben; ein Abbruch
+  hinterließ eine halbe Datei. Jetzt Temp-Datei + Umbenennen. (W7)
+- **E-Rechnung (XRechnung) wurde von KoSIT abgelehnt**, wenn keine USt-IdNr.
+  hinterlegt war: Es fehlten die Gruppe „Verkäufer-Kontakt“ (BG-6, BR-DE-2) und
+  eine Verkäufer-Kennung (BR-CO-26). Jetzt enthält das XML BG-6 (Ansprechpartner
+  = Inhaber-Name bzw. Firmenname, Telefon, E-Mail) und ohne USt-IdNr. die
+  Steuernummer als BT-29. Ohne Telefonnummer in den Stammdaten wird nicht
+  festgeschrieben (klare Meldung statt KoSIT-Fehler). KoSIT-Ablehnungen nennen
+  die verletzten Regeln, statt nur „validator exit-code 1“. (W1)
+- **Belegdatum und Geschäftsjahr in Europe/Berlin:** Das Frontend nahm „heute“
+  in UTC (zwischen 0 und 1–2 Uhr der Vortag, in der Neujahrsnacht eine Nummer
+  aus dem Vorjahreskreis); der Server nutzte die Prozess-Zeitzone. Jetzt gilt
+  überall Europe/Berlin (`chrono-tz`, `src/lib/date.ts`). (W1)
+- **Geschäftsjahr kommt vom Server:** Rechnung, Angebot, Kosten, Kosten aus
+  E-Rechnung und Privatbewegung leiten das GJ aus dem Belegdatum ab; ein
+  abweichendes GJ vom Client wird abgelehnt. (W1)
+- **Abo-Rechnungen ohne Doppel:** Vorrücken per Compare-and-Swap plus Sperre je
+  Vorlage zwischen automatischem Lauf und „Jetzt erstellen“. (W1)
+- **Logo und Unterschrift im Backup:** Backups (Format 2) enthalten
+  `data/branding`; der Restore spielt es zurück. Backups im Format 1 lassen sich
+  weiter einspielen, das gespeicherte Logo bleibt dann unverändert (Hinweis im
+  Restore-Ergebnis). (W1)
+- **Typst-Escaping vollständig:** Jedes ASCII-Satzzeichen in Paket-Texten wird
+  maskiert; `//`, `=`, `/ …:`, `~` oder `--` verschwanden sonst im PDF oder wurden
+  umgedeutet. (W1)
+- **Sidecar-Mock nur in Debug-/Test-Builds;** ein Release-Build mit gesetztem
+  `KLEIN_BUCH_SIDECAR_MOCK` startet nicht. (W1)
+- **Integritätsprüfung** zählt den Monat in Europe/Berlin (lief am Monatsersten
+  sonst doppelt oder gar nicht). (W1)
+- **Archiv-Schreibpfad:** eindeutige Temp-Datei, Schreibschutz vor dem
+  Sichtbarwerden; ein abgebrochenes Festschreiben hinterlässt keine Datei mehr,
+  die jeden weiteren Versuch mit „existiert mit anderem Hash“ blockiert. (W2)
+- **Integritätsprüfung:** nicht lesbare Dateien (z. B. Rechte) gelten nicht mehr
+  als manipuliert, sondern bekommen einen eigenen Hinweis. (W2)
+- **Backup konsistent:** DB-Snapshot per `VACUUM INTO` über eine eigene
+  Verbindung (auch bei parallelem Schreiber ein sauberer Stand), verschlüsselt
+  wie das Original; Backups laufen nacheinander, Dateinamen mit Millisekunden
+  (zwei Backups in derselben Sekunde überschrieben sich); Off-Site-Kopien per
+  Temp-Datei + fsync + Umbenennen. (W2)
+- **Tägliches Backup auch im laufenden Betrieb** (Scheduler), nicht nur beim
+  Entsperren. (W2)
+- **Kein `SQLITE_BUSY` bei parallelen Buchungen:** Schreib-Transaktionen mit
+  `BEGIN IMMEDIATE`, `busy_timeout` 15 s. (W2)
+- **Restore:** Archivdateien sind danach wieder schreibgeschützt. (W2)
+- **Falsche Passphrase beim Entsperren** meldete bei verschlüsselter DB einen
+  Datenbankfehler statt „falsches Passwort“: SQLCipher scheitert schon beim
+  Verbindungsaufbau (`file is not a database`); das gilt jetzt als falsche
+  Passphrase. (W5)
+- **Mail-Empfänger und SMTP-Benutzer** stehen nur noch auf DEBUG im Log, nicht
+  mehr auf INFO/WARN. (W5)
+- **Restore-Tausch abbruchsicher:** eine Zustandsdatei steuert nach einem
+  Abbruch das Zurückholen der Originale; ein Fehler in jeder Stufe stellt den
+  alten Stand wieder her, nichts wird in unklaren Lagen gelöscht; solange ein
+  Restore offen ist, sind Einrichten und Entsperren gesperrt. Der Marker
+  entsteht erst nach dem Audit-Eintrag; Dateinamen mit `..` blockieren den
+  Restore nicht mehr; kopierte Dateien werden mit `fsync` geschrieben. (W2)
+- **Parallele Festschreib-Läufe** derselben Rechnung laufen nacheinander;
+  Archivpfade sind gegen gleichzeitiges Schreiben gesperrt; nicht registrierte
+  Dateien am Zielpfad werden beiseitegelegt statt gelöscht; eine Wiederholung
+  nach Abbruch legt eine neue Dateiversion an, statt die Rechnungsnummer zu
+  blockieren. (W2)
+- **Passphrase nie im Log:** Statement-Logging von sqlx für die
+  verschlüsselten Verbindungen abgeschaltet (sonst konnte `PRAGMA key` als
+  „langsames Statement“ im Log landen). (W2)
+- **Migrations-Export** blockiert keine Schreiber mehr und hinterlässt bei
+  Fehlern keine offene Transaktion. (W2)
+
+### Changed (Umbau)
+
+- **Kern-Schnitt (W4):** Die 183 Commands sind als Kerne
+  `commands::<bereich>::<name>(ctx, args)` von Tauri getrennt: gemeinsamer
+  Anwendungskontext `AppCtx` (Pfade, schließbarer DB-Pool, Sitzung,
+  Restore-Audit, Benachrichtigungen, Zugangsdaten), Args-Structs mit den
+  bisherigen camelCase-Schlüsseln, Registry aller Kerne mit Metadaten für den
+  späteren HTTP-Dispatcher; die Tauri-App nutzt bis zum Umbau generierte dünne
+  Wrapper. Pfade für den Server kommen aus `KLEIN_BUCH_DATA_DIR`,
+  `KLEIN_BUCH_INPUTS_DIR`, `KLEIN_BUCH_RESOURCE_DIR`, `KLEIN_BUCH_WEB_DIR`
+  (Pflicht); `inputs/` wird bei jedem Start ergänzt, nie überschrieben. Der
+  ungenutzte Command `invoices_archive_paths` entfällt.
+- Neue Tests: Storno über den Kern, §19-Prüfung in der Vorlagen-Vorschau,
+  UTF-8-Prüfung beim Rechnungseingang, Restore-Audit über den Kontext,
+  Registry = Frontend-Aufrufe, kein Tauri-Bezug außerhalb der Hülle.
+- **Tauri entfernt, HTTP-Server `klein-buch-server` (W5):** axum-Router, hyper
+  mit Header-Read-Timeout 10 s, einziger Einstieg (Subcommands `serve`,
+  `healthcheck`, `version`; Adresse `KLEIN_BUCH_LISTEN`, Standard
+  `0.0.0.0:8080`). Tauri samt Plugins, `build.rs`, `capabilities/` und
+  `tauri.conf.json` entfallen; die Crate ist nur noch eine Bibliothek plus Binary.
+- **`POST /api/cmd/{name}` mit verbindlicher Allowlist (W5):** 160 der 183 Kerne
+  sind erreichbar; Einrichten/Anmelden laufen über `/api/auth/*`, Upload- und
+  Download-Wege folgen in W7, Factory Reset, Drop-Folder und Microsoft 365 sind
+  im Server gesperrt, Desktop-Funktionen („Im Ordner zeigen“) entfallen. Alles
+  andere → 404, ohne Sitzung → 401, gesperrte DB → 423, zu großer Körper → 413,
+  ohne Pflicht-Header `X-KleinBuch-Request` → 403.
+- **Fehler mit Status statt String (W5):** fachliche Fehler 4xx mit Meldung,
+  Trigger-Verstöße 409 mit Text, Sidecar-Ausfall 503, interne Fehler 500 nur mit
+  Referenz (voller Text im Log).
+- **Einrichten und Anmelden (W5, vorläufig):** `GET /api/auth/status`,
+  `POST /api/auth/setup`, `POST /api/auth/login` mit Passphrase; Sitzungs-Cookie
+  `__Host-kb_session` (HttpOnly, Secure, SameSite=Strict). TOTP, Setup-Token und
+  Rate-Limit folgen in W6.
+- **Start fail-closed (W5):** Volumes `/data` und `/inputs` müssen eingebunden
+  und beschreibbar sein; Instanz-Marker `/data/.klein-buch-instance` und DB
+  müssen zusammenpassen; keine unverschlüsselte DB; Selbsttest des
+  Schreibschutzes im Archiv; Reste in `/data/tmp` werden entfernt — alles vor dem
+  Port-Bind. Ein vorgemerkter Factory Reset wird nicht angewendet, sondern
+  verweigert den Start (E7); eine Sperrdatei verhindert einen zweiten Prozess
+  auf demselben Datenverzeichnis. Beim Entsperren prüft eine Stichprobe, ob die
+  Archivpfade zum Datenverzeichnis passen, bevor Scheduler und Pool aktiv werden.
+- **Jobs und Idempotenz (W5):** Festschreiben, Storno, Versand, Backup, Restore
+  und Exporte laufen als Job (`202` + `GET /api/jobs/{id}`), ändernde Aufrufe als
+  eigener Task mit Idempotenz-Schlüssel — ein abgebrochener Request hinterlässt
+  nichts halb, die Wiederholung liefert dasselbe Ergebnis. Während eines Restores
+  sind Änderungen gesperrt und der Scheduler pausiert; danach fährt der Server
+  geordnet herunter (wartet auf laufende Tasks), der Neustart wendet ihn an.
+  Einrichten und Anmelden laufen ebenfalls abbruchsicher.
+- **Sicherheits-Header und Lastgrenzen (W5):** CSP mit Hashes der
+  Inline-Skripte (kein `unsafe-inline` für Skripte), `nosniff`,
+  `Referrer-Policy`, COOP/CORP, `Permissions-Policy`, `Cache-Control` je
+  Routenklasse; höchstens 64 Anfragen gleichzeitig, je Kostenklasse 2/2/1/1
+  Plätze, 30 Render-/Java-Aufrufe je Minute und Sitzung, 30-s-Timeout.
+- **Logging ohne Geheimnisse (W5):** `sqlx::query=off` fest im Filter,
+  Standard `info`; das Zugriffsprotokoll nennt Methode, Pfad ohne Query,
+  Status und Dauer.
+- **`/healthz` (W5):** nach außen 200/503 ohne Körper, über Loopback mit
+  `{"state":"setup|locked|unlocked"}`; `locked` gilt als gesund.
+- **Frontend über HTTP (W5):** `src/lib/transport.ts` ersetzt die
+  Tauri-Bridge (Pflicht-Header, Idempotenz-Schlüssel, Job-Abfrage, Anmeldung bei
+  401/423, Warten auf den Neustart nach dem Restore).
+- Neue Tests: Allowlist, Routen-Inventar, Statustabelle aller Fehlervarianten,
+  Header je Routenklasse, Fail-closed-Start (auch über das Binary), Abbruch
+  beim Festschreiben mit Wiederholung, Header-Timeout, parallele Vorschauen,
+  keine Geheimnisse im Log, Healthcheck-Subcommand; Vitest für den Transport.
+- **Anmeldung mit zweitem Faktor (W6):** Einrichtung mit Setup-Token aus dem
+  Container-Log, Daten-Passwort und TOTP (QR-Code, lokal erzeugt); zehn
+  Einmal-Codes für den Notfall. Anmeldung mit Passwort und App-Code (der Code
+  wird vor dem Passwort geprüft, beide Fehler antworten gleich). Ein Code gilt
+  nur einmal, auch über Neustarts. `klein-buch-server totp-reset` setzt den
+  zweiten Faktor zurück (Neueinrichtung mit Setup-Token und Passwort).
+- **Sitzungen (W6):** Cookie `__Host-kb_session` (HttpOnly, Secure,
+  SameSite=Strict), neue ID bei jeder Anmeldung, Ablauf nach 30 min ohne Nutzung
+  bzw. nach 12 h, Abmelden, „Datenbank sperren“ (schließt die Datenbank, meldet
+  alle Geräte ab, pausiert geplante Aufgaben).
+- **Re-Auth für kritische Aktionen (W6):** Restore, Backup-Ziele, Mailkonten,
+  Steuerberater-, Detail-, Migrations- und DSGVO-Export, TOTP und Einmal-Codes
+  erneuern, Passwort ändern verlangen eine Bestätigung mit Passwort und
+  App-Code (gilt 5 min); der Dialog erscheint automatisch.
+- **Daten-Passwort ändern (W6):** Die Datenbank wird mit dem neuen Passwort neu
+  verschlüsselt (Prüfung vor dem Tausch), andere Geräte werden abgemeldet,
+  danach entsteht ein Backup. Ältere Backups bleiben mit dem alten Passwort
+  einspielbar.
+- **Schutz vor Durchprobieren (W6):** Wartezeiten je Gerät bzw. IP (IPv6 je
+  /64) ab dem fünften Fehlversuch, verdoppelnd bis 1 h, keine Dauersperre;
+  ein globales Budget für Clients ohne Gerätecookie. Nach der Anmeldung
+  erscheint die Zahl der Fehlversuche seither.
+- **Betrieb hinter dem Reverse-Proxy (W6):** `KLEIN_BUCH_PUBLIC_URL` ist
+  Pflicht (falscher Host → 421, fremder Origin → 403);
+  `KLEIN_BUCH_TRUSTED_PROXIES` legt fest, von wem `X-Forwarded-*` gilt.
+  Anmelden nur über HTTPS (Proxy), direkt am Server oder mit
+  `KLEIN_BUCH_INSECURE_HTTP=1` (nur Tests). HSTS bei HTTPS.
+- Entfernt: der Übergangspfad für unverschlüsselte Bestands-Datenbanken (E17).
+- Neue Tests: Setup-Token, TOTP vor der KDF, Replay auch nach Neustart,
+  Einmal-Codes, `totp-reset`, Wartezeiten je IP/Gerät, Proxy-Header, Host/Origin,
+  HTTPS-Regel, HSTS, Re-Auth über alle 13 betroffenen Commands, Sperren,
+  Abmelden, Passwort-Wechsel mit Datenerhalt, Log ohne Geheimnisse.
+- **Downloads statt Speicherort (W7):** EÜR-PDF, ELSTER-CSV, Einzelaufstellung,
+  DATEV-Stapel, Steuerberater-Paket, Migrations-Export und DSGVO-Auskunft
+  entstehen auf dem Server und kommen als Browser-Download (einmal abrufbar,
+  nach 1 h gelöscht); kein Pfad mehr vom Browser.
+- **PDF-Vorschau im Browser (W7):** Vorlagen-, Paket- und Broschüren-Vorschau,
+  Angebots-Bundle sowie Rechnungs- und Angebots-PDFs öffnen in einem
+  Vorschau-Dialog (mit „In neuem Tab öffnen“ und „Herunterladen“).
+- **Archivdateien hash-geprüft (W7):** Jeder Abruf prüft SHA-256 und wird
+  protokolliert (`archive.read`); eine veränderte Datei wird nicht ausgeliefert.
+  Belege, Anhänge und andere fremde Dateien kommen nur als Download.
+- **Uploads (W7):** Belege, Anhänge, Verträge, Rechtsdokumente, E-Rechnungen,
+  Logo und Unterschrift werden gestreamt hochgeladen; Größe je Art (20 MiB,
+  E-Rechnung 10 MiB, Logo/Unterschrift 2 MiB), Typ am Inhalt geprüft (SVG nur
+  für Logo/Unterschrift, kein HTML), zu wenig freier Platz wird abgelehnt
+  (`KLEIN_BUCH_MIN_FREE_BYTES`).
+- Entfernt: „Im Ordner zeigen“, „Ordner öffnen“ und „Pfad kopieren“.
+- **Restore per Upload oder aus der Liste (W7):** Backup-Datei hochladen (mit
+  Fortschritt) oder ein lokales Backup auswählen; eingespielt werden Backups ab
+  v2026.5 (Schema 30). Erst wird entschlüsselt, dann das Sicherheits-Backup
+  angelegt — eine falsche Passphrase verändert nichts. Das Entpacken ist gegen
+  Zip-Bomben, fremde Pfade und Symlinks gehärtet; fehlende eigene PDF-Vorlagen
+  meldet danach die Inbox.
+- **Pflicht-Backup vor jeder Datenbank-Umstellung (W7):** Beim Entsperren einer
+  älteren Datenbank entsteht vorher ein geprüftes Backup; ohne Backup keine
+  Umstellung.
+- **Mehrere externe Backup-Ziele (W7):** Ordner unter `/backup-targets` (eigene
+  Volumes) und SFTP-Server, beliebig kombiniert; jedes Backup geht an jedes Ziel,
+  Fehler je Ziel im Protokoll und in der Inbox, Status in der Übersicht und im
+  Healthcheck. Der Cloud-Ordner-Vorschlag entfällt. Neue Variablen:
+  `KLEIN_BUCH_BACKUP_TARGETS_DIR` (Standard `/backup-targets`),
+  `KLEIN_BUCH_MAX_RESTORE_BYTES` (Standard 4 GiB), `KLEIN_BUCH_MIN_FREE_BYTES`
+  (Standard 2 GiB).
+- **Zugangsdaten in der verschlüsselten Datenbank (W8):** SMTP- und
+  SFTP-Passwörter liegen in einer eigenen Tabelle der SQLCipher-Datenbank
+  (Migration 0031, Schema 31) statt im Schlüsselbund des Betriebssystems; nie im
+  Migrations-Export, in der DSGVO-Auskunft, in Protokollen oder im Audit. Die
+  Abhängigkeiten `keyring` und `libdbus` entfallen.
+- **Passwort gilt nur für Server, Port und Benutzer (W8):** Ändert sich eins
+  davon, wird das gespeicherte Passwort gelöscht, mit Benutzer ist ein neues
+  Pflicht. Gespeicherte Postfächer und SFTP-Ziele testet „Testen“ in der Liste
+  (nur per ID); Ad-hoc-Tests brauchen das eingegebene Passwort.
+- **Verbindungstests begrenzt (W8):** nur freigegebene Ports (SMTP 25, 465, 587,
+  2525; SFTP 22, 2222; anpassbar über `KLEIN_BUCH_ALLOWED_TEST_PORTS`), höchstens
+  10 Tests je Minute, eine einheitliche Fehlermeldung. Ein SFTP-Ziel übernimmt
+  nur den Host-Fingerprint aus dem letzten Test dieses Servers.
+- **SMTP (W8):** unverschlüsselt nur ohne Benutzer und Passwort; EHLO-Name über
+  `KLEIN_BUCH_SMTP_HELO_NAME`, eigene CA über `KLEIN_BUCH_SMTP_CA_FILE` (PEM-Datei
+  im Volume). Die Microsoft-Anmeldung (Graph) ist im Server ausgeblendet;
+  Microsoft-Konten lassen sich auf SMTP umstellen.
+- **Desktop-Reste entfernt (W9):** Tauri-Pakete (`@tauri-apps/*`), Seiten
+  „Zurücksetzen“ und „Rechnungs-Eingang (Ordner)“, der Kanal
+  „System-Mitteilung“ bei den Erinnerungen; der Über-Dialog nutzt normale Links
+  und zeigt die Quell-URL der Instanz.
+- **Geschäftsjahr nur noch vom Server (W9):** Die Oberfläche schickt beim
+  Anlegen von Rechnung, Angebot, Kosten und Privatbewegung kein Geschäftsjahr
+  mehr mit; ein mitgeschickter Wert wird ignoriert.
+- **Ohne Secure Context (W9):** Zwischenablage und zufällige IDs haben einen
+  Rückfall, falls der Browser die Seite nicht als sicher einstuft (z. B. HTTP
+  mit `KLEIN_BUCH_INSECURE_HTTP=1` in Tests). Entwicklung mit `pnpm dev` über
+  einen Proxy auf den lokalen Server.
+- Backup-Protokoll: Auslöser „Täglich (automatisch)“ statt „Täglich
+  (App-Start)“ (der Tageslauf kommt seit W2 aus dem Scheduler). (W9)
+- **Docker-Image (W11):** `Dockerfile` (Node → Rust → jlink-JRE → Debian
+  trixie-slim, Basis-Images mit Digest, ohne Root, Healthcheck) und
+  `compose.example.yaml` mit gehärteten Laufzeit-Einstellungen. Der Java-Sidecar
+  liegt unter `src-tauri/sidecar/` (KoSIT-Validator 1.6.2, Mustang 2.23.0,
+  XRechnung-Konfiguration 2026-01-31, Quellen und SHA-256 in `versions.json`,
+  in CI geprüft); die Windows-Laufzeit ist entfernt.
+- **Vorlagen in `/inputs` bleiben aktuell (W11):** Ein Seed-Manifest ersetzt
+  unveränderte mitgelieferte Dateien durch neue Fassungen; vom Nutzer geänderte
+  bleiben unangetastet, die neue Fassung liegt daneben als `<name>.neu`
+  (Hinweis in der Inbox).
+- Entfernt: Factory Reset und Rechnungs-Eingangsordner samt Code (seit W5 im
+  Server gesperrt), Windows-Release-Workflow. (W11)
+- **Auf dem Smartphone bedienbar (W10):** Navigation als ausklappbares Menü,
+  Listen und Positionen als Karten, einspaltige Formulare, größere Schaltflächen
+  (mind. 44 px), Meldungen unten. PDFs öffnen auf dem Handy in der PDF-Ansicht
+  des Browsers; Belege lassen sich direkt mit der Kamera fotografieren. Geprüft
+  auf allen Seiten bei 390, 768 und 1280 px Breite.
+- **Lizenzen und Quellen unter `/legal/` (W12):** Die Lizenzseite entsteht beim
+  Image-Build aus den tatsächlich eingebauten Teilen (Rust per cargo-about,
+  mitgelieferte NOTICE-Dateien inkl. SQLCipher und OpenSSL, eingebettete
+  Schriften, Java-Sidecar mit Inventar und Hinweisen, JS-Pakete des Bundles)
+  und ist ohne Anmeldung erreichbar, ebenso `LICENSE.txt`, „Quellen Dritter“
+  und die Debian-Paketliste; dieselben Dateien liegen im Image unter
+  `/usr/share/doc/klein-buch`.
+- **Quellangabe nach AGPL §13 (W12):** Anmeldung, Einrichtung und Über-Dialog
+  zeigen Version und Commit mit Link auf genau diesen Quellstand (bei einem
+  Release auf das Release); ein Build ohne Commit heißt
+  „Entwicklungs-Build, Quellstand unbekannt“. Betreiber mit eigenen Änderungen
+  setzen `KLEIN_BUCH_SOURCE_URL`.
+- **Versionsprüfung (W12, opt-in):** Unter Einstellungen → Sicherheit &
+  Anmeldung lässt sich eine tägliche Abfrage der Releases einschalten; eine
+  neue Version erscheint als Hinweis in der Inbox. Standard aus — ohne
+  Einschalten baut Klein.Buch keine Verbindung auf.
+- **Release-Image (W12):** Signiertes Image mit SBOM, Schwachstellen-Scan und
+  Quellarchiv „Quellen Dritter“ je Release; Lieferketten-Prüfungen in CI
+  (cargo-deny, cargo-audit, pnpm audit, gitleaks), Actions per Commit-SHA.
+- Ausgeblendet: die wirkungslosen Erinnerungsregeln des entfernten
+  Rechnungs-Eingangsordners; ein falscher Code bei der Einrichtung des zweiten
+  Faktors erscheint jetzt ebenfalls als Fehlversuch im Log (fail2ban). (W13)
+- **Abhängigkeiten (W12):** russh 0.64, quick-xml 0.42, lopdf 0.46 und weitere
+  Updates wegen Sicherheitsmeldungen (u. a. rustls, tokio). Der
+  E-Rechnungs-Parser setzt Texte mit Entity-Referenzen (`&amp;`) jetzt am
+  Element-Ende zusammen und liest auch CDATA-Abschnitte. ZIP-Dateien nur noch
+  mit Deflate (Backups und Exporte von Klein.Buch nutzen nichts anderes).
+
+### Documentation
+
+- **ADR 0039 „Web-/Docker-Betrieb“:** Entscheidungen E1–E17, Bedrohungsmodell
+  für den Internetbetrieb, Standardentscheidungen und die Entscheidungen
+  während der Umsetzung; löst ADR 0002 (Tauri-Shell) und ADR 0038 (NSIS-Bundle)
+  ab. Amendments in ADR 0001, 0008, 0009, 0011, 0013, 0014, 0023, 0028, 0034,
+  0035, 0036, 0037; ADR-Index aktualisiert. (W3)
+- `docs/architecture/security.md` überarbeitet (Threat Model für den
+  Internetbetrieb, Stand der Umsetzung je Maßnahme, Doku-Drift bei Verifier und
+  SQLCipher-Migration behoben, Write-once unter Linux ehrlich beschrieben);
+  `gobd.md` zum neuen Archiv-Schreibpfad nachgezogen. (W3)
+- **Handbuch und Betriebsdoku für den Docker-Betrieb (W13):** Neue Hilfe-Kategorie
+  „Betrieb“ (Installation mit Docker Compose, Reverse-Proxy und TLS, Volumes
+  und Rechte, zweiter Faktor, Updates und Rückfall, Notfall-Wiederherstellung,
+  Speicher, Fehlersuche im Container mit fail2ban-Filter, Lizenz und
+  Quellcode); alle übrigen Artikel auf Browser und Server umgestellt
+  („Rechnungseingang per Upload“ statt Eingangsordner, Mail nur per SMTP,
+  Downloads statt Speichern-Dialog); Artikel zu Zurücksetzen, Microsoft-Anmeldung
+  und SmartScreen entfernt. `README.md` mit Schnellstart, neue `SECURITY.md`
+  (Meldeweg, Signaturprüfung mit cosign) und `CONTRIBUTING.md`; Betriebs-,
+  Architektur- und Build-Doku auf den Server-Betrieb umgestellt.
+
+### Changed
+
+- CI läuft auch auf dem Arbeitszweig `phase-w`, mit `concurrency`, nur
+  Leserechten (`contents: read`), Node 22, pnpm-Version aus `packageManager`
+  in `package.json`, festem Runner `ubuntu-24.04` und Zeitlimits. (W0)
+- `LICENSE` enthält jetzt den vollständigen Text der AGPL-3.0 (vorher nur
+  Urheberhinweis und Platzhalter); Urheberhinweis in `COPYRIGHT`, Hinweis zur
+  Java-Laufzeit der Windows-Releases v2026.5.0/v2026.5.1 in
+  `THIRD-PARTY-NOTICES.md` und `versions.json`. CI prüft die Prüfsumme von
+  `LICENSE`. (W1)
+- Migrationen `0001` und `0002` mit LF statt CRLF (sqlx prüft die Rohbytes);
+  ein Test verhindert CR in Migrationen. (W1)
+- Frontend-Tests mit vitest (`pnpm test`, läuft in CI). (W1)
+- PDF-Erzeugung, Passphrase-Ableitung und ZIP laufen außerhalb der
+  async-Runtime; gleichzeitige Renders (2), Java-Starts (2) und
+  Passphrase-Ableitungen (1) sind begrenzt. (W2)
 
 ## [2026.5.1] — Hotfix, veröffentlicht 2026-05-28
 

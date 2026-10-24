@@ -3,103 +3,128 @@ slug: troubleshooting-hash-mismatch
 title: Hash-Mismatch im Archiv
 category: troubleshooting
 order: 540
-keywords: [hash, mismatch, archiv, integrität, manipulation, prüfwert, sha-256]
+keywords: [hash, mismatch, archiv, integrität, manipulation, prüfsumme, sha-256]
 ---
 
 # Hash-Mismatch im Archiv
 
-Klein.Buch berechnet beim Ausstellen jeder Rechnung einen
-SHA-256-Prüfwert über die Archiv-Datei und speichert ihn in der
-Datenbank. Bei jedem Lese-Zugriff prüft die App, ob der aktuelle
-Prüfwert noch zum gespeicherten Wert passt. Stimmen die Werte nicht
-überein, schlägt Klein.Buch Alarm: ein Hash-Mismatch.
+Klein.Buch legt jede ausgestellte Rechnung und jeden Beleg als Datei im
+Beleg-Archiv auf dem Server ab. Beim Ablegen berechnet es eine
+Prüfsumme (SHA-256) und speichert sie in der Datenbank. Eine Prüfsumme
+ist eine Art Fingerabdruck des Datei-Inhalts: Ändert sich auch nur ein
+einziges Zeichen, ändert sich die Prüfsumme. Bei jedem Öffnen oder
+Herunterladen einer Archiv-Datei und bei der monatlichen
+Archiv-Prüfung rechnet Klein.Buch die Prüfsumme neu aus. Passt sie
+nicht mehr zum gespeicherten Wert, nennt man das einen Hash-Mismatch
+(Hash ist der Fachbegriff für die Prüfsumme, Mismatch heißt
+Nichtübereinstimmung).
+
+## Wie Du davon erfährst
+
+Findet die Archiv-Prüfung einen Schaden, erscheint unter "Hinweise" der
+dringende Eintrag "Archiv-Integrität gestört". Er nennt, wie viele
+Dateien verändert sind und wie viele fehlen. Der Knopf "Öffnen" führt zu
+"Einstellungen" und "Protokoll & Datensicherheit".
+
+Dort zeigt die Karte "Archiv-Integrität" jede bisherige Prüfung mit
+Zeitpunkt und der Zahl der geprüften, einwandfreien und fehlerhaften
+Dateien. Mit "Jetzt prüfen" startest Du die Prüfung sofort. Automatisch
+läuft sie einmal im Monat, allerdings nur, solange Klein.Buch entsperrt
+ist. Darunter steht das Audit-Protokoll mit Einträgen wie "Integrität
+gestört".
+
+Willst Du eine betroffene Datei öffnen, liefert Klein.Buch sie nicht aus,
+sondern meldet einen Fehler. Es gibt Dir also nie unbemerkt eine
+veränderte Datei heraus.
 
 ## Was das bedeutet
 
-Eine Datei im Archiv-Ordner hat sich verändert, seit sie
-ausgestellt wurde. Klein.Buch selbst tut das nicht; die App
-erlaubt sich keinen schreibenden Zugriff auf ausgestellte
-Archiv-Dateien. Die Veränderung muss von außen kommen.
+Klein.Buch unterscheidet drei Fälle.
 
-Klein.Buch unterscheidet zwei Fälle und zeigt sie in der
-Detail-Ansicht des betroffenen Belegs:
+Inhalt verändert: Die Datei ist noch da, aber ihr Inhalt passt nicht
+mehr zur Prüfsumme. Das ist der ernste Fall.
 
-**Inhalt verändert (Manipulation).** Die Datei existiert noch,
-aber ihr Inhalt passt nicht mehr zum gespeicherten Prüfwert. Das
-ist der ernste Fall.
+Datei fehlt: Die Datei ist nicht mehr im Archiv. Das deutet auf ein
+versehentliches Löschen oder Verschieben.
 
-**Datei fehlt (verwaist).** Die Datei ist gar nicht mehr im
-Archiv-Ordner. Das deutet auf versehentliches Löschen oder einen
-Synchronisations-Fehler.
+Datei nicht lesbar: Die Datei ist da, aber Klein.Buch darf sie nicht
+lesen, meist wegen falscher Dateirechte. Klein.Buch meldet das getrennt
+mit dem Hinweis "Archiv-Dateien nicht lesbar". Das ist kein Hinweis auf
+eine Manipulation, die Prüfung bleibt aber unvollständig. Der Betreiber
+korrigiert die Rechte im Daten-Ordner (siehe Kapitel "[Volumes und
+Rechte](/help/volumes-und-rechte)").
+
+Klein.Buch selbst verändert abgelegte Archiv-Dateien nie. Es fügt nur
+neue hinzu. Eine Veränderung muss also von außen kommen.
 
 ## Mögliche Ursachen
 
-1. Ein Anti-Virus-Programm hat die Datei in Quarantäne verschoben.
-2. Ein Cloud-Sync-Konflikt hat die Datei überschrieben (passiert
-   bei OneDrive-Konflikten, wenn zwei Geräte denselben Ordner
-   synchronisieren).
-3. Manueller Eingriff (Datei verschoben, in einem Editor geöffnet
-   und neu gespeichert).
-4. Ein Festplatten-Fehler hat einzelne Bytes verändert.
+1. Jemand hat auf dem Server direkt im Daten-Ordner gearbeitet und
+   Dateien im Archiv geöffnet, verschoben, gelöscht oder neu gespeichert.
+2. Ein anderes Programm auf dem Server schreibt in den Daten-Ordner,
+   zum Beispiel ein Sync- oder Kopier-Programm, das alte Stände
+   zurückschreibt.
+3. Der Daten-Ordner wurde von Hand umgezogen oder zurückkopiert, und
+   dabei ist etwas schiefgegangen.
+4. Ein Fehler des Speichers hat einzelne Bytes verändert.
 5. Ein bösartiger Eingriff (Manipulation).
+
+## Schreibschutz auf dem Server
+
+Klein.Buch setzt jede Archiv-Datei nach dem Schreiben auf "nur lesen".
+Auf einem Linux-Server schützt das aber nur vor versehentlichem
+Überschreiben. Löschen und Umbenennen bleiben für denselben Benutzer
+möglich, und ein Administrator des Servers kann ohnehin alles. Deshalb
+gibt es die Prüfsumme in der Datenbank, die monatliche Prüfung und die
+verschlüsselten Backups auf externen Zielen. Zusätzlich empfiehlt es
+sich, dass der Betreiber regelmäßige Snapshots des Speichers anlegt
+(Momentaufnahmen, aus denen sich ein früherer Stand zurückholen lässt).
 
 ## Was Du tun musst
 
-Es gibt in Klein.Buch keinen Knopf, der den Prüfwert neu berechnet
-oder den Beleg "akzeptiert" — das wäre ein GoBD-Bruch und
-absichtlich nicht eingebaut. Bei einem Hash-Mismatch ist der
-einzige saubere Weg: **das Backup wiederherstellen, das vor dem
-Mismatch erzeugt wurde.**
+Es gibt in Klein.Buch keinen Knopf, der die Prüfsumme neu berechnet oder
+den Beleg "akzeptiert". Das wäre ein Verstoß gegen die GoBD (Grundsätze
+ordnungsmäßiger Buchführung, die Regeln, nach denen das Finanzamt
+Buchführungs-Software akzeptiert) und ist absichtlich nicht eingebaut.
+Der einzige saubere Weg ist, ein Backup zurückzuspielen, das vor dem
+Schaden entstanden ist.
 
-Wichtig: Eine Wiederherstellung setzt **Datenbank und gesamtes
-Archiv** auf den Backup-Zeitpunkt zurück. Belege, die Du seitdem
-ausgestellt hast, sind danach nicht mehr in Klein.Buch — Du musst
-sie aus dem Sicherheits-Backup (das Klein.Buch vor jeder
-Wiederherstellung automatisch zieht) zurückholen oder neu
-erfassen.
+Eine Wiederherstellung setzt die Datenbank und das gesamte Archiv auf
+den Stand des Backups zurück. Belege, die Du seitdem erfasst hast, sind
+danach nicht mehr in Klein.Buch. Vor der Wiederherstellung legt
+Klein.Buch automatisch ein Sicherheits-Backup des aktuellen Stands an,
+in dem diese Belege noch stehen.
 
-Vorgehen:
+So gehst Du vor:
 
-1. **Öffne den Beleg** in der Detail-Ansicht. Klein.Buch zeigt
-   eine Warnung mit dem konkreten Datei-Pfad und ob Inhalt verändert
-   oder Datei verwaist ist.
-2. **Sichere den aktuellen Daten-Ordner** außerhalb von Klein.Buch
-   (zum Beispiel komplett kopieren), damit Du nichts unbeabsichtigt
-   verlierst.
-3. **Spiele das letzte Backup vor dem Mismatch zurück** (siehe
-   Kapitel "Backup und Wiederherstellen").
-4. **Trag die Belege seit dem Backup-Zeitpunkt erneut ein**, soweit
-   sie nicht im Sicherheits-Backup vor der Wiederherstellung
-   stehen.
-
-## Auf Windows: Schreibschutz ist nicht hart
-
-Klein.Buch markiert Archiv-Dateien beim Schreiben als nur-lesbar
-(unter Windows das Read-Only-Attribut). Das schützt vor Versehen,
-nicht vor vorsätzlichem Zugriff: ein Administrator kann das
-Attribut im Eigenschaften-Dialog des Datei-Explorers entfernen.
-Genau deshalb gibt es zusätzlich den SHA-256-Prüfwert in der
-Datenbank — wenn jemand das Attribut umgeht und die Datei ändert,
-fällt es beim nächsten Lese-Zugriff auf.
+1. Stell fest, seit wann der Schaden besteht. In der Karte
+   "Archiv-Integrität" siehst Du, bei welcher Prüfung zuerst Fehler
+   auftraten.
+2. Bitte den Betreiber, den Daten-Ordner zusätzlich von Hand an einen
+   sicheren Ort zu kopieren, damit nichts unbeabsichtigt verloren geht.
+3. Spiel das letzte Backup vor dem Schaden zurück (siehe Kapitel
+   "[Backup und Wiederherstellen](/help/backup-und-wiederherstellen)").
+4. Prüfe mit "Jetzt prüfen", ob das Archiv jetzt einwandfrei ist.
+5. Trag die Belege seit dem Backup-Zeitpunkt erneut ein. Geht es dabei um
+   festgeschriebene Rechnungen, sprich vorher mit Deiner Steuerberatung.
+   Klein.Buch ist ein Werkzeug, kein Steuerberater.
 
 ## Vorbeugen
 
-1. Anti-Virus-Software so konfigurieren, dass der Klein.Buch-
-   Daten-Ordner ausgespart bleibt.
-2. Den Klein.Buch-Daten-Ordner **nicht** mit Cloud-Diensten
-   synchronisieren. Off-Site-Sicherung läuft über die separat
-   eingerichteten Backup-Ziele.
-3. Regelmäßig die Archiv-Integritätsprüfung in "Einstellungen →
-   Protokoll & Datensicherheit" laufen lassen, damit Du Probleme
-   früh entdeckst.
+1. Im Daten-Ordner auf dem Server nichts von Hand ändern.
+2. Den Daten-Ordner nicht mit Sync-Programmen abgleichen. Die Kopie nach
+   außen läuft über die Backup-Ziele von Klein.Buch.
+3. Die Archiv-Prüfung unter "Protokoll & Datensicherheit" ab und zu von
+   Hand starten, damit Du Probleme früh entdeckst.
 
-## Bei wiederholten Mismatches
+## Bei wiederholten Fehlern
 
-Wenn das Problem mehrfach auftritt, hast Du höchstwahrscheinlich
-einen Cloud-Sync oder Anti-Virus, der sich am Archiv-Ordner
-vergreift. Such die Ursache und stell sie ab. Andernfalls
-riskierst Du eine GoBD-relevante Lücke in der Beleg-Aufzeichnung.
+Tritt das Problem mehrfach auf, greift höchstwahrscheinlich ein Programm
+oder eine Person auf dem Server regelmäßig auf den Daten-Ordner zu.
+Such die Ursache gemeinsam mit dem Betreiber und stell sie ab. Sonst
+entsteht eine Lücke in Deiner Belegaufzeichnung, die bei einer Prüfung
+durch das Finanzamt auffallen kann.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

@@ -1,0 +1,10 @@
+Komponente: ph-cii-d16b 3.1.0; ph-ubl22/23/24 9.0.3; ph-xsds-* 3.0.0
+Betrifft: com.helger.cii:ph-cii-d16b:3.1.0, com.helger.ubl:ph-ubl22:9.0.3, com.helger.ubl:ph-ubl23:9.0.3, com.helger.ubl:ph-ubl24:9.0.3, com.helger.xsd:ph-xsds-ccts-cct-schemamodule:3.0.0, com.helger.xsd:ph-xsds-xades132:3.0.0, com.helger.xsd:ph-xsds-xades141:3.0.0, com.helger.xsd:ph-xsds-xml:3.0.0, com.helger.xsd:ph-xsds-xmldsig:3.0.0, com.helger.xsd:ph-xsds-xmldsig11:3.0.0
+Quelle: https://repo1.maven.org/maven2/com/helger/cii/ph-cii-d16b/3.1.0/ph-cii-d16b-3.1.0.jar!/NOTICE (unverändert)
+(Die übrigen genannten Artefakte enthalten denselben Text.)
+========================================================================
+=============================================================================
+= NOTICE file corresponding to section 4d of the Apache License Version 2.0 =
+=============================================================================
+This product includes Open Source Software developed by
+Philip Helger - https://www.helger.com/

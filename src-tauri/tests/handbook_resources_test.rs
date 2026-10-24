@@ -28,6 +28,7 @@ const ALLOWED_CATEGORIES: &[&str] = &[
     "faq",
     "troubleshooting",
     "glossar",
+    "betrieb",
 ];
 
 fn handbook_dir() -> PathBuf {

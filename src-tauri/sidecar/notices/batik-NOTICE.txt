@@ -1,0 +1,23 @@
+Komponente: Apache Batik 1.19
+Betrifft: org.apache.xmlgraphics:batik-anim:1.19, org.apache.xmlgraphics:batik-awt-util:1.19, org.apache.xmlgraphics:batik-bridge:1.19, org.apache.xmlgraphics:batik-codec:1.19, org.apache.xmlgraphics:batik-constants:1.19, org.apache.xmlgraphics:batik-css:1.19, org.apache.xmlgraphics:batik-dom:1.19, org.apache.xmlgraphics:batik-ext:1.19, org.apache.xmlgraphics:batik-extension:1.19, org.apache.xmlgraphics:batik-gvt:1.19, org.apache.xmlgraphics:batik-i18n:1.19, org.apache.xmlgraphics:batik-parser:1.19, org.apache.xmlgraphics:batik-script:1.19, org.apache.xmlgraphics:batik-shared-resources:1.19, org.apache.xmlgraphics:batik-svg-dom:1.19, org.apache.xmlgraphics:batik-svggen:1.19, org.apache.xmlgraphics:batik-transcoder:1.19, org.apache.xmlgraphics:batik-util:1.19, org.apache.xmlgraphics:batik-xml:1.19
+Quelle: https://repo1.maven.org/maven2/org/apache/xmlgraphics/batik-anim/1.19/batik-anim-1.19.jar!/META-INF/NOTICE (unverändert)
+(Alle 19 batik-*-Artefakte enthalten denselben Text.)
+========================================================================
+Apache Batik
+Copyright 1999-2022 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This software contains code from the World Wide Web Consortium (W3C) for the 
+Document Object Model API (DOM API) and SVG Document Type Definition (DTD).
+
+This software contains code from the International Organisation for
+Standardization for the definition of character entities used in the software's
+documentation.
+
+This product includes images from the Tango Desktop Project
+(http://tango.freedesktop.org/).
+
+This product includes images from the Pasodoble Icon Theme
+(http://www.jesusda.com/projects/pasodoble).

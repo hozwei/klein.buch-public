@@ -4,17 +4,15 @@
 //! der Abschluss-Wizard-Endpoint, das Festschreibungsprotokoll und der
 //! Auto-AfA-Schalter (Manuel-Entscheidung Block 15: Default an, abschaltbar).
 
-use crate::backup::BackupSession;
-use crate::config::Paths;
+use crate::app_ctx::AppCtx;
 use crate::db::repo::{app_settings, euer as euer_repo};
 use crate::error::Result;
 use crate::euer::aggregate::aggregate;
 use crate::fiscal_year::{lock, transition};
 use chrono::Datelike;
 use serde::Serialize;
-use sqlx::SqlitePool;
 use std::collections::BTreeSet;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,10 +39,19 @@ pub struct FiscalYearOverview {
     pub open_receivables: Vec<transition::OpenReceivable>,
 }
 
-#[tauri::command]
-pub async fn fiscal_year_overview(pool: State<'_, SqlitePool>) -> Result<FiscalYearOverview> {
-    let pool = pool.inner();
-    let current = chrono::Local::now().date_naive().year() as i64;
+/// Argumente von [`fiscal_year_overview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYearOverviewArgs {}
+
+pub async fn fiscal_year_overview(
+    ctx: &Arc<AppCtx>,
+    _args: FiscalYearOverviewArgs,
+) -> Result<FiscalYearOverview> {
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let current = crate::clock::today_berlin().year() as i64;
     let auto = app_settings::get_bool(pool, "depreciation_auto_year_close", true).await?;
 
     let inputs = euer_repo::load_inputs(pool).await?;
@@ -109,31 +116,67 @@ pub async fn fiscal_year_overview(pool: State<'_, SqlitePool>) -> Result<FiscalY
     })
 }
 
-#[tauri::command]
+/// Argumente von [`fiscal_year_close`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYearCloseArgs {
+    pub year: i64,
+}
+
 pub async fn fiscal_year_close(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, BackupSession>,
-    year: i64,
+    ctx: &Arc<AppCtx>,
+    args: FiscalYearCloseArgs,
 ) -> Result<lock::FiscalYearLock> {
-    let paths = Paths::from_handle(&app)?;
-    let today = chrono::Local::now().date_naive();
-    lock::close_year(pool.inner(), &paths, session.inner(), year, today).await
+    let FiscalYearCloseArgs { year } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    let today = crate::clock::today_berlin();
+    lock::close_year(&pool, &paths, session, year, today).await
 }
 
-#[tauri::command]
+/// Argumente von [`fiscal_year_closed_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYearClosedListArgs {}
+
 pub async fn fiscal_year_closed_list(
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: FiscalYearClosedListArgs,
 ) -> Result<Vec<lock::FiscalYearLock>> {
-    lock::list_closed(pool.inner()).await
+    let pool = ctx.pool()?;
+
+    lock::list_closed(&pool).await
 }
 
-#[tauri::command]
-pub async fn fiscal_year_auto_close_get(pool: State<'_, SqlitePool>) -> Result<bool> {
-    app_settings::get_bool(pool.inner(), "depreciation_auto_year_close", true).await
+/// Argumente von [`fiscal_year_auto_close_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYearAutoCloseGetArgs {}
+
+pub async fn fiscal_year_auto_close_get(
+    ctx: &Arc<AppCtx>,
+    _args: FiscalYearAutoCloseGetArgs,
+) -> Result<bool> {
+    let pool = ctx.pool()?;
+
+    app_settings::get_bool(&pool, "depreciation_auto_year_close", true).await
 }
 
-#[tauri::command]
-pub async fn fiscal_year_auto_close_set(pool: State<'_, SqlitePool>, enabled: bool) -> Result<()> {
-    app_settings::set_bool(pool.inner(), "depreciation_auto_year_close", enabled).await
+/// Argumente von [`fiscal_year_auto_close_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiscalYearAutoCloseSetArgs {
+    pub enabled: bool,
+}
+
+pub async fn fiscal_year_auto_close_set(
+    ctx: &Arc<AppCtx>,
+    args: FiscalYearAutoCloseSetArgs,
+) -> Result<()> {
+    let FiscalYearAutoCloseSetArgs { enabled } = args;
+    let pool = ctx.pool()?;
+
+    app_settings::set_bool(&pool, "depreciation_auto_year_close", enabled).await
 }

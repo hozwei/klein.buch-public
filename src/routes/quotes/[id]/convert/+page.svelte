@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin, yearOfIsoDate, addDaysIso } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -51,7 +52,7 @@
 
   // Rechnungs-spezifische Felder (das Angebot trägt sie nicht).
   // Heute = Obergrenze für Rechnungs- und Leistungsdatum (keine Zukunft).
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayBerlin();
   let invoiceDate = $state(today);
   let deliveryDate = $state("");
   let dueDate = $state("");
@@ -79,8 +80,7 @@
   let convertible = $derived(detail?.quote.status === "accepted");
 
   let fiscalYear = $derived(() => {
-    const d = new Date(invoiceDate);
-    return Number.isNaN(d.getTime()) ? new Date().getFullYear() : d.getFullYear();
+    return yearOfIsoDate(invoiceDate);
   });
 
   // §19-Hardline: USt-Felder gesperrt, Items auf category=E / rate=0 zwingen.
@@ -144,10 +144,7 @@
   });
 
   function addDays(iso: string, days: number): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return addDaysIso(iso, days);
   }
 
   function addItem() {
@@ -338,7 +335,7 @@
           <h2>Positionen</h2>
           <button type="button" onclick={addItem} class="btn-secondary">+ Position</button>
         </header>
-        <table>
+        <table class="cards">
           <thead>
             <tr>
               <th>#</th>
@@ -359,8 +356,8 @@
               {#if isRich(it)}
                 {@const linked = !!it.sourcePackageId}
                 <tr class="pkg-row">
-                  <td>{it.position}</td>
-                  <td>
+                  <td data-label="Pos.">{it.position}</td>
+                  <td class="cards-full" data-label="Beschreibung">
                     {#if linked}
                       <span class="pkg-badge">aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</span>
                       <div class="pkg-title">{it.descriptionTitle}</div>
@@ -369,22 +366,22 @@
                     {/if}
                   </td>
                   {#if linked}
-                    <td class="right">{it.quantity}</td>
-                    <td>{it.unitCode}</td>
-                    <td class="right">{euro(it.unitPriceCents)}</td>
+                    <td class="right" data-label="Menge">{it.quantity}</td>
+                    <td data-label="Einheit">{it.unitCode}</td>
+                    <td class="right" data-label="Einzelpreis (€)">{euro(it.unitPriceCents)}</td>
                   {:else}
-                    <td><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
-                    <td><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
-                    <td>
+                    <td data-label="Menge"><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
+                    <td data-label="Einheit"><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
+                    <td data-label="Einzelpreis (€)">
                       <input type="number" step="0.01" value={it.unitPriceCents / 100}
                         oninput={(e) => { it.unitPriceCents = eurosFromInput(+(e.target as HTMLInputElement).value); }} required />
                     </td>
                   {/if}
                   {#if !isKlein}
-                    <td class="right">{it.taxRatePercent}</td>
-                    <td>{it.taxCategoryCode}</td>
+                    <td class="right" data-label="USt-Satz %">{it.taxRatePercent}</td>
+                    <td data-label="USt-Art">{it.taxCategoryCode}</td>
                   {/if}
-                  <td class="right">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
+                  <td class="right" data-label="Netto">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
                   <td>
                     <div class="pkg-actions">
                       {#if linked}
@@ -397,7 +394,7 @@
                   </td>
                 </tr>
                 <tr class="pkg-detail">
-                  <td colspan="99">
+                  <td colspan="99" class="cards-full">
                     {#if linked}
                       <div class="pkg-desc">{it.description}</div>
                     {:else}
@@ -407,11 +404,11 @@
                 </tr>
               {:else}
                 <tr>
-                  <td>{it.position}</td>
-                  <td><input type="text" bind:value={it.description} required /></td>
-                  <td><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
-                  <td><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
-                  <td>
+                  <td data-label="Pos.">{it.position}</td>
+                  <td class="cards-full" data-label="Beschreibung"><input type="text" bind:value={it.description} required /></td>
+                  <td data-label="Menge"><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
+                  <td data-label="Einheit"><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
+                  <td data-label="Einzelpreis (€)">
                     <input
                       type="number"
                       step="0.01"
@@ -421,8 +418,8 @@
                     />
                   </td>
                   {#if !isKlein}
-                    <td><input type="number" step="0.01" bind:value={it.taxRatePercent} /></td>
-                    <td>
+                    <td data-label="USt-Satz %"><input type="number" step="0.01" bind:value={it.taxRatePercent} /></td>
+                    <td data-label="USt-Art">
                       <select bind:value={it.taxCategoryCode}>
                         <option value="S">S</option>
                         <option value="Z">Z</option>
@@ -436,7 +433,7 @@
                       </select>
                     </td>
                   {/if}
-                  <td class="right">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
+                  <td class="right" data-label="Netto">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
                   <td>
                     {#if items.length > 1}
                       <button type="button" class="btn-danger" onclick={() => removeItem(i)}>×</button>
@@ -448,20 +445,20 @@
           </tbody>
           <tfoot>
             <tr>
-              <td colspan={isKlein ? 5 : 7} class="right"><strong>Netto</strong></td>
-              <td class="right"><strong>{euro(totals.net)}</strong></td>
+              <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Netto</strong></td>
+              <td class="right" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
               <td></td>
             </tr>
             {#if !isKlein}
               <tr>
-                <td colspan="7" class="right">USt</td>
-                <td class="right">{euro(totals.tax)}</td>
+                <td colspan="7" class="right sum-label">USt</td>
+                <td class="right" data-label="USt">{euro(totals.tax)}</td>
                 <td></td>
               </tr>
             {/if}
             <tr class="grand">
-              <td colspan={isKlein ? 5 : 7} class="right"><strong>Brutto</strong></td>
-              <td class="right"><strong>{euro(totals.gross)}</strong></td>
+              <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
+              <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
               <td></td>
             </tr>
           </tfoot>
@@ -527,7 +524,14 @@
   .pkg-badge { display: inline-block; font-size: 0.72rem; font-weight: 600; color: #0f5d6e; background: #e0f2f7; border: 1px solid #b6e0ea; border-radius: 999px; padding: 0.05rem 0.5rem; }
   .pkg-desc { font-size: 0.82rem; color: #4b5563; margin-top: 0.2rem; white-space: pre-line; }
   .pkg-title { font-weight: 600; margin-top: 0.25rem; }
-  .pkg-actions { display: flex; gap: 0.4rem; align-items: center; }
+  .pkg-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
   .pkg-row td { background: #f8fbfc; border-bottom: 0; }
   .pkg-detail td { background: #f8fbfc; padding-top: 0; }
+  /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im
+     data-label der Betragszelle; Paket-Kopf und -Beschreibung bilden eine Karte. */
+  @media (max-width: 820px) {
+    td.sum-label { display: none; }
+    tr.pkg-row { margin-bottom: 0; border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+    tr.pkg-detail { border-top: 0; border-radius: 0 0 var(--r-lg) var(--r-lg); }
+  }
 </style>

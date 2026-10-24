@@ -7,12 +7,24 @@
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import AboutDialog from "$lib/AboutDialog.svelte";
   import XmlViewerDialog from "$lib/XmlViewerDialog.svelte";
+  import PdfPreviewDialog from "$lib/PdfPreviewDialog.svelte";
+  import ReauthDialog from "$lib/ReauthDialog.svelte";
+  import { confirmDialog } from "$lib/confirm.svelte";
+  import { flash } from "$lib/toast.svelte";
   import { appState } from "$lib/stores.svelte";
   import { modalStack } from "$lib/modalStack.svelte";
-  import { notificationsUnreadCount, appInfo } from "$lib/api";
+  import { notificationsUnreadCount, appInfo, authLogout, authLock } from "$lib/api";
   import { openAboutDialog } from "$lib/aboutModal.svelte";
   import { formatVersionDisplay } from "$lib/version";
   let { children } = $props();
+
+  // Plan W10: Unter 900 px ist die Navigation ein Drawer (Menü-Knopf in der
+  // oberen Leiste); er schließt sich bei jedem Seitenwechsel und mit Escape.
+  let navOpen = $state(false);
+  $effect(() => {
+    $page.url.pathname;
+    navOpen = false;
+  });
 
   // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
   let unread = $state(0);
@@ -96,7 +108,38 @@
       '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
     help: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
   };
+
+  // Plan W6: Abmelden beendet nur diese Sitzung; „Datenbank sperren“ schließt
+  // die Datenbank und beendet alle Sitzungen (danach ist die Anmeldung mit
+  // Passwort + App-Code nötig). Danach lädt die Seite neu → Anmelde-Maske.
+  async function logout() {
+    try {
+      await authLogout();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+    location.reload();
+  }
+
+  async function lockDatabase() {
+    const ok = await confirmDialog({
+      title: "Datenbank sperren?",
+      body:
+        "Die Datenbank wird geschlossen und alle angemeldeten Geräte werden abgemeldet. " +
+        "Geplante Aufgaben (Abo-Rechnungen, Backups) pausieren bis zur nächsten Anmeldung.",
+      confirmLabel: "Sperren",
+    });
+    if (!ok) return;
+    try {
+      await authLock();
+      location.reload();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+  }
 
   const nav: Array<{ href: string; label: string; icon: string }> = [
     { href: "/", label: "Start", icon: "home" },
@@ -140,6 +183,10 @@
     return false;
   }
   function onWindowKeydown(ev: KeyboardEvent): void {
+    if (ev.key === "Escape" && navOpen) {
+      navOpen = false;
+      return;
+    }
     if (ev.key !== "F1") return;
     if (isEditableTarget(ev.target)) return;
     // Modifikatoren ignorieren — Ctrl+F1 / Shift+F1 sind nicht „unser" F1.
@@ -170,7 +217,39 @@
   <!-- R5-014: `inert` solange ein Modal offen ist — Tab kann nicht aus dem
        Modal in die Sidebar springen. `|| undefined` weil Svelte `inert=false`
        sonst als String-Attribut rendert, was die a11y-Semantik invertiert. -->
-  <nav class="sidebar" inert={modalStack.count > 0 || undefined}>
+  <header class="mobilebar" inert={modalStack.count > 0 || undefined}>
+    <button
+      type="button"
+      class="menu-toggle"
+      aria-label={navOpen ? "Menü schließen" : "Menü öffnen"}
+      aria-expanded={navOpen}
+      aria-controls="app-nav"
+      onclick={() => (navOpen = !navOpen)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        aria-hidden="true"
+        ><path d="M4 7h16M4 12h16M4 17h16" /></svg
+      >
+      {#if unread > 0}<span class="nav-badge menu-badge">{unread}</span>{/if}
+    </button>
+    <a class="mobile-brand" href="/">Klein.Buch</a>
+  </header>
+  {#if navOpen}
+    <!-- Schließt den Drawer per Tipp daneben (Tastatur: Escape). -->
+    <button
+      type="button"
+      class="nav-backdrop"
+      aria-label="Menü schließen"
+      tabindex="-1"
+      onclick={() => (navOpen = false)}
+    ></button>
+  {/if}
+  <nav id="app-nav" class="sidebar" class:open={navOpen} inert={modalStack.count > 0 || undefined}>
     <ul>
       {#each nav as item}
         <li class:active={isActive($page.url.pathname, item.href)}>
@@ -210,6 +289,34 @@
           <span class="nav-label">Über</span>
         </button>
       </li>
+      <li>
+        <button type="button" class="nav-button" onclick={lockDatabase}>
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true">{@html ICONS.lock}</svg>
+          <span class="nav-label">Datenbank sperren</span>
+        </button>
+      </li>
+      <li>
+        <button type="button" class="nav-button" onclick={logout}>
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true">{@html ICONS.logout}</svg>
+          <span class="nav-label">Abmelden</span>
+        </button>
+      </li>
     </ul>
     <!--
       Sidebar-Footer (G4.1-Fix): reine Versions-Anzeige, unten gepinnt
@@ -230,6 +337,7 @@
 {/if}
 
 <BackupGate />
+<ReauthDialog />
 
 <!-- Global, einmalig: app-weites Feedback (Toast) + Bestätigungs-Dialog +
      statischer „Über"-Dialog (G2-DOC.3.5). -->
@@ -237,6 +345,7 @@
 <ConfirmDialog />
 <AboutDialog />
 <XmlViewerDialog />
+<PdfPreviewDialog />
 
 <style>
   :global(body) {
@@ -366,6 +475,93 @@
   /* … außer die sticky PageBar, die soll bündig oben sitzen. */
   main > :global(.pagebar) {
     margin-top: 0;
+  }
+
+  /* --- Mobil / schmale Fenster (Plan W10) --------------------------------
+     Unter 900 px: obere Leiste mit Menü-Knopf, Navigation als Drawer von
+     links, Inhalt scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). */
+  .mobilebar {
+    display: none;
+  }
+  @media (max-width: 900px) {
+    :global(body) {
+      display: block;
+    }
+    .mobilebar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      height: var(--mobilebar-h);
+      padding: 0 0.5rem;
+      background: var(--c-primary-800);
+      color: #fff;
+    }
+    .menu-toggle {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 0;
+      border-radius: var(--r-md);
+      color: inherit;
+      cursor: pointer;
+    }
+    .menu-toggle svg {
+      width: 24px;
+      height: 24px;
+    }
+    .menu-badge {
+      position: absolute;
+      top: 4px;
+      right: 2px;
+    }
+    .mobile-brand {
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .nav-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      border: 0;
+      padding: 0;
+      background: rgba(10, 25, 32, 0.4);
+    }
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 50;
+      width: min(280px, 85vw);
+      height: 100dvh;
+      transform: translateX(-100%);
+      visibility: hidden;
+      transition:
+        transform var(--t-base) var(--ease-apple),
+        visibility 0s linear var(--t-base);
+    }
+    .sidebar.open {
+      transform: none;
+      visibility: visible;
+      box-shadow: var(--sh-xl);
+      transition: transform var(--t-base) var(--ease-apple);
+    }
+    .sidebar a,
+    .sidebar .nav-button {
+      min-height: 44px;
+    }
+    main {
+      height: auto;
+      min-height: calc(100dvh - var(--mobilebar-h));
+      overflow: visible;
+    }
   }
 
   /* --- Druck (G2-DOC.3.4) -----------------------------------------------

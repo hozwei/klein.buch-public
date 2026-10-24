@@ -1,5 +1,6 @@
 <script lang="ts">
   // Block P2b — Neues Paket anlegen (= erste Revision).
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import PageBar from "$lib/PageBar.svelte";
@@ -11,6 +12,7 @@
     packageCategoriesList,
     packagesCreate,
     packagePreview,
+    downloadUrl,
     sellerProfileGet,
   } from "$lib/api";
   import type { PackageCategory } from "$lib/types";
@@ -87,7 +89,8 @@
     }
     previewing = true;
     try {
-      await packagePreview(title.trim(), body, cents());
+      const ticket = await packagePreview(title.trim(), body, cents());
+      openPdfPreview(downloadUrl(ticket), "Paket-Vorschau", ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -178,8 +181,9 @@
   }
   .row { display: flex; gap: 1rem; }
   .row > label { flex: 1; }
+  @media (max-width: 600px) { .row { flex-direction: column; gap: 0; } }
   .hint { font-size: var(--fs-sm); color: var(--c-text-muted); margin: 0; }
-  .md-head { display: flex; align-items: center; justify-content: space-between; }
+  .md-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
   .md-head h2 { font-size: var(--fs-lg); margin: 0; }
   .md-help { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.5; }
   .md-help code {
@@ -190,6 +194,7 @@
     border-radius: var(--r-sm);
   }
   .md-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .md-grid { grid-template-columns: 1fr; } }
   .md-preview {
     border: 1px solid var(--c-border);
     border-radius: var(--r-md);
@@ -198,5 +203,5 @@
     overflow: auto;
     line-height: 1.5;
   }
-  .actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
 </style>

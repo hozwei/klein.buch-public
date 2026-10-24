@@ -3,21 +3,23 @@
 //!
 //! Orchestriert:
 //! - Mail-Account-Verwaltung ([`crate::db::repo::mail_accounts`])
-//! - Passwort-Handling über den OS-Keychain ([`crate::mail::keyring`])
+//! - Passwort-Handling über die Datenbank ([`crate::secrets`], W8)
 //! - Body-Rendering via Tera ([`crate::mail::templates`])
 //! - Versand via lettre ([`crate::mail::smtp`]), Multi-Attachment-fähig
 //! - GoBD: nach Versand `status = 'sent'` + Audit-Log-Eintrag
 //!
 //! ## Hard-Rules
 //!
-//! - **Passwort niemals** in DB/Logs/`audit_log` — nur im Keychain.
+//! - **Passwort niemals** im Konto-Datensatz, in Logs oder `audit_log` — nur in
+//!   der Tabelle `secrets` der verschlüsselten DB (Plan W8).
 //! - Versand nur für **gelockte** Rechnungen mit archiviertem ZUGFeRD-PDF.
 //! - Das ZUGFeRD-PDF wird vor dem Anhängen per SHA-256 gegen das Archiv
 //!   verifiziert ([`crate::archive::read_and_verify`]) — Tamper-Schutz.
 
+use crate::app_ctx::AppCtx;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive;
 use crate::config::Paths;
@@ -28,8 +30,9 @@ use crate::db::repo::{
 use crate::domain::kleinunternehmer;
 use crate::error::{Error, Result};
 use crate::mail::templates::RenderedMail;
-use crate::mail::{keyring, oauth_ms, smtp, templates};
-use tauri_plugin_opener::OpenerExt;
+use crate::mail::{oauth_ms, smtp, templates};
+use crate::nettest::{self, TestKind};
+use crate::secrets;
 
 // =============================================================================
 // DTOs
@@ -93,7 +96,7 @@ pub struct SendQuoteResult {
 #[serde(rename_all = "camelCase")]
 pub struct OauthStatus {
     pub account_id: String,
-    /// True, wenn ein Token-Bundle im Keychain liegt.
+    /// True, wenn ein Token-Bundle in `secrets` liegt.
     pub connected: bool,
     pub account_email: Option<String>,
     pub scopes: Option<String>,
@@ -104,27 +107,46 @@ pub struct OauthStatus {
 // Commands — Accounts
 // =============================================================================
 
-#[tauri::command]
-pub async fn mail_accounts_list(pool: State<'_, SqlitePool>) -> Result<Vec<MailAccountRow>> {
-    mail_accounts::list(pool.inner()).await
+/// Argumente von [`mail_accounts_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountsListArgs {}
+
+pub async fn mail_accounts_list(
+    ctx: &Arc<AppCtx>,
+    _args: MailAccountsListArgs,
+) -> Result<Vec<MailAccountRow>> {
+    let pool = ctx.pool()?;
+
+    mail_accounts::list(&pool).await
 }
 
-/// Legt einen Mail-Account an und speichert (falls vorhanden) die Passwort
-/// im OS-Keychain. Die Passwort verlässt diesen Command nie Richtung DB.
-#[tauri::command]
+/// Argumente von [`mail_account_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountCreateArgs {
+    pub input: mail_accounts::MailAccountInput,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Legt einen Mail-Account an und speichert (falls vorhanden) das Passwort in
+/// `secrets` (verschlüsselte DB), nie im Konto-Datensatz.
 pub async fn mail_account_create(
-    pool: State<'_, SqlitePool>,
-    input: mail_accounts::MailAccountInput,
-    password: Option<String>,
+    ctx: &Arc<AppCtx>,
+    args: MailAccountCreateArgs,
 ) -> Result<MailAccountRow> {
-    let pool = pool.inner();
+    let MailAccountCreateArgs { input, password } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    check_smtp_only(&input)?;
+    check_plaintext(&input, password.as_deref())?;
     let row = mail_accounts::create(pool, &input).await?;
 
-    if let (Some(service_id), Some(pass)) =
-        (row.keychain_service_id.as_deref(), password.as_deref())
-    {
+    if let (Some(_), Some(pass)) = (row.keychain_service_id.as_deref(), password.as_deref()) {
         if !pass.is_empty() {
-            keyring::set_password(service_id, pass)?;
+            secrets::set(pool, &secrets::smtp_key(&row.id), pass).await?;
         }
     }
 
@@ -146,25 +168,74 @@ pub async fn mail_account_create(
     Ok(row)
 }
 
-/// Aktualisiert einen Mail-Account. Ein nicht-leeres `password` überschreibt
-/// das im Keychain hinterlegte Passwort; bleibt das Feld leer, bleibt das
-/// bestehende Passwort unverändert.
-#[tauri::command]
-pub async fn mail_account_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: mail_accounts::MailAccountInput,
-    password: Option<String>,
-) -> Result<MailAccountRow> {
-    let pool = pool.inner();
-    let row = mail_accounts::update(pool, &id, &input).await?;
+/// Argumente von [`mail_account_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountUpdateArgs {
+    pub id: String,
+    pub input: mail_accounts::MailAccountInput,
+    #[serde(default)]
+    pub password: Option<String>,
+}
 
-    if let (Some(service_id), Some(pass)) =
-        (row.keychain_service_id.as_deref(), password.as_deref())
-    {
-        if !pass.is_empty() {
-            keyring::set_password(service_id, pass)?;
-        }
+/// Aktualisiert einen Mail-Account. Ein nicht-leeres `password` überschreibt
+/// das gespeicherte Passwort; bleibt das Feld leer, bleibt das bestehende
+/// Passwort unverändert, solange Server, Port und Benutzer gleich bleiben.
+pub async fn mail_account_update(
+    ctx: &Arc<AppCtx>,
+    args: MailAccountUpdateArgs,
+) -> Result<MailAccountRow> {
+    let MailAccountUpdateArgs {
+        id,
+        input,
+        password,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
+    let before = mail_accounts::get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
+    check_smtp_only(&input)?;
+    let new_password = password.as_deref().filter(|p| !p.is_empty());
+    let stored = secrets::get(pool, &secrets::smtp_key(&id)).await?;
+    check_plaintext(&input, new_password.or(stored.as_deref()))?;
+    // Plan W8: Zugangsdaten gelten nur für (Host, Port, Benutzer). Ändert sich
+    // eins davon, wird das gespeicherte Passwort gelöscht; mit Benutzer ist
+    // dann ein neues Pflicht (sonst ginge es an den neuen Host).
+    let rebound = before.smtp_host.as_deref().map(str::trim)
+        != input.smtp_host.as_deref().map(str::trim)
+        || before.smtp_port != input.smtp_port
+        || before
+            .smtp_user
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            != input
+                .smtp_user
+                .as_deref()
+                .map(str::trim)
+                .filter(|u| !u.is_empty());
+    let has_user = input
+        .smtp_user
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|u| !u.is_empty());
+    if rebound && stored.is_some() && has_user && new_password.is_none() {
+        return Err(Error::Mail(
+            "Server, Port oder Benutzer geändert — bitte das Passwort neu eingeben.".into(),
+        ));
+    }
+    let row = mail_accounts::update(pool, &id, &input).await?;
+    if rebound {
+        secrets::delete(pool, &secrets::smtp_key(&id)).await?;
+    }
+    // Umstellung eines (Desktop-)Microsoft-Kontos auf SMTP: Token verwerfen.
+    if before.auth_type != row.auth_type {
+        secrets::delete(pool, &secrets::oauth_key(&id)).await?;
+    }
+    if let (Some(_), Some(pass)) = (row.keychain_service_id.as_deref(), new_password) {
+        secrets::set(pool, &secrets::smtp_key(&row.id), pass).await?;
     }
 
     audit_log::append(
@@ -184,20 +255,26 @@ pub async fn mail_account_update(
     Ok(row)
 }
 
-/// Löscht einen Mail-Account inkl. seines Keychain-Eintrags (best-effort).
-#[tauri::command]
-pub async fn mail_account_delete(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    let pool = pool.inner();
+/// Argumente von [`mail_account_delete`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountDeleteArgs {
+    pub id: String,
+}
+
+/// Löscht einen Mail-Account samt gespeichertem Passwort bzw. Token.
+pub async fn mail_account_delete(ctx: &Arc<AppCtx>, args: MailAccountDeleteArgs) -> Result<()> {
+    let MailAccountDeleteArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
 
-    // Keychain-Einträge entfernen (SMTP-Passwort + OAuth-Token) — best-effort,
-    // ein verwaister Eintrag darf das Löschen des Accounts nicht blockieren.
-    if let Some(service_id) = account.keychain_service_id.as_deref() {
-        keyring::delete_password(service_id).ok();
-        keyring::delete_oauth_tokens(service_id).ok();
-    }
+    // Gespeicherte Zugangsdaten entfernen (SMTP-Passwort + OAuth-Token).
+    secrets::delete(pool, &secrets::smtp_key(&account.id)).await?;
+    secrets::delete(pool, &secrets::oauth_key(&account.id)).await?;
 
     mail_accounts::delete(pool, &id).await?;
 
@@ -213,49 +290,180 @@ pub async fn mail_account_delete(pool: State<'_, SqlitePool>, id: String) -> Res
     Ok(())
 }
 
+/// Argumente von [`mail_account_test_connection`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountTestConnectionArgs {
+    pub args: TestConnectionArgs,
+}
+
 /// Testet eine SMTP-Verbindung mit Ad-hoc-Daten (vor dem Speichern eines
 /// Accounts). Gibt bei Erfolg `()` zurück, sonst einen sprechenden Fehler.
-#[tauri::command]
-pub async fn mail_account_test_connection(args: TestConnectionArgs) -> Result<()> {
+pub async fn mail_account_test_connection(
+    ctx: &Arc<AppCtx>,
+    args: MailAccountTestConnectionArgs,
+) -> Result<()> {
+    let MailAccountTestConnectionArgs { args } = args;
+    // Plan W8: nie ein gespeichertes Passwort an einen frei gewählten Host —
+    // gespeicherte Konten testet `mail_account_test_saved`.
+    ctx.net_tests.check_port(TestKind::Smtp, args.smtp_port)?;
+    let has_user = args
+        .smtp_user
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty());
+    let has_password = args.password.as_deref().is_some_and(|p| !p.is_empty());
+    if has_user && !has_password {
+        return Err(Error::Domain(
+            "Bitte das Passwort eingeben (gespeicherte Postfächer über „Testen“ in der Liste)."
+                .into(),
+        ));
+    }
+    if !args.smtp_use_tls && (has_user || has_password) {
+        return Err(plaintext_refused());
+    }
+    ctx.net_tests.admit()?;
     let config = smtp::SmtpConfig {
-        host: args.smtp_host,
+        host: args.smtp_host.trim().to_string(),
         port: args.smtp_port,
         use_tls: args.smtp_use_tls,
         username: args.smtp_user,
         password: args.password,
     };
-    smtp::test_connection(&config).await
+    smtp::test_connection(&config)
+        .await
+        .map_err(|e| nettest::connect_failed(&config.host, config.port, &e))
+}
+
+/// Argumente von [`mail_account_test_saved`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailAccountTestSavedArgs {
+    pub id: String,
+}
+
+/// Testet ein gespeichertes Konto mit seinem gespeicherten Passwort (Plan W8,
+/// nur per ID; Port-Allowlist und Kontingent wie beim Ad-hoc-Test).
+pub async fn mail_account_test_saved(
+    ctx: &Arc<AppCtx>,
+    args: MailAccountTestSavedArgs,
+) -> Result<()> {
+    let MailAccountTestSavedArgs { id } = args;
+    let pool = ctx.pool()?;
+    let account = mail_accounts::get(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
+    let config = smtp_config_for(&pool, &account).await?;
+    ctx.net_tests.check_port(TestKind::Smtp, config.port)?;
+    ctx.net_tests.admit()?;
+    smtp::test_connection(&config)
+        .await
+        .map_err(|e| nettest::connect_failed(&config.host, config.port, &e))
+}
+
+/// Im Server-Betrieb nur SMTP-Postfächer (E9: MS-Graph ausgeblendet).
+fn check_smtp_only(input: &mail_accounts::MailAccountInput) -> Result<()> {
+    if input.auth_type != "smtp_password" {
+        return Err(Error::Domain(
+            "Die Microsoft-Anmeldung (Graph) ist im Server-Betrieb nicht verfügbar — bitte das \
+             Postfach per SMTP einrichten."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Klartext-SMTP nur ohne Zugangsdaten (Plan W8).
+fn plaintext_refused() -> Error {
+    Error::Mail(
+        "Unverschlüsseltes SMTP nur ohne Zugangsdaten — bitte TLS einschalten oder Benutzer \
+         und Passwort entfernen."
+            .into(),
+    )
+}
+
+fn check_plaintext(input: &mail_accounts::MailAccountInput, password: Option<&str>) -> Result<()> {
+    let has_user = input
+        .smtp_user
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty());
+    if input.auth_type == "smtp_password"
+        && !input.smtp_use_tls
+        && (has_user || password.is_some_and(|p| !p.is_empty()))
+    {
+        return Err(plaintext_refused());
+    }
+    Ok(())
+}
+
+/// SMTP-Verbindungsdaten eines gespeicherten Kontos (Passwort aus der DB).
+async fn smtp_config_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<smtp::SmtpConfig> {
+    let host = account
+        .smtp_host
+        .clone()
+        .ok_or_else(|| Error::Mail("Mail-Account ohne SMTP-Host".into()))?;
+    let port: u16 = account
+        .smtp_port
+        .and_then(|p| u16::try_from(p).ok())
+        .ok_or_else(|| Error::Mail("Mail-Account ohne gültigen SMTP-Port".into()))?;
+    let password = match account.keychain_service_id.as_deref() {
+        Some(_) => secrets::get(pool, &secrets::smtp_key(&account.id)).await?,
+        None => None,
+    };
+    Ok(smtp::SmtpConfig {
+        host,
+        port,
+        use_tls: account.smtp_use_tls == 1,
+        username: account.smtp_user.clone(),
+        password,
+    })
 }
 
 // =============================================================================
 // Commands — OAuth (Block 16, Microsoft Exchange Online)
 // =============================================================================
 
+/// Argumente von [`mail_oauth_status`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthStatusArgs {
+    pub account_id: String,
+}
+
 /// Liest den OAuth-Verbindungsstatus eines Accounts (verbunden? Postfach? Ablauf?).
-#[tauri::command]
 pub async fn mail_oauth_status(
-    pool: State<'_, SqlitePool>,
-    account_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailOauthStatusArgs,
 ) -> Result<OauthStatus> {
-    let account = mail_accounts::get(pool.inner(), &account_id)
+    let MailOauthStatusArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let account = mail_accounts::get(&pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    Ok(oauth_status_for(&account))
+    oauth_status_for(&pool, &account).await
+}
+
+/// Argumente von [`mail_oauth_connect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthConnectArgs {
+    pub account_id: String,
 }
 
 /// Startet den OAuth-Auth-Code-Flow (PKCE) für ein Microsoft-Konto: öffnet den
 /// Browser zur Microsoft-Anmeldung, fängt den Redirect über einen lokalen
-/// Loopback-Server, tauscht den Code gegen Token, legt sie im Keychain ab und
+/// Loopback-Server, tauscht den Code gegen Token, legt sie in `secrets` ab und
 /// speichert die nicht-geheimen Metadaten (Postfach, Scopes, Ablauf) in der DB.
 ///
 /// Blockiert bis zum Abschluss bzw. bis zur Zeitüberschreitung (5 min).
-#[tauri::command]
 pub async fn mail_oauth_connect(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    account_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailOauthConnectArgs,
 ) -> Result<OauthStatus> {
-    let pool = pool.inner();
+    let MailOauthConnectArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -295,9 +503,7 @@ pub async fn mail_oauth_connect(
     )?;
 
     // Browser zur Microsoft-Anmeldung öffnen.
-    app.opener()
-        .open_url(auth_url, None::<&str>)
-        .map_err(|e| Error::Mail(format!("Browser konnte nicht geöffnet werden: {e}")))?;
+    ctx.open_url(&auth_url)?;
 
     // Auf den Redirect warten (max. 5 Minuten), Query parsen, state prüfen.
     let query = oauth_ms::capture_redirect(&listener, std::time::Duration::from_secs(300)).await?;
@@ -308,7 +514,7 @@ pub async fn mail_oauth_connect(
         ));
     }
 
-    // Code → Token. Bundle in den Keychain.
+    // Code → Token. Bundle in `secrets`.
     let resp = oauth_ms::exchange_code(
         &endpoints.token,
         client_id,
@@ -327,7 +533,13 @@ pub async fn mail_oauth_connect(
     // Nur den (langlebigen) Refresh-Token persistieren. Der Access-Token (großes
     // JWT) wird bei jedem Versand frisch geholt — sonst sprengt access+refresh das
     // 2560-Zeichen-Limit des Windows Credential Managers.
-    keyring::set_oauth_tokens(service_id, &bundle.refresh_token)?;
+    let _ = service_id;
+    secrets::set(
+        pool,
+        &secrets::oauth_key(&account_id),
+        &bundle.refresh_token,
+    )
+    .await?;
 
     let scopes = resp
         .scope
@@ -359,20 +571,27 @@ pub async fn mail_oauth_connect(
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail("Account nach Connect nicht lesbar.".into()))?;
-    Ok(oauth_status_for(&account))
+    oauth_status_for(pool, &account).await
+}
+
+/// Argumente von [`mail_oauth_disconnect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailOauthDisconnectArgs {
+    pub account_id: String,
 }
 
 /// Trennt die Microsoft-Verbindung eines Accounts: löscht das Token-Bundle aus
-/// dem Keychain und die Session-Metadaten aus der DB.
-#[tauri::command]
-pub async fn mail_oauth_disconnect(pool: State<'_, SqlitePool>, account_id: String) -> Result<()> {
-    let pool = pool.inner();
+/// `secrets` und die Session-Metadaten aus der DB.
+pub async fn mail_oauth_disconnect(ctx: &Arc<AppCtx>, args: MailOauthDisconnectArgs) -> Result<()> {
+    let MailOauthDisconnectArgs { account_id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    if let Some(service_id) = account.keychain_service_id.as_deref() {
-        keyring::delete_oauth_tokens(service_id).ok();
-    }
+    secrets::delete(pool, &secrets::oauth_key(&account.id)).await?;
     mail_accounts::clear_oauth_session(pool, &account_id).await?;
     audit_log::append(
         pool,
@@ -389,61 +608,102 @@ pub async fn mail_oauth_disconnect(pool: State<'_, SqlitePool>, account_id: Stri
 // Commands — E-Mail-Protokoll (Block 16b)
 // =============================================================================
 
+/// Argumente von [`email_log_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogListArgs {
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 /// Die jüngsten Protokoll-Einträge, neueste zuerst. `limit` Default 200 (1–1000).
-#[tauri::command]
 pub async fn email_log_list(
-    pool: State<'_, SqlitePool>,
-    limit: Option<i64>,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogListArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
+    let EmailLogListArgs { limit } = args;
+    let pool = ctx.pool()?;
+
     let limit = limit.unwrap_or(200).clamp(1, 1000);
-    email_log::list(pool.inner(), limit).await
+    email_log::list(&pool, limit).await
+}
+
+/// Argumente von [`email_log_for`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogForArgs {
+    pub kind: String,
+    pub id: String,
 }
 
 /// Versand-Historie eines Belegs (`kind` = "invoice" | "quote", `id` = dessen ID).
-#[tauri::command]
 pub async fn email_log_for(
-    pool: State<'_, SqlitePool>,
-    kind: String,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogForArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
-    email_log::list_for(pool.inner(), &kind, &id).await
+    let EmailLogForArgs { kind, id } = args;
+    let pool = ctx.pool()?;
+
+    email_log::list_for(&pool, &kind, &id).await
+}
+
+/// Argumente von [`email_log_search`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailLogSearchArgs {
+    pub filter: email_log::EmailLogFilter,
 }
 
 /// Serverseitige Suche/Filterung über das Protokoll (Volltext + Zeitfenster +
 /// Status/Art/Kanal). Für die Protokoll-Seite.
-#[tauri::command]
 pub async fn email_log_search(
-    pool: State<'_, SqlitePool>,
-    filter: email_log::EmailLogFilter,
+    ctx: &Arc<AppCtx>,
+    args: EmailLogSearchArgs,
 ) -> Result<Vec<crate::db::models::EmailLogRow>> {
-    email_log::search(pool.inner(), &filter).await
+    let EmailLogSearchArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    email_log::search(&pool, &filter).await
 }
 
 // =============================================================================
 // Commands — Versand
 // =============================================================================
 
-/// Erzeugt die Body-Vorschau (Betreff + Text) für eine Rechnung aus dem
-/// `invoice-de`-Template — für die Send-UI.
-#[tauri::command]
-pub async fn mail_invoice_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    invoice_id: String,
-) -> Result<RenderedMail> {
-    let paths = Paths::from_handle(&app)?;
-    render_invoice_mail(pool.inner(), &paths, &invoice_id).await
+/// Argumente von [`mail_invoice_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailInvoicePreviewArgs {
+    pub invoice_id: String,
 }
 
-#[tauri::command]
-pub async fn mail_send_invoice(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: SendInvoiceArgs,
-) -> Result<SendResult> {
-    let paths = Paths::from_handle(&app)?;
+/// Erzeugt die Body-Vorschau (Betreff + Text) für eine Rechnung aus dem
+/// `invoice-de`-Template — für die Send-UI.
+pub async fn mail_invoice_preview(
+    ctx: &Arc<AppCtx>,
+    args: MailInvoicePreviewArgs,
+) -> Result<RenderedMail> {
+    let MailInvoicePreviewArgs { invoice_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    render_invoice_mail(&pool, &paths, &invoice_id).await
+}
+
+/// Argumente von [`mail_send_invoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendInvoiceArgs {
+    pub args: SendInvoiceArgs,
+}
+
+pub async fn mail_send_invoice(ctx: &Arc<AppCtx>, args: MailSendInvoiceArgs) -> Result<SendResult> {
+    let MailSendInvoiceArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     send_invoice_core(
-        pool.inner(),
+        &pool,
         &paths,
         &args.account_id,
         &args.invoice_id,
@@ -454,17 +714,23 @@ pub async fn mail_send_invoice(
     .await
 }
 
+/// Argumente von [`mail_send_test`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendTestArgs {
+    pub account_id: String,
+    pub to: String,
+}
+
 /// Sendet eine kurze Test-Mail über ein **gespeichertes** Konto an `to`.
 /// Im Gegensatz zu `mail_account_test_connection` (nur Connect/Login) prüft das
-/// den vollständigen echten Pfad: Credential aus dem Keychain → Versandkanal
+/// den vollständigen echten Pfad: Credential aus `secrets` → Versandkanal
 /// (SMTP oder Microsoft Graph) → Zustellung.
-#[tauri::command]
-pub async fn mail_send_test(
-    pool: State<'_, SqlitePool>,
-    account_id: String,
-    to: String,
-) -> Result<()> {
-    let pool = pool.inner();
+pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result<()> {
+    let MailSendTestArgs { account_id, to } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let recipient = to.trim();
     if recipient.is_empty() {
         return Err(Error::Mail("Bitte eine Empfänger-Adresse angeben.".into()));
@@ -473,7 +739,18 @@ pub async fn mail_send_test(
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    let now = chrono::Local::now().format("%d.%m.%Y %H:%M").to_string();
+    // Testversand wie ein Verbindungstest begrenzt (Plan W8).
+    if account.auth_type != "oauth_microsoft" {
+        let port = account
+            .smtp_port
+            .and_then(|p| u16::try_from(p).ok())
+            .unwrap_or(0);
+        ctx.net_tests.check_port(TestKind::Smtp, port)?;
+    }
+    ctx.net_tests.admit()?;
+    let now = crate::clock::now_berlin()
+        .format("%d.%m.%Y %H:%M")
+        .to_string();
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),
@@ -512,31 +789,47 @@ pub async fn mail_send_test(
     Ok(())
 }
 
+/// Argumente von [`mail_quote_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailQuotePreviewArgs {
+    pub quote_id: String,
+}
+
 /// Erzeugt die Body-Vorschau (Betreff + Text) für eine Angebots-Mail aus dem
 /// `quote-de`-Template — für die Send-UI.
-#[tauri::command]
 pub async fn mail_quote_preview(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    quote_id: String,
+    ctx: &Arc<AppCtx>,
+    args: MailQuotePreviewArgs,
 ) -> Result<RenderedMail> {
-    let paths = Paths::from_handle(&app)?;
-    render_quote_mail(pool.inner(), &paths, &quote_id).await
+    let MailQuotePreviewArgs { quote_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
+    render_quote_mail(&pool, &paths, &quote_id).await
+}
+
+/// Argumente von [`mail_send_quote`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailSendQuoteArgs {
+    pub args: SendQuoteArgs,
 }
 
 /// Angebotsversand (Block 8). Hängt das **Bundle** als Multi-Attachment an:
 /// Angebots-PDF + aktive AGB + aktive Datenschutz-Version. Bindet die
 /// ausgegebenen Legal-Versionen append-only ans Angebot (rechtlicher Nachweis)
 /// und verlangt aktive AGB + Datenschutz (Pflicht für Versand).
-#[tauri::command]
 pub async fn mail_send_quote(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    args: SendQuoteArgs,
+    ctx: &Arc<AppCtx>,
+    args: MailSendQuoteArgs,
 ) -> Result<SendQuoteResult> {
-    let paths = Paths::from_handle(&app)?;
+    let MailSendQuoteArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     send_quote_core(
-        pool.inner(),
+        &pool,
         &paths,
         &args.account_id,
         &args.quote_id,
@@ -808,19 +1101,17 @@ pub async fn send_quote_core(
 // Versand-Dispatch (SMTP vs. Microsoft Graph)
 // =============================================================================
 
-fn oauth_status_for(account: &MailAccountRow) -> OauthStatus {
-    let connected = account
-        .keychain_service_id
-        .as_deref()
-        .and_then(|svc| keyring::get_oauth_tokens(svc).ok().flatten())
+async fn oauth_status_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<OauthStatus> {
+    let connected = secrets::get(pool, &secrets::oauth_key(&account.id))
+        .await?
         .is_some();
-    OauthStatus {
+    Ok(OauthStatus {
         account_id: account.id.clone(),
         connected,
         account_email: account.oauth_account_email.clone(),
         scopes: account.oauth_scopes.clone(),
         token_expires_at: account.oauth_token_expires_at.clone(),
-    }
+    })
 }
 
 /// Vereinheitlichte Provider-Antwort eines Versands — Grundlage für das
@@ -833,7 +1124,7 @@ pub(crate) struct SendReceipt {
 }
 
 /// Versendet eine fertig zusammengebaute Mail über den Kanal des Accounts:
-/// SMTP (Passwort aus Keychain) oder Microsoft Graph (OAuth-Token aus Keychain,
+/// SMTP (Passwort aus `secrets`) oder Microsoft Graph (OAuth-Token aus `secrets`,
 /// bei Bedarf still erneuert). Liefert die Provider-Antwort zurück.
 async fn dispatch_send(
     pool: &SqlitePool,
@@ -853,27 +1144,9 @@ async fn dispatch_send(
         });
     }
 
-    // smtp_password (Default). Fehlt der Keychain-Eintrag, wird ohne Auth
+    // smtp_password (Default). Ohne gespeichertes Passwort wird ohne Auth
     // gesendet (Open-Relay/MailHog).
-    let host = account
-        .smtp_host
-        .clone()
-        .ok_or_else(|| Error::Mail("Mail-Account ohne SMTP-Host".into()))?;
-    let port: u16 = account
-        .smtp_port
-        .and_then(|p| u16::try_from(p).ok())
-        .ok_or_else(|| Error::Mail("Mail-Account ohne gültigen SMTP-Port".into()))?;
-    let password = match account.keychain_service_id.as_deref() {
-        Some(service_id) => keyring::get_password(service_id)?,
-        None => None,
-    };
-    let config = smtp::SmtpConfig {
-        host,
-        port,
-        use_tls: account.smtp_use_tls == 1,
-        username: account.smtp_user.clone(),
-        password,
-    };
+    let config = smtp_config_for(pool, account).await?;
     let info = smtp::send(&config, mail).await?;
     Ok(SendReceipt {
         channel: "smtp",
@@ -949,17 +1222,14 @@ pub(crate) async fn send_and_log(
 }
 
 /// Liefert einen frischen Access-Token für ein OAuth-Konto: holt ihn bei jedem
-/// Aufruf über den (gechunkt im Keychain abgelegten) Refresh-Token. Schreibt
+/// Aufruf über den (in `secrets` abgelegten) Refresh-Token. Schreibt
 /// einen rotierten Refresh-Token zurück und aktualisiert den Ablauf in der DB.
 async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Result<String> {
-    let service_id = account
-        .keychain_service_id
-        .as_deref()
-        .ok_or_else(|| Error::Mail("Account ohne Keychain-Service-ID.".into()))?;
-    // Im Keychain liegt NUR der Refresh-Token (s. mail_oauth_connect). Der
-    // Access-Token wird bei jedem Versand frisch geholt — kein Persistieren des
-    // großen JWT (Windows-Credential-Manager-Limit) und nie ein stale Token.
-    let stored_refresh = keyring::get_oauth_tokens(service_id)?.ok_or_else(|| {
+    // Gespeichert ist NUR der Refresh-Token (s. mail_oauth_connect). Der
+    // Access-Token wird bei jedem Versand frisch geholt — nie ein stale Token.
+    let stored_refresh = secrets::get(pool, &secrets::oauth_key(&account.id))
+        .await?
+        .ok_or_else(|| {
         Error::Mail(
             "Postfach ist nicht mit Microsoft verbunden. Bitte in den E-Mail-Einstellungen verbinden."
                 .into(),
@@ -981,7 +1251,7 @@ async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Res
     // Rotierten Refresh-Token (falls Microsoft einen neuen mitschickt) persistieren.
     if let Some(new_refresh) = resp.refresh_token.as_deref().filter(|r| !r.is_empty()) {
         if new_refresh != stored_refresh {
-            keyring::set_oauth_tokens(service_id, new_refresh)?;
+            secrets::set(pool, &secrets::oauth_key(&account.id), new_refresh).await?;
         }
     }
     // Ablauf nur für die Anzeige aktualisieren.

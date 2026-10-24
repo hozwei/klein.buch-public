@@ -96,3 +96,29 @@ Build-Tools am Host: Perl + (Windows-MSVC) NASM.
 Zwei-Datei-Atomicity); SQLCipher-Plaintext-Header (`cipher_plaintext_header_size`/
 `cipher_salt`) für Argon2id-im-Header (versions-/plattformabhängige SQLCipher-
 Interna, hier nicht testbar → zu riskant für v1.0; ggf. Post-v1.0-Enhancement).
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · Phase W (Umsetzung Block W6). SQLCipher, die eine
+Geheimnis-Kette und „Passphrase-Verlust = Totalverlust“ bleiben.
+
+- **Bedrohungsmodell:** Netzwerk-Angreifer statt Laptop-Dieb (ADR 0039). Die
+  At-Rest-Verschlüsselung schützt weiter Volume, Snapshots und Backups, ist bei
+  einer aus dem Internet erreichbaren Instanz aber kein Zugangsschutz.
+- **Entsperren der DB ≠ Anmeldung eines Clients.** Zustände `setup` → `locked` ↔
+  `unlocked`, Browser-Sitzungen davon getrennt. Nach einem Neustart entsperrt die
+  erste Anmeldung die DB; jede weitere prüft die Passphrase gegen den Verifier
+  ohne zweiten Pool. Das Setup (Pt. 4) verlangt zusätzlich einen einmaligen
+  Setup-Token aus dem Container-Log.
+- **Login = TOTP + Passphrase:** TOTP nach RFC 6238 in der App, geprüft **vor**
+  der KDF (ein falscher Code löst keine Schlüsselableitung aus).
+- **Sitzungen:** Cookie `__Host-kb_session`, Idle-Timeout 30 min, absolut 12 h.
+  Kritische Aktionen (Restore, Backup-Ziele, Mailkonten, Exporte, Passphrase)
+  verlangen eine Re-Auth, die 5 min gilt. „Datenbank sperren“ schließt den Pool,
+  stoppt den Scheduler und beendet alle Sitzungen.
+- **Passphrase ändern** (neu): per `sqlcipher_export` in eine neue Datei +
+  atomares `rename` (kein `PRAGMA rekey`), danach sofort ein Backup.
+- **Klartext-Übergangspfad (Pt. 5) entfällt** (ADR 0039, E17): Es gibt keinen
+  Klartext-Bestand; eine Klartext-DB im Volume verhindert Setup und Entsperren.
+- **Bereits umgesetzt:** sqlx-Statement-Logging der verschlüsselten Verbindungen
+  aus, weil die Passphrase im Statement `PRAGMA key` steht (Pt. 6).

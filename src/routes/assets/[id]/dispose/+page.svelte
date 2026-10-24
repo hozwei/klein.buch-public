@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -17,11 +18,11 @@
 
   let id = $derived($page.params.id ?? "");
 
-  let disposalDate = $state(new Date().toISOString().slice(0, 10));
+  let disposalDate = $state(todayBerlin());
   let disposalType = $state<DisposalType>("sale");
   let proceedsEuros = $state<number>(0);
 
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
 
   let isSale = $derived(disposalType === "sale");
   let proceedsCents = $derived(isSale ? Math.round(proceedsEuros * 100) : 0);
@@ -131,6 +132,7 @@
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .who { margin: 0 0 1rem; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .info-cell { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; justify-content: center; }

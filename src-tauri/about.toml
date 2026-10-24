@@ -1,73 +1,87 @@
-# cargo-about Konfiguration für die Drittanbieter-Lizenz-Liste
-# (Block G2-DOC.3.5, „Über"-Dialog).
+# cargo-about-Konfiguration für den Rust-Teil der Lizenzseite `/legal/`
+# (Plan W12, ADR 0039; vorher Block G2-DOC.3.5).
 #
-# Generiert wird `resources/handbook/third-party-licenses.html` per
-# `cargo about generate -c about.toml -o resources/handbook/third-party-licenses.html about.hbs`
-# Der Aufruf läuft im Release-CI (siehe .github/workflows/release.yml). Im
-# Dev-Build steht in der Resource ein eingecheckter Stub — der Über-Dialog
-# verlinkt also immer eine existierende Datei, nur ihr Inhalt unterscheidet
-# sich zwischen Release- und Dev-Build.
+# Erzeugt wird der Rust-Teil in einer Stufe des Image-Builds (`Dockerfile`),
+# nicht im Workflow — sonst hätte ein `docker build` aus dem Tag nur den
+# Platzhalter im Image:
 #
-# Akzeptierte Lizenzen für die in Klein.Buch verwendeten Crates. Wenn ein
-# Update eine neue Lizenz reinzieht, schlägt der Build fehl — wir müssen
-# uns die neue Lizenz dann explizit anschauen, bevor sie akzeptiert wird.
-# Begründung pro Eintrag steht im PRD §G2-DOC.3.5 (juristische Pflicht-
-# Hinweise) bzw. im ADR-Index.
+#   cargo about generate --locked -c about.toml -o <tmp>/rust.html about.hbs
+#
+# Version exakt gepinnt (`cargo install cargo-about --locked --version 0.9.2 --features cli`).
+# `legal/build_legal.py` setzt daraus, den mitgelieferten NOTICE-Dateien,
+# den eingebetteten Schriften, dem Java- und dem JS-Teil die fertige Seite
+# `/legal/third-party-licenses.html` zusammen und bricht ab, wenn ein Teil
+# fehlt oder der Dev-Build-Platzhalter darin steht.
+#
+# Akzeptierte Lizenzen für die Crates, die im Server-Binary für
+# x86_64-unknown-linux-gnu landen (ohne Dev- und Build-Abhängigkeiten).
+# Geprüft gegen Cargo.lock und die `license`-Felder der Crates (Stand W12):
+# jede Lizenz hier wird von mindestens einem Crate ohne Alternative bzw. in
+# einem AND-Ausdruck gebraucht. Zieht ein Update eine neue Lizenz herein,
+# scheitert der Image-Build — die neue Lizenz wird dann erst geprüft und
+# hier (und in `deny.toml`) aufgenommen. Die Reihenfolge ist die Priorität,
+# mit der cargo-about bei `A OR B` den angezeigten Text wählt.
 accepted = [
     "MIT",
     "Apache-2.0",
+    # ar_archive_writer
     "Apache-2.0 WITH LLVM-exception",
+    # arrayref, kamadak-exif, mutate_once
     "BSD-2-Clause",
+    # encoding_rs, matchit, subtle, curve25519-dalek, ed25519-dalek,
+    # tiny-skia, deunicode, aws-lc-sys
     "BSD-3-Clause",
-    "BSL-1.0",
-    "CC0-1.0",
+    # rustls-webpki, untrusted, ring, aws-lc-rs, aws-lc-sys
     "ISC",
+    # resvg, usvg (Copyleft auf Dateiebene; unveränderte Nutzung)
     "MPL-2.0",
-    "Unicode-DFS-2016",
+    # icu_*, unicode-ident, zerovec, … (Unicode-Daten)
     "Unicode-3.0",
+    # foldhash, slotmap
     "Zlib",
-    "OpenSSL",
+    # quoted_printable
     "0BSD",
-    # webpki-roots (Mozilla-CA-Root-Bundle, transitiv via russh/rustls)
-    # — Community Data License Agreement, Permissive-2.0. Daten-Lizenz mit
-    # MIT-ähnlich-permissivem Wortlaut.
+    # webpki-roots (Mozilla-CA-Root-Bundle) — Community Data License
+    # Agreement, Permissive-2.0: Daten-Lizenz mit MIT-ähnlichem Wortlaut.
     "CDLA-Permissive-2.0",
 ]
-# Die Eigen-Crate `klein-buch` (AGPL-3.0-or-later) ist in Cargo.toml mit
-# `publish = false` markiert und wird zusammen mit `private = { ignore = true }`
-# (unten) von cargo-about automatisch aus der Drittanbieter-Liste
-# herausgefiltert. Deshalb steht AGPL hier NICHT in `accepted` — der spdx-
-# Licensee-Parser von cargo-about 0.6 lehnt die `-or-later`-Form bei
-# `accepted`-Einträgen ohnehin ab („expected a bare-gnu-license"); die korrekte
-# Lösung ist Ignorieren via `publish = false`, nicht Akzeptieren der Lizenz.
-
-# `targets` filtert die analysierten Plattform-spezifischen Dependencies
-# — wir veröffentlichen heute nur Windows x86_64 (Release-Workflow ist
-# Windows-only), also reicht dieses Target. Wenn macOS/Linux dazukommen,
-# hier ergänzen.
+# Nicht mehr nötig seit dem Linux-Target (W12): BSL-1.0, CC0-1.0 (nur noch als
+# Alternative in OR-Ausdrücken), Unicode-DFS-2016 (unicode-ident nennt
+# Unicode-3.0), OpenSSL (ring ≥ 0.17.10 nennt `Apache-2.0 AND ISC`).
 #
-# Format: ab cargo-about 0.6 ist `targets` strikt eine String-Liste; die
-# frühere `{ triple = "…" }`-Inline-Table-Form wird abgelehnt
-# („invalid type: map, expected a string").
+# Mitgelieferter C-Code: libsqlite3-sys (Feature
+# `bundled-sqlcipher-vendored-openssl`) übersetzt SQLCipher (Lizenz von
+# Zetetic LLC, BSD-3-Clause-Wortlaut) und über openssl-src OpenSSL 3
+# (Apache-2.0) ins Binary. openssl-src ist eine Build-Abhängigkeit und
+# erscheint deshalb nicht in der cargo-about-Liste; beide Lizenztexte nimmt
+# `legal/build_legal.py` fest in den Abschnitt „Mitgelieferte Hinweise“ auf.
+#
+# Die Eigen-Crate `klein-buch` (AGPL-3.0-or-later) ist in Cargo.toml mit
+# `publish = false` markiert und wird mit `private = { ignore = true }`
+# (unten) aus der Drittanbieter-Liste herausgefiltert. Deshalb steht AGPL hier
+# nicht in `accepted`.
+
+# `targets` filtert plattformabhängige Abhängigkeiten: Das Docker-Image gibt
+# es nur für linux/amd64 (ADR 0039), also reicht dieses Target. Muss ein
+# weiteres Target dazukommen (z. B. linux/arm64), hier ergänzen.
+#
+# Format: `targets` ist eine String-Liste (die frühere
+# `{ triple = "…" }`-Form lehnt cargo-about seit 0.6 ab).
 targets = [
-    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
 ]
 
-# `ignore-build-dependencies`: cargo-about analysiert per Default auch
-# build-script-Abhängigkeiten. Die landen aber nicht im fertigen Binary,
-# also lassen wir sie aus der Über-Liste raus (Lizenz-Pflicht bezieht
-# sich auf das, was wir distributieren).
+# Build-Script- und Dev-Abhängigkeiten landen nicht im ausgelieferten Binary
+# und bleiben aus der Liste. Ausnahme ist mitgelieferter C-Code aus
+# Build-Abhängigkeiten (openssl-src, siehe oben).
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 ignore-transitive-dependencies = false
 
-# `private` (Standard true) blendet path-/git-Dependencies aus, wenn deren
-# `publish = false` ist. Wir haben keine Workspace-Members, deshalb hier
-# ohne Wirkung; der Eintrag dokumentiert, dass wir das Standardverhalten
-# bewusst beibehalten.
+# Blendet Workspace-Crates mit `publish = false` aus — hier die Eigen-Crate.
 private = { ignore = true }
 
-# Pro Crate-Override-Slot bleibt leer — wenn ein Crate eine Lizenz-Datei
-# nicht im Repo führt, hier explizit auflisten. Cargo-about meldet den
-# Fall klar im CI-Log.
-[clarify]
+# Crate-spezifische Klarstellungen (`[<crate>.clarify]` mit `license` und
+# `files`/`git` samt SHA-256) kämen ans Ende dieser Datei, falls ein Crate
+# seine Lizenzdatei nicht maschinenlesbar mitliefert. cargo-about meldet den
+# Fall im Build-Log. Derzeit keine.

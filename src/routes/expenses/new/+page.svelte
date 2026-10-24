@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
-  import { contactsList, paymentAccountsList, expensesCreate } from "$lib/api";
+  import { contactsList, paymentAccountsList, expensesCreate, uploadFile } from "$lib/api";
   import type { Contact, PaymentAccount, ExpenseCategory, ExpenseInputDto } from "$lib/types";
   import { EXPENSE_CATEGORIES } from "$lib/labels";
   import { euro } from "$lib/format";
@@ -13,8 +14,8 @@
   let busy = $state(false);
 
   // Formularfelder
-  let expenseDate = $state(new Date().toISOString().slice(0, 10));
-  let paidDate = $state<string>(new Date().toISOString().slice(0, 10));
+  let expenseDate = $state(todayBerlin());
+  let paidDate = $state<string>(todayBerlin());
   let notPaidYet = $state(false);
   let vendorContactId = $state<string>("");
   let vendorName = $state("");
@@ -32,7 +33,7 @@
   let receiptFile = $state<File | null>(null);
 
   // Kein zukünftiges Datum erlaubt (Beleg-/Zahldatum); Backend erzwingt es auch.
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
 
   let grossCents = $derived(Math.round(netEuros * 100) + Math.round(taxEuros * 100));
 
@@ -78,13 +79,8 @@
     }
     busy = true;
     try {
-      let receiptBytes: number[] | null = null;
-      let receiptFilename: string | null = null;
-      if (receiptFile) {
-        const buf = await receiptFile.arrayBuffer();
-        receiptBytes = Array.from(new Uint8Array(buf));
-        receiptFilename = receiptFile.name;
-      }
+      // Plan W7: Beleg zuerst hochladen (Größe/Typ prüft der Server).
+      const receiptUploadId = receiptFile ? (await uploadFile("beleg", receiptFile)).uploadId : null;
       const input: ExpenseInputDto = {
         expenseDate,
         paidDate: notPaidYet ? null : paidDate || null,
@@ -103,9 +99,7 @@
       };
       const detail = await expensesCreate({
         input,
-        fiscalYear: null, // Backend leitet aus dem Beleg-Datum ab
-        receiptBytes,
-        receiptFilename,
+        receiptUploadId,
       });
       flash("Kosten erfasst: " + detail.expense.expenseNumber);
       await goto(`/expenses/${detail.expense.id}`);
@@ -224,14 +218,28 @@
         deine Buchung korrekt ist (im Zweifel Steuerberater fragen).
       </p>
     {/if}
-    <label class="span2">
-      Beleg (PDF/Bild, optional)
-      <input
-        type="file"
-        accept="application/pdf,image/*"
-        onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
-      />
-    </label>
+    <div class="span2 receipt">
+      <label>
+        Beleg (PDF/Bild, optional)
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+      </label>
+      <!-- Plan W10: auf dem Smartphone direkt die Kamera öffnen -->
+      <label class="btn-secondary camera">
+        Beleg fotografieren
+        <input
+          class="visually-hidden"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+      </label>
+      {#if receiptFile}<span class="receipt-name">Ausgewählt: {receiptFile.name}</span>{/if}
+    </div>
     <label class="span2">
       Notiz (optional)
       <textarea rows="2" bind:value={notes}></textarea>
@@ -243,6 +251,12 @@
 <style>
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .receipt { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; }
+  .receipt > label:first-child { flex: 1 1 16rem; }
+  label.camera { flex-direction: row; min-height: 44px; cursor: pointer; }
+  .receipt-name { flex-basis: 100%; font-size: 0.82rem; color: #4b5563; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .lbl-hint { font-weight: 400; color: #9ca3af; font-size: 0.78rem; }

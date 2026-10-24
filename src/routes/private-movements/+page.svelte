@@ -48,23 +48,23 @@
 {:else if items.length === 0}
   <p class="muted">Noch keine Privatbewegungen erfasst.</p>
 {:else}
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr><th>Beleg-Nr.</th><th>Datum</th><th>Art</th><th>Konto</th><th>Beschreibung</th><th class="num">Betrag</th></tr>
     </thead>
     <tbody>
       {#each items as m (m.id)}
         <tr>
-          <td>{m.movementNumber}</td>
-          <td>{date(m.movementDate)}</td>
-          <td>
+          <td data-label="Beleg-Nr.">{m.movementNumber}</td>
+          <td data-label="Datum">{date(m.movementDate)}</td>
+          <td data-label="Art">
             <Badge tone={m.movementType === "entnahme" ? "danger" : "success"}>
               {movementTypeLabel(m.movementType)}
             </Badge>
           </td>
-          <td>{m.accountLabel ?? "—"}</td>
-          <td>{m.description}</td>
-          <td class="num {m.movementType === 'entnahme' ? 'neg' : 'pos'}">
+          <td data-label="Konto">{m.accountLabel ?? "—"}</td>
+          <td class="cards-full" data-label="Beschreibung">{m.description}</td>
+          <td class="num {m.movementType === 'entnahme' ? 'neg' : 'pos'}" data-label="Betrag">
             {m.movementType === "entnahme" ? "−" : "+"}{euro(m.amountCents)}
           </td>
         </tr>

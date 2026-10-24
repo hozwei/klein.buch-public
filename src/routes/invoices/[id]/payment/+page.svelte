@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -17,7 +18,7 @@
   // R5-002: `today` als Obergrenze für das Zahldatum (Zufluss-Prinzip §11
   // EStG — kein Zukunftsdatum). Beim Mount fix; reicht für eine Page, die
   // pro Vorgang einmal aufgerufen wird. Backend setzt denselben Floor.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayBerlin();
 
   let amountEuros = $state(0);
   let paidDate = $state(today);

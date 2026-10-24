@@ -147,7 +147,7 @@ pub async fn invoice_accounts(pool: &SqlitePool) -> Result<Vec<PaymentAccountRow
 pub async fn create(pool: &SqlitePool, input: &PaymentAccountInput) -> Result<PaymentAccountRow> {
     validate(input)?;
     let id = Uuid::now_v7().to_string();
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     if input.is_default {
         sqlx::query("UPDATE payment_accounts SET is_default = 0")
@@ -183,7 +183,7 @@ pub async fn update(
     input: &PaymentAccountInput,
 ) -> Result<PaymentAccountRow> {
     validate(input)?;
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     if input.is_default {
         sqlx::query("UPDATE payment_accounts SET is_default = 0 WHERE id != ?")

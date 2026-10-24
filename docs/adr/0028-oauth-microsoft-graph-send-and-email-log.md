@@ -55,3 +55,20 @@ gechunkte Keychain-Ablage), `mail::dispatch_send`, `db::repo::email_log`,
 Commands `mail_oauth_{status,connect,disconnect}` + `email_log_*`, Migrationen
 `0014`/`0015`; ADR 0006 (Audit/Append-only), Block 5 (SMTP/Keychain). Commit
 `block-16`.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039, E6/E9; Umsetzung Blöcke W5, W8).
+
+- **MS-Graph/OAuth im Server-Betrieb ausgeblendet:** Versand vorerst nur per SMTP. Die
+  Commands `mail_oauth_{status,connect,disconnect}` stehen nicht in der Allowlist des
+  HTTP-Transports, die UI bietet Graph nicht an. Grund: Loopback-Redirect und -Capture
+  (`http://localhost`) setzen voraus, dass Browser und App auf demselben Rechner laufen; beim
+  Browser-Zugriff auf einen Container trifft das nicht zu. Die Token-Haltung im OS-Keychain
+  gibt es im Container ebenfalls nicht.
+- **Secrets:** SMTP-Passwörter liegen in einer STRICT-Tabelle der SQLCipher-DB, `keyring`
+  entfällt (Amendment ADR 0011, Migration `0031`). Damit entfällt auch die gechunkte
+  Keychain-Ablage des Refresh-Tokens. Kommt Graph später zurück, werden Redirect und
+  Token-Ablage per eigenem Amendment neu entschieden.
+- **`email_log` bleibt** unverändert append-only und protokolliert weiter jeden Versuch
+  (Erfolg und Fehler) mit Provider-Antwort, im Server-Betrieb also die SMTP-Codes.

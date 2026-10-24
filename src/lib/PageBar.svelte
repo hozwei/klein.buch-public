@@ -29,7 +29,8 @@
 <style>
   .pagebar {
     position: sticky;
-    top: 0;
+    /* unter der mobilen Menüleiste (Plan W10), sonst bündig oben */
+    top: var(--sticky-top, 0);
     z-index: 30;
     display: flex;
     align-items: center;
@@ -54,6 +55,11 @@
      ist die API seit Chromium 76 (2019) verfügbar, deshalb in der Praxis selten. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .pagebar { background: var(--c-bg); }
+  }
+  /* Plan W10: Auf dem Handy klebt nur die Menüleiste; eine klebende PageBar
+     mit umbrechenden Aktionen würde ein Viertel des Bildschirms belegen. */
+  @media (max-width: 600px) {
+    .pagebar { position: static; }
   }
   .pb-left { display: flex; align-items: center; gap: 0.85rem; min-width: 0; }
   /* Zurück-Pille — IDENTISCH zu allen .pb-right-Buttons (Manuel-Hardline

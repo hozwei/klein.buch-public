@@ -1,263 +1,236 @@
 # Build- und Release-Prozess
 
-> Vertiefung zu „Build/Release" in `../ARCHITECTURE.md` §7 und §8. Wie
-> Klein.Buch von Source-Code zum auslieferbaren Installer wird, was die CI
-> grün macht, wie ein Release-Tag das Auslieferungs-Bundle erzeugt.
+> Vertiefung zu „Phasen und Auslieferung" in `../ARCHITECTURE.md` §8. Wie aus dem
+> Quellstand das signierte Docker-Image wird, was die CI prüft und wie ein
+> Release entsteht. Grundlage: ADR 0039 (Web-/Docker-Betrieb, löst ADR 0002 und
+> 0038 ab), Nr. 99–114.
 
-**v1.0 ist Windows-only** (Scope-Wechsel 2026-05-26). macOS und Linux sind
-explizit aus v1.0 raus; Detail siehe `docs/RELEASE-1.0-GUIDE.md`. Der
-Sidecar-Build und das Tauri-Bundle existieren entsprechend nur für die
-Windows-Target-Triplets.
+**Ein Artefakt:** das Image `ghcr.io/hozwei/klein-buch:<CalVer>`, nur
+`linux/amd64`, gebaut in GitHub Actions aus dem öffentlichen Repository
+`hozwei/klein.buch-public`. Installer, Desktop-Bundles und der
+Windows-Release-Workflow sind entfallen (W5, W11).
+
+**Pfade** in diesem Dokument gelten relativ zur Wurzel des öffentlichen
+Repositorys (= Inhalt des Produktordners `klein-buch/` plus `.github/`).
 
 ---
 
-## 1. Werkzeug-Kette
+## 1. Werkzeuge und Versionen
 
-| Werkzeug | Rolle | Version (Stand) |
+| Werkzeug | Rolle | Version / Quelle |
 |---|---|---|
-| **Rust stable** | Tauri-Backend kompilieren | rust-toolchain stable (CI: dtolnay/rust-toolchain@stable) |
-| **Node + pnpm 10** | Frontend kompilieren | Node 20, pnpm 10 (lock-file ist `klein-buch/pnpm-lock.yaml`) |
-| **Tauri 2** | Bundler (App + NSIS + MSI auf Windows) | aus `Cargo.toml`/`package.json` |
-| **SQLCipher** | DB-Verschlüsselung (G1-ENC) | gepinnt über `libsqlite3-sys = "=0.30.1"` mit `bundled-sqlcipher-vendored-openssl` |
-| **Perl + NASM (Windows-MSVC)** | OpenSSL-vendored bauen | Host-Pflicht — siehe Cargo.toml-Kommentar |
-| **Java 21+ JDK + `jlink`** | Sidecar-Build (KoSIT + Mustang) | `scripts/build-sidecar.ps1` |
+| Rust | Server `klein-buch-server` | `src-tauri/rust-toolchain.toml` (1.99.1); im Image `rust:1.99.1-trixie` mit Digest |
+| cargo-auditable | Abhängigkeitsliste im Binary (für Scanner) | 0.7.7 |
+| SQLCipher + OpenSSL | DB-Verschlüsselung | `libsqlite3-sys = "=0.30.1"` mit `bundled-sqlcipher-vendored-openssl`; braucht `perl`, `make` |
+| Node + pnpm | SPA (SvelteKit, `adapter-static`) | Node 22 (`node:22-trixie-slim` mit Digest), pnpm aus `packageManager` in `package.json` |
+| Eclipse Temurin JDK + `jlink` | Java-Laufzeit für den Sidecar | `eclipse-temurin:21.0.12_8-jdk` mit Digest; Module aus `versions.json` (`jlink_modules`) |
+| cargo-about | Rust-Teil der Lizenzseite `/legal/` | 0.9.2 (`--features cli`) |
+| Debian | Laufzeit-Basis | `debian:trixie-slim` mit Digest |
+| syft, trivy, cosign, skopeo | SBOM, Scan, Signatur, OCI-Transport | syft 1.55.0, trivy 0.76.1, cosign 3.1.4 (per SHA-256 geprüft); skopeo vom Runner |
+| cargo-deny, cargo-audit, gitleaks | Gates in der CI | 0.20.2, 0.22.2, 8.30.1 (per SHA-256 geprüft) |
 
-**Host-Build vs. CI.** Tests + `cargo fmt`/`cargo clippy` laufen in der CI
-(`.github/workflows/ci.yml`, Ubuntu-Runner). Der **Release-Build** läuft
-auf einem **Windows-Runner** (`.github/workflows/release.yml`,
-`windows-latest`) — sonst kann das NSIS+MSI-Bundle nicht erzeugt werden.
-
----
-
-## 2. Sidecar-Build
-
-Der Java-Sidecar (KoSIT-Validator + Mustang) ist **eine** ausführbare
-Einheit, einmal pro Target-OS. Aktuell existiert er nur für
-`x86_64-pc-windows-msvc`.
-
-### 2.1 Script
-
-`scripts/build-sidecar.ps1` am Repo-Root (`Buchhaltung/scripts/`). Output:
-`sidecar-build/klein-buch-java-x86_64-pc-windows-msvc/`.
-
-**Pinned versions** (im Skript-Header):
-
-- **KoSIT-Validator** `v1.6.2` (GitHub-Release Asset
-  `*standalone*.jar`).
-- **XRechnung-Konfiguration** `v2026-01-31` (oder fallback `release-2026-01-31`
-  / `2026-01-31`).
-- **Mustang** `2.23.0` (direkt von `mustangproject.org`, kein GitHub-Release).
-
-### 2.2 Schritte
-
-1. **KoSIT-Validator-JAR** runterladen (`*standalone*.jar` aus GitHub-Release).
-2. **XRechnung-Konfiguration-ZIP** runterladen und nach
-   `xrechnung-config/` entpacken.
-3. **Mustang-CLI-JAR** direkt von `mustangproject.org`.
-4. **jlink-JRE** bauen — Minimal-Java-Runtime mit nur den benötigten Modulen
-   (`java.base`, `java.xml`, `java.naming`, `java.management`, …). Größe
-   typischerweise ~80 MB statt ~200 MB für eine volle JRE.
-5. **Launcher-Skript** `klein-buch-java.bat` erzeugen, das die JRE und die
-   JARs zusammenfügt und Mustang oder KoSIT als CLI-Tool aufruft.
-6. **Versions-Manifest** `versions.json` — KoSIT-Tag, XRechnung-Tag,
-   Mustang-Version, JDK-Version, Build-Zeitpunkt. Wird zur Laufzeit von der
-   App gelesen (Settings → „Über") und im EÜR-Export beigelegt.
-
-### 2.3 Committed Artifacts
-
-Der gebaute Sidecar liegt **committed** unter
-`klein-buch/src-tauri/binaries/klein-buch-java-x86_64-pc-windows-msvc/`.
-Das ist Absicht: der Release-Workflow soll **kein** Sidecar-Build laufen
-lassen (sonst wären KoSIT + Mustang + JDK + Mustang.org-Download
-Build-Zeit-Abhängigkeiten und ein Server-Ausfall würde das Release blocken).
-Das committen wird durch `.gitignore` so geregelt, dass nur die Sidecar-
-Binary-Artefakte ihren Weg ins Repo finden, nichts aus `target/` oder
-`work/`.
-
-**Updaten** des Sidecars passiert **manuell**: Manuel führt
-`scripts/build-sidecar.ps1` aus, prüft mit den Sidecar-Smokes
-(`sidecar-build/smokes/`), committet das neue Binary-Verzeichnis mit dem
-Prefix `block-…: sidecar update kosit X / xrechnung Y / mustang Z`.
+Alle Basis-Images stehen mit Digest direkt in den `FROM`-Zeilen des
+`Dockerfile` (Dependabot erkennt nur diese Form); `legal/check_base_images.py`
+prüft in der CI, dass sie zu `src-tauri/sidecar/versions.json` passen. Alle
+GitHub Actions sind per Commit-SHA festgelegt.
 
 ---
 
-## 3. Frontend-Build
+## 2. Java-Sidecar aus geprüften Quellen
 
-`klein-buch/package.json` definiert vier Skripte:
+`src-tauri/sidecar/` enthält:
 
-- `pnpm dev` — Vite-Dev-Server, gestartet von `tauri dev`
-- `pnpm build` — Vite-Production-Build (Output: `klein-buch/build/`)
-- `pnpm check` / `pnpm lint` — `svelte-kit sync` + `svelte-check`
-- `pnpm tauri` — Wrapper auf `@tauri-apps/cli`
+- `lib/kosit-validator.jar` (KoSIT-Validator 1.6.2, `validator-1.6.2-standalone.jar`
+  von GitHub) und `lib/mustang.jar` (Mustang 2.23.0, `Mustang-CLI-2.23.0.jar` von
+  Maven Central);
+- `xrechnung-config/` (XRechnung-Konfiguration 2026-01-31, Release-ZIP entpackt);
+- `versions.json` (Schema 2: je Komponente Quelle + SHA-256, jlink-Module,
+  JDK-Hersteller/-Version/-Image, Basis-Images, Angaben der früheren
+  Windows-Releases unter `desktop_releases_2026_5`);
+- `klein-buch-java.sh` (POSIX-sh-Launcher; der Server startet ihn über
+  `/bin/sh`, weil das Ausführbar-Bit nicht überall erhalten bleibt; JVM mit
+  `-Xmx512m`, Temp unter `$TMPDIR`);
+- `THIRD-PARTY-JAVA.md`, `notices/`, `copyleft-sources.txt` (Lizenzinventar,
+  NOTICE-Texte, Quellen der Copyleft-Teile für das Quellarchiv).
 
-`tauri.conf.json` zeigt `frontendDist` auf `../build`. Der Tauri-Build ruft
-`pnpm build` als `beforeBuildCommand`.
-
----
-
-## 4. Tauri-Bundle
-
-`klein-buch/src-tauri/tauri.conf.json`:
-
-- `productName = "Klein.Buch"`, `identifier = "de.wildbach.kleinbuch"`.
-- `bundle.targets = "all"` — auf Windows ergibt das NSIS-Installer (.exe)
-  + MSI-Paket (.msi).
-- `bundle.resources` packt den Windows-Sidecar (`binaries/klein-buch-
-  java-x86_64-pc-windows-msvc/*`) und die `inputs/`-Default-Assets ins
-  Bundle.
-- `bundle.category = "Finance"`.
-- Icons in `klein-buch/src-tauri/icons/` (`32x32`, `128x128`, `128x128@2x`,
-  `.ico`, `.icns`).
-
-**App-Lokales Datenverzeichnis** zur Laufzeit: `%APPDATA%\
-de.wildbach.kleinbuch\`. Dort liegen die SQLCipher-DB, das Archiv, der
-lokale Backup-Floor, Branding-Logos, Exporte und der Restore-Staging-
-Ordner. **`inputs/`** liegt **außerhalb** dieses Verzeichnisses (im Repo
-für Dev, im Bundle für die installierte App).
+`.gitattributes` schließt `lib/` und `xrechnung-config/` von der
+Zeilenend-Umwandlung aus. Der Workflow `image.yml` lädt die Originale und
+vergleicht SHA-256 bzw. den entpackten Baum (§5). Ein Update der Komponenten
+heißt: neue Originale nach `lib/` bzw. `xrechnung-config/`, `versions.json`
+nachziehen, Inventar (`THIRD-PARTY-JAVA.md`) und Hinweise prüfen
+(`legal/check_java_inventory.py`).
 
 ---
 
-## 5. CI-Workflow (`ci.yml`)
+## 3. Image-Build (`Dockerfile`)
 
-Trigger: `push` auf `main` und PR-Open gegen `main`.
+Build-Kontext ist die Wurzel des öffentlichen Repositorys (`.dockerignore` hält
+ihn klein). Stufen:
 
-**Job 1 — `rust`**:
-1. Ubuntu-Runner.
-2. Tauri-Linux-Deps installieren (`libwebkit2gtk-4.1-dev`,
-   `libappindicator3-dev`, `librsvg2-dev`, `libssl-dev`, `patchelf`).
-3. Free disk space (`/usr/local/lib/android` und ähnliches wegräumen — Tauri
-   + Typst lassen den Runner sonst volllaufen).
-4. Rust stable + `rustfmt` + `clippy`.
-5. `Swatinem/rust-cache@v2` mit `workspaces: klein-buch/src-tauri`.
-6. `cargo fmt --all -- --check`.
-7. `cargo clippy --all-targets -- -D warnings`.
-8. `cargo test --all-features`.
+| Stufe | Inhalt |
+|---|---|
+| `web` | `pnpm install --frozen-lockfile`, `pnpm build` (SPA samt Handbuch aus `src-tauri/resources/handbook`); die JS-Lizenzliste des Bundles (`js-licenses.json`, eigenes Vite-Plugin) geht in die Lizenzseite |
+| `server` | `cargo auditable build --release --locked --bin klein-buch-server`; Build-Argumente `KLEINBUCH_SOURCE_URL`, `KLEINBUCH_BUILD_COMMIT`, `KLEINBUCH_BUILD_TAG` spät (Cache) |
+| `jre` | `jlink` mit den Modulen aus `versions.json` → `/opt/jre` |
+| `legal-tools` | cargo-about (parallel zum Server-Build) |
+| `runtime-base` | `debian:trixie-slim` + `apt-get upgrade` + `tzdata`, `fontconfig`, `fonts-dejavu-core`, `libfreetype6`; Paketliste `debian-pakete.tsv` per `dpkg-query` (danach kein `apt-get install` mehr) |
+| `legal` | `cargo metadata`, `cargo about generate --fail`, `legal/build_legal.py licenses` → `third-party-licenses.html`, `LICENSE.txt`, `legal.css`. Braucht Netz (cargo-about löst den Graphen für alle Plattformen auf). |
+| `legal-sources` | `build_legal.py sources` → `quellen.html`, `SOURCES.md`, `debian-pakete.tsv`; Abbruch bei „Dev-Build-Platzhalter“ |
+| Laufzeit | Binary, SPA (`/opt/klein-buch/web`), Seed-Quelle `inputs/` (`/opt/klein-buch/inputs`), Sidecar + JRE (`/opt/klein-buch/sidecar`), Lizenzseite (`/opt/klein-buch/legal` und `/usr/share/doc/klein-buch`); `ENV` mit `KLEIN_BUCH_*`-Pfaden, `TZ=Europe/Berlin`, `HOME=/tmp`, `TMPDIR=/data/tmp`; `USER 65532:65532`, `EXPOSE 8080`, `HEALTHCHECK` über `klein-buch-server healthcheck`; kein `VOLUME` |
 
-**Services in Job 1**: MailHog (SMTP 1025 + HTTP-API 8025) für den
-Block-5-E2E-SMTP-Test. Der Test erkennt selbst, ob MailHog erreichbar ist
-und skippt sich notfalls.
+`build_legal.py` bricht ab, wenn ein Pflichtteil der Lizenzseite fehlt (u. a.
+„SIL OPEN FONT LICENSE“, „GUST Font License“, „Zetetic“, „BY-SA 3.0“).
 
-**Job 2 — `frontend`**:
-1. Ubuntu-Runner.
-2. pnpm + Node 20 (Cache auf `klein-buch/pnpm-lock.yaml`).
-3. `pnpm install --frozen-lockfile`.
-4. `pnpm lint` (= `svelte-kit sync && svelte-check`).
+Lokal:
 
-**Beide Jobs grün** ⇒ CI grün. Die Sidecar-/KoSIT-Tests laufen in CI im
-Mock-Mode (`MOCK_KOSIT=1` / `MOCK_MUSTANG=1` über Test-Helpers), weil der
-Sidecar im Runner nicht vorhanden ist (Linux, kein Windows-Binary).
+```sh
+docker build -t klein-buch:dev .
+docker build --build-arg KLEINBUCH_BUILD_COMMIT=$(git rev-parse HEAD) \
+  --build-arg KLEINBUCH_BUILD_TAG=v<Version> -t klein-buch:dev .
+```
 
----
-
-## 6. Release-Workflow (`release.yml`)
-
-Trigger: Tag-Push `v*` oder manueller Workflow-Dispatch (mit `tag`-Input).
-
-**Job — `windows`**:
-1. `windows-latest`-Runner.
-2. Checkout.
-3. Rust stable + `Swatinem/rust-cache`.
-4. pnpm 10 + Node 20.
-5. `pnpm install --frozen-lockfile`.
-6. **`pnpm tauri build`** — Frontend (über `beforeBuildCommand: pnpm build`)
-   + Rust-Release-Build + NSIS-Installer + MSI-Paket.
-7. **SHA-256-Checksums** (PowerShell): findet alle `.exe` und `.msi` unter
-   `src-tauri/target/release/bundle/`, schreibt `SHA256SUMS.txt`.
-8. **Draft-Release** mit `softprops/action-gh-release@v2`:
-   - `draft: true` (Manuel reviewt vor Publish).
-   - `name`/`tag_name` aus dem Workflow-Input oder dem gepushten Tag.
-   - Release-Notes-Body enthält SmartScreen-Hinweis und SHA-256-Anleitung
-     (siehe §8).
-   - Artefakte: `*.exe`, `*.msi`, `SHA256SUMS.txt`.
-
-**Kein Code-Signing.** Bewusst unsignierte Installer (Apple-Developer-ID-
-Programm wäre 99 €/Jahr, EV-Certificate für Windows-SmartScreen-Bypass
-~300 €/Jahr; beides für v1.0 gespart). Konsequenz: Windows SmartScreen
-warnt beim ersten Start.
-
-**Signing-Hintergrund**: `klein-buch/docs/release-signing-guide.md` — was es
-kosten würde, was sich ändert, wann es relevant wird.
+Ohne Commit zeigt die Oberfläche „Entwicklungs-Build, Quellstand unbekannt“
+(`/api/public/info` liefert dann `sourceLink: null`).
 
 ---
 
-## 7. Tag-Konvention
+## 4. CI (`.github/workflows/ci.yml`)
 
-- **Feature-/Phasen-Stand-Tags**: `v0.1.0`, `v0.1.0-phase2c`, `v0.1.0-phase4`
-  etc. Vor v1.0 als „milestones" gesetzt, lösen Release-Workflow aus, Result
-  ist Draft-Release.
-- **v1.0-Release-Tag**: `v1.0` (oder `v1.0.0`, Workflow akzeptiert beides
-  über `v*`-Pattern). Tag-Push triggert `release.yml`.
-- **Pre-Releases**: `v1.0.0-rc.1` etc. — werden gleich behandelt wie
-  Release-Tags.
+Trigger: Push auf `main` und `phase-w`, Pull Requests gegen `main`. Nur
+`contents: read`, `concurrency` je Zweig (ein neuer Push bricht den laufenden
+Lauf ab), Runner fest `ubuntu-24.04`, Zeitlimits je Job. Alle Jobs laufen nur im
+Repository `hozwei/klein.buch-public`.
 
----
+| Job | Schritte |
+|---|---|
+| `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst MailHog (SMTP 1025, API 8025) für den SMTP-E2E-Test. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
+| `frontend` | pnpm + Node 22; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
+| `rust-supply-chain` | `cargo deny --locked check advisories licenses` (`src-tauri/deny.toml`); `cargo audit` über das ganze `Cargo.lock` mit denselben begründeten Ausnahmen |
+| `js-audit` | `pnpm audit --prod --audit-level high` |
+| `secrets` | `gitleaks dir` über den Arbeitsbaum (Funde geschwärzt) |
+| `java-inventory` | `legal/check_java_inventory.py` (Java-Inventar ↔ JARs), `legal/check_base_images.py` (Basis-Images ↔ `versions.json`) |
 
-## 8. SmartScreen + erster Start
-
-Ein unsigned Windows-Installer löst SmartScreen aus:
-
-> Windows hat Ihren PC geschützt. Microsoft Defender SmartScreen hat den
-> Start einer unbekannten App verhindert.
-
-Nutzer-Pfad: **„Weitere Informationen" → „Trotzdem ausführen"**. Das wird
-in den Release-Notes erklärt:
-
-> **Unsignierte Windows-Installer.** Windows SmartScreen warnt beim ersten
-> Start („Unbekannter Herausgeber") → „Weitere Informationen" → „Trotzdem
-> ausführen". Wer das nicht möchte, baut aus dem Quellcode selbst (siehe
-> README).
->
-> **Integrität prüfen:** SHA-256-Summen in `SHA256SUMS.txt`. Unter Windows:
-> `Get-FileHash <datei> -Algorithm SHA256` muss übereinstimmen.
-
-Das gleiche steht auch im User-Handbuch (G2-DOC.2.6 Troubleshooting:
-„SmartScreen-Warnung").
+Die Rust-Tests laufen mit dem Sidecar-Mock (`KLEIN_BUCH_SIDECAR_MOCK`, nur in
+Debug-Builds wirksam). Die echten Validator-Tests (`tests/sidecar_real_test.rs`,
+`#[ignore]`) laufen lokal gegen eine jlink-JRE; im Image decken die
+HTTP-Schritte des Smoke-Tests dieselben Wege ab.
 
 ---
 
-## 9. Self-Build aus dem Quellcode
+## 5. Image-Workflows
 
-Für Nutzer, die SmartScreen nicht akzeptieren wollen:
+**`.github/workflows/image.yml`** (Push auf `phase-w`, manuell; nur
+`contents: read`):
 
-1. Repo klonen.
-2. Pflicht-Werkzeug installieren: Rust stable, Node 20, pnpm 10, Java JDK 21,
-   Perl, NASM (auf Windows-MSVC).
-3. **Sidecar bauen**: `pwsh scripts/build-sidecar.ps1` (im Repo-Root).
-4. Sidecar nach `klein-buch/src-tauri/binaries/` verschieben (im Skript
-   beschrieben).
-5. **Frontend bauen**: `cd klein-buch && pnpm install && pnpm build`.
-6. **Tauri bauen**: `pnpm tauri build`. Output: `klein-buch/src-tauri/target/
-   release/bundle/`.
+- `sidecar-sources`: KoSIT-Validator, Mustang und XRechnung-Konfiguration aus den
+  Quellen in `versions.json` laden, SHA-256 bzw. entpackten Baum vergleichen.
+- `compose-example`: `docker compose -f compose.example.yaml config --quiet` und
+  Prüfung, dass das Beispiel ein Image `ghcr.io/hozwei/klein-buch:…` nennt.
 
-`README.md` am Repo-Root listet das in einer Self-Build-Sektion.
+**`.github/workflows/release-image.yml`**, Job `dry-run` (Trockenlauf auf
+`phase-w`, nur `contents: read`, kein Push, keine Signatur):
+
+1. Werkzeuge laden (syft, trivy per SHA-256), Version
+   `<Cargo-Version>-dev.<Kurz-SHA>`.
+2. Build als OCI-Layout mit SBOM- und Provenance-Attestierung
+   (`sbom: true`, `provenance: mode=max`), GHA-Cache.
+3. Attestierungen im Index prüfen, per skopeo in Docker laden, Schicht-IDs mit
+   dem Layout vergleichen.
+4. Smoke-Test `.github/scripts/image_smoke.sh` (mit `image_smoke.py`): Größe
+   < 400 MB, Mock-Schalter verweigert den Start, Container read-only ohne
+   Capabilities mit fremder UID, Healthcheck, Zeitzone, `CapEff` 0,
+   Seed-Manifest; über HTTP Einrichtung mit Setup-Token und TOTP, Festschreiben
+   mit echtem KoSIT + Mustang (PDF/A-3), ZUGFeRD-Extraktion im Rechnungseingang,
+   Ablehnung einer manipulierten XRechnung; Lizenz- und Quelldateien,
+   `/legal/`, `/api/public/info` mit dem Build-Commit.
+5. SBOM mit syft (SPDX-JSON).
+6. trivy: CRITICAL/HIGH mit verfügbarem Fix brechen ab; Ausnahmen begründet und
+   befristet in `.trivyignore`.
+7. Quellarchiv „Quellen Dritter“ (`.github/scripts/build_sources_archive.sh`).
+8. SBOM und Quellarchiv als Workflow-Artefakt (14 Tage).
 
 ---
 
-## 10. Pre-Release-Smokes
+## 6. Release (`release-image.yml`, Job `release`)
 
-Vor einem v1.0-Tag empfiehlt sich:
+**Auslöser:** ein Tag `v*` im öffentlichen Repository. Rechte nur hier:
+`contents: write`, `packages: write`, `id-token: write` (für cosign keyless).
 
-1. **Lokal `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test`**
-   grün (alle drei in `klein-buch/src-tauri/`).
-2. **`pnpm check`** grün.
-3. **`pnpm tauri dev`** öffnet die App, Login mit Test-Passphrase, eine
-   Beispiel-Rechnung End-to-End: Draft → Lock & Issue → PDF in `archive/`,
-   XML in `archive/` → Versand (SMTP zum Test-Account oder Mailhog).
-4. **Backup-Roundtrip**: Backup erstellen, App schließen, Datei manuell
-   umbenennen (DB unlesbar machen), App starten, Restore vom Backup wählen,
-   Restart, verifizieren dass die Rechnung wieder da ist.
-5. **`scripts/build-sidecar.ps1` re-run** wenn KoSIT, XRechnung-Config oder
-   Mustang seit dem letzten Build aktualisiert wurden.
+1. **Tag-Commit liegt auf `main`**, sonst Abbruch: Ein Tag auf einem
+   Arbeitszweig baut kein Image.
+2. **Version:** Tag im Format `vJJJJ.M.P` (Regex `^v[0-9]{4}\.[0-9]{1,2}\.[0-9]+$`)
+   und gleich `version` in `src-tauri/Cargo.toml` (die zeigt der Server an).
+   Tags mit Zusatz (z. B. `-rc.1`) ergeben kein Release.
+3. Build **ohne Cache** mit `pull: true`, SBOM- und Provenance-Attestierung,
+   Build-Argumente mit Commit und Tag.
+4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf.
+5. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
+   `ghcr.io/<owner>/klein-buch:<Version>`; der gepushte Digest muss dem
+   gebauten Index entsprechen. Gibt es das Tag schon mit anderem Inhalt, bricht
+   der Lauf ab; mit gleichem Inhalt wird nicht erneut gepusht.
+6. **Signatur:** `cosign sign` auf den Digest, danach `cosign verify` mit der
+   genauen Workflow-Identität.
+7. **Release-Entwurf** (`gh release create --draft --verify-tag`) mit Notizen
+   (Tag und Digest, Prüfbefehl, Quellen) und den Assets
+   `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
+   `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Veröffentlicht
+   wird der Entwurf von Hand nach Durchsicht.
 
-Diese Liste wird im `RELEASE-1.0-GUIDE.md` als Teil von G4 final
-formalisiert.
+Feste Regeln (E15): nur volle Versionen als Tag, kein `:latest`, kein gleitender
+Minor-Tag; Images und Tags `v*` werden nie gelöscht oder verschoben — sie sind
+Quellbezug älterer Images und der Rückfall nach einem gescheiterten Update.
+
+Beim ersten Release: Existiert das Paket `ghcr.io/hozwei/klein-buch` schon, ohne
+mit dem Repository verknüpft zu sein, braucht der Workflow Schreibrechte unter
+„Package settings → Manage Actions access“.
+
+Prüfen durch Nutzer: `SECURITY.md` (Signatur, SBOM, Quellarchiv).
+
+---
+
+## 7. Veröffentlichen ins öffentliche Repository
+
+Entwickelt wird in einem privaten Entwicklungsordner. In das öffentliche
+Repository kommt der Stand nur über das Skript
+`tools/veroeffentlichen/Veroeffentlichen.ps1` (im Entwicklungsordner, nicht Teil
+dieses Repositorys). Es spiegelt `klein-buch/` als Wurzel plus `.github/`, lässt
+Interna weg (z. B. `CLAUDE.md`, Memory, Review- und Planungsunterlagen, Daten,
+Build-Ordner), bricht bei verbotenen Begriffen oder fremden Commits auf GitHub ab
+und passt die Pfade in `.github/workflows/*.yml` an das flache Repository an.
+
+| Aufruf | Wirkung |
+|---|---|
+| `… -NurAnzeigen` | nur zeigen, was sich ändern würde (immer zuerst) |
+| `… -Branch phase-w -Ja` | Arbeitsstand auf einen Arbeitszweig; löst CI, `image.yml` und den Trockenlauf aus |
+| `… -Tag v<Version>` | Release: Standardzweig `main`, Tag nur zusammen mit `main`; prüft, dass `src-tauri/Cargo.toml` dieselbe Version und `CHANGELOG.md` einen Abschnitt `## [<Version>]` hat |
+| `… -MainOhneTag` | bewusst auf `main` ohne Tag (sonst gesperrt) |
+
+Auf GitHub wird nichts gemergt; Pull Requests (auch von Dependabot,
+`.github/dependabot.yml`) sind nur Hinweise, übernommen wird im
+Entwicklungsordner (`CONTRIBUTING.md`).
+
+---
+
+## 8. Vor einem Release
+
+1. Lokal grün: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+   `TZ=UTC cargo test` (in `src-tauri/`), `pnpm check`, `pnpm test`.
+2. Version in `src-tauri/Cargo.toml` setzen, `CHANGELOG.md` mit Abschnitt
+   `## [<Version>]`.
+3. Auf `phase-w` veröffentlichen; CI, `image.yml` und Trockenlauf grün (Smoke,
+   Scan, Quellarchiv).
+4. Stand nach `main` bringen und mit `-Tag v<Version>` veröffentlichen.
+5. Release-Lauf grün, Signatur mit dem Befehl aus `SECURITY.md` prüfen,
+   Release-Entwurf durchsehen und veröffentlichen.
 
 ---
 
 ## Letzte Verifikation
 
-Stand: 2026-05-26. Quelle: `.github/workflows/ci.yml`,
-`.github/workflows/release.yml`, `klein-buch/src-tauri/tauri.conf.json`,
-`klein-buch/src-tauri/Cargo.toml`, `klein-buch/package.json`,
-`scripts/build-sidecar.ps1`. Bei jedem CI/Release-Workflow-Update diese
-Datei mitziehen.
+Stand: 2026-10-24 (Phase W, Block W13). Quellen: `Dockerfile`,
+`.dockerignore`, `.gitattributes`, `.github/workflows/{ci.yml,image.yml,release-image.yml}`,
+`.github/scripts/{image_smoke.sh,build_sources_archive.sh}`,
+`.github/dependabot.yml`, `src-tauri/rust-toolchain.toml`,
+`src-tauri/Cargo.toml`, `src-tauri/sidecar/versions.json`, `package.json`,
+`tools/veroeffentlichen/LIESMICH.md` (Entwicklungsordner), ADR 0039 Nr. 99–114.
+Bei jeder Änderung an Dockerfile oder Workflows diese Datei mitziehen.

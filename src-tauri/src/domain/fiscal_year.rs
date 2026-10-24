@@ -5,6 +5,9 @@
 //! - `fiscal_year_bounds(year) -> (NaiveDate, NaiveDate)` — 01.01.–31.12.
 //! - `months_remaining_in_year(date) -> u32`
 //! - `soft_lock_deadline(fiscal_year) -> NaiveDate` — 31.05. des Folgejahres
+//!
+//! Das GJ eines neuen Belegs ist immer `fiscal_year_for(Belegdatum)`; der Client
+//! schickt keins mit (Plan W1.2/W9).
 
 use chrono::{Datelike, NaiveDate};
 

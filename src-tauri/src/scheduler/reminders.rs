@@ -10,53 +10,56 @@
 
 use crate::error::Result;
 use crate::fiscal_year::guard;
+use crate::notify::Notifier;
 use crate::notify::{self, rules, NewNotification};
 use chrono::{Datelike, NaiveDate};
 use sqlx::SqlitePool;
 use std::path::Path;
-use tauri::AppHandle;
 
 /// Führt alle aktiven Reminder-Regeln aus. Liefert die Anzahl neu erzeugter
 /// Hinweise (Dedup-Treffer zählen nicht).
 ///
-/// `floor_dir` ist der lokale Backup-Floor (`paths.backups_dir`); die
-/// `backup_overdue`-Regel braucht ihn, um ein konfiguriertes Off-Site-Ziel vom
-/// Floor zu unterscheiden (G1-NOTIFY).
+/// `targets_root` ist die Wurzel der Verzeichnis-Ziele
+/// (`paths.backup_targets_dir`); die `backup_overdue`-Regel braucht sie, um die
+/// konfigurierten Off-Site-Ziele zu lesen (G1-NOTIFY, Plan W7).
 pub async fn run(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     today: NaiveDate,
-    floor_dir: &Path,
+    targets_root: &Path,
 ) -> Result<usize> {
     let mut created = 0usize;
 
     if let Some(rule) = rules::get_enabled_by_type(pool, "monthly_doc_check").await? {
-        created += monthly_doc_check(pool, app, &rule, today).await?;
+        created += monthly_doc_check(pool, notifier, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "fiscal_year_lock_pending").await? {
-        created += fiscal_year_lock_pending(pool, app, &rule, today).await?;
+        created += fiscal_year_lock_pending(pool, notifier, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "backup_overdue").await? {
-        created += backup_overdue(pool, app, &rule, today, floor_dir).await?;
+        created += backup_overdue(pool, notifier, &rule, today, targets_root).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "invoice_overdue").await? {
-        created += invoice_overdue(pool, app, &rule, today).await?;
+        created += invoice_overdue(pool, notifier, &rule, today).await?;
     }
     Ok(created)
 }
 
 async fn emit_one(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     n: NewNotification<'_>,
 ) -> Result<usize> {
-    Ok(notify::emit(pool, app, n).await?.map(|_| 1).unwrap_or(0))
+    Ok(notify::emit(pool, notifier, n)
+        .await?
+        .map(|_| 1)
+        .unwrap_or(0))
 }
 
 /// Monatlicher Doku-Check ab Tag N (Default 10.). Dedup pro Kalendermonat.
 async fn monthly_doc_check(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -67,7 +70,7 @@ async fn monthly_doc_check(
     let key = format!("monthly_doc_check:{:04}-{:02}", today.year(), today.month());
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Belege erfassen",
@@ -85,7 +88,7 @@ async fn monthly_doc_check(
 /// solange es nicht abgeschlossen ist. Dedup pro Zieljahr.
 async fn fiscal_year_lock_pending(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -108,7 +111,7 @@ async fn fiscal_year_lock_pending(
     );
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Geschäftsjahr abschließen",
@@ -125,7 +128,7 @@ async fn fiscal_year_lock_pending(
 /// Hinweis, wenn die maßgebliche Sicherung älter als N Tage ist (Default 7).
 /// Dedup pro Tag. **Off-Site-bewusst** (G1-NOTIFY):
 ///
-/// - Ist ein **Off-Site-Ziel** konfiguriert (Cloud-Ordner/USB/SFTP, vom Floor
+/// - Ist ein **Off-Site-Ziel** konfiguriert (Ordner unter `/backup-targets` oder SFTP, vom Floor
 ///   verschieden), zählt das letzte **erfolgreiche Off-Site-Backup** aus dem
 ///   append-only `backup_log` (G1-LOG). Der lokale Floor ist ohnehin fast immer
 ///   frisch (Lock-/Tages-Backup) — die Off-Site-Kopie ist das, was ausfallen kann.
@@ -133,15 +136,15 @@ async fn fiscal_year_lock_pending(
 ///   wenn überhaupt keine Sicherung mehr lief (App lange nicht geöffnet).
 async fn backup_overdue(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
-    floor_dir: &Path,
+    targets_root: &Path,
 ) -> Result<usize> {
     let max_age = rule.config_i64("max_age_days", 7);
-    let has_offsite = crate::backup::target::offsite_target(pool, floor_dir)
+    let has_offsite = !crate::backup::target::list_targets(pool, targets_root)
         .await?
-        .is_some();
+        .is_empty();
 
     let (last, title, body, key): (Option<String>, &str, String, String) = if has_offsite {
         let last = sqlx::query_scalar(
@@ -155,7 +158,7 @@ async fn backup_overdue(
             "Off-Site-Backup überfällig",
             format!(
                 "Seit über {max_age} Tagen gab es kein erfolgreiches externes Backup \
-                 (oder noch keins). Prüfe dein Backup-Ziel (Cloud-Ordner, USB oder SFTP)."
+                 (oder noch keins). Prüfe deine Backup-Ziele (Ordner unter /backup-targets oder SFTP)."
             ),
             format!("offsite_backup_overdue:{}", today.format("%Y-%m-%d")),
         )
@@ -189,7 +192,7 @@ async fn backup_overdue(
     }
     emit_one(
         pool,
-        app,
+        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title,
@@ -207,7 +210,7 @@ async fn backup_overdue(
 /// Rechnung (nur ein Hinweis, bis abgehakt).
 async fn invoice_overdue(
     pool: &SqlitePool,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -235,7 +238,7 @@ async fn invoice_overdue(
         let action = format!("/invoices/{id}");
         created += emit_one(
             pool,
-            app,
+            notifier,
             NewNotification {
                 rule_id: Some(&rule.id),
                 title: "Rechnung überfällig",
@@ -348,8 +351,8 @@ mod tests {
     }
 
     async fn set_offsite(pool: &SqlitePool) {
-        sqlx::query("INSERT INTO app_settings (key, value) VALUES ('backup_target', ?)")
-            .bind(r#"{"kind":"directory","path":"/mnt/onedrive/kb"}"#)
+        sqlx::query("INSERT INTO app_settings (key, value) VALUES ('backup_targets', ?)")
+            .bind(r#"[{"id":"a","label":"NAS","kind":"directory","path":"nas/kb"}]"#)
             .execute(pool)
             .await
             .unwrap();
@@ -363,7 +366,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         // Kein Off-Site-Ziel, kein Backup → überfällig über den Floor-Pfad.
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
@@ -387,7 +390,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         // Off-Site konfiguriert, aber noch kein erfolgreiches Off-Site-Backup → überfällig.
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
@@ -429,7 +432,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
-        let floor = Path::new("/data/backups");
+        let floor = Path::new("/backup-targets");
         assert_eq!(
             backup_overdue(&pool, None, &rule, today, floor)
                 .await

@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { paymentAccountsList, privateMovementsCreate } from "$lib/api";
+  import { paymentAccountsList, privateMovementsCreate, uploadFile } from "$lib/api";
   import type { PaymentAccount, MovementType, PrivateMovementInputDto } from "$lib/types";
   import { MOVEMENT_TYPES } from "$lib/labels";
   import { euro } from "$lib/format";
@@ -11,7 +12,7 @@
   let accounts = $state<PaymentAccount[]>([]);
   let busy = $state(false);
 
-  let movementDate = $state(new Date().toISOString().slice(0, 10));
+  let movementDate = $state(todayBerlin());
   let movementType = $state<MovementType>("entnahme");
   let amountEuros = $state<number>(0);
   let accountId = $state<string>("");
@@ -42,13 +43,8 @@
     }
     busy = true;
     try {
-      let receiptBytes: number[] | null = null;
-      let receiptFilename: string | null = null;
-      if (receiptFile) {
-        const buf = await receiptFile.arrayBuffer();
-        receiptBytes = Array.from(new Uint8Array(buf));
-        receiptFilename = receiptFile.name;
-      }
+      // Plan W7: Beleg zuerst hochladen (Größe/Typ prüft der Server).
+      const receiptUploadId = receiptFile ? (await uploadFile("beleg", receiptFile)).uploadId : null;
       const input: PrivateMovementInputDto = {
         movementDate,
         movementType,
@@ -59,9 +55,7 @@
       };
       const row = await privateMovementsCreate({
         input,
-        fiscalYear: null,
-        receiptBytes,
-        receiptFilename,
+        receiptUploadId,
       });
       flash("Erfasst: " + row.movementNumber);
       await goto("/private-movements");
@@ -91,7 +85,7 @@
   <div class="grid">
     <label>
       Datum
-      <input type="date" bind:value={movementDate} max={new Date().toISOString().slice(0, 10)} />
+      <input type="date" bind:value={movementDate} max={todayBerlin()} />
     </label>
     <label>
       Art
@@ -137,6 +131,7 @@
 <style>
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   input, select, textarea { padding: 0.45rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }

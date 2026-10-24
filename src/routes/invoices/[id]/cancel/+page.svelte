@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -15,7 +16,7 @@
   let submitting = $state(false);
   let error = $state<string | null>(null);
   let reason = $state("");
-  let stornoDate = $state(new Date().toISOString().slice(0, 10));
+  let stornoDate = $state(todayBerlin());
 
   let id = $derived($page.params.id ?? "");
   let canCancel = $derived(
@@ -113,7 +114,13 @@
       <form id="cancel-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
         <label>
           Storno-Datum *
-          <input type="date" bind:value={stornoDate} required />
+          <input
+            type="date"
+            bind:value={stornoDate}
+            min={inv.invoiceDate}
+            max={todayBerlin()}
+            required
+          />
         </label>
         <label>
           Grund * (steht später auf dem Storno-Beleg)

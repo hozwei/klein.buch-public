@@ -1,34 +1,47 @@
 [package]
 name = "klein-buch"
-version = "2026.5.1"
+version = "2026.10.0"
 description = "Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer"
 authors = ["Manuel Schmid <schmidm@wildbach-computerhilfe.de>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/hozwei/klein.buch-public"
 # Klein.Buch wird NICHT nach crates.io veröffentlicht; Distribution läuft über
-# Windows-Installer (NSIS/MSI). Der Marker macht das explizit und sorgt
-# nebenbei dafür, dass `cargo about generate` die eigene Crate ignoriert
+# das Docker-Image (ADR 0039). Der Marker macht das explizit und sorgt nebenbei
+# dafür, dass `cargo about generate` die eigene Crate ignoriert
 # (about.toml: `private = { ignore = true }`).
 publish = false
 
 [lib]
 name = "klein_buch_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+# Einziger Einstieg (Plan W5): HTTP-Server bzw. Subcommands (`healthcheck`).
+[[bin]]
+name = "klein-buch-server"
+path = "src/main.rs"
 
 [dependencies]
-# --- Tauri Core ---
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-notification = "2"
-# Nativer Ordner-Picker für „Durchsuchen…" (Backup-Ziel wählen).
-tauri-plugin-dialog = "2"
-
 # --- Async runtime ---
 tokio = { version = "1", features = ["full"] }
+# CancellationToken + TaskTracker für das geordnete Herunterfahren (Plan W5.6).
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+# Stream-Adapter für gestreamte Downloads/Uploads (W7).
+futures-util = "0.3"
+
+# --- HTTP-Server (Plan W5, ADR 0039) ---
+# axum als Router; die Verbindungen bedient hyper direkt (eigene Annahme-
+# Schleife), weil `axum::serve` keinen Header-Read-Timeout kennt (W5.8).
+# `multipart` für POST /api/upload/{art} (Plan W7).
+axum = { version = "0.8", features = ["multipart"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "service"] }
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+# Nur ServeDir/ServeFile für die SPA; kein CorsLayer (Plan W5.7).
+tower-http = { version = "0.6", features = ["fs"] }
+# Freier Platz vor Uploads (statvfs, Plan W7); ohne unsafe.
+rustix = { version = "1", features = ["fs", "process"] }
 
 # --- Persistence ---
 sqlx = { version = "0.8", default-features = false, features = [
@@ -55,6 +68,9 @@ sqlx = { version = "0.8", default-features = false, features = [
 # Falls EXAKT-Pin bricht (sqlx-Update): `cargo tree -i libsqlite3-sys` muss GENAU
 # EINE Version zeigen, sonst greift die Unification nicht.
 libsqlite3-sys = { version = "=0.30.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Dasselbe (vendored) OpenSSL wie SQLCipher, nur für `openssl_sys::init()`:
+# Initialisierung mit OPENSSL_INIT_NO_ATEXIT (siehe `db::init_crypto`).
+openssl-sys = "0.9"
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }
@@ -62,16 +78,29 @@ serde_json = "1"
 
 # --- Time / IDs ---
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v7", "serde"] }
+# Zeitzone fest Europe/Berlin (Plan W1.8, E12), unabhängig von der Prozess-TZ.
+chrono-tz = "0.10"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 # --- Cryptography ---
 sha2 = "0.10"
 argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
+# Geheimnisse (Passphrase-Kopien) im RAM nach Gebrauch überschreiben.
+zeroize = "1"
+# TOTP (RFC 6238, Plan W6): HMAC-SHA1 über den Zeitschritt, konstantzeitiger
+# Vergleich, Base32-Geheimnis, QR-Code als SVG (lokal erzeugt, kein Dienst).
+hmac = "0.12"
+sha1 = "0.10"
+subtle = "2"
+data-encoding = "2"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# CIDR-Liste der vertrauten Reverse-Proxys (KLEIN_BUCH_TRUSTED_PROXIES, W6).
+ipnet = "2"
 
 # --- XML / Templates ---
-quick-xml = { version = "0.36", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 tera = "1"
 
 # --- Markdown (Paket-Markup, Block P2) ---
@@ -83,7 +112,7 @@ pulldown-cmark = { version = "0.12", default-features = false }
 # lopdf: reine Rust-PDF-Manipulation für das Angebots-Bundle (Block 8) —
 # führt Angebots-PDF + AGB-PDF + Datenschutz-PDF zu EINEM Druck-PDF zusammen.
 # Merge-Rezept verifiziert gegen das offizielle examples/merge.rs (lopdf 0.40).
-lopdf = "0.40"
+lopdf = "0.46"
 typst = "0.13"
 typst-pdf = "0.13"
 typst-library = "0.13"
@@ -117,19 +146,10 @@ reqwest = { version = "0.12", default-features = false, features = [
 base64 = "0.22"
 url = "2"
 
-# --- OS-Keychain ---
-# keyring 3 hat KEINE Default-Backends — ohne Feature-Flags fällt die Crate
-# auf den In-Memory-Mock-Store zurück, d. h. die SMTP-Passphrase wäre nach
-# App-Neustart weg (Backup-Hardline gebrochen). Wir aktivieren die nativen
-# OS-Stores pro Plattform + secret-service (Linux) mit Rust-Crypto statt
-# openssl (konsistent mit dem rustls-only-Stack, keine System-libssl-Pflicht).
-# Doku: https://docs.rs/keyring/3.6.1/keyring/#credential-store-features
-keyring = { version = "3", default-features = false, features = [
-    "apple-native",
-    "windows-native",
-    "sync-secret-service",
-    "crypto-rust",
-] }
+# --- Zugangsdaten ---
+# Seit Plan W8 in der SQLCipher-DB (Tabelle `secrets`, Migration 0031); die
+# `keyring`-Crate (OS-Schlüsselbund, im Container nicht vorhanden) und damit
+# libdbus entfallen.
 
 # --- SFTP-Backup-Ziel (ADR 0034, Block G1-BKP.3) ---
 # russh = reine-Rust-SSH (RustCrypto), KEIN OpenSSL/libssh → konsistent mit dem
@@ -145,11 +165,14 @@ keyring = { version = "3", default-features = false, features = [
 # Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
 # unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist
 # die Client-API gegen genau diese Version neu zu verifizieren.
-russh = "0.60"
+russh = "0.64"
 russh-sftp = "2.1"
 
 # --- Archive ---
-zip = "2"
+# Nur Deflate (Backups, Exporte) und Zeitstempel: ohne die Standard-Features
+# entfallen zstd/bzip2/xz samt statisch gelinktem C-Code (W12); fremde ZIPs mit
+# anderen Verfahren werden abgelehnt.
+zip = { version = "2", default-features = false, features = ["deflate", "time"] }
 
 # --- Temp files (Sidecar-Bridges schreiben PDFs/XML in Temp-Dirs) ---
 tempfile = "3"
@@ -160,6 +183,9 @@ anyhow = "1"
 
 # --- Logging ---
 tracing = "0.1"
+# Nur für sqlx::ConnectOptions::log_statements(LevelFilter): Statement-Logging aus,
+# weil `PRAGMA key` die Passphrase enthält (Plan W2.3/W5.9).
+log = "0.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
@@ -170,4 +196,6 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
+# Kein `panic = "abort"` im Server (Plan W5, ADR 0039): eine Panik beendet nur
+# die betroffene Anfrage bzw. den Job (tokio fängt sie am Task-Ende), nicht den
+# ganzen Prozess samt entsperrter Datenbank.

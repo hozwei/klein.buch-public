@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import {
@@ -11,8 +13,10 @@
     quotesGeneratePdf,
     quotesOpenBundle,
     quotesLegalBindings,
-    attachmentsOpen,
-    attachmentsReveal,
+    archiveUrl,
+    downloadUrl,
+    saveArchiveFile,
+    uploadFile,
     emailLogFor,
   } from "$lib/api";
   import type {
@@ -38,7 +42,7 @@
 
   // Annahme-Panel
   let showAccept = $state(false);
-  let acceptedDate = $state(new Date().toISOString().slice(0, 10));
+  let acceptedDate = $state(todayBerlin());
   let signedContractFile = $state<File | null>(null);
   let attachmentLabel = $state("");
 
@@ -97,7 +101,8 @@
     busy = true;
     try {
       const q = await quotesGeneratePdf(detail.quote.id);
-      if (q.pdfArchiveId) await attachmentsOpen(q.pdfArchiveId);
+      if (q.pdfArchiveId)
+        openPdfPreview(archiveUrl(q.pdfArchiveId), `Angebot ${q.quoteNumber}`, "");
       await load();
     } catch (e) {
       flash(String(e), "error");
@@ -110,7 +115,8 @@
     if (!detail) return;
     busy = true;
     try {
-      await quotesOpenBundle(detail.quote.id);
+      const ticket = await quotesOpenBundle(detail.quote.id);
+      openPdfPreview(downloadUrl(ticket), "Angebot mit AGB und Datenschutz", ticket.fileName);
       await loadBindings();
     } catch (e) {
       flash(String(e), "error");
@@ -155,18 +161,13 @@
   async function accept() {
     if (!detail) return;
     await run(async () => {
-      let bytes: number[] | null = null;
-      let filename: string | null = null;
-      if (signedContractFile) {
-        const buf = await signedContractFile.arrayBuffer();
-        bytes = Array.from(new Uint8Array(buf));
-        filename = signedContractFile.name;
-      }
+      const signedContractUploadId = signedContractFile
+        ? (await uploadFile("vertrag", signedContractFile)).uploadId
+        : null;
       return quotesAccept({
         quoteId: detail!.quote.id,
         acceptedDate: acceptedDate || null,
-        signedContractBytes: bytes,
-        signedContractFilename: filename,
+        signedContractUploadId,
         attachmentLabel: attachmentLabel.trim() || null,
       });
     }, "Angebot angenommen.");
@@ -225,20 +226,9 @@
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  async function openAttachment(archiveEntryId: string) {
-    try {
-      await attachmentsOpen(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-
-  async function revealAttachment(archiveEntryId: string) {
-    try {
-      await attachmentsReveal(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  // Plan W7: Anlagen und gebundene Rechtsdokumente als Download.
+  function openAttachment(archiveEntryId: string) {
+    saveArchiveFile(archiveEntryId);
   }
 </script>
 
@@ -428,7 +418,7 @@
 
   <section class="card">
     <h2>Positionen</h2>
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>#</th>
@@ -446,29 +436,29 @@
       <tbody>
         {#each detail.items as it (it.id)}
           <tr>
-            <td>{it.position}</td>
-            <td>{it.description}</td>
-            <td class="right">{it.quantity}</td>
-            <td>{it.unitCode}</td>
-            <td class="right">{euro(it.unitPriceCents)}</td>
+            <td data-label="Pos.">{it.position}</td>
+            <td class="cards-full" data-label="Beschreibung">{it.description}</td>
+            <td class="right" data-label="Menge">{it.quantity}</td>
+            <td data-label="Einheit">{it.unitCode}</td>
+            <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
             {#if q.isKleinunternehmer === 0}
-              <td class="right">{it.taxRatePercent}</td>
-              <td>{it.taxCategoryCode}</td>
+              <td class="right" data-label="USt %">{it.taxRatePercent}</td>
+              <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
-            <td class="right">{euro(it.netAmountCents)}</td>
+            <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
           </tr>
         {/each}
       </tbody>
       <tfoot>
-        <tr><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">Netto</td>
-            <td class="right">{euro(q.netAmountCents)}</td></tr>
+        <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
+            <td class="right" data-label="Netto">{euro(q.netAmountCents)}</td></tr>
         {#if q.taxAmountCents !== 0}
-          <tr><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">USt</td>
-              <td class="right">{euro(q.taxAmountCents)}</td></tr>
+          <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
+              <td class="right" data-label="USt">{euro(q.taxAmountCents)}</td></tr>
         {/if}
-        <tr class="grand"><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">
+        <tr class="grand"><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
               <strong>Brutto</strong></td>
-            <td class="right"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
+            <td class="right" data-label="Brutto"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
       </tfoot>
     </table>
   </section>
@@ -486,8 +476,7 @@
               <span class="muted">— {a.fileName} · {fmtBytes(a.fileSizeBytes)} · {date(a.createdAt)}</span>
             </div>
             <div class="att-actions">
-              <button class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Öffnen</button>
-              <button class="btn-secondary btn-sm" onclick={() => revealAttachment(a.archiveEntryId)}>Im Ordner</button>
+              <button class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Herunterladen</button>
             </div>
           </li>
         {/each}
@@ -513,7 +502,7 @@
                 <span class="muted">— {b.title} · gebunden {date(b.boundAt)}</span>
               </div>
               <div class="att-actions">
-                <button class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Öffnen</button>
+                <button class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Herunterladen</button>
               </div>
             </li>
           {/each}
@@ -525,7 +514,7 @@
   {#if sendLog.length > 0}
     <section class="card">
       <h2>Versand-Historie</h2>
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -538,11 +527,11 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td>{fmtLogTime(e.createdAt)}</td>
-              <td>{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
-              <td>{e.toEmail}</td>
-              <td>{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
-              <td>
+              <td data-label="Zeitpunkt">{fmtLogTime(e.createdAt)}</td>
+              <td data-label="Status">{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
+              <td data-label="Empfänger">{e.toEmail}</td>
+              <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
+              <td class="cards-full" data-label="Antwort des Anbieters">
                 {#if e.status === "success"}
                   {[e.providerCode, e.providerMessage].filter(Boolean).join(" ")}
                   {#if e.requestId}<br /><small class="muted">request-id: {e.requestId}</small>{/if}
@@ -575,11 +564,11 @@
   .accept-panel { border-left: 4px solid #2563eb; }
   .cancel-panel { border-left: 4px solid #ef4444; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; }
+  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; min-width: 0; }
   label.block { width: 100%; }
   input, textarea { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
-  .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+  .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
   dl { display: grid; grid-template-columns: 7rem 1fr; gap: 0.25rem 0.75rem; }
   dt { color: #6b7280; font-size: 0.85rem; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -591,6 +580,7 @@
   .klein-note { color: #1e40af; font-size: 0.85rem; }
   .att { list-style: none; padding: 0; margin: 0; }
   .att li { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
+  .att-info { min-width: 0; overflow-wrap: anywhere; }
   .att-actions { display: flex; gap: 0.4rem; }
   /* .btn-sm entfernt — Buttons app-weit gleich groß (Manuel-Hardline 2026-05-26). */
   .status { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
@@ -607,4 +597,10 @@
   .muted { color: #6b7280; }
   .err { color: #b91c1c; }
   .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
+  /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
+     Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
+  @media (max-width: 820px) {
+    td.sum-label { display: none; }
+    td { overflow-wrap: anywhere; }
+  }
 </style>

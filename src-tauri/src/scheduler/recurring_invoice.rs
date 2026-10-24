@@ -27,10 +27,10 @@
 //!   Nummernlücke, identisch zum manuell angelegten Entwurf.
 //! - **Unlock-Gate + ein Backup pro Burst** wie beim Kosten-Abo.
 
+use crate::notify::Notifier;
 use chrono::{Datelike, Days, NaiveDate};
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::AppHandle;
 
 use crate::backup::{self, BackupSession};
 use crate::commands::invoices::{create_invoice_draft_from_input, run_lock_pipeline};
@@ -83,7 +83,7 @@ pub async fn process_due(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     today: NaiveDate,
 ) -> Result<ProcessReport> {
     if !session.is_unlocked() {
@@ -97,8 +97,19 @@ pub async fn process_due(
     let due = recurring_invoice::list_due(pool, &today.to_string()).await?;
     let mut report = ProcessReport::default();
 
-    for tmpl in &due {
-        match catch_up(pool, paths, app, tmpl, today).await {
+    for listed in &due {
+        // Unter der Vorlagen-Sperre frisch lesen: ein paralleles „Jetzt
+        // erstellen“ kann die Vorlage inzwischen vorgerückt haben.
+        let _guard = crate::locks::RECURRING_TEMPLATES.lock(&listed.id).await;
+        let tmpl = match recurring_invoice::get_row(pool, &listed.id).await {
+            Ok(Some(t)) if t.active != 0 => t,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!("Abo-Rechnung {} nicht lesbar: {e}", listed.id);
+                continue;
+            }
+        };
+        match catch_up(pool, paths, notifier, &tmpl, today).await {
             Ok(0) => {}
             Ok(n) => {
                 report.processed_templates += 1;
@@ -126,10 +137,12 @@ pub async fn run_now(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     id: &str,
     today: NaiveDate,
 ) -> Result<String> {
+    // Plan W1.4: nie gleichzeitig mit dem Tick auf derselben Vorlage.
+    let _guard = crate::locks::RECURRING_TEMPLATES.lock(id).await;
     let tmpl = recurring_invoice::get_row(pool, id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Abo-Vorlage nicht gefunden: {id}")))?;
@@ -150,9 +163,16 @@ pub async fn run_now(
         )));
     }
 
-    let invoice_id = process_one(pool, paths, app, &tmpl, &items, occurrence, today).await?;
+    let invoice_id = process_one(pool, paths, notifier, &tmpl, &items, occurrence, today).await?;
     let following = compute_next_due_date(freq, day, occurrence);
-    recurring_invoice::advance(pool, &tmpl.id, &invoice_id, &following.to_string()).await?;
+    recurring_invoice::advance(
+        pool,
+        &tmpl.id,
+        &occurrence.to_string(),
+        &invoice_id,
+        &following.to_string(),
+    )
+    .await?;
 
     backup::auto_backup_if_unlocked(pool, paths, session, "recurring_invoice.lock")
         .await
@@ -167,7 +187,7 @@ pub async fn run_now(
 async fn catch_up(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     tmpl: &RecurringInvoiceRow,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -188,9 +208,16 @@ async fn catch_up(
     let mut created = 0usize;
 
     while next <= today && end.map(|e| next <= e).unwrap_or(true) && created < CATCH_UP_CAP {
-        let invoice_id = process_one(pool, paths, app, tmpl, &items, next, today).await?;
+        let invoice_id = process_one(pool, paths, notifier, tmpl, &items, next, today).await?;
         let following = compute_next_due_date(freq, day, next);
-        recurring_invoice::advance(pool, &tmpl.id, &invoice_id, &following.to_string()).await?;
+        recurring_invoice::advance(
+            pool,
+            &tmpl.id,
+            &next.to_string(),
+            &invoice_id,
+            &following.to_string(),
+        )
+        .await?;
         next = following;
         created += 1;
     }
@@ -209,17 +236,17 @@ async fn catch_up(
 async fn process_one(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     tmpl: &RecurringInvoiceRow,
     items: &[RecurringInvoiceItemRow],
     occurrence: NaiveDate,
     today: NaiveDate,
 ) -> Result<String> {
+    // GJ leitet der Draft-Weg aus dem Rechnungsdatum ab (Plan W1.2/W9).
     let (input, fiscal_year) = build_invoice_input(tmpl, items, occurrence, today);
 
     // Draft über den normalen Weg — vergibt die Nummer + persistiert (Transaktion).
-    let detail =
-        create_invoice_draft_from_input(pool, &tmpl.contact_id, fiscal_year, &input, None).await?;
+    let detail = create_invoice_draft_from_input(pool, &tmpl.contact_id, &input, None).await?;
     let invoice_id = detail.invoice.id.clone();
     let number = detail.invoice.invoice_number.clone();
 
@@ -246,7 +273,7 @@ async fn process_one(
         AutoMode::Draft => {
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung als Entwurf bereit",
                 &format!(
                     "„{}“: Rechnungs-Entwurf {} angelegt — bitte prüfen und festschreiben.",
@@ -269,7 +296,7 @@ async fn process_one(
                 );
                 emit_notice(
                     pool,
-                    app,
+                    notifier,
                     "Abo-Rechnung: Auto-Festschreiben übersprungen",
                     &format!(
                         "„{}“: Entwurf {} liegt vor, kann aber nicht automatisch festgeschrieben werden, weil das Geschäftsjahr {} bereits abgeschlossen ist. Bitte den Beleg manuell prüfen.",
@@ -285,12 +312,20 @@ async fn process_one(
             match run_lock_pipeline(pool, paths, &invoice_id, "N/A").await {
                 Ok(_) => {
                     if matches!(mode, AutoMode::IssueSend) {
-                        try_auto_send(pool, paths, app, &tmpl.label, &invoice_id, &number, &dedup)
-                            .await;
+                        try_auto_send(
+                            pool,
+                            paths,
+                            notifier,
+                            &tmpl.label,
+                            &invoice_id,
+                            &number,
+                            &dedup,
+                        )
+                        .await;
                     } else {
                         emit_notice(
                             pool,
-                            app,
+                            notifier,
                             "Abo-Rechnung erstellt",
                             &format!(
                                 "„{}“: Rechnung {} automatisch festgeschrieben.",
@@ -311,7 +346,7 @@ async fn process_one(
                     );
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung: Festschreiben fehlgeschlagen",
                         &format!(
                             "„{}“: Entwurf {} liegt vor, konnte aber nicht automatisch festgeschrieben werden ({e}). Bitte manuell festschreiben.",
@@ -337,7 +372,7 @@ async fn process_one(
 async fn try_auto_send(
     pool: &SqlitePool,
     paths: &Paths,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     label: &str,
     invoice_id: &str,
     number: &str,
@@ -349,7 +384,7 @@ async fn try_auto_send(
                 Ok(_) => {
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung erstellt & versendet",
                         &format!(
                             "„{label}“: Rechnung {number} automatisch festgeschrieben und per E-Mail versendet."
@@ -364,7 +399,7 @@ async fn try_auto_send(
                     tracing::warn!("Abo-Rechnung {number}: Auto-Versand fehlgeschlagen: {e}");
                     emit_notice(
                         pool,
-                        app,
+                        notifier,
                         "Abo-Rechnung: Versand fehlgeschlagen",
                         &format!(
                             "„{label}“: Rechnung {number} ist festgeschrieben, der automatische Versand schlug fehl ({e}). Bitte manuell versenden."
@@ -380,7 +415,7 @@ async fn try_auto_send(
         Ok(None) => {
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung erstellt — Versand offen",
                 &format!(
                     "„{label}“: Rechnung {number} festgeschrieben. Kein Standard-Mail-Konto gesetzt — bitte manuell versenden (Einstellungen → E-Mail)."
@@ -395,7 +430,7 @@ async fn try_auto_send(
             tracing::warn!("Abo-Rechnung {number}: Mail-Konto-Abruf fehlgeschlagen: {e}");
             emit_notice(
                 pool,
-                app,
+                notifier,
                 "Abo-Rechnung erstellt — Versand offen",
                 &format!(
                     "„{label}“: Rechnung {number} festgeschrieben, Versand nicht möglich ({e})."
@@ -497,7 +532,7 @@ fn freq_and_day(tmpl: &RecurringInvoiceRow) -> Result<(Frequency, u32)> {
 
 async fn emit_notice(
     pool: &SqlitePool,
-    _app: Option<&AppHandle>,
+    _app: Option<&dyn Notifier>,
     title: &str,
     body: &str,
     severity: &str,
@@ -690,6 +725,9 @@ mod pipeline_tests {
             backups_dir: backups,
             inputs_dir: dir.join("inputs"),
             sidecar_dir: dir.join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
         }
     }
 
@@ -887,6 +925,69 @@ mod pipeline_tests {
             after.next_due_date, "2026-06-01",
             "um eine Periode vorgerückt"
         );
+    }
+
+    /// Plan W1.4: Tick und „Jetzt erstellen“ gleichzeitig auf derselben fälligen
+    /// Periode → genau eine Rechnung, Vorlage genau einmal vorgerückt.
+    #[tokio::test]
+    async fn parallel_tick_and_run_now_create_exactly_one_invoice() {
+        let (pool, dir) = setup_pool().await;
+        let paths = paths_for(dir.path());
+        mk_seller(&pool).await;
+        let contact_id = mk_contact(&pool).await;
+        let session = BackupSession::default();
+        session.set("passphrase-1234".into());
+
+        let detail =
+            recurring_invoice::create(&pool, &ri_tmpl(&contact_id, d(2026, 5, 1), "draft"))
+                .await
+                .unwrap();
+        let id = detail.template.id.clone();
+
+        let (tick, now) = tokio::join!(
+            process_due(&pool, &paths, &session, None, d(2026, 5, 20)),
+            run_now(&pool, &paths, &session, None, &id, d(2026, 5, 20)),
+        );
+        let tick = tick.unwrap();
+        let created = tick.created_invoices + usize::from(now.is_ok());
+        assert_eq!(
+            created, 1,
+            "genau eine Rechnung (tick={tick:?}, run_now={now:?})"
+        );
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoices")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let after = recurring_invoice::get_row(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.next_due_date, "2026-06-01");
+    }
+
+    /// Compare-and-Swap: ein veralteter Stichtag rückt nicht vor.
+    #[tokio::test]
+    async fn advance_with_stale_due_date_is_rejected() {
+        let (pool, _dir) = setup_pool().await;
+        mk_seller(&pool).await;
+        let contact_id = mk_contact(&pool).await;
+        let detail =
+            recurring_invoice::create(&pool, &ri_tmpl(&contact_id, d(2026, 5, 1), "draft"))
+                .await
+                .unwrap();
+        let id = detail.template.id.clone();
+        let err = recurring_invoice::advance(&pool, &id, "2026-04-01", "inv-x", "2026-05-01")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("vorgerückt"), "{err}");
+        let row = recurring_invoice::get_row(&pool, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.next_due_date, "2026-05-01");
+        assert!(row.last_invoice_id.is_none());
     }
 
     #[tokio::test]

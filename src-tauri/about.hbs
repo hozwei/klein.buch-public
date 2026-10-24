@@ -2,58 +2,43 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<title>Klein.Buch — Drittanbieter-Bibliotheken</title>
-<style>
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    max-width: 900px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-    color: #1a1a1a;
-    line-height: 1.45;
-  }
-  h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
-  h2 { font-size: 1.2rem; margin-top: 2rem; }
-  .meta { color: #555; font-size: 0.9rem; margin-bottom: 2rem; }
-  .lic { border: 1px solid #ddd; border-radius: 6px; padding: 1rem 1.25rem; margin: 0.75rem 0; background: #fafafa; }
-  .lic h3 { margin: 0 0 0.25rem; font-size: 1rem; }
-  .lic .spdx { color: #444; font-size: 0.85rem; margin-bottom: 0.5rem; }
-  .lic ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
-  .lic li { font-size: 0.85rem; }
-  pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; font-size: 0.8rem; border-radius: 4px; }
-  .toc a { display: inline-block; margin: 0.1rem 0.4rem 0.1rem 0; font-size: 0.85rem; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Klein.Buch — Rust-Bibliotheken</title>
+<link rel="stylesheet" href="/legal/legal.css">
 </head>
 <body>
-<h1>Klein.Buch — Drittanbieter-Bibliotheken (Rust)</h1>
+<main class="legal">
+<h1>Klein.Buch — Rust-Bibliotheken</h1>
+<!-- kb:rust:begin -->
 <p class="meta">
-  Erzeugt aus <code>Cargo.lock</code> per <a href="https://github.com/EmbarkStudios/cargo-about">cargo-about</a>.
-  Pflicht-Hinweise zu Apache-2.0 (NOTICE) und GPL-Classpath-Exception (OpenJDK-Sidecar)
-  stehen im „Über"-Dialog der App.
+  Erzeugt aus <code>Cargo.lock</code> per
+  <a href="https://github.com/EmbarkStudios/cargo-about">cargo-about</a> für
+  <code>x86_64-unknown-linux-gnu</code>, ohne Entwicklungs- und Build-Abhängigkeiten.
+  Die Hinweise nach Apache-2.0 (NOTICE-Dateien), die Lizenzen des mitgelieferten
+  C-Codes (SQLCipher, OpenSSL), die eingebetteten Schriften sowie die Java- und
+  JavaScript-Komponenten stehen in den weiteren Abschnitten dieser Seite.
 </p>
 
-<div class="toc">
+<h3>Übersicht</h3>
+<ul class="overview">
 {{#each overview}}
-  <a href="#{{id}}">{{name}}</a>
+  <li><a href="#rust-{{id}}">{{name}}</a> ({{count}})</li>
 {{/each}}
-</div>
+</ul>
 
 {{#each licenses}}
-<h2 id="{{id}}">{{name}} (SPDX: {{id}})</h2>
-{{#each used_by}}
-  <div class="lic">
-    <h3>{{crate.name}} {{crate.version}}</h3>
-    <div class="spdx">SPDX: {{crate.license}}</div>
-    {{#if crate.description}}<div>{{crate.description}}</div>{{/if}}
-    <ul>
-      {{#if crate.repository}}<li>Repository: <code>{{crate.repository}}</code></li>{{/if}}
-      {{#if crate.homepage}}<li>Homepage: <code>{{crate.homepage}}</code></li>{{/if}}
-      {{#if crate.authors}}<li>Autoren: {{crate.authors}}</li>{{/if}}
-    </ul>
-  </div>
+<section class="license">
+  {{#if first_of_kind}}<h3 id="rust-{{id}}">{{name}}</h3>{{/if}}
+  <h4 id="rust-{{id}}-{{@index}}">{{name}} <span class="spdx">(SPDX: {{id}})</span></h4>
+  <ul class="used-by">
+  {{#each used_by}}
+    <li><strong>{{crate.name}} {{crate.version}}</strong>{{#if crate.repository}} — <code>{{crate.repository}}</code>{{/if}}</li>
+  {{/each}}
+  </ul>
+  <pre class="license-text">{{text}}</pre>
+</section>
 {{/each}}
-<pre>{{text}}</pre>
-{{/each}}
-
+<!-- kb:rust:end -->
+</main>
 </body>
 </html>

@@ -17,7 +17,7 @@
 
 use std::fs;
 
-use klein_buch_lib::config::seed_inputs_for_test;
+use klein_buch_lib::config::{ensure_inputs_seeded, seed_inputs_for_test, Paths};
 use tempfile::TempDir;
 
 /// Helper: legt eine Datei mit gegebenem Inhalt an. Eltern-Verzeichnisse
@@ -186,6 +186,79 @@ fn empty_bundle_directory_is_noop() {
     seed_inputs_for_test(&bundle, &target).unwrap();
 
     assert!(target.is_dir(), "Ziel-Verzeichnis muss angelegt werden");
-    let mut entries = fs::read_dir(&target).unwrap();
-    assert!(entries.next().is_none(), "Ziel darf nicht befüllt sein");
+    // Nur das Seed-Manifest (Plan W11), keine Dateien.
+    let names: Vec<String> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n != klein_buch_lib::seed::MANIFEST)
+        .collect();
+    assert!(names.is_empty(), "Ziel darf nicht befüllt sein: {names:?}");
+}
+
+/// Plan W4: `ensure_inputs_seeded` läuft immer (auch im Debug-Build) und liest
+/// die Seed-Quelle aus `resource_dir/inputs` — im Container
+/// `KLEIN_BUCH_RESOURCE_DIR/inputs` → Volume `/inputs`.
+#[test]
+fn ensure_inputs_seeded_uses_resource_dir_and_keeps_edits() {
+    let tmp = TempDir::new().unwrap();
+    let paths = Paths::under(tmp.path());
+    write_file(
+        &paths
+            .resource_dir
+            .join("inputs")
+            .join("specs")
+            .join("afa-tabellen.json"),
+        r#"{"version":"BMF-bundled"}"#,
+    );
+    write_file(
+        &paths
+            .resource_dir
+            .join("inputs")
+            .join("mail-templates")
+            .join("rechnung.txt"),
+        "Hallo",
+    );
+    write_file(
+        &paths.inputs_dir.join("specs").join("afa-tabellen.json"),
+        r#"{"version":"BMF-user"}"#,
+    );
+    ensure_inputs_seeded(&paths).unwrap();
+    assert_eq!(
+        fs::read_to_string(paths.inputs_dir.join("specs").join("afa-tabellen.json")).unwrap(),
+        r#"{"version":"BMF-user"}"#,
+        "User-Edit bleibt"
+    );
+    assert_eq!(
+        fs::read_to_string(paths.inputs_dir.join("mail-templates").join("rechnung.txt")).unwrap(),
+        "Hallo"
+    );
+}
+
+/// Fehlt die Seed-Quelle (falsches Image, beschädigte Installation), bricht der
+/// Start mit klarer Meldung ab statt später an „Datei nicht gefunden“.
+#[test]
+fn ensure_inputs_seeded_fails_without_seed_source() {
+    let tmp = TempDir::new().unwrap();
+    let paths = Paths::under(tmp.path());
+    let err = ensure_inputs_seeded(&paths).unwrap_err();
+    assert!(err.to_string().contains("Seed-Quelle"), "{err}");
+}
+
+/// Quelle und Ziel identisch (Desktop-Dev: Repo-`inputs/`) → No-op.
+#[test]
+fn ensure_inputs_seeded_is_noop_when_source_is_target() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    write_file(&repo.join("inputs").join("specs").join("a.json"), "x");
+    let paths = Paths::from_dirs(
+        tmp.path().join("data"),
+        repo.join("inputs"),
+        repo.clone(),
+        repo.join("web"),
+    );
+    ensure_inputs_seeded(&paths).unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.join("inputs").join("specs").join("a.json")).unwrap(),
+        "x"
+    );
 }

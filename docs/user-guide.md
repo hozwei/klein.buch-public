@@ -1,402 +1,200 @@
-# Klein.Buch — Benutzerhandbuch (v0.1.0)
+# Klein.Buch — Benutzerhandbuch (Kurzfassung)
 
-Klein.Buch ist eine lokale Buchhaltung für deutsche Kleinunternehmer nach §19 UStG.
-Alle Daten bleiben auf deinem Rechner. Klein.Buch ist ein Werkzeug, kein
-Steuerberater — die Pflichtangaben- und EÜR-Logik sollte vor dem Echtbetrieb von
-einem Steuerberater gegengeprüft werden.
+Das vollständige Handbuch ist in Klein.Buch eingebaut: im Menü unter **Hilfe**
+(oder mit F1), mit Volltext-Suche und Glossar. Die Kapitel liegen auch im
+Repository unter `src-tauri/resources/handbook/` (eine Markdown-Datei je
+Kapitel). Diese Datei gibt nur einen Überblick über die Abläufe und verweist
+dorthin; maßgeblich ist das eingebaute Handbuch.
+
+Klein.Buch läuft als selbst gehosteter Dienst und wird im Browser bedient, auf
+dem Computer wie auf dem Telefon. Installation und Betrieb (Docker, Reverse-Proxy,
+Volumes, Backups, Updates) beschreiben das Betriebshandbuch
+`docs/operations-guide.md` und die Handbuch-Kapitel `installation-docker`,
+`reverse-proxy-und-tls`, `volumes-und-rechte`,
+`totp-einrichten-und-wiederherstellen`, `updates-und-rueckfall`,
+`disaster-recovery`, `speicherbedarf` und `fehlersuche-im-container`.
+
+Klein.Buch ist ein Werkzeug, kein Steuerberater — die Pflichtangaben- und
+EÜR-Logik sollte vor dem Echtbetrieb von einem Steuerberater gegengeprüft
+werden.
 
 ## 1. Erste Schritte
 
-### 1.1 Backup-Passphrase (Onboarding)
+### 1.1 Einrichten und Anmelden
 
-Beim ersten Start verlangt Klein.Buch eine **Backup-Passphrase**, bevor du die erste
-Rechnung schreiben kannst. Mit ihr werden alle Backups verschlüsselt
-(Argon2id + AES-256-GCM).
+Beim ersten Aufruf richtet der Betreiber bzw. Nutzer die Instanz im Browser ein:
+**Setup-Token** aus dem Container-Log, **Daten-Passwort** (mindestens 16
+Zeichen) und eine **Authenticator-App** für den zweiten Faktor (QR-Code
+scannen, Code bestätigen). Dazu gibt es zehn **Einmal-Codes** für den Fall, dass
+das Gerät mit der App verloren geht.
 
-Wichtig: Die Passphrase wird **nirgends gespeichert** — nicht in der Datenbank,
-nicht in Logs. Verlierst du sie, sind die verschlüsselten Backups unbrauchbar.
-Bewahre sie sicher auf (z. B. Passwort-Manager).
+Das Daten-Passwort verschlüsselt Datenbank und Backups und wird **nirgends
+gespeichert**. Geht es verloren, sind Daten und Backups unbrauchbar — es gibt
+keinen Wiederherstellungsweg. Bewahre es in einem Passwort-Manager auf.
 
-Bei jedem App-Start gibst du die Passphrase einmal ein, um Backups zu entsperren.
+Angemeldet wird mit Daten-Passwort und App-Code. Nach jedem Neustart des
+Servers ist Klein.Buch gesperrt, bis sich jemand anmeldet; erst dann laufen
+Tages-Backup, Abo-Rechnungen und die übrigen geplanten Aufgaben. Für kritische
+Aktionen (Wiederherstellen, Backup-Ziele, Mail-Postfächer, vollständige Exporte,
+Passwort- oder App-Wechsel) fragt Klein.Buch beide Faktoren erneut ab.
+Einstellungen dazu: **Einstellungen → Sicherheit & Anmeldung**.
 
-### 1.2 Stammdaten (Verkäuferprofil)
+### 1.2 Firmendaten
 
-Unter **Einstellungen → Stammdaten** trägst du dein Unternehmen ein: Name,
-Adresse, Steuernummer (sofern vorhanden), E-Mail, optional IBAN/BIC und Logo.
+Unter **Einstellungen → Meine Firmendaten** trägst du dein Unternehmen ein: Name,
+Adresse, Steuernummer bzw. USt-IdNr., Telefon, E-Mail, Zahlungsziel.
+Bankverbindung und weitere Zahlwege pflegst du unter **Einstellungen → Konten**,
+Logo und Unterschrift unter **Einstellungen → Rechnungs-Layout**. Ohne
+Telefonnummer und ohne Steuernummer bzw. USt-IdNr. lässt sich keine Rechnung
+ausstellen (die E-Rechnung verlangt beides).
 
 Der Schalter **Kleinunternehmer (§19)** ist standardmäßig aktiv. In diesem Modus
 weist Klein.Buch keine Umsatzsteuer aus und setzt automatisch den Pflichthinweis
 „Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen." auf jede Rechnung und in die
-E-Rechnung. Ein Verzicht auf §19 (Wechsel zur Regelbesteuerung) ist möglich, bindet
-dich aber 5 Jahre — Klein.Buch warnt dich vor dem Umschalten.
+E-Rechnung. Ein Verzicht auf §19 (Wechsel zur Regelbesteuerung) ist möglich,
+bindet dich aber 5 Jahre — Klein.Buch warnt dich vor dem Umschalten.
 
-### 1.3 Mail-Account (für den Versand)
+### 1.3 E-Mail-Versand
 
-Unter **Einstellungen → SMTP / Mail** legst du ein Versand-Konto an: Bezeichnung,
-Absender-Name und -E-Mail, SMTP-Host und -Port, optional Benutzername, und das
-**Passwort (bzw. App-Passwort) deines Mail-Postfachs**. Das ist nicht zu
-verwechseln mit der Backup-Passphrase aus §1.1 — hier geht es um die
-Zugangsdaten deines E-Mail-Kontos.
+Unter **Einstellungen → E-Mail-Versand** legst du ein Postfach an: Absender,
+SMTP-Server und -Port, Benutzername und das **Passwort deines Mail-Postfachs**
+(bei Zwei-Faktor-Anmeldung des Anbieters ein App-Passwort). Port **587** heißt
+STARTTLS, Port **465** implizites TLS; ohne Verschlüsselung geht es nur ohne
+Benutzer und Passwort.
 
-- TLS-Schalter: Port **587** = STARTTLS, Port **465** = implizites TLS.
-- Mit **Verbindung testen** prüfst du Host/Port (und ggf. Login), bevor du speicherst.
-- Bei Postfächern mit 2-Faktor-Authentifizierung (z. B. Microsoft/Google) brauchst
-  du ein **App-Passwort** statt des normalen Logins.
-- Das Postfach-Passwort wird im **Schlüsselbund deines Betriebssystems** abgelegt
-  (Windows Credential Manager / macOS Keychain / Linux Secret Service) — niemals in
-  der Klein.Buch-Datenbank.
-- Bestehende Konten kannst du **Bearbeiten** oder **Löschen** (Löschen entfernt
-  auch das Passwort aus dem Schlüsselbund). Beim Bearbeiten bleibt das Passwort
-  unverändert, wenn du das Passwort-Feld leer lässt.
-- Mit **Test-Mail senden** (Empfänger-Feld + Button) verschickst du eine echte
-  kurze Test-Mail über das gewählte Konto und prüfst so den vollständigen
-  Versandweg — nicht nur die Verbindung.
+- Das Passwort liegt verschlüsselt in der Klein.Buch-Datenbank und gilt nur für
+  den eingetragenen Server, Port und Benutzer; wer eins davon ändert, gibt das
+  Passwort neu ein.
+- Verbindungstest und Testmail prüfen den Versandweg (nur auf üblichen
+  Mail-Ports, höchstens zehn Tests je Minute).
+- **Microsoft 365** wird über SMTP angebunden (z. B. `smtp.office365.com`, Port
+  587, sofern der Anbieter SMTP-Versand erlaubt). Die frühere Microsoft-Anmeldung
+  über OAuth gibt es im Server nicht.
+- Jeder Versand steht im **Versandprotokoll** (gleiche Seite), auch
+  Fehlschläge.
 
-> Hinweis zur Zustellung: Dass eine Mail vom Provider angenommen wird, heißt nicht,
-> dass sie beim Empfänger im Posteingang landet. Große Anbieter (z. B. outlook.com)
-> filtern Mails von kostenlosen Freemail-Absendern hart. Für zuverlässige
+> Hinweis zur Zustellung: Dass eine Mail vom Provider angenommen wird, heißt
+> nicht, dass sie beim Empfänger im Posteingang landet. Für zuverlässige
 > Zustellung an Geschäftskunden versendest du am besten von einer **eigenen
 > Domain** mit korrekt eingerichtetem SPF, DKIM und DMARC.
 
-**Microsoft 365 / Exchange Online (ohne Passwort):** Statt SMTP-Passwort kannst du
-ein Microsoft-Postfach per **OAuth** anbinden — Klein.Buch sendet dann über
-Microsoft Graph. Du wählst beim Konto den Typ „Microsoft", trägst Tenant- und
-Client-ID deiner eigenen Azure-App ein und klickst **Mit Microsoft verbinden**
-(Anmeldung im Browser). Es wird **kein Passwort** gespeichert, nur ein
-Aktualisierungs-Token im Schlüsselbund deines Betriebssystems. Die Einrichtungs-
-Hilfe für die Azure-App steht direkt auf der Mail-Seite.
+## 2. Rechnungen
 
-## 2. Rechnung schreiben und versenden
-
-### 2.1 Kontakt anlegen
-
-Unter **Kontakte → Neuer Kontakt** legst du den Empfänger an (Name, Adresse, ggf.
-USt-IdNr., E-Mail). Die E-Mail wird beim Versand als Standard-Empfänger vorbelegt.
-
-### 2.2 Rechnung erstellen
-
-Unter **Rechnungen → Neue Rechnung** wählst du den Kontakt und erfasst die
-Positionen (Beschreibung, Menge, Einheit, Einzelpreis). Im §19-Modus sind die
-USt-Felder gesperrt; die Summen werden live berechnet. Speichern erzeugt einen
-**Entwurf** mit bereits vergebener Rechnungsnummer (`RE-{Jahr}-{Nummer}`).
-
-### 2.3 Festschreiben (Lock & Issue)
-
-Auf der Detailseite kannst du **Validieren** (Pflichtangaben-Prüfung) und dann
-**Lock & Issue** klicken. Dabei passiert:
-
-1. Die XRechnung (CII) wird erzeugt und vom offiziellen KoSIT-Validator geprüft.
-2. Daraus entsteht ein ZUGFeRD-PDF/A-3 (PDF mit eingebettetem XML).
-3. PDF und XML werden unveränderbar archiviert (write-once, GoBD).
-4. Ein automatisches Sicherungs-Backup wird ausgelöst.
-
-Ab jetzt ist die Rechnung **festgeschrieben**: Kernfelder sind unveränderlich.
-Korrekturen laufen nur über einen **Storno-Beleg** (Schaltfläche *Stornieren*),
-nie über Löschen.
-
-### 2.4 Versenden
-
-Auf der festgeschriebenen Rechnung klickst du **Senden**:
-
-- Konto auswählen (Standard-Konto ist vorausgewählt).
-- Empfänger ist aus dem Kontakt vorbelegt, lässt sich überschreiben.
-- Betreff und Text kommen aus der Vorlage `invoice-de` und sind editierbar.
-- Das **ZUGFeRD-PDF wird automatisch angehängt**.
-
-Nach erfolgreichem Versand steht die Rechnung auf **Versendet**; der Vorgang wird im
-Audit-Log festgehalten (ohne Passwort).
-
-### 2.5 Zahlung erfassen
-
-Geht das Geld ein, erfasst du unter **+ Zahlung** den Betrag und das **Zahlungs-
-datum**. Das Zahlungsdatum ist für die EÜR maßgeblich (Cash-Basis), nicht das
-Rechnungsdatum. Bei Teilzahlung steht die Rechnung auf *Teilzahlung*, bei
-vollständiger Zahlung auf *Bezahlt*.
-
-### 2.6 Wiederkehrende Rechnungen (Abo-Rechnungen)
-
-Für regelmäßig gleiche Rechnungen (z. B. monatliche Wartung) legst du eine
-**Abo-Vorlage** an — Zugang über den Button **Wiederkehrende Rechnungen** auf der
-Rechnungen-Seite. Eine Vorlage hält Kunde, Positionen (inkl. Paketen/Anfahrt wie
-bei einer normalen Rechnung), Frequenz (monatlich / quartalsweise / halbjährlich /
-jährlich) und Stichtag.
-
-**Was am Stichtag passiert,** legst du je Vorlage fest:
-
-- **Nur Entwurf vorbereiten** (Standard, prüfungssicher): Klein.Buch legt am
-  Stichtag einen Rechnungs-*Entwurf* an und meldet ihn — Festschreiben und Versand
-  machst du selbst.
-- **Automatisch erstellen**: Die Rechnung wird automatisch festgeschrieben
-  (Nummer, PDF, E-Rechnung, Archiv) — Versand machst du selbst.
-- **Automatisch erstellen und senden**: zusätzlich Versand über dein
-  Standard-Mail-Konto. Schlägt der Versand fehl (oder fehlt ein Standard-Konto),
-  bekommst du einen Hinweis; die Rechnung bleibt festgeschrieben.
-
-**Belegdatum ist immer der Erstellungstag** (rechtlich vorgegeben, §14 UStG/GoBD) —
-nie rückdatiert. Den **Leistungszeitraum** (z. B. „Mai 2026") schreibt Klein.Buch
-separat auf die Rechnung, wenn der Haken gesetzt ist. War die App länger zu, holt
-sie verpasste Perioden beim nächsten Start nach (jede mit heutigem Belegdatum).
-Mit **Pausieren** stoppst du eine Vorlage vorübergehend; fällige Vorlagen kannst du
-über **fällige jetzt erstellen** auch sofort auslösen. Die Vorlage selbst ist ein
-Stammdatum (editierbar/pausierbar); die *erzeugten* Rechnungen sind nach dem
-Festschreiben unveränderlich.
+- **Kontakt anlegen** unter **Kontakte**; die E-Mail wird beim Versand
+  vorbelegt.
+- **Rechnung anlegen** unter **Rechnungen**: Kontakt, Positionen (auch Pakete
+  und Anfahrt), Fälligkeitsdatum. Im §19-Modus sind die USt-Felder gesperrt.
+  Gespeichert wird ein **Entwurf** mit bereits vergebener Nummer
+  (`RE-{Jahr}-{Nummer}`); das Geschäftsjahr ergibt sich aus dem Rechnungsdatum.
+- **Prüfen** und **Rechnung ausstellen**: Klein.Buch erzeugt die XRechnung, lässt
+  sie vom KoSIT-Validator prüfen, erzeugt das ZUGFeRD-PDF/A-3, archiviert beides
+  unveränderbar und legt ein Backup an. Ab jetzt ist die Rechnung
+  **festgeschrieben**; Korrekturen laufen nur über **Stornieren**
+  (Storno-Beleg `ST-{Jahr}-{Nummer}`), nie über Löschen.
+- **PDF öffnen** zeigt das PDF im Browser (auf dem Telefon in der PDF-Ansicht des
+  Browsers), **PDF herunterladen** speichert es.
+- **Senden** verschickt das ZUGFeRD-PDF über dein Postfach; Empfänger, Betreff
+  und Text sind vorbelegt und änderbar.
+- **+ Zahlung** erfasst Zahlungseingänge mit Datum; für die EÜR zählt das
+  Zahlungsdatum (Cash-Basis), Teilzahlungen auch über Jahresgrenzen.
+- **Wiederkehrende Rechnungen** (Button auf der Rechnungen-Seite): Abo-Vorlagen
+  mit Frequenz und Stichtag; je Vorlage nur Entwurf, automatisch ausstellen oder
+  ausstellen und senden. Das Belegdatum ist immer der Erstellungstag; verpasste
+  Perioden holt Klein.Buch nach.
 
 ## 3. Angebote
 
-Angebote haben einen eigenen Belegkreis (`AN-{Jahr}-{Nummer}`) und einen eigenen
-Lebenszyklus: *Entwurf → Versendet → Angenommen/Abgelehnt → Konvertiert/Storniert*.
+Eigener Belegkreis (`AN-{Jahr}-{Nummer}`) und Lebenszyklus: *Entwurf →
+Versendet → Angenommen/Abgelehnt → Umgewandelt/Storniert*. Festgeschriebene
+Angebote sind unveränderlich. **PDF anzeigen** zeigt das Angebot, **Druck-PDF
+(mit AGB)** fügt Angebot, AGB und Datenschutz zu einem PDF zusammen; der Versand
+schickt sie als drei Anhänge. Beim **Annehmen** kannst du den unterschriebenen
+Vertrag hochladen; er wird unveränderbar archiviert. **In Rechnung umwandeln**
+erzeugt aus einem angenommenen Angebot einen Rechnungs-Entwurf.
 
-### 3.1 Angebot anlegen
+AGB und Datenschutz pflegst du unter **Einstellungen → AGB & Datenschutz** als
+versionierte PDF-Dokumente; je Typ ist genau eine Version aktiv, alte Fassungen
+bleiben als Nachweis erhalten und werden nie gelöscht.
 
-Unter **Angebote → Neues Angebot** wählst du den Kontakt und erfasst die
-Positionen (wie bei der Rechnung). Im §19-Modus sind die USt-Felder gesperrt.
-Speichern erzeugt einen **Entwurf** mit bereits vergebener Angebotsnummer.
+## 4. Kosten, E-Rechnungen, Privat-Geld
 
-### 3.2 Festschreiben
+- **+ Neue Kosten**: Lieferant, Datum, Kategorie, Beschreibung, Betrag (brutto),
+  optional der Beleg als PDF oder Bild — auf dem Telefon auch direkt mit der
+  Kamera („Beleg fotografieren"). Kosten sind sofort festgeschrieben; Korrektur
+  über Stornieren. Für die EÜR zählt das Zahlungsdatum.
+- **E-Rechnung importieren**: empfangene XRechnung (XML, CII oder UBL) oder
+  ZUGFeRD-PDF hochladen. Klein.Buch liest die Daten, prüft sie mit dem
+  KoSIT-Validator (Hinweis, kein Hindernis), archiviert das Original und legt
+  eine Kostenposition an. Angenommen werden die ZUGFeRD-Profile `EN16931`,
+  `EXTENDED` und `XRECHNUNG`; `MINIMUM` und `BASIC-WL` sind keine gültigen
+  E-Rechnungen und werden abgelehnt. Die Roh-XML einer empfangenen Rechnung
+  zeigt die Detailseite.
+- **Wiederkehrende Abos** für regelmäßige Kosten (Miete, Software).
+- **Privat-Geld** dokumentiert Entnahmen und Einlagen (EÜR-neutral).
 
-Auf der Detailseite klickst du **Validieren** und dann **Festschreiben**. Damit
-wird das Angebot gesperrt (Status *Versendet*) und ist GoBD-konform unveränderlich
-— Korrekturen laufen nur über **Stornieren** (kein Löschen). Angebote sind keine
-E-Rechnungen, es läuft also keine KoSIT-/ZUGFeRD-Prüfung.
+## 5. Anschaffungen und Abschreibung
 
-### 3.3 Annehmen (mit Vertrags-Upload)
+Unter **Anschaffungen** erfasst du Anlagen über der GWG-Grenze mit Methode und
+betrieblichem Anteil; **AfA buchen** erzeugt die Abschreibung je Geschäftsjahr
+(wiederholbar). Eine Veräußerung löst den Restbuchwert auf. Die AfA-Sätze
+kommen aus der Tabelle `afa-tabellen.json` im Volume `/inputs`.
 
-Nimmt der Kunde an, klickst du **Annehmen**. Optional lädst du dabei den
-**unterschriebenen Vertrag** (PDF/Bild) hoch — er wird write-once archiviert und
-als Anhang mit dem Angebot verknüpft. Anhänge öffnest du über **Öffnen** /
-**Im Ordner**.
+## 6. EÜR und Steuer-Export
 
-### 3.4 PDF, Bundle und Versand
+Unter **Steuer (EÜR)** siehst du die Einnahmen-Überschuss-Rechnung eines Jahres
+auf Cash-Basis. **Für die Steuererklärung exportieren** erzeugt die
+ELSTER-Ausfüllhilfe mit „Anlage EÜR"-PDF, den DATEV-Buchungsstapel (SKR03,
+umschaltbar auf SKR04) und das Steuerberater-Paket (ZIP). Alle Exporte kommen als
+Download in den Browser. Die Konten-Zuordnung im DATEV-Export ist ein Vorschlag
+und vom Steuerberater zu prüfen.
 
-Auf einem festgeschriebenen Angebot stehen drei Aktionen bereit:
+## 7. Geschäftsjahr und Hinweise
 
-- **PDF anzeigen** — erzeugt (einmalig) das Angebots-PDF und öffnet es.
-- **Bundle (Druck)** — fügt Angebot + AGB + Datenschutz zu **einem** PDF zusammen
-  und öffnet es zum Drucken.
-- **Versenden** — verschickt das **Bundle** per Mail: Angebots-PDF, AGB und
-  Datenschutz als **drei separate Anhänge**. Empfänger, Betreff und Text sind wie
-  beim Rechnungsversand vorbelegt und editierbar.
+Unter **Geschäftsjahr** schließt du ein **abgelaufenes** Jahr ab: AfA buchen,
+Jahr prüfungssicher festschreiben (§146 AO), Backup. Der Abschluss ist
+unumkehrbar; Korrekturen danach nur per Storno-Beleg. Die automatische AfA zum
+Jahreswechsel ist standardmäßig aktiv und dort abschaltbar.
 
-Wichtig: Für Bundle und Versand müssen je eine **aktive** AGB- und
-Datenschutz-Version hinterlegt sein (siehe §4). Die zum Zeitpunkt der Ausgabe
-aktiven Versionen werden **fest und unveränderlich** mit dem Angebot verknüpft —
-auf der Detailseite siehst du unter *Verknüpfte Rechtsdokumente*, welche Fassung
-(Version) an dieses Angebot ging (rechtlicher Nachweis).
+**Hinweise** erinnern an Fälliges (überfällige Rechnungen, Backups, fehlende oder
+gescheiterte externe Backup-Ziele, Geschäftsjahr abschließen) und — wenn unter
+**Einstellungen → Sicherheit & Anmeldung** eingeschaltet — an neue Versionen.
+Welche Erinnerungen aktiv sind, steuerst du unter **Hinweise → Erinnerungen
+einstellen**.
 
-### 3.5 In Rechnung umwandeln
+## 8. Backups und Wiederherstellen
 
-Aus einem **angenommenen** Angebot erzeugt **In Rechnung umwandeln** eine
-Rechnungs-Entwurf (Positionen übernommen, anpassbar). Die Rechnung wird danach wie
-gewohnt festgeschrieben (§2.3). Das Angebot wechselt auf *Konvertiert* und verlinkt
-die Rechnung.
+Unter **Einstellungen → Backups**:
 
-## 4. Rechtsdokumente (AGB & Datenschutz)
+- **Status** und **Backup-Verlauf**; **Backup jetzt erstellen**.
+- **Externe Ziele**: Ordner unter `/backup-targets` (vom Betreiber
+  eingebunden, z. B. NAS oder Sync-Ordner) und SFTP-Server, gern mehrere.
+  Backups sind verschlüsselt und liegen auch bei einem Anbieter sicher. Ohne
+  externes Ziel liegen alle Backups auf demselben Server wie die Daten.
+- **Wiederherstellen**: Backup-Datei hochladen oder ein lokales Backup wählen und
+  das Daten-Passwort dieses Backups eingeben. Klein.Buch sichert vorher den
+  aktuellen Stand und startet danach neu; anschließend gilt das Daten-Passwort
+  des Backups.
 
-Unter **Einstellungen → Rechtsdokumente** pflegst du AGB und
-Datenschutzrichtlinie als **versionierte PDF-Dokumente**:
+Automatische Backups entstehen bei jedem Festschreiben und einmal täglich, vor
+jeder Wiederherstellung und vor jeder Datenbank-Umstellung durch ein Update.
+Eigene Vorlagen in `/inputs` sind **nicht** Teil der Backups; die sichert der
+Betreiber.
 
-- **Neue Version hochladen**: PDF wählen, optional einen Titel vergeben, hochladen.
-  Die Version ist zunächst inaktiv.
-- **Aktivieren**: Genau eine Version pro Dokumenttyp ist gleichzeitig aktiv. Beim
-  Aktivieren einer neuen Version wird die bisherige automatisch deaktiviert.
-- Versionen sind **GoBD-konform unveränderlich** und werden **nie gelöscht** —
-  alte Fassungen bleiben als Nachweis erhalten.
+**Alles löschen** gibt es in Klein.Buch nicht (zehnjährige Aufbewahrungspflicht,
+§147 AO). Wer neu beginnen will, lässt den Betreiber eine neue Instanz mit leerem
+Datenverzeichnis anlegen.
 
-Beim Erzeugen eines Angebots-Bundles oder beim Versand werden die aktiven
-Versionen fest mit dem Angebot verknüpft (§3.4). Bestehende Verknüpfungen bleiben
-unverändert, auch wenn du später eine neue Version aktivierst.
+## 9. Daten exportieren und DSGVO
 
-> Juristik-Hinweis: AGB- und Datenschutz-Texte solltest du vor dem Echtbetrieb
-> anwaltlich prüfen lassen. Klein.Buch liefert die Mechanik (Versionierung +
-> Nachweis), nicht die Rechtsberatung.
+**Einstellungen → Daten exportieren** erzeugt ein offenes ZIP mit allen Daten
+(eine JSON-Datei je Tabelle, Belegarchiv, Schema, Lesehilfe `read_export.py`) —
+für den Steuerberater oder einen Wechsel. Zugangsdaten sind nicht enthalten.
+DSGVO-Auskunft und Anonymisierung eines Kontakts startest du beim Kontakt.
 
-## 5. Backup
+## 10. PDF-Layout
 
-Unter **Einstellungen → Backup** siehst du Status und Verlauf und kannst:
-
-- ein **Backup-Ziel** wählen (z. B. ein OneDrive-Ordner) — Backups sind verschlüsselt,
-  liegen also auch in der Cloud sicher;
-- jederzeit ein **manuelles Backup** auslösen;
-- aus einem Backup **wiederherstellen** (Restore-Assistent).
-
-Automatische Backups laufen bei jedem Festschreiben/Storno und einmal täglich beim
-Start. Vor jeder Wiederherstellung erstellt Klein.Buch zunächst ein
-**Pre-Restore-Backup** und tauscht Datenbank und Archiv erst beim nächsten
-App-Start sicher aus. Deine Vorlagen unter `inputs/` werden dabei nicht angefasst.
-
-Den Wiederherstellungs- und Migrationsablauf für den Steuerberater beschreibt der
-`docs/operations-guide.md`.
-
-### 5.1 Zurücksetzen (alles löschen)
-
-Unter **Einstellungen → Zurücksetzen** kannst du Klein.Buch **vollständig auf
-diesem PC löschen** und auf den Anfang zurücksetzen — etwa um das Gerät
-weiterzugeben oder ganz neu zu beginnen. Das ist eine **alles-oder-nichts**-Funktion;
-einzelne Belege lassen sich bewusst nicht löschen (Storno statt Löschung).
-
-Wichtig: Wegen der **10-jährigen Aufbewahrungspflicht** (GoBD/§147 AO) bietet
-Klein.Buch zuerst einen **Daten-Export** an. Bestehen festgeschriebene Belege,
-musst du sie exportieren **oder** ausdrücklich bestätigen, dass du deine
-Aufbewahrungspflicht erfüllt hast. Danach tippst du `LÖSCHEN`, gibst dein
-Daten-Passwort ein und bestätigst final.
-
-Gelöscht wird **nur lokal**: Datenbank, Beleg-Archiv, lokale Backups sowie
-gespeicherte Mail-/Backup-Zugangsdaten. Ein **externes Backup-Ziel** (Cloud-Ordner
-oder SFTP-Server) bleibt bestehen — entferne es bei Bedarf selbst. Nach dem
-Zurücksetzen startet die App wieder mit der Passwort-Einrichtung wie beim ersten
-Mal.
-
-## 6. Kosten erfassen
-
-Unter **Kosten → Neue Kosten** erfasst du Betriebsausgaben: Lieferant, Datum,
-Kategorie, Beschreibung und Betrag (brutto). Optional lädst du den **Beleg**
-(PDF/Bild) hoch — er wird unveränderbar archiviert. Als Kleinunternehmer ziehst du
-keine Vorsteuer; die Kosten gehen daher **brutto** in die EÜR. Für Leistungen, bei
-denen du als Empfänger die Steuer schuldest (**§13b Reverse-Charge**), setzt du
-den entsprechenden Schalter.
-
-Das **Zahlungsdatum** ist für die EÜR maßgeblich (Cash-Basis): ohne Zahlungsdatum
-zählt die Kostenposition noch nicht. Erfasste Kosten sind sofort festgeschrieben;
-Korrekturen laufen über **Stornieren**, nicht über Löschen.
-
-**Wiederkehrende Kosten** (Abos, Mieten) legst du unter **Kosten → Abos** an:
-Intervall + Vorlage. Klein.Buch erzeugt die fälligen Posten automatisch als
-Entwurf (Zahlung bestätigst du später). War die App länger zu, werden verpasste
-Perioden beim nächsten Start nachgeholt.
-
-**Privatentnahmen/-einlagen** (unter **Privat-Geld**) dokumentierst du der
-Vollständigkeit halber — sie sind **EÜR-neutral** und beeinflussen den Gewinn
-nicht.
-
-## 7. E-Rechnungen empfangen
-
-Seit 2025 müssen Unternehmen strukturierte E-Rechnungen annehmen können. Unter
-**Kosten → E-Rechnung importieren** lädst du eine empfangene **XRechnung**
-(XML, beide Formate CII/UBL) oder **ZUGFeRD** (PDF mit eingebettetem XML) hoch.
-Klein.Buch liest die Daten aus, prüft sie mit dem KoSIT-Validator (**Hinweis, kein
-Hindernis** — eine rechtlich empfangene Rechnung kannst du immer verbuchen) und
-legt eine **Kostenposition** an. Die Originaldatei wird unveränderbar als Beleg
-archiviert. Kategorie und Zahlungsdatum ergänzt du anschließend.
-
-### 7.1 Rechnungs-Eingang einrichten (Post-v1.0, ADR 0037)
-
-UI-Label „Rechnungs-Eingang" (Settings-Menü), Code-Identifier intern
-`drop_folder_*` (Module, Settings-Keys, Route, Rule-IDs) — die folgende
-Beschreibung verwendet das UI-Label. Wer regelmäßig E-Rechnungen per
-E-Mail bekommt, will sie nicht jedes Mal von Hand durch den Datei-Dialog
-ziehen. Unter **Einstellungen → Rechnungs-Eingang** aktivierst du einen
-überwachten Ordner: Toggle „Rechnungs-Eingang aktivieren" an, Pfad
-auswählen, „Speichern". Klein.Buch prüft den Ordner ab dann alle fünf
-Minuten und beim App-Start; zusätzlich gibt es auf der Settings-Seite
-einen Button **„Jetzt prüfen"** für Eilfälle.
-
-- **Workflow:** XML- oder ZUGFeRD-PDF-Datei aus dem Mail-Anhang in den
-  Drop-Folder kopieren (oder den Cloud-Sync-Client das machen lassen). Beim
-  nächsten Tick wandert die Datei automatisch durch dieselbe Empfangs-Pipeline
-  wie der manuelle Import: Parser → KoSIT-Hinweis → write-once-Archiv →
-  Kostenposition (paid_date noch leer).
-- **`processed/YYYY-MM/`-Routing:** erfolgreich importierte Dateien werden in
-  einen Monats-Sub-Ordner verschoben, damit der Drop-Folder nicht zuwächst.
-  Der Monat ist das Sync-Datum, nicht das Beleg-Datum.
-- **`failed/`-Routing:** fehlgeschlagene Dateien (kaputtes XML, unsupported
-  Profile, unbekannte Endung) wandern in `failed/` und bleiben dort liegen.
-  Kein Auto-Delete — Klein.Buch löscht nichts im Drop-Folder. Du siehst
-  fehlerhafte Dateien sofort und kannst entscheiden, ob der Absender eine
-  neue Datei liefern muss oder ob du die Position manuell erfasst.
-- **Polling statt Live-Watcher:** Klein.Buch fragt den Ordner nicht über
-  Filesystem-Events ab (die OneDrive/iCloud-Sync-Clients liefern Events
-  unzuverlässig oder gar nicht). Stattdessen liest die App den Ordner direkt
-  über `read_dir` — das ist robust gegenüber Sync-Verzögerungen.
-- **Notifications:** Erfolg geht in die Inbox, Fehler zusätzlich als
-  OS-Toast. Beides ist in den Hinweis-Regeln schaltbar.
-- **Bewusste Limit:** der Drop-Folder ist nicht rekursiv, d. h. Klein.Buch
-  prüft nur Top-Level-Dateien. Unterordner-Strukturen baust du dir selbst,
-  Klein.Buch greift nicht hinein.
-
-### 7.2 Roh-XML einer empfangenen Rechnung anzeigen (Post-v1.0, ADR 0037)
-
-Auf der Detailseite einer empfangenen E-Rechnung gibt es den Button
-**„Roh-XML anzeigen"**. Klick öffnet einen Modal-Dialog mit der ursprünglichen
-XML-Datei aus dem Archiv: bei ZUGFeRD wird das XML aus dem PDF/A-3-Anhang
-extrahiert, bei XRechnung direkt gelesen. Der Dialog zeigt die XML
-formatiert (Pretty-Print), den SHA-256-Hash und die Byte-Größe; ein
-Copy-Button kopiert den vollständigen XML-Text in die Zwischenablage.
-
-Zweck dieser Funktion ist die schnelle Prüfung durch den Steuerberater oder
-den Betriebsprüfer — typische Fragen sind „Welche BT-Felder stehen drin?",
-„Ist die §13b-Markierung gesetzt?", „Welcher Buyer-Snapshot ist in der
-XML?". Das Anzeigen verändert nichts am Beleg und erzeugt keinen
-Audit-Eintrag (Lesepfad, kein Beleg-Akt); Tamper-Detection läuft trotzdem
-im Hintergrund, ein Hash-Mismatch würde sofort als `archive.tamper`-Audit
-landen.
-
-### 7.3 ZUGFeRD-Profile-Whitelist (Post-v1.0, ADR 0037)
-
-Klein.Buch akzeptiert beim Empfang nur die ZUGFeRD-Profile, die seit der
-E-Rechnungs-Pflicht 2025 gültige E-Rechnungen abbilden:
-
-- **akzeptiert:** `EN16931`, `EXTENDED`, `XRECHNUNG`
-- **abgelehnt:** `MINIMUM`, `BASIC-WL`
-
-Beide abgelehnten Profile tragen nicht die vollständigen § 14-UStG-Pflicht-
-angaben und gelten seit 2025 nur noch als buchhalterische Beilage zu einer
-Papier- oder PDF-Rechnung. Klein.Buch zeigt in dem Fall eine klare
-Fehlermeldung mit dem erkannten Profil-Namen. Tipp: Wenn ein Lieferant nur
-MIN- oder BASIC-WL-Anhänge schickt, ist das ein guter Anlass, ihn auf
-EN16931 oder XRECHNUNG umzustellen — andernfalls erfasst du die Position
-manuell und bittest um einen gültigen Beleg.
-
-## 8. Anlagen & Abschreibung (AfA)
-
-Größere Anschaffungen (über der GWG-Grenze) schreibst du über mehrere Jahre ab.
-Unter **Anschaffungen → Neue Anschaffung** erfasst du Bezeichnung, Datum,
-Anschaffungskosten, Methode (linear / GWG-Sofort / Computer-Sonderregel 1 Jahr)
-und ggf. den **betrieblichen Anteil**. Mit **AfA buchen** erzeugt Klein.Buch die
-Abschreibung für das Geschäftsjahr (der Lauf ist wiederholbar/idempotent). Verkaufst
-du eine Anlage, erfasst du die **Veräußerung** (Erlös) — Restbuchwert und
-Gewinn/Verlust fließen automatisch in die EÜR. Die AfA-Sätze stammen aus der
-BMF-Tabelle unter `inputs/afa-tabellen.json`, die du bei Bedarf pflegen kannst.
-
-## 9. EÜR & Steuer-Export
-
-Unter **Steuer (EÜR)** wählst du das Jahr und siehst die Einnahmen-Überschuss-
-Rechnung auf **Cash-Basis** (maßgeblich ist der Zahlungszeitpunkt): Betriebs-
-einnahmen, Betriebsausgaben nach Kategorie, AfA, Anlagen-Veräußerungen und der
-Überschuss/Verlust. Storno-Erstattungen erscheinen als negative Einnahme im Jahr
-des Storno-Belegs.
-
-Unter **Steuer (EÜR) → Exportieren** erzeugst du:
-
-- **Für die eigene Abgabe (ELSTER):** eine Ausfüllhilfe (welcher Betrag in welche
-  Zeile der Anlage EÜR gehört) plus ein PDF „Anlage EÜR".
-- **Für den Steuerberater:** einen **DATEV-Buchungsstapel** (Kontenrahmen SKR03
-  voreingestellt, SKR04 umschaltbar) und ein **Steuerberater-Paket (ZIP)** mit
-  Deckblatt, EÜR-PDF, DATEV-Datei, Einzelaufstellungen und Stammdaten.
-
-Sind für das Jahr noch nicht alle Abschreibungen gebucht, weist dich ein Banner
-darauf hin und bietet **AfA jetzt buchen** an — sonst fehlte die AfA im Export.
-Die Konten-Zuordnung im DATEV-Export ist ein **Vorschlag** und vom Steuerberater
-zu prüfen.
-
-## 10. Hinweise & Geschäftsjahr abschließen
-
-Die **Hinweise** (Glocke oben) erinnern dich an Fälliges: Belege erfassen,
-überfällige Rechnungen, Backup überfällig, Geschäftsjahr abschließen. Welche
-Erinnerungen aktiv sind, steuerst du unter **Hinweise → Regeln**.
-
-Unter **Geschäftsjahr** schließt du ein **abgelaufenes** Jahr ab. Dabei wird die
-AfA gebucht, das Jahr **prüfungssicher festgeschrieben** (danach unveränderlich,
-§146 AO) und ein Sicherungs-Backup erstellt. Der Abschluss ist **unumkehrbar** und
-verlangt eine entsperrte Backup-Passphrase. **Korrekturen** an einem
-abgeschlossenen Jahr sind weiterhin über einen **Storno-Beleg** möglich (er wirkt
-im Storno-Jahr). Die automatische AfA-Buchung zum Jahreswechsel ist standardmäßig
-aktiv und unter **Geschäftsjahr** abschaltbar.
-
-## 11. PDF-Layout wählen
-
-Unter **Einstellungen → Rechnungs-Layout** wählst du, wie deine Rechnungen und
-Angebote als PDF aussehen: **Standard, Modern, Klassisch** oder **Minimal**. Mit
-**Vorschau** öffnest du je Vorlage ein Muster-PDF. Die Auswahl gilt für **neu
-erzeugte** Belege; bereits ausgestellte bleiben unverändert. Im §19-Modus stehen
-nur Vorlagen mit der Kleinunternehmer-Klausel zur Wahl. Eigene Vorlagen kannst du
-als `.typ`-Datei in `inputs/pdf-templates/` ablegen.
+Unter **Einstellungen → Rechnungs-Layout** wählst du **Standard, Modern,
+Klassisch** oder **Minimal**, mit Vorschau. Die Auswahl gilt für neu erzeugte
+Belege. Im §19-Modus stehen nur Vorlagen mit der Kleinunternehmer-Klausel zur
+Wahl. Eigene Vorlagen legt der Betreiber als `.typ`-Datei in
+`/inputs/pdf-templates/` ab.

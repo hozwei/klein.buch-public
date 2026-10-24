@@ -1,6 +1,15 @@
 # ADR 0038 — Release-Bundle: NSIS only, MSI verworfen
 
-**Status:** Akzeptiert · 2026-05-27 · v1.0-RC (Block G4.3).
+**Status:** Akzeptiert · 2026-05-27 · v1.0-RC (Block G4.3). · **Abgelöst durch ADR 0039 (2026-10-23)**
+
+## Abgelöst (2026-10-23)
+
+Mit ADR 0039 entfällt die Desktop-App; Klein.Buch wird nur noch als
+Docker-Image mit festen CalVer-Tags verteilt. Einen Windows-Installer gibt es
+damit nicht mehr, weder NSIS noch MSI, und die Frage MSI-ProductVersion vs.
+CalVer-Jahr stellt sich nicht mehr. Die Windows-Release-Pipeline entfällt in
+Block W11; die veröffentlichten NSIS-Releases v2026.5.x bleiben unverändert
+stehen.
 
 **Code-Referenzen:**
 
@@ -106,7 +115,7 @@ Konkret:
 **Neutral:**
 
 - SmartScreen-Warnung beim Erst-Start gilt für NSIS wie für MSI gleichermaßen,
-  beides ist unsigniert. ADR-Bezug: implizit via `release-signing-guide.md`,
+  beides ist unsigniert. ADR-Bezug: implizit via `release-signing-guide.md` (mit Phase W, Block W13, entfernt),
   nicht durch diese Entscheidung verändert.
 
 ## Alternativen erwogen

@@ -12,55 +12,74 @@
 //! - Die Verknüpfung an ein Angebot passiert NICHT hier, sondern bei der
 //!   Bundle-/Versand-Erzeugung ([`crate::commands::quotes`]).
 
+use crate::app_ctx::AppCtx;
 use chrono::Datelike;
-use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::archive::{self, ArchiveKind};
-use crate::config::Paths;
 use crate::db::models::LegalDocumentRow;
 use crate::db::repo::{audit_log, legal_documents};
 use crate::error::{Error, Result};
 
-#[tauri::command]
-pub async fn legal_documents_list(pool: State<'_, SqlitePool>) -> Result<Vec<LegalDocumentRow>> {
-    legal_documents::list(pool.inner()).await
+/// Argumente von [`legal_documents_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegalDocumentsListArgs {}
+
+pub async fn legal_documents_list(
+    ctx: &Arc<AppCtx>,
+    _args: LegalDocumentsListArgs,
+) -> Result<Vec<LegalDocumentRow>> {
+    let pool = ctx.pool()?;
+
+    legal_documents::list(&pool).await
+}
+
+/// Argumente von [`legal_documents_upload`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegalDocumentsUploadArgs {
+    pub doc_type: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Aus `POST /api/upload/rechtsdokument` (Plan W7, nur PDF).
+    pub upload_id: String,
 }
 
 /// Lädt eine neue Version eines Rechtsdokuments hoch. Das PDF wird write-once
 /// archiviert; die neue Version ist zunächst **inaktiv** (separat aktivieren).
-#[tauri::command]
 pub async fn legal_documents_upload(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    doc_type: String,
-    title: Option<String>,
-    file_bytes: Vec<u8>,
-    file_name: String,
+    ctx: &Arc<AppCtx>,
+    args: LegalDocumentsUploadArgs,
 ) -> Result<LegalDocumentRow> {
-    let pool = pool.inner();
+    let LegalDocumentsUploadArgs {
+        doc_type,
+        title,
+        upload_id,
+    } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if !legal_documents::is_valid_doc_type(&doc_type) {
         return Err(Error::Domain(format!(
             "Unbekannter Dokumenttyp '{doc_type}' (erlaubt: agb, privacy)"
         )));
     }
-    if file_bytes.is_empty() {
-        return Err(Error::Domain("Datei ist leer.".into()));
-    }
-    if !file_bytes.starts_with(b"%PDF") {
-        return Err(Error::Domain(
-            "Es werden nur PDF-Dateien akzeptiert (die Datei beginnt nicht mit %PDF).".into(),
-        ));
-    }
+    // Upload-Art „rechtsdokument“ lässt nur PDF zu (Magic Bytes, Plan W7).
+    let upload = ctx
+        .uploads
+        .read(&upload_id, &[crate::uploads::UploadKind::LegalDocument])?;
+    let file_name = upload.file_name;
+    let file_bytes = upload.bytes;
 
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     let sanitized = sanitize_filename(&file_name);
     // Write-once-Pfad muss eindeutig sein → kurzer UUID-Token als Präfix
     // (mehrere Versionen mit gleichem Original-Namen kollisionsfrei).
     let token = &Uuid::now_v7().to_string()[..8];
     let archive_name = format!("{doc_type}-{token}-{sanitized}");
-    let fiscal_year = chrono::Local::now().year();
+    let fiscal_year = crate::clock::today_berlin().year();
 
     let stored = archive::store_bytes(
         pool,
@@ -94,23 +113,48 @@ pub async fn legal_documents_upload(
         )),
     )
     .await?;
+    ctx.uploads.consume(&upload_id);
 
     Ok(row)
 }
 
+/// Argumente von [`legal_documents_activate`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegalDocumentsActivateArgs {
+    pub id: String,
+}
+
 /// Aktiviert eine Version (deaktiviert die bisher aktive desselben Typs).
-#[tauri::command]
-pub async fn legal_documents_activate(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    let pool = pool.inner();
+pub async fn legal_documents_activate(
+    ctx: &Arc<AppCtx>,
+    args: LegalDocumentsActivateArgs,
+) -> Result<()> {
+    let LegalDocumentsActivateArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     legal_documents::activate(pool, &id).await?;
     audit_log::append(pool, "legal_document.activate", "legal_document", &id, None).await?;
     Ok(())
 }
 
+/// Argumente von [`legal_documents_deactivate`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegalDocumentsDeactivateArgs {
+    pub id: String,
+}
+
 /// Deaktiviert eine Version (danach kein aktives Dokument dieses Typs).
-#[tauri::command]
-pub async fn legal_documents_deactivate(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    let pool = pool.inner();
+pub async fn legal_documents_deactivate(
+    ctx: &Arc<AppCtx>,
+    args: LegalDocumentsDeactivateArgs,
+) -> Result<()> {
+    let LegalDocumentsDeactivateArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     legal_documents::deactivate(pool, &id).await?;
     audit_log::append(
         pool,

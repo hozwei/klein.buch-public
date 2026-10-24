@@ -24,6 +24,10 @@
 //!   `SpecifiedTradeSettlementPaymentMeans/TypeCode`.
 //! - **BT-34** Seller electronic address (`URIUniversalCommunication`).
 //! - **BT-10** BuyerReference (Pflicht-Parameter).
+//! - **BG-6** Seller Contact (BR-DE-2): BT-41 Ansprechpartner (sonst der
+//!   Verkäufer-Name), BT-42 Telefon, BT-43 E-Mail (BR-DE-5/6/7; Plan W1.11).
+//! - **BT-29** Seller identifier = Steuernummer, wenn keine USt-IdNr. (BT-31)
+//!   vorliegt (BR-CO-26: BT-32 allein genügt nicht; Plan W1.11).
 //!
 //! ## CII-Element-Reihenfolge ist schema-streng
 //! Die Reihenfolge folgt der KoSIT-Schematron-Testinstanz
@@ -155,14 +159,16 @@ pub fn to_xrechnung(
     // BT-22 §19-Klausel. EN-16931 verlangt SubjectCode (UNTDID 4451) für jede
     // IncludedNote — `REG` (Regulatory information) ist der EN-16931-konforme
     // Code für regulatorische Hinweise wie die Kleinunternehmer-Klausel.
-    // Fix R3-001 (v2026.5-Re-Review).
+    // Fix R3-001 (v2026.5-Re-Review). Reihenfolge laut CII-Schema (NoteType):
+    // ContentCode?, Content*, SubjectCode? — `SubjectCode` vor `Content` lehnte
+    // KoSIT als Schemafehler ab (W11-Fund mit dem echten Sidecar).
     if is_klein {
         x.push_str("    <ram:IncludedNote>\n");
-        x.push_str("      <ram:SubjectCode>REG</ram:SubjectCode>\n");
         x.push_str(&format!(
             "      <ram:Content>{}</ram:Content>\n",
             esc(HINWEIS_TEXT)
         ));
+        x.push_str("      <ram:SubjectCode>REG</ram:SubjectCode>\n");
         x.push_str("    </ram:IncludedNote>\n");
     }
     // BT-22 Custom-Notes. Dedup R3-003 — wenn der Nutzer in `notes` den
@@ -239,11 +245,44 @@ pub fn to_xrechnung(
         esc(buyer_reference.trim())
     ));
     // Seller
+    let seller_vat = seller.vat_id.filter(|s| !s.trim().is_empty());
+    let seller_tax = seller.tax_number.filter(|s| !s.trim().is_empty());
     x.push_str("      <ram:SellerTradeParty>\n");
+    // BT-29 (BR-CO-26): ohne USt-IdNr. die Steuernummer als Verkäufer-Kennung.
+    if seller_vat.is_none() {
+        if let Some(tax) = seller_tax {
+            x.push_str(&format!("        <ram:ID>{}</ram:ID>\n", esc(tax.trim())));
+        }
+    }
     x.push_str(&format!(
         "        <ram:Name>{}</ram:Name>\n",
         esc(seller.name)
     ));
+    // BG-6 Seller Contact (BR-DE-2): BT-41/42/43.
+    let contact_name = seller
+        .contact_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(seller.name);
+    x.push_str("        <ram:DefinedTradeContact>\n");
+    x.push_str(&format!(
+        "          <ram:PersonName>{}</ram:PersonName>\n",
+        esc(contact_name.trim())
+    ));
+    if let Some(phone) = seller.phone.filter(|s| !s.trim().is_empty()) {
+        x.push_str("          <ram:TelephoneUniversalCommunication>\n");
+        x.push_str(&format!(
+            "            <ram:CompleteNumber>{}</ram:CompleteNumber>\n",
+            esc(phone.trim())
+        ));
+        x.push_str("          </ram:TelephoneUniversalCommunication>\n");
+    }
+    x.push_str("          <ram:EmailURIUniversalCommunication>\n");
+    x.push_str(&format!(
+        "            <ram:URIID>{}</ram:URIID>\n",
+        esc(seller.email)
+    ));
+    x.push_str("          </ram:EmailURIUniversalCommunication>\n");
+    x.push_str("        </ram:DefinedTradeContact>\n");
     x.push_str("        <ram:PostalTradeAddress>\n");
     x.push_str(&format!(
         "          <ram:PostcodeCode>{}</ram:PostcodeCode>\n",
@@ -270,7 +309,7 @@ pub fn to_xrechnung(
     ));
     x.push_str("        </ram:URIUniversalCommunication>\n");
     // BT-31 USt-IdNr. (VA) zuerst, dann BT-32 Steuernr. (FC)
-    if let Some(vat) = seller.vat_id.filter(|s| !s.trim().is_empty()) {
+    if let Some(vat) = seller_vat {
         x.push_str("        <ram:SpecifiedTaxRegistration>\n");
         x.push_str(&format!(
             "          <ram:ID schemeID=\"VA\">{}</ram:ID>\n",
@@ -278,7 +317,7 @@ pub fn to_xrechnung(
         ));
         x.push_str("        </ram:SpecifiedTaxRegistration>\n");
     }
-    if let Some(tax) = seller.tax_number.filter(|s| !s.trim().is_empty()) {
+    if let Some(tax) = seller_tax {
         x.push_str("        <ram:SpecifiedTaxRegistration>\n");
         x.push_str(&format!(
             "          <ram:ID schemeID=\"FC\">{}</ram:ID>\n",
@@ -538,6 +577,8 @@ mod tests {
             tax_number: Some("123/456/78901"),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de",
+            phone: Some("+49 000 000000"),
+            contact_name: None,
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
@@ -796,6 +837,66 @@ mod tests {
             to_xrechnung("RE-2026-0001", &inv, &seller_klein(), &buyer(), "N/A", &[]).unwrap();
         assert!(xml.contains("Tom &amp; Jerry &lt;test&gt;"));
         assert!(!xml.contains("<test>"));
+    }
+
+    /// Plan W1.11 (BR-DE-2, BR-CO-26): ohne USt-IdNr. kommt die Steuernummer als
+    /// BT-29 (`ram:ID` direkt in `SellerTradeParty`), BG-6 trägt Name, Telefon
+    /// und E-Mail; die Reihenfolge folgt dem CII-Schema (ID → Name →
+    /// DefinedTradeContact → PostalTradeAddress).
+    #[test]
+    fn seller_without_vat_id_gets_bt29_and_contact() {
+        let xml = to_xrechnung(
+            "RE-2026-0001",
+            &invoice_simple(),
+            &seller_klein(),
+            &buyer(),
+            "N/A",
+            &[],
+        )
+        .unwrap();
+        let party = &xml[xml.find("<ram:SellerTradeParty>").unwrap()
+            ..xml.find("</ram:SellerTradeParty>").unwrap()];
+        let pos = |needle: &str| {
+            party
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} fehlt"))
+        };
+        assert!(pos("<ram:ID>123/456/78901</ram:ID>") < pos("<ram:Name>"));
+        assert!(pos("<ram:Name>") < pos("<ram:DefinedTradeContact>"));
+        assert!(pos("<ram:DefinedTradeContact>") < pos("<ram:PostalTradeAddress>"));
+        assert!(party.contains("<ram:PersonName>Wildbach Computerhilfe</ram:PersonName>"));
+        assert!(party.contains("<ram:CompleteNumber>+49 000 000000</ram:CompleteNumber>"));
+        assert!(party.contains(
+            "<ram:EmailURIUniversalCommunication>\n            <ram:URIID>schmidm@wildbach-computerhilfe.de</ram:URIID>"
+        ));
+        assert!(party.contains("<ram:ID schemeID=\"FC\">123/456/78901</ram:ID>"));
+    }
+
+    #[test]
+    fn seller_with_vat_id_has_no_bt29_and_named_contact() {
+        let seller = SellerView {
+            vat_id: Some("DE123456789"),
+            contact_name: Some("Erika Beispiel"),
+            ..seller_klein()
+        };
+        let xml = to_xrechnung(
+            "RE-2026-0001",
+            &invoice_simple(),
+            &seller,
+            &buyer(),
+            "N/A",
+            &[],
+        )
+        .unwrap();
+        let party = &xml[xml.find("<ram:SellerTradeParty>").unwrap()
+            ..xml.find("</ram:SellerTradeParty>").unwrap()];
+        assert!(
+            !party.contains("<ram:ID>123/456/78901</ram:ID>"),
+            "kein BT-29 mit USt-IdNr."
+        );
+        assert!(party.contains("<ram:ID schemeID=\"VA\">DE123456789</ram:ID>"));
+        assert!(party.contains("<ram:PersonName>Erika Beispiel</ram:PersonName>"));
+        assert!(party.contains("<ram:DefinedTradeContact>"));
     }
 
     fn seller_with_iban() -> SellerView<'static> {

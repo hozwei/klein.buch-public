@@ -6,7 +6,8 @@
     legalDocumentsUpload,
     legalDocumentsActivate,
     legalDocumentsDeactivate,
-    attachmentsOpen,
+    saveArchiveFile,
+    uploadFile as sendUpload,
   } from "$lib/api";
   import type { LegalDocument } from "$lib/types";
   import { date } from "$lib/format";
@@ -57,14 +58,8 @@
     }
     busy = true;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
-      await legalDocumentsUpload(
-        docType,
-        uploadTitle[docType].trim() || null,
-        bytes,
-        file.name,
-      );
+      const { uploadId } = await sendUpload("rechtsdokument", file);
+      await legalDocumentsUpload(docType, uploadTitle[docType].trim() || null, uploadId);
       uploadFile[docType] = null;
       uploadTitle[docType] = "";
       flash("Version hochgeladen. Zum Verwenden noch aktivieren.");
@@ -102,12 +97,8 @@
     }
   }
 
-  async function open(archiveEntryId: string) {
-    try {
-      await attachmentsOpen(archiveEntryId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  function open(archiveEntryId: string) {
+    saveArchiveFile(archiveEntryId);
   }
 
   function fmtBytes(n: number): string {
@@ -170,7 +161,7 @@
       {#if versions.length === 0}
         <p class="muted">Noch keine Version hochgeladen.</p>
       {:else}
-        <table>
+        <table class="cards">
           <thead>
             <tr>
               <th>Version</th>
@@ -184,15 +175,15 @@
           <tbody>
             {#each versions as d (d.id)}
               <tr class={d.isActive === 1 ? "active-row" : ""}>
-                <td>v{d.version}</td>
-                <td>{d.title}</td>
-                <td class="muted">{d.fileName} · {fmtBytes(d.fileSizeBytes)}</td>
-                <td>{date(d.createdAt)}</td>
-                <td>
+                <td data-label="Version">v{d.version}</td>
+                <td data-label="Titel">{d.title}</td>
+                <td class="muted" data-label="Datei">{d.fileName} · {fmtBytes(d.fileSizeBytes)}</td>
+                <td data-label="Hochgeladen">{date(d.createdAt)}</td>
+                <td data-label="Status">
                   {#if d.isActive === 1}<span class="badge ok">aktiv</span>{:else}<span class="badge muted-badge">inaktiv</span>{/if}
                 </td>
                 <td class="row-actions">
-                  <button class="btn-secondary btn-sm" onclick={() => open(d.archiveEntryId)}>Öffnen</button>
+                  <button class="btn-secondary btn-sm" onclick={() => open(d.archiveEntryId)}>Herunterladen</button>
                   {#if d.isActive === 1}
                     <button class="btn-secondary btn-sm" onclick={() => deactivate(d.id)} disabled={busy}>Deaktivieren</button>
                   {:else}
@@ -218,7 +209,7 @@
   th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
   th { background: #f3f4f6; font-weight: 600; font-size: 0.8rem; }
   .active-row { background: #f0fdf4; }
-  .row-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+  .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
   .badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
   .badge.ok { background: #d1fae5; color: #065f46; }
   .badge.warn { background: #fef3c7; color: #92400e; }
@@ -226,5 +217,12 @@
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   button:disabled { opacity: 0.6; cursor: not-allowed; }
   .muted { color: #6b7280; }
+  @media (max-width: 600px) {
+    .upload { grid-template-columns: 1fr; }
+    .sec-hdr { flex-wrap: wrap; gap: 0.5rem; }
+  }
+  @media (max-width: 820px) {
+    td { overflow-wrap: anywhere; }
+  }
   /* .caveat entfernt — globale Definition aus tokens.css greift. */
 </style>

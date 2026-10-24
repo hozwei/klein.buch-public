@@ -206,10 +206,15 @@ async fn update_unknown_id_errors() {
 async fn updated_at_is_set_for_today() {
     let (pool, _d) = setup_pool().await;
     let c = contacts::create(&pool, &good_input("Now")).await.unwrap();
-    let today = Utc::now().format("%Y-%m-%d").to_string();
+    // Zeitpunkt statt Kalendertag vergleichen: SQLite rechnet
+    // `datetime('now','utc')` relativ zur TZ des Testprozesses (der Server
+    // setzt TZ=UTC selbst, W9) — ein Datumsvergleich kippte um Mitternacht.
+    let created = chrono::NaiveDateTime::parse_from_str(&c.created_at, "%Y-%m-%d %H:%M:%S")
+        .expect("created_at im DB-Format");
+    let skew = (Utc::now().naive_utc() - created).num_hours().abs();
     assert!(
-        c.created_at.starts_with(&today),
-        "created_at = {} ; today = {today}",
+        skew <= 3,
+        "created_at = {} ; Abweichung {skew} h",
         c.created_at
     );
 }

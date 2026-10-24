@@ -18,6 +18,7 @@
     faq: false,
     troubleshooting: false,
     glossar: false,
+    betrieb: false,
   });
   // `touchedByCategory` merkt, welche Sektionen der Nutzer schon mal
   // bewusst gesetzt hat. Nur unberührte Sektionen folgen dem Default
@@ -30,6 +31,7 @@
     faq: false,
     troubleshooting: false,
     glossar: false,
+    betrieb: false,
   });
 
   export function isCategoryOpen(cat: HandbookCategory): boolean {
@@ -605,6 +607,25 @@
   .toc-list .toc-level-3 a {
     padding-left: 1.2rem;
     font-size: var(--fs-xs);
+  }
+
+  /* Handy/schmale Tablets (Plan W10): Inhaltsverzeichnis und Text
+     untereinander; die Seite scrollt als Ganzes statt der Spalten. */
+  @media (max-width: 760px) {
+    .help-shell {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      height: auto;
+    }
+    .help-sidebar {
+      height: auto;
+      max-height: 50vh;
+    }
+    .help-content {
+      height: auto;
+      overflow-y: visible;
+      padding: 1rem;
+    }
   }
 
   /* --- Druck (G2-DOC.3.4) ------------------------------------------- */

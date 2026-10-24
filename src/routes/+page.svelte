@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { APP_TIME_ZONE, dayOfYearBerlin, daysInYear, todayBerlin, yearBerlin } from "$lib/date";
   // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
   // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
@@ -12,6 +13,7 @@
     invoicesList,
     expensesList,
     backupLogList,
+    backupGetSettings,
     notificationsList,
     recurringInvoicesList,
   } from "$lib/api";
@@ -41,6 +43,8 @@
   let expenses = $state<ExpenseListItem[] | null>(null);
   let expensesErr = $state<string | null>(null);
   let backupLog = $state<BackupLogEntry[] | null>(null);
+  // Plan W7: Off-Site-Status (missing | failing | ok); null = nicht geladen.
+  let offsiteStatus = $state<"missing" | "failing" | "ok" | null>(null);
   let backupErr = $state<string | null>(null);
   let notifications = $state<AppNotification[] | null>(null);
   let notifErr = $state<string | null>(null);
@@ -66,6 +70,7 @@
     invoices = null; invoicesErr = null;
     expenses = null; expensesErr = null;
     backupLog = null; backupErr = null;
+    offsiteStatus = null;
     notifications = null; notifErr = null;
     recurring = null; recurringErr = null;
 
@@ -91,6 +96,7 @@
       backupLogList(20),
       notificationsList(false),
       recurringInvoicesList(false),
+      backupGetSettings(),
     ]);
 
     const [
@@ -102,6 +108,7 @@
       rBackup,
       rNotif,
       rRecurring,
+      rBackupSettings,
     ] = results;
 
     if (rSeller.status === "fulfilled") seller = rSeller.value;
@@ -125,6 +132,8 @@
     if (rNotif.status === "fulfilled") notifications = rNotif.value;
     else notifErr = errMsg(rNotif.reason);
 
+    if (rBackupSettings.status === "fulfilled") offsiteStatus = rBackupSettings.value.offsiteStatus;
+
     if (rRecurring.status === "fulfilled") recurring = rRecurring.value;
     else recurringErr = errMsg(rRecurring.reason);
 
@@ -137,42 +146,27 @@
 
   // ---- Derived-Werte ---------------------------------------------------------
 
+  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1).
   const today = new Date();
-  const todayIso = todayIsoLocal();
-
-  function todayIsoLocal(): string {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
+  const todayIso = todayBerlin(today);
+  const currentYear = yearBerlin(today);
 
   const fmtHeroDate = new Intl.DateTimeFormat("de-DE", {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
+    timeZone: APP_TIME_ZONE,
   });
   const heroDate = fmtHeroDate.format(today);
 
-  function dayOfYear(d: Date): number {
-    const start = new Date(d.getFullYear(), 0, 0);
-    const diff = d.getTime() - start.getTime();
-    return Math.floor(diff / 86_400_000);
-  }
-
-  function daysInYear(year: number): number {
-    return ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0) ? 366 : 365;
-  }
-
-  const fyDay = dayOfYear(today);
-  const fyDaysInYear = daysInYear(today.getFullYear());
+  const fyDay = dayOfYearBerlin(today);
+  const fyDaysInYear = daysInYear(currentYear);
   // Tag-Anzeige nur sinnvoll, wenn das offene GJ das laufende Kalenderjahr ist.
   // Bei offenem Vorjahr (currentYear < today.year) wäre „Tag X von 365" für
   // das Vorjahr irreführend → wir lassen die Tag-Zeile dann weg.
   const showFyDay = $derived(
-    fyOverview !== null && fyOverview.currentYear === today.getFullYear(),
+    fyOverview !== null && fyOverview.currentYear === currentYear,
   );
 
   // §19-Modus aus seller_profile (Singleton; isKleinunternehmer ist 0|1).
@@ -260,7 +254,7 @@
   // currentYear ist das älteste offene GJ. Wenn currentYear < heutiges Jahr,
   // gibt es ein abschließbares Vorjahr.
   const overdueFy: number | null = $derived(
-    fyOverview && fyOverview.currentYear < today.getFullYear()
+    fyOverview && fyOverview.currentYear < currentYear
       ? fyOverview.currentYear
       : null,
   );
@@ -556,6 +550,20 @@
             </a>
           </li>
         {/each}
+
+        {#if offsiteStatus === "missing" || offsiteStatus === "failing"}
+          <li class="task">
+            <div class="task-row">
+              <span class="task-badge tb-danger">Backup</span>
+              <span class="task-text">
+                {offsiteStatus === "missing"
+                  ? "Kein externes Backup-Ziel eingerichtet."
+                  : "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen."}
+              </span>
+              <a class="btn-secondary btn-sm" href="/settings/backup">Ziele prüfen</a>
+            </div>
+          </li>
+        {/if}
 
         {#if backupAmpel === "red" || backupAmpel === "never"}
           <li class="task">

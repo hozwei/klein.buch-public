@@ -11,11 +11,9 @@
 //! Ein Abo ist ein Stammdatum/Template — editierbar und pausierbar (kein
 //! GoBD-Beleg). Die daraus erzeugten Kosten sind sofort gelockt (Block 9).
 
-use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use crate::app_ctx::AppCtx;
+use std::sync::Arc;
 
-use crate::backup;
-use crate::config::Paths;
 use crate::db::models::{ExpenseRow, RecurringSubscriptionRow};
 use crate::db::repo::{audit_log, recurring};
 use crate::domain::recurring::{self as domain, RecurringInput};
@@ -26,35 +24,63 @@ use crate::scheduler::recurring::{process_due, run_now, ProcessReport};
 // Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn recurring_list(
-    pool: State<'_, SqlitePool>,
-    include_inactive: Option<bool>,
-) -> Result<Vec<RecurringSubscriptionRow>> {
-    recurring::list(pool.inner(), include_inactive.unwrap_or(false)).await
+/// Argumente von [`recurring_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringListArgs {
+    #[serde(default)]
+    pub include_inactive: Option<bool>,
 }
 
-#[tauri::command]
+pub async fn recurring_list(
+    ctx: &Arc<AppCtx>,
+    args: RecurringListArgs,
+) -> Result<Vec<RecurringSubscriptionRow>> {
+    let RecurringListArgs { include_inactive } = args;
+    let pool = ctx.pool()?;
+
+    recurring::list(&pool, include_inactive.unwrap_or(false)).await
+}
+
+/// Argumente von [`recurring_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringGetArgs {
+    pub id: String,
+}
+
 pub async fn recurring_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: RecurringGetArgs,
 ) -> Result<Option<RecurringSubscriptionRow>> {
-    recurring::get(pool.inner(), &id).await
+    let RecurringGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    recurring::get(&pool, &id).await
 }
 
 // =============================================================================
 // Create / Update / Pause
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`recurring_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringCreateArgs {
+    pub input: RecurringInput,
+}
+
 pub async fn recurring_create(
-    pool: State<'_, SqlitePool>,
-    input: RecurringInput,
+    ctx: &Arc<AppCtx>,
+    args: RecurringCreateArgs,
 ) -> Result<RecurringSubscriptionRow> {
+    let RecurringCreateArgs { input } = args;
+    let pool = ctx.pool()?;
+
     validate(&input)?;
-    let row = recurring::create(pool.inner(), &input).await?;
+    let row = recurring::create(&pool, &input).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "recurring.create",
         "recurring",
         &row.id,
@@ -69,16 +95,25 @@ pub async fn recurring_create(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`recurring_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringUpdateArgs {
+    pub id: String,
+    pub input: RecurringInput,
+}
+
 pub async fn recurring_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: RecurringInput,
+    ctx: &Arc<AppCtx>,
+    args: RecurringUpdateArgs,
 ) -> Result<RecurringSubscriptionRow> {
+    let RecurringUpdateArgs { id, input } = args;
+    let pool = ctx.pool()?;
+
     validate(&input)?;
-    let row = recurring::update(pool.inner(), &id, &input).await?;
+    let row = recurring::update(&pool, &id, &input).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         "recurring.update",
         "recurring",
         &row.id,
@@ -93,15 +128,24 @@ pub async fn recurring_update(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`recurring_set_active`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringSetActiveArgs {
+    pub id: String,
+    pub active: bool,
+}
+
 pub async fn recurring_set_active(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    active: bool,
+    ctx: &Arc<AppCtx>,
+    args: RecurringSetActiveArgs,
 ) -> Result<RecurringSubscriptionRow> {
-    recurring::set_active(pool.inner(), &id, active).await?;
+    let RecurringSetActiveArgs { id, active } = args;
+    let pool = ctx.pool()?;
+
+    recurring::set_active(&pool, &id, active).await?;
     audit_log::append(
-        pool.inner(),
+        &pool,
         if active {
             "recurring.activate"
         } else {
@@ -112,7 +156,7 @@ pub async fn recurring_set_active(
         None,
     )
     .await?;
-    recurring::get(pool.inner(), &id)
+    recurring::get(&pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))
 }
@@ -121,30 +165,41 @@ pub async fn recurring_set_active(
 // Auslösen (manuell einzeln + Due-Check für alle)
 // =============================================================================
 
+/// Argumente von [`recurring_run_now`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringRunNowArgs {
+    pub id: String,
+}
+
 /// „Jetzt erfassen" für ein fälliges Abo — legt eine Kosten-Position für den
 /// aktuellen Stichtag an und rückt das Abo um eine Periode vor. Liefert die
 /// erzeugte Kosten-Position (das Frontend navigiert dorthin).
-#[tauri::command]
-pub async fn recurring_run_now(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    id: String,
-) -> Result<ExpenseRow> {
-    let paths = Paths::from_handle(&app)?;
-    run_now(pool.inner(), &paths, session.inner(), &id, today_berlin()).await
+pub async fn recurring_run_now(ctx: &Arc<AppCtx>, args: RecurringRunNowArgs) -> Result<ExpenseRow> {
+    let RecurringRunNowArgs { id } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    run_now(&pool, &paths, session, &id, today_berlin()).await
 }
+
+/// Argumente von [`recurring_run_due_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringRunDueCheckArgs {}
 
 /// Manueller Due-Check für ALLE Auto-Abos (gleiche Logik wie der Scheduler-Tick).
 /// Nützlich direkt nach dem Entsperren, ohne auf den nächsten Tick zu warten.
-#[tauri::command]
 pub async fn recurring_run_due_check(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
+    ctx: &Arc<AppCtx>,
+    _args: RecurringRunDueCheckArgs,
 ) -> Result<ProcessReport> {
-    let paths = Paths::from_handle(&app)?;
-    process_due(pool.inner(), &paths, session.inner(), today_berlin()).await
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let paths = ctx.paths.clone();
+    process_due(&pool, &paths, session, today_berlin()).await
 }
 
 // =============================================================================
@@ -164,10 +219,9 @@ fn validate(input: &RecurringInput) -> Result<()> {
     Ok(())
 }
 
-/// Heutiges Datum (Europe/Berlin = System-TZ, in Block 0 gepinnt). Wie in
-/// `commands::expenses`.
+/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> chrono::NaiveDate {
-    chrono::Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn esc(s: &str) -> String {

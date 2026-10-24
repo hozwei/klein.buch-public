@@ -12,14 +12,15 @@
 //! XML, bekommt ein ZUGFeRD-PDF/A-3 zurück.
 //!
 //! Mock-Modus über `KLEIN_BUCH_SIDECAR_MOCK=1` — Bridge liefert die
-//! Original-PDF-Bytes unverändert zurück. CI + Cowork-Sandbox nutzen das.
+//! Original-PDF-Bytes unverändert zurück. Nur in Debug-/Test-Builds wirksam
+//! ([`super::sidecar_mock_active`], Plan W1.3).
 //!
 //! Block 11 ergänzt `extract_xml(pdf_bytes) -> String` für Empfangs-
 //! Parser. Hier nur als Stub-Signatur.
 
 use std::path::Path;
 
-use crate::einvoice::validator::launcher_path;
+use crate::einvoice::validator::{launcher_command, launcher_path};
 use crate::error::{Error, Result};
 
 /// Konstruiert die Args für den `combine`-Sub-Aufruf. Pure.
@@ -94,7 +95,7 @@ pub async fn create_zugferd_with_profile(
     sidecar_dir: &Path,
     profile: &str,
 ) -> Result<Vec<u8>> {
-    if std::env::var("KLEIN_BUCH_SIDECAR_MOCK").as_deref() == Ok("1") {
+    if super::sidecar_mock_active() {
         return Ok(pdf_bytes.to_vec());
     }
 
@@ -173,7 +174,7 @@ pub fn validate_combine_output(bytes: &[u8], combine_log: &str) -> Result<()> {
 /// Extrahiert XML aus einem ZUGFeRD-PDF (Block 11). Mock liefert leeren
 /// String. Production verifiziert mit Re-Embed-Roundtrip.
 pub async fn extract_xml(pdf_bytes: &[u8], sidecar_dir: &Path) -> Result<String> {
-    if std::env::var("KLEIN_BUCH_SIDECAR_MOCK").as_deref() == Ok("1") {
+    if super::sidecar_mock_active() {
         return Ok(String::new());
     }
     let launcher = launcher_path(sidecar_dir);
@@ -194,9 +195,21 @@ pub async fn extract_xml(pdf_bytes: &[u8], sidecar_dir: &Path) -> Result<String>
         "extract",
     )
     .await?;
+    // W14: das extrahierte XML stammt aus einer fremden PDF — Größe vor dem
+    // Einlesen prüfen (eine E-Rechnung hat wenige hundert KiB).
+    let len = tokio::fs::metadata(&out_xml).await?.len();
+    if len > MAX_EXTRACTED_XML_BYTES {
+        return Err(Error::Sidecar(format!(
+            "Eingebettetes XML ist zu groß ({len} Byte, höchstens {MAX_EXTRACTED_XML_BYTES})."
+        )));
+    }
     let xml = tokio::fs::read_to_string(&out_xml).await?;
     Ok(xml)
 }
+
+/// Obergrenze für das aus einer ZUGFeRD-PDF extrahierte XML (wie das
+/// Upload-Limit für E-Rechnungen).
+const MAX_EXTRACTED_XML_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Führt einen Mustang-Subcommand aus. Liefert die kombinierte
 /// stdout+stderr-Ausgabe zurück (für Diagnose, weil Mustang bei
@@ -215,7 +228,12 @@ async fn run_launcher(
         "Mustang-Sidecar startet: {action_label} ({}).",
         launcher.display()
     );
-    let mut cmd = tokio::process::Command::new(launcher);
+    // Plan W2.6: höchstens `limits::JVM` gleichzeitige Java-Starts.
+    let _jvm = crate::limits::JVM
+        .acquire()
+        .await
+        .map_err(|e| Error::Sidecar(format!("JVM-Semaphore: {e}")))?;
+    let mut cmd = launcher_command(launcher);
     cmd.args(args).current_dir(cwd).kill_on_drop(true);
     let output = match tokio::time::timeout(
         std::time::Duration::from_secs(MUSTANG_TIMEOUT_SECS),
@@ -226,8 +244,8 @@ async fn run_launcher(
         Err(_) => {
             return Err(Error::Sidecar(format!(
                 "Mustang ({action_label}) hat nach {MUSTANG_TIMEOUT_SECS}s nicht geantwortet — \
-                 der Java-Sidecar hängt vermutlich. Bitte App neu starten; bleibt es, \
-                 Sidecar/JRE prüfen."
+                 der Java-Sidecar hängt vermutlich. Bitte erneut versuchen; bleibt es, \
+                 Container-Log und Speichergrenze (mem_limit) prüfen."
             )));
         }
         Ok(Err(e)) => return Err(Error::Sidecar(format!("mustang-{action_label}-spawn: {e}"))),

@@ -1,0 +1,9 @@
+Komponente: en16931-cii2ubl 2.3.1
+Betrifft: com.helger:en16931-cii2ubl:2.3.1
+Quelle: https://repo1.maven.org/maven2/com/helger/en16931-cii2ubl/2.3.1/en16931-cii2ubl-2.3.1.jar!/NOTICE (unverändert)
+========================================================================
+=============================================================================
+= NOTICE file corresponding to section 4d of the Apache License Version 2.0 =
+=============================================================================
+This product includes Open Source Software developed by
+Philip Helger - https://www.helger.com/

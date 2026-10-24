@@ -11,19 +11,34 @@
 ## 1. Quelle und Index
 
 - Alle Handbuch-Seiten liegen als reine Markdown-Dateien unter
-  `klein-buch/src-tauri/resources/handbook/*.md` und werden mit dem
-  Tauri-Bundle ausgeliefert. Das Verzeichnis enthält zusätzlich
-  `README.md` (Konventionen, kein Beleg-Artefakt). Das Handbuch ist
-  bewusst **reine Textform** (G2-DOC.2.8): kein `img/`-Verzeichnis,
-  keine Screenshots — die UI wird in Worten beschrieben, damit
-  Bilder bei UI-Änderungen nicht veralten. Der Markdown-Renderer
-  trägt einen harmlosen Bild-Fallback (broken-img-Stub) für den Fall,
-  dass künftig wieder Bilder eingezogen werden.
+  `klein-buch/src-tauri/resources/handbook/*.md` (der Ordnername stammt
+  aus der Desktop-Fassung; eine Tauri-Resource gibt es seit Phase W nicht
+  mehr, ADR 0039). Eingebunden werden sie beim Build der SPA:
+  `src/lib/handbook/index.ts` lädt sie per Vite-Glob
+  (`import.meta.glob`, `?raw`, eager) in das Frontend-Bundle. Der Server
+  liefert das Handbuch damit als Teil der SPA unter `/help/<slug>` aus;
+  zur Laufzeit liest niemand diesen Ordner, das `Dockerfile` kopiert ihn
+  nur in die Node-Stufe (SPA-Build). Das Verzeichnis enthält zusätzlich
+  `README.md` (Konventionen, keine Handbuch-Seite). Das Handbuch ist
+  bewusst **reine Textform** (G2-DOC.2.8): keine Screenshots, `img/`
+  bleibt leer (nur `.gitkeep`; `handbook_resources_test` verlangt den
+  Ordner) — die UI wird in Worten beschrieben, damit Bilder bei
+  UI-Änderungen nicht veralten. Der Markdown-Renderer löst
+  `![…](img/<name>)` über einen eigenen Vite-Glob auf und lässt einen
+  fehlenden Pfad unverändert durch (Browser zeigt das Broken-Image-Icon),
+  falls künftig wieder Bilder eingezogen werden.
 - Jede Seite trägt einen YAML-Front-Matter mit den fünf Pflichtfeldern
   `slug`, `title`, `category`, `order`, `keywords`. Konvention:
   **Dateiname == `<slug>.md`**, der `slug` ist im Verzeichnis eindeutig
   und kebab-case. Der Test `handbook_resources_test` setzt das beim
   Build durch.
+- `category` stammt aus einer festen Liste (`src/lib/handbook/categories.ts`,
+  gespiegelt in `handbook_resources_test`), in Anzeigereihenfolge:
+  `erste-schritte`, `bedienen`, `recht-und-steuern`, `faq`,
+  `troubleshooting`, `glossar`, `betrieb`. `betrieb` ist neu seit W13 und
+  sammelt die Kapitel für Betreiber (u. a. Installation mit Docker,
+  Reverse-Proxy und TLS, Volumes und Rechte, Updates); es steht im
+  Kapitelbaum am Ende, getrennt von der täglichen Bedienung.
 - Der Frontend-Index lebt in `klein-buch/src/lib/handbook/index.ts`:
   `import.meta.glob` zieht alle Files zur Build-Zeit, ein eigener
   schlanker Front-Matter-Parser füllt die `HandbookEntry[]`-Liste,

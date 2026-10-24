@@ -104,3 +104,25 @@ aufgerufen aus `db::prepare_filesystem`), `domain::factory_reset` (pure Gating),
 `mail::keyring`, Onboarding/`BackupGate.svelte`, Frontend `routes/settings/reset`;
 ADR 0035 (Passphrase), ADR 0009/0034 (Backup), GoBD-Hardline in `CLAUDE.md`.
 RELEASE-1.0-GUIDE §G1-RESET.
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · Phase W. Der Factory Reset ist im Server-Betrieb
+**abgeschaltet** (ADR 0039, E7).
+
+- **Warum:** Hinter einer aus dem Internet erreichbaren Anmeldung würde ein
+  Total-Löschknopf den Schaden einer übernommenen Sitzung auf den Verlust aller
+  Bücher ausweiten. Die Motivation aus dem Kontext (Gerät weitergeben) trifft auf
+  einen Container nicht zu, und die Umsetzung hängt an Desktop-Mechanik
+  (`AppHandle::restart()`, OS-Keychain).
+- **Umsetzung:** `factory_reset_check` und `factory_reset` sind ab Block W5 nicht
+  erreichbar (nicht in der Command-Allowlist); die Seite `settings/reset` entfällt
+  in Block W9, der Reset-Code (`commands`, `backup` und `domain::factory_reset`)
+  in Block W11.
+- **Neuanfang** ist Sache des Betreibers: Container mit einem neuen, leeren
+  `/data`-Volume starten. Die Aufbewahrungspflicht (10 Jahre, GoBD) gilt
+  unverändert: Enthält das alte Volume festgeschriebene Belege, vorher den
+  Steuerberater- bzw. Migrations-Export ziehen und das alte Volume samt
+  Off-Site-Backups aufbewahren.
+- Die GoBD-Hardline wird damit strenger: Im Server-Betrieb gibt es keine
+  Total-Löschung aus der App heraus.

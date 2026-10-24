@@ -52,11 +52,13 @@ ist die "Festschreibung" im rechtlichen Sinn.
 Bei ausgestellten Rechnungen siehst Du den Knopf **"Senden"** in
 der PageBar. Klick öffnet eine eigene Versand-Seite. Empfänger
 ist voreingestellt aus dem Kontakt; Betreff und Text kannst Du
-ändern. PDF und XRechnung hängen automatisch dran. Klick "Senden".
+ändern. Die Rechnung hängt automatisch als ZUGFeRD-PDF an, in dem
+die XRechnung-Daten bereits stecken. Klick "Senden".
 
-Klein.Buch protokolliert jeden Versand im Mail-Protokoll: Datum,
-Empfänger, Provider-Antwort. Das Protokoll findest Du unter
-"Einstellungen → E-Mail-Versand".
+Klein.Buch protokolliert jeden Versand im E-Mail-Protokoll:
+Zeitpunkt, Empfänger, Antwort des Mail-Servers. Das Protokoll
+findest Du unter "Einstellungen → E-Mail-Versand", oben rechts über
+"E-Mail-Protokoll".
 
 Wenn Du noch kein Postfach eingerichtet hast, lies das Kapitel
 "Konten und Mail-Versand".
@@ -64,11 +66,12 @@ Wenn Du noch kein Postfach eingerichtet hast, lies das Kapitel
 ## Manueller Versand
 
 Wenn Du aus Deinem normalen Mail-Programm versenden möchtest,
-klick auf **"PDF öffnen"** oder **"Im Ordner zeigen"**. Klein.Buch
-zeigt Dir entweder die fertige ZUGFeRD-PDF im PDF-Viewer oder
-öffnet den Archiv-Ordner im Datei-Explorer. Eine separate
-XRechnung-XML brauchst Du in der Regel nicht — die XML-Daten
-stecken bereits im ZUGFeRD-PDF.
+klick auf **"PDF herunterladen"**. Dein Browser speichert die
+fertige ZUGFeRD-PDF in seinem Download-Ordner, und Du hängst sie in
+Deinem Mail-Programm an. Mit **"PDF öffnen"** schaust Du die
+Rechnung vorher an; die Vorschau bietet ebenfalls "Herunterladen"
+und "In neuem Tab öffnen". Eine separate XRechnung-XML brauchst Du
+in der Regel nicht, die XML-Daten stecken bereits im ZUGFeRD-PDF.
 
 ## Zahlung erfassen
 
@@ -97,4 +100,4 @@ Rechnungen"** und legst dort eine Vorlage an. Mehr dazu im Kapitel
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

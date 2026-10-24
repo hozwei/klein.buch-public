@@ -32,3 +32,21 @@ Templates erfolgen; die ZUGFeRD-Einbettung muss robust und standardkonform sein.
 | ZUGFeRD-Einbettung selbst (lopdf) | PDF/A-3-Spezifika fehleranfällig, hoher Aufwand |
 | wkhtmltopdf/Chromium-Print | Kein PDF/A, großes Binary |
 | Mustang als Rust-Reimpl | ZUGFeRD-Spec non-trivial, Out-of-Scope v0.1 |
+
+## Amendment 2026-10-23 — Web-/Docker-Betrieb (ADR 0039)
+
+**Status:** Akzeptiert · 2026-10-23 · Phase W (ADR 0039; Blöcke W1, W2, W11). Typst und
+Mustang bleiben gesetzt. Für den Serverbetrieb gilt zusätzlich:
+
+- **Sidecar nur noch Linux** (Amendment ADR 0001): jlink-JRE im Image, Launcher
+  `klein-buch-java.sh`. Die Konsequenz „Cross-OS-Bundles per CI-Matrix“ und das
+  Windows-Sidecar entfallen. Bezugsquellen und SHA-256 der JARs/ZIPs stehen in
+  `sidecar/versions.json`; ein CI-Schritt vergleicht sie mit den Originalen.
+- **Last begrenzt:** Der Typst-Render läuft außerhalb der async-Runtime (`spawn_blocking`)
+  hinter einer Render-Semaphore, JVM-Starts (KoSIT, Mustang) sind ebenfalls per Semaphore
+  begrenzt (`limits.rs`: Render 2, JVM 2). Ein laufender Render blockiert keine anderen
+  Anfragen; parallele Anfragen können keine unbegrenzte Zahl von JVMs starten.
+- **Escaping vollständig:** Freitext aus dem Paket-Markup (ADR 0031) wird vor der Übergabe an
+  Typst an jedem ASCII-Satzzeichen mit `\` maskiert. Vorher fehlten u. a. `/`, `=`, `~`, `-`
+  und `+`; `//` begann einen Typst-Kommentar, der Text danach fehlte im PDF, stand aber im
+  XML (BT-154). PDF und XRechnung zeigen damit denselben Text.

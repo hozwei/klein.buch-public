@@ -1,7 +1,7 @@
 <script lang="ts">
   // Block 4 — Backup & Restore.
   import { onMount, tick } from "svelte";
-  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { waitForRestart } from "$lib/transport";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { flash } from "$lib/toast.svelte";
@@ -9,59 +9,66 @@
   import {
     backupGetSettings,
     backupCreateNow,
-    backupSetTarget,
     backupTestSftp,
-    backupSetSftpTarget,
+    backupTestSftpSaved,
+    backupTargetAddDirectory,
+    backupTargetAddSftp,
+    backupTargetRemove,
     backupList,
-    backupOpenFolder,
-    backupRevealPath,
-    backupRestorePreview,
     backupRestoreApply,
+    uploadFile,
     type BackupSettings,
     type BackupHistoryItem,
-    type RestorePreview,
-    type DetectedTarget,
+    type TargetView,
     type SftpProbe,
   } from "$lib/api";
 
   let settings = $state<BackupSettings | null>(null);
   let history = $state<BackupHistoryItem[]>([]);
-  let targetInput = $state("");
   let busy = $state(false);
 
+  // Verzeichnis-Ziel unter /backup-targets (Plan W7).
+  let dirChoice = $state("");
+  let dirSub = $state("klein-buch");
+  let dirLabel = $state("");
+
   // SFTP-Ziel (G1-BKP.3).
+  let sftpLabel = $state("");
   let sftpHost = $state("");
   let sftpPort = $state(22);
   let sftpUser = $state("");
   let sftpRemoteDir = $state("");
   let sftpPassword = $state("");
-  // Bestätigter/gepinnter Host-Key-Fingerprint (Pflicht zum Speichern).
+  // Host-Key-Fingerprint aus dem letzten Test (Pflicht zum Speichern). Der
+  // Server übernimmt nur den Fingerprint seiner letzten Probe für Host + Port
+  // (Plan W8); ändern sich Host oder Port, ist ein neuer Test nötig.
   let sftpFingerprint = $state("");
   let sftpProbe = $state<SftpProbe | null>(null);
+  let sftpProbedFor = $state("");
+  const sftpEndpoint = $derived(`${sftpHost.trim().toLowerCase()}:${sftpPort}`);
+  const sftpProbeValid = $derived(sftpFingerprint !== "" && sftpProbedFor === sftpEndpoint);
+  let testingTargetId = $state<string | null>(null);
 
-  // Restore-Wizard-State.
-  let restorePath = $state("");
+  // Restore (Plan W7): hochgeladene .kbk oder lokales Backup aus der Liste.
+  let restoreFile = $state<File | null>(null);
+  // Upload der gewählten Datei; nach falscher Passphrase wiederverwendet
+  // (der Server lässt ihn dann liegen, ADR 0039 Nr. 72).
+  let restoreUploadId = $state<string | null>(null);
+  let restoreFromList = $state<BackupHistoryItem | null>(null);
   let restorePass = $state("");
-  let preview = $state<RestorePreview | null>(null);
+  let uploadPercent = $state<number | null>(null);
   let restoreReport = $state<string | null>(null);
   // Refs zum gezielten Scrollen/Fokussieren.
   let restoreSection = $state<HTMLElement | null>(null);
-  let previewBox = $state<HTMLElement | null>(null);
   let restorePassInput = $state<HTMLInputElement | null>(null);
+  let restoreFileInput = $state<HTMLInputElement | null>(null);
 
   onMount(load);
 
   async function load() {
     try {
       settings = await backupGetSettings();
-      targetInput = settings.targetPath ?? "";
-      if (settings.sftp) {
-        sftpHost = settings.sftp.host;
-        sftpPort = settings.sftp.port;
-        sftpUser = settings.sftp.user;
-        sftpRemoteDir = settings.sftp.remoteDir;
-        sftpFingerprint = settings.sftp.hostFingerprint ?? "";
-      }
+      if (!dirChoice && settings.availableDirs.length > 0) dirChoice = settings.availableDirs[0];
       history = await backupList();
     } catch (e) {
       flash(String(e), "error");
@@ -97,34 +104,27 @@
     return "Off-Site";
   }
 
-  // Nur lokale Pfade kann der Restore-Assistent direkt lesen (SFTP erst laden).
+  // Direkt einspielbar sind nur Backups im lokalen Backup-Ordner; externe
+  // Kopien erst herunterladen und hochladen.
   function isLocalPath(targetPath: string): boolean {
-    return !targetPath.startsWith("sftp://");
+    return !!settings && targetPath.startsWith(settings.floorPath);
   }
 
-  // Lokalen Ordner im Explorer/Finder öffnen (Floor / Off-Site-Verzeichnis).
-  async function openFolder(path: string) {
-    try {
-      await backupOpenFolder(path);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  function targetLocation(t: TargetView): string {
+    if (t.kind === "directory") return `${settings?.targetsRoot ?? ""}/${t.directory ?? ""}`;
+    const dir = (t.remoteDir ?? "").replace(/^\/+/, "");
+    return `sftp://${t.user}@${t.host}:${t.port}/${dir}`;
   }
 
-  // Eine Backup-Datei im enthaltenden Ordner anzeigen (Verlaufs-Zeile).
-  async function revealBackup(path: string) {
-    try {
-      await backupRevealPath(path);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-
-  async function saveTarget() {
+  async function addDirectory() {
+    if (!dirChoice) return;
+    const sub = dirSub.trim().replace(/^\/+|\/+$/g, "");
+    const directory = sub ? `${dirChoice}/${sub}` : dirChoice;
     busy = true;
     try {
-      await backupSetTarget(targetInput.trim());
-      flash("Backup-Ordner gespeichert.");
+      await backupTargetAddDirectory(dirLabel.trim() || directory, directory);
+      dirLabel = "";
+      flash("Ordner-Ziel hinzugefügt — es wird ab dem nächsten Backup beschrieben.");
       await load();
     } catch (e) {
       flash(String(e), "error");
@@ -133,27 +133,26 @@
     }
   }
 
-  // Erkannten Cloud-Ordner per 1-Klick übernehmen und direkt speichern.
-  async function useDetected(dt: DetectedTarget) {
-    targetInput = dt.path;
-    await saveTarget();
-  }
-
-  // Nativen Ordner-Auswahl-Dialog öffnen (tauri-plugin-dialog) und gewählten
-  // Pfad übernehmen + speichern.
-  async function browseFolder() {
+  async function removeTarget(t: TargetView) {
+    if (
+      !(await confirmDialog({
+        title: `Backup-Ziel „${t.label}“ entfernen?`,
+        body: "Vorhandene Backups am Ziel bleiben liegen; künftige Backups gehen nicht mehr dorthin.",
+        confirmLabel: "Entfernen",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    busy = true;
     try {
-      const picked = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Off-Site-Backup-Ordner wählen",
-      });
-      if (typeof picked === "string" && picked.trim()) {
-        targetInput = picked;
-        await saveTarget();
-      }
+      await backupTargetRemove(t.id);
+      flash("Backup-Ziel entfernt.");
+      await load();
     } catch (e) {
       flash(String(e), "error");
+    } finally {
+      busy = false;
     }
   }
 
@@ -171,6 +170,7 @@
       );
       sftpProbe = p;
       sftpFingerprint = p.fingerprint;
+      sftpProbedFor = sftpEndpoint;
       if (p.writeOk) {
         flash("Verbindung ok — Host-Fingerprint bitte prüfen und speichern.");
       } else {
@@ -183,24 +183,28 @@
     }
   }
 
-  // SFTP: als Backup-Ziel speichern (Passwort → Keychain, Fingerprint → Pin).
-  async function saveSftp() {
-    if (!sftpFingerprint) {
+  // SFTP: als Backup-Ziel hinzufügen (Passwort je Ziel, Fingerprint → Pin).
+  async function addSftp() {
+    if (!sftpProbeValid) {
       flash("Bitte zuerst die Verbindung testen, um den Host-Fingerprint zu bestätigen.", "error");
       return;
     }
     busy = true;
     try {
-      await backupSetSftpTarget(
-        sftpHost.trim(),
-        sftpPort,
-        sftpUser.trim(),
-        sftpRemoteDir.trim(),
-        sftpFingerprint,
-        sftpPassword,
-      );
+      await backupTargetAddSftp({
+        label: sftpLabel.trim() || sftpHost.trim(),
+        host: sftpHost.trim(),
+        port: sftpPort,
+        user: sftpUser.trim(),
+        remoteDir: sftpRemoteDir.trim(),
+        hostFingerprint: sftpFingerprint,
+        password: sftpPassword,
+      });
       sftpPassword = "";
-      flash("SFTP-Ziel gespeichert.");
+      sftpProbe = null;
+      sftpFingerprint = "";
+      sftpProbedFor = "";
+      flash("SFTP-Ziel hinzugefügt.");
       await load();
     } catch (e) {
       flash(String(e), "error");
@@ -209,16 +213,34 @@
     }
   }
 
+  // Gespeichertes SFTP-Ziel testen (nur per ID: gespeichertes Passwort,
+  // gepinnter Fingerprint — Plan W8).
+  async function testSavedSftp(t: TargetView) {
+    testingTargetId = t.id;
+    try {
+      const p = await backupTestSftpSaved(t.id);
+      if (p.writeOk) {
+        flash(`Verbindung zu „${t.label}“ ok, Fingerprint stimmt.`);
+      } else {
+        flash(`Login ok, aber Schreiben auf „${t.label}“ schlug fehl: ${p.writeError ?? ""}`, "error");
+      }
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      testingTargetId = null;
+    }
+  }
+
   async function backupNow() {
     busy = true;
     try {
       const o = await backupCreateNow();
       flash(`Backup erstellt: ${o.fileName} (${fmtBytes(o.sizeBytes)})`);
-      // Off-Site-Spiegelung (G1-BKP.4): Erfolg/Fehler separat zurückmelden.
-      if (o.mirrorError) {
-        flash(`Off-Site-Kopie fehlgeschlagen: ${o.mirrorError}`, "error");
-      } else if (o.mirrorTarget) {
-        flash("Off-Site-Kopie ebenfalls gespeichert.");
+      // Off-Site-Spiegelung (Plan W7): je Ziel zurückmelden.
+      const failed = o.offsite.filter((r) => r.error);
+      for (const r of failed) flash(`Kopie auf „${r.label}“ fehlgeschlagen: ${r.error}`, "error");
+      if (o.offsite.length > 0 && failed.length === 0) {
+        flash(`Kopie auf ${o.offsite.length} externe(s) Ziel(e) gespeichert.`);
       }
       await load();
     } catch (e) {
@@ -229,32 +251,20 @@
   }
 
   async function pickForRestore(item: BackupHistoryItem) {
-    restorePath = item.targetPath;
-    preview = null;
+    restoreFromList = item;
+    restoreFile = null;
+    if (restoreFileInput) restoreFileInput.value = "";
     restoreReport = null;
     await tick();
     restoreSection?.scrollIntoView({ behavior: "smooth", block: "start" });
-    // Direkt prüfen — ein Klick reicht, dann nur noch Passphrase eingeben.
-    await doPreview();
+    restorePassInput?.focus();
   }
 
-  async function doPreview() {
-    busy = true;
-    preview = null;
-    try {
-      preview = await backupRestorePreview(restorePath.trim());
-      await tick();
-      if (restorePassInput) {
-        restorePassInput.focus();
-        restorePassInput.scrollIntoView({ behavior: "smooth", block: "center" });
-      } else {
-        previewBox?.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    } catch (e) {
-      flash(String(e), "error");
-    } finally {
-      busy = false;
-    }
+  function pickFile(e: Event) {
+    restoreFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null;
+    restoreUploadId = null;
+    if (restoreFile) restoreFromList = null;
+    restoreReport = null;
   }
 
   async function doRestore() {
@@ -264,7 +274,8 @@
         body:
           "Wenn du ein älteres Backup wiederherstellst, gehen seither erfasste" +
           " Belege verloren. Sicherheitshalber wird vorher automatisch ein Backup" +
-          " des aktuellen Stands erstellt.",
+          " des aktuellen Stands erstellt. Nach dem Restore gilt die Passphrase" +
+          " dieses Backups.",
         confirmLabel: "Wiederherstellen",
         danger: true,
       }))
@@ -273,15 +284,42 @@
     }
     busy = true;
     try {
-      const r = await backupRestoreApply(restorePath.trim(), restorePass);
+      let source: { uploadId: string } | { backupId: string };
+      if (restoreFile) {
+        if (!restoreUploadId) {
+          uploadPercent = 0;
+          const t = await uploadFile("restore", restoreFile, (loaded, total) => {
+            uploadPercent = total > 0 ? Math.round((loaded / total) * 100) : null;
+          });
+          restoreUploadId = t.uploadId;
+        }
+        source = { uploadId: restoreUploadId };
+      } else if (restoreFromList) {
+        source = { backupId: restoreFromList.id };
+      } else {
+        return;
+      }
+      uploadPercent = null;
+      const r = await backupRestoreApply(source, restorePass);
       restorePass = "";
+      restoreUploadId = null;
+      // Plan W5: der Server startet nach dem Restore selbst neu und wendet ihn
+      // dabei an; danach ist die Anmeldung mit der Passphrase des Backups nötig.
       restoreReport =
-        `Wiederherstellung vorbereitet. Sicherheits-Backup: ${r.preRestoreBackupPath}. ` +
-        "Bitte starte die App jetzt neu — dann wird die Wiederherstellung angewendet.";
-      flash("Wiederherstellung vorgemerkt — App neu starten.", "ok");
+        `Wiederherstellung vorbereitet. Sicherheits-Backup: ${r.preRestoreBackup}. ` +
+        "Der Server startet jetzt neu und wendet die Wiederherstellung an — bitte warten." +
+        (r.notice ? ` ${r.notice}` : "");
+      flash("Wiederherstellung vorgemerkt — Server startet neu.", "ok");
+      if (!(await waitForRestart())) {
+        restoreReport +=
+          " Der Server ist nach drei Minuten nicht zurück. Bitte den Container prüfen und die Seite neu laden.";
+      }
     } catch (e) {
+      // Nur nach falscher Passphrase bleibt der Upload auf dem Server liegen.
+      if (!String(e).includes("falsche Passphrase")) restoreUploadId = null;
       flash(String(e), "error");
     } finally {
+      uploadPercent = null;
       busy = false;
     }
   }
@@ -309,68 +347,106 @@
   </section>
 
   <section class="card">
-    <h2>Off-Site-Kopie <HelpAnchor slug="backup-ziel-einrichten" /></h2>
+    <h2>Externe Ziele <HelpAnchor slug="backup-ziel-einrichten" /></h2>
+    {#if settings.offsiteStatus === "missing"}
+      <p class="warn-box">
+        Kein externes Ziel eingerichtet — die Backups liegen nur im Datenverzeichnis
+        des Servers. Bitte mindestens ein Ziel hinzufügen.
+      </p>
+    {:else if settings.offsiteStatus === "failing"}
+      <p class="warn-box">
+        Mindestens ein Ziel ist beim letzten Backup fehlgeschlagen — Einzelheiten unten
+        und im Backup-Protokoll.
+      </p>
+    {/if}
     <p class="muted">
-      Eine <strong>lokale Sicherung läuft immer</strong> automatisch — auch ohne
-      Einstellung hier:
-    </p>
-    <div class="pathline">
-      <code class="path">{settings.floorPath}</code>
-      <button class="link" onclick={() => openFolder(settings!.floorPath)}>Ordner öffnen</button>
-    </div>
-    <p class="muted">
-      Zusätzlich kann jede Sicherung in einen <strong>zweiten Ordner</strong>
-      gespiegelt werden — ideal ein Cloud-Ordner (OneDrive, iCloud), dann liegt
-      automatisch eine Kopie außer Haus. Leer lassen = nur lokale Sicherung.
+      Eine <strong>lokale Sicherung läuft immer</strong> automatisch:
+      <code class="path">{settings.floorPath}</code>. Zusätzlich geht jede Sicherung
+      an jedes externe Ziel (verschlüsselt).
     </p>
 
-    {#if settings.detectedTargets.length > 0}
-      <p class="muted">Erkannte Cloud-Ordner — ein Klick übernimmt sie als Ziel:</p>
-      <div class="chips">
-        {#each settings.detectedTargets as dt}
-          <button class="chip" onclick={() => useDetected(dt)} disabled={busy} title={dt.path}>
-            {dt.label}
-          </button>
+    {#if settings.targets.length > 0}
+      <ul class="targets">
+        {#each settings.targets as t (t.id)}
+          <li>
+            <div>
+              <strong>{t.label}</strong>
+              <span class="muted">({t.kind === "sftp" ? "SFTP" : "Ordner"})</span>
+              <div class="path">{targetLocation(t)}</div>
+              {#if t.lastResult}
+                {#if t.lastResult.ok}
+                  <div class="hint">Zuletzt erfolgreich: {t.lastResult.at}</div>
+                {:else}
+                  <div class="bad">Fehlgeschlagen ({t.lastResult.at}): {t.lastResult.error}</div>
+                {/if}
+              {:else}
+                <div class="hint">Noch kein Backup auf dieses Ziel.</div>
+              {/if}
+            </div>
+            <div class="target-actions">
+              {#if t.kind === "sftp"}
+                <button
+                  class="link"
+                  onclick={() => testSavedSftp(t)}
+                  disabled={busy || testingTargetId === t.id}
+                >
+                  {testingTargetId === t.id ? "Teste …" : "Testen"}
+                </button>
+              {/if}
+              <button class="link" onclick={() => removeTarget(t)} disabled={busy}>Entfernen</button>
+            </div>
+          </li>
         {/each}
-      </div>
+      </ul>
     {/if}
 
-    <div class="row" style="flex-wrap: wrap">
-      <input
-        type="text"
-        bind:value={targetInput}
-        placeholder={settings.defaultSuggestion}
-      />
-      <button onclick={browseFolder} disabled={busy}>Durchsuchen…</button>
-      <button
-        onclick={() => openFolder(targetInput.trim())}
-        disabled={busy || !targetInput.trim()}
-      >
-        Ordner öffnen
+    <h3>Ordner-Ziel hinzufügen</h3>
+    {#if settings.availableDirs.length === 0}
+      <p class="hint">
+        Unter <code>{settings.targetsRoot}</code> ist kein Ordner eingebunden. In der
+        Container-Konfiguration ein Volume unter <code>{settings.targetsRoot}/…</code>
+        einbinden (z. B. NAS-Freigabe oder Sync-Ordner), dann erscheint es hier.
+      </p>
+    {:else}
+      <div class="row" style="flex-wrap: wrap">
+        <label>
+          Eingebundener Ordner
+          <select bind:value={dirChoice}>
+            {#each settings.availableDirs as d}<option value={d}>{d}</option>{/each}
+          </select>
+        </label>
+        <label>
+          Unterordner
+          <input type="text" bind:value={dirSub} placeholder="klein-buch" />
+        </label>
+        <label>
+          Bezeichnung
+          <input type="text" bind:value={dirLabel} placeholder="z. B. NAS im Büro" />
+        </label>
+      </div>
+      <button class="primary" onclick={addDirectory} disabled={busy || !dirChoice}>
+        Ordner-Ziel hinzufügen
       </button>
-      <button class="primary" onclick={saveTarget} disabled={busy}>Speichern</button>
-    </div>
-    <p class="hint">Vorschlag: {settings.defaultSuggestion}</p>
+    {/if}
   </section>
 
   <section class="card">
-    <h2>SFTP-Server (für Fortgeschrittene)</h2>
+    <h2>SFTP-Ziel hinzufügen (für Fortgeschrittene)</h2>
     <p class="muted">
-      Off-Site-Kopie auf einen eigenen Server per SSH/SFTP statt in einen Ordner
-      (die lokale Sicherung läuft weiterhin immer). Das Passwort wird sicher im
-      Schlüsselbund deines Systems
-      gespeichert — nie in der App. Beim ersten Mal zeigt der Test den
-      „Fingerabdruck" des Servers; bitte prüfen und bestätigen (Schutz vor
-      manipulierten Verbindungen).
+      Kopie auf einen eigenen Server per SSH/SFTP. Beim Test zeigt der Server seinen
+      „Fingerabdruck“; bitte prüfen und bestätigen (Schutz vor manipulierten
+      Verbindungen). Das Passwort wird verschlüsselt in der Datenbank dieser Instanz
+      gespeichert und gilt nur für dieses Ziel; für einen anderen Server oder
+      Benutzer das Ziel entfernen und neu anlegen.
     </p>
 
-    {#if settings.sftp}
-      <p class="muted"><strong>Aktuelles Ziel ist dieser SFTP-Server.</strong></p>
-    {/if}
-
+    <label>
+      Bezeichnung
+      <input type="text" bind:value={sftpLabel} placeholder="z. B. Server bei Hoster" />
+    </label>
     <label>
       Server (Host)
-      <input type="text" bind:value={sftpHost} placeholder="backup.example.de" />
+      <input type="text" bind:value={sftpHost} placeholder="backup.example.org" />
     </label>
     <div class="row">
       <label style="flex:0 0 8rem">
@@ -379,7 +455,7 @@
       </label>
       <label style="flex:1">
         Benutzer
-        <input type="text" bind:value={sftpUser} placeholder="manuel" />
+        <input type="text" bind:value={sftpUser} placeholder="klein-buch" />
       </label>
     </div>
     <label>
@@ -388,24 +464,22 @@
     </label>
     <label>
       Passwort
-      <input
-        type="password"
-        bind:value={sftpPassword}
-        autocomplete="off"
-        placeholder={settings.sftp ? "leer lassen = gespeichertes behalten" : ""}
-      />
+      <input type="password" bind:value={sftpPassword} autocomplete="off" />
     </label>
 
     <div class="row" style="margin-top:0.6rem">
-      <button onclick={testSftp} disabled={busy || !sftpHost.trim() || !sftpUser.trim()}>
+      <button
+        onclick={testSftp}
+        disabled={busy || !sftpHost.trim() || !sftpUser.trim() || !sftpPassword}
+      >
         Verbindung testen
       </button>
-      <button class="primary" onclick={saveSftp} disabled={busy || !sftpFingerprint}>
-        Als SFTP-Ziel speichern
+      <button class="primary" onclick={addSftp} disabled={busy || !sftpProbeValid || !sftpPassword}>
+        Als SFTP-Ziel hinzufügen
       </button>
     </div>
 
-    {#if sftpProbe}
+    {#if sftpProbe && sftpProbeValid}
       <div class="preview">
         <p class:bad={!sftpProbe.writeOk}>
           Schreibtest im Zielordner: {sftpProbe.writeOk ? "ok" : "FEHLGESCHLAGEN"}
@@ -417,14 +491,10 @@
         <p class="fingerprint">{sftpProbe.fingerprint}</p>
       </div>
     {:else if sftpFingerprint}
-      <div class="preview">
-        <p class="muted">Gepinnter Host-Fingerprint:</p>
-        <p class="fingerprint">{sftpFingerprint}</p>
-        <p class="hint">
-          Host geändert? Bitte erneut „Verbindung testen", damit der Fingerabdruck
-          zum neuen Server passt.
-        </p>
-      </div>
+      <p class="hint">
+        Server oder Port geändert — bitte erneut „Verbindung testen“, damit der
+        Fingerabdruck zum neuen Server passt.
+      </p>
     {/if}
   </section>
 
@@ -449,7 +519,7 @@
       <p class="muted">Noch keine Backups.</p>
     {:else}
       <div class="table-wrap">
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Erstellt</th>
@@ -463,20 +533,19 @@
         <tbody>
           {#each history as item}
             <tr>
-              <td>{item.createdAt}</td>
-              <td>{reasonLabel(item.triggerReason)}</td>
-              <td class="ort">
+              <td data-label="Erstellt">{item.createdAt}</td>
+              <td data-label="Grund">{reasonLabel(item.triggerReason)}</td>
+              <td class="ort cards-full" data-label="Ort">
                 {locationLabel(item.targetPath)}
                 <div class="path">{item.targetPath}</div>
               </td>
-              <td>{retentionLabel(item.retentionTag)}</td>
-              <td>{fmtBytes(item.fileSizeBytes)}</td>
+              <td data-label="Aufbewahrung">{retentionLabel(item.retentionTag)}</td>
+              <td data-label="Größe">{fmtBytes(item.fileSizeBytes)}</td>
               <td class="actions">
                 {#if isLocalPath(item.targetPath)}
                   <button class="link" onclick={() => pickForRestore(item)}>Auswählen ↓</button>
-                  <button class="link" onclick={() => revealBackup(item.targetPath)}>Ordner öffnen</button>
                 {:else}
-                  <span class="hint" title="SFTP-Backup erst herunterladen, dann unten den Pfad einfügen.">erst laden</span>
+                  <span class="hint" title="Externe Kopie erst herunterladen, dann unten als Datei hochladen.">erst laden</span>
                 {/if}
               </td>
             </tr>
@@ -490,40 +559,40 @@
   <section class="card danger" bind:this={restoreSection}>
     <h2>Wiederherstellen</h2>
     <p class="muted">
-      Backup über „Auswählen" in der Liste oben übernehmen (oder Pfad einfügen) →
-      prüfen → Backup-Passwort eingeben.
+      Backup-Datei (.kbk) hochladen oder oben in der Liste „Auswählen“ →
+      Backup-Passwort eingeben. Eingespielt werden Backups ab Klein.Buch v2026.5;
+      ältere Datenbank-Versionen werden beim nächsten Anmelden umgestellt (vorher
+      entsteht automatisch ein Backup).
     </p>
-    <div class="row">
-      <input type="text" bind:value={restorePath} placeholder="Pfad zur Backup-Datei" />
-      <button onclick={doPreview} disabled={busy || !restorePath.trim()}>Backup prüfen</button>
-    </div>
-
-    {#if preview}
-      <div class="preview" bind:this={previewBox}>
-        <p>Erstellt: <strong>{preview.createdAt}</strong></p>
-        <p>App-Version: {preview.appVersion}</p>
-        <p>Inhalt: {fmtBytes(preview.contentSizeBytes)}</p>
-        <p class:bad={!preview.compatible}>
-          Passt zu dieser App-Version:
-          {preview.compatible
-            ? "ja"
-            : "NEIN — dieses Backup stammt aus einer anderen Version"}
-        </p>
-        {#if preview.compatible}
-          <label>
-            Backup-Passwort
-            <input
-              type="password"
-              bind:value={restorePass}
-              bind:this={restorePassInput}
-              autocomplete="off"
-            />
-          </label>
-          <button class="primary" onclick={doRestore} disabled={busy || !restorePass}>
-            Wiederherstellen
-          </button>
-        {/if}
-      </div>
+    <label>
+      Backup-Datei
+      <input
+        type="file"
+        accept=".kbk"
+        bind:this={restoreFileInput}
+        onchange={pickFile}
+        disabled={busy}
+      />
+    </label>
+    {#if restoreFromList}
+      <p>Ausgewählt: <strong>Backup vom {restoreFromList.createdAt}</strong></p>
+    {/if}
+    {#if restoreFile || restoreFromList}
+      <label>
+        Backup-Passwort
+        <input
+          type="password"
+          bind:value={restorePass}
+          bind:this={restorePassInput}
+          autocomplete="off"
+        />
+      </label>
+      <button class="primary" onclick={doRestore} disabled={busy || !restorePass}>
+        Wiederherstellen
+      </button>
+      {#if uploadPercent !== null}
+        <p class="muted">Hochladen … {uploadPercent} %</p>
+      {/if}
     {/if}
 
     {#if restoreReport}
@@ -562,21 +631,11 @@
     margin-top: 0.4rem;
     word-break: break-all;
   }
-  .pathline {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    margin: 0.3rem 0 0.5rem;
-  }
   .path {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.8rem;
     color: #6b7280;
     word-break: break-all;
-  }
-  .pathline .path {
-    flex: 1 1 14rem;
   }
   td .path {
     display: block;
@@ -585,27 +644,10 @@
   .actions {
     white-space: nowrap;
   }
-  .actions button.link + button.link {
-    margin-left: 0.6rem;
-  }
   .row {
-    display: flex;
-    gap: 0.5rem;
-  }
-  .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
-    margin: 0.2rem 0 0.7rem;
-  }
-  button.chip {
-    background: #eff6ff;
-    border-color: #bfdbfe;
-    color: #1e40af;
-    border-radius: 999px;
-    padding: 0.35rem 0.85rem;
-    font-size: 0.85rem;
-    font-weight: 600;
   }
   input[type="text"],
   input[type="password"] {
@@ -670,7 +712,24 @@
   /* ORT trägt den vollen Pfad: darf umbrechen + reserviert Mindestbreite. */
   td.ort {
     white-space: normal;
-    min-width: 22rem;
+  }
+  @media (min-width: 601px) {
+    td.ort {
+      min-width: 22rem;
+    }
+  }
+  @media (max-width: 820px) {
+    th,
+    td {
+      white-space: normal;
+    }
+    ul.targets li {
+      flex-wrap: wrap;
+    }
+    .row label {
+      min-width: 0;
+      max-width: 100%;
+    }
   }
   .preview {
     margin-top: 0.8rem;
@@ -678,9 +737,34 @@
     background: #f9fafb;
     border-radius: 6px;
   }
-  .preview .bad {
+  .bad {
     color: #991b1b;
     font-weight: 700;
+  }
+  .warn-box {
+    padding: 0.6rem 0.8rem;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 6px;
+    color: #78350f;
+  }
+  ul.targets {
+    list-style: none;
+    padding: 0;
+    margin: 0.6rem 0 1rem;
+  }
+  ul.targets li {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .target-actions {
+    display: flex;
+    gap: 0.75rem;
+    white-space: nowrap;
   }
   .fingerprint {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

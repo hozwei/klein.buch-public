@@ -235,4 +235,18 @@
   .actions-foot {
     margin-top: 1.5rem;
   }
+  .body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  /* Handy (Plan W10): Aktionen unter den Text statt daneben. */
+  @media (max-width: 600px) {
+    .item {
+      flex-wrap: wrap;
+    }
+    .actions {
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+  }
 </style>

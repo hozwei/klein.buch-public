@@ -1,0 +1,12 @@
+Komponente: ph-xml, ph-datetime 11.2.6; ph-schematron-api, ph-schematron-xslt 8.0.6
+Betrifft: com.helger.commons:ph-xml:11.2.6, com.helger.commons:ph-datetime:11.2.6, com.helger.schematron:ph-schematron-api:8.0.6, com.helger.schematron:ph-schematron-xslt:8.0.6
+Quelle: https://repo1.maven.org/maven2/com/helger/commons/ph-xml/11.2.6/ph-xml-11.2.6.jar!/NOTICE (unverändert)
+(Die übrigen genannten Artefakte enthalten denselben Text.)
+========================================================================
+=============================================================================
+= NOTICE file corresponding to section 4d of the Apache License Version 2.0 =
+=============================================================================
+This product includes Open Source Software developed by
+Philip Helger - https://www.helger.com/
+
+This product includes Open Source Software developed by phloc systems (http://www.phloc.com/)

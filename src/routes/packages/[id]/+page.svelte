@@ -1,6 +1,7 @@
 <script lang="ts">
   // Block P2b — Paket bearbeiten (= neue Revision) + Revisions-Panel
   // (Vergleich zweier Versionen + Rollback). Append-only: nichts wird überschrieben.
+  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
@@ -18,6 +19,7 @@
     packageRevisionsRollback,
     packageCategoriesList,
     packagePreview,
+    downloadUrl,
     sellerProfileGet,
   } from "$lib/api";
   import type { Package, PackageRevision, PackageCategory } from "$lib/types";
@@ -133,7 +135,8 @@
   async function preview() {
     previewing = true;
     try {
-      await packagePreview(title.trim(), body, cents());
+      const ticket = await packagePreview(title.trim(), body, cents());
+      openPdfPreview(downloadUrl(ticket), "Paket-Vorschau", ticket.fileName);
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -274,7 +277,7 @@
     max-width: 46rem;
   }
   /* .card entfernt — globale Definition aus tokens.css. */
-  .head-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+  .head-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
   .head-row h2 { font-size: var(--fs-lg); margin: 0; }
   .ver { font-size: var(--fs-sm); color: var(--c-text-muted); }
   label { display: block; margin-bottom: 0.8rem; font-size: var(--fs-sm); font-weight: 600; }
@@ -290,10 +293,12 @@
   }
   .row { display: flex; gap: 1rem; }
   .row > label { flex: 1; }
+  @media (max-width: 600px) { .row { flex-direction: column; gap: 0; } }
   .hint { font-size: var(--fs-sm); color: var(--c-text-muted); margin: 0; }
-  .md-head { display: flex; align-items: center; justify-content: space-between; }
+  .md-head { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
   .md-head h2 { font-size: var(--fs-lg); margin: 0; }
   .md-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .md-grid { grid-template-columns: 1fr; } }
   .md-preview {
     border: 1px solid var(--c-border);
     border-radius: var(--r-md);
@@ -302,11 +307,12 @@
     overflow: auto;
     line-height: 1.5;
   }
-  .actions { display: flex; gap: 0.5rem; margin: 0.5rem 0 1.5rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1.5rem; }
   .section-h { font-size: var(--fs-lg); margin: 1.5rem 0 0.8rem; }
   .revs { display: flex; flex-direction: column; gap: 0.4rem; }
   .rev {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
@@ -316,9 +322,10 @@
     padding: 0.6rem 1rem;
   }
   .rev-main { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .cmp-pick { display: flex; gap: 1rem; margin-bottom: 0.8rem; }
-  .cmp-pick label { flex: 0 0 12rem; }
+  .cmp-pick { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.8rem; }
+  .cmp-pick label { flex: 0 1 12rem; min-width: 0; }
   .cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .cmp-grid { grid-template-columns: 1fr; } }
   .cmp-col {
     border: 1px solid var(--c-border);
     border-radius: var(--r-lg);

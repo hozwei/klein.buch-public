@@ -8,19 +8,19 @@
 //! Export (DATEV-CSV + Steuerberater-ZIP) folgt in Block 14b/14c; die
 //! ELSTER-Ausfüllhilfe (Block 14a) liegt unten.
 
-use chrono::{Datelike, Local};
+use crate::app_ctx::AppCtx;
+use chrono::Datelike;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
-use tauri_plugin_opener::OpenerExt;
+use std::sync::Arc;
 
 use crate::archive;
 use crate::config::Paths;
 use crate::db::models::SellerProfileRow;
 use crate::db::repo::{audit_log, euer as euer_repo, seller_profile};
 use crate::domain::kleinunternehmer::{self, KleinunternehmerStatus, HINWEIS_TEXT};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::euer::aggregate::{self, EuerReport};
 use crate::euer::datev_csv::{self, DatevHeader, Skr};
 use crate::euer::detail::{self, AveeurItem, DisposalItem, ExpenseItem, IncomeItem, StornoItem};
@@ -52,28 +52,46 @@ fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bo
     kleinunternehmer::is_active_for_year(&klein_status_from_profile(profile), fiscal_year)
 }
 
+/// Argumente von [`euer_compute_report`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerComputeReportArgs {
+    pub fiscal_year: i64,
+}
+
 /// Berechnet den EÜR-Report für ein Geschäftsjahr (Cash-Basis).
-#[tauri::command]
 pub async fn euer_compute_report(
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
+    ctx: &Arc<AppCtx>,
+    args: EuerComputeReportArgs,
 ) -> Result<EuerReport> {
-    let inputs = euer_repo::load_inputs(pool.inner()).await?;
+    let EuerComputeReportArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
+    let inputs = euer_repo::load_inputs(&pool).await?;
     Ok(aggregate::aggregate(fiscal_year as i32, &inputs))
 }
+
+/// Argumente von [`euer_available_years`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerAvailableYearsArgs {}
 
 /// Geschäftsjahre mit EÜR-relevanten Bewegungen — für den Jahres-Selector.
 /// Das aktuelle Jahr (Europe/Berlin) ist immer enthalten, damit auch ohne
 /// Daten ein sinnvoller Default angeboten wird. Absteigend sortiert.
-#[tauri::command]
-pub async fn euer_available_years(pool: State<'_, SqlitePool>) -> Result<Vec<i64>> {
-    let mut years: Vec<i64> = euer_repo::available_years(pool.inner())
+pub async fn euer_available_years(
+    ctx: &Arc<AppCtx>,
+    _args: EuerAvailableYearsArgs,
+) -> Result<Vec<i64>> {
+    let pool = ctx.pool()?;
+
+    let mut years: Vec<i64> = euer_repo::available_years(&pool)
         .await?
         .into_iter()
         .map(|y| y as i64)
         .collect();
 
-    let current = Local::now().year() as i64;
+    let current = crate::clock::today_berlin().year() as i64;
     if !years.contains(&current) {
         years.push(current);
     }
@@ -89,7 +107,8 @@ pub async fn euer_available_years(pool: State<'_, SqlitePool>) -> Result<Vec<i64
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElsterExportResult {
-    pub csv_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     /// Anzahl aller Positionen (inkl. Kontrollsummen).
     pub line_count: usize,
     /// Anzahl der ins ELSTER-Formular einzutragenden Positionen.
@@ -123,9 +142,18 @@ pub struct EuerPackage {
     pub assets: Vec<AveeurItem>,
 }
 
-#[tauri::command]
-pub async fn euer_package(pool: State<'_, SqlitePool>, fiscal_year: i64) -> Result<EuerPackage> {
-    let pool = pool.inner();
+/// Argumente von [`euer_package`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerPackageArgs {
+    pub fiscal_year: i64,
+}
+
+pub async fn euer_package(ctx: &Arc<AppCtx>, args: EuerPackageArgs) -> Result<EuerPackage> {
+    let EuerPackageArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let y = fiscal_year as i32;
     Ok(EuerPackage {
         form: build_form_for_year(pool, y).await?,
@@ -141,34 +169,42 @@ pub async fn euer_package(pool: State<'_, SqlitePool>, fiscal_year: i64) -> Resu
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EuerDetailExport {
-    pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub income_count: usize,
     pub expense_count: usize,
     pub asset_count: usize,
 }
 
+/// Argumente von [`euer_export_detail_zip`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerExportDetailZipArgs {
+    pub fiscal_year: i64,
+}
+
 /// Schreibt die Einzelaufstellung als ZIP (einnahmen.csv, ausgaben.csv,
-/// anlageverzeichnis.csv) an den gewählten Pfad. Read-only.
-#[tauri::command]
+/// anlageverzeichnis.csv) in den Download-Ordner (Plan W7). Read-only.
 pub async fn euer_export_detail_zip(
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
-    target_path: String,
+    ctx: &Arc<AppCtx>,
+    args: EuerExportDetailZipArgs,
 ) -> Result<EuerDetailExport> {
+    let EuerExportDetailZipArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
     use std::io::Write;
 
-    let pool = pool.inner();
+    let pool = &pool;
     let y = fiscal_year as i32;
     let income = euer_repo::income_detail(pool, y).await?;
     let expenses = euer_repo::expense_detail(pool, y).await?;
     let assets = euer_repo::aveeur_items(pool, y).await?;
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("EUER-{fiscal_year}-Einzelaufstellung.zip"))?;
+    let path = download_path.as_path();
     let file = std::fs::File::create(path)?;
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
@@ -183,34 +219,49 @@ pub async fn euer_export_detail_zip(
     zw.finish()?;
 
     Ok(EuerDetailExport {
-        zip_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         income_count: income.len(),
         expense_count: expenses.len(),
         asset_count: assets.len(),
     })
 }
 
-/// Schreibt die ELSTER-Ausfüllhilfe als CSV an den gewählten Pfad. Read-only
+/// Argumente von [`euer_export_elster`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerExportElsterArgs {
+    pub fiscal_year: i64,
+}
+
+/// Schreibt die ELSTER-Ausfüllhilfe als CSV in den Download-Ordner (Plan W7). Read-only
 /// (kein Lock/Backup/Audit — eine reine Auswertung).
-#[tauri::command]
 pub async fn euer_export_elster(
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
-    target_path: String,
+    ctx: &Arc<AppCtx>,
+    args: EuerExportElsterArgs,
 ) -> Result<ElsterExportResult> {
-    let form = build_form_for_year(pool.inner(), fiscal_year as i32).await?;
+    let EuerExportElsterArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
+    let form = build_form_for_year(&pool, fiscal_year as i32).await?;
     let csv = elster_csv::to_csv(&form);
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("EUER-{fiscal_year}-ELSTER.csv"))?;
+    let path = download_path.as_path();
     std::fs::write(path, csv.as_bytes())?;
 
     Ok(ElsterExportResult {
-        csv_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         line_count: form.lines.len(),
         entry_count: form.lines.iter().filter(|l| l.is_entry).count(),
     })
@@ -220,7 +271,8 @@ pub async fn euer_export_elster(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EuerPdfExport {
-    pub pdf_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub size_bytes: i64,
 }
 
@@ -228,7 +280,7 @@ pub struct EuerPdfExport {
 /// Einzelaufstellung) als Bytes — gemeinsam genutzt von `euer_export_pdf` und dem
 /// Steuerberater-Paket.
 async fn build_euer_pdf_bytes(
-    app: &AppHandle,
+    paths: &Paths,
     pool: &SqlitePool,
     fiscal_year: i64,
 ) -> Result<Vec<u8>> {
@@ -249,7 +301,7 @@ async fn build_euer_pdf_bytes(
 
     let data = json!({
         "year": fiscal_year,
-        "generatedAt": Local::now().date_naive().to_string(),
+        "generatedAt": crate::clock::today_berlin().to_string(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
         "seller": {
@@ -320,7 +372,6 @@ async fn build_euer_pdf_bytes(
     });
     let data_json = serde_json::to_string(&data)?;
 
-    let paths = Paths::from_handle(app)?;
     let source = templates::load_euer_source(&paths.inputs_dir);
     let branding_dir = paths.inputs_dir.join("branding");
     let branding_opt = if branding_dir.is_dir() {
@@ -329,28 +380,35 @@ async fn build_euer_pdf_bytes(
         None
     };
 
-    typst_render::render_euer(&source, &data_json, branding_opt)
+    typst_render::plain_job(&source, &data_json, branding_opt)
+        .compile_async()
+        .await
+}
+
+/// Argumente von [`euer_export_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerExportPdfArgs {
+    pub fiscal_year: i64,
 }
 
 /// Erzeugt das vollständige EÜR-Dokument als PDF und schreibt es an den gewählten
 /// Pfad. Read-only.
-#[tauri::command]
-pub async fn euer_export_pdf(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
-    target_path: String,
-) -> Result<EuerPdfExport> {
-    let pdf_bytes = build_euer_pdf_bytes(&app, pool.inner(), fiscal_year).await?;
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+pub async fn euer_export_pdf(ctx: &Arc<AppCtx>, args: EuerExportPdfArgs) -> Result<EuerPdfExport> {
+    let EuerExportPdfArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
+    let pdf_bytes = build_euer_pdf_bytes(&ctx.paths, &pool, fiscal_year).await?;
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx.downloads.prepare(&format!("EUER-{fiscal_year}.pdf"))?;
+    let path = download_path.as_path();
     std::fs::write(path, &pdf_bytes)?;
     Ok(EuerPdfExport {
-        pdf_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         size_bytes: pdf_bytes.len() as i64,
     })
 }
@@ -359,21 +417,30 @@ pub async fn euer_export_pdf(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatevExport {
-    pub csv_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub booking_count: usize,
 }
 
+/// Argumente von [`euer_export_datev`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerExportDatevArgs {
+    pub fiscal_year: i64,
+    pub skr: String,
+}
+
 /// Erzeugt den DATEV-Buchungsstapel (EXTF) eines Geschäftsjahres für die
-/// Steuerberater-Übergabe und schreibt ihn an den gewählten Pfad. `skr` =
+/// Steuerberater-Übergabe und schreibt ihn in den Download-Ordner (Plan W7). `skr` =
 /// "SKR03" (Default) oder "SKR04". Read-only.
-#[tauri::command]
 pub async fn euer_export_datev(
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
-    skr: String,
-    target_path: String,
+    ctx: &Arc<AppCtx>,
+    args: EuerExportDatevArgs,
 ) -> Result<DatevExport> {
-    let pool = pool.inner();
+    let EuerExportDatevArgs { fiscal_year, skr } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let y = fiscal_year as i32;
 
     let income = euer_repo::income_detail(pool, y).await?;
@@ -399,20 +466,25 @@ pub async fn euer_export_datev(
     let header = DatevHeader {
         fiscal_year: y,
         skr: skr_enum,
-        generated_at: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
+        generated_at: crate::clock::now_berlin()
+            .format("%Y%m%d%H%M%S%3f")
+            .to_string(),
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
 
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("DATEV-{fiscal_year}-{skr}.csv"))?;
+    let path = download_path.as_path();
     std::fs::write(path, &bytes)?;
 
     Ok(DatevExport {
-        csv_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         booking_count: bookings.len(),
     })
 }
@@ -421,31 +493,39 @@ pub async fn euer_export_datev(
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StbExport {
-    pub zip_path: String,
+    /// Abruf über `GET /files/download/{id}` (Plan W7).
+    pub download: crate::downloads::DownloadTicket,
     pub file_count: usize,
 }
 
-/// Erzeugt das **Steuerberater-Paket** als ZIP: Deckblatt-PDF + vollständiges
-/// EÜR-PDF + DATEV-Buchungsstapel + ELSTER-Ausfüllhilfe + Einzelaufstellungs-CSVs
-/// + Anlageverzeichnis + Mandanten-Stammdaten + Original-Belege (PDF/XML aus dem
-/// write-once-Archiv) + SHA-256-Manifest + LIESMICH.txt mit §19-Klausel und
+/// Argumente von [`euer_export_stb_zip`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerExportStbZipArgs {
+    pub fiscal_year: i64,
+    pub skr: String,
+}
+
+/// Erzeugt das **Steuerberater-Paket** als ZIP: Deckblatt-PDF, vollständiges
+/// EÜR-PDF, DATEV-Buchungsstapel, ELSTER-Ausfüllhilfe, Einzelaufstellungs-CSVs,
+/// Anlageverzeichnis, Mandanten-Stammdaten, Original-Belege (PDF/XML aus dem
+/// write-once-Archiv), SHA-256-Manifest und LIESMICH.txt mit §19-Klausel und
 /// Disclaimer. `skr` = "SKR03" (Default) / "SKR04". Read-only — schreibt
 /// genau einen `euer.stb_export`-Audit-Eintrag.
 ///
 /// Alle Dateien liegen unter dem ZIP-Top-Level-Ordner `EUER-{year}/` (R2-018).
-#[tauri::command]
 pub async fn euer_export_stb_zip(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    fiscal_year: i64,
-    skr: String,
-    target_path: String,
+    ctx: &Arc<AppCtx>,
+    args: EuerExportStbZipArgs,
 ) -> Result<StbExport> {
-    let pool = pool.inner();
+    let EuerExportStbZipArgs { fiscal_year, skr } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let y = fiscal_year as i32;
 
     // EÜR-PDF (gemeinsamer Helfer).
-    let euer_pdf = build_euer_pdf_bytes(&app, pool, fiscal_year).await?;
+    let euer_pdf = build_euer_pdf_bytes(&ctx.paths, pool, fiscal_year).await?;
 
     // Bewegungen + Profil laden (für DATEV, Detail-CSVs, Deckblatt, Stammdaten).
     let form = build_form_for_year(pool, y).await?;
@@ -475,7 +555,9 @@ pub async fn euer_export_stb_zip(
     let datev_header = DatevHeader {
         fiscal_year: y,
         skr: skr_enum,
-        generated_at: Local::now().format("%Y%m%d%H%M%S%3f").to_string(),
+        generated_at: crate::clock::now_berlin()
+            .format("%Y%m%d%H%M%S%3f")
+            .to_string(),
     };
     let datev_bytes = datev_csv::to_datev(&datev_header, &bookings);
 
@@ -509,7 +591,7 @@ pub async fn euer_export_stb_zip(
     // Deckblatt-PDF (R2-019: §19-Klausel + Disclaimer in den Cover-Daten).
     let cover_data = json!({
         "year": fiscal_year,
-        "generatedAt": Local::now().date_naive().to_string(),
+        "generatedAt": crate::clock::today_berlin().to_string(),
         "skr": skr_enum.code(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
@@ -541,7 +623,7 @@ pub async fn euer_export_stb_zip(
     });
     let cover_json = serde_json::to_string(&cover_data)?;
 
-    let paths = Paths::from_handle(&app)?;
+    let paths = ctx.paths.clone();
     let cover_source = templates::load_cover_source(&paths.inputs_dir);
     let branding_dir = paths.inputs_dir.join("branding");
     let branding_opt = if branding_dir.is_dir() {
@@ -549,18 +631,19 @@ pub async fn euer_export_stb_zip(
     } else {
         None
     };
-    let cover_pdf = typst_render::render_pdf(&cover_source, &cover_json, branding_opt)?;
+    let cover_pdf = typst_render::plain_job(&cover_source, &cover_json, branding_opt)
+        .compile_async()
+        .await?;
 
     // LIESMICH.txt (R2-019).
     let liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum);
 
     // ZIP zusammenstellen.
-    let path = std::path::Path::new(&target_path);
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
+    let (download_id, download_path) = ctx
+        .downloads
+        .prepare(&format!("Steuerberater-{fiscal_year}.zip"))?;
+    let path = download_path.as_path();
     let file = std::fs::File::create(path)?;
     let mut zw = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
@@ -651,7 +734,7 @@ pub async fn euer_export_stb_zip(
         // wäre der Hash zirkulär).
         let manifest_json = serde_json::to_string_pretty(&json!({
             "fiscalYear": fiscal_year,
-            "generatedAt": Local::now().to_rfc3339(),
+            "generatedAt": crate::clock::now_berlin().to_rfc3339(),
             "algorithm": "SHA-256",
             "files": manifest,
         }))?;
@@ -677,7 +760,11 @@ pub async fn euer_export_stb_zip(
     .await?;
 
     Ok(StbExport {
-        zip_path: target_path,
+        download: ctx.downloads.register(
+            download_id,
+            path,
+            crate::downloads::DownloadKind::Export,
+        )?,
         file_count,
     })
 }
@@ -737,22 +824,37 @@ pub struct AfaPending {
     pub pending_count: i64,
 }
 
-#[tauri::command]
-pub async fn euer_afa_pending(pool: State<'_, SqlitePool>, fiscal_year: i64) -> Result<AfaPending> {
-    let pending_count = euer_repo::afa_pending_count(pool.inner(), fiscal_year as i32).await?;
+/// Argumente von [`euer_afa_pending`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerAfaPendingArgs {
+    pub fiscal_year: i64,
+}
+
+pub async fn euer_afa_pending(ctx: &Arc<AppCtx>, args: EuerAfaPendingArgs) -> Result<AfaPending> {
+    let EuerAfaPendingArgs { fiscal_year } = args;
+    let pool = ctx.pool()?;
+
+    let pending_count = euer_repo::afa_pending_count(&pool, fiscal_year as i32).await?;
     Ok(AfaPending {
         fiscal_year,
         pending_count,
     })
 }
 
+/// Argumente von [`euer_reveal_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerRevealPathArgs {
+    pub path: String,
+}
+
 /// Zeigt eine exportierte Datei im Datei-Explorer/Finder (markiert sie im
 /// enthaltenden Ordner). Gleiches Muster wie `invoices_reveal_pdf`.
-#[tauri::command]
-pub async fn euer_reveal_path(app: AppHandle, path: String) -> Result<()> {
-    app.opener()
-        .reveal_item_in_dir(&path)
-        .map_err(|e| Error::Other(anyhow::anyhow!("Ordner konnte nicht geöffnet werden: {e}")))?;
+pub async fn euer_reveal_path(ctx: &Arc<AppCtx>, args: EuerRevealPathArgs) -> Result<()> {
+    let EuerRevealPathArgs { path } = args;
+
+    ctx.reveal(&path)?;
     Ok(())
 }
 

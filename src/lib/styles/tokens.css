@@ -398,6 +398,70 @@ tbody tr:hover td { background: var(--c-surface-2); }
 ::view-transition-new(page-content) {
   animation: kb-page-in var(--t-base) var(--ease-apple) both;
 }
+/* ---- Responsiv (Plan W10) -------------------------------------------------
+ * Unter 900 px: Navigation als Drawer (+layout.svelte), schmalere Ränder,
+ * Tabellen außerhalb von Karten scrollen in sich (Karten haben dafür schon
+ * overflow-x: auto), Eingaben in 16 px (kein Auto-Zoom auf iOS).
+ * Primäre Aktionen sind überall ≥ 44 × 44 px (Touch-Ziel). */
+:root { --mobilebar-h: 52px; --sticky-top: 0px; }
+.btn-primary, button.primary { min-height: 44px; min-width: 44px; }
+/* Auf Touch-Geräten und schmalen Fenstern auch alle übrigen Aktions-Buttons. */
+@media (max-width: 900px), (pointer: coarse) {
+  .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger,
+  .link, .link-a, .link-btn, .back { min-height: 44px; }
+}
+@media (max-width: 900px) {
+  :root { --main-pad: 1rem; --sticky-top: var(--mobilebar-h); }
+  table:not(.card table) { display: block; overflow-x: auto; max-width: 100%; }
+  input, select, textarea { max-width: 100%; }
+  /* Grid-/Flex-Spalten dürfen schmaler werden als lange Auswahltexte oder
+     Datei-Eingaben (sonst bestimmt deren Mindestbreite die Spalte). */
+  label, fieldset { min-width: 0; }
+  select { text-overflow: ellipsis; }
+  input[type="file"] { width: 100%; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px; }
+  .card { padding: 1rem; }
+}
+
+/* Tabellen als Karten (Plan W10): `<table class="cards">` und `data-label`
+ * an jeder `<td>`. Unter 820 px (Handy, Tablet hochkant) wird jede Zeile eine Karte, jede Zelle eine
+ * Zeile „LABEL … Wert“ (Label links als float, Inhalt rechtsbündig im
+ * normalen Textfluss — Text und Spans bleiben zusammen). Zellen ohne
+ * data-label (Aktionen, Leerzeilen) stehen rechtsbündig ohne Label;
+ * `td.cards-full` (lange Texte, Beschreibungs-Eingaben) bekommt die volle
+ * Breite mit dem Label darüber. */
+@media (max-width: 820px) {
+  table.cards, table.cards:not(.card table) { display: block; overflow: visible; }
+  table.cards thead { display: none; }
+  table.cards tbody, table.cards tfoot { display: block; }
+  table.cards tr {
+    display: block; margin: 0 0 0.75rem; padding: 0.4rem 0.85rem;
+    border: 1px solid var(--c-border); border-radius: var(--r-lg); background: var(--c-surface);
+  }
+  table.cards td {
+    display: flow-root; padding: 0.45rem 0 !important; text-align: right;
+    overflow-wrap: anywhere;
+  }
+  table.cards tr td:last-child { border-bottom: 0 !important; }
+  table.cards td[data-label]::before {
+    content: attr(data-label); float: left; max-width: 45%; margin-right: 1rem; text-align: left;
+    font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    line-height: 1.6; color: var(--c-text-subtle);
+  }
+  table.cards td:has(input:not([type="checkbox"]):not([type="radio"]), select, textarea)[data-label]::before {
+    line-height: 2.6rem;
+  }
+  table.cards td:empty { display: none; }
+  table.cards td.cards-full { text-align: left; }
+  table.cards td.cards-full[data-label]::before { float: none; display: block; max-width: none; margin: 0 0 0.3rem; }
+  table.cards td input:not([type="checkbox"]):not([type="radio"]), table.cards td select, table.cards td textarea {
+    width: 55%; max-width: 55%; min-width: 0; box-sizing: border-box;
+  }
+  table.cards td.cards-full input:not([type="checkbox"]):not([type="radio"]),
+  table.cards td.cards-full select, table.cards td.cards-full textarea { width: 100%; max-width: 100%; }
+  table.cards tbody tr:hover td { background: transparent; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-old(page-content),
   ::view-transition-new(page-content) {

@@ -1,0 +1,4 @@
+# Sidecar-Komponenten byte-genau wie aus den Quellen (SHA-256-/Baum-Vergleich
+# im Image-Workflow, Plan W11): keine Zeilenend-Umwandlung.
+src-tauri/sidecar/lib/** binary
+src-tauri/sidecar/xrechnung-config/** -text

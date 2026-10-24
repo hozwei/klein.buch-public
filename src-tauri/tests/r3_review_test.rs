@@ -33,6 +33,8 @@ fn seller_kleinunternehmer() -> SellerView<'static> {
         tax_number: Some("133/456/7890"),
         vat_id: None,
         email: "schmidm@wildbach-computerhilfe.de",
+        phone: Some("+49 000 000000"),
+        contact_name: None,
         iban: Some("DE02120300000000202051"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
@@ -95,10 +97,13 @@ fn r3_001_bt22_carries_subject_code_reg_for_kleinunternehmer() {
         &[],
     )
     .unwrap();
-    // Note mit SubjectCode REG muss exakt einmal vorkommen.
-    let note_block = "<ram:IncludedNote>\n      <ram:SubjectCode>REG</ram:SubjectCode>";
+    // Note mit SubjectCode REG — nach Content (CII-Schema, W11-Fund).
+    let note_block = format!(
+        "<ram:IncludedNote>\n      <ram:Content>{HINWEIS_TEXT}</ram:Content>\n      \
+         <ram:SubjectCode>REG</ram:SubjectCode>\n    </ram:IncludedNote>"
+    );
     assert!(
-        xml.contains(note_block),
+        xml.contains(&note_block),
         "BT-22 muss mit SubjectCode REG emittiert werden, gefundenes XML:\n{xml}"
     );
     // Klausel-Text muss im Content stehen.

@@ -52,7 +52,7 @@ pub async fn next_number(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32)
 /// und sehr seltene Sonderfälle, die den Slug direkt brauchen.
 pub async fn next_seq(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32) -> Result<u32> {
     let slug = doc_type.db_slug();
-    let mut tx = pool.begin().await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
 
     // Zeile für (slug, year) sicherstellen — kollidiert sie schon, ignorieren.
     sqlx::query(

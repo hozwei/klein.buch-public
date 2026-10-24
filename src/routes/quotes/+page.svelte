@@ -96,7 +96,7 @@
 {:else if rows.length === 0}
   <p class="muted">Keine Angebote.</p>
 {:else}
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr>
         <th>Nummer</th>
@@ -111,12 +111,12 @@
     <tbody>
       {#each rows as r (r.id)}
         <tr class:canceled={r.status === "canceled" || r.status === "rejected"}>
-          <td><a href={`/quotes/${r.id}`}>{r.quoteNumber}</a></td>
-          <td>{date(r.quoteDate)}</td>
-          <td>{date(r.validUntil)}</td>
-          <td>{r.contactName}</td>
-          <td class="right">{euro(r.grossAmountCents)}</td>
-          <td><Badge tone={statusTone(r.status)} strike={r.status === "canceled"}>{statusLabel(r.status)}</Badge></td>
+          <td data-label="Nummer"><a href={`/quotes/${r.id}`}>{r.quoteNumber}</a></td>
+          <td data-label="Datum">{date(r.quoteDate)}</td>
+          <td data-label="Gültig bis">{date(r.validUntil)}</td>
+          <td data-label="Empfänger">{r.contactName}</td>
+          <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
+          <td data-label="Status"><Badge tone={statusTone(r.status)} strike={r.status === "canceled"}>{statusLabel(r.status)}</Badge></td>
           <td class="right"><Button variant="secondary" size="sm" href={`/quotes/${r.id}`}>Öffnen</Button></td>
         </tr>
       {/each}

@@ -24,25 +24,6 @@ export interface TravelLine {
   taxCategoryCode: TaxCategoryCode;
 }
 
-// ---- Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP) -------------
-
-/** Konfiguration des Watched-Folders fuer eingehende E-Rechnungen. */
-export interface DropFolderSettings {
-  /** Periodischer Sync (5-min-Tick + App-Start-Sweep) aktiv? */
-  enabled: boolean;
-  /** Absoluter Ordner-Pfad. Leer = noch nicht gewaehlt. */
-  path: string;
-}
-
-/** Ergebnis-Zaehler eines manuellen `Jetzt synchronisieren`-Laufs. */
-export interface DropFolderSyncResult {
-  /** `true`, wenn der Lauf uebersprungen wurde (Toggle off oder Pfad leer/ungueltig). */
-  skippedDisabled: boolean;
-  imported: number;
-  failed: number;
-  ignoredHidden: number;
-}
-
 export type InvoiceStatus =
   | "draft"
   | "issued"
@@ -317,7 +298,6 @@ export interface InvoiceInputDto {
 
 export interface CreateDraftArgs {
   contactId: Uuid;
-  fiscalYear: number;
   buyerReference: string | null;
   input: InvoiceInputDto;
 }
@@ -605,7 +585,6 @@ export interface QuoteInputDto {
 
 export interface QuoteCreateDraftArgs {
   contactId: Uuid;
-  fiscalYear: number;
   input: QuoteInputDto;
 }
 
@@ -613,10 +592,8 @@ export interface QuoteAcceptArgs {
   quoteId: Uuid;
   /** Fachliches Annahmedatum (YYYY-MM-DD). null → heute (Backend). */
   acceptedDate: string | null;
-  /** Roh-Bytes des hochgeladenen unterschriebenen Vertrags. null → ohne Doc. */
-  signedContractBytes: number[] | null;
-  /** Original-Dateiname des Uploads (für MIME/Anhang-Name). */
-  signedContractFilename: string | null;
+  /** Upload (Art `vertrag`) des unterschriebenen Vertrags. null → ohne Doc. */
+  signedContractUploadId: string | null;
   attachmentLabel: string | null;
 }
 
@@ -918,9 +895,8 @@ export interface ExpenseListFilter {
 
 export interface ExpenseCreateArgs {
   input: ExpenseInputDto;
-  fiscalYear: number | null;
-  receiptBytes: number[] | null;
-  receiptFilename: string | null;
+  /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
+  receiptUploadId: string | null;
 }
 
 export interface ExpenseCancelArgs {
@@ -987,10 +963,9 @@ export interface EInvoiceParseResult {
 /** Args für expenses_create_from_einvoice (Schritt 2). */
 export interface EInvoiceCreateArgs {
   input: ExpenseInputDto;
-  fiscalYear: number | null;
-  /** Original-Datei (XML oder ZUGFeRD-PDF) — wird unverändert archiviert. */
-  originalBytes: number[];
-  originalFileName: string;
+  /** Upload des Originals aus Schritt 1 (XML oder ZUGFeRD-PDF) — wird
+   *  unverändert archiviert. */
+  uploadId: string;
   sourceFormat: string;
   validation: ValidationSummary | null;
 }
@@ -1042,9 +1017,8 @@ export interface PrivateMovementListFilter {
 
 export interface PrivateMovementCreateArgs {
   input: PrivateMovementInputDto;
-  fiscalYear: number | null;
-  receiptBytes: number[] | null;
-  receiptFilename: string | null;
+  /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
+  receiptUploadId: string | null;
 }
 
 // ---- Generischer Anhang-Upload (Block 9) -----------------------------------
@@ -1052,8 +1026,8 @@ export interface PrivateMovementCreateArgs {
 export interface AddAttachmentArgs {
   parentType: string;
   parentId: Uuid;
-  fileBytes: number[];
-  fileName: string;
+  /** Upload der Art `anhang` (Plan W7). */
+  uploadId: string;
   label: string | null;
 }
 
@@ -1360,9 +1334,17 @@ export interface ElsterForm {
   surplusCents: Cents;
 }
 
+/** Download-Ticket (Plan W7, `downloads::DownloadTicket`): die Datei liegt kurz
+ *  auf dem Server und wird über `GET /files/download/{downloadId}` geholt. */
+export interface DownloadTicket {
+  downloadId: string;
+  fileName: string;
+  sizeBytes: number;
+}
+
 /** Ergebnis des CSV-Exports (`commands::euer::ElsterExportResult`). */
 export interface ElsterExportResult {
-  csvPath: string;
+  download: DownloadTicket;
   lineCount: number;
   entryCount: number;
 }
@@ -1435,7 +1417,7 @@ export interface EuerPackage {
 
 /** Ergebnis des Einzelaufstellung-ZIP-Exports (`commands::euer::EuerDetailExport`). */
 export interface EuerDetailExport {
-  zipPath: string;
+  download: DownloadTicket;
   incomeCount: number;
   expenseCount: number;
   assetCount: number;
@@ -1449,19 +1431,19 @@ export interface AfaPending {
 
 /** Ergebnis des PDF-Exports „Anlage EÜR" (`commands::euer::EuerPdfExport`). */
 export interface EuerPdfExport {
-  pdfPath: string;
+  download: DownloadTicket;
   sizeBytes: number;
 }
 
 /** Ergebnis des DATEV-Buchungsstapel-Exports (`commands::euer::DatevExport`). */
 export interface DatevExport {
-  csvPath: string;
+  download: DownloadTicket;
   bookingCount: number;
 }
 
 /** Ergebnis des Steuerberater-Paket-Exports (`commands::euer::StbExport`). */
 export interface StbExport {
-  zipPath: string;
+  download: DownloadTicket;
   fileCount: number;
 }
 
@@ -1564,6 +1546,9 @@ export interface IntegrityCheckSummary {
   filesPassed: number;
   filesFailed: number;
   failedArchiveIds: string[];
+  /** Vorhanden, aber nicht lesbar (z. B. Rechte) — kein Manipulationsbefund (W2). */
+  filesUnreadable: number;
+  unreadableArchiveIds: string[];
 }
 
 /** Eine Zeile der Integrity-Check-Historie (`commands::system::IntegrityCheckRow`). */
@@ -1583,7 +1568,19 @@ export interface AppInfo {
   schemaVersion: number;
   identifier: string;
   licenseSpdx: string;
+  /** Wirksame Quell-URL (AGPL §13; `KLEIN_BUCH_SOURCE_URL`, sonst Build-Wert). */
   repositoryUrl: string;
-  /** Kurzer Commit-Hash vom Release-CI bzw. `"dev"` im lokalen Build. */
-  buildCommit: string;
+  /** Voller Commit-SHA des Builds; `null` im Entwicklungs-Build (Plan W12). */
+  buildCommit: string | null;
+  /** Release-Tag des Builds; `null` außerhalb von Release-Builds. */
+  buildTag: string | null;
+  /** Link auf den exakten Quellstand; `null` ohne bekannten Commit. */
+  sourceLink: string | null;
+}
+
+/** Opt-in Versionsprüfung (`commands::settings::UpdateCheckSettings`, Plan W12). */
+export interface UpdateCheckSettings {
+  enabled: boolean;
+  /** Letzte Abfrage (RFC 3339, UTC) oder `null`. */
+  lastCheckAt: string | null;
 }

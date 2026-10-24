@@ -4,14 +4,14 @@
 //! nur der Vollständigkeit der Kasse. Erfassung schreibt sofort fest (Lock-Event
 //! → Backup-Hook). Kein Storno/Edit — Korrektur via Gegenbewegung (append-only).
 
-use chrono::Datelike;
+use crate::app_ctx::AppCtx;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
-use crate::commands::attachments::{guess_mime, sanitize_filename};
+use crate::commands::attachments::sanitize_filename;
 use crate::config::Paths;
 use crate::db::models::{PrivateMovementListItem, PrivateMovementRow};
 use crate::db::numbering;
@@ -24,38 +24,86 @@ use crate::error::{Error, Result};
 #[serde(rename_all = "camelCase")]
 pub struct PrivateMovementCreateArgs {
     pub input: PrivateMovementInput,
-    /// Optional — sonst aus dem Bewegungs-Datum (Kalenderjahr) abgeleitet.
-    pub fiscal_year: Option<i64>,
-    /// Optionaler Beleg (z. B. Quittung). `None` → ohne Beleg.
-    pub receipt_bytes: Option<Vec<u8>>,
-    pub receipt_filename: Option<String>,
+    /// Optionaler Beleg (z. B. Quittung) aus `POST /api/upload/beleg` (Plan W7).
+    #[serde(default)]
+    pub receipt_upload_id: Option<String>,
+    /// Vom Command aus dem Upload gelesen, nie vom Client.
+    #[serde(skip)]
+    pub receipt: Option<crate::uploads::UploadedFile>,
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsListArgs {
+    #[serde(default)]
+    pub filter: Option<private_movements::ListFilter>,
+}
+
 pub async fn private_movements_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<private_movements::ListFilter>,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsListArgs,
 ) -> Result<Vec<PrivateMovementListItem>> {
-    private_movements::list(pool.inner(), &filter.unwrap_or_default()).await
+    let PrivateMovementsListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    private_movements::list(&pool, &filter.unwrap_or_default()).await
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsGetArgs {
+    pub id: String,
+}
+
 pub async fn private_movements_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsGetArgs,
 ) -> Result<Option<PrivateMovementRow>> {
-    private_movements::get(pool.inner(), &id).await
+    let PrivateMovementsGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    private_movements::get(&pool, &id).await
 }
 
-#[tauri::command]
+/// Argumente von [`private_movements_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateMovementsCreateArgs {
+    pub args: PrivateMovementCreateArgs,
+}
+
 pub async fn private_movements_create(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
+    ctx: &Arc<AppCtx>,
+    args: PrivateMovementsCreateArgs,
+) -> Result<PrivateMovementRow> {
+    let PrivateMovementsCreateArgs { mut args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let upload_id = args.receipt_upload_id.take().filter(|id| !id.is_empty());
+    if let Some(id) = upload_id.as_deref() {
+        args.receipt = Some(
+            ctx.uploads
+                .read(id, &[crate::uploads::UploadKind::Receipt])?,
+        );
+    }
+    let paths = ctx.paths.clone();
+    let row = create_core(&pool, &paths, session, args).await?;
+    if let Some(id) = upload_id.as_deref() {
+        ctx.uploads.consume(id);
+    }
+    Ok(row)
+}
+
+/// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).
+pub async fn create_core(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &backup::BackupSession,
     args: PrivateMovementCreateArgs,
 ) -> Result<PrivateMovementRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
     let input = args.input;
 
     if let Err(errs) = private_movement::validate_private_movement(&input) {
@@ -68,28 +116,29 @@ pub async fn private_movements_create(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.movement_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &input.movement_date,
+    ));
     // GJ-Festschreibung (Block 15): keine neue Privatbewegung mit Datum in einem
     // abgeschlossenen Geschäftsjahr.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     let movement_number =
         numbering::next_number(pool, DocType::PrivateMovement, fiscal_year as i32).await?;
 
-    let receipt_archive_id = match args.receipt_bytes {
-        Some(bytes) if !bytes.is_empty() => {
-            let sanitized = sanitize_filename(args.receipt_filename.as_deref().unwrap_or("beleg"));
+    let receipt_archive_id = match args.receipt {
+        Some(file) if !file.bytes.is_empty() => {
+            let sanitized = sanitize_filename(&file.file_name);
             let archive_name = format!("{movement_number}-{sanitized}");
-            let mime = guess_mime(&sanitized);
             let stored = archive::store_bytes(
                 pool,
                 &paths.archive_dir,
                 fiscal_year as i32,
                 ArchiveKind::Attachment,
                 &archive_name,
-                mime,
-                &bytes,
+                // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+                file.mime,
+                &file.bytes,
             )
             .await?;
             Some(stored.archive_id)
@@ -118,7 +167,7 @@ pub async fn private_movements_create(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "private_movement.lock")
+    backup::auto_backup_if_unlocked(pool, paths, session, "private_movement.lock")
         .await
         .ok();
 

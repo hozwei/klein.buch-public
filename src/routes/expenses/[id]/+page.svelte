@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import {
@@ -7,8 +8,7 @@
     expensesSetPayment,
     expensesReceiptXmlText,
     paymentAccountsList,
-    attachmentsOpen,
-    attachmentsReveal,
+    saveArchiveFile,
   } from "$lib/api";
   import type { ExpenseDetail, AttachmentView, PaymentAccount } from "$lib/types";
   import { euro, date } from "$lib/format";
@@ -28,7 +28,7 @@
   let showCancel = $state(false);
   let cancelReason = $state("");
   let showPay = $state(false);
-  let payDate = $state(new Date().toISOString().slice(0, 10));
+  let payDate = $state(todayBerlin());
   let payAccountId = $state<string>("");
 
   // PV1-A5: Roh-XML-Viewer wird global im Root-Layout gemountet
@@ -101,7 +101,7 @@
   });
 
   function startPay() {
-    payDate = detail?.expense.paidDate ?? new Date().toISOString().slice(0, 10);
+    payDate = detail?.expense.paidDate ?? todayBerlin();
     payAccountId =
       detail?.expense.paidFromAccountId ??
       accounts.find((a) => a.isDefault === 1 && a.active === 1)?.id ??
@@ -163,19 +163,9 @@
     if (detail) detail.attachments = list;
   }
 
-  async function openReceipt(archiveId: string) {
-    try {
-      await attachmentsOpen(archiveId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
-  }
-  async function revealReceipt(archiveId: string) {
-    try {
-      await attachmentsReveal(archiveId);
-    } catch (e) {
-      flash(String(e), "error");
-    }
+  // Plan W7: Beleg-Original (Fremddatei) als Download, hash-geprüft.
+  function openReceipt(archiveId: string) {
+    saveArchiveFile(archiveId);
   }
 </script>
 
@@ -238,7 +228,7 @@
         <div class="pay-grid">
           <label>
             Bezahlt am
-            <input type="date" bind:value={payDate} max={new Date().toISOString().slice(0, 10)} />
+            <input type="date" bind:value={payDate} max={todayBerlin()} />
           </label>
           <label>
             Konto
@@ -271,8 +261,7 @@
     <h2>Beleg</h2>
     {#if e.receiptArchiveId}
       <div class="row">
-        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg öffnen</button>
-        <button class="btn-secondary btn-sm" onclick={() => revealReceipt(e.receiptArchiveId!)}>Im Ordner zeigen</button>
+        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
       </div>
     {:else}
       <p class="muted">Kein primärer Beleg hinterlegt.</p>
@@ -334,9 +323,10 @@
   dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin: 0; }
   dl div { display: flex; flex-direction: column; }
   dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; }
+  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
   .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; }
+  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; max-width: 100%; }
   .pay-grid { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
   .pay-grid label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .pay-grid input, .pay-grid select { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }

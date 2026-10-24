@@ -4,61 +4,121 @@
 //! Argumente kommen camelCase rein (Tauri-Default), wir nennen sie hier
 //! snake_case und überlassen die Konvertierung Tauri.
 
+use crate::app_ctx::AppCtx;
 use crate::db::models::ContactRow;
 use crate::db::repo::{audit_log, contacts};
 use crate::domain::contact::ContactInput;
 use crate::error::{Error, Result};
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::State;
+use std::sync::Arc;
 
-#[tauri::command]
-pub async fn contacts_list(
-    pool: State<'_, SqlitePool>,
-    include_archived: Option<bool>,
-) -> Result<Vec<ContactRow>> {
-    contacts::list(pool.inner(), include_archived.unwrap_or(false)).await
+/// Argumente von [`contacts_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsListArgs {
+    #[serde(default)]
+    pub include_archived: Option<bool>,
 }
 
-#[tauri::command]
-pub async fn contacts_get(pool: State<'_, SqlitePool>, id: String) -> Result<Option<ContactRow>> {
-    contacts::get(pool.inner(), &id).await
+pub async fn contacts_list(ctx: &Arc<AppCtx>, args: ContactsListArgs) -> Result<Vec<ContactRow>> {
+    let ContactsListArgs { include_archived } = args;
+    let pool = ctx.pool()?;
+
+    contacts::list(&pool, include_archived.unwrap_or(false)).await
 }
 
-#[tauri::command]
-pub async fn contacts_create(
-    pool: State<'_, SqlitePool>,
-    input: ContactInput,
-) -> Result<ContactRow> {
-    contacts::create(pool.inner(), &input).await
+/// Argumente von [`contacts_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsGetArgs {
+    pub id: String,
 }
 
-#[tauri::command]
-pub async fn contacts_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: ContactInput,
-) -> Result<ContactRow> {
-    contacts::update(pool.inner(), &id, &input).await
+pub async fn contacts_get(ctx: &Arc<AppCtx>, args: ContactsGetArgs) -> Result<Option<ContactRow>> {
+    let ContactsGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    contacts::get(&pool, &id).await
 }
 
-#[tauri::command]
-pub async fn contacts_archive(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    contacts::archive(pool.inner(), &id).await
+/// Argumente von [`contacts_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsCreateArgs {
+    pub input: ContactInput,
 }
 
-#[tauri::command]
-pub async fn contacts_unarchive(pool: State<'_, SqlitePool>, id: String) -> Result<()> {
-    contacts::unarchive(pool.inner(), &id).await
+pub async fn contacts_create(ctx: &Arc<AppCtx>, args: ContactsCreateArgs) -> Result<ContactRow> {
+    let ContactsCreateArgs { input } = args;
+    let pool = ctx.pool()?;
+
+    contacts::create(&pool, &input).await
 }
 
-#[tauri::command]
+/// Argumente von [`contacts_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsUpdateArgs {
+    pub id: String,
+    pub input: ContactInput,
+}
+
+pub async fn contacts_update(ctx: &Arc<AppCtx>, args: ContactsUpdateArgs) -> Result<ContactRow> {
+    let ContactsUpdateArgs { id, input } = args;
+    let pool = ctx.pool()?;
+
+    contacts::update(&pool, &id, &input).await
+}
+
+/// Argumente von [`contacts_archive`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsArchiveArgs {
+    pub id: String,
+}
+
+pub async fn contacts_archive(ctx: &Arc<AppCtx>, args: ContactsArchiveArgs) -> Result<()> {
+    let ContactsArchiveArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    contacts::archive(&pool, &id).await
+}
+
+/// Argumente von [`contacts_unarchive`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsUnarchiveArgs {
+    pub id: String,
+}
+
+pub async fn contacts_unarchive(ctx: &Arc<AppCtx>, args: ContactsUnarchiveArgs) -> Result<()> {
+    let ContactsUnarchiveArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    contacts::unarchive(&pool, &id).await
+}
+
+/// Argumente von [`contacts_search`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsSearchArgs {
+    pub query: String,
+    #[serde(default)]
+    pub include_archived: Option<bool>,
+}
+
 pub async fn contacts_search(
-    pool: State<'_, SqlitePool>,
-    query: String,
-    include_archived: Option<bool>,
+    ctx: &Arc<AppCtx>,
+    args: ContactsSearchArgs,
 ) -> Result<Vec<ContactRow>> {
-    contacts::search(pool.inner(), &query, include_archived.unwrap_or(false)).await
+    let ContactsSearchArgs {
+        query,
+        include_archived,
+    } = args;
+    let pool = ctx.pool()?;
+
+    contacts::search(&pool, &query, include_archived.unwrap_or(false)).await
 }
 
 // =============================================================================
@@ -83,12 +143,21 @@ pub struct AnonymizeCheck {
     pub blocker: Option<String>,
 }
 
-#[tauri::command]
+/// Argumente von [`contacts_anonymize_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsAnonymizeCheckArgs {
+    pub id: String,
+}
+
 pub async fn contacts_anonymize_check(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: ContactsAnonymizeCheckArgs,
 ) -> Result<AnonymizeCheck> {
-    let pool = pool.inner();
+    let ContactsAnonymizeCheckArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let contact = contacts::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {id}")))?;
@@ -133,10 +202,22 @@ pub async fn anonymize_core(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
     Ok(row)
 }
 
+/// Argumente von [`contacts_anonymize`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsAnonymizeArgs {
+    pub id: String,
+}
+
 /// Anonymisiert den Kontakt (irreversibel). Siehe [`anonymize_core`].
-#[tauri::command]
-pub async fn contacts_anonymize(pool: State<'_, SqlitePool>, id: String) -> Result<ContactRow> {
-    anonymize_core(pool.inner(), &id).await
+pub async fn contacts_anonymize(
+    ctx: &Arc<AppCtx>,
+    args: ContactsAnonymizeArgs,
+) -> Result<ContactRow> {
+    let ContactsAnonymizeArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    anonymize_core(&pool, &id).await
 }
 
 #[cfg(test)]

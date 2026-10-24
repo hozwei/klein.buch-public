@@ -1,0 +1,61 @@
+# Sidecar-Quellen (Plan W11): vergleicht KoSIT-Validator, Mustang und die
+# XRechnung-Konfiguration mit ihren Originalen (SHA-256, Inhalt); dazu prüft
+# Docker Compose das Beispiel `compose.example.yaml` (Plan W13).
+# Das Image selbst baut und prüft seit W12 der Trockenlauf in release-image.yml
+# (Build, Smoke-Test, SBOM, Scan, Quellarchiv) — ein zweiter Build je Push entfällt.
+name: Image
+
+on:
+  push:
+    branches: [phase-w]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sidecar-sources:
+    name: Sidecar-Quellen (SHA-256)
+    if: github.repository == 'hozwei/klein.buch-public'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Originale laden und Prüfsummen vergleichen
+        run: |
+          set -euo pipefail
+          V=src-tauri/sidecar/versions.json
+          check() {
+            local key=$1 url sha file
+            url=$(jq -r ".$key.source_url" "$V")
+            sha=$(jq -r ".$key.sha256" "$V")
+            curl -fsSL --retry 3 -o "/tmp/$key.download" "$url"
+            echo "$sha  /tmp/$key.download" | sha256sum -c -
+          }
+          for key in kosit_validator mustang; do
+            check "$key"
+            file=$(jq -r ".$key.file" "$V")
+            echo "$(jq -r ".$key.sha256" "$V")  src-tauri/sidecar/$file" | sha256sum -c -
+          done
+          check xrechnung_config
+          mkdir -p /tmp/cfg
+          unzip -q /tmp/xrechnung_config.download -d /tmp/cfg
+          diff -r /tmp/cfg src-tauri/sidecar/xrechnung-config
+          echo "Sidecar-Komponenten entsprechen den Quellen."
+
+  compose-example:
+    name: compose.example.yaml gültig
+    if: github.repository == 'hozwei/klein.buch-public'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: docker compose config
+        run: |
+          docker compose version
+          docker compose -f compose.example.yaml config --quiet
+          docker compose -f compose.example.yaml config | grep -q 'image: ghcr.io/hozwei/klein-buch:'

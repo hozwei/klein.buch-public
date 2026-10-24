@@ -6,10 +6,9 @@
 //!
 //! ## Hard-Rules
 //!
-//! - **Passwort nie in DB/Log/audit.** Es lebt ausschließlich im OS-Keychain
-//!   (Windows Credential Manager / macOS Keychain / Linux Secret Service), genau
-//!   wie die SMTP-Passphrase (siehe [`crate::mail::keyring`]). Es gibt genau ein
-//!   SFTP-Ziel, daher eine feste Service-ID.
+//! - **Passwort nie im Ziel-JSON, Log oder Audit.** Es liegt je Ziel-ID in der
+//!   verschlüsselten Datenbank (`crate::secrets::sftp_key`, Plan W8) und wird
+//!   dem Upload übergeben.
 //! - **Host-Key-Pinning (MITM-Schutz).** Der Server-Host-Key wird über einen
 //!   gepinnten SHA-256-Fingerprint (`SHA256:…`) verifiziert. Ein Upload ohne
 //!   passenden Pin wird **abgelehnt**. Den Fingerprint ermittelt der einmalige
@@ -22,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::PublicKey;
+use russh::keys::{PublicKey, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -31,11 +30,6 @@ use crate::error::{Error, Result};
 
 /// Gesamt-Timeout für Handshake + Auth + SFTP-Open.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Keychain-Service-ID des SFTP-Backup-Passworts (es gibt genau EIN Ziel).
-const KEYRING_SERVICE: &str = "kleinbuch::backup::sftp";
-/// Fixer `user`-Teil des Keychain-Eintrags.
-const KEYRING_USER: &str = "sftp-password";
 
 /// Name der temporären Probe-Datei für den Schreibrechte-Test.
 const PROBE_FILE: &str = ".klein-buch-write-test";
@@ -87,43 +81,6 @@ fn fingerprint_of(key: &PublicKey) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Keychain (Imperative Shell) — Passwort nie in DB/Log/audit
-// ---------------------------------------------------------------------------
-
-/// Speichert das SFTP-Passwort im OS-Credential-Manager.
-pub fn set_password(password: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht erstellbar: {e}")))?;
-    entry
-        .set_password(password)
-        .map_err(|e| Error::Backup(format!("SFTP-Passwort nicht speicherbar: {e}")))?;
-    Ok(())
-}
-
-/// Liest das SFTP-Passwort. `Ok(None)`, wenn keines hinterlegt ist; andere
-/// Store-Fehler werden propagiert (defekter Keychain ≠ „kein Passwort").
-pub fn get_password() -> Result<Option<String>> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht lesbar: {e}")))?;
-    match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(Error::Backup(format!("SFTP-Passwort nicht lesbar: {e}"))),
-    }
-}
-
-/// Löscht das SFTP-Passwort. Idempotent (fehlender Eintrag = Ok).
-pub fn delete_password() -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-        .map_err(|e| Error::Backup(format!("Keychain-Eintrag nicht adressierbar: {e}")))?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(Error::Backup(format!("SFTP-Passwort nicht löschbar: {e}"))),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Host-Key-Verifier (russh-Client-Handler)
 // ---------------------------------------------------------------------------
 
@@ -145,9 +102,11 @@ impl client::Handler for HostKeyVerifier {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
-        let fp = fingerprint_of(server_public_key);
+        // Gepinnt wird der Host-Key selbst; bei einem Zertifikat dessen Schlüssel
+        // (die Signatur des Schlüsseltauschs hat russh davor schon geprüft).
+        let fp = fingerprint_of(&server_public_key.public_key());
         *self.seen.lock().expect("seen mutex poisoned") = Some(fp.clone());
         Ok(match &self.pinned {
             Some(p) => *p == fp,
@@ -216,17 +175,26 @@ async fn open(
 /// erst durchgereicht, wenn auch das rekursive Anlegen scheitert.
 async fn write_remote(sftp: &SftpSession, dir: &str, name: &str, bytes: &[u8]) -> Result<String> {
     let path = remote_join(dir, name);
-    if let Err(first) = create_and_write(sftp, &path, bytes).await {
+    // Plan W7: erst unter einem Temp-Namen schreiben, dann umbenennen — ein
+    // Abbruch hinterlässt keine halbe `.kbk` unter dem endgültigen Namen.
+    let tmp = remote_join(dir, &format!(".{name}.part"));
+    if let Err(first) = create_and_write(sftp, &tmp, bytes).await {
         if dir != "." {
             // Rekursives `mkdir -p` — pro Komponente best-effort, idempotent
             // ggü. „existiert bereits".
             mkdir_p_remote(sftp, dir).await;
         }
-        create_and_write(sftp, &path, bytes).await.map_err(|e| {
+        create_and_write(sftp, &tmp, bytes).await.map_err(|e| {
             Error::Backup(format!(
                 "SFTP-Schreiben nach '{path}' fehlgeschlagen: {e} (erster Versuch: {first})"
             ))
         })?;
+    }
+    if let Err(e) = sftp.rename(&tmp, &path).await {
+        let _ = sftp.remove_file(&tmp).await;
+        return Err(Error::Backup(format!(
+            "SFTP-Umbenennen nach '{path}' fehlgeschlagen: {e}"
+        )));
     }
     Ok(path)
 }
@@ -349,10 +317,12 @@ pub async fn probe(
 
 /// Lädt einen Backup-Blob per SFTP hoch und liefert die `sftp://`-URI zurück.
 ///
-/// Erzwingt einen gepinnten Host-Fingerprint (sonst Abbruch) und liest das
-/// Passwort aus dem Keychain. Bei Host-Key-Abweichung bricht der Upload mit einer
+/// Erzwingt einen gepinnten Host-Fingerprint (sonst Abbruch); das Passwort
+/// kommt vom Aufrufer (aus `secrets`). Bei Host-Key-Abweichung bricht der Upload mit einer
 /// expliziten MITM-Warnung ab (kein Blind-Trust).
+#[allow(clippy::too_many_arguments)]
 pub async fn upload(
+    password: Option<&str>,
     host: &str,
     port: u16,
     user: &str,
@@ -372,11 +342,14 @@ pub async fn upload(
                     .into(),
             )
         })?;
-    let password = get_password()?.filter(|p| !p.is_empty()).ok_or_else(|| {
-        Error::Backup(
-            "Kein SFTP-Passwort im Schlüsselbund — bitte das SFTP-Ziel erneut speichern.".into(),
-        )
-    })?;
+    let password = password
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Error::Backup(
+                "Kein SFTP-Passwort gespeichert — bitte das SFTP-Ziel neu anlegen.".into(),
+            )
+        })?;
 
     let dir = normalize_remote_dir(remote_dir);
     let seen = Arc::new(Mutex::new(None));
@@ -422,18 +395,6 @@ pub async fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Once;
-
-    static MOCK_INIT: Once = Once::new();
-
-    /// Erzwingt den plattform-unabhängigen Keyring-Mock-Store für den Test-Prozess
-    /// (CI ohne echten Keychain/Secret-Service).
-    fn use_mock_store() {
-        MOCK_INIT.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        });
-    }
-
     #[test]
     fn normalize_remote_dir_cases() {
         assert_eq!(normalize_remote_dir(""), ".");
@@ -462,16 +423,5 @@ mod tests {
             sftp_uri("kb", "host.de", 2222, "/srv/a.kbk"),
             "sftp://kb@host.de:2222/srv/a.kbk"
         );
-    }
-
-    #[test]
-    fn keyring_wrapper_contract_against_mock() {
-        use_mock_store();
-        // Frischer Eintrag → Ok(None) (NoEntry-Mapping).
-        assert_eq!(get_password().unwrap(), None);
-        // set + delete dürfen nicht hart fehlschlagen; delete ist idempotent.
-        set_password("s3cr3t-sftp").unwrap();
-        delete_password().unwrap();
-        delete_password().unwrap();
     }
 }

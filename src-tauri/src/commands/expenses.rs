@@ -16,14 +16,15 @@
 //!   Diese Pipeline erzwingt daher keine USt-Freiheit (siehe domain::expense).
 //! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
 
-use chrono::{Datelike, Local, NaiveDate};
+use crate::app_ctx::AppCtx;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, State};
+use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
 use crate::backup;
-use crate::commands::attachments::{guess_mime, sanitize_filename};
+use crate::commands::attachments::sanitize_filename;
 use crate::config::Paths;
 use crate::db::models::{ExpenseDetail, ExpenseListItem, ExpenseRow};
 use crate::db::numbering;
@@ -35,16 +36,18 @@ use crate::einvoice::types::ValidationSummary;
 use crate::einvoice::{mustang_bridge, validator};
 use crate::error::{Error, Result};
 use crate::fiscal_year::guard;
+use crate::uploads::UploadKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpenseCreateArgs {
     pub input: ExpenseInput,
-    /// Optional — sonst aus dem Beleg-Datum (Kalenderjahr) abgeleitet.
-    pub fiscal_year: Option<i64>,
-    /// Roh-Bytes des primären Belegs (PDF/Bild). `None` → ohne Beleg.
-    pub receipt_bytes: Option<Vec<u8>>,
-    pub receipt_filename: Option<String>,
+    /// Primärer Beleg aus `POST /api/upload/beleg` (Plan W7). `None` → ohne Beleg.
+    #[serde(default)]
+    pub receipt_upload_id: Option<String>,
+    /// Vom Command aus dem Upload gelesen, nie vom Client.
+    #[serde(skip)]
+    pub receipt: Option<crate::uploads::UploadedFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,17 +89,20 @@ pub struct EInvoiceParseResult {
 }
 
 /// Argumente für [`expenses_create_from_einvoice`]. Das Frontend schickt die
-/// (ggf. korrigierte) Eingabe **und** die Original-Bytes erneut mit, damit das
-/// Original GoBD-konform unverändert archiviert werden kann.
+/// (ggf. korrigierte) Eingabe **und** die `uploadId` des Originals aus dem
+/// Einlesen, damit das Original GoBD-konform unverändert archiviert wird.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EInvoiceCreateArgs {
     pub input: ExpenseInput,
-    pub fiscal_year: Option<i64>,
-    /// Original-Datei (XRechnung-XML oder ZUGFeRD-PDF) — wird write-once
-    /// als `ReceivedEinvoice` archiviert (Originalformat-Aufbewahrung §147 AO).
-    pub original_bytes: Vec<u8>,
-    pub original_file_name: String,
+    /// Original-Datei (XRechnung-XML oder ZUGFeRD-PDF) aus
+    /// `POST /api/upload/erechnung` (Plan W7) — wird write-once als
+    /// `ReceivedEinvoice` archiviert (Originalformat-Aufbewahrung §147 AO).
+    #[serde(default)]
+    pub upload_id: String,
+    /// Vom Command aus dem Upload gelesen (bzw. vom Ablage-Ordner), nie vom Client.
+    #[serde(skip)]
+    pub original: Option<crate::uploads::UploadedFile>,
     /// `zugferd` | `xrechnung-cii` | `xrechnung-ubl` (aus dem Parse-Schritt).
     pub source_format: String,
     /// Beratender KoSIT-Befund aus dem Parse-Schritt (wird mitgespeichert).
@@ -107,35 +113,76 @@ pub struct EInvoiceCreateArgs {
 // Read
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_list(
-    pool: State<'_, SqlitePool>,
-    filter: Option<expenses::ListFilter>,
-) -> Result<Vec<ExpenseListItem>> {
-    expenses::list(pool.inner(), &filter.unwrap_or_default()).await
+/// Argumente von [`expenses_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesListArgs {
+    #[serde(default)]
+    pub filter: Option<expenses::ListFilter>,
 }
 
-#[tauri::command]
+pub async fn expenses_list(
+    ctx: &Arc<AppCtx>,
+    args: ExpensesListArgs,
+) -> Result<Vec<ExpenseListItem>> {
+    let ExpensesListArgs { filter } = args;
+    let pool = ctx.pool()?;
+
+    expenses::list(&pool, &filter.unwrap_or_default()).await
+}
+
+/// Argumente von [`expenses_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesGetArgs {
+    pub id: String,
+}
+
 pub async fn expenses_get(
-    pool: State<'_, SqlitePool>,
-    id: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesGetArgs,
 ) -> Result<Option<ExpenseDetail>> {
-    expenses::get_detail(pool.inner(), &id).await
+    let ExpensesGetArgs { id } = args;
+    let pool = ctx.pool()?;
+
+    expenses::get_detail(&pool, &id).await
 }
 
 // =============================================================================
 // Create
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_create(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
+/// Argumente von [`expenses_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCreateArgs {
+    pub args: ExpenseCreateArgs,
+}
+
+pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Result<ExpenseDetail> {
+    let ExpensesCreateArgs { mut args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let upload_id = args.receipt_upload_id.take().filter(|id| !id.is_empty());
+    if let Some(id) = upload_id.as_deref() {
+        args.receipt = Some(ctx.uploads.read(id, &[UploadKind::Receipt])?);
+    }
+    let paths = ctx.paths.clone();
+    let detail = create_core(&pool, &paths, session, args).await?;
+    if let Some(id) = upload_id.as_deref() {
+        ctx.uploads.consume(id);
+    }
+    Ok(detail)
+}
+
+/// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
+pub async fn create_core(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &backup::BackupSession,
     args: ExpenseCreateArgs,
 ) -> Result<ExpenseDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
     let mut input = args.input;
 
     // Lieferanten-Snapshot: bei verknüpftem Kontakt dessen Namen sicherstellen.
@@ -159,9 +206,10 @@ pub async fn expenses_create(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.expense_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &input.expense_date,
+    ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -171,19 +219,19 @@ pub async fn expenses_create(
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
     // Optionalen Beleg write-once archivieren.
-    let receipt_archive_id = match args.receipt_bytes {
-        Some(bytes) if !bytes.is_empty() => {
-            let sanitized = sanitize_filename(args.receipt_filename.as_deref().unwrap_or("beleg"));
+    let receipt_archive_id = match args.receipt {
+        Some(file) if !file.bytes.is_empty() => {
+            let sanitized = sanitize_filename(&file.file_name);
             let archive_name = format!("{expense_number}-{sanitized}");
-            let mime = guess_mime(&sanitized);
             let stored = archive::store_bytes(
                 pool,
                 &paths.archive_dir,
                 fiscal_year as i32,
                 ArchiveKind::ExpenseOriginal,
                 &archive_name,
-                mime,
-                &bytes,
+                // Typ aus der Inhaltsprüfung, nicht aus der Endung (Plan W7).
+                file.mime,
+                &file.bytes,
             )
             .await?;
             Some(stored.archive_id)
@@ -217,7 +265,7 @@ pub async fn expenses_create(
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "expense.lock")
+    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
         .await
         .ok();
 
@@ -230,15 +278,20 @@ pub async fn expenses_create(
 // Cancel (Storno statt Löschung)
 // =============================================================================
 
-#[tauri::command]
-pub async fn expenses_cancel(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: ExpenseCancelArgs,
-) -> Result<ExpenseRow> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
+/// Argumente von [`expenses_cancel`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCancelArgs {
+    pub args: ExpenseCancelArgs,
+}
+
+pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Result<ExpenseRow> {
+    let ExpensesCancelArgs { args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let paths = ctx.paths.clone();
 
     if args.reason.trim().is_empty() {
         return Err(Error::Domain("Storno-Grund ist erforderlich.".into()));
@@ -267,7 +320,7 @@ pub async fn expenses_cancel(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session.inner(), "expense.cancel")
+    backup::auto_backup_if_unlocked(pool, &paths, session, "expense.cancel")
         .await
         .ok();
 
@@ -280,12 +333,21 @@ pub async fn expenses_cancel(
 // Zahlung markieren (paid_date / Konto — kein Kernfeld, nach Lock erlaubt)
 // =============================================================================
 
-#[tauri::command]
+/// Argumente von [`expenses_set_payment`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesSetPaymentArgs {
+    pub args: ExpenseSetPaymentArgs,
+}
+
 pub async fn expenses_set_payment(
-    pool: State<'_, SqlitePool>,
-    args: ExpenseSetPaymentArgs,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesSetPaymentArgs,
 ) -> Result<ExpenseRow> {
-    let pool = pool.inner();
+    let ExpensesSetPaymentArgs { args } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     if let Some(d) = args.paid_date {
         if d > today_berlin() {
             return Err(Error::Domain(
@@ -343,6 +405,14 @@ pub async fn expenses_set_payment(
 // E-Rechnung-Empfang: Parsen (Schritt 1) + Festschreiben (Schritt 2)
 // =============================================================================
 
+/// Argumente von [`expenses_parse_einvoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesParseEinvoiceArgs {
+    /// Aus `POST /api/upload/erechnung` (Plan W7); bleibt für Schritt 2 liegen.
+    pub upload_id: String,
+}
+
 /// Schritt 1 — eine eingehende E-Rechnung (XRechnung-XML **oder** ZUGFeRD-PDF)
 /// einlesen, extrahieren und validieren, OHNE etwas zu persistieren.
 ///
@@ -352,14 +422,15 @@ pub async fn expenses_set_payment(
 ///
 /// Die KoSIT-Validierung ist **beratend** — schlägt sie fehl oder kann sie
 /// nicht laufen, geht der Import trotzdem weiter (`validation = None`/`failed`).
-#[tauri::command]
 pub async fn expenses_parse_einvoice(
-    app: AppHandle,
-    file_bytes: Vec<u8>,
-    file_name: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesParseEinvoiceArgs,
 ) -> Result<EInvoiceParseResult> {
-    let paths = Paths::from_handle(&app)?;
-    parse_einvoice_with_paths(&paths, file_bytes, file_name).await
+    let ExpensesParseEinvoiceArgs { upload_id } = args;
+    let upload = ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?;
+
+    let paths = ctx.paths.clone();
+    parse_einvoice_with_paths(&paths, upload.bytes, upload.file_name).await
 }
 
 /// Headless-Helfer hinter [`expenses_parse_einvoice`]: identische Logik, aber
@@ -436,22 +507,34 @@ pub async fn parse_einvoice_with_paths(
     })
 }
 
+/// Argumente von [`expenses_create_from_einvoice`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesCreateFromEinvoiceArgs {
+    pub args: EInvoiceCreateArgs,
+}
+
 /// Schritt 2 — die (ggf. korrigierte) Eingabe als Kosten **festschreiben**.
 ///
 /// Reihenfolge: Domain-Validation (Hard-Block) → Lieferanten-Snapshot →
 /// Belegnummer → **Original write-once als `ReceivedEinvoice` archivieren**
 /// (GoBD-Originalformat) → `expenses::create` (sofort gelockt) →
 /// KoSIT-Befund persistieren → Audit → Auto-Critical-Backup.
-#[tauri::command]
 pub async fn expenses_create_from_einvoice(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    session: State<'_, backup::BackupSession>,
-    args: EInvoiceCreateArgs,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesCreateFromEinvoiceArgs,
 ) -> Result<ExpenseDetail> {
-    let pool = pool.inner();
-    let paths = Paths::from_handle(&app)?;
-    create_from_einvoice_with(pool, &paths, session.inner(), args).await
+    let ExpensesCreateFromEinvoiceArgs { mut args } = args;
+    let pool = ctx.pool()?;
+    let session = &ctx.session;
+
+    let pool = &pool;
+    let upload_id = std::mem::take(&mut args.upload_id);
+    args.original = Some(ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?);
+    let paths = ctx.paths.clone();
+    let detail = create_from_einvoice_with(pool, &paths, session, args).await?;
+    ctx.uploads.consume(&upload_id);
+    Ok(detail)
 }
 
 /// Headless-Helfer hinter [`expenses_create_from_einvoice`]: identische
@@ -466,9 +549,10 @@ pub async fn create_from_einvoice_with(
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
-    if args.original_bytes.is_empty() {
-        return Err(Error::Domain("Die Original-E-Rechnung fehlt.".into()));
-    }
+    let original = match args.original {
+        Some(file) if !file.bytes.is_empty() => file,
+        _ => return Err(Error::Domain("Die Original-E-Rechnung fehlt.".into())),
+    };
 
     // Lieferanten-Snapshot: bei verknüpftem Kontakt dessen Namen sicherstellen.
     if let Some(cid) = input.vendor_contact_id.as_deref() {
@@ -491,9 +575,10 @@ pub async fn create_from_einvoice_with(
         )));
     }
 
-    let fiscal_year = args
-        .fiscal_year
-        .unwrap_or_else(|| input.expense_date.year() as i64);
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &input.expense_date,
+    ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -504,12 +589,9 @@ pub async fn create_from_einvoice_with(
 
     // Original-E-Rechnung GoBD-konform unverändert archivieren (write-once).
     // Das ist zugleich der „Beleg" der Kosten-Position (receipt_archive_id).
-    let mime = if args.source_format == "zugferd" {
-        "application/pdf"
-    } else {
-        "application/xml"
-    };
-    let sanitized = sanitize_filename(&args.original_file_name);
+    // Typ aus der Inhaltsprüfung des Uploads (Plan W7).
+    let mime = original.mime;
+    let sanitized = sanitize_filename(&original.file_name);
     let archive_name = format!("{expense_number}-{sanitized}");
     let stored = archive::store_bytes(
         pool,
@@ -518,7 +600,7 @@ pub async fn create_from_einvoice_with(
         ArchiveKind::ReceivedEinvoice,
         &archive_name,
         mime,
-        &args.original_bytes,
+        &original.bytes,
     )
     .await?;
 
@@ -574,10 +656,9 @@ pub async fn create_from_einvoice_with(
         .ok_or_else(|| Error::Domain("import: detail-load leer".into()))
 }
 
-/// Heutiges Datum (Europe/Berlin = System-TZ, in Block 0 gepinnt). Wie in
-/// `commands::invoices`; bei Bedarf später auf chrono-tz migrieren.
+/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
-    Local::now().date_naive()
+    crate::clock::today_berlin()
 }
 
 fn escape(s: &str) -> String {
@@ -699,17 +780,25 @@ where
     }))
 }
 
+/// Argumente von [`expenses_receipt_xml_text`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpensesReceiptXmlTextArgs {
+    pub expense_id: String,
+}
+
 /// Tauri-Wrapper um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
 /// für ZUGFeRD-PDF-Extraktion ein.
-#[tauri::command]
 pub async fn expenses_receipt_xml_text(
-    app: AppHandle,
-    pool: State<'_, SqlitePool>,
-    expense_id: String,
+    ctx: &Arc<AppCtx>,
+    args: ExpensesReceiptXmlTextArgs,
 ) -> Result<Option<XmlViewerPayload>> {
-    let paths = Paths::from_handle(&app)?;
+    let ExpensesReceiptXmlTextArgs { expense_id } = args;
+    let pool = ctx.pool()?;
+
+    let paths = ctx.paths.clone();
     let sidecar_dir = paths.sidecar_dir.clone();
-    load_receipt_xml(pool.inner(), &expense_id, move |bytes| async move {
+    load_receipt_xml(&pool, &expense_id, move |bytes| async move {
         mustang_bridge::extract_xml(&bytes, &sidecar_dir).await
     })
     .await

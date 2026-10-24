@@ -4,29 +4,46 @@
 //! deaktiviert (`active=0`), weil sie von Kosten/Rechnungen/Privatbewegungen
 //! referenziert werden. Genau ein Konto kann `is_default` sein.
 
-use sqlx::SqlitePool;
-use tauri::State;
+use crate::app_ctx::AppCtx;
+use std::sync::Arc;
 
 use crate::db::models::PaymentAccountRow;
 use crate::db::repo::payment_accounts::PaymentAccountInput;
 use crate::db::repo::{audit_log, payment_accounts};
 use crate::error::Result;
 
-#[tauri::command]
-pub async fn payment_accounts_list(
-    pool: State<'_, SqlitePool>,
-    include_inactive: Option<bool>,
-) -> Result<Vec<PaymentAccountRow>> {
-    payment_accounts::list(pool.inner(), include_inactive.unwrap_or(false)).await
+/// Argumente von [`payment_accounts_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAccountsListArgs {
+    #[serde(default)]
+    pub include_inactive: Option<bool>,
 }
+
+pub async fn payment_accounts_list(
+    ctx: &Arc<AppCtx>,
+    args: PaymentAccountsListArgs,
+) -> Result<Vec<PaymentAccountRow>> {
+    let PaymentAccountsListArgs { include_inactive } = args;
+    let pool = ctx.pool()?;
+
+    payment_accounts::list(&pool, include_inactive.unwrap_or(false)).await
+}
+
+/// Argumente von [`payment_accounts_ensure_defaults`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAccountsEnsureDefaultsArgs {}
 
 /// Idempotenter Seed der Standard-Konten ("Hauptkonto", "Bargeld") und Rückgabe
 /// der aktuellen Liste. Wird vom Settings-UI beim ersten Öffnen aufgerufen.
-#[tauri::command]
 pub async fn payment_accounts_ensure_defaults(
-    pool: State<'_, SqlitePool>,
+    ctx: &Arc<AppCtx>,
+    _args: PaymentAccountsEnsureDefaultsArgs,
 ) -> Result<Vec<PaymentAccountRow>> {
-    let pool = pool.inner();
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let seeded = payment_accounts::ensure_defaults(pool).await?;
     if seeded {
         audit_log::append(
@@ -41,12 +58,21 @@ pub async fn payment_accounts_ensure_defaults(
     payment_accounts::list(pool, false).await
 }
 
-#[tauri::command]
+/// Argumente von [`payment_accounts_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAccountsCreateArgs {
+    pub input: PaymentAccountInput,
+}
+
 pub async fn payment_accounts_create(
-    pool: State<'_, SqlitePool>,
-    input: PaymentAccountInput,
+    ctx: &Arc<AppCtx>,
+    args: PaymentAccountsCreateArgs,
 ) -> Result<PaymentAccountRow> {
-    let pool = pool.inner();
+    let PaymentAccountsCreateArgs { input } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let row = payment_accounts::create(pool, &input).await?;
     audit_log::append(
         pool,
@@ -64,13 +90,22 @@ pub async fn payment_accounts_create(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`payment_accounts_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAccountsUpdateArgs {
+    pub id: String,
+    pub input: PaymentAccountInput,
+}
+
 pub async fn payment_accounts_update(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    input: PaymentAccountInput,
+    ctx: &Arc<AppCtx>,
+    args: PaymentAccountsUpdateArgs,
 ) -> Result<PaymentAccountRow> {
-    let pool = pool.inner();
+    let PaymentAccountsUpdateArgs { id, input } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     let row = payment_accounts::update(pool, &id, &input).await?;
     audit_log::append(
         pool,
@@ -88,13 +123,22 @@ pub async fn payment_accounts_update(
     Ok(row)
 }
 
-#[tauri::command]
+/// Argumente von [`payment_accounts_set_active`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentAccountsSetActiveArgs {
+    pub id: String,
+    pub active: bool,
+}
+
 pub async fn payment_accounts_set_active(
-    pool: State<'_, SqlitePool>,
-    id: String,
-    active: bool,
+    ctx: &Arc<AppCtx>,
+    args: PaymentAccountsSetActiveArgs,
 ) -> Result<()> {
-    let pool = pool.inner();
+    let PaymentAccountsSetActiveArgs { id, active } = args;
+    let pool = ctx.pool()?;
+
+    let pool = &pool;
     payment_accounts::set_active(pool, &id, active).await?;
     audit_log::append(
         pool,

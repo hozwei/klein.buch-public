@@ -4,8 +4,8 @@
 //! - `encrypt`: AES-256-GCM mit Argon2id-derived Key aus Passphrase.
 //! - `restore`: pre-restore-Backup → verify → apply.
 //! - `rotation`: daily/monthly/yearly Retention (GVS).
-//! - `target`: konfigurierbares Backup-Ziel (lokale FS, OneDrive, SFTP, etc.).
-//! - `sftp`: SFTP-Upload-Arm (russh) mit Host-Key-Pinning + Keychain-Passwort.
+//! - `target`: Backup-Ziele (Verzeichnisse unter `/backup-targets`, SFTP; mehrere, W7).
+//! - `sftp`: SFTP-Upload-Arm (russh) mit Host-Key-Pinning; Passwort im SecretStore (W8).
 //! - `manifest`: JSON-Header mit Versionsdaten + Hash.
 //!
 //! Dieser `mod.rs` enthält zusätzlich:
@@ -18,7 +18,6 @@
 //! - [`auto_backup_if_unlocked`] — best-effort Auto-Hook für `lock`-Events.
 
 pub mod encrypt;
-pub mod factory_reset;
 pub mod manifest;
 pub mod restore;
 pub mod rotation;
@@ -29,10 +28,13 @@ pub mod target;
 use crate::config::Paths;
 use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
 use crate::error::{Error, Result};
-use chrono::{Local, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::sync::Mutex;
+
+/// Serialisiert [`create_now`] (Plan W2.3).
+static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 // ---------------------------------------------------------------------------
 // app_settings-Keys (Block 4)
@@ -48,12 +50,9 @@ pub const SETTING_VERIFIER_CT: &str = "backup_verifier_ct_hex";
 // ---------------------------------------------------------------------------
 
 /// Hält die Backup-Passphrase **ausschließlich im Prozess-Memory** der
-/// laufenden Session. Wird in den Tauri-State gehängt. Niemals serialisiert,
-/// niemals in DB/Logs/audit_log.
-///
-/// Hinweis (Hardening-Backlog): die Passphrase liegt als `String` im Heap.
-/// Eine `zeroize`-Wischung beim Drop wäre die nächste Stufe; bewusst nicht in
-/// Block 4, um die Dependency-Fläche unverändert zu lassen.
+/// laufenden Session (im `AppCtx`). Niemals serialisiert, niemals in
+/// DB/Logs/audit_log. Beim Ersetzen und Löschen wird der alte Wert per
+/// `zeroize` überschrieben (Plan W6: „Datenbank sperren“, Passphrase ändern).
 #[derive(Default)]
 pub struct BackupSession {
     inner: Mutex<Option<String>>,
@@ -61,11 +60,20 @@ pub struct BackupSession {
 
 impl BackupSession {
     pub fn set(&self, passphrase: String) {
-        *self.inner.lock().expect("BackupSession mutex poisoned") = Some(passphrase);
+        use zeroize::Zeroize as _;
+        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(old) = guard.as_mut() {
+            old.zeroize();
+        }
+        *guard = Some(passphrase);
     }
 
     pub fn clear(&self) {
-        *self.inner.lock().expect("BackupSession mutex poisoned") = None;
+        use zeroize::Zeroize as _;
+        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(mut old) = guard.take() {
+            old.zeroize();
+        }
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -148,17 +156,7 @@ pub async fn setup_passphrase(
         ));
     }
 
-    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
-    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
-    let nonce_arr = encrypt::nonce_array(&nonce)?;
-    let ct = encrypt::encrypt(&key, &nonce_arr, encrypt::VERIFIER_PLAINTEXT)?;
-
-    set_setting(pool, SETTING_VERIFIER_SALT, &manifest::to_hex(&salt)).await?;
-    set_setting(pool, SETTING_VERIFIER_NONCE, &manifest::to_hex(&nonce)).await?;
-    set_setting(pool, SETTING_VERIFIER_CT, &manifest::to_hex(&ct)).await?;
-    set_setting(pool, SETTING_PASSPHRASE_SET, "true").await?;
-
+    store_verifier(pool, passphrase).await?;
     session.set(passphrase.to_string());
 
     crate::db::repo::audit_log::append(
@@ -169,6 +167,22 @@ pub async fn setup_passphrase(
         Some(r#"{"verifier":"stored"}"#),
     )
     .await?;
+    Ok(())
+}
+
+/// Schreibt den Verifier (Salt + Nonce + Ciphertext einer Magic-Konstante) für
+/// `passphrase` — bei der Einrichtung und nach „Passphrase ändern“ (W6).
+pub async fn store_verifier(pool: &SqlitePool, passphrase: &str) -> Result<()> {
+    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+    let key = encrypt::derive_key_async(passphrase, &salt).await?;
+    let nonce_arr = encrypt::nonce_array(&nonce)?;
+    let ct = encrypt::encrypt(&key, &nonce_arr, encrypt::VERIFIER_PLAINTEXT)?;
+
+    set_setting(pool, SETTING_VERIFIER_SALT, &manifest::to_hex(&salt)).await?;
+    set_setting(pool, SETTING_VERIFIER_NONCE, &manifest::to_hex(&nonce)).await?;
+    set_setting(pool, SETTING_VERIFIER_CT, &manifest::to_hex(&ct)).await?;
+    set_setting(pool, SETTING_PASSPHRASE_SET, "true").await?;
     Ok(())
 }
 
@@ -212,7 +226,7 @@ pub async fn verify_passphrase(pool: &SqlitePool, passphrase: &str) -> Result<bo
     let nonce = encrypt::nonce_array(&manifest::from_hex(&nonce_hex)?)?;
     let ct = manifest::from_hex(&ct_hex)?;
 
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
+    let key = encrypt::derive_key_async(passphrase, &salt).await?;
     match encrypt::decrypt(&key, &nonce, &ct) {
         Ok(pt) => Ok(pt == encrypt::VERIFIER_PLAINTEXT),
         Err(_) => Ok(false),
@@ -224,9 +238,8 @@ pub async fn verify_passphrase(pool: &SqlitePool, passphrase: &str) -> Result<bo
 // ---------------------------------------------------------------------------
 
 /// Ergebnis eines erstellten Backups. `file_path` ist immer der **lokale Floor**
-/// (primäre Kopie). Die Off-Site-Spiegelung (G1-BKP.4) ist best-effort:
-/// `mirror_target` = Off-Site-Pfad/URI bei Erfolg, `mirror_error` = Fehlertext bei
-/// Fehlschlag (Floor ist dann trotzdem gesichert).
+/// (primäre Kopie). Die Off-Site-Spiegelung (G1-BKP.4, Plan W7) ist
+/// best-effort und je Ziel in `offsite` beschrieben.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupOutcome {
@@ -237,10 +250,20 @@ pub struct BackupOutcome {
     pub retention_tag: String,
     pub trigger_reason: String,
     pub created_at: String,
-    /// Off-Site-Pfad/URI, falls die Spiegelung erfolgreich war (sonst `None`).
-    pub mirror_target: Option<String>,
-    /// Fehlertext, falls die Off-Site-Spiegelung fehlschlug (sonst `None`).
-    pub mirror_error: Option<String>,
+    /// Ergebnis je Off-Site-Ziel (Plan W7, mehrere Ziele).
+    pub offsite: Vec<OffsiteResult>,
+}
+
+/// Ergebnis der Spiegelung auf ein Off-Site-Ziel.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsiteResult {
+    pub target_id: String,
+    pub label: String,
+    /// Pfad/URI bei Erfolg.
+    pub location: Option<String>,
+    /// Fehlertext bei Fehlschlag.
+    pub error: Option<String>,
 }
 
 /// Fügt eine `backup_history`-Zeile ein (Floor oder Off-Site — unterschieden
@@ -256,6 +279,7 @@ async fn insert_history_row(
     retention_tag: &str,
     trigger_reason: &str,
     app_version: &str,
+    db_schema_version: i32,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO backup_history
@@ -269,7 +293,7 @@ async fn insert_history_row(
     .bind(size_bytes)
     .bind(retention_tag)
     .bind(trigger_reason)
-    .bind(EXPECTED_SCHEMA_VERSION)
+    .bind(db_schema_version)
     .bind(app_version)
     .execute(pool)
     .await?;
@@ -278,9 +302,9 @@ async fn insert_history_row(
 
 /// Pro-Lauf-Backup-Ergebnis-Hinweis (G1-NOTIFY), gated über die abschaltbare
 /// Regel `rule_backup_result` (Migration `0027`). Schreibt in die In-App-Inbox
-/// (Quelle der Wahrheit, ADR 0027); **kein** OS-Push — `create_now` hat keinen
-/// `AppHandle`, die OS-native Eskalation übernimmt die periodische
-/// `backup_overdue`-Regel. Best-effort: ein Hinweis-Fehler darf ein Backup nie
+/// (Quelle der Wahrheit, ADR 0027); **kein** Kanal außerhalb der Inbox —
+/// `create_now` bekommt keinen `Notifier`, und im Server gibt es ohnehin nur
+/// die Inbox (`notify::InboxOnly`). Best-effort: ein Hinweis-Fehler darf ein Backup nie
 /// beeinflussen. Enthält **nie** ein Geheimnis (nur Status/Dateiname).
 async fn notify_backup_result(
     pool: &SqlitePool,
@@ -298,12 +322,11 @@ async fn notify_backup_result(
     if !enabled {
         return;
     }
-    // Direkt in die In-App-Inbox schreiben (NICHT über `notify::emit`): `emit`
-    // berührt `os_native::push`, dessen WinRT-Pfad in Integrationstest-Binaries
-    // (Lib ohne `cfg(test)`) comctl32/`TaskDialogIndirect` zieht und sie beim
-    // Laden scheitern lässt (STATUS_ENTRYPOINT_NOT_FOUND, vgl. ADR 0027 Pt. 5).
-    // Der Pro-Lauf-Hinweis ist ohnehin Inbox-only (kein OS-Push) → `store::create`
-    // genügt und hält den Backup-Pfad frei vom OS-Notification-Code.
+    // Direkt in die In-App-Inbox schreiben (NICHT über `notify::emit`): Der
+    // Pro-Lauf-Hinweis ist Inbox-only, und `create_now` hat keinen `Notifier` →
+    // `store::create` genügt (Dedup über `dedup_key` wie bei `emit`). Die frühere
+    // Begründung — der WinRT-Pfad der Desktop-Benachrichtigung in Testbinaries —
+    // ist mit W5 entfallen (ADR 0027 Pt. 5, ADR 0039).
     crate::notify::store::create(
         pool,
         crate::notify::NewNotification {
@@ -320,6 +343,89 @@ async fn notify_backup_result(
     .ok();
 }
 
+/// Verschlüsselt einen Content-ZIP zu einer `.kbk`-Datei (Manifest-Frame +
+/// AES-256-GCM, Schlüssel per Argon2id mit frischem Salt/Nonce). Blockierend
+/// (KDF) — aus async-Code über `limits::run_blocking` aufrufen.
+pub fn seal_backup(
+    zip_bytes: &[u8],
+    content_sha256: &str,
+    passphrase: &str,
+    schema_version: i32,
+) -> Result<(manifest::Manifest, Vec<u8>)> {
+    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
+    let ciphertext = encrypt::encrypt(&key, &encrypt::nonce_array(&nonce)?, zip_bytes)?;
+    let man = manifest::Manifest {
+        magic: manifest::MAGIC.to_string(),
+        format_version: manifest::FORMAT_VERSION,
+        schema_version,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        created_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        kdf: manifest::KdfParams {
+            algo: "argon2id".to_string(),
+            m_cost_kib: encrypt::KDF_M_COST_KIB,
+            t_cost: encrypt::KDF_T_COST,
+            p_cost: encrypt::KDF_P_COST,
+        },
+        salt_hex: manifest::to_hex(&salt),
+        nonce_hex: manifest::to_hex(&nonce),
+        content_sha256: content_sha256.to_string(),
+        content_size_bytes: zip_bytes.len() as u64,
+    };
+    let file_bytes = manifest::frame(&man, &ciphertext)?;
+    Ok((man, file_bytes))
+}
+
+/// Trägt eine vorhandene `.kbk` im lokalen Backup-Ordner in `backup_history`
+/// ein (Pre-Restore-Backup nach dem Tausch, Gegenprüfung W7). Schema-Version
+/// aus dem Manifest; unbekannte oder fremde Namen werden ignoriert.
+pub async fn record_existing_backup(
+    pool: &SqlitePool,
+    backups_dir: &std::path::Path,
+    file_name: &str,
+    trigger_reason: &str,
+) -> Result<()> {
+    if file_name.is_empty() || file_name.contains(['/', '\\']) || !file_name.ends_with(".kbk") {
+        return Ok(());
+    }
+    let path = backups_dir.join(file_name);
+    let bytes = tokio::fs::read(&path).await?;
+    let header = manifest::read_manifest_only(&bytes)?;
+    let target = path.to_string_lossy().to_string();
+    let exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM backup_history WHERE target_path = ?")
+            .bind(&target)
+            .fetch_one(pool)
+            .await?;
+    if exists > 0 {
+        return Ok(());
+    }
+    insert_history_row(
+        pool,
+        &uuid::Uuid::now_v7().to_string(),
+        &target,
+        &snapshot::sha256_hex(&bytes),
+        bytes.len() as i64,
+        "manual",
+        trigger_reason,
+        &header.app_version,
+        header.schema_version,
+    )
+    .await
+}
+
+/// Liest eine geschriebene `.kbk` und prüft sie vollständig (Entschlüsseln +
+/// Content-Hash). Für das Pflicht-Backup vor einer Migration (Plan W7).
+pub async fn verify_backup_file(path: &std::path::Path, passphrase: &str) -> Result<()> {
+    let bytes = tokio::fs::read(path).await?;
+    let pass = zeroize::Zeroizing::new(passphrase.to_string());
+    crate::limits::run_blocking(&crate::limits::KDF, move || {
+        restore::decrypt_backup(&bytes, &pass).map(|_| ())
+    })
+    .await
+}
+
 /// Erstellt **jetzt** ein verschlüsseltes Backup: Snapshot → Argon2id-Key →
 /// AES-256-GCM → Manifest-Frame → **Floor schreiben** (immer lokal) →
 /// `backup_history` → Audit → **Off-Site-Spiegelung** (best-effort, G1-BKP.4) →
@@ -331,50 +437,54 @@ pub async fn create_now(
     passphrase: &str,
     trigger_reason: &str,
 ) -> Result<BackupOutcome> {
-    // 1. Konsistenter Content-Snapshot.
-    let content = snapshot::build_content_zip(pool, paths).await?;
+    // Plan W2.3: Backups laufen nacheinander (Auto-Backup nach Lock, Tages-Backup
+    // im Tick, manuell, Pre-Restore) — nie zwei gleichzeitig.
+    let _serial = BACKUP_LOCK.lock().await;
 
-    // 2. Schlüssel ableiten + verschlüsseln (frische Salt+Nonce pro Backup).
-    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
-    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
-    let nonce_arr = encrypt::nonce_array(&nonce)?;
-    let ciphertext = encrypt::encrypt(&key, &nonce_arr, &content.zip_bytes)?;
+    // 1. Konsistenter Content-Snapshot. Die DB ist mit derselben Passphrase
+    //    verschlüsselt (eine Passphrase-Kette, ADR 0035); Klartext nur in Tests.
+    let db_key = (!crate::db::db_file_is_plaintext(&paths.db_file)).then_some(passphrase);
+    let content = snapshot::build_content_zip(paths, db_key).await?;
+    // Schema-Version der gesicherten DB — vor einer Migration älter als
+    // `EXPECTED` (Pflicht-Backup vor Migration, Plan W7).
+    let schema_version = crate::db::schema_version::read(pool)
+        .await?
+        .unwrap_or(EXPECTED_SCHEMA_VERSION);
 
-    // 3. Manifest + Datei-Frame.
-    let app_version = env!("CARGO_PKG_VERSION").to_string();
-    let created_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let man = manifest::Manifest {
-        magic: manifest::MAGIC.to_string(),
-        format_version: manifest::FORMAT_VERSION,
-        schema_version: EXPECTED_SCHEMA_VERSION,
-        app_version: app_version.clone(),
-        created_at: created_at.clone(),
-        kdf: manifest::KdfParams {
-            algo: "argon2id".to_string(),
-            m_cost_kib: encrypt::KDF_M_COST_KIB,
-            t_cost: encrypt::KDF_T_COST,
-            p_cost: encrypt::KDF_P_COST,
-        },
-        salt_hex: manifest::to_hex(&salt),
-        nonce_hex: manifest::to_hex(&nonce),
-        content_sha256: content.sha256_hex.clone(),
-        content_size_bytes: content.zip_bytes.len() as u64,
+    // 2./3. Verschlüsseln (Argon2id + AES außerhalb der Runtime, KDF begrenzt,
+    //       Plan W2.6) und Manifest-Frame.
+    let (man, file_bytes) = {
+        let pass = zeroize::Zeroizing::new(passphrase.to_string());
+        let snapshot::Content {
+            zip_bytes,
+            sha256_hex,
+        } = content;
+        crate::limits::run_blocking(&crate::limits::KDF, move || {
+            seal_backup(&zip_bytes, &sha256_hex, &pass, schema_version)
+        })
+        .await?
     };
-    let file_bytes = manifest::frame(&man, &ciphertext)?;
+    let app_version = man.app_version.clone();
+    let created_at = man.created_at.clone();
     let file_hash = snapshot::sha256_hex(&file_bytes);
     let size_bytes = file_bytes.len() as i64;
-    let stamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let file_name = format!("klein-buch-{stamp}.kbk");
+    // Millisekunden + Kurz-UUID: zwei Backups in derselben Sekunde ergeben zwei
+    // Dateien (Plan W2.3).
+    let stamp = crate::clock::now_berlin()
+        .format("%Y%m%d-%H%M%S%3f")
+        .to_string();
+    let short = uuid::Uuid::now_v7().simple().to_string();
+    let file_name = format!("klein-buch-{stamp}-{}.kbk", &short[short.len() - 8..]);
     let retention_tag =
-        rotation::classify_retention(Local::now().date_naive(), trigger_reason).to_string();
+        rotation::classify_retention(crate::clock::today_berlin(), trigger_reason).to_string();
 
     // 4. Floor schreiben — IMMER lokal (`paths.backups_dir`). Das ist die
     //    primäre, nicht-abschaltbare Sicherheits-Kopie (G1-BKP.4 Tier-Modell).
     let floor_target = target::BackupTarget::Directory {
         path: paths.backups_dir.to_string_lossy().to_string(),
     };
-    let floor_path = match target::write_backup(&floor_target, &file_name, &file_bytes).await {
+    let floor_path = match target::write_backup(&floor_target, None, &file_name, &file_bytes).await
+    {
         Ok(p) => p,
         Err(e) => {
             // Floor-Fehlschlag protokollieren (best-effort), dann hart melden:
@@ -407,7 +517,7 @@ pub async fn create_now(
                  Prüfe Speicherplatz und Schreibrechte. Details im Backup-Protokoll.",
                 &format!(
                     "backup_result_failed_floor:{}",
-                    Local::now().format("%Y-%m-%d")
+                    crate::clock::now_berlin().format("%Y-%m-%d")
                 ),
             )
             .await;
@@ -425,6 +535,7 @@ pub async fn create_now(
         &retention_tag,
         trigger_reason,
         &app_version,
+        schema_version,
     )
     .await?;
     crate::db::repo::audit_log::append(
@@ -455,16 +566,71 @@ pub async fn create_now(
     .await
     .ok();
 
-    // 5. Off-Site-Spiegelung (best-effort) — falls ein vom Floor verschiedenes
-    //    Ziel konfiguriert ist. Fehlschlag ist NICHT fatal: der Floor ist
-    //    gesichert, und ein nicht erreichbares Off-Site-Ziel darf einen
-    //    GoBD-festgeschriebenen Vorgang nie zurückrollen. Pre-Restore-Backups
-    //    werden nicht gespiegelt (lokaler Sicherheits-Snapshot vor Restore).
-    let mut mirror_target = None;
-    let mut mirror_error = None;
-    if trigger_reason != "pre_restore" {
-        if let Some(offsite) = target::offsite_target(pool, &paths.backups_dir).await? {
-            match target::write_backup(&offsite, &file_name, &file_bytes).await {
+    // 5. Off-Site-Spiegelung auf jedes Ziel (Plan W7, best-effort). Fehlschlag
+    //    ist NICHT fatal: der Floor ist gesichert, und ein nicht erreichbares
+    //    Ziel darf einen GoBD-festgeschriebenen Vorgang nie zurückrollen. Jedes
+    //    Ziel wird einzeln protokolliert (`backup_log`, Audit, Ergebnis für den
+    //    Status `offsite`); Fehler und fehlende Ziele erzeugen einen
+    //    Inbox-Hinweis.
+    let mut offsite = Vec::new();
+    // Seit W7 auch das Pre-Restore-Backup (einzige vollständige Kopie des
+    // ersetzten Stands, Gegenprüfung W7); nur die Rotation spart es aus.
+    {
+        let targets = target::list_targets(pool, &paths.backup_targets_dir).await?;
+        if targets.is_empty() {
+            // Dedup je Kalenderwoche: solange kein Ziel eingerichtet ist,
+            // kommt der Hinweis wöchentlich wieder.
+            let week = crate::clock::today_berlin().format("%G-W%V").to_string();
+            crate::notify::store::create(
+                pool,
+                crate::notify::NewNotification {
+                    title: "Kein externes Backup-Ziel",
+                    body: "Backups liegen nur im lokalen Datenverzeichnis. Richte unter \
+                           „Backups“ mindestens ein externes Ziel ein (Ordner unter \
+                           /backup-targets oder SFTP) — sonst ist bei einem Ausfall des \
+                           Servers alles weg.",
+                    severity: "warning",
+                    action_url: Some("/settings/backup"),
+                    dedup_key: Some(&format!("backup_offsite_missing:{week}")),
+                    ..Default::default()
+                },
+            )
+            .await
+            .ok();
+        }
+        let mut run = Vec::new();
+        for entry in &targets {
+            let (kind, label) = target::log_meta(entry);
+            // Gesamtgrenze je Ziel: ein hängendes Ziel staut nicht alle
+            // weiteren Backups (Gegenprüfung W7).
+            let limit =
+                std::time::Duration::from_secs(60 + file_bytes.len() as u64 / (1024 * 1024));
+            let password = match &entry.target {
+                target::BackupTarget::Sftp { .. } => {
+                    crate::secrets::get(pool, &crate::secrets::sftp_key(&entry.id))
+                        .await
+                        .ok()
+                        .flatten()
+                }
+                target::BackupTarget::Directory { .. } => None,
+            };
+            let written = match target::resolve(entry, &paths.backup_targets_dir) {
+                Ok(resolved) => match tokio::time::timeout(
+                    limit,
+                    target::write_backup(&resolved, password.as_deref(), &file_name, &file_bytes),
+                )
+                .await
+                {
+                    Ok(r) => r.map_err(|e| (e, resolved)),
+                    Err(_) => Err((
+                        Error::Backup(format!("Zeitüberschreitung nach {} s", limit.as_secs())),
+                        resolved,
+                    )),
+                },
+                Err(e) => Err((e, entry.target.clone())),
+            };
+            let at = crate::clock::now_berlin().to_rfc3339();
+            match written {
                 Ok(offsite_path) => {
                     let mirror_id = uuid::Uuid::now_v7().to_string();
                     insert_history_row(
@@ -476,6 +642,7 @@ pub async fn create_now(
                         &retention_tag,
                         trigger_reason,
                         &app_version,
+                        schema_version,
                     )
                     .await
                     .ok();
@@ -484,21 +651,19 @@ pub async fn create_now(
                         "backup.mirror.ok",
                         "backup",
                         &mirror_id,
-                        Some(&format!(
-                            r#"{{"target":"{}"}}"#,
-                            offsite_path.replace('\\', "\\\\").replace('"', "'")
-                        )),
+                        Some(
+                            &serde_json::json!({ "target": entry.id, "location": offsite_path })
+                                .to_string(),
+                        ),
                     )
                     .await
                     .ok();
-                    // Off-Site-Erfolg ins Backup-Protokoll (G1-LOG).
-                    let (kind, label) = target::log_meta(&offsite);
                     crate::db::repo::backup_log::insert(
                         pool,
                         &crate::db::repo::backup_log::BackupLogEntry {
                             trigger: trigger_reason.to_string(),
                             target_kind: kind.to_string(),
-                            target_label: label,
+                            target_label: label.clone(),
                             file_name: file_name.clone(),
                             full_path: offsite_path.clone(),
                             size_bytes,
@@ -508,33 +673,46 @@ pub async fn create_now(
                     )
                     .await
                     .ok();
-                    mirror_target = Some(offsite_path);
+                    run.push((
+                        entry.id.clone(),
+                        target::TargetResult {
+                            ok: true,
+                            at,
+                            error: None,
+                        },
+                    ));
+                    offsite.push(OffsiteResult {
+                        target_id: entry.id.clone(),
+                        label: entry.label.clone(),
+                        location: Some(offsite_path),
+                        error: None,
+                    });
                 }
-                Err(e) => {
-                    tracing::error!("Off-Site-Spiegelung fehlgeschlagen ({trigger_reason}): {e}");
+                Err((e, failed_target)) => {
+                    tracing::error!(
+                        "Off-Site-Spiegelung auf „{}“ fehlgeschlagen ({trigger_reason}): {e}",
+                        entry.label
+                    );
                     crate::db::repo::audit_log::append(
                         pool,
                         "backup.mirror.failed",
                         "backup",
                         &history_id,
-                        Some(&format!(
-                            r#"{{"error":"{}"}}"#,
-                            e.to_string().replace('"', "'")
-                        )),
+                        Some(
+                            &serde_json::json!({ "target": entry.id, "error": e.to_string() })
+                                .to_string(),
+                        ),
                     )
                     .await
                     .ok();
-                    // Off-Site-Fehlschlag ins Backup-Protokoll (G1-LOG) — der für
-                    // den Nutzer wichtigste Fall (Ziel offline). Nie fatal.
-                    let (kind, label) = target::log_meta(&offsite);
                     crate::db::repo::backup_log::insert(
                         pool,
                         &crate::db::repo::backup_log::BackupLogEntry {
                             trigger: trigger_reason.to_string(),
                             target_kind: kind.to_string(),
-                            target_label: label,
+                            target_label: label.clone(),
                             file_name: file_name.clone(),
-                            full_path: target::log_failed_path(&offsite, &file_name),
+                            full_path: target::log_failed_path(&failed_target, &file_name),
                             size_bytes,
                             status: "failed".to_string(),
                             detail: Some(e.to_string()),
@@ -542,29 +720,52 @@ pub async fn create_now(
                     )
                     .await
                     .ok();
-                    notify_backup_result(
+                    let body = format!(
+                        "Die Sicherung auf das externe Ziel „{}“ schlug fehl: {e}. Die lokale \
+                         Pflichtkopie und die übrigen Ziele sind gesichert. Details im \
+                         Backup-Protokoll.",
+                        entry.label
+                    );
+                    crate::notify::store::create(
                         pool,
-                        "warning",
-                        "Externe Backup-Spiegelung fehlgeschlagen",
-                        &format!(
-                            "Die Sicherung auf das externe Ziel schlug fehl: {e}. \
-                             Die lokale Pflichtkopie ist gesichert. Details im Backup-Protokoll."
-                        ),
-                        &format!(
-                            "backup_result_failed_offsite:{}",
-                            Local::now().format("%Y-%m-%d")
-                        ),
+                        crate::notify::NewNotification {
+                            title: "Externe Backup-Spiegelung fehlgeschlagen",
+                            body: &body,
+                            severity: "warning",
+                            action_url: Some("/settings/backup-log"),
+                            dedup_key: Some(&format!(
+                                "backup_result_failed_offsite:{}:{}",
+                                entry.id,
+                                crate::clock::now_berlin().format("%Y-%m-%d")
+                            )),
+                            ..Default::default()
+                        },
                     )
-                    .await;
-                    mirror_error = Some(e.to_string());
+                    .await
+                    .ok();
+                    run.push((
+                        entry.id.clone(),
+                        target::TargetResult {
+                            ok: false,
+                            at,
+                            error: Some(e.to_string()),
+                        },
+                    ));
+                    offsite.push(OffsiteResult {
+                        target_id: entry.id.clone(),
+                        label: entry.label.clone(),
+                        location: None,
+                        error: Some(e.to_string()),
+                    });
                 }
             }
         }
+        target::store_results(pool, &targets, &run).await.ok();
     }
 
     // 6. Rotation (getiert) — außer direkt vor einem Restore (Pre-Restore nie prunen).
     if trigger_reason != "pre_restore" {
-        let _ = rotation::run(pool, &paths.backups_dir).await;
+        let _ = rotation::run(pool, &paths.backups_dir, &paths.backup_targets_dir).await;
     }
 
     // 7. Pro-Lauf-Erfolgs-Hinweis NUR bei manuellem Backup (G1-NOTIFY). Auto-Lock-/
@@ -589,8 +790,7 @@ pub async fn create_now(
         retention_tag,
         trigger_reason: trigger_reason.to_string(),
         created_at,
-        mirror_target,
-        mirror_error,
+        offsite,
     })
 }
 
@@ -683,12 +883,37 @@ pub async fn auto_daily_if_due(
         }
     };
 
-    if due {
-        auto_backup_if_unlocked(pool, paths, session, "auto_daily").await
-    } else {
-        Ok(None)
+    if !due {
+        return Ok(None);
     }
+    // Review W2 S2-3: nach einem Fehlschlag (z. B. Platte voll) frühestens nach
+    // einer Stunde erneut — sonst alle 5 min ein `backup.failed` im
+    // append-only Audit-Log, samt Snapshot und Argon2id.
+    {
+        let last = DAILY_LAST_FAILURE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(t) = *last {
+            if t.elapsed() < DAILY_RETRY_AFTER {
+                return Ok(None);
+            }
+        }
+    }
+    let outcome = auto_backup_if_unlocked(pool, paths, session, "auto_daily").await?;
+    *DAILY_LAST_FAILURE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = match outcome {
+        Some(_) => None,
+        // Session war entsperrt (oben geprüft) → `None` heißt fehlgeschlagen.
+        None => Some(std::time::Instant::now()),
+    };
+    Ok(outcome)
 }
+
+/// Zeitpunkt des letzten fehlgeschlagenen Tages-Backups (Backoff, S2-3).
+static DAILY_LAST_FAILURE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+/// Wartezeit nach einem fehlgeschlagenen Tages-Backup.
+const DAILY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
 
 #[cfg(test)]
 mod tests {
@@ -846,5 +1071,51 @@ mod tests {
         assert!(setup_passphrase(&pool, &session, "noch-eine-lang-genug")
             .await
             .is_err());
+    }
+
+    /// Plan W2.3: zwei Backups in derselben Sekunde (auch gleichzeitig
+    /// angestoßen) ergeben zwei Dateien und zwei `backup_log`-Zeilen.
+    #[tokio::test]
+    async fn two_backups_in_same_second_give_two_files_and_log_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        let paths = Paths {
+            data_dir: data.clone(),
+            db_file: data.join("klein-buch.sqlite"),
+            archive_dir: data.join("archive"),
+            backups_dir: data.join("backups"),
+            inputs_dir: dir.path().join("inputs"),
+            sidecar_dir: dir.path().join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
+        };
+        std::fs::create_dir_all(&paths.backups_dir).unwrap();
+        let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+
+        let pass = "passphrase-1234567890";
+        let (a, b) = tokio::join!(
+            create_now(&pool, &paths, pass, "manual"),
+            create_now(&pool, &paths, pass, "manual"),
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_ne!(a.file_path, b.file_path);
+        let files = std::fs::read_dir(&paths.backups_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .map(|e| e.file_name().to_string_lossy().ends_with(".kbk"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(files, 2);
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_log WHERE target_kind = 'local' AND status = 'ok'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 2);
     }
 }

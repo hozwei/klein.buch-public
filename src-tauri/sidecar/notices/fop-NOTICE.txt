@@ -1,0 +1,10 @@
+Komponente: Apache FOP 2.11
+Betrifft: org.apache.xmlgraphics:fop-core:2.11, org.apache.xmlgraphics:fop-events:2.11, org.apache.xmlgraphics:fop-util:2.11
+Quelle: https://repo1.maven.org/maven2/org/apache/xmlgraphics/fop-core/2.11/fop-core-2.11.jar!/META-INF/NOTICE (unverändert)
+(fop-events und fop-util enthalten denselben Text.)
+========================================================================
+Apache FOP
+Copyright 1999-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).

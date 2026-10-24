@@ -156,8 +156,10 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
     }
     let syntax = detect_syntax(xml).ok_or(ParseError::UnknownSyntax)?;
 
+    // Kein `trim_text`: Seit quick-xml 0.38 kommen Entity-Referenzen (`&amp;`)
+    // als eigene Events; der Text eines Elements wird deshalb gesammelt und erst
+    // am Element-Ende (getrimmt) zugeordnet.
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut p = ParsedEInvoice {
         syntax: Some(syntax),
@@ -168,26 +170,34 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
     let mut stack: Vec<String> = Vec::new();
     // schemeID-Attribut des aktuell offenen Elements (für CII VA/FC-Unterscheidung).
     let mut scheme: Option<String> = None;
+    // Textinhalt des aktuell offenen Elements.
+    let mut text = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 stack.push(local_name(e.name().as_ref()));
                 scheme = scheme_id(&e);
+                text.clear();
             }
             Ok(Event::Empty(_)) => {
                 // Selbstschließende Elemente tragen für uns keinen Textinhalt.
             }
-            Ok(Event::Text(t)) => {
-                let raw = t
-                    .unescape()
-                    .map_err(|e| ParseError::Malformed(e.to_string()))?;
-                let text = raw.trim();
-                if !text.is_empty() {
-                    assign(syntax, &stack, scheme.as_deref(), text, &mut p);
-                }
+            Ok(Event::Text(t)) => text.push_str(&t.xml10_content()),
+            // CDATA-Abschnitte sind gewöhnlicher Text des Elements.
+            Ok(Event::CData(c)) => text.push_str(&c.xml10_content()),
+            Ok(Event::GeneralRef(r)) => {
+                let resolved = resolve_entity(&r).ok_or_else(|| {
+                    ParseError::Malformed(format!("unbekannte Entität &{};", &*r))
+                })?;
+                text.push(resolved);
             }
             Ok(Event::End(_)) => {
+                let value = text.trim();
+                if !value.is_empty() {
+                    assign(syntax, &stack, scheme.as_deref(), value, &mut p);
+                }
+                text.clear();
                 stack.pop();
                 scheme = None;
             }
@@ -511,11 +521,23 @@ pub fn build_expense_input(p: &ParsedEInvoice, today: NaiveDate) -> ExpenseInput
 // =============================================================================
 
 /// Strippt einen Namespace-Prefix (`ram:Name` → `Name`).
-fn local_name(qname: &[u8]) -> String {
-    let s = String::from_utf8_lossy(qname);
-    match s.rsplit(':').next() {
-        Some(x) => x.to_string(),
-        None => s.into_owned(),
+fn local_name(qname: &str) -> String {
+    qname.rsplit(':').next().unwrap_or(qname).to_string()
+}
+
+/// Löst eine Entity-Referenz auf: die fünf vordefinierten XML-Entitäten und
+/// Zeichenreferenzen (`&#38;`, `&#x26;`). Andere Entitäten → `None`.
+fn resolve_entity(r: &quick_xml::events::BytesRef) -> Option<char> {
+    if r.is_char_ref() {
+        return r.resolve_char_ref().ok().flatten();
+    }
+    match &**r {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        _ => None,
     }
 }
 
@@ -523,7 +545,7 @@ fn local_name(qname: &[u8]) -> String {
 fn scheme_id(e: &BytesStart) -> Option<String> {
     for a in e.attributes().flatten() {
         if local_name(a.key.as_ref()) == "schemeID" {
-            return Some(String::from_utf8_lossy(a.value.as_ref()).into_owned());
+            return Some(a.value.into_owned());
         }
     }
     None
@@ -740,6 +762,8 @@ mod tests {
             tax_number: Some("123/456/78901"),
             vat_id: None,
             email: "schmidm@wildbach-computerhilfe.de",
+            phone: None,
+            contact_name: None,
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
@@ -946,6 +970,53 @@ mod tests {
         assert_eq!(p.gross_amount_cents, Some(11_900));
         assert_eq!(p.line_descriptions, vec!["Internet-Anschluss April"]);
         assert!(!p.reverse_charge);
+    }
+
+    #[test]
+    fn entities_inside_text_are_resolved() {
+        // quick-xml ≥ 0.38 liefert `&amp;` als eigenes Event: der Text darf
+        // weder zerfallen noch seine Leerzeichen um die Referenz verlieren.
+        let xml = UBL_FIXTURE.replace(
+            "<cbc:RegistrationName>Lieferant Telekom GmbH</cbc:RegistrationName>",
+            "<cbc:RegistrationName>\n  M&#252;ller &amp; S&#xF6;hne &lt;GmbH&gt; &quot;Nord&apos; </cbc:RegistrationName>",
+        );
+        let p = parse(&xml).unwrap();
+        assert_eq!(
+            p.seller_name.as_deref(),
+            Some("Müller & Söhne <GmbH> \"Nord'")
+        );
+        // CDATA zählt als Text (auch gemischt mit Entitäten).
+        let cdata = UBL_FIXTURE
+            .replace("LF-2026-7788", "<![CDATA[LF-2026-7788]]>")
+            .replace(
+                "Lieferant Telekom GmbH",
+                "Müller <![CDATA[&]]> Söhne &amp; Co",
+            );
+        let p = parse(&cdata).unwrap();
+        assert_eq!(p.invoice_number.as_deref(), Some("LF-2026-7788"));
+        assert_eq!(p.seller_name.as_deref(), Some("Müller & Söhne & Co"));
+        // Nicht definierte Entitäten bleiben ein Fehler (wie bisher).
+        let bad = UBL_FIXTURE.replace("Lieferant Telekom GmbH", "Lieferant &foo; GmbH");
+        assert!(matches!(parse(&bad), Err(ParseError::Malformed(_))));
+    }
+
+    #[test]
+    fn external_entities_and_entity_bombs_are_never_resolved() {
+        // W14: XXE (Datei und Netz) und „Billion Laughs“. quick-xml wertet die
+        // DTD nicht aus; eine eigene Entität ist für den Parser unbekannt → Fehler.
+        for doctype in [
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>"#,
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY xxe SYSTEM "http://192.0.2.1/x">]>"#,
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY xxe "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>"#,
+        ] {
+            let xml = UBL_FIXTURE
+                .replacen("<ubl:Invoice", &format!("{doctype}\n<ubl:Invoice"), 1)
+                .replace("Lieferant Telekom GmbH", "&xxe;");
+            match parse(&xml) {
+                Err(ParseError::Malformed(msg)) => assert!(!msg.contains("root:"), "{msg}"),
+                other => panic!("Entität darf nicht aufgelöst werden: {other:?}"),
+            }
+        }
     }
 
     #[test]

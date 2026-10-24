@@ -17,16 +17,16 @@ use crate::config::Paths;
 use crate::db::repo::app_settings;
 use crate::depreciation::accrue_yearly;
 use crate::error::Result;
+use crate::notify::Notifier;
 use crate::notify::{self, NewNotification};
 use chrono::{Datelike, NaiveDate};
 use sqlx::SqlitePool;
-use tauri::AppHandle;
 
 pub async fn run(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
-    app: Option<&AppHandle>,
+    notifier: Option<&dyn Notifier>,
     today: NaiveDate,
 ) -> Result<()> {
     // Setting-Gate (Default an).
@@ -71,7 +71,7 @@ pub async fn run(
         );
         notify::emit(
             pool,
-            app,
+            notifier,
             NewNotification {
                 rule_id: None,
                 title: "Abschreibung gebucht",

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
@@ -60,7 +61,7 @@
   let contactId = $state<string>("");
   let frequency = $state<Frequency>("monthly");
   let dayOfPeriod = $state<number>(1);
-  let nextDueDate = $state(new Date().toISOString().slice(0, 10));
+  let nextDueDate = $state(todayBerlin());
   let endDate = $state<string>("");
   let paymentTermsDays = $state<number>(14);
   let autoMode = $state<RecurringInvoiceMode>("draft");
@@ -323,7 +324,7 @@
         <h2>Positionen</h2>
         <button type="button" onclick={addItem} class="btn-secondary">+ Position</button>
       </header>
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>#</th>
@@ -344,8 +345,8 @@
             {#if isRich(it)}
               {@const linked = !!it.sourcePackageId}
               <tr class="pkg-row">
-                <td>{it.position}</td>
-                <td>
+                <td data-label="Pos.">{it.position}</td>
+                <td class="cards-full" data-label="Beschreibung">
                   {#if linked}
                     <span class="pkg-badge">aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</span>
                     <div class="pkg-title">{it.descriptionTitle}</div>
@@ -354,22 +355,22 @@
                   {/if}
                 </td>
                 {#if linked}
-                  <td class="right">{it.quantity}</td>
-                  <td>{it.unitCode}</td>
-                  <td class="right">{euro(it.unitPriceCents)}</td>
+                  <td class="right" data-label="Menge">{it.quantity}</td>
+                  <td data-label="Einheit">{it.unitCode}</td>
+                  <td class="right" data-label="Einzelpreis (€)">{euro(it.unitPriceCents)}</td>
                 {:else}
-                  <td><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
-                  <td><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
-                  <td>
+                  <td data-label="Menge"><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
+                  <td data-label="Einheit"><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
+                  <td data-label="Einzelpreis (€)">
                     <input type="number" step="0.01" value={it.unitPriceCents / 100}
                       oninput={(e) => { it.unitPriceCents = eurosFromInput(+(e.target as HTMLInputElement).value); }} required />
                   </td>
                 {/if}
                 {#if !isKlein}
-                  <td class="right">{it.taxRatePercent}</td>
-                  <td>{it.taxCategoryCode}</td>
+                  <td class="right" data-label="USt-Satz %">{it.taxRatePercent}</td>
+                  <td data-label="USt-Art">{it.taxCategoryCode}</td>
                 {/if}
-                <td class="right">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
+                <td class="right" data-label="Netto">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
                 <td>
                   <div class="pkg-actions">
                     {#if linked}
@@ -382,7 +383,7 @@
                 </td>
               </tr>
               <tr class="pkg-detail">
-                <td colspan="99">
+                <td colspan="99" class="cards-full">
                   {#if linked}
                     <div class="pkg-desc">{it.description}</div>
                   {:else}
@@ -392,17 +393,17 @@
               </tr>
             {:else}
               <tr>
-                <td>{it.position}</td>
-                <td><input type="text" bind:value={it.description} required /></td>
-                <td><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
-                <td><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
-                <td>
+                <td data-label="Pos.">{it.position}</td>
+                <td class="cards-full" data-label="Beschreibung"><input type="text" bind:value={it.description} required /></td>
+                <td data-label="Menge"><input type="number" step="any" min="0" bind:value={it.quantity} required /></td>
+                <td data-label="Einheit"><input type="text" bind:value={it.unitCode} placeholder="C62" maxlength="3" /></td>
+                <td data-label="Einzelpreis (€)">
                   <input type="number" step="0.01" value={it.unitPriceCents / 100}
                     oninput={(e) => { it.unitPriceCents = eurosFromInput(+(e.target as HTMLInputElement).value); }} required />
                 </td>
                 {#if !isKlein}
-                  <td><input type="number" step="0.01" bind:value={it.taxRatePercent} /></td>
-                  <td>
+                  <td data-label="USt-Satz %"><input type="number" step="0.01" bind:value={it.taxRatePercent} /></td>
+                  <td data-label="USt-Art">
                     <select bind:value={it.taxCategoryCode}>
                       <option value="S">S</option>
                       <option value="Z">Z</option>
@@ -416,7 +417,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
+                <td class="right" data-label="Netto">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
                 <td>
                   {#if items.length > 1}
                     <button type="button" class="btn-danger" onclick={() => removeItem(i)}>×</button>
@@ -428,8 +429,8 @@
         </tbody>
         <tfoot>
           <tr class="grand">
-            <td colspan={isKlein ? 5 : 7} class="right"><strong>{isKlein ? "Summe" : "Netto"}</strong></td>
-            <td class="right"><strong>{euro(totals.net)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>{isKlein ? "Summe" : "Netto"}</strong></td>
+            <td class="right" data-label={isKlein ? "Summe" : "Netto"}><strong>{euro(totals.net)}</strong></td>
             <td></td>
           </tr>
         </tfoot>
@@ -483,7 +484,7 @@
   th { background: #f3f4f6; font-weight: 600; font-size: 0.85rem; }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
   tr.grand td { border-top: 2px solid #1a1a1a; }
-  .modepick { border: 1px solid var(--c-border); }
+  .modepick { border: 1px solid var(--c-border); min-width: 0; }
   .modepick legend { font-size: 0.9rem; color: #4b5563; font-weight: 600; padding: 0 0.35rem; }
   label.radio { flex-direction: row; align-items: flex-start; gap: 0.6rem; padding: 0.6rem; border: 1px solid #e5e7eb; border-radius: 5px; cursor: pointer; margin-top: 0.5rem; }
   label.radio span { font-size: 0.85rem; color: #4b5563; line-height: 1.35; }
@@ -499,7 +500,14 @@
   .pkg-badge { display: inline-block; font-size: 0.72rem; font-weight: 600; color: #0f5d6e; background: #e0f2f7; border: 1px solid #b6e0ea; border-radius: 999px; padding: 0.05rem 0.5rem; }
   .pkg-desc { font-size: 0.82rem; color: #4b5563; margin-top: 0.2rem; white-space: pre-line; }
   .pkg-title { font-weight: 600; margin-top: 0.25rem; }
-  .pkg-actions { display: flex; gap: 0.4rem; align-items: center; }
+  .pkg-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
   .pkg-row td { background: #f8fbfc; border-bottom: 0; }
   .pkg-detail td { background: #f8fbfc; padding-top: 0; }
+  /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im
+     data-label der Betragszelle; Paket-Kopf und -Beschreibung bilden eine Karte. */
+  @media (max-width: 820px) {
+    td.sum-label { display: none; }
+    tr.pkg-row { margin-bottom: 0; border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+    tr.pkg-detail { border-top: 0; border-radius: 0 0 var(--r-lg) var(--r-lg); }
+  }
 </style>

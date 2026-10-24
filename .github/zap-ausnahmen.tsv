@@ -1,0 +1,4 @@
+# Ausnahmen für das ZAP-Gate (Plan W14, .github/scripts/zap_gate.py).
+# Nur Alarme mit Risiko Mittel/Hoch brauchen eine Zeile: <alertRef oder pluginId><TAB><Begründung>.
+# Jede Ausnahme ist im Review (W14) geprüft; bei jedem Update erneut bewerten.
+10055-6	CSP style-src unsafe-inline: Svelte setzt style-Attribute (style:-Direktiven, Übergänge); script-src bleibt ohne unsafe-inline (nur self + Hashes), {@html} nur für Konstanten, QR-SVG vom Server und die zuerst escapte Markdown-Vorschau; CSS-Injektion ohne Skriptausführung. W14-Review, ADR 0039 Nr. 121.

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { todayBerlin } from "$lib/date";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import PageBar from "$lib/PageBar.svelte";
@@ -7,6 +8,7 @@
     paymentAccountsList,
     expensesParseEinvoice,
     expensesCreateFromEinvoice,
+    uploadFile,
   } from "$lib/api";
   import type {
     Contact,
@@ -30,15 +32,15 @@
 
   // Datei + Parse-Ergebnis.
   let file = $state<File | null>(null);
-  let originalBytes = $state<number[]>([]);
-  let originalFileName = $state("");
+  // Plan W7: Upload des Originals aus Schritt 1, in Schritt 2 archiviert.
+  let uploadId = $state("");
   let sourceFormat = $state("");
   let validation = $state<ValidationSummary | null>(null);
   let parsed = $state<EInvoiceParseResult["parsed"] | null>(null);
 
   // Editierbare Formularfelder (aus dem Vorschlag vorbefüllt).
-  let expenseDate = $state(new Date().toISOString().slice(0, 10));
-  let paidDate = $state<string>(new Date().toISOString().slice(0, 10));
+  let expenseDate = $state(todayBerlin());
+  let paidDate = $state<string>(todayBerlin());
   let notPaidYet = $state(true);
   let vendorContactId = $state<string>("");
   let vendorName = $state("");
@@ -51,7 +53,7 @@
   let reverseCharge13b = $state(false);
   let notes = $state("");
 
-  const maxDate = new Date().toISOString().slice(0, 10);
+  const maxDate = todayBerlin();
   let grossCents = $derived(Math.round(netEuros * 100) + Math.round(taxEuros * 100));
 
   onMount(async () => {
@@ -75,10 +77,8 @@
     }
     busy = true;
     try {
-      const buf = await file.arrayBuffer();
-      originalBytes = Array.from(new Uint8Array(buf));
-      originalFileName = file.name;
-      const res: EInvoiceParseResult = await expensesParseEinvoice(originalBytes, file.name);
+      uploadId = (await uploadFile("erechnung", file)).uploadId;
+      const res: EInvoiceParseResult = await expensesParseEinvoice(uploadId);
 
       parsed = res.parsed;
       sourceFormat = res.sourceFormat;
@@ -88,7 +88,7 @@
       const inp = res.input;
       expenseDate = inp.expenseDate;
       notPaidYet = inp.paidDate === null;
-      paidDate = inp.paidDate ?? new Date().toISOString().slice(0, 10);
+      paidDate = inp.paidDate ?? todayBerlin();
       vendorName = inp.vendorName;
       vendorInvoiceNumber = inp.vendorInvoiceNumber ?? "";
       category = inp.category as ExpenseCategory;
@@ -157,9 +157,7 @@
       };
       const detail = await expensesCreateFromEinvoice({
         input,
-        fiscalYear: null,
-        originalBytes,
-        originalFileName,
+        uploadId,
         sourceFormat,
         validation,
       });
@@ -175,7 +173,7 @@
   function reset() {
     phase = "select";
     file = null;
-    originalBytes = [];
+    uploadId = "";
     parsed = null;
     validation = null;
   }
@@ -339,6 +337,7 @@
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .src { font-size: 0.85rem; color: #4b5563; margin: 0.25rem 0 0.75rem; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .lbl-hint { font-weight: 400; color: #9ca3af; font-size: 0.78rem; }
@@ -347,13 +346,13 @@
   input, select, textarea { padding: 0.45rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
   input.ro { background: #f3f4f6; font-weight: 600; }
   .hint { font-size: 0.82rem; color: #3730a3; background: #eef2ff; border: 1px solid #c7d2fe; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0; }
-  .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   button:disabled { opacity: 0.6; cursor: not-allowed; }
   .findings { font-size: 0.85rem; margin: 0 0 1rem; }
   .findings summary { cursor: pointer; color: #4b5563; }
   .findings ul { margin: 0.5rem 0 0; padding-left: 1rem; }
-  .findings li { margin: 0.25rem 0; line-height: 1.4; }
+  .findings li { margin: 0.25rem 0; line-height: 1.4; overflow-wrap: anywhere; }
   .findings code { background: #f3f4f6; padding: 0 0.25rem; border-radius: 3px; font-size: 0.8rem; }
   .sev { font-size: 0.72rem; padding: 0.05rem 0.4rem; border-radius: 3px; margin-right: 0.3rem; }
   .sev-error { background: #fee2e2; color: #991b1b; }
