@@ -115,7 +115,7 @@ pulldown-cmark = { version = "0.12", default-features = false }
 lopdf = "0.46"
 typst = "0.13"
 typst-pdf = "0.13"
-typst-library = "0.13"
+typst-library = "0.15"
 typst-syntax = "0.13"
 typst-utils = "0.13"
 typst-assets = { version = "0.13", features = ["fonts"] }
