@@ -289,11 +289,16 @@ export function saveFile(url: string, fileName: string): void {
   a.remove();
 }
 
-/** Öffentliche Angaben der Instanz (AGPL §13, ohne Sitzung). */
+/** Öffentliche Angaben der Instanz (AGPL §13, ohne Sitzung; Plan W12). */
 export interface PublicInfo {
   version: string;
-  commit: string;
+  /** Voller Commit-SHA des Builds; `null` im Entwicklungs-Build. */
+  commit: string | null;
+  /** Release-Tag (`v<CalVer>`); `null` außerhalb von Release-Builds. */
+  tag: string | null;
   sourceUrl: string;
+  /** Link auf den exakten Quellstand (Tag bzw. Commit); `null` ohne bekannten Commit. */
+  sourceLink: string | null;
   licenseSpdx: string;
 }
 

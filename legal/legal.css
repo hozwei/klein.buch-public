@@ -1,0 +1,118 @@
+/* Klein.Buch — Stylesheet der Seiten unter /legal/ (Plan W12).
+   Schlicht, ohne Schriften oder Bilder von außen; auf dem Handy lesbar. */
+
+:root {
+  color-scheme: light dark;
+  --fg: #1a1a1a;
+  --muted: #555;
+  --bg: #fff;
+  --box: #f6f6f6;
+  --line: #ddd;
+  --link: #0b5c8a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6e6e6;
+    --muted: #a8a8a8;
+    --bg: #161616;
+    --box: #222;
+    --line: #3a3a3a;
+    --link: #7cc4f0;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+main.legal {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+a { color: var(--link); }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 0.5rem; }
+h2 {
+  font-size: 1.3rem;
+  margin: 2.5rem 0 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+h3 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+h4 { font-size: 1rem; margin: 1.25rem 0 0.25rem; }
+h1, h2, h3, h4 { overflow-wrap: anywhere; }
+
+.meta, .spdx, .hint { color: var(--muted); }
+.meta { font-size: 0.95rem; }
+.spdx { font-weight: normal; font-size: 0.9rem; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--box);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
+
+pre.license-text { max-height: 28rem; overflow-y: auto; }
+
+nav.toc ol, ul.overview, ul.used-by { padding-left: 1.25rem; }
+ul.overview { columns: 16rem auto; column-gap: 2rem; }
+ul.used-by li, ul.overview li { font-size: 0.9rem; }
+
+section.license, section.notice, section.package {
+  margin: 1rem 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  display: block;
+  overflow-x: auto;
+}
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+th { background: var(--box); }
+
+@media (max-width: 40rem) {
+  main.legal { padding: 1rem 0.75rem 2rem; }
+  h1 { font-size: 1.35rem; }
+  h2 { font-size: 1.15rem; }
+  pre { font-size: 0.75rem; padding: 0.5rem; }
+  pre.license-text { max-height: 20rem; }
+}
+
+@media print {
+  pre.license-text { max-height: none; overflow: visible; }
+  a { color: inherit; }
+}

@@ -1,0 +1,37 @@
+Komponente: veraPDF 1.26.x
+Betrifft: org.verapdf:core-jakarta:1.26.5, org.verapdf:feature-reporting-jakarta:1.26.5, org.verapdf:metadata-fixer-jakarta:1.26.5, org.verapdf:validation-model-jakarta:1.26.5, org.verapdf:verapdf-xmp-core-jakarta:1.26.5, org.verapdf:parser:1.26.1, org.verapdf:pdf-model:1.26.1
+Quelle: Lizenzkopf aus verapdf-xmp-core-jakarta-1.26.5-sources.jar!/org/verapdf/xmp/XMPUtils.java (wörtlich)
+Hinweis: Der XMP-Kern (verapdf-xmp-core-jakarta) beruht auf dem Adobe XMP Toolkit for Java; das POM nennt
+         BSD-3-Clause, die Quelltextköpfe nennen zusätzlich die veraPDF-Doppellizenz GPL-3.0-or-later OR MPL-2.0.
+========================================================================
+----- veraPDF-Kopf -----
+/**
+ * This file is part of veraPDF PDF/A XMP Library Core, a module of the veraPDF project.
+ * Copyright (c) 2015, veraPDF Consortium <info@verapdf.org>
+ * All rights reserved.
+ *
+ * veraPDF PDF/A XMP Library Core is free software: you can redistribute it and/or modify
+ * it under the terms of either:
+ *
+ * The GNU General public license GPLv3+.
+ * You should have received a copy of the GNU General Public License
+ * along with veraPDF PDF/A XMP Library Core as the LICENSE.GPL file in the root of the source
+ * tree.  If not, see http://www.gnu.org/licenses/ or
+ * https://www.gnu.org/licenses/gpl-3.0.en.html.
+ *
+ * The Mozilla Public License MPLv2+.
+ * You should have received a copy of the Mozilla Public License along with
+ * veraPDF PDF/A XMP Library Core as the LICENSE.MPL file in the root of the source tree.
+ * If a copy of the MPL was not distributed with this file, you can obtain one at
+ * http://mozilla.org/MPL/2.0/.
+ */
+
+----- Adobe-Kopf -----
+// =================================================================================================
+// ADOBE SYSTEMS INCORPORATED
+// Copyright 2006 Adobe Systems Incorporated
+// All Rights Reserved
+//
+// NOTICE:  Adobe permits you to use, modify, and distribute this file in accordance with the terms
+// of the Adobe license agreement accompanying it.
+// =================================================================================================

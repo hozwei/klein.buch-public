@@ -5,13 +5,12 @@
 //! - Manueller Archiv-Integritäts-Check + dessen Historie (der automatische Lauf
 //!   sitzt im [`crate::scheduler::integrity_check_cron`]).
 //! - `app_info()` liefert App-Version (CARGO_PKG_VERSION), Schema-Version
-//!   (`db::schema_version::EXPECTED_SCHEMA_VERSION`), Identifier
-//!   (`tauri.conf.json`), Lizenz-Kennung und Build-Commit (Env-Var
-//!   `KLEINBUCH_BUILD_COMMIT`, gesetzt vom Release-Workflow; sonst `"dev"`).
-//!   Read-only, kein DB-Zugriff — auch vor dem Unlock benutzbar.
-//! - `third_party_licenses_path()` resolved den Bundle-Pfad zur generierten
-//!   `resources/handbook/third-party-licenses.html` (cargo-about + pnpm licenses
-//!   im Release-CI; im Dev-Build steht dort der eingecheckte Stub).
+//!   (`db::schema_version::EXPECTED_SCHEMA_VERSION`), Identifier, Lizenz-Kennung
+//!   und die Quellangaben aus [`crate::build_info`] (Commit, Tag, Quell-URL,
+//!   Link auf den exakten Stand — dieselbe Quelle wie `GET /api/public/info`,
+//!   Plan W12). Read-only, kein DB-Zugriff.
+//! - `third_party_licenses_path()` ist im Server entfallen (Route::Dropped);
+//!   die Lizenzseiten liefert `GET /legal/` aus (Plan W12).
 
 use crate::app_ctx::AppCtx;
 use crate::archive::integrity_check::{self, IntegrityCheckSummary};
@@ -102,10 +101,9 @@ pub async fn archive_integrity_history(
 
 /// Statische App-Metadaten für den „Über"-Dialog.
 ///
-/// Alles Compile-Time-Werte aus Cargo / Build-Env — kein DB-Zugriff, kein
-/// I/O. Der Command darf daher auch **vor** dem Unlock aufgerufen werden
-/// (er taucht im UI sowieso nur im entsperrten Zustand auf, aber wir
-/// machen ihn nicht unnötig pool-abhängig).
+/// Alles Compile-Time-Werte aus Cargo / Build-Env (plus der Laufzeit-Override
+/// der Quell-URL) — kein DB-Zugriff. Seit Plan W5 braucht der Command eine
+/// Sitzung; die Quellangaben gibt es ohne Sitzung über `/api/public/info`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -117,10 +115,14 @@ pub struct AppInfo {
     pub identifier: String,
     /// SPDX-Kennung der App-Lizenz (`AGPL-3.0-or-later`).
     pub license_spdx: String,
-    /// Source-Repository (für AGPL §13: "corresponding source" sichtbar im UI).
+    /// Wirksame Quell-URL (AGPL §13; `KLEIN_BUCH_SOURCE_URL`, sonst Build-Wert).
     pub repository_url: String,
-    /// Build-Commit-Kurz-Hash (vom Release-CI gesetzt) oder `"dev"`.
-    pub build_commit: String,
+    /// Voller Commit-SHA des Builds; `None` im Entwicklungs-Build.
+    pub build_commit: Option<String>,
+    /// Release-Tag des Builds; `None` außerhalb von Release-Builds.
+    pub build_tag: Option<String>,
+    /// Link auf den exakten Quellstand; `None` ohne bekannten Commit.
+    pub source_link: Option<String>,
 }
 
 /// Argumente von [`app_info`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -129,15 +131,16 @@ pub struct AppInfo {
 pub struct AppInfoArgs {}
 
 pub async fn app_info(ctx: &Arc<AppCtx>, _args: AppInfoArgs) -> AppInfo {
+    let source = crate::build_info::current();
     AppInfo {
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: source.version,
         schema_version: EXPECTED_SCHEMA_VERSION,
         identifier: ctx.app_identifier.clone(),
-        license_spdx: "AGPL-3.0-or-later".to_string(),
-        repository_url: "https://github.com/hozwei/klein.buch-public".to_string(),
-        build_commit: option_env!("KLEINBUCH_BUILD_COMMIT")
-            .unwrap_or("dev")
-            .to_string(),
+        license_spdx: source.license_spdx,
+        repository_url: source.source_url,
+        build_commit: source.commit,
+        build_tag: source.tag,
+        source_link: source.source_link,
     }
 }
 
@@ -226,12 +229,21 @@ mod tests {
         const { assert!(EXPECTED_SCHEMA_VERSION >= 27) };
     }
 
-    #[test]
-    fn build_commit_defaults_to_dev() {
-        // Im normalen Dev-/CI-Test-Lauf ist KLEINBUCH_BUILD_COMMIT nicht
-        // gesetzt → Fallback "dev". Im Release-Build setzt der Workflow
-        // den Wert auf den Commit-SHA.
-        let v = option_env!("KLEINBUCH_BUILD_COMMIT").unwrap_or("dev");
-        assert!(!v.is_empty());
+    /// `app_info` und `/api/public/info` lesen dieselbe Quelle (Plan W12);
+    /// keine feste Repository-URL mehr im Code.
+    #[tokio::test]
+    async fn app_info_uses_build_info() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ctx = crate::app_ctx::AppCtx::for_tests(crate::config::Paths::under(dir.path()));
+        let info = app_info(&ctx, AppInfoArgs {}).await;
+        let source = crate::build_info::current();
+        assert_eq!(info.repository_url, source.source_url);
+        assert_eq!(info.build_commit, source.commit);
+        assert_eq!(info.build_tag, source.tag);
+        assert_eq!(info.source_link, source.source_link);
+        assert_eq!(info.license_spdx, crate::build_info::LICENSE_SPDX);
+        if info.build_commit.is_none() {
+            assert!(info.source_link.is_none(), "ohne Commit kein Link");
+        }
     }
 }

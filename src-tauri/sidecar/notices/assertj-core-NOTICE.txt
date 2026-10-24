@@ -1,0 +1,7 @@
+Komponente: AssertJ core 2.9.0 (mit eingebettetem cglib 3.2.5)
+Betrifft: org.assertj:assertj-core:2.9.0, cglib:cglib:3.2.5, cglib:cglib-nodep:3.2.5
+Quelle: https://repo1.maven.org/maven2/org/assertj/assertj-core/2.9.0/assertj-core-2.9.0.jar!/META-INF/NOTICE (unverändert)
+(cglib 3.2.5 enthält denselben Text.)
+========================================================================
+This product includes software developed by
+The Apache Software Foundation (http://www.apache.org/).

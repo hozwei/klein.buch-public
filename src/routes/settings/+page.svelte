@@ -31,7 +31,7 @@
   </a>
   <a href="/settings/security">
     <span class="s-title">Sicherheit &amp; Anmeldung</span>
-    <span class="s-sub">Zweiter Faktor, Einmal-Codes und Daten-Passwort ändern</span>
+    <span class="s-sub">Zweiter Faktor, Einmal-Codes, Daten-Passwort und Versionsprüfung</span>
   </a>
   <a href="/settings/backup">
     <span class="s-title">Backups</span>

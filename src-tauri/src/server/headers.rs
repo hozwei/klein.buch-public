@@ -34,6 +34,10 @@ pub const CSP_NONE: &str = "default-src 'none'; frame-ancestors 'none'";
 pub const CSP_PDF_INLINE: &str = "default-src 'none'; frame-ancestors 'self'";
 /// CSP für Downloads fremder Inhalte (W7).
 pub const CSP_DOWNLOAD: &str = "sandbox; default-src 'none'; frame-ancestors 'none'";
+/// CSP der Lizenz- und Quellenseiten unter `/legal/` (W12): keine Skripte,
+/// Stil nur aus `/legal/legal.css`.
+pub const CSP_LEGAL: &str = "default-src 'none'; style-src 'self'; img-src 'self'; \
+                             base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 pub const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=(), payment=()";
 pub const CACHE_NO_STORE: &str = "no-store";
 pub const CACHE_IMMUTABLE: &str = "public, max-age=31536000, immutable";
@@ -111,6 +115,8 @@ pub enum ResponseClass {
     Download,
     ImmutableAsset,
     Asset,
+    /// `/legal/` (W12)
+    Legal,
 }
 
 fn classify(path: &str, response: &Response) -> ResponseClass {
@@ -119,6 +125,9 @@ fn classify(path: &str, response: &Response) -> ResponseClass {
     }
     if path.starts_with("/api/") || path == "/api" || path == "/healthz" {
         return ResponseClass::Api;
+    }
+    if path == "/legal" || path.starts_with("/legal/") {
+        return ResponseClass::Legal;
     }
     if path.starts_with("/files/") {
         return ResponseClass::Download;
@@ -173,6 +182,7 @@ pub fn apply(class: ResponseClass, headers: &mut HeaderMap, csp: &Csp, https: bo
         ResponseClass::Download => (CSP_DOWNLOAD, CACHE_NO_STORE),
         ResponseClass::ImmutableAsset => (CSP_NONE, CACHE_IMMUTABLE),
         ResponseClass::Asset => (CSP_NONE, CACHE_REVALIDATE),
+        ResponseClass::Legal => (CSP_LEGAL, CACHE_REVALIDATE),
     };
     set(header::CONTENT_SECURITY_POLICY, policy);
     set(header::CACHE_CONTROL, cache);

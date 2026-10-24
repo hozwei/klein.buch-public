@@ -1,6 +1,7 @@
-# Image-CI für den Arbeitszweig (Plan W11): baut das Server-Image, prüft es mit
-# einem Smoke-Test und vergleicht die Sidecar-Komponenten mit ihren Quellen.
-# KEIN Push in eine Registry — das Release-Image entsteht erst mit W12.
+# Sidecar-Quellen (Plan W11): vergleicht KoSIT-Validator, Mustang und die
+# XRechnung-Konfiguration mit ihren Originalen (SHA-256, Inhalt).
+# Das Image selbst baut und prüft seit W12 der Trockenlauf in release-image.yml
+# (Build, Smoke-Test, SBOM, Scan, Quellarchiv) — ein zweiter Build je Push entfällt.
 name: Image
 
 on:
@@ -22,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Originale laden und Prüfsummen vergleichen
         run: |
           set -euo pipefail
@@ -44,78 +45,3 @@ jobs:
           unzip -q /tmp/xrechnung_config.download -d /tmp/cfg
           diff -r /tmp/cfg src-tauri/sidecar/xrechnung-config
           echo "Sidecar-Komponenten entsprechen den Quellen."
-
-  image:
-    name: Image bauen + Smoke
-    if: github.repository == 'hozwei/klein.buch-public'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Image bauen (ohne Push)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          load: true
-          push: false
-          tags: klein-buch:ci
-          build-args: |
-            KLEIN_BUCH_COMMIT=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Image-Größe < 400 MB
-        run: |
-          size=$(docker image inspect -f '{{.Size}}' klein-buch:ci)
-          echo "Image: $((size / 1024 / 1024)) MiB"
-          test "$size" -lt $((400 * 1024 * 1024))
-
-      - name: Mock-Schalter im Release-Build verweigert den Start
-        run: |
-          set +e
-          out=$(docker run --rm -e KLEIN_BUCH_SIDECAR_MOCK=1 -e KLEIN_BUCH_PUBLIC_URL=http://localhost:8080 \
-            -e KLEIN_BUCH_ALLOW_UNMOUNTED=1 klein-buch:ci 2>&1)
-          rc=$?
-          set -e
-          echo "$out"
-          test "$rc" -ne 0
-          echo "$out" | grep -q "KLEIN_BUCH_SIDECAR_MOCK"
-
-      - name: Container starten (gehärtet, fremde UID)
-        run: |
-          mkdir -p smoke/data smoke/inputs
-          sudo chown -R 568:568 smoke
-          docker run -d --name kb \
-            --read-only --tmpfs /tmp:size=512m,mode=1777,noexec,nosuid,nodev \
-            --cap-drop ALL --security-opt no-new-privileges --user 568:568 \
-            -v "$PWD/smoke/data:/data" -v "$PWD/smoke/inputs:/inputs" \
-            -e KLEIN_BUCH_PUBLIC_URL=http://localhost:8080 -e KLEIN_BUCH_INSECURE_HTTP=1 \
-            -p 127.0.0.1:8080:8080 klein-buch:ci
-          for i in $(seq 1 60); do
-            if docker exec kb /usr/local/bin/klein-buch-server healthcheck; then break; fi
-            sleep 2
-          done
-          docker exec kb /usr/local/bin/klein-buch-server healthcheck
-
-      - name: Laufzeit-Eigenschaften
-        run: |
-          set -euo pipefail
-          test "$(docker exec kb id -u)" = "568"
-          tz=$(docker exec kb date +%Z); echo "Zeitzone im Container: $tz"
-          case "$tz" in CET|CEST) ;; *) exit 1 ;; esac
-          if docker exec kb sh -c 'touch /schreibtest' 2>/dev/null; then echo "/ ist beschreibbar"; exit 1; fi
-          docker exec kb grep -E '^CapEff:\s+0+$' /proc/1/status
-          docker exec kb test -f /inputs/.seed-manifest.json
-          docker exec kb test -f /inputs/pdf-templates/default.typ
-
-      - name: Smoke über HTTP (Einrichtung, Festschreiben, Rechnungseingang)
-        run: |
-          token=$(docker logs kb 2>&1 | sed -n 's/^Setup-Token: \([A-Z0-9]*\).*/\1/p' | head -1)
-          test -n "$token"
-          SMOKE_URL=http://localhost:8080 python3 .github/scripts/image_smoke.py "$token"
-
-      - name: Container-Log
-        if: always()
-        run: docker logs kb 2>&1 | grep -v '^Setup-Token' | tail -200 || true

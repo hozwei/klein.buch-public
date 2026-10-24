@@ -1,0 +1,10 @@
+Komponente: Apache PDFBox (pdfbox-io) 3.0.7
+Betrifft: org.apache.pdfbox:pdfbox-io:3.0.7
+Quelle: https://repo1.maven.org/maven2/org/apache/pdfbox/pdfbox-io/3.0.7/pdfbox-io-3.0.7.jar!/META-INF/NOTICE (unverändert)
+========================================================================
+Apache PDFBox io
+Copyright 2002-2026 The Apache Software Foundation
+
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).

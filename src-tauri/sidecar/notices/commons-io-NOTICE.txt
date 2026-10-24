@@ -1,0 +1,10 @@
+Komponente: Apache Commons IO 2.20.0 (Mustang) und 2.21.0 (KoSIT)
+Betrifft: commons-io:commons-io:2.20.0, commons-io:commons-io:2.21.0
+Quelle: https://repo1.maven.org/maven2/commons-io/commons-io/2.20.0/commons-io-2.20.0.jar!/META-INF/NOTICE.txt (unverändert)
+(2.21.0 enthält denselben Text.)
+========================================================================
+Apache Commons IO
+Copyright 2002-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (https://www.apache.org/).

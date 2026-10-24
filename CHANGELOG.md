@@ -282,6 +282,30 @@ Arbeitszweig `phase-w`.
   (mind. 44 px), Meldungen unten. PDFs öffnen auf dem Handy in der PDF-Ansicht
   des Browsers; Belege lassen sich direkt mit der Kamera fotografieren. Geprüft
   auf allen Seiten bei 390, 768 und 1280 px Breite.
+- **Lizenzen und Quellen unter `/legal/` (W12):** Die Lizenzseite entsteht beim
+  Image-Build aus den tatsächlich eingebauten Teilen (Rust per cargo-about,
+  mitgelieferte NOTICE-Dateien inkl. SQLCipher und OpenSSL, eingebettete
+  Schriften, Java-Sidecar mit Inventar und Hinweisen, JS-Pakete des Bundles)
+  und ist ohne Anmeldung erreichbar, ebenso `LICENSE.txt`, „Quellen Dritter“
+  und die Debian-Paketliste; dieselben Dateien liegen im Image unter
+  `/usr/share/doc/klein-buch`.
+- **Quellangabe nach AGPL §13 (W12):** Anmeldung, Einrichtung und Über-Dialog
+  zeigen Version und Commit mit Link auf genau diesen Quellstand (bei einem
+  Release auf das Release); ein Build ohne Commit heißt
+  „Entwicklungs-Build, Quellstand unbekannt“. Betreiber mit eigenen Änderungen
+  setzen `KLEIN_BUCH_SOURCE_URL`.
+- **Versionsprüfung (W12, opt-in):** Unter Einstellungen → Sicherheit &
+  Anmeldung lässt sich eine tägliche Abfrage der Releases einschalten; eine
+  neue Version erscheint als Hinweis in der Inbox. Standard aus — ohne
+  Einschalten baut Klein.Buch keine Verbindung auf.
+- **Release-Image (W12):** Signiertes Image mit SBOM, Schwachstellen-Scan und
+  Quellarchiv „Quellen Dritter“ je Release; Lieferketten-Prüfungen in CI
+  (cargo-deny, cargo-audit, pnpm audit, gitleaks), Actions per Commit-SHA.
+- **Abhängigkeiten (W12):** russh 0.64, quick-xml 0.42, lopdf 0.46 und weitere
+  Updates wegen Sicherheitsmeldungen (u. a. rustls, tokio). Der
+  E-Rechnungs-Parser setzt Texte mit Entity-Referenzen (`&amp;`) jetzt am
+  Element-Ende zusammen und liest auch CDATA-Abschnitte. ZIP-Dateien nur noch
+  mit Deflate (Backups und Exporte von Klein.Buch nutzen nichts anderes).
 
 ### Documentation
 

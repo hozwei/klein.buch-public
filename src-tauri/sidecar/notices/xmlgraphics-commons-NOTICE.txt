@@ -1,0 +1,9 @@
+Komponente: Apache XML Graphics Commons 2.11
+Betrifft: org.apache.xmlgraphics:xmlgraphics-commons:2.11
+Quelle: https://repo1.maven.org/maven2/org/apache/xmlgraphics/xmlgraphics-commons/2.11/xmlgraphics-commons-2.11.jar!/META-INF/NOTICE (unverändert)
+========================================================================
+Apache XML Graphics Commons
+Copyright 2006-2025 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).

@@ -123,6 +123,7 @@ import type {
   IntegrityCheckSummary,
   IntegrityCheckRow,
   AppInfo,
+  UpdateCheckSettings,
 } from "./types";
 
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -239,6 +240,15 @@ export function quoteSignatureGet(): Promise<boolean> {
 
 export function quoteSignatureSet(enabled: boolean): Promise<void> {
   return invoke<void>("quote_signature_set", { enabled });
+}
+
+// Opt-in Versionsprüfung gegen die GitHub-Releases (Plan W12, E14)
+export function updateCheckGet(): Promise<UpdateCheckSettings> {
+  return invoke<UpdateCheckSettings>("update_check_get");
+}
+
+export function updateCheckSet(enabled: boolean): Promise<void> {
+  return invoke<void>("update_check_set", { enabled });
 }
 
 // Inhaber (Vor-/Nachname) + Standard-Fristen

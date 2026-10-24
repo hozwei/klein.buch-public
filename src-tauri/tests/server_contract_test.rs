@@ -155,9 +155,9 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        183,
+        185,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
-         - 5 Reset-/Drop-Folder-Commands (W11)"
+         - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12)"
     );
 
     for spec in REGISTRY.iter() {
@@ -261,10 +261,35 @@ async fn public_route_inventory() {
     let r = send(app, get("/api/public/info", None)).await;
     assert_eq!(r.status, StatusCode::OK);
     let info = r.json();
-    for key in ["version", "commit", "sourceUrl", "licenseSpdx"] {
+    for key in [
+        "version",
+        "commit",
+        "tag",
+        "sourceUrl",
+        "sourceLink",
+        "licenseSpdx",
+    ] {
         assert!(info.get(key).is_some(), "{key} fehlt: {info}");
     }
     assert_eq!(info["licenseSpdx"], "AGPL-3.0-or-later");
+
+    // Lizenz- und Quellenseiten (W12) ohne Sitzung; ohne Dateien 404 statt SPA
+    let r = send(app, get("/legal/fehlt.txt", None)).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(r.json()["code"], "not_found", "JSON statt SPA");
+    let legal = srv.state.ctx.paths.resource_dir.join("legal");
+    std::fs::create_dir_all(&legal).unwrap();
+    std::fs::write(legal.join("third-party-licenses.html"), "<h1>Lizenzen</h1>").unwrap();
+    std::fs::write(legal.join("LICENSE.txt"), "GNU AFFERO").unwrap();
+    for path in ["/legal/", "/legal/third-party-licenses.html"] {
+        let r = send(app, get(path, None)).await;
+        assert_eq!(r.status, StatusCode::OK, "{path}");
+        assert!(r.text().contains("Lizenzen"), "{path}");
+    }
+    let r = send(app, get("/legal/LICENSE.txt", None)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = send(app, get("/legal", None)).await;
+    assert_eq!(r.status, StatusCode::PERMANENT_REDIRECT);
 
     // ohne Loopback-Peer: nur Status, kein Körper
     let r = send(app, get("/healthz", None)).await;

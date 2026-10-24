@@ -1,0 +1,8 @@
+Komponente: Validator-Konfiguration XRechnung 2026-01-31
+Quelle: https://github.com/itplr-kosit/validator-configuration-xrechnung/blob/v2026-01-31/NOTICE (unverändert)
+========================================================================
+KoSIT XML-Validator Configuration for XRechnung
+Copyright 2020 Koordinierungsstelle für IT-Standards
+
+This product includes software developed by
+Coordination Office for IT-Standards (http://www.xoev.de/).

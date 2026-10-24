@@ -1,0 +1,87 @@
+Komponente: Apache FOP 2.11 - ICC-Profil org/apache/fop/pdf/sRGB.icc
+Betrifft: org.apache.xmlgraphics:fop-core:2.11
+Quelle: https://repo1.maven.org/maven2/org/apache/xmlgraphics/fop-core/2.11/fop-core-2.11.jar!/org/apache/fop/pdf/sRGB.icc.{README,COPYING,LICENSE-ZLIB} (unverändert)
+========================================================================
+----- sRGB.icc.README -----
+Included are profiles created by Marti Maria (littleCMS) <http://www.littlecms.com>:
+
+  # CIE*Lab 
+  # CIE*XYZ
+  # sRGB
+
+Various contributors:
+
+  # LStar-RGB from ColorSolutions                  <http://hwww.basICColor.com>
+  # Photogamut-RGB from the Photogamut workgroup   <http://www.photogamut.org>
+  # Cineon and Gray from Kai-Uwe Behrmann          <http://www.behrmann.name>
+  # compatibleWithAdobeRGB1998 from Graeme Gill    <http://www.argyllcms.com>
+
+----- sRGB.icc.COPYING -----
+The profiles in the base directory are provided according to different licenses.
+
+
+Group A
+sRGB, LCMSLAB.ICM, LCMSXYZ.ICM, the compatibleWithAdobeRGB.icc and the 
+Gray.icc, CineonLog_M*.icc, CineLogCurve.icc profiles are all zlib licensed.
+Even though it is highly recommended to rename them before editing.
+
+
+Group B
+The eciRGB*.icc profiles come with their license in license.rtf.
+
+
+Group C
+PhotoGamutRGB_avg6c.icc is licensed to be distributed freely. Modifications 
+are not allowed.
+
+
+
+Additionally all profiles come with the following disclaimer. The provided 
+ICC Profiles in the package are called DATA in the folling statement.
+
+
+                NO WARRANTY
+
+  BECAUSE THE DATA IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+FOR THE DATA, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT WHEN
+OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
+PROVIDE THE DATA "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED
+OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.  THE ENTIRE RISK AS
+TO THE QUALITY AND PERFORMANCE OF THE DATA IS WITH YOU.  SHOULD THE
+DATA PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING,
+REPAIR OR CORRECTION.
+
+  12. IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
+REDISTRIBUTE THE DATA AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES,
+INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING
+OUT OF THE USE OR INABILITY TO USE THE DATA (INCLUDING BUT NOT LIMITED
+TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY
+YOU OR THIRD PARTIES OR A FAILURE OF THE DATA TO OPERATE WITH ANY OTHER
+PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGES.
+
+----- sRGB.icc.LICENSE-ZLIB -----
+The zlib/libpng License
+
+Copyright (c) 2008 Kai-Uwe Behrmann
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+    1. The origin of this software must not be misrepresented; you must not
+    claim that you wrote the original software. If you use this software
+    in a product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+
+    2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+    3. This notice may not be removed or altered from any source
+    distribution.

@@ -1,0 +1,43 @@
+# Ausnahmen für den Image-Scan (Plan W12, .github/workflows/release-image.yml):
+#   trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1
+# Nur mit Begründung und Ablaufdatum (exp:): Nach Ablauf schlägt der Scan wieder an
+# und die Ausnahme muss neu geprüft werden. Rust-Ausnahmen entsprechen
+# src-tauri/deny.toml ([advisories] ignore) und der --ignore-Liste von cargo audit;
+# Java-Ausnahmen betreffen Bibliotheken, die im Mustang-Uber-JAR mitgebündelt sind.
+
+# zip 2.4.2 (Rust, im Server-Binary): Die Lücken betreffen nur ZipArchive::extract bzw.
+# ZipStreamReader::extract (SUID/SGID-Bits, Symlinks außerhalb des Zielordners).
+# Klein.Buch liest Backups und Exporte über by_name/by_index_raw in den Speicher und ruft
+# extract nicht auf. Fix erst in zip 9 (inkompatible API). RUSTSEC-2026-0367/-0368/-0369.
+GHSA-vv5m-jxxh-4627 exp:2027-04-30
+GHSA-4v9h-p7m9-rh26 exp:2027-04-30
+GHSA-4684-h2q9-2vcp exp:2027-04-30
+
+# quick-xml 0.36.2 (Rust, über typst 0.13 → hayagriva → citationberg): parst nur die
+# eingebetteten CSL-Daten und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt.
+# Der E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben). Weg mit typst ≥ 0.14.
+RUSTSEC-2026-0194 exp:2027-04-30
+RUSTSEC-2026-0195 exp:2027-04-30
+
+# Mustang 2.23.0 (sidecar/lib/mustang.jar, unverändertes Uber-JAR): Klein.Buch ruft nur
+# `combine` (eigenes Typst-PDF + eigenes XML) und `extract` (hochgeladenes PDF, PDFBox) auf.
+# Ein Class-Load-Trace der JVM über beide Aktionen und den KoSIT-Validator (24.10.2026,
+# sidecar_real-Tests) lädt keine Klasse aus Jackson, veraPDF oder AssertJ — die Lücken
+# sind im Betrieb nicht erreichbar. Mustang 2.26 bündelt veraPDF 1.30.2 und Jackson
+# 2.22.2 (behebt nur einen Teil); Update prüfen, sobald Jackson ≥ 2.22.3 enthalten ist.
+# jackson-core 2.17.3 (DoS beim Parsen von JSON; Mustang liest bei uns kein JSON)
+CVE-2026-68494 exp:2027-04-30
+CVE-2026-89407 exp:2027-04-30
+CVE-2026-89425 exp:2027-04-30
+# jackson-databind 2.17.3 (Polymorphie/DoS beim Deserialisieren; bei uns nicht genutzt)
+CVE-2026-54512 exp:2027-04-30
+CVE-2026-54513 exp:2027-04-30
+CVE-2026-68497 exp:2027-04-30
+CVE-2026-91776 exp:2027-04-30
+CVE-2026-91777 exp:2027-04-30
+# assertj-core 2.9.0 (XXE in XML-Assertions; Testbibliothek, nur mitgebündelt)
+CVE-2026-24400 exp:2027-04-30
+# veraPDF validation-model 1.26.5 (XXE in Rich Text/XFA bei der PDF/A-Validierung;
+# Klein.Buch ruft keine Validierung über Mustang auf)
+CVE-2026-54078 exp:2027-04-30
+CVE-2026-54079 exp:2027-04-30

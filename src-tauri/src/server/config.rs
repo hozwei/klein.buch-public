@@ -11,8 +11,8 @@ use crate::error::{Error, Result};
 pub const ENV_LISTEN: &str = "KLEIN_BUCH_LISTEN";
 /// `1` schaltet die Mountpoint-Prüfung ab — nur für lokale Tests (Plan W5.5).
 pub const ENV_ALLOW_UNMOUNTED: &str = "KLEIN_BUCH_ALLOW_UNMOUNTED";
-/// Quelle für die AGPL-§13-Angabe (Forks überschreiben sie).
-pub const ENV_SOURCE_URL: &str = "KLEIN_BUCH_SOURCE_URL";
+// Quelle für die AGPL-§13-Angabe (Forks überschreiben sie; Plan W12).
+pub use crate::build_info::{DEFAULT_SOURCE_URL, ENV_SOURCE_URL};
 /// Öffentliche Adresse der Instanz (Pflicht, Plan W6), z. B. `https://buch.example.org`.
 pub const ENV_PUBLIC_URL: &str = "KLEIN_BUCH_PUBLIC_URL";
 /// CIDR-Liste vertrauter Reverse-Proxys (Standard leer).
@@ -21,7 +21,6 @@ pub const ENV_TRUSTED_PROXIES: &str = "KLEIN_BUCH_TRUSTED_PROXIES";
 pub const ENV_INSECURE_HTTP: &str = "KLEIN_BUCH_INSECURE_HTTP";
 
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
-pub const DEFAULT_SOURCE_URL: &str = "https://github.com/hozwei/klein.buch-public";
 
 /// Schalter für die Prüfungen vor dem Port-Bind.
 #[derive(Debug, Clone, Default)]
@@ -113,12 +112,10 @@ pub fn healthcheck_addr(listen: SocketAddr) -> SocketAddr {
     SocketAddr::new(ip, listen.port())
 }
 
-/// Quell-URL für `/api/public/info` (AGPL §13).
+/// Quell-URL für `/api/public/info` (AGPL §13): Laufzeit-Override, sonst
+/// Build-Wert, sonst Standard ([`crate::build_info::source_url`]).
 pub fn source_url() -> String {
-    std::env::var(ENV_SOURCE_URL)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_SOURCE_URL.to_string())
+    crate::build_info::source_url()
 }
 
 #[cfg(test)]

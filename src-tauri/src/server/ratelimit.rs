@@ -23,9 +23,13 @@ use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::{IntoResponse as _, Response};
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use rand::RngCore as _;
@@ -33,6 +37,9 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tokio::time::Instant;
 
+use super::errors::ApiError;
+use super::policy::ClientInfo;
+use super::state::ServerState;
 use crate::error::Result;
 
 pub const FREE_ATTEMPTS: u32 = 5;
@@ -239,9 +246,92 @@ pub fn device_cookie_header(value: &str) -> String {
     format!("{DEVICE_COOKIE}={value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000")
 }
 
+// ---------------------------------------------------------------------------
+// Öffentliche Lese-Routen (Plan W12)
+// ---------------------------------------------------------------------------
+
+/// Anfragen je [`PUBLIC_WINDOW`] und Schlüssel auf `GET /api/public/info` und
+/// `/legal/` (ohne Sitzung; ADR 0039 „mit Rate-Limit“).
+pub const PUBLIC_PER_WINDOW: u32 = 120;
+pub const PUBLIC_WINDOW: Duration = Duration::from_secs(60);
+/// Sammelschlüssel, wenn die Tabelle voll ist (begrenzter Speicher).
+const OVERFLOW_KEY: &str = "overflow";
+
+/// Festes Zeitfenster je Client-IP (IPv6 je /64, wie [`key_for`]); zählt jede
+/// Anfrage, nicht nur Fehlversuche.
+#[derive(Default)]
+pub struct PublicRateLimiter {
+    windows: Mutex<HashMap<String, (Instant, u32)>>,
+}
+
+impl PublicRateLimiter {
+    /// Zählt eine Anfrage; über dem Limit die Wartezeit bis zum neuen Fenster.
+    pub fn hit(&self, key: &str) -> std::result::Result<(), Duration> {
+        let now = Instant::now();
+        let mut map = self.windows.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut key = key;
+        if map.len() >= MAX_ENTRIES && !map.contains_key(key) {
+            map.retain(|_, (start, _)| now.duration_since(*start) < PUBLIC_WINDOW);
+            if map.len() >= MAX_ENTRIES {
+                key = OVERFLOW_KEY;
+            }
+        }
+        let entry = map.entry(key.to_string()).or_insert((now, 0));
+        if now.duration_since(entry.0) >= PUBLIC_WINDOW {
+            *entry = (now, 0);
+        }
+        if entry.1 >= PUBLIC_PER_WINDOW {
+            return Err(PUBLIC_WINDOW.saturating_sub(now.duration_since(entry.0)));
+        }
+        entry.1 += 1;
+        Ok(())
+    }
+}
+
+/// Middleware der öffentlichen Lese-Routen: 429 + `Retry-After` über dem
+/// Limit. Die Client-IP kommt aus der Policy-Middleware (vertraute Proxys).
+pub async fn public_limit(
+    State(st): State<Arc<ServerState>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let ip = req
+        .extensions()
+        .get::<ClientInfo>()
+        .map(|c| c.ip)
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    match st.public_rate.hit(&key_for(None, ip)) {
+        Ok(()) => next.run(req).await,
+        Err(wait) => {
+            let secs = wait.as_secs().max(1);
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                format!("Zu viele Anfragen — bitte {secs} s warten."),
+            )
+            .with_retry_after(secs)
+            .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn public_window_per_key() {
+        let rl = PublicRateLimiter::default();
+        let key = "ip:203.0.113.9";
+        for _ in 0..PUBLIC_PER_WINDOW {
+            assert!(rl.hit(key).is_ok());
+        }
+        let wait = rl.hit(key).unwrap_err();
+        assert!(wait <= PUBLIC_WINDOW && wait > Duration::ZERO);
+        assert!(rl.hit("ip:198.51.100.7").is_ok(), "andere IP frei");
+        tokio::time::advance(PUBLIC_WINDOW).await;
+        assert!(rl.hit(key).is_ok(), "neues Fenster");
+    }
 
     #[tokio::test(start_paused = true)]
     async fn backoff_doubles_and_expires() {

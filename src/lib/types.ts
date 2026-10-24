@@ -1568,7 +1568,19 @@ export interface AppInfo {
   schemaVersion: number;
   identifier: string;
   licenseSpdx: string;
+  /** Wirksame Quell-URL (AGPL §13; `KLEIN_BUCH_SOURCE_URL`, sonst Build-Wert). */
   repositoryUrl: string;
-  /** Kurzer Commit-Hash vom Release-CI bzw. `"dev"` im lokalen Build. */
-  buildCommit: string;
+  /** Voller Commit-SHA des Builds; `null` im Entwicklungs-Build (Plan W12). */
+  buildCommit: string | null;
+  /** Release-Tag des Builds; `null` außerhalb von Release-Builds. */
+  buildTag: string | null;
+  /** Link auf den exakten Quellstand; `null` ohne bekannten Commit. */
+  sourceLink: string | null;
+}
+
+/** Opt-in Versionsprüfung (`commands::settings::UpdateCheckSettings`, Plan W12). */
+export interface UpdateCheckSettings {
+  enabled: boolean;
+  /** Letzte Abfrage (RFC 3339, UTC) oder `null`. */
+  lastCheckAt: string | null;
 }

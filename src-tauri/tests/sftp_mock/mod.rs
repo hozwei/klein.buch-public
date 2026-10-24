@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use russh::keys::ssh_key::private::Ed25519Keypair;
 use russh::keys::PrivateKey;
-use russh::server::{Auth, Msg, Server as _, Session};
+use russh::server::{Auth, ChannelOpenHandle, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
 use russh_sftp::protocol::{
     File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
@@ -110,10 +110,12 @@ impl russh::server::Handler for MockSession {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         self.channels.insert(channel.id(), channel);
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn channel_eof(

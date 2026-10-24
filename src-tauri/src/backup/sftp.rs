@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::PublicKey;
+use russh::keys::{PublicKey, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -102,9 +102,11 @@ impl client::Handler for HostKeyVerifier {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
-        let fp = fingerprint_of(server_public_key);
+        // Gepinnt wird der Host-Key selbst; bei einem Zertifikat dessen Schlüssel
+        // (die Signatur des Schlüsseltauschs hat russh davor schon geprüft).
+        let fp = fingerprint_of(&server_public_key.public_key());
         *self.seen.lock().expect("seen mutex poisoned") = Some(fp.clone());
         Ok(match &self.pinned {
             Some(p) => *p == fp,

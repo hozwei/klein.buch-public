@@ -11,6 +11,7 @@ pub mod archive;
 pub mod assets;
 pub mod backup;
 pub mod branding;
+pub mod build_info;
 pub mod clock;
 pub mod commands;
 pub mod config;

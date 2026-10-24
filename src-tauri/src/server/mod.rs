@@ -16,6 +16,7 @@
 //! - [`limits`]: Semaphoren je Kostenklasse, globale Grenze, Timeout
 //! - [`http`]: Annahme-Schleife mit Header-Timeout, geordnetes Herunterfahren
 //! - [`health`]: `GET /healthz` und Subcommand `healthcheck`
+//! - [`legal`]: Lizenz- und Quellenseiten unter `/legal/` (W12)
 //! - [`logging`]: Log-Filter ohne Geheimnisse, Zugriffsprotokoll
 
 pub mod auth;
@@ -29,6 +30,7 @@ pub mod http;
 pub mod idempotency;
 pub mod instance;
 pub mod jobs;
+pub mod legal;
 pub mod limits;
 pub mod logging;
 pub mod policy;
@@ -58,8 +60,15 @@ pub const APP_IDENTIFIER: &str = "de.wildbach.kleinbuch";
 ///
 /// Öffentlich (ohne Sitzung) sind genau `GET /api/auth/status`,
 /// `POST /api/auth/setup`, `POST /api/auth/login`, `GET /api/public/info`,
-/// `GET /healthz` und die SPA-Assets (Plan §3); `/legal/` folgt in W12.
+/// `GET /healthz`, `GET /legal/…` (W12) und die SPA-Assets (Plan §3).
+/// `/api/public/info` und `/legal/` zählen zusätzlich Anfragen je Client
+/// ([`ratelimit::public_limit`]).
 pub fn router(state: Arc<ServerState>) -> Router {
+    // Öffentliche Lese-Routen zählen Anfragen je Client (W12).
+    let public_limit = middleware::from_fn_with_state(state.clone(), ratelimit::public_limit);
+    let info = get(public_info).route_layer(public_limit.clone());
+    let legal_index = get(legal::index).route_layer(public_limit.clone());
+    let legal_file = get(legal::file).route_layer(public_limit);
     let api = Router::new()
         .route("/cmd/{name}", post(dispatch::cmd))
         .route("/auth/status", get(auth::status))
@@ -73,7 +82,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/auth/recovery/renew", post(auth::recovery_renew))
         .route("/auth/passphrase", post(auth::change_passphrase))
         .route("/jobs/{id}", get(jobs::get_job))
-        .route("/public/info", get(public_info))
+        .route("/public/info", info)
         .fallback(errors::not_found)
         .route_layer(middleware::from_fn(limits::request_timeout));
     // Uploads ohne Gesamt-Timeout und ohne axum-Körperlimit: Größe je Art und
@@ -100,6 +109,10 @@ pub fn router(state: Arc<ServerState>) -> Router {
         )
         // sonst kein SPA-Fallback unter /files
         .route("/files/{*rest}", any(errors::not_found))
+        // Lizenz- und Quellenseiten ohne Sitzung (W12); kein SPA-Fallback.
+        .route("/legal", get(legal::redirect))
+        .route("/legal/", legal_index)
+        .route("/legal/{*file}", legal_file)
         .fallback_service(headers::spa_service(&state.ctx.paths.web_dir))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -121,14 +134,10 @@ async fn head_not_allowed() -> axum::http::StatusCode {
     axum::http::StatusCode::METHOD_NOT_ALLOWED
 }
 
-/// `GET /api/public/info` (AGPL §13): Version, Commit, Quelle, Lizenz.
-async fn public_info() -> Json<serde_json::Value> {
-    Json(serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "commit": option_env!("KLEIN_BUCH_COMMIT").unwrap_or("unbekannt"),
-        "sourceUrl": config::source_url(),
-        "licenseSpdx": "AGPL-3.0-or-later",
-    }))
+/// `GET /api/public/info` (AGPL §13, Plan W12): Version, Commit, Tag,
+/// Quell-URL, Link auf den exakten Quellstand (ohne Commit `null`), Lizenz.
+async fn public_info() -> Json<crate::build_info::SourceInfo> {
+    Json(crate::build_info::current())
 }
 
 /// Einstieg des Binaries: `serve` (Standard) oder `healthcheck`.
@@ -266,6 +275,9 @@ pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<Serve
             "KLEIN_BUCH_TRUSTED_PROXIES enthält 0.0.0.0/0 bzw. ::/0 — dann vertraut der Server den \
              Weiterleitungs-Headern jedes Clients (Rate-Limit und HTTPS-Regel umgehbar)"
         );
+    }
+    if let Some(warning) = crate::build_info::source_url_warning() {
+        tracing::warn!("{warning}");
     }
     if cfg.policy.insecure_http {
         tracing::warn!(

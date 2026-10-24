@@ -473,9 +473,10 @@ mod tests {
 
     #[test]
     fn uri_and_qr() {
+        // Testvektor aus RFC 6238 Anhang B (öffentlich, kein Geheimnis).
         let secret = b"12345678901234567890";
         let uri = otpauth_uri(secret, "kontakt@example.org");
-        assert!(uri.starts_with("otpauth://totp/Klein.Buch:kontakt%40example.org?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"));
+        assert!(uri.starts_with("otpauth://totp/Klein.Buch:kontakt%40example.org?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")); // gitleaks:allow
         let svg = qr_svg(&uri).unwrap();
         assert!(svg.starts_with("<svg"), "{}", &svg[..40]);
         assert_eq!(

@@ -1,0 +1,15 @@
+Komponente: Apache PDFBox (fontbox) 3.0.7
+Betrifft: org.apache.pdfbox:fontbox:3.0.7
+Quelle: https://repo1.maven.org/maven2/org/apache/pdfbox/fontbox/3.0.7/fontbox-3.0.7.jar!/META-INF/NOTICE (unverändert)
+========================================================================
+Apache FontBox
+Copyright 2008-2026 The Apache Software Foundation
+
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+Based on source code contributed to the original FontBox project.
+Copyright (c) 2006-2007, www.fontbox.org
+
+Includes the Script Property (Scripts-10.0.0.txt)
+Copyright 2017 Unicode, Inc.

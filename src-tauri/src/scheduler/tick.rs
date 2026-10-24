@@ -21,6 +21,7 @@ use crate::backup::BackupSession;
 use crate::config::Paths;
 use crate::error::Result;
 use crate::notify::Notifier;
+use crate::scheduler::update_check::{self, Outcome};
 
 /// Tick-Intervall in Sekunden (5 Minuten).
 const TICK_INTERVAL_SECS: u64 = 300;
@@ -79,7 +80,21 @@ async fn run_tick(ctx: &Arc<AppCtx>) -> Result<()> {
         return Ok(());
     };
     let today = crate::clock::today_berlin();
-    run_jobs(&pool, &ctx.paths, &ctx.session, ctx.notifier(), today).await
+    let result = run_jobs(&pool, &ctx.paths, &ctx.session, ctx.notifier(), today).await;
+
+    // 6. Opt-in Versionsprüfung (Plan W12, E14): ohne Opt-in keine Verbindung,
+    //    sonst höchstens täglich. Außerhalb von `run_jobs`, damit die
+    //    DB-Jobs (und ihre Tests) nie ins Netz gehen.
+    let url = update_check::endpoint();
+    let now = crate::clock::now_utc();
+    match update_check::run_if_due(&pool, ctx.notifier(), &url, now).await {
+        Ok(Outcome::NewVersion { tag, created: true }) => {
+            tracing::info!("Versionsprüfung: neue Version {tag} — Hinweis angelegt");
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("{e}"),
+    }
+    result
 }
 
 /// Die Jobs eines Ticks — ohne Tauri-State testbar (`app = None`).

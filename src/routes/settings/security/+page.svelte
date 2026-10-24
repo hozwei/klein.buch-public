@@ -2,6 +2,8 @@
   // Plan W6 — Sicherheit & Anmeldung: zweiter Faktor (TOTP) neu einrichten,
   // Einmal-Codes neu erzeugen, Daten-Passwort ändern. Alle drei verlangen eine
   // frische Bestätigung (Re-Auth-Dialog öffnet sich automatisch).
+  // Plan W12 — Versionsprüfung (opt-in, E14): Schalter für die tägliche
+  // Abfrage der GitHub-Releases; Hinweise landen in der Inbox.
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { flash } from "$lib/toast.svelte";
@@ -12,9 +14,13 @@
     authTotpRenewFinish,
     authRecoveryRenew,
     authChangePassphrase,
+    updateCheckGet,
+    updateCheckSet,
     type TotpOffer,
   } from "$lib/api";
+  import type { UpdateCheckSettings } from "$lib/types";
 
+  let updateCheck = $state<UpdateCheckSettings | null>(null);
   let recoveryLeft = $state<number | null>(null);
   let codes = $state<string[]>([]);
   let offer = $state<TotpOffer | null>(null);
@@ -23,7 +29,10 @@
   let newPassConfirm = $state("");
   let busy = $state(false);
 
-  onMount(load);
+  onMount(() => {
+    load();
+    loadUpdateCheck();
+  });
 
   async function load() {
     try {
@@ -31,6 +40,46 @@
     } catch (e) {
       flash(String(e), "error");
     }
+  }
+
+  async function loadUpdateCheck() {
+    try {
+      updateCheck = await updateCheckGet();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+  }
+
+  async function toggleUpdateCheck(box: HTMLInputElement) {
+    const enabled = box.checked;
+    busy = true;
+    try {
+      await updateCheckSet(enabled);
+      flash(
+        enabled
+          ? "Versionsprüfung eingeschaltet — die erste Abfrage folgt in wenigen Minuten."
+          : "Versionsprüfung ausgeschaltet.",
+        "ok",
+      );
+    } catch (e) {
+      // Die Checkbox ist nur einseitig gebunden: nach einem Fehler den
+      // angezeigten Zustand ausdrücklich zurücksetzen (Svelte setzt ihn nicht
+      // neu, wenn der geladene Wert gleich bleibt).
+      box.checked = !enabled;
+      flash(String(e), "error");
+    } finally {
+      busy = false;
+      await loadUpdateCheck();
+      if (updateCheck) box.checked = updateCheck.enabled;
+    }
+  }
+
+  function fmtDateTime(iso: string | null): string {
+    if (!iso) return "noch nie";
+    const d = new Date(iso);
+    return isNaN(d.getTime())
+      ? iso
+      : d.toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
   }
 
   async function renewRecovery() {
@@ -193,6 +242,33 @@
   </form>
 </section>
 
+<section class="card">
+  <h2>Versionsprüfung</h2>
+  <p>
+    Auf Wunsch fragt Klein.Buch höchstens einmal täglich bei GitHub nach, ob eine neue
+    Version erschienen ist, und legt dann einen Hinweis an. Gesendet wird nur eine
+    Anfrage mit festem Programmnamen — keine Daten über diese Instanz. Das Update selbst
+    spielst du in deiner Container-Verwaltung ein (neues Image-Tag); vor einer
+    Datenbank-Umstellung legt Klein.Buch beim Entsperren selbst ein Backup an.
+  </p>
+  {#if updateCheck}
+    <label class="check">
+      <input
+        type="checkbox"
+        checked={updateCheck.enabled}
+        disabled={busy}
+        onchange={(e) => toggleUpdateCheck(e.currentTarget)}
+      />
+      Nach neuen Versionen suchen
+    </label>
+    {#if updateCheck.enabled}
+      <p class="muted">Zuletzt geprüft: {fmtDateTime(updateCheck.lastCheckAt)}</p>
+    {/if}
+  {:else}
+    <p class="muted">Lade …</p>
+  {/if}
+</section>
+
 <style>
   .card {
     margin-bottom: 1rem;
@@ -223,5 +299,20 @@
   .codes {
     columns: 2;
     max-width: 24rem;
+  }
+  label.check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  label.check input {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    padding: 0;
+  }
+  .muted {
+    color: var(--c-text-muted);
+    font-size: 0.85rem;
   }
 </style>

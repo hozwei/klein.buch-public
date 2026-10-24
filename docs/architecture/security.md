@@ -72,7 +72,8 @@ nicht (E1).
 | Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
 | | Header-Read-Timeout 10 s, Request-Timeouts, `ConcurrencyLimitLayer(64)`, Job-Warteschlange ≤ 8, ≤ 30 Render-/JVM-Aufrufe je Sitzung und Minute, Body-Limits je Route | umgesetzt (W5; globale Grenze 64 ohne Warteschlange) |
 | Interna in Fehlermeldungen | Fehlerabbildung je Variante; sonst 500 mit `ref`, Volltext nur im Log | umgesetzt (W5) |
-| Versionsangabe vor dem Login | `GET /api/public/info` (Version, Commit, Quell-URL) ist wegen AGPL §13 öffentlich | bewusst akzeptiert (ADR 0039) |
+| Versionsangabe vor dem Login | `GET /api/public/info` (Version, Commit, Tag, Quell-URL) und `/legal/` sind wegen AGPL §13 öffentlich | bewusst akzeptiert (ADR 0039) |
+| Überlast über die öffentlichen Routen | 120 Anfragen je Minute und Client-IP (IPv6 je /64) für `/api/public/info` und `/legal/*`, dann 429; `/legal/` liefert nur Dateien direkt im Ordner mit fester Endungsliste, CSP ohne Skripte | umgesetzt (W12) |
 
 **Uploads** (Belege, Anhänge, E-Rechnungen, Rechtsdokumente, Logo, Unterschrift)
 
@@ -150,9 +151,9 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Kompromittierte Abhängigkeit | `Cargo.lock` + `pnpm-lock.yaml`; Build mit `--locked` bzw. `--frozen-lockfile`, `cargo auditable` | umgesetzt (W11) |
-| | `cargo deny`, `cargo audit`, `pnpm audit`, gitleaks, `trivy`-Gate, SBOM; Actions per Commit-SHA, Basis-Images per Digest; Renovate/Dependabot | geplant (W12) |
-| Untergeschobenes Image | Build nur aus dem öffentlichen Repo, cosign-Signatur (keyless), feste Tags ohne `:latest`, Tags und Images nie löschen | geplant (W12) |
-| Selbst-Update als Einfallstor | kein Update-Knopf in der App (bräuchte `docker.sock`, also praktisch root auf dem Host); opt-in Versionsprüfung ohne weitere Daten | Entscheidung E14, Umsetzung geplant (W12) |
+| | `cargo deny`, `cargo audit`, `pnpm audit`, gitleaks, `trivy`-Gate, SBOM; Actions per Commit-SHA, Basis-Images per Digest; Dependabot | umgesetzt (W12; Ausnahmen begründet in `deny.toml`/`.trivyignore`) |
+| Untergeschobenes Image | Build nur aus dem öffentlichen Repo, cosign-Signatur (keyless), feste Tags ohne `:latest`, Tags und Images nie löschen | umgesetzt (W12, `release-image.yml`; erster Release-Lauf nach der Freigabe) |
+| Selbst-Update als Einfallstor | kein Update-Knopf in der App (bräuchte `docker.sock`, also praktisch root auf dem Host); opt-in Versionsprüfung ohne weitere Daten | umgesetzt (W12: Standard aus, fester User-Agent, keine Weiterleitungen, Hinweis nur als Text) |
 
 **Passphrase im Speicher.** Nach dem Entsperren liegt die Passphrase im
 Prozessspeicher (`BackupSession`). Die KDF-Pfade arbeiten mit `Zeroizing`-Kopien
@@ -788,7 +789,7 @@ dieser Benutzer nicht erreicht.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W nach W8, Version 2026.5.1, Schema v31), ADRs
+Stand: 2026-10-24 (Phase W nach W12, Version 2026.5.1, Schema v31), ADRs
 0009/0034/0035/0036/0039. Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`,
 `restore.rs`, `target.rs`, `sftp.rs`, `manifest.rs`, `encrypt.rs`,
 `rotation.rs`), `src/db/mod.rs` (Pool-Open, Bootstrap, Verschlüsselungs-

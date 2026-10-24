@@ -100,7 +100,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 ipnet = "2"
 
 # --- XML / Templates ---
-quick-xml = { version = "0.36", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 tera = "1"
 
 # --- Markdown (Paket-Markup, Block P2) ---
@@ -112,7 +112,7 @@ pulldown-cmark = { version = "0.12", default-features = false }
 # lopdf: reine Rust-PDF-Manipulation für das Angebots-Bundle (Block 8) —
 # führt Angebots-PDF + AGB-PDF + Datenschutz-PDF zu EINEM Druck-PDF zusammen.
 # Merge-Rezept verifiziert gegen das offizielle examples/merge.rs (lopdf 0.40).
-lopdf = "0.40"
+lopdf = "0.46"
 typst = "0.13"
 typst-pdf = "0.13"
 typst-library = "0.13"
@@ -165,11 +165,14 @@ url = "2"
 # Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
 # unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist
 # die Client-API gegen genau diese Version neu zu verifizieren.
-russh = "0.60"
+russh = "0.64"
 russh-sftp = "2.1"
 
 # --- Archive ---
-zip = "2"
+# Nur Deflate (Backups, Exporte) und Zeitstempel: ohne die Standard-Features
+# entfallen zstd/bzip2/xz samt statisch gelinktem C-Code (W12); fremde ZIPs mit
+# anderen Verfahren werden abgelehnt.
+zip = { version = "2", default-features = false, features = ["deflate", "time"] }
 
 # --- Temp files (Sidecar-Bridges schreiben PDFs/XML in Temp-Dirs) ---
 tempfile = "3"

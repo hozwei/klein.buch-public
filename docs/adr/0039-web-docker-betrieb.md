@@ -851,6 +851,100 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     (`XRechnungDueDateMissing`), wie W1.11 bei der Telefonnummer; Zahlungsbedingungen werden
     nicht erfunden. Die Oberfläche belegt das Fälligkeitsdatum ohnehin vor, Abo-Rechnungen
     setzen es aus dem Zahlungsziel, Storno-Belege sind ausgenommen.
+107. **Java-Inventar und -Hinweise (W12).** `src-tauri/sidecar/THIRD-PARTY-JAVA.md` (von Hand
+    gepflegt) führt jede `pom.properties`-Koordinate beider JARs (94 eindeutige) und die
+    Komponenten ohne `pom.properties` (Saxon-HE 12.8/12.9, xmlresolver, Rhino 1.7.13, dom4j
+    2.1.5, stax-utils, xml-apis-ext, picocli 4.7.7) mit SPDX und Quell-Link; Herkunft geprüft,
+    indem jede `.class` gegen das Original-Artefakt verglichen wurde. `sidecar/notices/` (59
+    Dateien) enthält die NOTICE-/LICENSE-Texte aus den Original-Artefakten bzw. Repo-Tags,
+    `sidecar/copyleft-sources.txt` die Quellen der MPL-/EPL-/EUPL-/GPL-Teile fürs Quellarchiv.
+    CI prüft mit `legal/check_java_inventory.py`. Funde über den Plan hinaus: `mustang.jar`
+    enthält GNU FreeSans (GPL-3.0-or-later mit Font-Ausnahme; SFD-Quelle im Quellarchiv) und
+    eine zweite CEN-Schematron-Fassung (1.3.12, EUPL-1.2, ebenfalls im Quellarchiv); die
+    Factur-X-/ZUGFeRD-Schemata tragen keine Lizenzangabe (Inventar: NOASSERTION, verbreitet als
+    Teil von Mustang); `verapdf-xmp-core-jakarta` wird wegen der Quelltextköpfe als MPL-Teil
+    behandelt.
+108. **Lizenzseite im Image-Build (W12).** Dockerfile-Stufen `legal-tools` (cargo-about 0.9.2
+    mit `--features cli`, parallel zum Server-Build), `legal` (auf der Server-Stufe: `cargo
+    metadata --filter-platform x86_64-unknown-linux-gnu`, `cargo about generate --fail`,
+    `legal/build_legal.py licenses`) und `legal-sources` (`build_legal.py sources` mit der
+    `dpkg-query`-Liste der Laufzeit-Basis `runtime-base`, nach der kein `apt-get install` mehr
+    folgt). Ergebnis in `/opt/klein-buch/legal` und `/usr/share/doc/klein-buch`:
+    `third-party-licenses.html` (Rust, mitgelieferte NOTICE-Dateien inkl. SQLCipher/Zetetic und
+    OpenSSL, eingebettete Schriften, CSL-Stile von hayagriva mit CC BY-SA 3.0 — vorsichtshalber
+    als mitgeliefert gezählt —, Java, JS, weitere Hinweise), `LICENSE.txt` (+ `LICENSE`),
+    `legal.css`, `quellen.html`, `SOURCES.md`, `debian-pakete.tsv`. Der Build scheitert, wenn ein
+    Pflichtteil oder eine der Zeichenfolgen „SIL OPEN FONT LICENSE“, „GUST Font License“,
+    „Zetetic“, „BY-SA 3.0“ fehlt oder „Dev-Build-Platzhalter“ vorkommt. Die JS-Liste entsteht im
+    Vite-Build (eigenes Plugin ohne neue Abhängigkeit) aus den Modulen des Client-Bundles; der
+    Build bricht ab, wenn einem Paket Lizenzfeld oder -text fehlt. Die `legal`-Stufe braucht Netz,
+    weil cargo-about den Graphen für alle Plattformen auflöst. Basis-Images stehen mit Digest direkt
+    in den `FROM`-Zeilen (Dependabot erkennt `FROM ${ARG}` nicht); `legal/check_base_images.py`
+    prüft in CI, dass sie zu `versions.json` passen (daraus speisen sich `quellen.html`,
+    `SOURCES.md` und das Quellarchiv). Die Laufzeit-Basis spielt beim Build `apt-get upgrade` ein,
+    damit Debian-Sicherheitsupdates seit dem Digest nicht als offene Funde im Scan stehen.
+109. **`/legal/` und Rate-Limit öffentlicher Routen (W12).** Ohne Sitzung, nur Dateien direkt in
+    `<RESOURCE_DIR>/legal` (Name `[A-Za-z0-9._-]`, kein führender Punkt, Endungen html/css/txt/tsv/
+    json, `canonicalize` + Elternordner-Prüfung, höchstens 32 MiB), keine Verzeichnislisten,
+    `/legal` → 308 auf `/legal/`. Eigene Header-Klasse: CSP ohne Skripte (`default-src 'none';
+    style-src 'self'; img-src 'self'`), `no-cache`. Neu: Rate-Limit 120 Anfragen je 60 s und
+    Client-IP (IPv6 je /64) gemeinsam für `/api/public/info` und `/legal/*`, darüber 429 mit
+    `Retry-After`.
+110. **AGPL §13 (W12).** Build-Werte `KLEINBUCH_SOURCE_URL`, `KLEINBUCH_BUILD_COMMIT`,
+    `KLEINBUCH_BUILD_TAG` (spätes `ARG`/`ENV` vor `cargo build`; `KLEIN_BUCH_COMMIT` entfällt),
+    Laufzeit-Override `KLEIN_BUCH_SOURCE_URL` (nur http(s) ohne Benutzerangaben/Query, sonst
+    Warnung und ignoriert). `GET /api/public/info` liefert `{version, commit, tag, sourceUrl,
+    sourceLink, licenseSpdx}`; `sourceLink` = `<url>/releases/tag/<tag>` bzw.
+    `<url>/tree/<commit>`, ohne Commit `null` und die Oberfläche zeigt „Entwicklungs-Build,
+    Quellstand unbekannt“ — nie `main`. Anzeige auf Anmeldung/Einrichtung (`SourceNotice`) und im
+    Über-Dialog; `app_info` nutzt dieselbe Quelle, die festen URLs sind entfernt. Der Über-Dialog
+    verweist für Lizenzen, NOTICE-Dateien und Quellen auf `/legal/`.
+111. **Opt-in Versionsprüfung (W12, E14).** `app_settings.update_check_enabled` (Standard aus);
+    der Scheduler-Tick fragt nur entsperrt und höchstens alle 24 h (Zeitstempel vor der Abfrage,
+    also auch nach Fehlschlag) `…/releases/latest` ab — aus `KLEIN_BUCH_UPDATE_URL`, sonst aus der
+    Quell-URL, sonst `hozwei/klein.buch-public`. Nur GET mit festem User-Agent
+    „Klein.Buch-Versionspruefung“, ohne Weiterleitungen, Antwort ≤ 512 KiB; Entwürfe und
+    Vorabversionen zählen nicht. Eine neuere CalVer ergibt einen Inbox-Eintrag mit Name und Link
+    nur als Text (Steuer-/Bidi-Zeichen entfernt, kein `action_url`), je Tag einmal. Schalter unter
+    Einstellungen → Sicherheit & Anmeldung; Commands `update_check_get`/`update_check_set`
+    (Registry 185, `api.ts` 167). Test: ohne Opt-in keine Verbindung.
+112. **Release-Infrastruktur (W12).** `.github/workflows/release-image.yml`: Trockenlauf auf
+    `phase-w` (nur `contents: read`): OCI-Layout mit SBOM- und Provenance-Attestierung, per skopeo
+    in Docker geladen (Schicht-IDs verglichen), `.github/scripts/image_smoke.sh` (alle
+    Image-Prüfungen aus W11 plus Lizenz-/Quelldateien, `/legal/` und `/api/public/info` mit dem
+    Build-Commit), syft-SBOM, trivy (CRITICAL/HIGH mit Fix, Ausnahmen in `.trivyignore` mit
+    Ablaufdatum), Quellarchiv (`.github/scripts/build_sources_archive.sh`: OpenJDK-Quellen des
+    exakten Temurin-Builds + jlink-Befehl, Debian-Quellpakete über snapshot.debian.org,
+    `-sources.jar`/Tag-Archive aus `copyleft-sources.txt`) als Artefakt. Release-Lauf nur auf
+    `v*`-Tags (Tag = Version in `Cargo.toml`): ohne Cache bauen → Smoke → SBOM → Scan →
+    Quellarchiv → Push mit `--preserve-digests` (ohne Quellarchiv kein Push) → cosign keyless +
+    verify → Release-Entwurf mit Digest, Quellarchiv, SBOM. Abweichung von W11: `image.yml` prüft
+    nur noch die Sidecar-Quellen; Build und Smoke des Images laufen im Trockenlauf (sonst zwei
+    Image-Builds je Push). Der Release-Job baut nur, wenn der Tag-Commit auf `main` liegt;
+    `Veroeffentlichen.ps1` setzt Tags nur mit `-Branch main`.
+113. **Gates und Pins (W12).** Neue CI-Jobs (nur `contents: read`): cargo-deny 0.20.2
+    (`advisories licenses`, `deny.toml` mit derselben Allowlist wie `about.toml`), cargo-audit
+    0.22.2 (ganzes `Cargo.lock`, dieselben Ausnahmen), `pnpm audit --prod --audit-level high`,
+    gitleaks 8.30.1, Java-Inventar. Alle Actions per Commit-SHA, Werkzeuge per SHA-256.
+    `.github/dependabot.yml` (cargo, npm, Actions, Docker; wöchentlich, gruppiert) — die PRs sind
+    nur Hinweise, übernommen wird im Entwicklungsordner. Der RFC-6238-Testvektor in `totp.rs` ist
+    für gitleaks markiert.
+114. **Abhängigkeiten wegen RustSec (W12).** Für grüne Gates aktualisiert: russh 0.60 → 0.64
+    (crypto-bigint-Timing; API: `PublicKeyOrCertificate`, `ChannelOpenHandle`), quick-xml 0.36 →
+    0.42 (DoS beim Parsen; Entity-Referenzen kommen jetzt als eigene Events — der
+    E-Rechnungs-Parser sammelt den Text je Element und ordnet ihn am Element-Ende zu, neuer Test),
+    lopdf 0.40 → 0.46 (Stack-Überlauf), plist 1.10.3, rustls 0.23.46, rustls-webpki 0.103.16,
+    webpki-roots 1.0.11, quinn-proto 0.11.19, tokio 1.54.1, anyhow 1.0.104 u. a. Begründete
+    Ausnahmen: rsa/Marvin (kein Fix), drei zip-Meldungen zu `extract` (nicht genutzt, Fix erst in
+    zip 9), quick-xml 0.36 über typst 0.13 → hayagriva → citationberg (nur eingebettete bzw. vom
+    Betreiber geladene CSL-Daten; weg mit typst ≥ 0.14). `zip` nur noch mit `deflate` + `time`:
+    zstd, bzip2 und xz samt statisch gelinktem C-Code entfallen (sonst fehlten deren
+    BSD-Hinweise auf der Lizenzseite), fremde ZIPs mit anderen Verfahren werden abgelehnt.
+    trivy meldet 11 HIGH-Funde im unveränderten Mustang-Uber-JAR (jackson-core/-databind 2.17.3,
+    assertj-core 2.9.0, veraPDF 1.26.5). Ein Class-Load-Trace der JVM über `combine`, `extract`
+    und den KoSIT-Validator lädt keine Klasse dieser Bibliotheken — begründete Ausnahmen in
+    `.trivyignore` (Ablauf 2027-04-30). Mustang 2.26 behebt nur einen Teil (Jackson 2.22.2); ein
+    Update folgt, sobald es alle Funde behebt.
 
 ## Konsequenzen
 

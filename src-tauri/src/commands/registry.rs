@@ -473,6 +473,8 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("seller_owner_set", h::seller_owner_set),
     ("document_terms_get", h::document_terms_get),
     ("document_terms_set", h::document_terms_set),
+    ("update_check_get", h::update_check_get),
+    ("update_check_set", h::update_check_set),
     ("audit_trail_list", h::audit_trail_list),
     ("archive_integrity_run", h::archive_integrity_run),
     ("archive_integrity_history", h::archive_integrity_history),
@@ -2087,6 +2089,24 @@ mod h {
             let args: crate::commands::settings::DocumentTermsSetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::settings::document_terms_set(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn update_check_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::UpdateCheckGetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::update_check_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn update_check_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::settings::UpdateCheckSetArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::settings::update_check_set(&ctx, args).await?,
             )?)
         })
     }

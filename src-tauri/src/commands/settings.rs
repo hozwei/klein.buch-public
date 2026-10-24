@@ -726,6 +726,56 @@ pub async fn document_terms_set(ctx: &Arc<AppCtx>, args: DocumentTermsSetArgs) -
     Ok(())
 }
 
+// ---- Versionsprüfung (Plan W12, ADR 0039 E14) -------------------------------
+
+/// Opt-in Versionsprüfung gegen die GitHub-Releases (Standard aus).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckSettings {
+    pub enabled: bool,
+    /// Letzte Abfrage (RFC 3339, UTC); `None`, solange keine lief.
+    pub last_check_at: Option<String>,
+}
+
+/// Argumente von [`update_check_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckGetArgs {}
+
+pub async fn update_check_get(
+    ctx: &Arc<AppCtx>,
+    _args: UpdateCheckGetArgs,
+) -> Result<UpdateCheckSettings> {
+    use crate::scheduler::update_check::{SETTING_ENABLED, SETTING_LAST_CHECK};
+    let pool = ctx.pool()?;
+
+    Ok(UpdateCheckSettings {
+        enabled: crate::db::repo::app_settings::get_bool(&pool, SETTING_ENABLED, false).await?,
+        last_check_at: crate::db::repo::app_settings::get(&pool, SETTING_LAST_CHECK).await?,
+    })
+}
+
+/// Argumente von [`update_check_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckSetArgs {
+    pub enabled: bool,
+}
+
+/// Schaltet die Versionsprüfung ein oder aus; die erste Abfrage nach dem
+/// Einschalten macht der nächste Scheduler-Tick (höchstens täglich).
+pub async fn update_check_set(ctx: &Arc<AppCtx>, args: UpdateCheckSetArgs) -> Result<()> {
+    let UpdateCheckSetArgs { enabled } = args;
+    let pool = ctx.pool()?;
+
+    crate::db::repo::app_settings::set_bool(
+        &pool,
+        crate::scheduler::update_check::SETTING_ENABLED,
+        enabled,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

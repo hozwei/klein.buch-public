@@ -57,8 +57,8 @@ fn registry_matches_frontend_api() {
     let mut api = api_ts_commands();
     assert_eq!(
         api.len(),
-        165,
-        "api.ts ruft 165 Commands auf (Plan W5, W7, W8, W9)"
+        167,
+        "api.ts ruft 167 Commands auf (Plan W5, W7, W8, W9, W12)"
     );
     // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
     for name in [

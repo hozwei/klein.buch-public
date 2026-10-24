@@ -14,6 +14,7 @@
   import { onMount } from "svelte";
   import { appState } from "$lib/stores.svelte";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
+  import SourceNotice from "$lib/SourceNotice.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
   import { flash } from "$lib/toast.svelte";
   import { onAuthRequired } from "$lib/transport";
@@ -355,6 +356,9 @@
           </button>
         </form>
       {/if}
+
+      <!-- AGPL §13 (Plan W12): Version und Quellstand auch vor der Anmeldung -->
+      <SourceNotice />
     </div>
   </div>
 {/if}

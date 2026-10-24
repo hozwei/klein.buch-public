@@ -20,7 +20,7 @@ use super::idempotency::IdempotencyStore;
 use super::jobs::JobRegistry;
 use super::limits::Admission;
 use super::policy::HttpPolicy;
-use super::ratelimit::RateLimiter;
+use super::ratelimit::{PublicRateLimiter, RateLimiter};
 use super::session::{SessionId, SessionStore};
 use super::totp::TotpStore;
 use crate::app_ctx::AppCtx;
@@ -87,6 +87,9 @@ pub struct ServerState {
     pub totp: TotpStore,
     /// Rate-Limit für Anmeldung, Einrichtung, Re-Auth.
     pub ratelimit: RateLimiter,
+    /// Anfragen je Client auf öffentlichen Lese-Routen (`/api/public/info`,
+    /// `/legal/`, Plan W12).
+    pub public_rate: PublicRateLimiter,
     setup: Mutex<SetupState>,
     /// Lesend gehalten von jedem laufenden Command/Job; schreibend von
     /// „Datenbank sperren“ und „Passphrase ändern“ (warten auf laufende Arbeit).
@@ -120,6 +123,7 @@ impl ServerState {
             policy,
             totp,
             ratelimit,
+            public_rate: PublicRateLimiter::default(),
             setup: Mutex::new(SetupState::default()),
             db_gate: tokio::sync::RwLock::new(()),
             totp_clock_offset: AtomicI64::new(0),
