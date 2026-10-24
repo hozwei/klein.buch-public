@@ -101,7 +101,7 @@ ipnet = "2"
 
 # --- XML / Templates ---
 quick-xml = { version = "0.42", features = ["serialize"] }
-tera = "1"
+tera = "2"
 
 # --- Markdown (Paket-Markup, Block P2) ---
 # default-features = false → nur der Parser (kein HTML-Renderer; wir bauen Typst
