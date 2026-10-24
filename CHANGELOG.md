@@ -10,6 +10,13 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **Zeitstempel um 1–2 Stunden zu früh:** Bei einer Prozess-Zeitzone ungleich
+  UTC (z. B. `TZ=Europe/Berlin`; vermutlich auch die Desktop-Fassung) lagen
+  alle von der Datenbank gesetzten Zeitstempel — Audit-Log, Backup- und
+  E-Mail-Protokoll, Anlage- und Änderungszeiten — um den Zeitzonen-Versatz zu
+  früh (SQLite `datetime('now','utc')`). Der Server rechnet jetzt intern immer
+  in UTC; die Datumsfilter der Protokolle gelten in Europe/Berlin. Bereits
+  gespeicherte Zeitstempel bleiben unverändert. (W9)
 - **Logo-Dateiname vom Browser:** Das Profil übernahm den Logo-Dateinamen vom
   Browser; darüber ließen sich mit einer Sitzung beliebige Dateien lesen oder
   löschen. Jetzt setzt nur der Logo-Upload den Namen, und nur `logo.*`/
@@ -233,6 +240,19 @@ Arbeitszweig `phase-w`.
   `KLEIN_BUCH_SMTP_HELO_NAME`, eigene CA über `KLEIN_BUCH_SMTP_CA_FILE` (PEM-Datei
   im Volume). Die Microsoft-Anmeldung (Graph) ist im Server ausgeblendet;
   Microsoft-Konten lassen sich auf SMTP umstellen.
+- **Desktop-Reste entfernt (W9):** Tauri-Pakete (`@tauri-apps/*`), Seiten
+  „Zurücksetzen“ und „Rechnungs-Eingang (Ordner)“, der Kanal
+  „System-Mitteilung“ bei den Erinnerungen; der Über-Dialog nutzt normale Links
+  und zeigt die Quell-URL der Instanz.
+- **Geschäftsjahr nur noch vom Server (W9):** Die Oberfläche schickt beim
+  Anlegen von Rechnung, Angebot, Kosten und Privatbewegung kein Geschäftsjahr
+  mehr mit; ein mitgeschickter Wert wird ignoriert.
+- **Ohne Secure Context (W9):** Zwischenablage und zufällige IDs haben einen
+  Rückfall, falls der Browser die Seite nicht als sicher einstuft (z. B. HTTP
+  mit `KLEIN_BUCH_INSECURE_HTTP=1` in Tests). Entwicklung mit `pnpm dev` über
+  einen Proxy auf den lokalen Server.
+- Backup-Protokoll: Auslöser „Täglich (automatisch)“ statt „Täglich
+  (App-Start)“ (der Tageslauf kommt seit W2 aus dem Scheduler). (W9)
 
 ### Documentation
 

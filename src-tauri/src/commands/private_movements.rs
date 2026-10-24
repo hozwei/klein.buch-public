@@ -24,8 +24,6 @@ use crate::error::{Error, Result};
 #[serde(rename_all = "camelCase")]
 pub struct PrivateMovementCreateArgs {
     pub input: PrivateMovementInput,
-    /// Optional — sonst aus dem Bewegungs-Datum (Kalenderjahr) abgeleitet.
-    pub fiscal_year: Option<i64>,
     /// Optionaler Beleg (z. B. Quittung) aus `POST /api/upload/beleg` (Plan W7).
     #[serde(default)]
     pub receipt_upload_id: Option<String>,
@@ -118,12 +116,10 @@ pub async fn create_core(
         )));
     }
 
-    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
-    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &input.movement_date,
-        args.fiscal_year,
-    )
-    .map_err(Error::Domain)?;
+    ));
     // GJ-Festschreibung (Block 15): keine neue Privatbewegung mit Datum in einem
     // abgeschlossenen Geschäftsjahr.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;

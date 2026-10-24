@@ -73,7 +73,7 @@
     return t === "manual"
       ? "Manuell"
       : t === "auto_daily"
-        ? "Täglich (App-Start)"
+        ? "Täglich (automatisch)"
         : t === "auto_critical"
           ? "Beleg festgeschrieben"
           : t === "pre_restore"
@@ -142,7 +142,7 @@
       <select bind:value={triggerF} onchange={load}>
         <option value="all">alle</option>
         <option value="manual">Manuell</option>
-        <option value="auto_daily">Täglich (App-Start)</option>
+        <option value="auto_daily">Täglich (automatisch)</option>
         <option value="auto_critical">Beleg festgeschrieben</option>
         <option value="pre_restore">Vor Wiederherstellung</option>
       </select>

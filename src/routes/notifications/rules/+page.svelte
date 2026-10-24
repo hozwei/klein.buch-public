@@ -55,12 +55,6 @@
     }
   }
 
-  function channels(rule: NotificationRule): string {
-    const c: string[] = [];
-    if (rule.deliverInApp) c.push("In-App");
-    if (rule.deliverOsNative) c.push("System-Mitteilung");
-    return c.join(" + ") || "—";
-  }
 </script>
 
 <header class="hdr">
@@ -70,7 +64,7 @@
 
 <p class="lead">
   Lege fest, woran Klein.Buch dich automatisch erinnert. Erinnerungen erscheinen
-  in der Hinweis-Liste und – sofern aktiviert – als System-Mitteilung.
+  in der Hinweis-Liste.
 </p>
 
 {#if error}
@@ -84,7 +78,6 @@
         <div class="body">
           <strong>{rule.label}</strong>
           <p class="text">{describe(rule)}</p>
-          <span class="ch">Kanäle: {channels(rule)}</span>
         </div>
         <span class="switch">
           <Toggle
@@ -143,10 +136,6 @@
     color: #374151;
     line-height: 1.45;
     max-width: 40rem;
-  }
-  .ch {
-    font-size: 0.78rem;
-    color: #9ca3af;
   }
   .switch {
     display: inline-flex;

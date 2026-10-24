@@ -55,7 +55,6 @@
       };
       const row = await privateMovementsCreate({
         input,
-        fiscalYear: null,
         receiptUploadId,
       });
       flash("Erfasst: " + row.movementNumber);

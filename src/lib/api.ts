@@ -45,8 +45,6 @@ import type {
   PdfTemplateMeta,
   TravelSettings,
   TravelLine,
-  DropFolderSettings,
-  DropFolderSyncResult,
   RecordPaymentArgs,
   RenderedMail,
   SellerProfile,
@@ -298,23 +296,6 @@ export function travelSettingsSet(
 /** Berechnet eine Anfahrts-Position aus km + gespeichertem Kilometersatz. */
 export function travelCompute(km: number, roundTrip: boolean): Promise<TravelLine> {
   return invoke<TravelLine>("travel_compute", { km, roundTrip });
-}
-
-// ---- Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP) -------------
-
-export function dropFolderSettingsGet(): Promise<DropFolderSettings> {
-  return invoke<DropFolderSettings>("drop_folder_settings_get");
-}
-
-export function dropFolderSettingsSet(
-  args: DropFolderSettings,
-): Promise<DropFolderSettings> {
-  return invoke<DropFolderSettings>("drop_folder_settings_set", { args });
-}
-
-/** Manueller Trigger fuer den Drop-Folder-Sync (gegen den 5-min-Tick). */
-export function dropFolderSyncNow(): Promise<DropFolderSyncResult> {
-  return invoke<DropFolderSyncResult>("drop_folder_sync_now");
 }
 
 // ---- Invoices (Block 3b) ---------------------------------------------------
@@ -1086,41 +1067,6 @@ export function migrationExportRun(): Promise<ExportReport> {
   return invoke<ExportReport>("migration_export_run", {});
 }
 
-// ---- Factory Reset (G1-RESET, ADR 0036) ------------------------------------
-
-/** Pre-Flight-Status fürs Reset-UI. */
-export interface FactoryResetCheck {
-  /** Anzahl festgeschriebener Belege; > 0 ⇒ Export oder Quittung Pflicht. */
-  lockedDocuments: number;
-  /** Ist ein Off-Site-Ziel konfiguriert (bleibt bestehen)? */
-  hasOffSiteTarget: boolean;
-  /** Off-Site-Label (Pfad bzw. sftp://…), falls vorhanden. */
-  offSiteLabel: string | null;
-  /** Exaktes Tipp-Bestätigungswort. */
-  confirmWord: string;
-  /** Exakter Wortlaut der Aufbewahrungs-Quittung. */
-  retentionReceiptText: string;
-}
-
-/** Liest Belege-Zählung, Off-Site-Hinweis und die exakten Bestätigungstexte. */
-export function factoryResetCheck(): Promise<FactoryResetCheck> {
-  return invoke<FactoryResetCheck>("factory_reset_check");
-}
-
-/**
- * Führt den Factory Reset aus: merkt ihn vor und startet die App neu (der Nuke
- * läuft beim Neustart vor dem Pool-Open). Auf dem Erfolgspfad kehrt der Aufruf
- * nicht zurück (die App startet neu); nur Fehler resolven/rejecten.
- */
-export function factoryReset(args: {
-  passphrase: string;
-  confirmWord: string;
-  exportConfirmed: boolean;
-  retentionReceipt: string;
-}): Promise<void> {
-  return invoke<void>("factory_reset", args);
-}
-
 // ---- Notifications / Hinweise (Block 15) -----------------------------------
 
 export function notificationsList(includeDismissed = false): Promise<AppNotification[]> {
@@ -1193,13 +1139,4 @@ export function archiveIntegrityHistory(limit?: number): Promise<IntegrityCheckR
 /** Statische App-Metadaten (Version, Schema-Version, Build-Commit, Lizenz). */
 export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
-}
-
-/**
- * Bundle-Pfad zur generierten Drittanbieter-Lizenz-Übersicht. Im Release
- * stehen dort cargo-about- + pnpm-licenses-Output, im Dev-Build der Stub.
- * Falls die Datei fehlt, wirft das Backend eine sprechende Fehlermeldung.
- */
-export function thirdPartyLicensesPath(): Promise<string> {
-  return invoke<string>("third_party_licenses_path");
 }

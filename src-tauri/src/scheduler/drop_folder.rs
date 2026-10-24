@@ -283,7 +283,6 @@ pub async fn import_einvoice_from_file(
         session,
         EInvoiceCreateArgs {
             input: parsed.input,
-            fiscal_year: None,
             upload_id: String::new(),
             original: Some(original),
             source_format: parsed.source_format,

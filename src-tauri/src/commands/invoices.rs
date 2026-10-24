@@ -66,10 +66,6 @@ use crate::pdf::{klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    /// Optional und nur zur Kontrolle: der Server leitet das GJ aus dem
-    /// Rechnungsdatum ab (Plan W1.2); ein abweichender Wert wird abgelehnt.
-    #[serde(default)]
-    pub fiscal_year: Option<i64>,
     /// Buyer-Reference (BT-10). Default `"N/A"` für B2C; B2G muss
     /// Leitweg-ID setzen.
     pub buyer_reference: Option<String>,
@@ -220,8 +216,7 @@ pub async fn invoices_create_draft(
     let InvoicesCreateDraftArgs { args } = args;
     let pool = ctx.pool()?;
 
-    create_invoice_draft_from_input(&pool, &args.contact_id, args.fiscal_year, &args.input, None)
-        .await
+    create_invoice_draft_from_input(&pool, &args.contact_id, &args.input, None).await
 }
 
 /// Gemeinsame Draft-Erzeugung für Ausgangsrechnungen. Genutzt von
@@ -240,16 +235,14 @@ pub async fn invoices_create_draft(
 pub async fn create_invoice_draft_from_input(
     pool: &SqlitePool,
     contact_id: &str,
-    client_fiscal_year: Option<i64>,
     input: &InvoiceInput,
     derived_from_quote_id: Option<&str>,
 ) -> Result<InvoiceDetail> {
-    // GJ = Jahr des Rechnungsdatums (Plan W1.2) — bestimmt den Nummernkreis.
-    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+    // GJ = Jahr des Rechnungsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
+    // den Nummernkreis.
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &input.invoice_date,
-        client_fiscal_year,
-    )
-    .map_err(Error::Domain)?;
+    ));
     // P3: Positionen mit Markdown-Body → `description` (XRechnung-BT-154) aus dem
     // Markup als Klartext neu berechnen, damit das XML auch nach Edits stimmt.
     let owned_input;

@@ -12,6 +12,8 @@
 // Re-Auth-Dialog (`setReauthHandler`) und wiederholt danach mit demselben
 // Schlüssel.
 
+import { randomId } from "./browser";
+
 export const REQUEST_HEADER = "X-KleinBuch-Request";
 export const IDEMPOTENCY_HEADER = "Idempotency-Key";
 
@@ -52,15 +54,7 @@ async function needsReauth(res: Response): Promise<boolean> {
 
 /** Zufälliger Schlüssel (auch ohne `crypto.randomUUID`). */
 export function newIdempotencyKey(): string {
-  const c = globalThis.crypto;
-  if (c && typeof c.randomUUID === "function") return c.randomUUID();
-  const bytes = new Uint8Array(16);
-  if (c && typeof c.getRandomValues === "function") {
-    c.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return randomId();
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -293,6 +287,23 @@ export function saveFile(url: string, fileName: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+/** Öffentliche Angaben der Instanz (AGPL §13, ohne Sitzung). */
+export interface PublicInfo {
+  version: string;
+  commit: string;
+  sourceUrl: string;
+  licenseSpdx: string;
+}
+
+export async function publicInfo(): Promise<PublicInfo> {
+  const res = await fetchWithRetry("/api/public/info", {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  if (!res.ok) throw await errorMessage(res);
+  return (await res.json()) as PublicInfo;
 }
 
 export type AuthState = "setup_required" | "totp_setup_required" | "login_required" | "ok";

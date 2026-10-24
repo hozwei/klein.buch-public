@@ -493,7 +493,6 @@ pub async fn draft_invoice(srv: &TestServer) -> String {
     klein_buch_lib::commands::invoices::create_invoice_draft_from_input(
         &pool,
         &contact_id,
-        None,
         &input,
         None,
     )

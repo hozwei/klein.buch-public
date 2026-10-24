@@ -40,6 +40,14 @@ const DROPPED_FROM_FRONTEND: &[&str] = &[
     "mail_oauth_status",
     "mail_oauth_connect",
     "mail_oauth_disconnect",
+    // W9: Lizenzliste unter /legal/ (W12); Routen Reset und Drop-Folder
+    // entfallen (E7, E11)
+    "third_party_licenses_path",
+    "factory_reset_check",
+    "factory_reset",
+    "drop_folder_settings_get",
+    "drop_folder_settings_set",
+    "drop_folder_sync_now",
 ];
 
 /// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,

@@ -9,6 +9,7 @@
   // generierten ID vorrangig akzeptiert, falls der Aufrufer eine feste ID
   // braucht.
   import type { Snippet } from "svelte";
+  import { randomId } from "$lib/browser";
 
   type SlotProps = {
     inputId: string;
@@ -34,9 +35,9 @@
   } = $props();
 
   // Stable per-Mount-ID — `$state`-frei, weil sie sich pro Komponente nicht
-  // ändert und keine Reaktivität braucht. `crypto.randomUUID()` ist in Tauri-
-  // WebView verfügbar (kein Secure-Context-Zwang).
-  const _uid = crypto.randomUUID();
+  // ändert und keine Reaktivität braucht. `randomId` kommt auch ohne Secure
+  // Context aus (HTTP im LAN, Plan W9).
+  const _uid = randomId();
   const inputId = $derived(htmlFor ?? `ff-${_uid}`);
   const hintId = `ff-hint-${_uid}`;
   const errorId = `ff-err-${_uid}`;

@@ -99,6 +99,11 @@ pub struct EmailLogFilter {
     pub limit: Option<i64>,
 }
 
+fn parse_day(d: &str) -> Result<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+        .map_err(|_| crate::error::Error::Domain(format!("Ungültiges Datum: {d}")))
+}
+
 fn clean(v: &Option<String>) -> Option<String> {
     v.as_deref()
         .map(str::trim)
@@ -108,8 +113,7 @@ fn clean(v: &Option<String>) -> Option<String> {
 
 /// Serverseitige Suche/Filterung über das Protokoll. Dynamische WHERE-Klausel via
 /// `QueryBuilder` (parametrisiert, kein SQL-Injection-Risiko). Datumsgrenzen
-/// werden gegen die LOKALE Zeit verglichen (`date(created_at, 'localtime')`),
-/// passend zur Anzeige.
+/// gelten in Europe/Berlin, passend zur Anzeige.
 pub async fn search(pool: &sqlx::SqlitePool, f: &EmailLogFilter) -> Result<Vec<EmailLogRow>> {
     let mut qb: sqlx::QueryBuilder<sqlx::Sqlite> =
         sqlx::QueryBuilder::new("SELECT * FROM email_log WHERE 1 = 1");
@@ -130,13 +134,18 @@ pub async fn search(pool: &sqlx::SqlitePool, f: &EmailLogFilter) -> Result<Vec<E
         qb.push_bind(pat);
         qb.push(")");
     }
+    // Tagesgrenzen in Europe/Berlin, als UTC-Zeitstempel verglichen (W9;
+    // vorher `date(created_at, 'localtime')`, abhängig von der Prozess-TZ).
     if let Some(d) = clean(&f.date_from) {
-        qb.push(" AND date(created_at, 'localtime') >= ");
-        qb.push_bind(d);
+        qb.push(" AND created_at >= ");
+        qb.push_bind(crate::clock::berlin_day_start_db_utc(parse_day(&d)?));
     }
     if let Some(d) = clean(&f.date_to) {
-        qb.push(" AND date(created_at, 'localtime') <= ");
-        qb.push_bind(d);
+        let next = parse_day(&d)?
+            .succ_opt()
+            .ok_or_else(|| crate::error::Error::Domain(format!("Ungültiges Datum: {d}")))?;
+        qb.push(" AND created_at < ");
+        qb.push_bind(crate::clock::berlin_day_start_db_utc(next));
     }
     if let Some(s) = clean(&f.status) {
         qb.push(" AND status = ");

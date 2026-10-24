@@ -3,7 +3,8 @@
 //! Einrichtung (Setup-Token aus dem Log + Passphrase + TOTP) `unlocked`, nach
 //! einem Neustart `locked` und nach dem Login (Einmal-Code) wieder
 //! `unlocked`. `totp-reset` beendet alle Sitzungen. SIGTERM beendet den
-//! Server geordnet mit Exit 0.
+//! Server geordnet mit Exit 0. Mit `TZ=Europe/Berlin` (wie im Image, E12)
+//! stehen die SQL-Zeitstempel trotzdem in UTC (W9-Fund).
 
 mod server_support;
 
@@ -35,6 +36,7 @@ fn server_cmd(paths: &Paths, port: u16, sub: Option<&str>) -> Command {
         .env("KLEIN_BUCH_PUBLIC_URL", format!("http://127.0.0.1:{port}"))
         .env("KLEIN_BUCH_ALLOW_UNMOUNTED", "1")
         .env_remove("KLEIN_BUCH_SIDECAR_MOCK")
+        .env("TZ", "Europe/Berlin")
         .env("RUST_LOG", "info");
     cmd
 }
@@ -255,4 +257,21 @@ async fn healthcheck_reports_setup_unlocked_locked() {
     let text = std::fs::read_to_string(&log).unwrap();
     assert!(!text.contains(PASS), "Passphrase im Server-Log");
     assert!(!text.contains(&recovery[0]), "Einmal-Code im Server-Log");
+
+    // W9: `datetime('now','utc')` hing an der Prozess-TZ (1–2 h zu früh).
+    let pool = klein_buch_lib::db::open_pool(&paths.db_file, Some(PASS))
+        .await
+        .unwrap();
+    let newest: String =
+        sqlx::query_scalar("SELECT timestamp_utc FROM audit_log ORDER BY id DESC LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    let at = chrono::NaiveDateTime::parse_from_str(&newest, "%Y-%m-%d %H:%M:%S").unwrap();
+    let skew = (chrono::Utc::now().naive_utc() - at).num_minutes().abs();
+    assert!(
+        skew < 30,
+        "audit_log.timestamp_utc {newest} weicht {skew} min von UTC ab"
+    );
 }

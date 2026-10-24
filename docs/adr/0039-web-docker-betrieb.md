@@ -168,7 +168,9 @@ meist in UTC, Browser in beliebigen Zeitzonen; vor dem Fix bekam ein Beleg zwisc
 das Vortagsdatum, in der Neujahrsnacht eine Nummer aus dem Vorjahreskreis. **Folge.** Umgesetzt
 in W1 (`src-tauri/src/clock.rs`, `src/lib/date.ts`); das Geschäftsjahr bestimmt der Server aus
 dem Belegdatum, ein abweichendes Client-GJ wird abgelehnt. `TZ` im Image bleibt Pflicht, weil
-einige SQL-Filter `'localtime'` nutzen.
+einige SQL-Filter `'localtime'` nutzen. *(Korrektur W9, 24.10.2026: Der Server setzt für seinen
+Prozess `TZ=UTC`, die Filter rechnen ohne `'localtime'` — Nr. 94; seit W9 ignoriert der Server
+ein Client-GJ — Nr. 89.)*
 
 ### E13 — Image aus GitHub Actions, öffentlich
 
@@ -713,6 +715,50 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Ed25519-Schlüssel (keine Fixture-Datei) und Passwort-Login; er kann nur, was der Upload braucht.
     CI braucht dafür keinen zusätzlichen Dienst. Der SMTP-E2E gegen MailHog (`tests/e2e_test.rs`,
     CI-Dienst) bleibt; lokal überspringt er sich.
+89. **Geschäftsjahr nie vom Client (W9).** Das Feld `fiscalYear` fällt aus den Args von
+    `invoices_create_draft`, `quotes_create_draft`, `expenses_create`,
+    `expenses_create_from_einvoice` und `private_movements_create` sowie aus `api.ts`; der Server
+    nimmt `fiscal_year_for(Belegdatum)`. Ein trotzdem mitgeschicktes `fiscalYear` wird ignoriert
+    (unbekannte Felder verwirft serde), nicht mehr abgelehnt — es kann den Nummernkreis nicht
+    mehr beeinflussen. `resolve_document_fiscal_year` entfällt. Abo-Rechnungen gehen denselben
+    Weg. Die Jahresauswahl der Berichte (`euer_*`, `depreciation_*`, Listenfilter) bleibt.
+90. **Über-Dialog (W9).** Normale Links statt Opener-Plugin; die Quell-URL kommt aus
+    `/api/public/info` (`KLEIN_BUCH_SOURCE_URL`, AGPL §13), Lizenztext über gnu.org, die
+    vollständige Liste der Drittanbieter-Lizenzen verweist auf `/legal/third-party-licenses.html`,
+    das der Server ab W12 ohne Sitzung ausliefert (bis dahin 404). Drittanbieter-Liste „axum /
+    tokio“ statt „Tauri 2“; die vollständige Liste entsteht in W12.
+91. **Entfallene Oberflächen (W9).** Routen `settings/reset` (E7) und `settings/drop-folder`
+    (E11) samt Einträgen gelöscht; die zugehörigen `api.ts`-Funktionen (`factory_reset*`,
+    `drop_folder_*`, `third_party_licenses_path`) ebenso — die Commands sind seit W5 gesperrt,
+    ihr Rust-Code entfällt in W11. Der Kanal „System-Mitteilung“ der Erinnerungen ist aus der
+    Oberfläche entfernt; die Spalte `notification_rules.deliver_os_native` bleibt (kein
+    Schema-Umbau), zugestellt wird nur in die Inbox (seit W4). `@tauri-apps/*` und das Skript
+    `tauri` sind aus `package.json` entfernt.
+92. **Ohne Secure Context (W9).** Ohne Secure Context (HTTP außerhalb von Loopback, etwa mit
+    `KLEIN_BUCH_INSECURE_HTTP=1` in Tests) fehlen `crypto.randomUUID` und `navigator.clipboard`: `src/lib/browser.ts` liefert `randomId()` (Rückfall
+    `getRandomValues`) und `copyText()` (Rückfall verstecktes Textfeld + `execCommand`). Die
+    Anmeldung selbst verlangt weiter HTTPS bzw. Loopback (W6).
+93. **Entwicklung (W9).** `pnpm dev` leitet `/api`, `/files`, `/healthz` und `/legal` an den
+    lokalen Server (`KLEIN_BUCH_DEV_API`, Standard `http://127.0.0.1:8080`); der Server läuft
+    dafür mit `KLEIN_BUCH_PUBLIC_URL=http://127.0.0.1:5173`. Der Build-Abschnitt im README ist
+    darauf umgestellt; Schnellstart und Betrieb folgen in W13.
+94. **Zeitstempel in UTC unabhängig von `TZ` (W9-Fund, S1).** SQLite wendet den Modifikator
+    `'utc'` auch auf `'now'` an, als wäre das Ortszeit: mit `TZ=Europe/Berlin` (E12) liefert
+    `datetime('now','utc')` UTC minus 1–2 h (geprüft mit der eingebauten SQLCipher 3.45.3).
+    Das betrifft die Standardwerte und Trigger aller Tabellen (149 Stellen, u. a.
+    `audit_log.timestamp_utc`, `backup_log`/`email_log.created_at`, `created_at`/`updated_at`);
+    in CI (UTC) fiel es nicht auf, aufgedeckt hat es `contacts_repo_test` in der Kopie (TZ
+    Europe/Berlin) kurz nach Mitternacht. Die Desktop-Fassung dürfte unter Windows ebenso
+    betroffen gewesen sein (SQLite nutzt dort die Zeitzone des Systems; nicht nachgeprüft).
+    Migrationen lassen sich nicht ändern (Prüfsummen), ein Tabellen-Neubau aller Belegtabellen
+    samt GoBD-Triggern wäre unverhältnismäßig; `SQLITE_OMIT_LOCALTIME` scheidet aus (dann
+    liefert `'utc'` NULL). Deshalb: `server::main_entry` setzt `TZ=UTC` vor jedem weiteren
+    Thread; die vier Datumsfilter der Protokolle vergleichen gegen Berliner Tagesgrenzen in UTC
+    (`clock::berlin_day_start_db_utc`) statt `date(…, 'localtime')`. Fachliche Daten rechneten
+    schon vorher mit `crate::clock` (chrono-tz). Der Java-Sidecar erbt `TZ=UTC` (Daten bekommt er
+    explizit). Bestehende Zeitstempel werden nicht korrigiert (GoBD, E17). Test:
+    `server_binary_test` startet das Binary mit `TZ=Europe/Berlin` und prüft
+    `audit_log.timestamp_utc` gegen die UTC-Uhr; `kb-gate` und README: Tests mit `TZ=UTC` wie CI.
 
 ## Konsequenzen
 

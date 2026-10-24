@@ -173,31 +173,36 @@ in `domain/`, `einvoice/{parser,generator}`, `depreciation::compute`,
 
 ## Build aus dem Quellcode
 
+> Umbau zur Web-/Docker-Fassung (Phase W, ADR 0039): Die Desktop-Shell (Tauri)
+> ist entfallen. Dieser Abschnitt beschreibt die Entwicklung; Betrieb per
+> Docker-Image und Schnellstart folgen mit dem Handbuch.
+
 **Voraussetzungen:**
 - Rust ≥ 1.78
-- Node ≥ 20, pnpm ≥ 9
-- Tauri-CLI 2.x
+- Node ≥ 22, pnpm (Version aus `packageManager` in `package.json`)
 - JDK 21 (für den jlink-Sidecar-Build)
-- Windows: MSVC Build Tools 2022, Windows SDK
 
 ```bash
 # Frontend-Abhängigkeiten installieren
 pnpm install
 
-# Java-Sidecar einmalig bauen (KoSIT-Validator + Mustang in einer jlink-JRE)
-pwsh ../scripts/build-sidecar.ps1
+# Entwicklung: Server auf 127.0.0.1:8080, Vite-Dev-Server auf 127.0.0.1:5173
+# (leitet /api, /files, /healthz und /legal an den Server weiter)
+KLEIN_BUCH_DATA_DIR=/tmp/klein-buch-dev KLEIN_BUCH_INPUTS_DIR=$PWD/inputs \
+KLEIN_BUCH_ALLOW_UNMOUNTED=1 KLEIN_BUCH_LISTEN=127.0.0.1:8080 \
+KLEIN_BUCH_PUBLIC_URL=http://127.0.0.1:5173 KLEIN_BUCH_INSECURE_HTTP=1 \
+KLEIN_BUCH_SIDECAR_MOCK=1 \
+  cargo run --manifest-path src-tauri/Cargo.toml --bin klein-buch-server
+pnpm dev
 
-# Dev-Mode mit Hot-Reload
-pnpm tauri dev
-
-# Production-Bundle (NSIS-Installer + MSI)
-pnpm tauri build
-
-# Tests
-cargo test --manifest-path src-tauri/Cargo.toml
+# Tests (in UTC wie die CI; der Server setzt TZ=UTC selbst)
+TZ=UTC cargo test --manifest-path src-tauri/Cargo.toml
 pnpm check                  # svelte-check (TypeScript)
-pnpm lint
+pnpm test                   # vitest
 ```
+
+`KLEIN_BUCH_SIDECAR_MOCK=1` ersetzt Mustang/KoSIT durch einen Mock (nur in
+Debug-Builds); ohne ihn braucht der Server den gebauten Sidecar.
 
 Der Sidecar liegt nach dem Build unter
 `src-tauri/binaries/klein-buch-java-{target_triple}/`. Im Repo

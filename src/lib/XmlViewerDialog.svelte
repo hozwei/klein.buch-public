@@ -6,6 +6,7 @@
   import { xmlViewerStore, closeXmlViewer } from "$lib/xmlViewerModal.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
   import { flash } from "$lib/toast.svelte";
+  import { copyText } from "$lib/browser";
 
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;
@@ -36,7 +37,7 @@
     const payload = xmlViewerStore.payload;
     if (!payload) return;
     try {
-      await navigator.clipboard.writeText(payload.xml);
+      await copyText(payload.xml);
       flash("Roh-XML in die Zwischenablage kopiert.");
     } catch (e) {
       flash(

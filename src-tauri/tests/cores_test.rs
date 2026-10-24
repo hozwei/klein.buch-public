@@ -174,7 +174,7 @@ async fn locked_invoice(env: &Env) -> String {
         is_storno_for: None,
         cancel_reason: None,
     };
-    let draft = inv_cmd::create_invoice_draft_from_input(&pool, &contact_id, None, &input, None)
+    let draft = inv_cmd::create_invoice_draft_from_input(&pool, &contact_id, &input, None)
         .await
         .unwrap();
     inv_cmd::run_lock_pipeline(&pool, &env.ctx.paths, &draft.invoice.id, "N/A")

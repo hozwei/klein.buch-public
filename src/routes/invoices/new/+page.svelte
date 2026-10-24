@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { todayBerlin, yearOfIsoDate, addDaysIso } from "$lib/date";
+  import { todayBerlin, addDaysIso } from "$lib/date";
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
@@ -119,10 +119,6 @@
     return { net, tax, gross: net + tax };
   });
 
-  let fiscalYear = $derived(() => {
-    return yearOfIsoDate(invoiceDate);
-  });
-
   onMount(async () => {
     loading = true;
     try {
@@ -221,7 +217,6 @@
     try {
       const args: CreateDraftArgs = {
         contactId,
-        fiscalYear: fiscalYear(),
         buyerReference: buyerReference.trim() || "N/A",
         input: {
           direction: "issued",

@@ -60,10 +60,6 @@ use crate::pdf::{bundle, klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    /// Optional und nur zur Kontrolle: der Server leitet das GJ aus dem
-    /// Angebotsdatum ab (Plan W1.2); ein abweichender Wert wird abgelehnt.
-    #[serde(default)]
-    pub fiscal_year: Option<i64>,
     pub input: QuoteInput,
 }
 
@@ -247,12 +243,11 @@ pub async fn create_draft_core(
         }
     }
 
-    // GJ = Jahr des Angebotsdatums (Plan W1.2) — bestimmt den Nummernkreis.
-    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+    // GJ = Jahr des Angebotsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
+    // den Nummernkreis.
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &args.input.quote_date,
-        args.fiscal_year,
-    )
-    .map_err(Error::Domain)?;
+    ));
     let quote_number = numbering::next_number(pool, DocType::Quote, fiscal_year as i32).await?;
     let totals = quote::compute_totals(&args.input.items);
     let snapshot = SellerSnapshot {
@@ -706,7 +701,6 @@ pub async fn quotes_convert_to_invoice(
     let invoice_detail = crate::commands::invoices::create_invoice_draft_from_input(
         pool,
         &quote.contact_id,
-        None,
         &input,
         Some(&quote.id),
     )

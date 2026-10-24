@@ -157,7 +157,6 @@
       };
       const detail = await expensesCreateFromEinvoice({
         input,
-        fiscalYear: null,
         uploadId,
         sourceFormat,
         validation,

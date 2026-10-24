@@ -42,8 +42,6 @@ use crate::uploads::UploadKind;
 #[serde(rename_all = "camelCase")]
 pub struct ExpenseCreateArgs {
     pub input: ExpenseInput,
-    /// Optional — sonst aus dem Beleg-Datum (Kalenderjahr) abgeleitet.
-    pub fiscal_year: Option<i64>,
     /// Primärer Beleg aus `POST /api/upload/beleg` (Plan W7). `None` → ohne Beleg.
     #[serde(default)]
     pub receipt_upload_id: Option<String>,
@@ -97,7 +95,6 @@ pub struct EInvoiceParseResult {
 #[serde(rename_all = "camelCase")]
 pub struct EInvoiceCreateArgs {
     pub input: ExpenseInput,
-    pub fiscal_year: Option<i64>,
     /// Original-Datei (XRechnung-XML oder ZUGFeRD-PDF) aus
     /// `POST /api/upload/erechnung` (Plan W7) — wird write-once als
     /// `ReceivedEinvoice` archiviert (Originalformat-Aufbewahrung §147 AO).
@@ -209,12 +206,10 @@ pub async fn create_core(
         )));
     }
 
-    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
-    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &input.expense_date,
-        args.fiscal_year,
-    )
-    .map_err(Error::Domain)?;
+    ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
@@ -580,12 +575,10 @@ pub async fn create_from_einvoice_with(
         )));
     }
 
-    // GJ = Jahr des Belegdatums (Plan W1.2); ein abweichendes Client-GJ wird abgelehnt.
-    let fiscal_year = crate::domain::fiscal_year::resolve_document_fiscal_year(
+    // GJ = Jahr des Belegdatums (Plan W1.2/W9, nie vom Client).
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &input.expense_date,
-        args.fiscal_year,
-    )
-    .map_err(Error::Domain)?;
+    ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;

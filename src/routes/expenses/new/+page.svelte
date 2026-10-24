@@ -99,7 +99,6 @@
       };
       const detail = await expensesCreate({
         input,
-        fiscalYear: null, // Backend leitet aus dem Beleg-Datum ab
         receiptUploadId,
       });
       flash("Kosten erfasst: " + detail.expense.expenseNumber);

@@ -24,25 +24,6 @@ export interface TravelLine {
   taxCategoryCode: TaxCategoryCode;
 }
 
-// ---- Drop-Folder fuer eingehende E-Rechnungen (Block PV1-DROP) -------------
-
-/** Konfiguration des Watched-Folders fuer eingehende E-Rechnungen. */
-export interface DropFolderSettings {
-  /** Periodischer Sync (5-min-Tick + App-Start-Sweep) aktiv? */
-  enabled: boolean;
-  /** Absoluter Ordner-Pfad. Leer = noch nicht gewaehlt. */
-  path: string;
-}
-
-/** Ergebnis-Zaehler eines manuellen `Jetzt synchronisieren`-Laufs. */
-export interface DropFolderSyncResult {
-  /** `true`, wenn der Lauf uebersprungen wurde (Toggle off oder Pfad leer/ungueltig). */
-  skippedDisabled: boolean;
-  imported: number;
-  failed: number;
-  ignoredHidden: number;
-}
-
 export type InvoiceStatus =
   | "draft"
   | "issued"
@@ -317,7 +298,6 @@ export interface InvoiceInputDto {
 
 export interface CreateDraftArgs {
   contactId: Uuid;
-  fiscalYear: number;
   buyerReference: string | null;
   input: InvoiceInputDto;
 }
@@ -605,7 +585,6 @@ export interface QuoteInputDto {
 
 export interface QuoteCreateDraftArgs {
   contactId: Uuid;
-  fiscalYear: number;
   input: QuoteInputDto;
 }
 
@@ -916,7 +895,6 @@ export interface ExpenseListFilter {
 
 export interface ExpenseCreateArgs {
   input: ExpenseInputDto;
-  fiscalYear: number | null;
   /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
   receiptUploadId: string | null;
 }
@@ -985,7 +963,6 @@ export interface EInvoiceParseResult {
 /** Args für expenses_create_from_einvoice (Schritt 2). */
 export interface EInvoiceCreateArgs {
   input: ExpenseInputDto;
-  fiscalYear: number | null;
   /** Upload des Originals aus Schritt 1 (XML oder ZUGFeRD-PDF) — wird
    *  unverändert archiviert. */
   uploadId: string;
@@ -1040,7 +1017,6 @@ export interface PrivateMovementListFilter {
 
 export interface PrivateMovementCreateArgs {
   input: PrivateMovementInputDto;
-  fiscalYear: number | null;
   /** Upload (Art `beleg`, Plan W7). null → ohne Beleg. */
   receiptUploadId: string | null;
 }

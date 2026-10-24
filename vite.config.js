@@ -1,31 +1,31 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 
-const host = process.env.TAURI_DEV_HOST;
+// Entwicklung mit `pnpm dev` (Plan W9): Die SPA kommt vom Vite-Dev-Server,
+// API, Dateien, Healthcheck und `/legal/` gehen an den lokalen Rust-Server
+// (`klein-buch-server`). Ziel über `KLEIN_BUCH_DEV_API`, Standard
+// http://127.0.0.1:8080. Der Server prüft Host und Origin gegen seine
+// öffentliche Adresse — für die Entwicklung mit
+// `KLEIN_BUCH_PUBLIC_URL=http://127.0.0.1:5173` und
+// `KLEIN_BUCH_INSECURE_HTTP=1` starten.
+const api = process.env.KLEIN_BUCH_DEV_API || "http://127.0.0.1:8080";
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [sveltekit()],
-
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    host: "127.0.0.1",
+    port: 5173,
     strictPort: true,
-    host: host || false,
-    hmr: host
-      ? {
-          protocol: "ws",
-          host,
-          port: 1421,
-        }
-      : undefined,
+    proxy: {
+      "/api": { target: api },
+      "/files": { target: api },
+      "/healthz": { target: api },
+      "/legal": { target: api },
+    },
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },
-}));
+});

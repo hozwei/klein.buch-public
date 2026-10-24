@@ -133,6 +133,13 @@ async fn public_info() -> Json<serde_json::Value> {
 
 /// Einstieg des Binaries: `serve` (Standard) oder `healthcheck`.
 pub fn main_entry(args: Vec<OsString>) -> ExitCode {
+    // W9-Fund: SQLite rechnet `datetime('now','utc')` (Standardwerte und
+    // Trigger aller Tabellen) relativ zur Prozess-Zeitzone; mit
+    // TZ=Europe/Berlin (E12) lägen alle Zeitstempel 1–2 h zu früh. Fachliche
+    // Daten rechnen mit `crate::clock` (chrono-tz Europe/Berlin), nie mit der
+    // Prozess-TZ. Gesetzt vor jedem weiteren Thread und vor dem ersten
+    // Zugriff auf die Zeitzone.
+    std::env::set_var("TZ", "UTC");
     let sub = args.first().and_then(|a| a.to_str()).unwrap_or("serve");
     match sub {
         "serve" => run_server(),

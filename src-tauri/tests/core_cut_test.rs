@@ -57,8 +57,8 @@ fn registry_matches_frontend_api() {
     let mut api = api_ts_commands();
     assert_eq!(
         api.len(),
-        171,
-        "api.ts ruft 171 Commands auf (Plan W5, W7, W8)"
+        165,
+        "api.ts ruft 165 Commands auf (Plan W5, W7, W8, W9)"
     );
     // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
     for name in [
@@ -76,6 +76,14 @@ fn registry_matches_frontend_api() {
         "mail_oauth_status",
         "mail_oauth_connect",
         "mail_oauth_disconnect",
+        // seit W9: Lizenzliste unter /legal/ (W12); Routen Reset und
+        // Drop-Folder entfallen (E7, E11)
+        "third_party_licenses_path",
+        "factory_reset_check",
+        "factory_reset",
+        "drop_folder_settings_get",
+        "drop_folder_settings_set",
+        "drop_folder_sync_now",
     ] {
         let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
         assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");

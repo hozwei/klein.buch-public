@@ -242,12 +242,11 @@ async fn process_one(
     occurrence: NaiveDate,
     today: NaiveDate,
 ) -> Result<String> {
+    // GJ leitet der Draft-Weg aus dem Rechnungsdatum ab (Plan W1.2/W9).
     let (input, fiscal_year) = build_invoice_input(tmpl, items, occurrence, today);
 
     // Draft über den normalen Weg — vergibt die Nummer + persistiert (Transaktion).
-    let detail =
-        create_invoice_draft_from_input(pool, &tmpl.contact_id, Some(fiscal_year), &input, None)
-            .await?;
+    let detail = create_invoice_draft_from_input(pool, &tmpl.contact_id, &input, None).await?;
     let invoice_id = detail.invoice.id.clone();
     let number = detail.invoice.invoice_number.clone();
 

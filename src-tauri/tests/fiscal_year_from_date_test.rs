@@ -3,9 +3,10 @@
 //!
 //! - Feste Uhr 2026-12-31T23:30:00Z → heute in Berlin 2027-01-01 → GJ 2027,
 //!   Belegnummer aus dem Kreis 2027.
-//! - Je Command mit GJ vom Client (Rechnung, Angebot, Kosten, Kosten aus
-//!   E-Rechnung, Privatbewegung): ein abweichendes GJ wird abgelehnt, ohne GJ
-//!   kommt die Nummer aus dem Kreis des Belegdatums.
+//! - Je Create-Command (Rechnung, Angebot, Kosten, Kosten aus E-Rechnung,
+//!   Privatbewegung): ein vom Client mitgeschicktes `fiscalYear` wird ignoriert
+//!   (das Feld gibt es seit W9 nicht mehr), GJ und Nummer kommen aus dem
+//!   Belegdatum.
 //!
 //! Args werden wie vom Frontend als camelCase-JSON gebaut.
 
@@ -166,48 +167,24 @@ async fn invoice_date_and_fiscal_year_follow_berlin_clock() {
     assert_eq!(today.to_string(), "2027-01-01");
 
     let args = invoice_args(&env.contact_id, &today.to_string(), None);
-    let detail = invoices::create_invoice_draft_from_input(
-        &env.pool,
-        &args.contact_id,
-        args.fiscal_year,
-        &args.input,
-        None,
-    )
-    .await
-    .unwrap();
+    let detail =
+        invoices::create_invoice_draft_from_input(&env.pool, &args.contact_id, &args.input, None)
+            .await
+            .unwrap();
     assert_eq!(detail.invoice.fiscal_year, 2027);
     assert_eq!(detail.invoice.invoice_number, "RE-2027-0001");
 }
 
 #[tokio::test]
-async fn invoice_rejects_deviating_client_fiscal_year() {
+async fn invoice_ignores_client_fiscal_year() {
     let env = setup().await;
     let args = invoice_args(&env.contact_id, "2027-01-01", Some(2026));
-    let err = invoices::create_invoice_draft_from_input(
-        &env.pool,
-        &args.contact_id,
-        args.fiscal_year,
-        &args.input,
-        None,
-    )
-    .await
-    .unwrap_err();
-    assert!(err.to_string().contains("Geschäftsjahr 2026"), "{err}");
-
-    let ok = invoice_args(&env.contact_id, "2027-01-01", Some(2027));
-    let detail = invoices::create_invoice_draft_from_input(
-        &env.pool,
-        &ok.contact_id,
-        ok.fiscal_year,
-        &ok.input,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        detail.invoice.invoice_number, "RE-2027-0001",
-        "abgelehnter Versuch verbraucht keine Nummer"
-    );
+    let detail =
+        invoices::create_invoice_draft_from_input(&env.pool, &args.contact_id, &args.input, None)
+            .await
+            .unwrap();
+    assert_eq!(detail.invoice.fiscal_year, 2027);
+    assert_eq!(detail.invoice.invoice_number, "RE-2027-0001");
 }
 
 #[tokio::test]
@@ -236,11 +213,7 @@ async fn quote_fiscal_year_from_quote_date() {
         }))
         .unwrap()
     };
-    let err = quotes::create_draft_core(&env.pool, args(Some(2026)))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("Geschäftsjahr 2026"), "{err}");
-    let detail = quotes::create_draft_core(&env.pool, args(None))
+    let detail = quotes::create_draft_core(&env.pool, args(Some(2026)))
         .await
         .unwrap();
     assert_eq!(detail.quote.fiscal_year, 2027);
@@ -278,11 +251,7 @@ async fn expense_fiscal_year_from_expense_date() {
         }))
         .unwrap()
     };
-    let err = expenses::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("Geschäftsjahr 2026"), "{err}");
-    let detail = expenses::create_core(&env.pool, &env.paths, &env.session, args(None))
+    let detail = expenses::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
         .await
         .unwrap();
     assert_eq!(detail.expense.fiscal_year, 2027);
@@ -312,13 +281,8 @@ async fn expense_from_einvoice_fiscal_year_from_expense_date() {
         );
         a
     };
-    let err =
-        expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(Some(2026)))
-            .await
-            .unwrap_err();
-    assert!(err.to_string().contains("Geschäftsjahr 2026"), "{err}");
     let detail =
-        expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(None))
+        expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(Some(2026)))
             .await
             .unwrap();
     assert_eq!(detail.expense.fiscal_year, 2027);
@@ -344,11 +308,7 @@ async fn private_movement_fiscal_year_from_movement_date() {
         }))
         .unwrap()
     };
-    let err = private_movements::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
-        .await
-        .unwrap_err();
-    assert!(err.to_string().contains("Geschäftsjahr 2026"), "{err}");
-    let row = private_movements::create_core(&env.pool, &env.paths, &env.session, args(None))
+    let row = private_movements::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
         .await
         .unwrap();
     assert_eq!(row.fiscal_year, 2027);

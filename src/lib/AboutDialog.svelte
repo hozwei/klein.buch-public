@@ -5,20 +5,20 @@
   // gem. PRD-§G2-DOC.3.5. Wird genau einmal über das Root-Layout gemountet
   // und über `aboutModalStore` (siehe aboutModal.svelte.ts) ein-/ausgeblendet.
   //
-  // Externe Links und der Lizenz-File-Pfad öffnen wir über das opener-Plugin
-  // (Standard-Browser bzw. Standard-Programm des OS). Das Modal selbst hält
-  // keine Eingaben — kein Form-Submit, kein Pflicht-State.
+  // Externe Links sind normale Links (neuer Tab); die Quell-URL kommt vom
+  // Server (`/api/public/info`, AGPL §13 — Forks setzen KLEIN_BUCH_SOURCE_URL).
+  // Das Modal selbst hält keine Eingaben — kein Form-Submit, kein Pflicht-State.
 
-  import { openUrl, openPath } from "@tauri-apps/plugin-opener";
   import { aboutModalStore, closeAboutDialog } from "$lib/aboutModal.svelte";
-  import { appInfo, thirdPartyLicensesPath } from "$lib/api";
+  import { appInfo } from "$lib/api";
+  import { publicInfo } from "$lib/transport";
   import { formatVersionDisplay } from "$lib/version";
-  import { flash } from "$lib/toast.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
   import type { AppInfo } from "$lib/types";
 
   let info = $state<AppInfo | null>(null);
   let infoError = $state<string | null>(null);
+  let sourceUrl = $state("https://github.com/hozwei/klein.buch-public");
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;
 
@@ -36,6 +36,13 @@
       })
       .catch((e) => {
         infoError = e instanceof Error ? e.message : String(e);
+      });
+    publicInfo()
+      .then((p) => {
+        if (p.sourceUrl) sourceUrl = p.sourceUrl;
+      })
+      .catch(() => {
+        // Standard-Quelle bleibt stehen
       });
   });
 
@@ -66,33 +73,6 @@
     }
   }
 
-  async function openExternal(url: string): Promise<void> {
-    try {
-      await openUrl(url);
-    } catch (e) {
-      flash(
-        `Link konnte nicht geöffnet werden: ${e instanceof Error ? e.message : String(e)}`,
-        "error",
-      );
-    }
-  }
-
-  async function openMail(): Promise<void> {
-    await openExternal("mailto:schmidm@wildbach-computerhilfe.de");
-  }
-
-  async function openLicensesFile(): Promise<void> {
-    try {
-      const path = await thirdPartyLicensesPath();
-      await openPath(path);
-    } catch (e) {
-      flash(
-        `Drittanbieter-Lizenzliste konnte nicht geöffnet werden: ${e instanceof Error ? e.message : String(e)}`,
-        "error",
-      );
-    }
-  }
-
   // Drittanbieter-Hauptliste fest verdrahtet (Spec: sichtbar im Dialog selbst,
   // kein Verstecken hinter einem zusätzlichen Klick). Reihenfolge entspricht
   // den Gruppen in PRD §G2-DOC.3.5.
@@ -102,7 +82,7 @@
     {
       label: "Framework / Sprache",
       items: [
-        { name: "Tauri 2", license: "MIT / Apache-2.0", role: "Desktop-Shell" },
+        { name: "axum / tokio", license: "MIT", role: "Web-Server" },
         { name: "Rust-Toolchain", license: "MIT / Apache-2.0", role: "Backend" },
         { name: "Svelte 5", license: "MIT", role: "Frontend" },
       ],
@@ -199,15 +179,15 @@
             84036 Landshut
           </p>
           <p class="links">
-            <button
-              type="button"
+            <a
               class="linklike"
-              onclick={() => openExternal("https://wildbach-computerhilfe.de")}
-              >wildbach-computerhilfe.de</button
+              href="https://wildbach-computerhilfe.de"
+              target="_blank"
+              rel="noopener noreferrer">wildbach-computerhilfe.de</a
             >
             <span class="sep">·</span>
-            <button type="button" class="linklike" onclick={openMail}
-              >schmidm@wildbach-computerhilfe.de</button
+            <a class="linklike" href="mailto:schmidm@wildbach-computerhilfe.de"
+              >schmidm@wildbach-computerhilfe.de</a
             >
           </p>
         </section>
@@ -246,21 +226,15 @@
             musst du den Quelltext mitliefern.
           </p>
           <p class="links">
-            <button
-              type="button"
+            <a
               class="linklike"
-              onclick={() =>
-                openExternal(
-                  "https://github.com/hozwei/klein.buch-public/blob/main/LICENSE",
-                )}>Lizenztext (LICENSE)</button
+              href="https://www.gnu.org/licenses/agpl-3.0.html"
+              target="_blank"
+              rel="noopener noreferrer">Lizenztext (AGPL-3.0)</a
             >
             <span class="sep">·</span>
-            <button
-              type="button"
-              class="linklike"
-              onclick={() =>
-                openExternal("https://github.com/hozwei/klein.buch-public")}
-              >Quellcode (github.com/hozwei/klein.buch-public)</button
+            <a class="linklike" href={sourceUrl} target="_blank" rel="noopener noreferrer"
+              >Quellcode ({sourceUrl.replace(/^https?:\/\//, "")})</a
             >
           </p>
         </section>
@@ -292,9 +266,16 @@
             die Apache-NOTICE-Dateien im Sidecar-Bundle bei.
           </p>
 
-          <button type="button" class="btn-secondary" onclick={openLicensesFile}>
+          <!-- `/legal/` liefert der Server ohne Sitzung aus (Plan W12). -->
+          <a
+            class="btn-secondary"
+            href="/legal/third-party-licenses.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-sveltekit-reload
+          >
             Vollständige Liste der Open-Source-Bibliotheken öffnen
-          </button>
+          </a>
         </section>
 
         <!-- Footer-Disclaimer (Spec: identischer Wortlaut zu G3) -->
