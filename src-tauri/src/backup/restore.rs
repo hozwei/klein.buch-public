@@ -234,8 +234,7 @@ pub async fn apply(
     )
     .await;
     if let Err(e) = staged {
-        let _ = clear_dir_force(&staging);
-        let _ = fs::remove_dir(&staging);
+        remove_staging(&staging).await;
         return Err(e);
     }
 
@@ -263,7 +262,7 @@ pub async fn apply(
     })();
     if let Err(e) = written {
         let _ = fs::remove_file(&marker_tmp);
-        let _ = clear_dir_force(&staging);
+        remove_staging(&staging).await;
         return Err(e);
     }
 
@@ -272,8 +271,7 @@ pub async fn apply(
     // wiederhergestellte DB (aus RESTORE_APPLIED.json, übersteht Neustarts).
     if let Err(e) = fs::rename(&marker_tmp, &marker) {
         let _ = fs::remove_file(&marker_tmp);
-        let _ = clear_dir_force(&staging);
-        let _ = fs::remove_dir(&staging);
+        remove_staging(&staging).await;
         return Err(e.into());
     }
 
@@ -341,6 +339,23 @@ async fn check_migration_checksums(pool: &SqlitePool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Staging nach einem Fehler in Phase A entfernen. Ein eben geschlossener
+/// SQLite-Pool kann `-wal`/`-shm` noch kurz selbst löschen bzw. halten
+/// (CI-Fund W8) — daher einige Versuche.
+async fn remove_staging(staging: &Path) {
+    for _ in 0..20 {
+        let _ = clear_dir_force(staging);
+        let _ = fs::remove_dir(staging);
+        if !staging.exists() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tracing::warn!(
+        "Restore-Staging ließ sich nicht vollständig entfernen (wird beim Start aufgeräumt)"
+    );
 }
 
 /// Entpacken + gestagte DB prüfen (blockierende Teile außerhalb der Runtime).
@@ -977,7 +992,12 @@ pub(crate) fn clear_dir_force(dir: &Path) -> Result<()> {
     let mut stack = vec![dir.to_path_buf()];
     let mut dirs_to_remove = Vec::new();
     while let Some(d) = stack.pop() {
-        for entry in fs::read_dir(&d)? {
+        let entries = match fs::read_dir(&d) {
+            Ok(it) => it,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
             let entry = entry?;
             let p = entry.path();
             if p.is_dir() {
@@ -985,7 +1005,13 @@ pub(crate) fn clear_dir_force(dir: &Path) -> Result<()> {
                 dirs_to_remove.push(p);
             } else {
                 make_writable(&p)?;
-                fs::remove_file(&p)?;
+                // Eine Datei kann zwischen Auflisten und Löschen verschwinden
+                // (z. B. `-wal`/`-shm` eines eben geschlossenen SQLite-Pools).
+                match fs::remove_file(&p) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
     }
