@@ -2,7 +2,8 @@
 //!
 //! - ohne Argument oder `serve`: Server starten (Konfiguration aus der Umgebung)
 //! - `healthcheck`: fragt `/healthz` über Loopback ab (Docker-`HEALTHCHECK`)
-//! - `version`: Version ausgeben
+//! - `totp-reset`: zweiten Faktor zurücksetzen (Geräteverlust, W6)
+//! - `version` bzw. `--version`: Version ausgeben
 
 fn main() -> std::process::ExitCode {
     klein_buch_lib::server::main_entry(std::env::args_os().skip(1).collect())

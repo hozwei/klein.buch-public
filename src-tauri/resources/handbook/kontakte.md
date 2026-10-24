@@ -62,7 +62,9 @@ sehen sollte.
 Klick auf "DSGVO-Auskunft" im Kontakt-Fenster. Klein.Buch erstellt
 ein ZIP-Paket mit einer PDF-Zusammenfassung, allen Rechnungen,
 Stornos und Angeboten zu diesem Kontakt und den Daten in
-maschinenlesbarem Format (JSON). Speichere das ZIP und sende es der
+maschinenlesbarem Format (JSON). Vorher fragt Klein.Buch noch einmal
+Dein Daten-Passwort und den App-Code ab. Dein Browser speichert das
+ZIP in seinem Download-Ordner; von dort sendest Du es der
 anfragenden Person.
 
 Klein.Buch protokolliert die Auskunft im Audit-Log: Zeitpunkt,
@@ -79,9 +81,8 @@ ist je Kontakt anders) und leert alle weiteren persönlichen Felder.
 
 Bereits ausgestellte Rechnungen bleiben mit der damals
 festgeschriebenen Adresse erhalten. Das ist gesetzliche Pflicht
-laut GoBD und nicht abschaltbar. Eine echte Total-Löschung läuft
-nur über "Einstellungen → Zurücksetzen" und betrifft die ganze
-Klein.Buch-Instanz, nicht einzelne Personen.
+laut GoBD und nicht abschaltbar. Eine Funktion, die alle Daten auf
+einmal löscht, gibt es in Klein.Buch nicht.
 
 Klein.Buch lässt eine Anonymisierung nur zu, wenn keine offenen
 Entwurfs-Belege zu dem Kontakt existieren. Schließe oder lösche
@@ -89,4 +90,4 @@ diese Entwürfe vorher.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

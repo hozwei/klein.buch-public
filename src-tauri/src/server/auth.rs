@@ -419,6 +419,7 @@ async fn setup_final(
     let code = request.body.totp_code.clone().unwrap_or_default();
     let Some(confirmed_step) = code_matches_pending(&secret, &code, st.totp_now()) else {
         st.ratelimit.failure(&key, has_device);
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.setup.failed ip={} reason=totp", request.info.ip);
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "totp_invalid",

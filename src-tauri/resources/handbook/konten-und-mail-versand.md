@@ -3,96 +3,148 @@ slug: konten-und-mail-versand
 title: Konten und Mail-Versand
 category: bedienen
 order: 250
-keywords: [mail, smtp, oauth, exchange, microsoft, versand, mail-konto]
+keywords: [mail, smtp, e-mail-versand, postfach, microsoft 365, office365, versand, protokoll, tls, test-mail]
 ---
 
 # Konten und Mail-Versand
 
-Klein.Buch kann Rechnungen direkt aus der App heraus per E-Mail
-versenden, sobald Du ein E-Mail-Konto eingerichtet hast. Das spart
-den Schritt über das normale Mail-Programm.
+Klein.Buch kann Rechnungen und Angebote direkt per E-Mail
+verschicken, sobald Du ein Postfach eingerichtet hast. Das spart den
+Umweg über Dein normales Mail-Programm. Klein.Buch versendet dabei
+über SMTP. SMTP ist der Standard-Weg, auf dem jedes Mail-Programm
+seine Mails an den Mail-Server Deines Anbieters übergibt. Praktisch
+jeder Anbieter unterstützt das (zum Beispiel GMX, Web.de,
+mailbox.org oder das Postfach zu Deiner eigenen Domain).
 
-## Welche Konto-Typen es gibt
+Die Einstellungen dazu findest Du im Hauptmenü unter "Einstellungen"
+auf der Karte "E-Mail-Versand". Mit der Karte "Konten" (Bankkonto,
+Bargeld und andere Zahlungswege) hat das nichts zu tun.
 
-Klein.Buch unterstützt zwei Konto-Arten:
+## Postfach einrichten
 
-1. SMTP-Konto: Standard-Mail-Server mit Benutzername und Passwort.
-   Praktisch jeder Mail-Anbieter unterstützt das (zum Beispiel
-   GMX, Web.de, mailbox.org, eigene Domain mit Hosting-Paket).
-2. Microsoft 365 Exchange Online: für geschäftliche Microsoft-
-   Konten. Klein.Buch nutzt OAuth (Open Authorization) und die
-   Microsoft Graph API, also kein App-Passwort, sondern eine
-   richtige Anmeldung über Deinen Browser.
+Im Abschnitt "Neues Postfach" trägst Du ein:
 
-## SMTP-Konto einrichten
+1. **Bezeichnung**, ein Name nur für Dich, zum Beispiel
+   "Geschäftspostfach".
+2. **Absender-Name** und **Absender-E-Mail**, so wie Dein Kunde den
+   Absender sehen soll.
+3. **Server (SMTP-Host)**, zum Beispiel "smtp.example.org". Den
+   genauen Namen nennt Dir Dein Mail-Anbieter in seiner Hilfe.
+4. **Port**. Vorbelegt ist 587, der übliche Port für eine
+   Verbindung, die nach dem Aufbau verschlüsselt wird (STARTTLS).
+   Manche Anbieter nutzen stattdessen 465 mit sofort verschlüsselter
+   Verbindung. Klein.Buch erkennt das am Port.
+5. **Benutzername**, meist Deine E-Mail-Adresse.
+6. **Verschlüsselte Verbindung (TLS) verwenden**, standardmäßig an.
+   Lass den Schalter an.
+7. **Passwort** Deines Postfachs.
+8. Optional **Als Standard-Postfach**.
 
-Klick in den Einstellungen auf "Konten" und dann auf "Neues
-SMTP-Konto". Trage Server-Adresse (zum Beispiel
-"mail.beispiel-anbieter.de"), Port (meistens 465 mit SSL oder 587
-mit STARTTLS), Benutzername und Passwort ein. Setze die
-Absender-Adresse und den Anzeige-Namen.
+Klick zuerst auf **"Verbindung testen"**. Klein.Buch meldet sich mit
+den eingetragenen Daten beim Server an, ohne etwas zu speichern.
+Klappt das, klick auf **"Postfach speichern"**.
 
-Klein.Buch testet die Anmeldung sofort. Bei Erfolg landet das
-Konto in der Liste. Das Passwort liegt im Schlüsselbund Deines
-Betriebssystems, nicht in der Klein.Buch-Datenbank.
+Für alles, was mit Postfächern zu tun hat (anlegen, ändern, löschen,
+testen, Test-Mail), fragt Klein.Buch noch einmal Dein Daten-Passwort
+und den App-Code aus Deiner Authenticator-App ab. Die Bestätigung
+gilt dann fünf Minuten. So kann niemand, der eine offene
+Browser-Sitzung erwischt, Deine Zugangsdaten umleiten.
 
-## Microsoft-Konto einrichten
+## Wo das Passwort liegt
 
-Microsoft 365 lässt Dich keine fertigen App-Passwörter mehr
-erzeugen. Stattdessen registrierst Du Klein.Buch einmalig als App
-in Deinem Microsoft-Konto und meldest Dich dann per Browser an.
-Klein.Buch braucht dafür zwei Werte aus dem Microsoft-Portal:
-die Anwendungs-(Client-)ID und die Mandant-(Tenant-)ID.
+Das Passwort speichert Klein.Buch verschlüsselt in der Datenbank
+Deiner Instanz. Es ist genauso geschützt wie Deine Buchhaltung selbst.
+Es erscheint nie in Protokollen und nie in Exporten.
 
-Im Einrichtungs-Formular (Einstellungen, Konten, "Neues
-Microsoft-Konto") findest Du einen ausklappbaren Block mit der
-Überschrift "So richtest du die Microsoft-App ein". Er führt Dich
-in fünf Schritten durch das Microsoft-Entra-Portal: App anlegen,
-IDs notieren, Öffentliche Clientflows aktivieren, Mail-Sende-
-Berechtigung erlauben, in Klein.Buch eintragen. Die App-
-Registrierung machst Du einmalig.
+Das Passwort gilt nur für genau den eingetragenen Server, Port und
+Benutzer. Änderst Du beim Bearbeiten eines davon, löscht Klein.Buch
+das gespeicherte Passwort beim Speichern, und Du gibst es für die
+neue Verbindung neu ein. Klein.Buch weist Dich im Formular darauf
+hin. So landet ein gespeichertes Passwort nie bei einem anderen
+Server. Lässt Du das Passwort-Feld beim Bearbeiten leer, bleibt das
+bisherige Passwort unverändert.
 
-Trage anschließend Anwendungs-ID und Mandant-ID in das Klein.Buch-
-Formular ein und speichere. Daraufhin erscheint in der Konten-Liste
-oben ein Knopf "Mit Microsoft verbinden". Klick darauf. Klein.Buch
-öffnet einen lokalen Listener und schickt Dich in den Browser zur
-Microsoft-Anmeldung. Du meldest Dich mit Deiner Geschäfts-Adresse
-an und bestätigst, dass Klein.Buch Mails in Deinem Namen versenden
-darf.
+Ohne Verschlüsselung (TLS aus) speichert Klein.Buch ein Postfach nur
+ohne Benutzer und Passwort. Sonst gingen die Zugangsdaten lesbar
+übers Netz. Das ist nur für einen internen Mail-Server ohne
+Anmeldung gedacht.
 
-Nach der Anmeldung schickt Microsoft einen Code zurück an
-Klein.Buch. Die App tauscht den Code gegen ein OAuth-Token aus und
-speichert das Token verschlüsselt im Schlüsselbund. Das Konto ist
-einsatzbereit.
+## Verbindung prüfen
 
-## Standard-Konto
+In der Liste "Postfächer" hat jedes gespeicherte Postfach den Knopf
+"Testen". Er prüft die Anmeldung mit dem gespeicherten Passwort.
+Darunter steht "Test-Mail senden": Trag eine Empfänger-Adresse ein
+und klick auf "Test-Mail senden". Klein.Buch verschickt dann eine
+kurze Test-Mail über das gewählte Postfach. Das prüft den echten
+Versandweg.
 
-Wenn Du mehrere Konten hast, wählst Du in den Einstellungen ein
-Standard-Konto. Klein.Buch verwendet es beim Klick auf "Per
-E-Mail senden", solange Du nicht explizit ein anderes Konto
-auswählst.
+Zwei Grenzen gelten für Verbindungstests und Test-Mails:
 
-## Versand-Protokoll
+1. Getestet wird nur auf freigegebenen Ports, standardmäßig 25, 465,
+   587 und 2525. Als Betreiber kannst Du die Liste mit der Variable
+   `KLEIN_BUCH_ALLOWED_TEST_PORTS` ersetzen. Sie gilt dann auch für
+   die Tests von SFTP-Backup-Zielen.
+2. Höchstens 10 Tests pro Minute für die ganze Instanz, egal aus
+   wie vielen Browsern.
 
-In "Einstellungen → E-Mail-Versand" gibt es einen Abschnitt mit
-allen Versand-Vorgängen: Datum, Empfänger, Betreff,
-Provider-Antwort. Das Protokoll ist append-only und lässt sich
-nicht ändern. Es ist Deine GoBD-Spur für Versand-Belege.
+Scheitert eine Verbindung, meldet Klein.Buch "Verbindung zu Host:Port
+fehlgeschlagen (Host, Port, Zugangsdaten und Firewall prüfen)."
+Genauere Angaben stehen absichtlich nicht in der Oberfläche. Prüfe
+Server-Name, Port, Benutzer und Passwort und ob der Server Deines
+Containers ausgehende Verbindungen auf diesem Port zulässt.
 
-## Token-Ablauf
+## Microsoft 365
 
-Microsoft-OAuth-Tokens laufen nach einer Weile ab. Klein.Buch
-zeigt Dir vor Ablauf einen Hinweis. Klick auf "Konto neu anmelden"
-und durchlaufe den Browser-Schritt erneut. Das gespeicherte Token
-wird ausgetauscht, ohne dass Du sonst etwas verlieren würdest.
+Die Anmeldung über Microsoft (per Browser beim Microsoft-Konto) gibt
+es in Klein.Buch nicht. Ein Microsoft-365-Postfach richtest Du wie
+jedes andere als SMTP-Postfach ein: Server `smtp.office365.com`, Port
+587, TLS an, Deine Microsoft-Adresse als Benutzername und Dein
+Passwort. Das funktioniert nur, wenn in Deinem Microsoft-365-Mandanten
+(dem sogenannten Tenant, also der Firmen-Umgebung bei Microsoft) der
+SMTP-Versand erlaubt ist. Das legt der Administrator dort fest.
 
-## Versand-Vorlage
+Taucht in der Liste ein älteres Postfach vom Typ "Microsoft 365" mit
+dem Hinweis "im Server-Betrieb nicht verfügbar" auf, kannst Du es
+über "Auf SMTP umstellen" mit SMTP-Daten weiter nutzen oder löschen.
 
-Im Versand-Dialog kannst Du Betreff und Text vor dem Senden
-ändern. Klein.Buch merkt sich pro Empfänger Deinen letzten Text
-als Vorschlag für die nächste Mail. Du sparst Dir das wiederholte
-Formulieren, ohne dass die App Dir den Text aufzwingt.
+## Einstellungen für Betreiber
+
+Zwei Werte setzt Du bei Bedarf als Betreiber in der Compose-Datei:
+`KLEIN_BUCH_SMTP_HELO_NAME` legt den Namen fest, mit dem sich
+Klein.Buch beim Mail-Server vorstellt (sonst der Name des
+Containers). `KLEIN_BUCH_SMTP_CA_FILE` zeigt auf eine eigene
+Zertifikats-Datei (PEM) im Volume, falls Dein Mail-Server ein
+Zertifikat Deiner eigenen Zertifizierungsstelle nutzt. Eine Option,
+Zertifikatsfehler zu ignorieren, gibt es nicht.
+
+## Standard-Postfach
+
+Hast Du mehrere Postfächer, markiert ein Stern in der Liste das
+Standard-Postfach. Klein.Buch wählt es beim Versand vor. Abo-Rechnungen
+im Modus "Auto + Versand" gehen immer über das Standard-Postfach.
+
+## Versand einer Rechnung
+
+Bei einer ausgestellten Rechnung klickst Du oben auf **"Senden"**.
+Auf der Seite "Rechnung versenden" wählst Du das Postfach, prüfst den
+Empfänger (vorbelegt aus dem Kontakt) und passt Betreff und
+Nachricht an. Klein.Buch hängt die Rechnung automatisch als PDF an.
+Das ist die ZUGFeRD-PDF, in der die XRechnung-Datei bereits steckt.
+Klick auf "Senden".
+
+Betreff und Nachricht kommen aus einer Mail-Vorlage. Du kannst sie
+vor jedem Versand ändern. Die Vorlage selbst liegt als Textdatei im
+Vorlagen-Ordner `/inputs/mail-templates` Deiner Instanz.
+
+## E-Mail-Protokoll
+
+Oben rechts auf der Seite "E-Mail-Versand" kommst Du zum
+"E-Mail-Protokoll". Es zeigt jeden Versandversuch, auch die
+gescheiterten: Zeitpunkt, Status, Beleg, Empfänger, Betreff, Kanal
+und die Antwort des Mail-Servers. Das Protokoll lässt sich nicht
+ändern und nicht löschen. Es ist Dein Nachweis, wann welche Rechnung
+an wen ging.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

@@ -1,126 +1,124 @@
 ---
 slug: troubleshooting-rechnungs-eingang
-title: Probleme mit dem Rechnungs-Eingang
+title: Probleme beim Rechnungseingang
 category: troubleshooting
 order: 560
-keywords: [rechnungs-eingang, ordner, fehler, fehlgeschlagen, sync, onedrive, profil, einlesen, drop-folder]
+keywords: [rechnungseingang, upload, e-rechnung, fehler, einlesen, xrechnung, zugferd, profil, utf-8, dateityp]
 ---
 
-# Probleme mit dem Rechnungs-Eingang
+# Probleme beim Rechnungseingang
 
-Der Rechnungs-Eingang ist der überwachte Ordner für eingehende
-elektronische Rechnungen. Wie er funktioniert, steht im Kapitel
-"Eingangsrechnungen via Ordner". Dieses Kapitel sammelt die typischen
-Stolpersteine.
+Eingehende E-Rechnungen lädst Du über "Kosten" und "E-Rechnung
+importieren" im Browser hoch. Wie das im Normalfall abläuft, steht im
+Kapitel "Rechnungseingang per Upload". Dieses Kapitel sammelt die
+Meldungen, die dabei auftauchen können, und was Du dagegen tust.
+Die Meldungen erscheinen als kurze Einblendung am Bildschirm, meist
+mit dem Anfang "E-Rechnung konnte nicht gelesen werden".
 
-## Datei landet in `failed/` und nicht in `processed/`
+## "Dateityp nicht erlaubt"
 
-Wenn Klein.Buch eine Datei nicht übernehmen kann, wandert sie nach
-`failed/`. Das Original bleibt liegen, damit Du sie ansehen oder beim
-Absender reklamieren kannst. Die wichtigsten Gründe:
+Klein.Buch nimmt beim Rechnungseingang nur PDF und XML an. Geprüft
+wird der Inhalt der Datei, nicht die Endung im Namen. Eine ZIP-Datei,
+eine Word-Datei oder eine gespeicherte E-Mail (`.eml`) lehnt
+Klein.Buch deshalb ab, auch wenn sie umbenannt wurde. Entpacke die
+Datei oder speichere den Anhang der E-Mail einzeln und lade dann die
+eigentliche Rechnung hoch.
 
-1. Die Datei ist eine ZUGFeRD-PDF mit einem nicht akzeptierten Profil.
-   Klein.Buch akzeptiert nur `EN16931`, `EXTENDED` und `XRECHNUNG`. Die
-   alten Profile `MINIMUM` und `BASIC-WL` sind seit 2025 keine
-   gültigen E-Rechnungen mehr. Klein.Buch zeigt Dir das erkannte
-   Profil im Hinweis-Eintrag. Bitte den Absender um eine richtige
-   E-Rechnung. Oder erfasse die Position selbst über "Kosten" und
-   "Neue Kosten-Position".
-2. Die XRechnung-Datei ist beschädigt (zum Beispiel ein abgebrochener
-   Download oder eine Datei, die als XRechnung aussieht, aber kein
-   gültiges XML enthält). Öffne die Datei in einem Text-Editor. Wenn
-   sie unleserlich oder leer ist, frag beim Absender nach einer neuen
-   Version.
-3. Die Datei hat eine andere Endung als `.xml` oder `.pdf`. Klein.Buch
-   prüft nur diese beiden. Eine ZIP-Datei, eine Word-Datei oder eine
-   `.eml`-Mail-Datei wandert direkt nach `failed/`. Entpacke die Datei
-   gegebenenfalls und leg die enthaltene Rechnung selbst in den
-   Rechnungs-Eingang.
-4. Die ZUGFeRD-PDF enthält gar keine eingebettete XRechnung-Datei. Das
-   passiert, wenn der Absender Dir eine normale PDF schickt und nur so
-   tut, als wäre es ZUGFeRD. Die PDF kannst Du wie einen Papier-Beleg
-   behandeln: über "Kosten" und "Neue Kosten-Position" eintragen und
-   das PDF dort als Beleg anhängen.
+## "Die XML-Datei ist nicht UTF-8-codiert"
 
-## Mein Ordner wird gar nicht überwacht
+UTF-8 ist die Zeichenkodierung, die für E-Rechnungen vorgeschrieben
+ist. Sie sorgt dafür, dass Umlaute wie in "Müller" richtig ankommen.
+Hat der Absender die Datei anders kodiert, würde Klein.Buch die Namen
+verstümmelt ins Archiv übernehmen. Deshalb lehnt es die Datei ab. Bitte
+den Absender, die Rechnung als UTF-8 neu zu erzeugen.
 
-Drei Dinge prüfen:
+## "Anfrage zu groß" oder "Die Datei ist zu groß"
 
-1. Ist der Toggle in "Einstellungen" und "Rechnungs-Eingang" wirklich
-   eingeschaltet?
-2. Steht in dem Feld der richtige Pfad? Klein.Buch zeigt rechts neben
-   dem Feld einen Status: "Ordner ok" heißt, alles passt. Andere
-   Meldungen erklären das Problem in einem Satz.
-3. Existiert der Ordner überhaupt? Wenn Du ihn nachträglich umbenannt
-   oder verschoben hast, kennt Klein.Buch den alten Pfad nicht mehr.
-   Wähle den Ordner neu aus und speichere.
+Eine E-Rechnung darf höchstens 10 MB groß sein. Echte E-Rechnungen
+sind meist viel kleiner. Ist die Datei größer, steckt oft etwas
+anderes dahinter, zum Beispiel ein eingescannter Stapel. Erfasse die
+Ausgabe dann über "+ Neue Kosten" und hänge die Datei dort als Beleg
+an. Für Belege liegt die Grenze bei 20 MB.
 
-Klick danach auf "Jetzt prüfen". Wenn dann ein Hinweis kommt, weißt Du,
-dass die Übernahme läuft. Wenn nichts passiert, schau unter
-"Hinweise": dort steht der konkrete Fehler.
+## "In dieser PDF wurde keine eingebettete E-Rechnung gefunden"
 
-## Klein.Buch findet die Datei nicht, obwohl sie da liegt
+Das PDF ist eine normale PDF-Rechnung ohne XML-Anhang, also keine
+ZUGFeRD-Rechnung. Du kannst sie wie einen Papier-Beleg behandeln:
+über "+ Neue Kosten" eintragen und das PDF dort als Beleg anhängen.
 
-Klein.Buch sieht nur Dateien, die direkt im Rechnungs-Eingang
-liegen, nicht in Unter-Ordnern (außer den selbst angelegten
-`processed/` und `failed/`, die Klein.Buch zum Sortieren nutzt).
+## "ZUGFeRD/XRechnung-Profil nicht unterstützt"
 
-Häufig liegt das Problem aber an einem Cloud-Sync. Wenn Du den
-Rechnungs-Eingangs-Ordner in OneDrive, iCloud, Dropbox oder Nextcloud
-abgelegt hast, ist die Datei manchmal noch ein Platzhalter und gar nicht
-wirklich auf der Festplatte. Klein.Buch sieht den Platzhalter, weiß
-aber nicht, dass da echte Daten dahinterstehen.
+Die Datei nutzt eines der alten Profile `MINIMUM` oder `BASIC-WL`.
+Ein Profil ist eine Variante des ZUGFeRD-Formats. Seit 2025 gelten
+nur noch `EN16931`, `EXTENDED` und `XRECHNUNG` als gültige
+E-Rechnung. Klein.Buch nennt in der Meldung das erkannte Profil. Bitte
+den Absender um eine richtige E-Rechnung. Klappt das nicht, erfasst
+Du die Ausgabe selbst über "+ Neue Kosten".
 
-Lösung: Bei OneDrive klick mit der rechten Maustaste auf den
-Rechnungs-Eingangs-Ordner, dann auf "Immer auf diesem Gerät behalten".
-Damit lädt OneDrive alle Dateien echt herunter. Bei den anderen
-Cloud-Anbietern gibt es eine ähnliche Option (oft "Pin to device" oder
-"Stets verfügbar halten").
+## "Storno-/Gutschrift-Beleg … wird nicht automatisch importiert"
 
-## Eine Datei taucht doppelt in den Kosten auf
+Gutschriften liest Klein.Buch nicht automatisch ein. Sie würden die
+EÜR (Einnahmen-Überschuss-Rechnung, die einfache Steuer-Aufstellung)
+verfälschen, wenn sie wie eine normale Ausgabe gebucht würden. Erfasse
+die Gutschrift selbst als Korrektur.
 
-Das passiert in zwei Fällen:
+## "Unbekanntes E-Rechnungs-Format" oder "Pflichtfeld fehlt"
 
-1. Du hast dieselbe XRechnung sowohl manuell über "E-Rechnung
-   importieren" hochgeladen und zusätzlich in den Rechnungs-Eingang
-   gelegt. Beide Wege erzeugen einen Eingangsbeleg. Lösche keinen
-   davon manuell (Belege löschen ist gesetzlich verboten). Erzeuge
-   stattdessen einen Storno auf den Beleg, der wegfallen soll.
-2. Du hast die Datei aus `processed/` wieder herausgezogen und erneut
-   in den Rechnungs-Eingang gelegt. Klein.Buch behandelt sie als neue
-   Datei. Vermeide das. Wenn Du eine bereits übernommene Rechnung
-   noch einmal ansehen willst, mach das im Kosten-Detail über den
-   Button "Roh-XML anzeigen" und nicht durch erneute Übernahme.
+Die Datei ist beschädigt oder keine E-Rechnung, zum Beispiel ein
+abgebrochener Download. Öffne sie in einem Text-Editor. Ist sie leer
+oder unleserlich, frag beim Absender nach einer neuen Fassung. Fehlt
+nur eine Pflichtangabe, nennt die Meldung das Feld. Auch dann muss der
+Absender die Rechnung neu ausstellen.
 
-## Klein.Buch löscht den Ordner-Inhalt nicht selbst
+## "Upload nicht gefunden oder abgelaufen"
 
-Das ist Absicht. Klein.Buch verschiebt Dateien nach `processed/` oder
-`failed/`, löscht aber nichts. Wenn Du die Unterordner aufräumen willst,
-mach das im Datei-Explorer. Klein.Buch braucht die Dateien dort nach
-der Übernahme nicht mehr. Der Beleg selbst liegt sicher im internen
-Klein.Buch-Archiv und ist 10 Jahre nachweisbar.
+Eine hochgeladene Datei hält Klein.Buch eine Stunde lang bereit.
+Liegt zwischen "Einlesen & prüfen" und "Als Kosten festschreiben"
+mehr Zeit, oder wurde der Server zwischendurch neu gestartet, ist sie
+weg. Klick auf "Andere Datei" und lade die Rechnung noch einmal hoch.
 
-## Hinweis kommt nicht
+## "Upload abgelehnt" wegen zu wenig Speicherplatz
 
-Wenn Klein.Buch eine Rechnung übernimmt, schreibt es einen Eintrag
-unter "Hinweise". Bei Erfolg ist der Eintrag stumm (kein Pop-up),
-bei Fehler zusätzlich als OS-Benachrichtigung sichtbar — sofern Du
-sie in der Regel aktiviert hast. Wenn Du gar keine Hinweise siehst,
-geh im Hauptmenü auf "Hinweise" und klick oben rechts auf
-"Erinnerungen einstellen". Prüf, ob die zwei Regeln
-"Rechnungs-Eingang: Rechnung übernommen" und "Rechnungs-Eingang:
-Übernahme fehlgeschlagen" angeschaltet sind. Den Erfolgs-Hinweis
-kannst Du dort auch lauter machen.
+Vor jedem Upload prüft Klein.Buch, ob auf dem Server genug Platz frei
+bleibt (standardmäßig 2 GB Reserve). Ist der Speicher fast voll, lehnt
+es den Upload ab, damit Datenbank und Archiv nicht volllaufen. Das
+musst Du als Betreiber auf dem Server lösen. Mehr dazu im Kapitel
+"Speicher und Ressourcen".
+
+## "Der Prüf- und Konvertierungsdienst (Java) ist nicht verfügbar"
+
+Klein.Buch braucht für ZUGFeRD-PDFs ein Java-Hilfsprogramm, den
+Sidecar. Er holt die XML-Datei aus dem PDF. Antwortet er nicht, kannst
+Du ein ZUGFeRD-PDF gerade nicht einlesen. Eine XRechnung-XML geht
+trotzdem: Klein.Buch zeigt dann "Die formale Prüfung (KoSIT) war nicht
+möglich" und Du kannst die Rechnung ohne Prüfung erfassen. Was hinter
+der Meldung steckt, steht im Kapitel "Sidecar-Probleme".
+
+## Die Prüfung meldet formale Mängel
+
+Das ist keine Sperre. Der Fehler liegt beim Absender, Du bist nicht
+verpflichtet, die Rechnung abzulehnen. Du kannst sie erfassen,
+Klein.Buch speichert den Befund mit. Mit "Prüf-Details anzeigen"
+siehst Du die einzelnen Regeln, die Du dem Absender weitergeben
+kannst.
+
+## Eine Rechnung taucht doppelt in den Kosten auf
+
+Klein.Buch prüft nicht, ob Du dieselbe Rechnung schon einmal
+hochgeladen hast. Jede Übernahme ist ein neuer Eingangsbeleg. Lösche
+keinen davon (Belege löschen ist gesetzlich verboten), sondern
+storniere den überzähligen Beleg in der Kosten-Position über "Kosten
+stornieren". Willst Du eine schon übernommene Rechnung nur noch einmal
+ansehen, nimm in der Kosten-Position "Roh-XML anzeigen" oder "Beleg
+herunterladen" statt eines neuen Uploads.
 
 ## Wenn nichts hilft
 
-Lös einen manuellen Lauf über "Jetzt prüfen" aus. Wenn dabei ein
-Fehler kommt, kopiere die Meldung und melde den Fall im
-Klein.Buch-Repository auf GitHub. Den Link zum Repository findest
-Du im "Über"-Dialog (Hauptmenü unten neben "Hilfe"). Hänge die
-fehlerhafte XML-Datei oder die Inhalte einer Rechnung nicht an;
-sie könnten persönliche Daten enthalten.
+Kopiere die Meldung und melde den Fall im Klein.Buch-Repository auf
+GitHub. Den Link zum Quellcode findest Du im "Über"-Dialog (Hauptmenü
+unten neben "Hilfe"). Hänge die Rechnung selbst nicht an, sie enthält
+persönliche Daten.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

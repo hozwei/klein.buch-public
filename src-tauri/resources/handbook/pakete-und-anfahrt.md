@@ -64,7 +64,7 @@ Beispiel "Anfahrt zur Baustelle Beispielstraße 5").
 
 Klein.Buch hat keine eingebaute Karten-Funktion und kein Geocoding.
 Du gibst die Kilometer von Hand ein. Das ist Absicht: Klein.Buch
-ist offline-fähig und kontaktet keinen externen Karten-Dienst.
+schickt keine Kunden-Adressen an einen externen Karten-Dienst.
 
 ## Paket-Katalog als Broschüre
 
@@ -89,4 +89,4 @@ druckt den §19-Hinweis auf das fertige PDF.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

@@ -16,8 +16,10 @@ Klein.Buch hat für beides eine Funktion direkt im Kontakt-Fenster.
 ## Auskunft erzeugen
 
 Klick auf "Kontakte", öffne den Kontakt, dessen Daten angefragt
-sind, und klick auf "DSGVO-Auskunft erzeugen". Klein.Buch erzeugt
-ein ZIP-Paket mit:
+sind, und klick auf "DSGVO-Auskunft". Weil das Paket alle Daten der
+Person enthält, fragt Klein.Buch vorher noch einmal Dein
+Daten-Passwort und den App-Code ab. Dann erzeugt es ein ZIP-Paket
+mit:
 
 1. Einer PDF-Zusammenfassung der gespeicherten Stamm-Daten
 2. Allen Rechnungen, Stornos und Angeboten als PDF
@@ -26,8 +28,8 @@ ein ZIP-Paket mit:
 4. Den Roh-Daten als JSON (maschinenlesbar)
 5. Einer Inhalts-Übersicht
 
-Das ZIP liegt nach der Erzeugung im von Dir gewählten Ordner. Es
-ist nicht verschlüsselt, weil es an die anfragende Person geht.
+Dein Browser speichert das ZIP in seinem Download-Ordner. Es ist
+nicht verschlüsselt, weil es an die anfragende Person geht.
 Versende es per E-Mail mit einem ausreichend sicheren Kanal oder
 übergib es persönlich.
 
@@ -66,9 +68,10 @@ geschrieben hatten, bleiben mit dieser alten Adresse erhalten. Das
 ist gesetzliche Pflicht laut §147 AO und der GoBD. Klein.Buch
 kann diese Daten nicht löschen, ohne Deine Buchführung zu zerstören.
 
-Eine echte vollständige Löschung läuft nur über den Factory Reset
-und betrifft dann die gesamte Klein.Buch-Instanz, nicht einzelne
-Personen.
+Eine Funktion, die alle Daten auf einmal löscht, gibt es in
+Klein.Buch nicht. Eine vollständige Löschung beträfe ohnehin die
+gesamte Klein.Buch-Instanz, nicht einzelne Personen, und bliebe an
+die gesetzlichen Aufbewahrungsfristen gebunden.
 
 ## Anonymisierung verweigern
 
@@ -77,7 +80,8 @@ Entwurfs-Belege existieren. Schließe die Entwürfe vorher
 (festschreiben oder verwerfen) und versuche erneut.
 
 Die App lässt eine bereits anonymisierte Person nicht ein zweites
-Mal anonymisieren; der Knopf ist dann ausgegraut.
+Mal anonymisieren; die Knöpfe "DSGVO-Auskunft" und "Anonymisieren
+(DSGVO)" erscheinen dann nicht mehr.
 
 ## Rechtsgrundlagen
 
@@ -89,4 +93,4 @@ die das Gesetz selbst ausdrücklich vorsieht.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

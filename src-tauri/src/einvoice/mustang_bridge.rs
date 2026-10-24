@@ -232,8 +232,8 @@ async fn run_launcher(
         Err(_) => {
             return Err(Error::Sidecar(format!(
                 "Mustang ({action_label}) hat nach {MUSTANG_TIMEOUT_SECS}s nicht geantwortet — \
-                 der Java-Sidecar hängt vermutlich. Bitte App neu starten; bleibt es, \
-                 Sidecar/JRE prüfen."
+                 der Java-Sidecar hängt vermutlich. Bitte erneut versuchen; bleibt es, \
+                 Container-Log und Speichergrenze (mem_limit) prüfen."
             )));
         }
         Ok(Err(e)) => return Err(Error::Sidecar(format!("mustang-{action_label}-spawn: {e}"))),

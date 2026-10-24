@@ -207,9 +207,12 @@ E17: Es gibt keine produktiven Bestände mit älterem Schema, der Serverbetrieb 
 30. Ältere Stände zu unterstützen hieße, Pfade (Klartext-DB, CRLF-Migrationen, Backup ohne
 Branding) für Daten zu testen, die es nicht gibt. **Folge.** Backups einer **neueren** Version
 lehnt der Restore weiter ab (Down-Migration-Schutz, Schema-Hardline). Rückfall nach einem
-gescheiterten Update: vorheriges Image-Tag starten und das Pflicht-Backup vor der Migration
-einspielen; das ältere Image öffnet eine bereits migrierte DB nicht (Schema-Check). Heute
-verlangt der Restore noch exakt dieselbe Version; Umbau in W7.
+gescheiterten Update (korrigiert 24.10.2026, W13, Nr. 115): Im bisherigen `/data` geht das nicht —
+das ältere Image entsperrt eine bereits migrierte DB nicht (Schema-Check), ohne Sitzung gibt es
+keinen Restore, und das neue Image migriert ein eingespieltes älteres Backup wieder vorwärts.
+Der Weg ist das vorherige Image-Tag mit einem neuen, leeren `/data` (Einrichtung) und dort der
+Restore des Pflicht-Backups vor der Migration (Disaster-Recovery-Weg, W7). Der Restore älterer
+Backups mit Vorwärtsmigration ist seit W7 umgesetzt.
 
 ### E16 — Voll responsiv
 
@@ -280,7 +283,10 @@ die Verfügbarkeit über 10 Jahre.
   (CIDR, Default leer): `X-Forwarded-*` nur von dort, Client-IP = von rechts erster Eintrag
   außerhalb der Liste. Login und Setup nur über Loopback, über einen vertrauten Proxy mit
   `X-Forwarded-Proto: https` oder mit `KLEIN_BUCH_INSECURE_HTTP=1` (nur Tests und CI). Ohne
-  `TRUSTED_PROXIES` hinter einem Proxy wird das Rate-Limit je IP zum globalen (Handbuch). W6.
+  `TRUSTED_PROXIES` hinter einem Proxy lehnt der Server Einrichtung und Anmeldung ab (keine
+  HTTPS-Angabe von einem vertrauten Proxy); schickt ein eingetragener Proxy kein
+  `X-Forwarded-For`, wird das Rate-Limit je IP zum globalen (Handbuch; korrigiert 24.10.2026,
+  W13). W6.
 - **Pflicht-Backup vor jeder Migration** (Entsperren mit älterem Schema und Restore eines älteren
   Backups): Backup erzeugen und prüfen, erst dann `MIGRATOR.run`. Auslöser `manual`, weil der
   CHECK in `backup_log`/`backup_history` nur `manual`, `auto_daily`, `auto_critical` und
@@ -709,7 +715,9 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Volume, ergänzt die eingebauten Wurzeln); eine Option „Zertifikat ignorieren“ gibt es nicht.
     Neue oder geänderte Konten mit `auth_type = oauth_microsoft` lehnt der Server ab (E9); ein
     übernommenes Microsoft-Konto lässt sich auf SMTP umstellen (der Token wird dabei gelöscht) oder
-    löschen. `mail_oauth_*` sind gesperrt (404) und aus `api.ts` entfernt; der Code entfällt in W11.
+    löschen. `mail_oauth_*` sind gesperrt (404) und aus `api.ts` entfernt. Der Code (`mail/oauth_ms.rs`,
+    die Commands, `tests/oauth_ms_test.rs`) ist noch vorhanden — die in W11 geplante Entfernung
+    nannte der Plan nicht als Löschliste (Stand 24.10.2026, W13; S3).
 88. **SFTP-Testserver (W8).** Für den Done-Check „SFTP-Ziel mit Fingerprint“ startet
     `tests/sftp_mock` einen russh-SFTP-Server auf `127.0.0.1` mit einem im Test erzeugten
     Ed25519-Schlüssel (keine Fixture-Datei) und Passwort-Login; er kann nur, was der Upload braucht.
@@ -945,6 +953,17 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     und den KoSIT-Validator lädt keine Klasse dieser Bibliotheken — begründete Ausnahmen in
     `.trivyignore` (Ablauf 2027-04-30). Mustang 2.26 behebt nur einen Teil (Jackson 2.22.2); ein
     Update folgt, sobald es alle Funde behebt.
+115. **Handbuch und Betriebsdoku (W13).** Neue Handbuch-Kategorie `betrieb` (Installation mit
+    Docker Compose, Reverse-Proxy und TLS, Volumes und Rechte, TOTP, Updates und Rückfall,
+    Notfall-Wiederherstellung, Speicher, Fehlersuche im Container inkl. fail2ban-Filter auf die
+    Zeilen `auth.(login|setup|reauth).failed ip=… reason=…`, Lizenz und Quellcode). Entfallen:
+    `factory-reset`, `troubleshooting-oauth`, `troubleshooting-smartscreen`; `eingangsrechnungen-via-ordner`
+    wird zu `rechnungseingang-per-upload`. Zwei Korrekturen an diesem ADR (Rückfall in E15,
+    Folgen fehlender `TRUSTED_PROXIES` unter „Standardentscheidungen“) nach Abgleich mit dem Code.
+    Ein falscher TOTP-Code bei der Einrichtung schreibt jetzt ebenfalls eine
+    `auth.setup.failed`-Zeile (vorher nur Token und Passphrase). `SECURITY.md` und `CONTRIBUTING.md` neu,
+    `docs/release-signing-guide.md` entfernt; `compose.example.yaml` wird in CI mit
+    `docker compose config` geprüft.
 
 ## Konsequenzen
 

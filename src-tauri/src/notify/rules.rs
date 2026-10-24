@@ -36,13 +36,24 @@ impl NotificationRule {
     }
 }
 
+/// Regeln entfallener Funktionen: bleiben in der DB (forward-only Migrationen,
+/// 0029/0030), werden aber nicht mehr angezeigt — der Drop-Folder ist seit W11
+/// entfernt (E11), die Schalter hätten keine Wirkung.
+const RETIRED_RULE_IDS: &[&str] = &[
+    "rule_drop_folder_import_ok",
+    "rule_drop_folder_import_failed",
+];
+
 pub async fn list(pool: &SqlitePool) -> Result<Vec<NotificationRule>> {
     let rows = sqlx::query_as::<_, NotificationRule>(
         "SELECT * FROM notification_rules ORDER BY created_at ASC, id ASC",
     )
     .fetch_all(pool)
     .await?;
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .filter(|r| !RETIRED_RULE_IDS.contains(&r.id.as_str()))
+        .collect())
 }
 
 pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<NotificationRule>> {
@@ -123,6 +134,26 @@ mod tests {
         assert_eq!(r.config_i64("day_of_month", 1), 10);
         assert_eq!(r.config_i64("missing", 42), 42);
         assert!(r.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn retired_drop_folder_rules_are_not_listed() {
+        let pool = pool_with_rule().await;
+        sqlx::query(
+            "INSERT INTO notification_rules (id, rule_type, label, enabled, config_json)
+             VALUES ('rule_drop_folder_import_ok','custom','Rechnungs-Eingang: ok',0,'{}'),
+                    ('rule_drop_folder_import_failed','custom','Rechnungs-Eingang: Fehler',1,'{}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let ids: Vec<String> = list(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, vec!["rule_monthly_doc_check".to_string()]);
     }
 
     #[tokio::test]

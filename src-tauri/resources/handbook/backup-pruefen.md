@@ -3,109 +3,153 @@ slug: backup-pruefen
 title: Backup prüfen
 category: erste-schritte
 order: 80
-keywords: [backup, prüfen, protokoll, restore, wiederherstellen, off-site, sicherung]
+keywords: [backup, prüfen, protokoll, restore, wiederherstellen, off-site, sicherung, test]
 ---
 
 # Backup prüfen
 
-Ein Backup, das Du nie geprüft hast, ist im Notfall vielleicht
-kein Backup. Klein.Buch macht es Dir leicht, regelmäßig zu
-kontrollieren, dass Deine Sicherungen wirklich laufen und sich im
-Ernstfall wiederherstellen lassen.
+Ein Backup, das Du nie geprüft hast, ist im Notfall vielleicht kein
+Backup. Klein.Buch macht es Dir leicht, regelmäßig zu kontrollieren, dass
+Deine Sicherungen wirklich laufen und sich im Ernstfall zurückspielen
+lassen.
 
 ## Was Du regelmäßig kontrollierst
 
 1. Läuft das automatische Backup wirklich?
-2. Liegt das letzte erfolgreiche Off-Site-Backup nicht zu lange
-   zurück?
+2. Liegt das letzte erfolgreiche Backup auf einem externen Ziel nicht zu
+   lange zurück?
 3. Lässt sich ein Backup tatsächlich wiederherstellen?
 
-Den ersten und zweiten Punkt prüfst Du jede Woche mit einem Blick
-ins Protokoll. Den dritten Punkt prüfst Du seltener (etwa alle drei
-Monate) mit einem echten Probe-Wiederherstellen.
+Die ersten beiden Punkte prüfst Du einmal pro Woche mit einem Blick ins
+Protokoll. Den dritten prüfst Du seltener, etwa alle drei Monate, mit
+einem Probe-Wiederherstellen.
 
-## Backup-Protokoll lesen
+## Das Backup-Protokoll lesen
 
-Klick im Hauptmenü auf "Einstellungen", dann auf "Backups". Oben
-rechts in der PageBar gibt es den Knopf "Backup-Protokoll". Die
-Liste zeigt jedes erzeugte Backup mit Erstellt-Datum, Grund (zum
-Beispiel "Nach dem Festschreiben", "Automatisch (täglich)",
-"Manuell", "Vor einer Wiederherstellung"), Ort, Aufbewahrung,
-Größe und Status.
+Klick im Hauptmenü auf "Einstellungen", dann auf "Backups" und oben
+rechts auf "Backup-Protokoll". Das Protokoll ist der lückenlose und
+unveränderliche Nachweis jeder Sicherung, auch der fehlgeschlagenen.
+Jede Zeile nennt den Zeitpunkt, den Status ("gesichert" oder
+"fehlgeschlagen"), den Auslöser ("Manuell", "Täglich (automatisch)",
+"Beleg festgeschrieben" oder "Vor Wiederherstellung"), das Ziel ("Lokal
+(Pflichtkopie)", "Ordner (extern)" oder "SFTP-Server", jeweils mit
+Deiner Bezeichnung), die Datei und die Größe. Jeder Backup-Lauf erzeugt
+eine Zeile für die lokale Kopie und eine Zeile je externem Ziel.
 
-Suche nach den letzten Einträgen pro Ziel. Wenn das letzte
-Off-Site-Backup älter als sieben Tage ist, läuft etwas nicht
-rund. Klein.Buch warnt Dich in diesem Fall ohnehin über den
-Hinweise-Bereich.
+Über die Felder "Suche", "Von", "Bis", "Status", "Auslöser" und "Ziel"
+grenzt Du die Liste ein, mit "Suchen" wendest Du die Filter an,
+"Zurücksetzen" hebt sie wieder auf.
 
-## Wenn ein Backup-Eintrag "Fehler" zeigt
+Schau nach der neuesten Zeile je Ziel. Steht dort "gesichert", ist alles
+in Ordnung. Ist das letzte erfolgreiche Backup auf einem externen Ziel
+älter als sieben Tage, läuft etwas nicht rund. Klein.Buch meldet das
+ohnehin unter "Hinweise" mit dem Eintrag "Off-Site-Backup überfällig".
+Einen schnellen Überblick gibt auch die Seite "Backups": Unter jedem
+externen Ziel steht, wann es zuletzt geklappt hat oder warum nicht.
 
-Klick auf den Eintrag. Klein.Buch zeigt Dir die genaue
-Fehlermeldung des Betriebssystems oder des SFTP-Servers. Die
-häufigsten Ursachen:
+## Wenn ein Eintrag "fehlgeschlagen" zeigt
 
-1. Cloud-Ordner ist nicht synchronisiert oder offline
-2. Externer USB-Stick ist nicht angesteckt
-3. SFTP-Server nicht erreichbar (Netzwerk weg, Server-Wartung)
-4. Schreibrechte auf dem Ziel-Ordner entzogen
-5. Festplatte voll
+Die Fehlermeldung steht in derselben Zeile direkt unter dem Dateinamen.
+Die häufigsten Ursachen sind:
 
-Behebe die Ursache und stoße über "Jetzt Backup machen" einen
-neuen Versuch an. Klein.Buch loggt das Ergebnis erneut. Wenn der
-Fehler bleibt, schau ins Kapitel "Backup-Fehler" in der Kategorie
-"Troubleshooting".
+1. Der Ordner eines externen Ziels ist nicht mehr eingebunden oder das
+   NAS dahinter ist ausgeschaltet.
+2. Der Benutzer, unter dem der Container läuft, darf im Ziel-Ordner
+   nicht schreiben.
+3. Der Speicher ist voll, am Ziel oder auf dem Server.
+4. Der SFTP-Server ist nicht erreichbar, lehnt die Anmeldung ab oder
+   meldet sich mit einem anderen Schlüssel als beim Einrichten.
+
+Behebe die Ursache und klick auf der Seite "Backups" auf "Jetzt sichern".
+Klein.Buch protokolliert das Ergebnis erneut. Wenn der Fehler bleibt,
+schau ins Kapitel "[Backup-Fehler](/help/troubleshooting-backup)".
+
+Eine Sache kann das Protokoll nicht sehen: Lädt ein Sync-Programm auf
+dem Server die Dateien aus einem Ordner-Ziel in einen Cloud-Speicher
+hoch, meldet Klein.Buch "gesichert", sobald die Datei im Ordner liegt.
+Ob das Hochladen danach klappt, prüfst Du beim Cloud-Speicher selbst.
 
 ## Probe-Wiederherstellen (alle drei Monate)
 
-Ein Probe-Wiederherstellen spielt ein Backup in einer separaten
-Test-Umgebung zurück, ohne Deine echte Datenbank zu verändern. So
-weißt Du, dass das Backup wirklich funktioniert.
+Beim Probe-Wiederherstellen spielst Du ein Backup in eine getrennte
+Test-Instanz ein, ohne Deine echte Instanz anzufassen. Eine Instanz ist
+eine eigenständige Klein.Buch-Installation mit eigenen Daten. In Deiner
+echten Instanz probierst Du das bitte nicht aus: Dort würde die
+Wiederherstellung alles ersetzen, was Du seit dem Backup erfasst hast.
 
-Die einfache Variante: Auf einem zweiten Rechner Klein.Buch
-installieren, das Backup hineinkopieren und die Wiederherstellung
-ausführen. Klein.Buch fragt nach der Passphrase. Wenn die
-Wiederherstellung durchläuft und Du Deine Daten siehst, ist das
-Backup gesund.
+So gehst Du vor:
 
-Die kompakte Variante auf demselben Rechner: Vor der
-Wiederherstellung zieht Klein.Buch automatisch ein
-Sicherheits-Backup Deiner aktuellen Datenbank. Du kannst die
-Wiederherstellung deshalb gefahrlos ausprobieren und im Anschluss
-über das Backup-Protokoll wieder zurück auf den vorherigen Stand.
+1. Der Betreiber startet einen zweiten Klein.Buch-Container mit eigenen,
+   leeren Ordnern für `/data` und `/inputs` und mit einer eigenen
+   Adresse, wie im Kapitel "[Installation mit Docker Compose](/help/installation-docker)"
+   beschrieben. Die Backup-Ziele der echten Instanz bindet er dort nicht
+   ein. Sonst würde die Test-Instanz in diese Ordner schreiben und dort
+   auch alte Backups aussortieren.
+2. Du richtest die Test-Instanz ganz normal ein, mit einer beliebigen
+   Test-Passphrase und einem eigenen Eintrag in der Authenticator-App.
+3. Unter "Einstellungen" und "Backups" lädst Du in der Karte
+   "Wiederherstellen" das neueste Backup von Deinem externen Ziel hoch,
+   gibst als "Backup-Passwort" Deine echte Passphrase ein und klickst auf
+   "Wiederherstellen".
+4. Erscheint "Wiederherstellung vorbereitet", hat Klein.Buch das Backup
+   mit Deiner Passphrase entschlüsselt, auf Vollständigkeit und
+   Beschädigung geprüft und die Datenbank darin geöffnet. Das ist der
+   wichtigste Teil der Probe: Dein Backup ist lesbar.
 
-Wenn die Wiederherstellung fehlschlägt, lies das Kapitel "Fehler
-beim Wiederherstellen" in der Kategorie "Troubleshooting".
+Danach startet die Test-Instanz neu und enthält alle Deine Daten und
+Einstellungen. Dazu gehören auch die Mail-Konten mit Passwort, die
+SFTP-Ziele und Deine Abo-Rechnungen. Sobald Du Dich dort anmeldest,
+beginnt Klein.Buch sofort mit seinen geplanten Aufgaben. Fällige
+Abo-Rechnungen würden festgeschrieben und, je nach Einstellung, per
+E-Mail an Deine Kunden verschickt, und Backups gingen an Deine SFTP-Ziele.
+Melde Dich in der Test-Instanz deshalb nur an, wenn sie keine Verbindung
+nach außen hat (also weder Mail-Server noch SFTP-Server erreicht). Sonst
+hörst Du nach Schritt 4 auf: Der Betreiber hält die Test-Instanz an und
+löscht ihre Ordner.
+
+Klappt die Wiederherstellung nicht, lies das Kapitel "[Fehler beim
+Wiederherstellen](/help/troubleshooting-restore)".
 
 ## Was im Backup steckt
 
 Ein Klein.Buch-Backup enthält:
 
-1. Die verschlüsselte Datenbank
-2. Das komplette Beleg-Archiv (PDF, XML, Quittungen, Logos)
-3. Das Verkäuferprofil und die Einstellungen
+1. Die verschlüsselte Datenbank mit allen Belegen, Kontakten und
+   Einstellungen, auch den gespeicherten Passwörtern für Mail-Konten und
+   SFTP-Ziele und der Liste Deiner Backup-Ziele
+2. Das komplette Beleg-Archiv (Rechnungs-PDFs, XML-Dateien, Belege,
+   Anhänge)
+3. Dein Logo und Deine Unterschrift
 
 Es enthält absichtlich nicht:
 
-1. Deine Passphrase (kein Recovery-Backdoor)
-2. OAuth- und SMTP-Anmeldedaten (liegen im Schlüsselbund Deines
-   Betriebssystems, nicht in der Datenbank)
-3. Die Klein.Buch-Programm-Dateien selbst (kommen vom Installer)
+1. Deine Passphrase (es gibt keine Hintertür)
+2. Die Verbindung zu Deiner Authenticator-App (sie liegt getrennt auf dem
+   Server)
+3. Den Vorlagen-Ordner `/inputs` mit Rechnungs-Layouts, Mail-Vorlagen und
+   AfA-Tabellen (AfA steht für Absetzung für Abnutzung, also die
+   Abschreibungs-Tabellen). Diesen Ordner sichert der Betreiber selbst.
+4. Das Programm Klein.Buch (es kommt aus dem Docker-Image)
 
-Ohne Deine Passphrase ist das Backup wertlos. Notiere die
-Passphrase im Passwort-Manager. Wenn Du die Passphrase und das
-Backup zusammen verlierst, sind die Daten endgültig weg.
+Ohne Deine Passphrase ist das Backup wertlos. Notiere sie im
+Passwort-Manager. Verlierst Du Passphrase und Server zusammen, sind die
+Daten endgültig weg.
 
-## Erinnerung einrichten
+## Erinnerung
 
-Klein.Buch zeigt Dir im Bereich "Hinweise" automatisch eine
-Erinnerung, wenn ein Off-Site-Backup zu lange her ist. Die
-Schwelle (zum Beispiel sieben Tage) stellst Du in den
-Einstellungen ein.
+Klein.Buch erinnert Dich unter "Hinweise", wenn seit mehr als sieben
+Tagen kein Backup auf einem externen Ziel geklappt hat (ohne externes
+Ziel: wenn seit sieben Tagen gar kein Backup mehr entstanden ist). Die
+Erinnerung heißt "Backup überfällig". Du schaltest sie unter "Hinweise"
+und "Erinnerungen einstellen" an oder aus. Die Sieben-Tage-Grenze ist
+fest.
 
-Wenn Du die Hinweise leerst, kommt die Erinnerung beim nächsten
-Überschreiten der Schwelle wieder. Sie verschwindet nicht
-dauerhaft.
+Hakst Du den Hinweis ab, kommt er am nächsten Tag wieder, solange das
+Problem besteht. Zusätzlich meldet Klein.Buch jeden fehlgeschlagenen
+externen Kopiervorgang mit dem Hinweis "Externe Backup-Spiegelung
+fehlgeschlagen", höchstens einmal pro Tag und Ziel. Diesen Hinweis kannst
+Du nicht abschalten.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

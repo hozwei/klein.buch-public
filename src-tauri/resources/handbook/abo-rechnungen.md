@@ -41,7 +41,7 @@ aus, ohne Versand.
 
 **Auto + Versand.** Klein.Buch erzeugt, stellt aus und verschickt
 die Rechnung per E-Mail an das Standard-Postfach. Schlägt der
-Versand fehl (Server nicht erreichbar, OAuth-Token abgelaufen),
+Versand fehl (Mail-Server nicht erreichbar, Passwort falsch),
 bleibt die Rechnung ausgestellt liegen und Klein.Buch legt einen
 Eintrag unter "Hinweise" an. Du kannst die Rechnung dann manuell
 verschicken.
@@ -51,13 +51,15 @@ Speichere die Vorlage. Klein.Buch zeigt Dir den nächsten Stichtag.
 ## Automatischer Lauf
 
 Klein.Buch prüft alle fünf Minuten im Hintergrund, ob eine
-Abo-Rechnung fällig ist (das passiert nur, solange die App geöffnet
-und entsperrt ist). Außerdem prüft die App beim Öffnen der Vorlagen-
+Abo-Rechnung fällig ist. Das passiert auf dem Server, auch wenn kein
+Browser geöffnet ist, aber nur, solange Klein.Buch entsperrt ist. Nach
+einem Neustart des Containers ist Klein.Buch gesperrt, bis Du Dich
+wieder anmeldest. Außerdem prüft die App beim Öffnen der Vorlagen-
 Liste sofort, ob etwas nachzuholen ist.
 
-Wenn ein Lauf zwischendurch ausgefallen ist (App war geschlossen,
-Rechner aus), holt Klein.Buch beim nächsten Start die ausgelassenen
-Termine nach. Klein.Buch erzeugt pro verpasster Periode eine eigene
+Wenn ein Lauf zwischendurch ausgefallen ist (Klein.Buch war gesperrt
+oder der Container lief nicht), holt Klein.Buch die ausgelassenen
+Termine nach dem nächsten Entsperren nach. Klein.Buch erzeugt pro verpasster Periode eine eigene
 Rechnung — alle mit dem **heutigen** Ausstellungsdatum (so verlangt
 es §14 Abs. 4 Nr. 3 UStG), aber jeweils mit dem korrekten
 Leistungszeitraum der ursprünglichen Periode.
@@ -90,4 +92,4 @@ E-Mail-Versand".
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

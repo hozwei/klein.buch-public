@@ -128,7 +128,7 @@ async fn fiscal_year_lock_pending(
 /// Hinweis, wenn die maßgebliche Sicherung älter als N Tage ist (Default 7).
 /// Dedup pro Tag. **Off-Site-bewusst** (G1-NOTIFY):
 ///
-/// - Ist ein **Off-Site-Ziel** konfiguriert (Cloud-Ordner/USB/SFTP, vom Floor
+/// - Ist ein **Off-Site-Ziel** konfiguriert (Ordner unter `/backup-targets` oder SFTP, vom Floor
 ///   verschieden), zählt das letzte **erfolgreiche Off-Site-Backup** aus dem
 ///   append-only `backup_log` (G1-LOG). Der lokale Floor ist ohnehin fast immer
 ///   frisch (Lock-/Tages-Backup) — die Off-Site-Kopie ist das, was ausfallen kann.
@@ -158,7 +158,7 @@ async fn backup_overdue(
             "Off-Site-Backup überfällig",
             format!(
                 "Seit über {max_age} Tagen gab es kein erfolgreiches externes Backup \
-                 (oder noch keins). Prüfe dein Backup-Ziel (Cloud-Ordner, USB oder SFTP)."
+                 (oder noch keins). Prüfe deine Backup-Ziele (Ordner unter /backup-targets oder SFTP)."
             ),
             format!("offsite_backup_overdue:{}", today.format("%Y-%m-%d")),
         )

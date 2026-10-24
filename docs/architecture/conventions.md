@@ -73,9 +73,9 @@ Beispiel-Schluss:
 ```markdown
 ## Letzte Verifikation
 
-Stand: 2026-05-26, Schema v27, ADRs 0006/0027/0036. Quelle:
+Stand: 2026-05-26, Schema v27, ADRs 0006/0009/0027. Quelle:
 `klein-buch/src-tauri/migrations/*.sql` + `src/archive/`,
-`src/fiscal_year/`, `src/backup/factory_reset.rs`.
+`src/fiscal_year/`, `src/backup/restore.rs`.
 ```
 
 ---

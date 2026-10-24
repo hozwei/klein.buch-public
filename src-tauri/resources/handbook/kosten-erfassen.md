@@ -48,7 +48,8 @@ Im Formular gibst Du ein:
    stellen und die Steuerschuld auf Dich übertragen. Für §19-
    Kleinunternehmer fast nie zutreffend; lass den Toggle aus, wenn
    Du Dir unsicher bist.
-10. **Beleg-Anhang** — PDF oder Bild der Eingangsrechnung.
+10. **Beleg-Anhang** — PDF oder Bild der Eingangsrechnung. Auf dem
+    Handy öffnet der Knopf "Beleg fotografieren" direkt die Kamera.
 11. **Notiz** — freier Text.
 
 Klick auf "Kosten speichern". Klein.Buch schreibt die Position
@@ -111,20 +112,16 @@ Lege wiederkehrende Vorlagen über das Menü "Kosten" und
 ## E-Rechnung empfangen
 
 Wenn Du eine XRechnung oder ZUGFeRD-Datei per E-Mail bekommst,
-nutzt Du in der Kosten-Liste den Knopf "E-Rechnung importieren".
-Klein.Buch liest die XML-Daten aus der Datei, füllt die Felder
-automatisch aus und legt das Original im Archiv ab. Du musst nur
-noch das Zahlungs-Datum eintragen und speichern.
+nutzt Du in der Kosten-Liste den Knopf "E-Rechnung importieren" und
+lädst die Datei im Browser hoch. Klein.Buch liest die XML-Daten aus
+der Datei, füllt die Felder automatisch aus und legt das Original im
+Archiv ab. Du musst nur noch Zahlungs-Datum und Kategorie prüfen und
+mit "Als Kosten festschreiben" abschließen.
 
 Klein.Buch prüft die XRechnung mit dem KoSIT-Validator. Der
-Validator ist beratend, nie blockierend — bei Fehlern warnt die App
-und Du importierst trotzdem.
-
-Wenn Du regelmäßig E-Rechnungen per Mail bekommst, gibt es einen
-schnelleren Weg über einen überwachten Ordner. In Klein.Buch heißt
-der "Rechnungs-Eingang". Du legst die Datei dort ab, Klein.Buch
-übernimmt sie automatisch in die Kosten. Mehr dazu im Kapitel
-"Eingangsrechnungen via Ordner".
+Validator ist beratend, nie blockierend: Bei Fehlern warnt die App
+und Du importierst trotzdem. Mehr dazu im Kapitel "Rechnungseingang
+per Upload".
 
 ## Privatbewegungen
 
@@ -136,4 +133,4 @@ dazu im Kapitel "Privatbewegungen".
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

@@ -5,8 +5,9 @@
 //! - `rules`: Reminder-Konfiguration (User-editierbar, per Migration geseedet).
 //!
 //! [`emit`] ist der zentrale Einstieg: schreibt in die Inbox (idempotent via
-//! `dedup_key`) und schickt — falls neu und der Kanal der Regel aktiv ist —
-//! zusätzlich eine OS-native Notification.
+//! `dedup_key`) und reicht den Eintrag — falls neu und der Kanal der Regel
+//! aktiv ist — an den [`Notifier`] weiter; im Server ist das [`InboxOnly`],
+//! es bleibt also bei der Inbox.
 
 pub mod rules;
 pub mod store;

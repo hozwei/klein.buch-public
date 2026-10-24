@@ -50,9 +50,16 @@ Klein.Buch sicherstellen, zum Beispiel über Dein Online-Banking
 ## Wo Klein.Buch die Belege speichert
 
 Klein.Buch legt jede festgeschriebene Rechnung, jede XRechnung-XML
-und jeden hochgeladenen Eingangsbeleg im Archiv ab. Der Pfad ist
-in den Einstellungen sichtbar. Die Dateien dort haben nur
-Lese-Rechte; Klein.Buch (und auch Du) kannst sie nicht überschreiben.
+und jeden hochgeladenen Eingangsbeleg im Archiv ab. Das Archiv liegt
+im Daten-Volume Deiner Instanz, im Container unter `/data/archive`.
+Klein.Buch setzt jede Datei nach dem Schreiben auf reine Lese-Rechte
+und merkt sich ihren SHA-256-Prüfwert, eine Art digitalen
+Fingerabdruck. Bei jedem Lesen vergleicht es die Datei mit diesem
+Wert, und eine monatliche Prüfung meldet fehlende oder veränderte
+Dateien. Die Lese-Rechte schützen vor versehentlichem Überschreiben.
+Vor dem Löschen durch jemanden, der direkt auf dem Server arbeitet,
+schützen sie nicht. Deshalb gehören verschlüsselte externe Backups
+und, wenn Dein Server das kann, Snapshots des Dateisystems dazu.
 
 Beim Backup wird der Archiv-Ordner mitgesichert. Solange Deine
 Backups laufen, sind Deine Belege also auch außerhalb des
@@ -68,37 +75,47 @@ und Dropbox haben EU-Speicherort in einigen Geschäfts-Tarifen als
 Zusatz-Option. Bei iCloud lässt sich der Speicherort nicht
 zuverlässig festlegen — für GoBD-relevante Daten ist iCloud daher
 nicht empfohlen. Klein.Buch greift selbst nicht auf Cloud-Anbieter
-zu; das macht der Cloud-Sync-Client Deines Betriebssystems. Prüf
-beim Anbieter Deiner Wahl, dass EU-Speicher konfiguriert ist.
+zu; das macht ein Sync-Programm auf dem Server, dessen Ordner Du als
+Backup-Ziel unter `/backup-targets` einbindest. Prüf beim Anbieter
+Deiner Wahl, dass EU-Speicher konfiguriert ist. Dasselbe gilt für
+den Server, auf dem Klein.Buch selbst läuft, wenn Du ihn mietest.
 
 ## Was Klein.Buch nicht tun darf
 
 Klein.Buch bietet keine Lösch-Funktion für festgeschriebene
 Belege. Es gibt absichtlich keinen Knopf, der eine einzelne
-Rechnung aus der Datenbank entfernt. Die einzige Total-Löschung
-ist der Factory Reset, der die gesamte App-Instanz auf
-Werkszustand setzt und vorher entweder einen Export oder eine
-Aufbewahrungs-Quittung verlangt.
+Rechnung aus der Datenbank entfernt. Es gibt auch keine Funktion,
+die alle Daten auf einmal löscht. Eine Instanz endet nur, wenn Du als
+Betreiber ihr Daten-Volume auf dem Server löschst. Dann trägst Du
+selbst die Verantwortung dafür, dass die Belege der letzten 10 Jahre
+anderswo erhalten bleiben, zum Beispiel in einem Export oder einem
+Backup samt Passphrase.
 
 Das wirkt am Anfang umständlich. Es schützt Dich aber
 verlässlich: Bei einer späteren Prüfung kannst Du dem Finanzamt
 zeigen, dass Du die 10-Jahres-Frist von Anfang an architektonisch
 nicht brechen konntest.
 
-## Was beim Rechner-Wechsel passieren muss
+## Was beim Server-Wechsel passieren muss
 
-Wenn Du auf einen neuen Rechner umziehst:
+Wenn Du mit Klein.Buch auf einen neuen Server umziehst:
 
-1. Auf dem neuen Rechner Klein.Buch installieren.
-2. Aktuelles Backup vom alten Rechner mitnehmen.
-3. Im Onboarding den Pfad zum Backup auswählen statt einer leeren
-   Datenbank, damit das alte Backup wiederhergestellt wird.
-4. Passphrase eingeben.
-5. Backup-Ziele neu einrichten.
+1. Den Vorlagen-Ordner `/inputs` auf den neuen Server übernehmen,
+   falls Du dort etwas geändert hast. Er ist nicht Teil des Backups.
+2. Auf dem neuen Server Klein.Buch als Container einrichten und im
+   Browser die Einrichtung abschließen.
+3. Die neueste Backup-Datei (Endung `.kbk`) aus einem Deiner
+   externen Backup-Ziele holen.
+4. Unter "Einstellungen → Backups" im Abschnitt "Wiederherstellen"
+   die Datei hochladen.
+5. Das Backup-Passwort eingeben, also die Passphrase, mit der das
+   Backup verschlüsselt wurde.
+6. Backup-Ziele prüfen und bei Bedarf neu einrichten.
 
 Die Aufbewahrungs-Frist läuft beim Umzug unverändert weiter. Der
-Archiv-Inhalt kommt mit dem Backup mit.
+Archiv-Inhalt kommt mit dem Backup mit. Die Einzelheiten stehen im
+Kapitel "Notfall: Instanz neu aufsetzen und wiederherstellen".
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

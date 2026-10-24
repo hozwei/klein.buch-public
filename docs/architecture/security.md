@@ -2,19 +2,22 @@
 
 > Vertiefung zu „Backup" und „Verschlüsselung at Rest" in
 > `../ARCHITECTURE.md` §7. Wie die Geheimnis-Kette gebaut ist, wo welche
-> Geheimnisse leben, wie Bootstrap, Restore und Factory Reset race-frei
-> zueinander passen — und gegen wen sich Klein.Buch im Internetbetrieb
-> (Phase W) schützen muss.
+> Geheimnisse leben, wie Start, Entsperren und Restore race-frei zueinander
+> passen — und gegen wen sich Klein.Buch im Internetbetrieb (Phase W) schützen
+> muss.
 
 ADR-Basis: 0035 (Verschlüsselung at Rest), 0034 (Backup-Ziele/Retention/Log),
-0036 (Factory Reset), 0009 (Backup als First-Class), 0011 + 0028
-(Mail-Credentials; seit W8 im SecretStore der DB), 0039 (Web-/Docker-Betrieb).
+0036 (Factory Reset; im Server abgeschaltet und entfernt, E7), 0009 (Backup als
+First-Class), 0011 + 0028 (Mail-Credentials; seit W8 im SecretStore der DB),
+0039 (Web-/Docker-Betrieb).
 
-**Stand des Codes.** Beschrieben ist der Stand nach den Phase-W-Blöcken W1 und
-W2: Die Desktop-Shell ist noch vorhanden, eine HTTP-Schnittstelle gibt es noch
-nicht. Was der Server-Betrieb ändert, steht an der jeweiligen Stelle mit dem
-Block des Arbeitsplans („geplant (Wn)"). Nichts davon gilt als erledigt, bevor
-der Block abgeschlossen ist.
+**Stand des Codes.** Beschrieben ist der Server-Betrieb nach Phase W bis
+einschließlich W12: Tauri und die Desktop-Shell sind entfernt, Klein.Buch läuft
+als HTTP-Server im Docker-Image. Die Status-Spalte der Tabellen nennt je
+Maßnahme den Block, in dem sie umgesetzt wurde. Abläufe der Desktop-Fassung
+(Factory Reset, Klartext-Migration, Schlüsselbund) stehen nur noch als
+Herkunft da und sind als entfallen gekennzeichnet. Betriebsaufgaben des
+Betreibers: `../operations-guide.md`.
 
 ---
 
@@ -26,9 +29,10 @@ terminiert der Reverse-Proxy des Betreibers. Das bisherige Bedrohungsmodell
 (ADR 0035: gestohlenes Gerät, kopierte Datei) bleibt gültig, ist aber nicht mehr
 das maßgebliche. Maßgeblich ist jetzt ein Angreifer im Netz.
 
-Status in den Tabellen: **umgesetzt (W1/W2)** = heute im Code; **umgesetzt** =
-schon vor Phase W vorhanden; **geplant (Wn)** = Block des Arbeitsplans, noch
-nicht im Code.
+Status in den Tabellen: **umgesetzt (Wn)** = im Code seit Block Wn von
+Phase W; **umgesetzt** = schon vor Phase W vorhanden; **dokumentiert** =
+Betriebsaufgabe bzw. Grenze, beschrieben im Betriebshandbuch; **bewusst
+akzeptiert** = Restrisiko.
 
 ### Schutzgüter
 
@@ -80,7 +84,7 @@ nicht (E1).
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Pfad-Tricks im Dateinamen | `archive::store` lehnt Namen mit `/`, `\`, `:` ab | umgesetzt |
-| Übergroße oder falsch deklarierte Dateien (heute JSON-Bytes ohne Limit außer Branding) | Multipart gestreamt, Limits je Art (20 / 10 / 2 MiB), Typ per Magic Bytes gegen Allowlist, `mime_type` aus dieser Prüfung, freier Platz vor dem Archivieren | umgesetzt (W7): `POST /api/upload/{art}`, 413/415/507 |
+| Übergroße oder falsch deklarierte Dateien | Multipart gestreamt, Limits je Art (20 / 10 / 2 MiB), Typ per Magic Bytes gegen Allowlist, `mime_type` aus dieser Prüfung, freier Platz vor dem Archivieren | umgesetzt (W7): `POST /api/upload/{art}`, 413/415/507 |
 | Skript in einer ausgelieferten fremden Datei | fremde Dateien nur als `attachment` mit `Content-Security-Policy: sandbox`; `inline` nur für selbst erzeugte PDFs; `nosniff` | umgesetzt (W7): `/files/archive`, `/files/download` |
 | Auslieferung manipulierter oder fremder Archivdateien | Download nur über `read_and_verify` (Hash vor dem ersten Byte), `canonicalize` gegen `archive_dir`, Audit `archive.read` | umgesetzt (W7) |
 
@@ -92,7 +96,7 @@ nicht (E1).
 | Pfad-Traversal im Content-ZIP | Prüfung je Pfadkomponente (`..`, Wurzel, Laufwerkspräfix → Abbruch) | umgesetzt (W2) |
 | Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | umgesetzt (W7), dazu nur normale Pfadbestandteile |
 | Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | umgesetzt (W6/W7) |
-| Schema-Konflikt | heute exakt gleiche Schema-Version; künftig `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration, neuere Backups weiter abgelehnt | umgesetzt (W7); echte Vorwärtsmigration ab 0031 (W8) |
+| Schema-Konflikt | `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration beim nächsten Entsperren; neuere Backups abgelehnt (Down-Migration-Schutz) | umgesetzt (W7); echte Vorwärtsmigration 30 → 31 seit W8 |
 
 **Sidecar-Eingaben** (KoSIT, Mustang in der JVM)
 
@@ -122,7 +126,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Lesen der Belege | **Archivdateien (PDF/XML), Logo und Unterschrift liegen unverschlüsselt im Volume.** Schutz ist Sache des Betreibers (Host-Zugriff, Volume-Verschlüsselung). | bewusst akzeptiert |
 | Löschen oder Ersetzen von Archivdateien | Erkennung statt Verhinderung, siehe „Write-once unter Linux" | umgesetzt (W2), Doku W3 |
 | Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
-| | alle Temp-Dateien unter `/data/tmp`, `TMPDIR` im Image | geplant (W7/W11) |
+| | alle Temp-Dateien unter `/data/tmp`: Uploads, Downloads, Exporte, DSGVO-Auskunft (W7), Java-Sidecar über `TMPDIR=/data/tmp` im Image (W11); Reste beim Start und minütlich aufgeräumt | umgesetzt (W7/W11) |
 | Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | umgesetzt (W5; Stichprobe beim Entsperren, die DB ist vorher verschlüsselt) |
 | Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | umgesetzt (W11; Image-Smoke prüft UID, read-only Root-FS und `CapEff` 0) |
 
@@ -133,7 +137,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Lesen eines Backups | Argon2id + AES-256-GCM (§3.2); die DB im Content-ZIP ist zusätzlich SQLCipher-verschlüsselt | umgesetzt (W2) |
 | Inkonsistenter oder überschriebener Stand | Snapshot per `VACUUM INTO`, Backups serialisiert, Dateinamen mit Millisekunden + Kurz-UUID | umgesetzt (W2) |
 | Migration ohne Rückweg | Pflicht-Backup vor jeder Migration (Entsperren mit älterem Schema, Restore eines älteren Backups) | umgesetzt (W7) |
-| Speicher | das Backup wird im RAM gebaut (etwa 3× Archivgröße) | Doku-Hinweis (W13) |
+| Speicher | das Backup wird im RAM gebaut (etwa 3× Archivgröße), der Restore entschlüsselt im RAM (etwa 3× Backup-Größe); `mem_limit` im Compose-Beispiel | dokumentiert (W13, `../operations-guide.md` §10) |
 
 **Off-Site-Ziele**
 
@@ -157,8 +161,8 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 
 **Passphrase im Speicher.** Nach dem Entsperren liegt die Passphrase im
 Prozessspeicher (`BackupSession`). Die KDF-Pfade arbeiten mit `Zeroizing`-Kopien
-(umgesetzt). „Datenbank sperren" (Pool zu, Scheduler gestoppt, Passphrase per
-`zeroize` gelöscht, alle Sitzungen ungültig) ist geplant (W6). Nach einem
+(umgesetzt). „Datenbank sperren" (Pool zu, Scheduler pausiert, Passphrase per
+`zeroize` gelöscht, alle Sitzungen ungültig) ist umgesetzt (W6). Nach einem
 Neustart bleibt die Instanz gesperrt, bis der Nutzer im Browser entsperrt; ein
 Auto-Unlock ist ausgeschlossen (E3).
 
@@ -179,9 +183,9 @@ Auto-Unlock ist ausgeschlossen (E3).
 
 Klein.Buch hat **eine** Passphrase. Sie ist gleichzeitig:
 
-1. **App-Login.** Ohne sie wird kein Pool geöffnet. Im Server-Betrieb kommt ein
+1. **Anmeldung.** Ohne sie wird kein Pool geöffnet. Im Server-Betrieb kommt ein
    zweiter Faktor (TOTP) dazu, und Entsperren der Datenbank und Anmelden einer
-   Browser-Sitzung werden getrennt (geplant W6, Amendment ADR 0035).
+   Browser-Sitzung sind getrennt (umgesetzt W6, Amendment ADR 0035).
 2. **SQLCipher-Key-Source.** Aus ihr leitet SQLCipher per PBKDF2-HMAC-SHA512
    (Salt im DB-Header) den Page-Encryption-Key ab.
 3. **Backup-Schlüssel-Wurzel.** Die Backup-Hülle wird mit einem
@@ -192,8 +196,7 @@ Klein.Buch hat **eine** Passphrase. Sie ist gleichzeitig:
 **verliert**, hat *nichts*. Es gibt **keinen Recovery-Backdoor**. Das ist
 Absicht (ADR 0035): wer Belege jahrzehntelang aufbewahren will, muss seine
 Passphrase ebenso lange sicher verwahren — typischerweise in einem Passwort-
-Manager (das wird im Onboarding-Wizard empfohlen). Mindestlänge: 16 Zeichen,
-geprüft im Frontend und im Backend.
+Manager. Mindestlänge: 16 Zeichen, geprüft im Frontend und im Backend.
 
 **Warum zwei verschiedene KDFs?**
 
@@ -226,9 +229,11 @@ nutzen statt der Vanilla-`bundled`. `vendored-openssl` baut OpenSSL mit,
 damit das Produkt self-contained ist (kein System-OpenSSL nötig — wichtig
 für Auslieferung).
 
-Build-Tool-Pflicht am Host: **Perl** + (Windows-MSVC) **NASM**. Falls der
-Exakt-Pin durch ein sqlx-Update bricht, muss `cargo tree -i libsqlite3-sys`
-genau **eine** Version zeigen, sonst greift die Unification nicht.
+Build-Werkzeuge: **Perl** und **make** (im Image-Build installiert die Stufe
+`server` beide, `build-and-release.md` §3). Falls der Exakt-Pin durch ein
+sqlx-Update bricht, muss `cargo tree -i libsqlite3-sys` genau **eine** Version
+zeigen, sonst greift die Unification nicht. `db::init_crypto` initialisiert das
+mitgebaute OpenSSL ohne `atexit`-Aufräumen (ADR 0039 Nr. 98).
 
 ### 2.2 Pool-Open
 
@@ -286,10 +291,10 @@ Prüfwege:
 
    `backup::verify_passphrase` leitet den Schlüssel neu ab und entschlüsselt;
    scheitert das GCM-Tag oder weicht der Klartext ab, ist die Passphrase
-   falsch. Genutzt wird das bei bereits offener DB: Bestätigung vor dem Factory
-   Reset und der Klartext-Übergangspfad (§7). Im Server-Betrieb prüft die
-   Re-Auth bei entsperrter DB auf diesem Weg, ohne einen zweiten Pool zu öffnen
-   (geplant W6).
+   falsch. Genutzt wird das bei bereits offener DB, ohne einen zweiten Pool zu
+   öffnen: Anmeldung einer weiteren Sitzung, Re-Auth und Neueinrichtung des
+   zweiten Faktors nach `totp-reset` (umgesetzt W6). Die früheren Nutzer
+   (Bestätigung vor dem Factory Reset, Klartext-Übergangspfad) sind entfallen.
 
 **Vorteil:** der Verifier liegt selbst in der verschlüsselten DB; wer ihn aus
 einer kopierten DB-Datei holen will, braucht schon die Passphrase. Es gibt also
@@ -473,57 +478,52 @@ einen Testserver auf `127.0.0.1` mit Fingerprint).
 
 ## 5. Bootstrap-Reihenfolge
 
-Aus `../ARCHITECTURE.md` §3 — hier mit Sicherheits-Blickwinkel (Desktop-Stand;
-Server siehe unten):
+Aus `../ARCHITECTURE.md` §3 — hier mit Sicherheits-Blickwinkel. Zustandsautomat
+`setup` (leeres `/data`) → `locked` (kein Pool, kein Scheduler) ↔ `unlocked`;
+Browser-Sitzungen sind davon getrennt (umgesetzt W5/W6).
 
-1. **Setup-Closure.** Nur App-State + `prepare_filesystem`. **Kein**
-   Pool-Open. Wer hier den DB-Pool öffnen würde, ohne Passphrase, kriegt
-   eine wertlose Datei oder einen Fehler.
-2. **`prepare_filesystem`.** Legt `data_dir` an, kopiert fehlende
-   `inputs/`-Dateien (ohne zu überschreiben) und arbeitet dann vorgemerkte
-   Marker ab: (a) **Factory-Reset-Marker** `FACTORY_RESET_PENDING.json` —
-   `data_dir` leeren, früher Rücksprung in den Onboarding-Zustand; (b)
-   **Restore** — erst Reste eines unterbrochenen Tauschs heilen, dann einen
-   vorgemerkten Restore (`RESTORE_PENDING.json`) anwenden (§6). `archive/` und
-   `backups/` werden erst **danach** angelegt: ein leeres neues `archive/` neben
-   `archive.rollback` sah für die Wiederherstellung früher wie „Tausch fertig"
-   aus.
-3. **Frontend** prüft `backup_needs_onboarding`. Keine DB ⇒ Onboarding.
-   Verschlüsselte DB ⇒ Entsperren. Klartext-DB (Übergang, §7) ⇒ Onboarding nur,
-   wenn dort noch keine Passphrase eingerichtet ist, sonst Entsperren.
-4. **Onboarding** setzt die Passphrase, legt die DB verschlüsselt an (oder
-   migriert eine Klartext-DB, §7), schreibt den Verifier (§2.3) und erstellt
-   sofort das erste Backup.
-5. **Entsperren** öffnet den Pool mit der Passphrase, prüft per Probe-Read,
-   wendet Migrationen an (Schema-Check), schreibt einen gepufferten
-   Restore-Audit und übergibt die Passphrase an die `BackupSession`
-   (Prozessspeicher).
-6. **Scheduler-Start** danach; das fällige Tages-Backup legt der erste Tick an.
+1. **Vor dem Port-Bind** (`server::prepare`, synchron, fail-closed): Sperre
+   `/data/.klein-buch.lock`; Volumes vorhanden, beschreibbar, eingebunden;
+   `db::prepare_filesystem` — legt `data_dir` an, ergänzt `/inputs` aus dem
+   Image (Seed-Manifest, nie überschreiben), verweigert einen
+   Factory-Reset-Marker `FACTORY_RESET_PENDING.json` (E7, nichts wird gelöscht),
+   räumt Reste eines abgebrochenen Restore-Stagings auf, heilt einen
+   unterbrochenen Tausch und wendet einen vorgemerkten Restore an (§6).
+   `archive/` und `backups/` entstehen erst **danach**: ein leeres neues
+   `archive/` neben `archive.rollback` sah für die Wiederherstellung früher wie
+   „Tausch fertig" aus. Dann: DB und Instanz-Marker passen zusammen, keine
+   Klartext-DB, Selbsttest `0o400` im Archiv, `<data>/tmp` leeren. **Kein**
+   Pool-Open.
+2. **Einrichtung** (Zustand `setup`): Setup-Token (nur stderr) und TOTP-Code
+   werden geprüft, **bevor** die DB entsteht; dann DB verschlüsselt anlegen,
+   Verifier (§2.3) schreiben, Instanz-Marker und `totp.json`, erstes Backup.
+3. **Anmelden = Entsperren** (Zustand `locked`): TOTP vor der KDF, Pool mit der
+   Passphrase öffnen + Probe-Read, Archivpfad-Stichprobe, bei älterem Schema
+   Pflicht-Backup vor der Migration, Migrationen + Schema-Check, dann
+   `activate_unlocked`: Passphrase in die `BackupSession` (Prozessspeicher),
+   Pool in den Kontext, Audit, ausstehender Restore-Audit, Scheduler-Start; das
+   fällige Tages-Backup legt der erste Tick an.
 
 **Solange ein Restore offen ist** — Marker, Zustandsdatei
-`RESTORE_SWAP_STATE.json` oder `*.rollback`-Reste vorhanden — lehnen Onboarding
-und Entsperren ab (`restore::restore_incomplete`). Sonst entstünde neben der
-beiseitegelegten DB eine neue.
+`RESTORE_SWAP_STATE.json` oder `*.rollback`-Reste vorhanden — lehnen
+Einrichtung und Entsperren ab. Sonst entstünde neben der beiseitegelegten DB
+eine neue.
 
-**Was diese Reihenfolge schützt:** ohne Schritt 4 oder 5 gibt es nichts im
-Pool-State. Jeder Command, der den Pool braucht, scheitert sauber an „Pool
-nicht da" (übersetzt im UI als „App noch nicht entsperrt").
-
-**Server-Betrieb (geplant W5/W6).** Zustandsautomat `setup` (leeres `/data`) →
-`locked` (kein Pool, kein Scheduler) ↔ `unlocked`; Browser-Sitzungen sind davon
-getrennt. `prepare_filesystem` läuft synchron **vor** dem Port-Bind; die
-fail-closed-Prüfungen aus dem Threat Model verweigern den Start. Nach jedem
-Neustart ist die Instanz gesperrt, bis der Nutzer entsperrt (E3).
+**Was diese Reihenfolge schützt:** ohne Schritt 2 oder 3 gibt es keinen Pool.
+DB-Commands antworten dann 423 („gesperrt"), die Oberfläche zeigt die
+Anmeldung. Nach jedem Neustart ist die Instanz gesperrt, bis der Nutzer
+entsperrt (E3); einen Auto-Unlock gibt es nicht.
 
 ---
 
 ## 6. Race-Freiheit durch Zwei-Phasen-Pattern
 
-Sowohl **Restore** als auch **Factory Reset** machen destruktive FS-Ops
-(DB-Datei ersetzen, Archiv ersetzen, `data_dir` leeren). Im **Live-Command**
-ist der Pool offen — wir können da nicht einfach die Datei ersetzen
-(Windows-File-Lock, SQLite-WAL-State). Lösung: zwei Phasen, verbunden über eine
-Marker-Datei im Dateisystem (nicht in der DB, die ja ausgetauscht wird).
+Der **Restore** ersetzt DB-Datei, Archiv und Branding. Solange der Prozess
+läuft, ist der Pool offen — die Datei lässt sich nicht einfach ersetzen
+(offene Verbindungen, WAL-Zustand). Lösung: zwei Phasen, verbunden über eine
+Marker-Datei im Dateisystem (nicht in der DB, die ja ausgetauscht wird). Der
+Factory Reset der Desktop-Fassung nutzte dasselbe Muster; im Server ist er
+abgeschaltet und entfernt (E7).
 
 ### Phase A (Live)
 
@@ -538,15 +538,16 @@ Marker-Datei im Dateisystem (nicht in der DB, die ja ausgetauscht wird).
   Migrations-Prüfsummen), Marker per `rename`. Der Tausch beim Neustart legt
   `RESTORE_APPLIED.json` an; das erste Entsperren schreibt
   `backup.restore.applied` und trägt das Pre-Restore-Backup in die Historie ein.
-- **Factory Reset** (nur Desktop). Gating durchlaufen (Export-First-Pflicht
-  etc.), Passphrase-Verify, **Marker schreiben** (`FACTORY_RESET_PENDING.json`),
-  `AppHandle::restart()`.
 
-In Phase A wird der Pool nicht geschlossen. Phase A endet mit einem Neustart
-(Restore: vom Nutzer ausgelöst; Factory Reset: `AppHandle::restart()`); der
-gesamte Prozess-State verschwindet. Im Server beendet sich der Prozess nach dem
-Restore geordnet, sobald laufende Jobs fertig sind, und die Container-Verwaltung
-startet ihn neu (geplant W5).
+Der Restore-Job wartet exklusiv auf laufende Commands und Jobs (`db_gate`),
+pausiert den Scheduler und lehnt ab der Annahme Änderungen mit 503 ab (sie gingen
+beim Tausch verloren); ein zweiter Restore wird abgelehnt. In Phase A wird der
+Pool nicht geschlossen. Nach Erfolg beendet sich der Prozess geordnet (Exit 0,
+nach dem Abwarten laufender Aufgaben), und die Container-Verwaltung startet ihn
+neu (umgesetzt W5/W7; die Restart-Policy muss auch nach Exit 0 neu starten,
+`../operations-guide.md` §3). Scheitert Phase A, werden Sperre und Pause
+aufgehoben, und Upload bzw. Staging werden verworfen (bei falscher Passphrase
+bleibt der Upload für den nächsten Versuch liegen).
 
 ### Phase B (nächster Start, in `prepare_filesystem`, vor dem Pool-Open)
 
@@ -577,60 +578,57 @@ wird):
 | `moving` / `moved` | Tausch unvollständig | Teilkopien entfernen, Originale aus `.rollback` zurück; der Marker bleibt, der Tausch beginnt neu |
 | keine Zustandsdatei, aber `.rollback` vorhanden (älterer Stand) | unklar | **nichts löschen**: fehlt das Original, kommt die `.rollback`-Fassung zurück; sind beide da, wird die `.rollback`-Fassung als `.verworfen-<uuid>` beiseitegelegt |
 
-Der Audit `backup.restore.applied` wird nach dem Pool-Open geschrieben
-(`PendingRestoreAudit`). Scheitert er, schlägt das Entsperren fehl, und der
-Eintrag bleibt für den nächsten Versuch vorgemerkt.
+Die Angaben zum angewendeten Restore stehen in `RESTORE_APPLIED.json` (übersteht
+weitere Neustarts). Das erste Entsperren schreibt daraus den Audit
+`backup.restore.applied` in die wiederhergestellte DB und löscht die Datei erst
+danach; scheitert der Audit, schlägt das Entsperren fehl, und der Eintrag bleibt
+für den nächsten Versuch vorgemerkt.
 
-**Factory Reset** (nur Desktop): Datei `FACTORY_RESET_PENDING.json` ⇒
-`data_dir`-Inhalt leeren, Kern-Verzeichnisse leer neu anlegen,
-Keychain-Wipe best-effort. **Off-Site-Backups** in Cloud/SFTP bleiben
-unangetastet (bewusste Architektur-Entscheidung — GoBD und Geräte-Weitergabe
-trennen). Im Server-Modus ist der Factory Reset abgeschaltet (E7, Amendment
-ADR 0036); der Code entfällt in W11.
+**Factory Reset:** Ein vorgefundener Marker `FACTORY_RESET_PENDING.json` wird nie
+angewendet; der Start bricht ab, nichts wird gelöscht (E7, Amendment ADR 0036;
+Code seit W11 entfernt).
 
-**Tests** (G1-HARDEN.1, G1-RESET-Tests, Review W2): Roundtrip mit Crash
-zwischen Phase A und Phase B (Marker bleibt, Phase B greift beim nächsten
-Start); gezielt injizierte Fehler in Stufe 1 und Stufe 2 hinterlassen die
-Originale; nach Backup → Restore hat keine Datei unter `archive/` ein
-Schreibbit.
+**Tests:** Unit-Tests in `src/backup/restore.rs` (Tausch, Crash in Stufe 2,
+Wiederherstellung ohne Zustandsdatei löscht nie); `tests/server_restore_test.rs`
+(Disaster Recovery mit anderer Passphrase, abgelehnte Backups hinterlassen
+nichts, Restore aus der Historie nur lokal, Pflicht-Backup vor Migration,
+Schema-30-Backup mit Vorwärtsmigration, fremde Archivpfade, Audit über
+Neustarts); `tests/server_jobs_test.rs`
+(`restart_after_restore_blocks_writes_and_shuts_down`); nach Backup → Restore
+hat keine Datei unter `archive/` ein Schreibbit.
 
 ---
 
-## 7. Encryption-Migration (Klartext → SQLCipher)
+## 7. Neuverschlüsseln (Passphrase-Wechsel) und entfallene Klartext-Migration
 
-Eine Installation, die vor G1-ENC angelegt wurde, hat eine **Klartext-DB**
-(erkannt an `db::db_file_is_plaintext`: die Datei beginnt mit
-`SQLite format 3\0`; SQLCipher verschlüsselt auch den Header). Sie wird beim
-Onboarding (Klartext-DB ohne Passphrase) bzw. beim ersten Entsperren (Klartext-DB
-mit Verifier; Passphrase per `backup::verify_passphrase` geprüft) einmalig
-verschlüsselt — `db::migrate_plaintext_to_encrypted`:
+**Klartext-DB.** Eine unverschlüsselte Datenbank (erkannt an
+`db::db_file_is_plaintext`: die Datei beginnt mit `SQLite format 3\0`; SQLCipher
+verschlüsselt auch den Header) lässt den Server nicht starten (umgesetzt W5);
+ein Restore lehnt ein Backup mit Klartext-DB ab (W7). Den Übergangspfad der
+Desktop-Fassung (`migrate_plaintext_to_encrypted`, Adoption einer Klartext-DB in
+der Einrichtung) gibt es nicht mehr (umgesetzt W6, E17: kein Datenumzug aus der
+Desktop-Fassung).
 
-1. **Pflicht-Pre-Migration-Backup** (`create_now`, Auslöser `pre_restore`,
-   wird nie rotiert) mit der gerade bestätigten Passphrase. Scheitert es, wird
-   **nichts** verschlüsselt; die Klartext-DB bleibt unverändert.
-2. Audit `encryption.migration.started` noch in die Klartext-DB — er wandert mit
-   in den Export, der Audit-Trail bleibt lückenlos.
-3. Pool schließen, dann `db::encrypt_db_file_in_place`:
-   - Reste eines früheren Laufs (`<db>.enc-migrating` samt `-wal`/`-shm`)
-     entfernen.
-   - Eigene Einzelverbindung auf die Klartext-Quelle (Statement-Logging aus),
-     `PRAGMA wal_checkpoint(TRUNCATE)`, `ATTACH DATABASE '<db>.enc-migrating'
-     AS encrypted KEY …`, `SELECT sqlcipher_export('encrypted')`, `DETACH`.
-   - **Probe-Lesen** der Kopie mit der Passphrase. Scheitert es, wird die
-     Kopie gelöscht; die Klartext-DB bleibt unverändert.
-   - WAL/SHM von Kopie und Quelle entfernen (sonst würde SQLite die
-     Klartext-WAL auf die verschlüsselte Datei anwenden).
-   - **Atomarer `rename`** der Kopie auf den DB-Pfad. Neben der DB bleibt keine
-     Klartext-Kopie zurück.
-4. Pool mit Key neu öffnen, Migrationen + Schema-Check, Audit
-   `encryption.migration.applied`.
+**Passphrase-Wechsel** (`POST /api/auth/passphrase`, Re-Auth, W6;
+`db::rekey_db_file`, gemeinsamer Kern `reencrypt_db_file`):
 
-Der Rückweg ist das Pre-Migration-Backup (verschlüsselte `.kbk`), nicht eine
-Datei neben der DB.
+1. Gleiche Passphrase → 422. Warten auf laufende Commands und Jobs
+   (`db_gate`, höchstens 60 s, sonst 503); läuft ein Restore, wird abgelehnt.
+2. Pool schließen; eigene Einzelverbindung auf die DB (Statement-Logging aus),
+   `ATTACH DATABASE '<temp>' AS encrypted KEY …`,
+   `SELECT sqlcipher_export('encrypted')`, `DETACH`. Kein `PRAGMA rekey` (WAL,
+   offene Verbindungen).
+3. **Probe-Lesen** und `quick_check` der neuen Datei mit der neuen Passphrase,
+   `fsync`; erst danach WAL/SHM entfernen und **atomarer `rename`** auf den
+   DB-Pfad. Scheitert etwas vor dem Tausch, gilt die alte Passphrase weiter und
+   der Pool wird mit ihr wieder geöffnet; im Fehlerfall entscheidet ein
+   Probe-Öffnen, welche Passphrase gilt.
+4. Verifier (§2.3) neu schreiben, andere Sitzungen abmelden; danach ein Backup
+   (`manual`) als nachverfolgter Task. Ältere Backups bleiben mit der alten
+   Passphrase einspielbar.
 
-**Server-Betrieb:** Es gibt keinen Desktop-Bestand zu übernehmen (E17). Der
-Klartext-Übergangspfad wird entfernt (geplant W6); eine Klartext-DB lässt den
-Server nicht starten (geplant W5).
+Neben der DB bleibt keine Kopie mit der alten Passphrase zurück. Tests:
+`tests/server_auth_test.rs` (Wechsel mit Datenerhalt und Verifier).
 
 ---
 
@@ -708,8 +706,8 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
   hat, hat eine. Klein.Buch behauptet nicht, dass die *Existenz* der DB
   verborgen wäre.
 - **Hardware-Token.** Yubikey/Smartcard/WebAuthn sind nicht vorgesehen. Im
-  Server-Betrieb ist TOTP der zweite Faktor (geplant W6); die Passphrase gehört
-  in einen guten Passwort-Manager.
+  Server-Betrieb ist TOTP der zweite Faktor (umgesetzt W6); die Passphrase
+  gehört in einen guten Passwort-Manager.
 - **Physische Unveränderbarkeit des Archivs (WORM).** Siehe „Write-once unter
   Linux".
 
@@ -773,12 +771,13 @@ Linux deshalb **keine physische Unveränderbarkeit**.
    Datei lässt sich aus einem älteren Backup zurückholen.
 5. **Snapshots des Dateisystems beim Betreiber** — schreibgeschützte Snapshots
    des Daten-Volumes (z. B. ZFS oder Btrfs) liegen außerhalb der Reichweite des
-   Server-Benutzers. Das ist Betriebsaufgabe und wird im Betriebshandbuch
-   empfohlen (W13).
+   Server-Benutzers. Das ist Betriebsaufgabe und im Betriebshandbuch empfohlen
+   (`../operations-guide.md` §5, W13).
 
-Ergänzend (geplant): Selbsttest beim Start (`chmod 0400` im Archiv anlegen und
-prüfen; scheitert er, etwa wegen NFSv4-ACLs, startet der Server nicht, W5) und
-der Hinweis, DB und Archiv nicht auf NFS/SMB zu legen (W13).
+Ergänzend: Selbsttest beim Start (`chmod 0400` im Archiv anlegen und prüfen;
+scheitert er, etwa als root oder wegen NFSv4-ACLs, startet der Server nicht;
+umgesetzt W5) und der Hinweis, DB und Archiv nicht auf NFS/SMB/exFAT zu legen
+(`../operations-guide.md` §2, W13).
 
 **Was bleibt.** Wer Code als Server-Benutzer ausführt, kann Archivdateien löschen
 oder ersetzen. Klein.Buch bemerkt das spätestens beim nächsten Lesen oder
@@ -789,11 +788,12 @@ dieser Benutzer nicht erreicht.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W nach W12, Version 2026.5.1, Schema v31), ADRs
-0009/0034/0035/0036/0039. Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`,
-`restore.rs`, `target.rs`, `sftp.rs`, `manifest.rs`, `encrypt.rs`,
-`rotation.rs`), `src/db/mod.rs` (Pool-Open, Bootstrap, Verschlüsselungs-
-Migration), `src/archive/store.rs`, `src/archive/integrity_check.rs`,
-`src/scheduler/integrity_check_cron.rs`, `src/limits.rs`, `src/locks.rs`,
-`src/secrets.rs`, `src/nettest.rs`, `src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin);
-Planwerte aus dem Arbeitsplan Phase W (Blöcke W5–W13).
+Stand: 2026-10-24 (Phase W nach W12, Fließtext in W13 an die Tabellen
+angeglichen; Version 2026.5.1, Schema v31), ADRs 0009/0034/0035/0036/0039.
+Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`, `restore.rs`, `target.rs`,
+`sftp.rs`, `manifest.rs`, `encrypt.rs`, `rotation.rs`), `src/db/mod.rs`
+(Pool-Open, `prepare_filesystem`, Neuverschlüsseln), `src/server/` (`mod.rs`,
+`startup.rs`, `auth.rs`, `policy.rs`), `src/archive/store.rs`,
+`src/archive/integrity_check.rs`, `src/scheduler/integrity_check_cron.rs`,
+`src/limits.rs`, `src/locks.rs`, `src/secrets.rs`, `src/nettest.rs`,
+`src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin).

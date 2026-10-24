@@ -115,7 +115,7 @@ Konkret:
 **Neutral:**
 
 - SmartScreen-Warnung beim Erst-Start gilt für NSIS wie für MSI gleichermaßen,
-  beides ist unsigniert. ADR-Bezug: implizit via `release-signing-guide.md`,
+  beides ist unsigniert. ADR-Bezug: implizit via `release-signing-guide.md` (mit Phase W, Block W13, entfernt),
   nicht durch diese Entscheidung verändert.
 
 ## Alternativen erwogen

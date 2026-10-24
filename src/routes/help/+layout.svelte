@@ -18,6 +18,7 @@
     faq: false,
     troubleshooting: false,
     glossar: false,
+    betrieb: false,
   });
   // `touchedByCategory` merkt, welche Sektionen der Nutzer schon mal
   // bewusst gesetzt hat. Nur unberührte Sektionen folgen dem Default
@@ -30,6 +31,7 @@
     faq: false,
     troubleshooting: false,
     glossar: false,
+    betrieb: false,
   });
 
   export function isCategoryOpen(cat: HandbookCategory): boolean {

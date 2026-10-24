@@ -3,109 +3,171 @@ slug: troubleshooting-backup
 title: Backup-Fehler
 category: troubleshooting
 order: 520
-keywords: [backup, fehler, ziel, schreibrecht, voll, cloud, fehlgeschlagen]
+keywords: [backup, fehler, ziel, schreibrecht, speicher voll, sftp, fingerprint, volume, fehlgeschlagen]
 ---
 
 # Backup-Fehler
 
-Wenn Klein.Buch ein Backup nicht schreiben kann, landet ein
-Fehler-Eintrag im Backup-Protokoll und ein Eintrag unter "Hinweise".
-Hier die typischen Ursachen und die jeweilige Lösung.
+Wenn Klein.Buch ein Backup nicht schreiben kann, steht im
+Backup-Protokoll eine Zeile mit "fehlgeschlagen" und der Fehlermeldung.
+Auf der Seite "Backups" steht unter dem betroffenen Ziel
+"Fehlgeschlagen" mit Zeitpunkt und Meldung, und unter "Hinweise"
+erscheint ein Eintrag.
 
-## Ziel-Ordner nicht gefunden
+Wichtig ist, wo der Fehler passiert. Scheitert nur ein externes Ziel,
+sind die lokale Kopie und alle anderen Ziele trotzdem gesichert. Der
+Hinweis heißt dann "Externe Backup-Spiegelung fehlgeschlagen". Scheitert
+dagegen die lokale Kopie im Daten-Ordner des Servers, entsteht gar kein
+Backup. Klein.Buch meldet dann, dass die lokale Pflicht-Sicherung nicht
+geschrieben werden konnte. Das ist der ernstere Fall.
 
-Symptom: "Pfad existiert nicht" oder "Zugriff verweigert".
+Die meisten Ursachen liegen beim Server und nicht in Klein.Buch selbst.
+Einige Lösungen muss deshalb der Betreiber umsetzen, also die Person, die
+den Server und den Container verwaltet.
+
+## "Volume … ist nicht eingebunden"
+
+Diese Meldung (oder "Backup-Ziel-Wurzel /backup-targets fehlt") heißt:
+Der Ordner, der als Ziel eingetragen ist, kommt im Container nicht an.
+Meist wurde der Container ohne die passende Zeile unter `volumes:` neu
+erzeugt, oder der Ordner auf dem Server war beim Start nicht da, etwa
+weil das NAS noch nicht verbunden war.
+
+Lösung für den Betreiber: In der Compose-Datei prüfen, ob die Zeile für
+das Ziel noch da ist und der Name nach `/backup-targets/` genau gleich
+geblieben ist. Klein.Buch merkt sich das Ziel unter diesem Namen. Dann
+prüfen, ob der Ordner auf dem Server erreichbar ist, und den Container
+neu starten. Beim nächsten Backup versucht Klein.Buch es wieder.
+
+## Keine Schreibrechte
+
+Die Meldung enthält "Permission denied" (Zugriff verweigert). Der
+Container läuft unter einem eigenen Benutzer, der in der Compose-Datei
+unter `user:` steht. Dieser Benutzer darf im Ziel-Ordner nicht
+schreiben.
+
+Lösung für den Betreiber: Dem Benutzer aus `user:` Schreibrechte auf den
+Ordner geben, zum Beispiel mit `chown`. Bei einer NAS-Freigabe kommt es
+zusätzlich auf die Einstellungen der Freigabe an. Mehr dazu im Kapitel
+"[Volumes und Rechte](/help/volumes-und-rechte)".
+
+## Speicher voll
+
+Die Meldung enthält "No space left on device" (kein Platz mehr auf dem
+Speicher). Entweder ist das Ziel voll oder der Daten-Ordner auf dem
+Server. Ist der Daten-Ordner voll, scheitert schon die lokale Kopie.
+
+Lösung: Platz schaffen. Denk daran, dass Klein.Buch manuelle Backups und
+Sicherheits-Backups vor einer Wiederherstellung nie selbst löscht und
+auf SFTP-Servern gar nichts löscht. Wie viel Platz Klein.Buch braucht,
+steht im Kapitel "[Speicher und Ressourcen](/help/speicherbedarf)".
+
+## SFTP-Server nicht erreichbar oder Anmeldung abgelehnt
+
+Beim Einrichten oder beim Knopf "Testen" lautet die Meldung "Verbindung
+zu Host:Port fehlgeschlagen (Host, Port, Zugangsdaten und Firewall
+prüfen)." Klein.Buch sagt dabei absichtlich nicht, ob der Server nicht
+antwortet, der Port zu ist oder das Passwort nicht stimmt. Beim Backup
+selbst steht im Protokoll eine genauere Meldung, zum Beispiel "SFTP-Login
+abgelehnt" (Benutzername oder Passwort falsch) oder "hat das Zeitlimit
+überschritten".
 
 Mögliche Ursachen:
 
-1. Externer USB-Stick ist nicht angesteckt.
-2. Netzlaufwerk ist nicht verbunden.
-3. Cloud-Ordner ist nicht synchronisiert (zum Beispiel weil der
-   Cloud-Client gerade deinstalliert wurde).
-4. Du hast den Ziel-Ordner umbenannt oder verschoben.
+1. Der SFTP-Server ist ausgeschaltet oder in Wartung.
+2. Eine Firewall blockiert die Verbindung. Denk daran: Die Verbindung
+   geht vom Server aus, auf dem Klein.Buch läuft, nicht von Deinem Gerät.
+3. Adresse oder Port stimmen nicht.
+4. Das Passwort wurde beim Anbieter geändert.
 
-Lösung: Geh in "Einstellungen" und "Backups". Korrigier in der
-Karte "Off-Site-Kopie" den Pfad oder wähl über "Durchsuchen…" den
-aktuellen Ordner und klick auf "Speichern". Klein.Buch versucht
-mit dem nächsten Backup-Lauf den neuen Pfad.
+Ein SFTP-Ziel lässt sich nicht bearbeiten. Hat sich das Passwort oder
+ein anderer Zugangswert geändert, entfernst Du das Ziel mit "Entfernen"
+und legst es neu an, wie im Kapitel "[Off-Site-Backup
+einrichten](/help/backup-ziel-einrichten)" beschrieben.
 
-## Schreibrechte fehlen
+Zwei weitere Meldungen kommen nur beim Testen vor. "Port … ist nicht
+freigegeben" heißt: Der Port steht nicht auf der Liste der erlaubten
+Ports. Der Betreiber kann ihn über die Umgebungsvariable
+`KLEIN_BUCH_ALLOWED_TEST_PORTS` freigeben. "Zu viele Verbindungstests"
+heißt: Es gab mehr als zehn Tests in einer Minute. Dann eine Minute
+warten.
 
-Symptom: "Zugriff verweigert" trotz vorhandener Datei-Hierarchie.
+"Zeitüberschreitung nach … s" heißt: Die Übertragung hat zu lange
+gedauert. Jedes Ziel hat dafür 60 Sekunden plus eine Sekunde je
+Megabyte Backup-Größe. Eine sehr langsame Verbindung reicht dafür nicht
+aus.
 
-Lösung: Im Datei-Explorer das Eigenschaften-Dialog des
-Backup-Ordners öffnen, im Reiter "Sicherheit" das eigene
-Benutzer-Konto auswählen und "Vollzugriff" gewähren. Auf
-Netzlaufwerken oder Unternehmens-Pfaden frag den Administrator.
+## SFTP-Host-Schlüssel weicht ab
 
-## Festplatte voll
+Die Meldung lautet "SFTP-Host-Schlüssel weicht vom hinterlegten
+Fingerprint ab!" und nennt den erwarteten und den erhaltenen Wert.
+Klein.Buch hat sich beim Einrichten den Fingerabdruck des Servers
+gemerkt. Jetzt meldet sich der Server mit einem anderen. Das ist ein
+Sicherheits-Hinweis: Entweder hat der Betreiber des SFTP-Servers den
+Schlüssel ausgetauscht, zum Beispiel nach einer Neuinstallation, oder
+jemand versucht, sich zwischen Klein.Buch und den Server zu schalten
+(ein sogenannter Man-in-the-Middle-Angriff). Klein.Buch bricht die
+Übertragung deshalb ab.
 
-Symptom: "Kein Speicherplatz" oder "Schreiben fehlgeschlagen
-(Code 112)".
+Lösung: Frag beim Anbieter nach, ob der Schlüssel ausgetauscht wurde, und
+lass Dir den neuen Fingerprint nennen. Wenn ja, entfernst Du das Ziel,
+legst es neu an, vergleichst beim "Verbindung testen" den neuen
+Fingerprint mit dem genannten und klickst erst dann auf "Als SFTP-Ziel
+hinzufügen". Hat der Anbieter nichts ausgetauscht, lege das Ziel nicht
+neu an, sondern lass die Sache untersuchen.
 
-Lösung: Auf dem Ziel-Laufwerk Speicher freiräumen. Bei Cloud-
-Ordnern: Im Cloud-Anbieter-Konto prüfen, ob das Speicher-Kontingent
-ausgeschöpft ist. Klein.Buch-Backups sind in der Regel klein (oft
-unter 10 MB), aber andere Dateien können das Laufwerk füllen.
+## "Kein SFTP-Passwort gespeichert"
 
-## SFTP-Server nicht erreichbar
+Zu diesem Ziel liegt kein Passwort in der Datenbank. Das kommt vor, wenn
+ein SFTP-Ziel aus der früheren Desktop-Fassung mit einem Backup
+übernommen wurde. Lösung: Ziel entfernen und neu anlegen.
 
-Symptom: "Verbindung zum SFTP-Server fehlgeschlagen" oder "Timeout".
+## Sync-Ordner lädt nicht hoch
 
-Mögliche Ursachen:
+Das Protokoll meldet "gesichert", aber im Cloud-Speicher fehlt die
+Datei. Klein.Buch legt die Datei nur in den Ordner. Das Hochladen
+erledigt ein Sync-Programm auf dem Server, und das läuft gerade nicht
+richtig. Lösung für den Betreiber: Das Sync-Programm prüfen.
 
-1. Server ist offline oder in Wartung.
-2. Internet-Verbindung weg.
-3. Firewall blockiert den SFTP-Port.
+## Nach einem Update: "Entsperren abgebrochen"
 
-Lösung: Internet-Verbindung prüfen. Server-Adresse und Port noch
-einmal kontrollieren. Beim Anbieter nachfragen, ob der Server
-gerade läuft. Klein.Buch versucht den nächsten Backup-Zeitpunkt
-erneut.
+Bei der Anmeldung erscheint "Entsperren abgebrochen: Vor der
+Datenbank-Umstellung ließ sich kein Backup schreiben. Es wurde nichts
+verändert". Eine neue Version von Klein.Buch muss die Datenbank manchmal
+auf ein neues Format umstellen. Vorher legt sie zur Sicherheit ein
+Backup an. Klappt das nicht, stellt sie nichts um und bleibt gesperrt.
+Meist ist der Daten-Ordner voll oder nicht beschreibbar.
 
-## Host-Key-Wechsel beim SFTP
+Lösung für den Betreiber: Platz schaffen oder die Rechte von `/data`
+korrigieren und die genaue Ursache im Server-Log nachlesen. Danach
+meldest Du Dich erneut an. Alternativ kann der Betreiber zur vorherigen
+Version zurückkehren, siehe Kapitel "[Updates und
+Rückfall](/help/updates-und-rueckfall)".
 
-Symptom: "Host-Key passt nicht mehr".
+## Seit einem Neustart entstehen keine Backups
 
-Das ist ein Sicherheits-Hinweis. Entweder hat der Server-Betreiber
-den Schlüssel ausgetauscht (zum Beispiel nach einer
-Server-Wartung) oder es findet ein Angriff statt, der Dich auf
-einen falschen Server umleitet.
-
-Lösung: Frag beim Server-Anbieter, ob ein Schlüssel-Wechsel
-stattgefunden hat. Wenn ja, lass Dir den neuen Fingerabdruck
-bestätigen, klick in Klein.Buch auf "Verbindung testen" — der
-neue Fingerabdruck erscheint im Test-Ergebnis. Vergleich ihn mit
-dem vom Anbieter und pinn ihn mit "Als SFTP-Ziel speichern". Wenn
-der Anbieter nichts ausgetauscht hat, brich ab und untersuche die
-Sache.
-
-## Cloud-Ordner zeigt nicht alle Dateien
-
-Symptom: Backup-Protokoll meldet Erfolg, im Cloud-Ordner siehst Du
-die Datei aber nicht.
-
-Wahrscheinliche Ursache: Cloud-Client hat die Synchronisation
-gestoppt oder es gibt einen Konflikt. Lösung: Im Cloud-Client-
-Tray-Icon das Status-Symbol prüfen. Pausierte Synchronisation
-wieder anwerfen, Konflikt-Dateien auflösen.
-
-Bei OneDrive: Setze für den Klein.Buch-Backup-Ordner ausdrücklich
-"Immer auf diesem Gerät behalten", damit die Dateien nicht nur als
-Platzhalter abgelegt werden.
+Nach jedem Neustart des Servers ist Klein.Buch gesperrt, bis sich jemand
+anmeldet. Solange laufen keine geplanten Aufgaben, auch nicht das
+tägliche Backup. Nach der Anmeldung holt Klein.Buch es nach. Melde Dich
+nach einem Neustart deshalb bald wieder an.
 
 ## Wenn nichts hilft
 
-Stoße ein manuelles Backup über "Jetzt Backup machen" an.
-Klein.Buch zeigt den Fehler dann in Echtzeit. Notiere die genaue
-Fehlermeldung und melde den Fall im Klein.Buch-Repository auf
-GitHub. Hänge keine Datei-Inhalte aus Deiner Datenbank an, nur
-den Text der Fehlermeldung und die Klein.Buch-Version.
+Klick auf "Jetzt sichern". Klein.Buch zeigt den Fehler dann sofort an.
+Der Betreiber findet weitere Einzelheiten im Server-Log, zum Beispiel mit
+`docker compose logs klein-buch` (siehe Kapitel "[Fehlersuche im
+Container](/help/fehlersuche-im-container)"). Notiere die genaue
+Fehlermeldung und die Klein.Buch-Version und melde den Fall im
+öffentlichen Klein.Buch-Repository. Den Link findest Du im Hauptmenü
+unter "Über". Hänge keine Inhalte aus Deiner Datenbank an, nur den Text
+der Fehlermeldung und die Version.
 
-In der Zwischenzeit kannst Du die verschlüsselte Datenbank-Datei
-mit dem Datei-Explorer manuell an einen sicheren Ort kopieren.
-Den Pfad zum Daten-Ordner findest Du im Hauptmenü unter "Über".
+In der Zwischenzeit kann der Betreiber die vorhandenen Backup-Dateien
+(`.kbk`) aus dem lokalen Backup-Ordner von Hand an einen sicheren Ort
+kopieren. Auf dem Server liegt dieser Ordner im Unterordner `backups`
+des Ordners, der als `/data` eingebunden ist. Die Dateien sind
+verschlüsselt.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

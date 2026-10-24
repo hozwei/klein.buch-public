@@ -301,6 +301,9 @@ Arbeitszweig `phase-w`.
 - **Release-Image (W12):** Signiertes Image mit SBOM, Schwachstellen-Scan und
   Quellarchiv „Quellen Dritter“ je Release; Lieferketten-Prüfungen in CI
   (cargo-deny, cargo-audit, pnpm audit, gitleaks), Actions per Commit-SHA.
+- Ausgeblendet: die wirkungslosen Erinnerungsregeln des entfernten
+  Rechnungs-Eingangsordners; ein falscher Code bei der Einrichtung des zweiten
+  Faktors erscheint jetzt ebenfalls als Fehlversuch im Log (fail2ban). (W13)
 - **Abhängigkeiten (W12):** russh 0.64, quick-xml 0.42, lopdf 0.46 und weitere
   Updates wegen Sicherheitsmeldungen (u. a. rustls, tokio). Der
   E-Rechnungs-Parser setzt Texte mit Entity-Referenzen (`&amp;`) jetzt am
@@ -318,6 +321,16 @@ Arbeitszweig `phase-w`.
   Internetbetrieb, Stand der Umsetzung je Maßnahme, Doku-Drift bei Verifier und
   SQLCipher-Migration behoben, Write-once unter Linux ehrlich beschrieben);
   `gobd.md` zum neuen Archiv-Schreibpfad nachgezogen. (W3)
+- **Handbuch und Betriebsdoku für den Docker-Betrieb (W13):** Neue Hilfe-Kategorie
+  „Betrieb“ (Installation mit Docker Compose, Reverse-Proxy und TLS, Volumes
+  und Rechte, zweiter Faktor, Updates und Rückfall, Notfall-Wiederherstellung,
+  Speicher, Fehlersuche im Container mit fail2ban-Filter, Lizenz und
+  Quellcode); alle übrigen Artikel auf Browser und Server umgestellt
+  („Rechnungseingang per Upload“ statt Eingangsordner, Mail nur per SMTP,
+  Downloads statt Speichern-Dialog); Artikel zu Zurücksetzen, Microsoft-Anmeldung
+  und SmartScreen entfernt. `README.md` mit Schnellstart, neue `SECURITY.md`
+  (Meldeweg, Signaturprüfung mit cosign) und `CONTRIBUTING.md`; Betriebs-,
+  Architektur- und Build-Doku auf den Server-Betrieb umgestellt.
 
 ### Changed
 

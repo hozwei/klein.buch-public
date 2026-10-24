@@ -32,7 +32,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0008 | PDF via Typst, ZUGFeRD via Mustang im Java-Sidecar | PDF / Sidecar | `modules.md` §3 (pdf/) + `../ARCHITECTURE.md` §6 |
 | 0009 | Backup als First-Class-Feature (Argon2id + AES-256-GCM) | Backup | `security.md` §3 |
 | 0010 | EÜR auf Cash-Basis (§4 Abs. 3 EStG) | EÜR | `modules.md` §13 (euer/) |
-| 0011 | Mail (Phase 1): SMTP via lettre, Credentials im OS-Keychain | Mail | `security.md` §4 |
+| 0011 | Mail (Phase 1): SMTP via lettre, Credentials im OS-Keychain (Amendment 2026-10-23: seit W8 in der Tabelle `secrets` der SQLCipher-DB, Migration 0031) | Mail | `security.md` §4 |
 | 0012 | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` pro Geschäftsjahr | Belegnummern | `modules.md` §1 (domain/numbering) |
 | 0013 | Local-First strict: keine Telemetrie, kein Auto-Update, kein Cloud-Sync | Privacy / Local-First | `../ARCHITECTURE.md` §7 |
 | 0014 | Lizenz AGPL-3.0-or-later | Lizenz | `../README.md` (LICENSE) |
@@ -58,7 +58,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0034 | Backup-Ziele, Aufbewahrung + Backup-Log | Backup-Tiers | `security.md` §3 + `data-model.md` §2e (backup_log) |
 | 0035 | Verschlüsselung at Rest + Passphrase = App-Login | SQLCipher | `security.md` §2 |
 | 0036 | Factory Reset (vollständiges Zurücksetzen) | Factory Reset | `security.md` §6 + `gobd.md` §7 |
-| 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/) + §6 (scheduler/drop_folder) |
+| 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/); Drop-Folder im Server entfallen (E11, §6 Hinweis) |
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 

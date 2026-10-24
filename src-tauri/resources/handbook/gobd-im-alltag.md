@@ -37,7 +37,7 @@ Jede relevante Aktion landet in einem Audit-Log. Welche Rechnung
 wurde wann festgeschrieben, welche Zahlung wurde wann erfasst,
 welche Anlage wurde wann ausgebucht. Du kannst das Audit-Log nicht
 bearbeiten und nicht löschen. Klein.Buch zeigt es Dir in den
-Einstellungen unter "Audit-Log".
+Einstellungen unter "Protokoll & Datensicherheit".
 
 ## Aufbewahrung 10 Jahre
 
@@ -47,9 +47,9 @@ Beleg entstanden ist (§147 Abs. 4 AO). Eine Rechnung mit
 Rechnungsdatum 2026 ist also bis zum 31.12.2036 aufzuheben.
 
 Klein.Buch hat kein "Beleg löschen"-Werkzeug. Das ist Absicht.
-Die einzige Funktion, die Daten überhaupt löscht, ist der
-Factory Reset, und der verlangt vorher einen Export oder eine
-Aufbewahrungs-Quittung.
+Auch eine Funktion, die alle Daten auf einmal löscht, gibt es nicht.
+Löschen kann nur, wer als Betreiber direkt auf dem Server das
+Daten-Volume entfernt.
 
 ## Vollständigkeit
 
@@ -88,4 +88,4 @@ einzelne Punkte denken musst.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

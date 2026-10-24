@@ -4,8 +4,8 @@
 //! - `encrypt`: AES-256-GCM mit Argon2id-derived Key aus Passphrase.
 //! - `restore`: pre-restore-Backup → verify → apply.
 //! - `rotation`: daily/monthly/yearly Retention (GVS).
-//! - `target`: konfigurierbares Backup-Ziel (lokale FS, OneDrive, SFTP, etc.).
-//! - `sftp`: SFTP-Upload-Arm (russh) mit Host-Key-Pinning + Keychain-Passwort.
+//! - `target`: Backup-Ziele (Verzeichnisse unter `/backup-targets`, SFTP; mehrere, W7).
+//! - `sftp`: SFTP-Upload-Arm (russh) mit Host-Key-Pinning; Passwort im SecretStore (W8).
 //! - `manifest`: JSON-Header mit Versionsdaten + Hash.
 //!
 //! Dieser `mod.rs` enthält zusätzlich:
@@ -302,9 +302,9 @@ async fn insert_history_row(
 
 /// Pro-Lauf-Backup-Ergebnis-Hinweis (G1-NOTIFY), gated über die abschaltbare
 /// Regel `rule_backup_result` (Migration `0027`). Schreibt in die In-App-Inbox
-/// (Quelle der Wahrheit, ADR 0027); **kein** OS-Push — `create_now` hat keinen
-/// `AppHandle`, die OS-native Eskalation übernimmt die periodische
-/// `backup_overdue`-Regel. Best-effort: ein Hinweis-Fehler darf ein Backup nie
+/// (Quelle der Wahrheit, ADR 0027); **kein** Kanal außerhalb der Inbox —
+/// `create_now` bekommt keinen `Notifier`, und im Server gibt es ohnehin nur
+/// die Inbox (`notify::InboxOnly`). Best-effort: ein Hinweis-Fehler darf ein Backup nie
 /// beeinflussen. Enthält **nie** ein Geheimnis (nur Status/Dateiname).
 async fn notify_backup_result(
     pool: &SqlitePool,
@@ -322,12 +322,11 @@ async fn notify_backup_result(
     if !enabled {
         return;
     }
-    // Direkt in die In-App-Inbox schreiben (NICHT über `notify::emit`): `emit`
-    // berührt `os_native::push`, dessen WinRT-Pfad in Integrationstest-Binaries
-    // (Lib ohne `cfg(test)`) comctl32/`TaskDialogIndirect` zieht und sie beim
-    // Laden scheitern lässt (STATUS_ENTRYPOINT_NOT_FOUND, vgl. ADR 0027 Pt. 5).
-    // Der Pro-Lauf-Hinweis ist ohnehin Inbox-only (kein OS-Push) → `store::create`
-    // genügt und hält den Backup-Pfad frei vom OS-Notification-Code.
+    // Direkt in die In-App-Inbox schreiben (NICHT über `notify::emit`): Der
+    // Pro-Lauf-Hinweis ist Inbox-only, und `create_now` hat keinen `Notifier` →
+    // `store::create` genügt (Dedup über `dedup_key` wie bei `emit`). Die frühere
+    // Begründung — der WinRT-Pfad der Desktop-Benachrichtigung in Testbinaries —
+    // ist mit W5 entfallen (ADR 0027 Pt. 5, ADR 0039).
     crate::notify::store::create(
         pool,
         crate::notify::NewNotification {

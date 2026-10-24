@@ -81,8 +81,7 @@
 
 <p class="lead">
   Lückenloser, unveränderlicher Nachweis jedes Versand­versuchs (Erfolg und
-  Fehlschlag) mit Anbieter-Antwort (SMTP-Code bzw. Microsoft-Status + Anfrage-Nummer)
-  und Fehlermeldung. Such- und Filterfelder helfen, auch nach Jahren schnell den
+  Fehlschlag) mit Antwort des Mailservers (SMTP-Code) und Fehlermeldung. Such- und Filterfelder helfen, auch nach Jahren schnell den
   richtigen Vorgang zu finden.
 </p>
 

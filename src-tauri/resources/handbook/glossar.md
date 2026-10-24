@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, sidecar, rechnungs-eingang, drop-folder, roh-xml, zugferd-profil]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil]
 ---
 
 # Glossar
@@ -59,6 +59,17 @@ Felder. Die alten Rechnungen bleiben als Buchhaltungs-Beleg
 unverändert erhalten (das ist gesetzliche Pflicht laut GoBD, kein
 Bug). Siehe auch DSGVO.
 
+## App-Code (TOTP)
+
+Der sechsstellige Code aus einer Authenticator-App auf Deinem Handy.
+Die App erzeugt alle 30 Sekunden einen neuen Code. TOTP steht für
+"Time-based One-Time Password", also ein zeitbasiertes
+Einmal-Passwort. Bei jeder Anmeldung gibst Du den App-Code zusammen
+mit Deiner Passphrase ein. So reicht eine erratene oder mitgelesene
+Passphrase allein nicht, um an Deine Daten zu kommen. Für den Fall,
+dass das Handy verloren geht, bekommst Du bei der Einrichtung zehn
+Einmal-Codes. Jeder davon ersetzt genau einmal den App-Code.
+
 ## Aufbewahrungsfrist
 
 Die gesetzliche Pflicht, bestimmte Belege eine Mindestzeit
@@ -85,13 +96,14 @@ Passphrase verschlüsselt; ohne Passphrase ist es wertlos.
 
 ## Backup-Ziel
 
-Der Ordner oder Server, in den Klein.Buch die Backups schreibt. Du
-kannst einen lokalen Ordner wählen (auf der Festplatte, einem
-USB-Stick, einem Netzlaufwerk), einen Cloud-Ordner (OneDrive,
-iCloud, Dropbox, Nextcloud, sofern auf Deinem Rechner als Ordner
-sichtbar) oder einen SFTP-Server (siehe SFTP). Empfehlung: ein
-lokaler Ordner als schneller Schutz plus ein Off-Site-Ziel gegen
-Hardware-Schaden.
+Der Ordner oder Server, in den Klein.Buch die Backups schreibt. Eine
+lokale Sicherung im Daten-Volume läuft immer automatisch mit. Dazu
+richtest Du externe Ziele ein, auch mehrere: Ordner unter
+`/backup-targets`, die Du als Betreiber in den Container einbindest
+(zum Beispiel eine NAS-Freigabe oder den Ordner eines
+Sync-Programms für einen Cloud-Speicher), oder einen SFTP-Server
+(siehe SFTP). Mindestens ein externes Ziel ist Pflicht, sonst warnt
+Klein.Buch Dich.
 
 ## Belegdatum
 
@@ -117,6 +129,16 @@ Einnahme zählt erst, wenn das Geld bei Dir eingegangen ist. Eine
 Ausgabe zählt erst, wenn Du sie bezahlt hast. Das Gegenteil heißt
 Soll-Versteuerung und ist für Kleinunternehmer nicht relevant.
 Gesetzliche Grundlage: §11 EStG (Zufluss- und Abfluss-Prinzip).
+
+## Container und Instanz
+
+Ein Container ist ein abgeschlossenes Programm-Paket, das ein Server
+startet. Klein.Buch wird als fertiges Paket (das sogenannte Image)
+verteilt; daraus startet Dein Server den Container. Eine Instanz ist
+eine laufende Klein.Buch-Installation mit ihren eigenen Daten. Eine
+Instanz gehört genau einem Unternehmen. Wer den Container auf dem
+Server einrichtet, aktualisiert und sichert, ist der Betreiber. Das
+bist meist Du selbst.
 
 ## DATEV-Export
 
@@ -149,12 +171,13 @@ Format, das Du direkt in das ELSTER-Formular übertragen kannst
 
 ## Factory Reset
 
-Das vollständige Zurücksetzen von Klein.Buch auf Werkszustand:
-Datenbank, Beleg-Archiv, lokale Backups und Einstellungen werden
-gelöscht. Off-Site-Backups (Cloud, SFTP) bleiben bestehen und musst
-Du gegebenenfalls separat löschen. Vor dem Reset musst Du Deine
-Passphrase eingeben und einen Hinweis auf die 10-Jahres-
-Aufbewahrungspflicht ausdrücklich bestätigen.
+Das vollständige Zurücksetzen auf Werkszustand, bei dem alle Daten
+gelöscht werden. Diese Funktion gibt es in Klein.Buch absichtlich
+nicht: Über das Netz wäre eine Totallöschung die gefährlichste
+einzelne Aktion. Wer neu anfangen will, legt als Betreiber eine neue
+Instanz mit leerem Daten-Volume an. Wer ein altes Volume löscht,
+trägt selbst die Verantwortung für die 10-jährige
+Aufbewahrungspflicht.
 
 ## Festschreibung
 
@@ -190,8 +213,9 @@ nicht aus Versehen brechen.
 ## Hinweise (Inbox)
 
 Die Liste der Mitteilungen, die Klein.Buch im Hintergrund für Dich
-erzeugt: fälliges Backup, eingegangene E-Rechnung, fehlgeschlagener
-Mail-Versand, abgelaufenes OAuth-Token. Du findest sie über das
+erzeugt: fälliges Backup, gescheitertes Backup-Ziel, fehlgeschlagener
+Mail-Versand, neue Version (wenn Du die Versionsprüfung eingeschaltet
+hast). Du findest sie über das
 Menü "Hinweise". Jeder Hinweis bleibt stehen, bis Du ihn als
 gelesen markierst.
 
@@ -200,7 +224,9 @@ gelesen markierst.
 Eine Rechnung mit einem Gesamtbetrag bis 250 € (brutto). Hier
 erlaubt das Gesetz vereinfachte Pflichtangaben. Klein.Buch erkennt
 das automatisch und verwendet das passende Pflichtangaben-Schema.
-Gesetzliche Grundlage: §33 UStDV.
+Eine Steuernummer oder USt-IdNr braucht Klein.Buch trotzdem, weil
+auch zur Kleinbetragsrechnung eine XRechnung entsteht. Gesetzliche
+Grundlage: §33 UStDV.
 
 ## Kleinunternehmer
 
@@ -235,12 +261,14 @@ läuft als Sidecar (siehe dort) zusammen mit Klein.Buch.
 
 ## Off-Site-Backup
 
-Ein Backup, das nicht auf demselben Rechner liegt wie Deine Daten.
-Cloud-Ordner (OneDrive, iCloud, Dropbox, Nextcloud) und SFTP-Server
-zählen als Off-Site. Ohne Off-Site-Backup verlierst Du bei einem
-Hardware-Schaden oder einem Diebstahl alle Daten. Klein.Buch warnt
-Dich, wenn das letzte erfolgreiche Off-Site-Backup zu lange her
-ist.
+Ein Backup, das nicht auf demselben Speicher liegt wie Deine Daten.
+In Klein.Buch heißen sie "externe Ziele": eingebundene Ordner unter
+`/backup-targets` (zum Beispiel eine NAS-Freigabe oder der Ordner
+eines Sync-Programms für einen Cloud-Speicher) und SFTP-Server. Ohne
+Off-Site-Backup verlierst Du bei einem Hardware-Schaden oder einem
+Diebstahl des Servers alle Daten. Klein.Buch warnt Dich, wenn kein
+externes Ziel eingerichtet ist, wenn ein Ziel zuletzt gescheitert ist
+oder wenn das letzte erfolgreiche Backup zu lange her ist.
 
 ## Paket
 
@@ -252,9 +280,11 @@ jedes Angebot oder jede Rechnung. Wenn Du das Paket später
 
 ## Passphrase
 
-Das eine Passwort, mit dem Du Klein.Buch entsperrst. Es ist
-gleichzeitig der Schlüssel zur verschlüsselten Datenbank und zu
-allen Backups. Ohne Passphrase kommt niemand an Deine Daten
+Das eine Passwort, mit dem Du Klein.Buch entsperrst. In der
+Oberfläche heißt es "Daten-Passwort", beim Wiederherstellen eines
+Backups "Backup-Passwort". Bei der Anmeldung gibst Du es zusammen mit
+dem App-Code ein (siehe dort). Es ist gleichzeitig der Schlüssel zur
+verschlüsselten Datenbank und zu allen Backups. Ohne Passphrase kommt niemand an Deine Daten
 heran, auch Du nicht. Verlierst Du die Passphrase, sind alle Daten
 und alle Backups unwiederbringlich weg. Es gibt absichtlich keine
 Hintertür. Notiere die Passphrase in einem Passwort-Manager
@@ -288,15 +318,14 @@ zwei Richtungen: Privatentnahme (Geld geht von geschäftlich nach
 privat) und Privateinlage (Geld geht von privat nach
 geschäftlich).
 
-## Rechnungs-Eingang
+## Rechnungseingang
 
-Ein Ordner auf Deiner Festplatte, den Klein.Buch automatisch überwacht.
-Wenn Du dort eine XRechnung-Datei oder eine ZUGFeRD-PDF ablegst, liest
-Klein.Buch sie im Hintergrund ein und legt einen Eingangsbeleg in den
-Kosten an. Optional, sinnvoll wenn Du regelmäßig E-Rechnungen per Mail
-bekommst. Im Code und in internen Logs taucht das Feature unter dem
-englischen Namen "Drop-Folder" auf, das ist derselbe Ordner. Richte
-ihn in "Einstellungen" → "Rechnungs-Eingang" ein.
+Der Weg, auf dem empfangene E-Rechnungen in Klein.Buch kommen: Du
+lädst die XRechnung-Datei oder die ZUGFeRD-PDF im Browser hoch, über
+"Kosten" und "E-Rechnung importieren". Klein.Buch liest die Angaben
+aus, prüft sie mit KoSIT und legt nach Deiner Bestätigung einen
+Eingangsbeleg in den Kosten an. Einen überwachten Ordner (früher
+"Drop-Folder" genannt) gibt es nicht.
 
 ## Regelbesteuerung
 
@@ -309,7 +338,7 @@ beträgt dann mindestens 5 Jahre.
 
 ## Wiederherstellen (Restore)
 
-Das Zurückspielen eines Backups auf den jetzigen Rechner.
+Das Zurückspielen eines Backups in Deine Klein.Buch-Instanz.
 Klein.Buch erzeugt vor jeder Wiederherstellung automatisch ein
 Sicherheits-Backup des aktuellen Stands, damit Du im Notfall
 zurückwechseln kannst. Du brauchst die Passphrase, mit der das
@@ -339,20 +368,20 @@ umleiten kann.
 
 ## Sidecar
 
-Ein eigenständiges Programm, das Klein.Buch im Hintergrund
-mitstartet. Klein.Buch hat einen Sidecar für Mustang und den
-KoSIT-Validator. Du siehst den Sidecar nicht direkt; er wird beim
-App-Start automatisch hochgefahren und beim Beenden wieder
-geschlossen. Wenn der Sidecar nicht hochkommt, kann Klein.Buch
-keine E-Rechnungen erzeugen oder prüfen.
+Ein eigenständiges Hilfsprogramm in Java, das Klein.Buch im
+Container bei Bedarf startet. Klein.Buch hat einen Sidecar für
+Mustang und den KoSIT-Validator. Du siehst den Sidecar nicht direkt;
+er läuft für jeden Vorgang kurz an und beendet sich danach wieder.
+Wenn der Sidecar nicht antwortet, kann Klein.Buch keine E-Rechnungen
+erzeugen oder prüfen.
 
 ## SQLCipher
 
 Die Verschlüsselungs-Schicht über der Datenbank. Sie sorgt dafür,
-dass die Datenbank-Datei auf der Festplatte ohne Deine Passphrase
-nicht lesbar ist. Selbst wenn jemand Deinen Rechner stiehlt oder
-einen Backup-Ordner kopiert, kann er ohne die Passphrase nichts
-damit anfangen.
+dass die Datenbank-Datei im Daten-Volume ohne Deine Passphrase
+nicht lesbar ist. Selbst wenn jemand das Daten-Volume oder einen
+Backup-Ordner kopiert, kann er ohne die Passphrase nichts damit
+anfangen.
 
 ## Steuernummer
 
@@ -466,4 +495,4 @@ Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

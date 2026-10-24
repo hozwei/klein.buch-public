@@ -58,8 +58,10 @@ Positions-Liste.
 ## Schritt 4: Pflichtangaben prüfen
 
 Klein.Buch prüft die wichtigsten Pflichtangaben automatisch, sobald
-Du auf "Rechnung ausstellen" klickst (Verkäufer-Daten,
-Empfänger-Daten, Datum, mindestens eine Position). Falls etwas
+Du auf "Rechnung ausstellen" klickst (Verkäufer-Daten samt
+Steuernummer und Telefonnummer, Empfänger-Daten, Datum,
+Fälligkeitsdatum, mindestens eine Position). Mit dem Knopf "Prüfen"
+kannst Du das auch schon vorher testen. Falls etwas
 fehlt, benennt die App das fehlende Feld in einem roten
 Hinweis-Toast. Korrigiere und versuche erneut.
 
@@ -82,20 +84,21 @@ den neuen Stand.
 ## Schritt 6: PDF prüfen und versenden
 
 Nach dem Ausstellen siehst Du in der PageBar die Knöpfe **"PDF
-öffnen"** (zeigt die fertige Rechnung im PDF-Viewer) und **"Im
-Ordner zeigen"** (öffnet den Archiv-Ordner). Schau, ob alle
-Angaben stimmen.
+öffnen"** (zeigt die fertige Rechnung in einer Vorschau) und **"PDF
+herunterladen"** (Dein Browser speichert die Datei in seinem
+Download-Ordner). Schau, ob alle Angaben stimmen. Auf dem Handy
+öffnet "PDF öffnen" die PDF-Ansicht Deines Browsers.
 
 Zum Versenden hast Du zwei Möglichkeiten:
 
 **Per Klein.Buch.** Wenn Du in den Einstellungen ein Postfach
 eingerichtet hast (siehe Kapitel "Konten und Mail-Versand"), klick
-auf **"Senden"**. Klein.Buch öffnet einen Versand-Dialog, schlägt
+auf **"Senden"**. Klein.Buch öffnet die Versand-Seite, schlägt
 Betreff und Text vor und hängt die ZUGFeRD-PDF automatisch an.
 
-**Per Mail-Programm.** Klick auf "Im Ordner zeigen". Klein.Buch
-öffnet den Archiv-Ordner mit der fertigen ZUGFeRD-PDF. Hänge die
-Datei in Deinem normalen Mail-Programm an und verschicke sie. Eine
+**Per Mail-Programm.** Klick auf "PDF herunterladen". Dein Browser
+speichert die fertige ZUGFeRD-PDF. Hänge die Datei in Deinem
+normalen Mail-Programm an und verschicke sie. Eine
 separate XRechnung-XML brauchst Du nicht — die XML steckt im PDF.
 
 ## Was Klein.Buch im Hintergrund tut
@@ -110,4 +113,4 @@ vor dem Vorwurf, Du hättest Belege nachträglich verändert.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

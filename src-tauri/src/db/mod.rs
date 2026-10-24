@@ -27,8 +27,9 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// Hält einen beim App-Start angewendeten Restore zwischen, bis der Pool
 /// (nach dem Entsperren) offen ist und der Audit-Eintrag geschrieben werden
 /// kann. Der Restore-Swap selbst passiert filesystem-only **vor** dem Öffnen
-/// des Pools (Windows-File-Lock), der zugehörige Audit-Eintrag braucht aber den
-/// geöffneten Pool — daher dieser Zwischenspeicher im [`crate::app_ctx::AppCtx`].
+/// des Pools (eine offene Verbindung hielte die alte Datei samt WAL weiter
+/// fest), der zugehörige Audit-Eintrag braucht aber den geöffneten Pool —
+/// daher dieser Zwischenspeicher im [`crate::app_ctx::AppCtx`].
 #[derive(Default)]
 pub struct PendingRestoreAudit(pub Mutex<Option<AppliedInfo>>);
 
@@ -135,9 +136,12 @@ pub fn db_file_is_plaintext(path: &Path) -> bool {
 }
 
 /// Bereitet das Dateisystem vor (Verzeichnisse + vorgemerkter Restore), **ohne**
-/// den DB-Pool zu öffnen. Wird im `setup`-Closure beim App-Start aufgerufen.
+/// den DB-Pool zu öffnen. Wird beim Serverstart vor dem Port-Bind aufgerufen
+/// (`server::startup::run_checks`).
 ///
-/// Der Restore-Swap muss vor jedem Pool-Open passieren (Windows-File-Lock); der
+/// Der Restore-Swap muss vor jedem Pool-Open passieren: SQLite verträgt keinen
+/// Tausch der Datei unter einer offenen Verbindung (sie arbeitete über ihren
+/// Dateideskriptor und die WAL-/SHM-Dateien mit der alten DB weiter). Der
 /// zugehörige Audit-Eintrag wird im [`PendingRestoreAudit`]-State gepuffert und
 /// nach dem Entsperren in [`run_migrations`] geschrieben.
 pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
@@ -314,7 +318,8 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
 /// neue verschlüsselte Datei anwenden → Korruption) und die Datei atomar ersetzt.
 /// Schlägt etwas vor dem Swap fehl, bleibt die Klartext-DB unverändert.
 ///
-/// Voraussetzung: **kein offener Pool** auf `db_file` (Windows-File-Lock).
+/// Voraussetzung: **kein offener Pool** auf `db_file` (eine offene Verbindung
+/// arbeitete nach dem Tausch mit der alten Datei weiter).
 /// Idempotent: ist die Datei bereits verschlüsselt (oder fehlt sie), passiert nichts.
 pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Result<()> {
     if !db_file_is_plaintext(db_file) {

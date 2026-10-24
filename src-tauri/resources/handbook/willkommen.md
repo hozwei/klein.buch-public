@@ -8,10 +8,15 @@ keywords: [willkommen, einstieg, überblick, kleinunternehmer, einzelunternehmer
 
 # Willkommen in Klein.Buch
 
-Klein.Buch ist Deine lokale Buchhaltung. "Lokal" heißt: alle Daten,
-alle Rechnungen, alle Anhänge liegen auf Deiner Festplatte. Es gibt
-keinen Server in der Cloud, kein Konto, keine Anmeldung über das
-Internet. Wenn Du das Notebook zuklappst, sind die Daten weg vom Netz.
+Klein.Buch ist Deine eigene Buchhaltung. Sie läuft auf einem Server,
+den Du selbst betreibst, in einem sogenannten Container (einem
+abgeschlossenen Programm-Paket, das der Server startet). Du bedienst
+Klein.Buch im Browser, am Schreibtisch genauso wie auf dem Tablet oder
+dem Handy. Alle Daten, alle Rechnungen und alle Anhänge liegen auf
+Deiner Instanz, also Deiner eigenen Klein.Buch-Installation auf diesem
+Server, und nicht bei einem Anbieter. Es gibt kein Konto bei einem
+Hersteller und keinen Telemetrie-Kanal, der Daten über Dich
+verschickt.
 
 Diese App ist für **Kleinunternehmer nach §19 UStG** gebaut. §19
 UStG ist der Paragraph im Umsatzsteuergesetz, der Dich von der
@@ -55,15 +60,21 @@ unsicher bist, ob eine Ausgabe absetzbar ist oder ob ein Kunde aus
 dem Ausland besondere Regeln auslöst, frag einen Steuerberater.
 
 Du musst eine Passphrase einrichten, bevor Du die erste Rechnung
-schreiben kannst. Diese Passphrase verschlüsselt Deine Datenbank und
-Deine Backups. Wenn Du sie verlierst, sind Deine Daten unwiederbringlich
-weg. Es gibt absichtlich keine Hintertür. Notiere die Passphrase an
-einem sicheren Ort, am besten in einem Passwort-Manager.
+schreiben kannst. In der Oberfläche heißt sie "Daten-Passwort". Diese
+Passphrase verschlüsselt Deine Datenbank und Deine Backups. Wenn Du
+sie verlierst, sind Deine Daten unwiederbringlich weg. Es gibt
+absichtlich keine Hintertür. Notiere die Passphrase an einem sicheren
+Ort, am besten in einem Passwort-Manager. Zusätzlich verbindest Du bei
+der Einrichtung eine Authenticator-App auf Deinem Handy. Sie liefert
+den App-Code, den Du bei jeder Anmeldung zusammen mit dem
+Daten-Passwort eingibst.
 
 ## Wie es jetzt weitergeht
 
-Lies das Kapitel "Erste Schritte" der Reihe nach durch. Nach dem
-Passphrase-Setup beim ersten Start landest Du im Start-Bildschirm.
+Läuft Klein.Buch noch nicht auf Deinem Server, beginnst Du mit dem
+Kapitel "Installation mit Docker Compose". Danach liest Du das
+Kapitel "Erste Schritte" der Reihe nach durch. Nach der Einrichtung
+im Browser landest Du im Start-Bildschirm.
 Geh dann auf "Einstellungen → Meine Firmendaten" (Name, Adresse,
 Steuernummer, IBAN), richte unter "Backups" ein Off-Site-Ziel ein
 und schreib die erste Rechnung. Das dauert ungefähr 20 Minuten.
@@ -75,4 +86,4 @@ Mit der Taste F1 öffnest Du das Handbuch jederzeit.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

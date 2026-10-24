@@ -3,7 +3,7 @@ slug: einstellungen
 title: Einstellungen
 category: bedienen
 order: 240
-keywords: [einstellungen, settings, firmendaten, mail, agb, datenschutz, konten, anfahrtspauschale, backup, audit, rechnungs-eingang, layout, daten exportieren, zurücksetzen]
+keywords: [einstellungen, settings, firmendaten, mail, agb, datenschutz, konten, anfahrtspauschale, backup, audit, sicherheit, anmeldung, layout, daten exportieren]
 ---
 
 # Einstellungen
@@ -26,10 +26,10 @@ wirken nur auf neue Belege.
 
 ## E-Mail-Versand
 
-Hier richtest Du das Postfach für den Rechnungs-Versand ein
-(SMTP oder Microsoft 365). Im selben Bereich liegt das
-Versand-Protokoll mit allen verschickten Mails. Mehr dazu im
-Kapitel "Konten und Mail-Versand".
+Hier richtest Du das Postfach für den Rechnungs-Versand ein. Klein.Buch
+versendet über SMTP, auch ein Microsoft-365-Postfach. Oben rechts
+kommst Du ins E-Mail-Protokoll mit allen Versandversuchen. Mehr dazu
+im Kapitel "Konten und Mail-Versand".
 
 ## AGB & Datenschutz
 
@@ -53,15 +53,6 @@ Angeboten und Rechnungen. Du kannst auch festlegen, ob Hin- und
 Rückfahrt automatisch doppelt gerechnet werden. Mehr dazu im
 Kapitel "Pakete und Anfahrt".
 
-## Rechnungs-Eingang
-
-Hier richtest Du einen Ordner ein, den Klein.Buch im Hintergrund
-auf neue Eingangsrechnungen prüft. Du wählst einen Pfad und
-schaltest den Toggle ein. Sobald Du dann eine XRechnung-Datei oder
-eine ZUGFeRD-PDF in den Ordner legst, übernimmt Klein.Buch sie
-automatisch. Klein.Buch muss dafür laufen und entsperrt sein.
-Mehr dazu im Kapitel "Eingangsrechnungen via Ordner".
-
 ## Rechnungs-Layout
 
 Hier wählst Du eines der mitgelieferten PDF-Templates für Deine
@@ -72,22 +63,33 @@ Beispiel-Daten.
 
 ## Backups
 
-Hier richtest Du das Off-Site-Ziel ein (Cloud-Ordner oder
-SFTP-Server), siehst die Retention-Mengen und löst manuelle
-Sicherungen aus. Über die PageBar oben rechts kommst Du ins
-Backup-Protokoll mit Datum, Größe, Pfad und Status jeder
-Sicherung. Mehr dazu im Kapitel "Backup und Wiederherstellen".
+Hier richtest Du die externen Backup-Ziele ein, auch mehrere
+gleichzeitig: Ordner unter `/backup-targets`, die Du als Betreiber in
+den Container einbindest (zum Beispiel eine NAS-Freigabe oder den
+Ordner eines Sync-Programms), und SFTP-Server. Außerdem löst Du hier
+mit "Jetzt sichern" eine Sicherung aus, siehst den
+Backup-Verlauf und stellst ein Backup wieder her. Über die PageBar
+oben rechts kommst Du ins Backup-Protokoll mit Zeitpunkt, Status,
+Auslöser, Ziel, Datei und Größe jeder Sicherung. Mehr dazu im Kapitel
+"Backup und Wiederherstellen".
 
 Die lokale Sicherung läuft automatisch und ist nicht
-konfigurierbar — sie liegt im Klein.Buch-Daten-Ordner.
+konfigurierbar. Sie liegt im Daten-Volume des Servers, also auf
+demselben Speicher wie Deine Daten. Deshalb brauchst Du zusätzlich
+mindestens ein externes Ziel.
 
 ## Daten exportieren
 
-Hier erzeugst Du das Steuerberater-Paket als ZIP: EÜR-PDF,
-DATEV-Buchungsstapel, ELSTER-Ausfüllhilfe (CSV), alle Rechnungen
-als PDF und XRechnung-XML, alle Kosten-Belege, eine
-Inhalts-Übersicht und ein Manifest mit SHA-256-Prüfwerten pro
-Datei. Mehr dazu im Kapitel "EÜR-Export".
+Hier speicherst Du mit "Export erstellen und herunterladen" alle
+Deine Daten in einer ZIP-Datei: Rechnungen, Kosten, Belege, Kontakte
+und Einstellungen. So kommst Du jederzeit an Deine Daten, auch
+unabhängig von Klein.Buch, zum Beispiel für einen Programmwechsel.
+Dein Browser speichert die Datei in seinem Download-Ordner. Die Datei
+ist nicht verschlüsselt, bewahre sie sicher auf. Passwörter von
+Postfächern und Backup-Zielen sind nicht enthalten.
+
+Das Steuerberater-Paket findest Du nicht hier, sondern unter "Steuer
+(EÜR)" im Export-Bereich. Mehr dazu im Kapitel "EÜR-Export".
 
 ## Protokoll & Datensicherheit
 
@@ -99,13 +101,20 @@ durchsuchen, aber weder bearbeiten noch löschen. Im selben Bereich
 prüfst Du die Integrität des Beleg-Archivs (SHA-256-Vergleich
 gegen die Datenbank). Mehr Hintergrund im Kapitel "GoBD im Alltag".
 
-## Zurücksetzen
+## Sicherheit & Anmeldung
 
-Hier löschst Du alle lokalen Daten und beginnst neu, zum Beispiel
-zur Geräte-Weitergabe. Vor dem Reset musst Du entweder das
-Steuerberater-Paket exportiert haben oder eine getippte
-Aufbewahrungs-Quittung bestätigen. Mehr dazu im Kapitel
-"Zurücksetzen".
+Hier erzeugst Du neue Einmal-Codes, richtest den zweiten Faktor
+(Authenticator-App) neu ein, änderst Dein Daten-Passwort und
+schaltest die Versionsprüfung ein oder aus. Die Versionsprüfung fragt
+auf Wunsch höchstens einmal täglich bei GitHub nach einer neuen
+Version und legt dann einen Hinweis an. Neue Einmal-Codes, einen neuen
+zweiten Faktor und ein neues Daten-Passwort bestätigst Du vorher mit
+Daten-Passwort und App-Code.
+
+Einen Bereich zum Zurücksetzen oder Löschen aller Daten gibt es
+nicht. Über das Netz wäre das die gefährlichste einzelne Aktion. Wer
+neu anfangen will, legt als Betreiber eine neue Instanz mit leerem
+Daten-Volume an.
 
 ## Was Du nicht hier findest
 
@@ -116,15 +125,15 @@ sitzen aber woanders:
 Hauptmenü unter "Hinweise" über den Knopf "Erinnerungen
 einstellen".
 
-**Der Über-Dialog** mit Klein.Buch-Version, Daten-Pfad,
-Sidecar-Status und Drittanbieter-Lizenzen sitzt als eigener
-Eintrag "Über" im Hauptmenü unten neben "Hilfe".
+**Der Über-Dialog** mit Klein.Buch-Version, Lizenz, dem Link zum
+Quellcode dieser Version und den Drittanbieter-Lizenzen sitzt als
+eigener Eintrag "Über" im Hauptmenü unten neben "Hilfe".
 
-**Die Passphrase ändern** geht in Klein.Buch v1.0 nicht. Wenn Du
-sie wechseln musst, exportierst Du das Steuerberater-Paket,
-setzt Klein.Buch über "Zurücksetzen" zurück und richtest die App
-mit neuer Passphrase neu ein.
+**Abmelden und Datenbank sperren** sitzen ebenfalls unten im
+Hauptmenü. "Abmelden" beendet nur die Sitzung in diesem Browser.
+"Datenbank sperren" schließt die Datenbank und meldet alle Browser
+ab; danach braucht es wieder Daten-Passwort und App-Code.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

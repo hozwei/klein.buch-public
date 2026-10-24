@@ -140,7 +140,8 @@ async fn public_info() -> Json<crate::build_info::SourceInfo> {
     Json(crate::build_info::current())
 }
 
-/// Einstieg des Binaries: `serve` (Standard) oder `healthcheck`.
+/// Einstieg des Binaries: `serve` (Standard), `healthcheck`, `totp-reset`,
+/// `version`/`--version`.
 pub fn main_entry(args: Vec<OsString>) -> ExitCode {
     // W9-Fund: SQLite rechnet `datetime('now','utc')` (Standardwerte und
     // Trigger aller Tabellen) relativ zur Prozess-Zeitzone; mit

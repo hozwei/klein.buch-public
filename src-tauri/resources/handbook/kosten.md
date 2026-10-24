@@ -37,9 +37,10 @@ Effekt ist neutral, sobald beide das gleiche Datum haben.
 
 ## E-Rechnung importieren
 
-Klick auf "E-Rechnung importieren" und wähle eine XRechnung-XML
-oder ZUGFeRD-PDF aus. Klein.Buch liest die XML-Daten, füllt die
-Felder automatisch und legt die Original-Datei im Archiv ab.
+Klick auf "E-Rechnung importieren", wähle eine XRechnung-XML oder
+ZUGFeRD-PDF aus und klick auf "Einlesen & prüfen". Klein.Buch lädt
+die Datei hoch, liest die XML-Daten, füllt die Felder automatisch und
+legt die Original-Datei beim Festschreiben im Archiv ab.
 
 Klein.Buch prüft die Datei zusätzlich mit dem KoSIT-Validator. Wenn
 die XML Fehler hat (zum Beispiel fehlende Pflicht-Angabe des
@@ -47,8 +48,9 @@ Absenders), zeigt die App die Fehlermeldung an. Du kannst die
 Position trotzdem speichern, weil Du als Empfänger nicht für die
 Korrektheit der Eingangs-XRechnung haftest.
 
-Trage nach dem Import noch das Zahlungs-Datum und die Kategorie
-ein. Speichere.
+Trage vor dem Festschreiben noch das Zahlungs-Datum und die Kategorie
+ein und klick auf "Als Kosten festschreiben". Mehr dazu im Kapitel
+"Rechnungseingang per Upload".
 
 ## Wiederkehrende Abos
 
@@ -68,15 +70,17 @@ wenn der echte Betrag je Monat etwas abweicht.
 
 ## Beleg-Anhang anschauen
 
-Klick auf das Büroklammer-Symbol einer Zeile. Klein.Buch öffnet den
-Beleg in einem eigenen Fenster oder im Standard-PDF-Programm
-Deines Betriebssystems. Der Beleg liegt im Archiv und wird beim
-Öffnen gegen seinen Prüfwert geprüft. Wenn jemand die Datei im
-Archiv heimlich verändert hat, schlägt Klein.Buch Alarm.
+Öffne die Kosten-Position und klick im Abschnitt "Beleg" auf
+"Beleg herunterladen". Dein Browser speichert die Datei in seinem
+Download-Ordner, von dort öffnest Du sie. Fehlt der Beleg, zeigt die
+Liste beim Eintrag den Hinweis "kein Beleg". Der Beleg liegt im
+Archiv und wird vor dem Herunterladen gegen seinen Prüfwert geprüft.
+Wenn jemand die Datei im Archiv heimlich verändert hat, schlägt
+Klein.Buch Alarm.
 
 ## Roh-XML einer Eingangsrechnung ansehen
 
-Bei einer importierten oder über den Rechnungs-Eingang übernommenen
+Bei einer über "E-Rechnung importieren" hochgeladenen
 E-Rechnung kannst Du die ursprüngliche XML-Datei einsehen, also die
 maschinenlesbaren Felder, die Du nicht im normalen Eingabe-Formular
 siehst. Öffne dazu den Eingangsbeleg und klick auf "Roh-XML
@@ -85,8 +89,8 @@ Fenster mit einem Knopf zum Kopieren.
 
 Das ist praktisch, wenn ein Steuerberater oder ein Prüfer in die
 Original-Felder schauen will. Die Anzeige verändert nichts am Beleg.
-Bei eigenen Eingaben über "Neue Kosten-Position" gibt es keine
-XML — der Knopf ist dann ausgegraut.
+Bei eigenen Eingaben über "+ Neue Kosten" gibt es keine XML, der
+Knopf erscheint dann nicht.
 
 ## EÜR-Wirkung
 
@@ -97,4 +101,4 @@ das EÜR-Jahr 2027. Das ist die Cash-Basis nach §11 EStG.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*

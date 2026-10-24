@@ -4,9 +4,11 @@
 //! `data/branding/logo.<ext>` — NICHT unter `inputs/` (Hard-Rule: `inputs/` ist
 //! für Maschinen tabu). `seller_profile.logo_filename` referenziert die Datei.
 //!
-//! Reine Datei-Helfer (kein DB-Zugriff, kein AppHandle) → einfach testbar.
-//! Die Tauri-Commands (`commands::settings`) lösen das Verzeichnis aus `Paths`
-//! auf und rufen diese Funktionen.
+//! Reine Datei-Helfer (kein DB-Zugriff, kein `AppCtx`) → einfach testbar.
+//! Die Command-Kerne (`commands::settings`, erreichbar über
+//! `POST /api/cmd/{name}`; die Datei kommt per `POST /api/upload/logo` bzw.
+//! `…/unterschrift`) lösen das Verzeichnis aus `Paths` auf und rufen diese
+//! Funktionen.
 
 use crate::error::{Error, Result};
 use base64::Engine;

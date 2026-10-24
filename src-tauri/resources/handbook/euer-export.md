@@ -13,21 +13,25 @@ der Empfänger ist. Du wählst den passenden zum Zweck.
 
 Den Export-Bereich öffnest Du über das Hauptmenü "Steuer (EÜR)"
 und dort über den Link **"Für die Steuererklärung exportieren →"**.
+Jeder Export kommt als Download: Dein Browser speichert die Datei in
+seinem Download-Ordner. Unter dem Knopf zeigt Klein.Buch danach den
+Dateinamen an.
 
 ## ELSTER-Ausfüllhilfe
 
 Wenn Du die Steuererklärung selbst über das ELSTER-Portal abgibst,
 nutzt Du die Ausfüllhilfe. Im Export-Bereich findest Du das Feld
-**"ELSTER-Ausfüllhilfe (CSV)"**. Trag einen Speicherpfad ein und
-klick auf **"CSV speichern"**.
+**"ELSTER-Ausfüllhilfe (CSV)"**. Klick dort auf **"CSV
+herunterladen"**.
 
 Klein.Buch erzeugt eine CSV-Datei mit Deinen EÜR-Werten,
 aufgeschlüsselt nach den Zeilen der ELSTER-Anlage EÜR. Du öffnest
 dann ELSTER im Browser und tippst die Werte aus der CSV in die
 entsprechenden Formularfelder ab.
 
-Zusätzlich kannst Du die komplette Anlage EÜR als PDF speichern
-("PDF speichern" daneben) — als Beleg für Deine eigene Ablage.
+Zusätzlich kannst Du die vollständige EÜR als PDF herunterladen
+("PDF herunterladen" bei "Vollständige EÜR (PDF)"), als Beleg für
+Deine eigene Ablage.
 
 Eine direkte ELSTER-Übermittlung (ERiC) ist in Klein.Buch v1.0
 nicht enthalten — sie würde eine separate Zertifikats-Anmeldung
@@ -38,7 +42,7 @@ erfordern.
 Wenn Du einen Steuerberater hast, nutzt Du den DATEV-Export. Im
 Export-Bereich gibt es das Feld **"DATEV-Buchungsstapel
 (Steuerberater)"** plus eine Auswahl für den Kontenrahmen (SKR03
-ist Default, SKR04 verfügbar). Klick auf **"DATEV speichern"**.
+ist Default, SKR04 verfügbar). Klick auf **"DATEV herunterladen"**.
 
 Klein.Buch erzeugt eine CSV-Datei im DATEV-Format mit allen
 Buchungen des Geschäftsjahres. Die Konto-Zuordnung ist ein
@@ -47,9 +51,12 @@ prüfen sollte. Sende die CSV per E-Mail oder Daten-Übergabe-Dienst.
 
 ## Steuerberater-Paket (ZIP)
 
-Der dritte Export ist das komplette Steuerberater-Paket. Klick im
-Hauptmenü auf "Einstellungen", dann auf "Daten exportieren". Wähle
-ein Zielverzeichnis und löse den Export aus. Klein.Buch packt:
+Der dritte Export ist das komplette Steuerberater-Paket. Du findest
+es im selben Export-Bereich unter **"Steuerberater-Paket (ZIP, alles
+in einem)"**. Klick auf **"Paket herunterladen"**. Weil das Paket
+alle Belege enthält, fragt Klein.Buch vorher noch einmal Dein
+Daten-Passwort und den App-Code aus Deiner Authenticator-App ab; die
+Bestätigung gilt fünf Minuten. Klein.Buch packt:
 
 1. ein Deckblatt-PDF und eine `LIESMICH.txt`
 2. die Anlage-EÜR als PDF
@@ -73,16 +80,16 @@ Einbahn-Export.
 Wenn Du selbst über ELSTER abgibst: ELSTER-Ausfüllhilfe (CSV) plus
 Anlage-EÜR-PDF zur eigenen Ablage.
 
-Wenn Du einen Steuerberater hast: das Steuerberater-Paket aus den
-Einstellungen. Es enthält den DATEV-Stapel sowieso.
+Wenn Du einen Steuerberater hast: das Steuerberater-Paket. Es
+enthält den DATEV-Stapel sowieso.
 
 ## Was nicht im Export enthalten ist
 
 Klein.Buch lässt absichtlich aus: persönliche Notizen aus
-Kontakten, OAuth-Token, SMTP-Passwörter, die Passphrase, interne
+Kontakten, Passwörter von Postfächern und Backup-Zielen, die Passphrase, interne
 Audit-Log-Details. Alle datenschutz-relevanten Felder sind
 ausgespart.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
