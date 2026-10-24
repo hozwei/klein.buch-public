@@ -109,9 +109,15 @@ wiederherstellen, Backup-Ziele anlegen, entfernen und testen,
 Mailkonten anlegen, ändern, löschen und testen, eine Testmail senden,
 den Export für den Steuerberater, den Detail-Export, den
 Migrations-Export, die DSGVO-Auskunft, neue Einmal-Codes, den zweiten
-Faktor neu einrichten und das Daten-Passwort ändern. So kann jemand,
-der Dein offenes Browserfenster erwischt, keine Daten abziehen und
-keine Zugänge ändern.
+Faktor neu einrichten und das Daten-Passwort ändern, außerdem das
+Speichern der Firmendaten (Bankverbindung, Kleinunternehmer-Status),
+Zahlungskonten anlegen und ändern, einen Kontakt anonymisieren und ein
+Geschäftsjahr abschließen. So kann jemand, der Dein offenes
+Browserfenster erwischt, keine Daten abziehen, keine Zugänge ändern
+und keine Zahlungen auf ein fremdes Konto umleiten. Mit jeder
+Bestätigung erneuert Klein.Buch Deine Anmeldung im Hintergrund; neue
+Einmal-Codes oder ein neu eingerichteter zweiter Faktor melden alle
+anderen Geräte ab.
 
 Eine Anmeldung endet nach 30 Minuten ohne Aktivität und spätestens nach
 12 Stunden. "Datenbank sperren" beendet alle Sitzungen und verschließt

@@ -18,6 +18,10 @@ else
 fi
 TMP="${TMPDIR:-/tmp}"
 JVM_OPTS="-XX:-UsePerfData -Xmx512m -Djava.io.tmpdir=$TMP -Djava.awt.headless=true"
+# Keine Datei des Sidecars größer als 64 MiB (131072 × 512 Byte): Eine präparierte
+# E-Rechnung (z. B. Dekompressionsbombe im eingebetteten XML) kann so das
+# Daten-Volume nicht füllen; beim Überschreiten endet Java mit SIGXFSZ (W14).
+ulimit -f 131072
 
 cmd="${1:-}"
 case "$cmd" in

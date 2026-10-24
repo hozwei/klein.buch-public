@@ -50,8 +50,12 @@ pub fn require_request_header(headers: &HeaderMap) -> Result<(), ApiError> {
     }
 }
 
+/// Höchstdauer für das Einlesen eines (kleinen) JSON-Körpers: langsam
+/// gesendete Körper belegen sonst Plätze der globalen Grenze (W14).
+pub const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Liest den Körper bis `limit` Bytes, sonst 413 (auch vorab über
-/// `Content-Length`).
+/// `Content-Length`); dauert das länger als [`BODY_READ_TIMEOUT`], 408.
 pub async fn read_body(body: Body, headers: &HeaderMap, limit: usize) -> Result<Bytes, ApiError> {
     let declared = headers
         .get(header::CONTENT_LENGTH)
@@ -60,9 +64,15 @@ pub async fn read_body(body: Body, headers: &HeaderMap, limit: usize) -> Result<
     if declared.is_some_and(|len| len > limit as u64) {
         return Err(ApiError::payload_too_large());
     }
-    axum::body::to_bytes(body, limit)
-        .await
-        .map_err(|_| ApiError::payload_too_large())
+    match tokio::time::timeout(BODY_READ_TIMEOUT, axum::body::to_bytes(body, limit)).await {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(_)) => Err(ApiError::payload_too_large()),
+        Err(_) => Err(ApiError::new(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            "body_timeout",
+            "Die Anfrage wurde zu langsam übertragen.",
+        )),
+    }
 }
 
 async fn handle(

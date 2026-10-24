@@ -164,3 +164,166 @@ async fn sidecar_real_mustang_combine_and_extract_pdfa3() {
     assert!(extracted.contains("RE-2026-0001"), "{extracted}");
     assert!(extracted.contains("Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."));
 }
+
+// ---------------------------------------------------------------------------
+// W14: Angriffe über fremde E-Rechnungen (XXE, Dekompressionsbombe)
+// ---------------------------------------------------------------------------
+
+/// Lokaler „Kanarienvogel“ auf 127.0.0.1: zählt jede eingehende Verbindung.
+struct Canary {
+    port: u16,
+    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+fn canary() -> Canary {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Port");
+    let port = listener.local_addr().unwrap().port();
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            if conn.is_ok() {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    });
+    Canary { port, hits }
+}
+
+impl Canary {
+    fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// CII mit DOCTYPE: eine Entität auf `/etc/passwd`, eine auf den Kanarienvogel.
+fn xxe_xml(port: u16) -> String {
+    let doctype = format!(
+        "<!DOCTYPE rsm:CrossIndustryInvoice [\n  <!ENTITY file SYSTEM \"file:///etc/passwd\">\n  \
+         <!ENTITY net SYSTEM \"http://127.0.0.1:{port}/xxe\">\n]>\n"
+    );
+    xml()
+        .replacen(
+            "<rsm:CrossIndustryInvoice",
+            &format!("{doctype}<rsm:CrossIndustryInvoice"),
+            1,
+        )
+        .replacen(
+            "<ram:Name>Beispiel IT-Service</ram:Name>",
+            "<ram:Name>&file;&net;</ram:Name>",
+            1,
+        )
+}
+
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_kosit_does_not_resolve_external_entities() {
+    let c = canary();
+    let xml = xxe_xml(c.port);
+    assert!(xml.contains("&net;"), "Testaufbau: Entität eingesetzt");
+    let result = validator::validate(&xml, &sidecar_dir()).await;
+    let text = format!("{result:?}");
+    assert!(
+        !text.contains("root:x:0:0"),
+        "Dateiinhalt im Ergebnis: {text}"
+    );
+    if let Ok(report) = &result {
+        assert!(
+            !matches!(report.status, ValidationStatus::Passed),
+            "XRechnung mit DOCTYPE darf nicht als gültig gelten: {report:?}"
+        );
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(c.hits(), 0, "KoSIT hat eine externe Entität abgerufen");
+}
+
+/// Ersetzt den Inhalt der eingebetteten Datei einer ZUGFeRD-PDF.
+fn replace_embedded_xml(pdf: &[u8], content: Vec<u8>, compress: bool) -> Vec<u8> {
+    use lopdf::{Document, Object};
+    let mut doc = Document::load_mem(pdf).expect("PDF lesbar");
+    let mut content = Some(content);
+    let mut replaced = 0;
+    for object in doc.objects.values_mut() {
+        if let Object::Stream(stream) = object {
+            let is_embedded = stream
+                .dict
+                .get(b"Type")
+                .and_then(|t| t.as_name())
+                .map(|n| n == b"EmbeddedFile")
+                .unwrap_or(false);
+            if is_embedded {
+                stream.dict.remove(b"Params");
+                stream.set_plain_content(content.take().expect("genau eine eingebettete Datei"));
+                if compress {
+                    stream.compress().expect("komprimieren");
+                }
+                replaced += 1;
+            }
+        }
+    }
+    assert_eq!(replaced, 1, "genau eine eingebettete Datei erwartet");
+    let mut out = Vec::new();
+    doc.save_to(&mut out).expect("PDF schreiben");
+    out
+}
+
+async fn zugferd_pdf() -> Vec<u8> {
+    let pdf = typst_render::render_invoice_default_template(
+        &inputs_dir(),
+        "default",
+        "RE-2026-0001",
+        &invoice(),
+        &seller(),
+        &buyer(),
+        None,
+        None,
+    )
+    .expect("PDF");
+    mustang_bridge::create_zugferd(&pdf, &xml(), &sidecar_dir())
+        .await
+        .expect("Mustang combine")
+}
+
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_mustang_extract_does_not_resolve_external_entities() {
+    let c = canary();
+    let pdf = replace_embedded_xml(&zugferd_pdf().await, xxe_xml(c.port).into_bytes(), false);
+    let result = mustang_bridge::extract_xml(&pdf, &sidecar_dir()).await;
+    let text = format!("{result:?}");
+    assert!(
+        !text.contains("root:x:0:0"),
+        "Dateiinhalt im Ergebnis: {text}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(c.hits(), 0, "Mustang hat eine externe Entität abgerufen");
+    // Kommt XML zurück, ist es der Rohtext (DOCTYPE unaufgelöst); der Parser von
+    // Klein.Buch lehnt die Entitäten danach ab.
+    if let Ok(xml) = result {
+        assert!(klein_buch_lib::einvoice::parser::parse(&xml).is_err());
+    }
+}
+
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_mustang_extract_survives_decompression_bomb() {
+    // 512 MiB Leerzeichen, komprimiert wenige hundert KiB: Mustang darf weder das
+    // Volume füllen noch den Server-Speicher (ulimit -f, Größenprüfung, -Xmx).
+    let mut bomb = xml().into_bytes();
+    bomb.resize(512 * 1024 * 1024, b' ');
+    let pdf = replace_embedded_xml(&zugferd_pdf().await, bomb, true);
+    assert!(
+        pdf.len() < 8 * 1024 * 1024,
+        "Bombe ist klein: {} Byte",
+        pdf.len()
+    );
+    let started = std::time::Instant::now();
+    let result = mustang_bridge::extract_xml(&pdf, &sidecar_dir()).await;
+    assert!(result.is_err(), "Bombe muss abgelehnt werden");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(150),
+        "Abbruch innerhalb des Zeitlimits: {:?}",
+        started.elapsed()
+    );
+}

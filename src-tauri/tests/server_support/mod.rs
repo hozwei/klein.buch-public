@@ -389,6 +389,14 @@ pub async fn reauth(srv: &TestServer, cookie: &str) -> Reply {
     .await
 }
 
+/// Re-Auth (Status 200 erwartet) und neues Sitzungs-Cookie: die Re-Auth
+/// rotiert die Sitzungs-ID (W14), nur das neue Cookie trägt die Re-Auth.
+pub async fn reauth_cookie(srv: &TestServer, cookie: &str) -> String {
+    let r = reauth(srv, cookie).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    session_cookie(&r)
+}
+
 /// Ruft einen Command auf und holt bei 202 das Job-Ergebnis ab.
 pub async fn call(app: &Router, cookie: &str, name: &str, args: serde_json::Value) -> Reply {
     let reply = send(

@@ -148,7 +148,7 @@ async fn mail_password_is_encrypted_and_never_exported() {
     let srv = test_server();
     let cookie = setup(&srv).await;
     let _draft = draft_invoice(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
 
     // Migration 0031: STRICT-Tabelle, Schema 31
     {
@@ -265,7 +265,7 @@ async fn mail_password_is_encrypted_and_never_exported() {
 async fn credentials_are_bound_to_host_port_user() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let id = create_account(&srv, &cookie).await;
     let key = format!("smtp:{id}");
     let update = |input: serde_json::Value, password: Option<&str>| serde_json::json!({ "id": id, "input": input, "password": password });
@@ -409,7 +409,7 @@ async fn credentials_are_bound_to_host_port_user() {
 async fn connection_tests_are_guarded() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let (port, accepted) = counting_listener().await;
 
     // nicht freigegebener Port → abgelehnt ohne Verbindungsaufbau
@@ -504,7 +504,7 @@ async fn sftp_target_with_probed_fingerprint() {
         .ctx
         .net_tests
         .set_allowed_ports(Some(vec![mock.port]));
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let probe_args = |password: &str| {
         serde_json::json!({ "host": "127.0.0.1", "port": mock.port, "user": "kb",
                             "remoteDir": "kb/backups", "password": password })

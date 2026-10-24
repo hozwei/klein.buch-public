@@ -124,7 +124,14 @@ fn auth_of(name: &str) -> Auth {
         | "migration_export_run"
         | "dsgvo_export"
         | "euer_export_stb_zip"
-        | "euer_export_detail_zip" => Auth::Reauth,
+        | "euer_export_detail_zip"
+        // W14: Zahlungsdaten und §19-Status (IBAN auf jeder künftigen Rechnung,
+        // auch den automatisch versendeten), unumkehrbare Schritte.
+        | "seller_profile_upsert"
+        | "payment_accounts_create"
+        | "payment_accounts_update"
+        | "contacts_anonymize"
+        | "fiscal_year_close" => Auth::Reauth,
         _ => Auth::Session,
     }
 }

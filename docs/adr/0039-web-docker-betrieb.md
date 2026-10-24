@@ -964,6 +964,50 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `auth.setup.failed`-Zeile (vorher nur Token und Passphrase). `SECURITY.md` und `CONTRIBUTING.md` neu,
     `docs/release-signing-guide.md` entfernt; `compose.example.yaml` wird in CI mit
     `docker compose config` geprüft.
+116. **Security-Review W14.** Vier Prüfer je ASVS-4.0.3-L2-Kapitelgruppe (V2/V3, V4/V5/V12/V13,
+    V7/V8/V14, Geschäftslogik), S0/S1 gegengeprüft; Befunde W14-NNN und Checkliste in
+    `Buchhaltung/docs/REVIEW-PHASE-W.md` (nicht veröffentlicht). Kein S0; drei S1 behoben (Nr. 117,
+    118, 119). Verschoben mit Begründung in den Folgelauf 2026.11 (U5): Kosten-Abos ohne Sperre/CAS
+    (Doppelbuchung nur bei manuellem Auslöser parallel zum Tick), Pause nach Restore, Absturzfestigkeit
+    der Abo-Läufe, Nachholen ohne Bestätigung, Sperren ohne Zeitgrenze. Offen bleibt die bewusste
+    Frage „Storno im Folgejahr behält GJ/Nummernkreis“ (Freigabe).
+117. **Anmeldung ohne Aussperrung (W14).** Ein gültiges Gerätecookie wird bei jeder erfolgreichen
+    Einrichtung, Anmeldung und Re-Auth mit gleichem Wert und frischer Laufzeit neu gesetzt (gleitend
+    statt fest 1 Jahr). Ein Login mit Einmal-Code (ohne TOTP-Feld) zählt nur unter dem eigenen
+    Schlüssel, nicht im globalen Budget — ein Angreifer mit vielen Adressen kann das Budget sonst
+    dauerhaft ausschöpfen und den Inhaber auf jedem neuen Gerät aussperren; die Passphrase bleibt
+    Pflicht, Raten der Einmal-Codes ist aussichtslos.
+118. **Langsame Körper (W14).** Kleine JSON-Körper (Commands, Anmeldung) werden höchstens 10 s
+    gelesen (sonst 408 `body_timeout`); höchstens 16 gleichzeitige POST-Anfragen je Client-Adresse
+    (IPv6 je /64), GETs ausgenommen (SPA hinter Proxys ohne `TRUSTED_PROXIES`). Uploads streamen und
+    verlangen eine Sitzung.
+119. **Storno-Datum (W14, GoBD).** Das Storno-Datum muss zwischen Rechnungsdatum und heute liegen und
+    in einem offenen Geschäftsjahr — sonst änderte sich die EÜR eines festgeschriebenen Jahres
+    nachträglich (wie beim Kosten-Storno R2-003 und bei Zahlungen); die Oberfläche begrenzt das
+    Datumsfeld entsprechend.
+120. **Sitzungen und Re-Auth (W14).** Die Re-Auth rotiert die Sitzungs-ID (neue ID mit frischer
+    Re-Auth; die alte verliert das Re-Auth-Recht und gilt noch 10 s für laufende Anfragen) — ein
+    gestohlenes Cookie endet mit der Bestätigung des Inhabers. TOTP- und Einmal-Code-Erneuerung beenden
+    alle anderen Sitzungen. Re-Auth-pflichtig zusätzlich: `seller_profile_upsert` (IBAN/BIC, §19-Status),
+    `payment_accounts_create`/`_update`, `contacts_anonymize`, `fiscal_year_close` (21 Commands); eine
+    Anmeldung zählt bewusst nicht als Re-Auth. Versand bleibt ohne Re-Auth (täglicher Gebrauch,
+    Mail-Protokoll).
+121. **Weitere Härtung (W14).** Vorlagennamen sind einzelne Dateinamen (kein Pfadtrenner, kein
+    führender Punkt) — sonst lief eine hochgeladene Datei als Typst-Vorlage. `Cache-Control: immutable`
+    nur für erfolgreiche Antworten (eine 503 unter `/_app/immutable/` hätte den Browser dauerhaft
+    gebrochen). Sidecar-Launcher mit `ulimit -f` (64 MiB) und Größenprüfung des extrahierten XML
+    (10 MiB) gegen Dekompressionsbomben in fremden ZUGFeRD-PDFs; lopdf lädt hochgeladene PDFs mit
+    Dekompressionsgrenze. Angriffstests: XXE (Datei/Netz) gegen den Rust-Parser, KoSIT und
+    Mustang-Extract (lokaler Zähl-Listener, 0 Abrufe), 512-MiB-Bombe, Log-Scan inkl. TOTP-Geheimnis und
+    SMTP-Passwort. CI: `security.yml` (Härtung per `docker inspect`, Abnahme-Ablauf, OWASP ZAP Baseline +
+    API-Scan über alle Commands mit Sitzung, Gate mit `.github/zap-ausnahmen.tsv`); `image_smoke.py`
+    mit Abnahme-Ablauf (Zahlung, Backup, Restore samt Neustart und Anmeldung, Export) — Container daher
+    mit `--restart unless-stopped`. ZAP-Gate: Ausnahmen je alertRef oder Plugin-ID mit Begründung;
+    einzige Ausnahme `10055-6` (CSP `style-src 'unsafe-inline'`, nötig für Svelte-Stilattribute;
+    `script-src` bleibt ohne `unsafe-inline`). Die 30-s-Hänger im lokalen Gate: in W14 ein Testfehler
+    (ein neuer Test meldete sich ohne die KDF-Serialisierung der Testhilfen an, behoben), sonst ein
+    Artefakt des überbuchten Test-Hosts (PBKDF2 je neuer Verbindung, viele parallele Testserver; in CI
+    nie): kein automatischer Wiederholversuch im Produktcode.
 
 ## Konsequenzen
 

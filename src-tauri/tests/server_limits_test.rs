@@ -61,17 +61,22 @@ async fn parallel_previews_are_limited() {
     let srv = test_server();
     let cookie = setup(&srv).await;
     let mut tasks = Vec::new();
-    for _ in 0..50 {
+    for i in 0..50 {
         let app = srv.app.clone();
         let cookie = cookie.clone();
+        // verschiedene Adressen: die Grenze je Client (W14) soll hier nicht greifen
+        let peer = format!("198.51.100.{}:4000", i + 1);
         tasks.push(tokio::spawn(async move {
             send(
                 &app,
-                post(
-                    "/api/cmd/pdf_template_preview",
-                    r#"{"name":"default"}"#,
-                    Some(&cookie),
-                    None,
+                from_peer(
+                    post(
+                        "/api/cmd/pdf_template_preview",
+                        r#"{"name":"default"}"#,
+                        Some(&cookie),
+                        None,
+                    ),
+                    &peer,
                 ),
             )
             .await
@@ -100,4 +105,79 @@ async fn parallel_previews_are_limited() {
     }
     assert_eq!(by_status.values().sum::<usize>(), 50);
     let _ = StatusCode::OK;
+}
+
+/// W14: Ein Körper, der nie ankommt, belegt seinen Platz in der globalen Grenze
+/// höchstens `BODY_READ_TIMEOUT` lang (dann 408), auch ohne Anmeldung.
+#[tokio::test(start_paused = true)]
+async fn stalled_request_body_times_out() {
+    use axum::body::Body;
+    use axum::http::{header, Method, Request};
+    use klein_buch_lib::server::dispatch::BODY_READ_TIMEOUT;
+
+    let srv = test_server();
+    let stalled =
+        futures_util::stream::pending::<std::result::Result<axum::body::Bytes, std::io::Error>>();
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, "16000")
+        .header("x-kleinbuch-request", "1")
+        .body(Body::from_stream(stalled))
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::REQUEST_TIMEOUT, "{}", r.text());
+    assert_eq!(r.json()["code"], "body_timeout");
+    assert!(started.elapsed() >= BODY_READ_TIMEOUT);
+}
+
+/// W14: Höchstens `MAX_CONCURRENT_POSTS_PER_CLIENT` gleichzeitige POSTs je
+/// Adresse — langsam gesendete Körper eines Clients füllen die globale Grenze
+/// nicht; andere Clients bleiben bedienbar.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_posts_are_limited_per_client() {
+    use axum::body::Body;
+    use axum::http::{header, Method, Request};
+    use klein_buch_lib::server::limits::MAX_CONCURRENT_POSTS_PER_CLIENT;
+
+    let srv = test_server();
+    let stalled_from = |peer: &str| {
+        let body = futures_util::stream::pending::<
+            std::result::Result<axum::body::Bytes, std::io::Error>,
+        >();
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/auth/login")
+            .header(header::HOST, HOST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::CONTENT_LENGTH, "16000")
+            .header("x-kleinbuch-request", "1")
+            .body(Body::from_stream(body))
+            .unwrap();
+        from_peer(req, peer)
+    };
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONCURRENT_POSTS_PER_CLIENT {
+        let app = srv.app.clone();
+        let req = stalled_from("203.0.113.9:4000");
+        held.push(tokio::spawn(async move { send(&app, req).await }));
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let r = send(&srv.app, stalled_from("203.0.113.9:4001")).await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.text());
+    assert_eq!(r.json()["code"], "busy");
+    // ein anderer Client wird weiter bedient (hier: Anmeldung ohne Daten → 4xx, kein 503)
+    let other = from_peer(
+        post("/api/auth/login", "{}", None, None),
+        "198.51.100.99:4000",
+    );
+    let r = send(&srv.app, other).await;
+    assert_ne!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.text());
+    for t in held {
+        let r = t.await.unwrap();
+        assert_eq!(r.status, StatusCode::REQUEST_TIMEOUT);
+    }
 }

@@ -72,7 +72,7 @@ docker run --rm --entrypoint /bin/sh -e DOC="$DOC" -e JRE="$JRE" "$IMAGE" -c '
 step "Container starten (gehärtet, fremde UID)"
 mkdir -p "$WORK/data" "$WORK/inputs"
 sudo chown -R 568:568 "$WORK/data" "$WORK/inputs"
-docker run -d --name "$NAME" \
+docker run -d --name "$NAME" --restart unless-stopped \
   --read-only --tmpfs /tmp:size=512m,mode=1777,noexec,nosuid,nodev \
   --cap-drop ALL --security-opt no-new-privileges --user 568:568 \
   -v "$WORK/data:/data" -v "$WORK/inputs:/inputs" \

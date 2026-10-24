@@ -137,10 +137,15 @@ fn classify(path: &str, response: &Response) -> ResponseClass {
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/html"));
+    // Nur erfolgreiche Antworten dürfen ein Jahr im Cache liegen (W14): eine
+    // 503/421 unter /_app/immutable/ würde sonst den Browser dauerhaft brechen.
+    let cacheable = matches!(response.status().as_u16(), 200 | 304);
     if is_html {
         ResponseClass::Spa
-    } else if path.starts_with("/_app/immutable/") {
+    } else if path.starts_with("/_app/immutable/") && cacheable {
         ResponseClass::ImmutableAsset
+    } else if !cacheable {
+        ResponseClass::Api
     } else {
         ResponseClass::Asset
     }
@@ -235,5 +240,34 @@ mod tests {
             .find(|d| d.trim_start().starts_with("script-src"))
             .unwrap();
         assert!(!script_src.contains("unsafe"), "{script_src}");
+    }
+
+    #[test]
+    fn only_successful_immutable_assets_are_cached_for_a_year() {
+        use axum::http::StatusCode;
+        let with_status = |status: StatusCode| {
+            let mut r = Response::new(axum::body::Body::empty());
+            *r.status_mut() = status;
+            r.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/javascript"),
+            );
+            r
+        };
+        let path = "/_app/immutable/chunks/app.js";
+        assert_eq!(
+            classify(path, &with_status(StatusCode::OK)),
+            ResponseClass::ImmutableAsset
+        );
+        for status in [
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::MISDIRECTED_REQUEST,
+        ] {
+            assert_eq!(
+                classify(path, &with_status(status)),
+                ResponseClass::Api,
+                "{status}"
+            );
+        }
     }
 }

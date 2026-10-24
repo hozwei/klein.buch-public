@@ -202,7 +202,7 @@ async fn all_exports_are_downloads_and_leave_nothing_behind() {
         .format("%Y")
         .to_string();
     let y: i64 = year.parse().unwrap();
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
 
     let contact_id: String = {
         let pool = srv.state.ctx.pool().unwrap();

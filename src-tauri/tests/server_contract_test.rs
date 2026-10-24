@@ -86,6 +86,12 @@ const REAUTH: &[&str] = &[
     "dsgvo_export",
     "euer_export_stb_zip",
     "euer_export_detail_zip",
+    // W14: Zahlungsdaten/§19-Status, unumkehrbare Schritte
+    "seller_profile_upsert",
+    "payment_accounts_create",
+    "payment_accounts_update",
+    "contacts_anonymize",
+    "fiscal_year_close",
 ];
 
 /// Jobs laut Plan W5.6.

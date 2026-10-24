@@ -1001,6 +1001,25 @@ mod tests {
     }
 
     #[test]
+    fn external_entities_and_entity_bombs_are_never_resolved() {
+        // W14: XXE (Datei und Netz) und „Billion Laughs“. quick-xml wertet die
+        // DTD nicht aus; eine eigene Entität ist für den Parser unbekannt → Fehler.
+        for doctype in [
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>"#,
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY xxe SYSTEM "http://192.0.2.1/x">]>"#,
+            r#"<!DOCTYPE ubl:Invoice [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY xxe "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]>"#,
+        ] {
+            let xml = UBL_FIXTURE
+                .replacen("<ubl:Invoice", &format!("{doctype}\n<ubl:Invoice"), 1)
+                .replace("Lieferant Telekom GmbH", "&xxe;");
+            match parse(&xml) {
+                Err(ParseError::Malformed(msg)) => assert!(!msg.contains("root:"), "{msg}"),
+                other => panic!("Entität darf nicht aufgelöst werden: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn build_expense_input_from_ubl_has_vat() {
         let p = parse(UBL_FIXTURE).unwrap();
         let input = build_expense_input(&p, today());

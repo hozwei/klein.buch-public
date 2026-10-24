@@ -195,9 +195,21 @@ pub async fn extract_xml(pdf_bytes: &[u8], sidecar_dir: &Path) -> Result<String>
         "extract",
     )
     .await?;
+    // W14: das extrahierte XML stammt aus einer fremden PDF — Größe vor dem
+    // Einlesen prüfen (eine E-Rechnung hat wenige hundert KiB).
+    let len = tokio::fs::metadata(&out_xml).await?.len();
+    if len > MAX_EXTRACTED_XML_BYTES {
+        return Err(Error::Sidecar(format!(
+            "Eingebettetes XML ist zu groß ({len} Byte, höchstens {MAX_EXTRACTED_XML_BYTES})."
+        )));
+    }
     let xml = tokio::fs::read_to_string(&out_xml).await?;
     Ok(xml)
 }
+
+/// Obergrenze für das aus einer ZUGFeRD-PDF extrahierte XML (wie das
+/// Upload-Limit für E-Rechnungen).
+const MAX_EXTRACTED_XML_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Führt einen Mustang-Subcommand aus. Liefert die kombinierte
 /// stdout+stderr-Ausgabe zurück (für Diagnose, weil Mustang bei

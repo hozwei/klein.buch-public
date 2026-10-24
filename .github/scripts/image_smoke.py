@@ -4,8 +4,12 @@
 Gegen einen laufenden Container (KLEIN_BUCH_INSECURE_HTTP=1, Adresse aus
 SMOKE_URL): Einrichtung mit Setup-Token + TOTP, Verkäufer und Kunde anlegen,
 Rechnung festschreiben (echter KoSIT + Mustang), ungültige XRechnung beim
-Rechnungseingang abgelehnt, ZUGFeRD-PDF beim Rechnungseingang extrahiert.
-Nur Standardbibliothek. Aufruf: image_smoke.py <setup-token>
+Rechnungseingang abgelehnt, ZUGFeRD-PDF beim Rechnungseingang extrahiert;
+Abnahme-Ablauf (W14): Zahlung, Backup, Restore samt Neustart und Anmeldung,
+Export als Download. Der Container braucht dafür eine Restart-Policy, die auch
+nach Exit 0 neu startet. Nur Standardbibliothek.
+Aufruf: image_smoke.py <setup-token>  (SMOKE_COOKIE_FILE: Sitzungs-Cookie am
+Ende in diese Datei schreiben, z. B. für den ZAP-Scan)
 """
 
 import base64
@@ -64,6 +68,42 @@ def session_from(headers):
     fail("kein Sitzungs-Cookie")
 
 
+LAST_STEP = [0]
+
+
+def fresh_totp(secret_b32):
+    """TOTP-Code eines noch nicht benutzten Zeitschritts (jeder gilt nur einmal)."""
+    while int(time.time() // 30) <= LAST_STEP[0]:
+        time.sleep(1)
+    LAST_STEP[0] = int(time.time() // 30)
+    return totp(secret_b32, LAST_STEP[0])
+
+
+def reauth(secret_b32, cookie):
+    """Re-Auth; liefert das neue Sitzungs-Cookie (die ID rotiert, W14)."""
+    s, h, b = request("POST", "/api/auth/reauth",
+                      {"passphrase": PASS, "totpCode": fresh_totp(secret_b32)}, cookie)
+    if s != 200:
+        fail(f"Re-Auth: {s} {b}")
+    return session_from(h)
+
+
+def wait_state(want, timeout=180):
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        try:
+            s, _, b = request("GET", "/healthz")
+            if s == 200:
+                last = b.get("state")
+                if last == want:
+                    return
+        except (urllib.error.URLError, ConnectionError, OSError):
+            pass
+        time.sleep(2)
+    fail(f"Zustand {want} nicht erreicht (zuletzt {last})")
+
+
 def totp(secret_b32, step=None):
     key = base64.b32decode(secret_b32.upper() + "=" * (-len(secret_b32) % 8))
     step = int(time.time() // 30) if step is None else step
@@ -115,14 +155,18 @@ def main():
     s, _, offer = request("POST", "/api/auth/setup", {"setupToken": token, "step": "totp"})
     if s != 200:
         fail(f"Setup Schritt 1: {s} {offer}")
+    secret = offer["secret"]
     s, h, done = request(
         "POST", "/api/auth/setup",
-        {"setupToken": token, "passphrase": PASS, "totpCode": totp(offer["secret"])},
+        {"setupToken": token, "passphrase": PASS, "totpCode": fresh_totp(secret)},
     )
     if s != 200:
         fail(f"Setup Schritt 2: {s} {done}")
     cookie = session_from(h)
     print("Einrichtung ok", flush=True)
+    # Firmendaten (Zahlungsdaten, §19) verlangen seit W14 eine Re-Auth; sie
+    # rotiert die Sitzungs-ID.
+    cookie = reauth(secret, cookie)
 
     today = time.strftime("%Y-%m-%d")
     due = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 14 * 86400))
@@ -178,6 +222,55 @@ def main():
     if validation.get("status") != "failed":
         fail(f"ungültige XRechnung nicht abgelehnt: {validation}")
     print(f"ungültige XRechnung abgelehnt ({validation.get('errorCount')} Fehler)", flush=True)
+
+    # Abnahme (W14): Zahlung → Backup → Restore (Neustart, Anmeldung) → Export
+    invoice_id = locked["invoice"]["id"]
+    paid = cmd("invoices_record_payment", {"args": {
+        "invoiceId": invoice_id, "amountCents": locked["invoice"]["grossAmountCents"],
+        "paidDate": today, "note": None}}, cookie)
+    if paid.get("status") != "paid":
+        fail(f"Zahlung: Status {paid.get('status')}")
+    print("Zahlung erfasst (bezahlt)", flush=True)
+    backup = cmd("backup_create_now", {}, cookie)
+    print(f"Backup {backup['fileName']} ({backup['sizeBytes']} Byte)", flush=True)
+    contact_after_backup = cmd("contacts_create", {"input": {
+        "contactType": "customer", "name": "Nach dem Backup GmbH", "legalForm": None,
+        "vatId": None, "taxNumber": None, "street": "Weg 3", "postalCode": "11111",
+        "city": "Beispieldorf", "countryCode": "DE", "email": "spaeter@example.org", "phone": None,
+        "iban": None, "bic": None, "acceptsEinvoice": False, "notes": None}}, cookie)
+    cookie = reauth(secret, cookie)
+    report = cmd("backup_restore_apply", {"backupId": backup["historyId"], "passphrase": PASS}, cookie)
+    if not report.get("requiresRestart"):
+        fail(f"Restore ohne Neustart: {report}")
+    print("Restore angewendet, Server startet neu", flush=True)
+    time.sleep(12)
+    wait_state("locked")
+    s, h, body = request("POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)})
+    if s != 200:
+        fail(f"Anmeldung nach Restore: {s} {body}")
+    cookie = session_from(h)
+    restored = cmd("invoices_get", {"id": invoice_id}, cookie)
+    status = (restored.get("invoice") or restored).get("status")
+    if status != "paid":
+        fail(f"Rechnung nach Restore: {status}")
+    names = [c.get("name") for c in cmd("contacts_list", {}, cookie)]
+    if contact_after_backup["name"] in names:
+        fail("Kontakt nach dem Backup ist nach dem Restore noch da")
+    print("Restore geprüft (Stand des Backups, Anmeldung mit TOTP)", flush=True)
+    cookie = reauth(secret, cookie)
+    export = cmd("migration_export_run", {}, cookie)
+    ticket = export.get("download") or {}
+    s, hdr, data = request("GET", f"/files/download/{ticket.get('downloadId')}", cookie=cookie, raw=True)
+    if s != 200 or not data.startswith(b"PK"):
+        fail(f"Export-Download: {s}")
+    if "attachment" not in (hdr.get("Content-Disposition") or ""):
+        fail("Export ohne Content-Disposition attachment")
+    print(f"Export geladen ({len(data)} Byte, {export.get('tableCount')} Tabellen)", flush=True)
+
+    cookie_file = os.environ.get("SMOKE_COOKIE_FILE")
+    if cookie_file:
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(cookie)
     print("SMOKE OK", flush=True)
 
 

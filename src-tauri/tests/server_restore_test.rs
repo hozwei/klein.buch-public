@@ -29,6 +29,8 @@ async fn scalar_i64(srv: &TestServer, sql: &str) -> i64 {
 
 /// Backup über den Command; liefert die Bytes der `.kbk`.
 async fn backup_bytes(srv: &TestServer, cookie: &str) -> Vec<u8> {
+    // Argon2id; nicht parallel zu den Anmeldungen anderer Tests (KDF-Platz 1)
+    let _serial = kdf_serial().await;
     let r = call(&srv.app, cookie, "backup_create_now", serde_json::json!({})).await;
     let body = r.json();
     let out = if body.get("state").is_some() {
@@ -52,6 +54,8 @@ fn marker_exists(srv: &TestServer) -> bool {
 }
 
 async fn restore_upload(srv: &TestServer, cookie: &str, kbk: &[u8], pass: &str) -> Reply {
+    // Entschlüsseln + Umschlüsseln über die KDF; serialisiert wie login()
+    let _serial = kdf_serial().await;
     let id = upload_id(srv, cookie, "restore", "sicherung.kbk", kbk).await;
     call(
         &srv.app,
@@ -161,7 +165,7 @@ async fn disaster_recovery_with_other_passphrase() {
     let b = destroy_and_recreate(a).await;
     // Frische Instanz B (andere Passphrase), Restore des Backups von A
     let cookie_b = setup(&b).await;
-    assert_eq!(reauth(&b, &cookie_b).await.status, StatusCode::OK);
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
     let id = upload_id(&b, &cookie_b, "restore", "von-a.kbk", &kbk).await;
     let r = send(
         &b.app,
@@ -290,7 +294,7 @@ async fn disaster_recovery_with_other_passphrase() {
 async fn bad_backups_are_rejected_and_leave_nothing() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let good = backup_bytes(&srv, &cookie).await;
 
     assert_rejected(
@@ -377,7 +381,7 @@ async fn bad_backups_are_rejected_and_leave_nothing() {
 async fn restore_from_history_only_local() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let _ = backup_bytes(&srv, &cookie).await;
     let pool = srv.state.ctx.pool().unwrap();
     // Eintrag, der aus dem Backup-Ordner hinauszeigt
@@ -417,13 +421,16 @@ async fn restore_from_history_only_local() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let r = call(
-        &srv.app,
-        &cookie,
-        "backup_restore_apply",
-        serde_json::json!({ "backupId": id, "passphrase": PASS }),
-    )
-    .await;
+    let r = {
+        let _serial = kdf_serial().await;
+        call(
+            &srv.app,
+            &cookie,
+            "backup_restore_apply",
+            serde_json::json!({ "backupId": id, "passphrase": PASS }),
+        )
+        .await
+    };
     assert_eq!(r.json()["state"], "done", "{}", r.text());
     assert!(r.json()["result"]["source"]
         .as_str()
@@ -590,7 +597,7 @@ async fn schema_30_backup_is_restored_and_migrated_forward() {
     // Instanz B stellt es wieder her
     let b = test_server();
     let cookie_b = setup(&b).await;
-    assert_eq!(reauth(&b, &cookie_b).await.status, StatusCode::OK);
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
     let r = restore_upload(&b, &cookie_b, &kbk, PASS).await;
     assert_eq!(r.json()["state"], "done", "{}", r.text());
     assert_eq!(r.json()["result"]["schemaVersion"], old, "{}", r.text());
@@ -660,7 +667,7 @@ async fn foreign_archive_paths_are_rejected() {
     let kbk = backup_bytes(&a, &cookie_a).await;
     let b = test_server();
     let cookie_b = setup(&b).await;
-    assert_eq!(reauth(&b, &cookie_b).await.status, StatusCode::OK);
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
     assert_rejected(&b, &cookie_b, &kbk, "Archivpfade").await;
     assert_eq!(
         scalar_i64(
@@ -679,7 +686,7 @@ async fn foreign_archive_paths_are_rejected() {
 async fn applied_audit_survives_restart_before_unlock() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let kbk = backup_bytes(&srv, &cookie).await;
     let r = restore_upload(&srv, &cookie, &kbk, PASS).await;
     assert_eq!(r.json()["state"], "done", "{}", r.text());

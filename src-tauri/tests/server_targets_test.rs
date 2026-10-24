@@ -56,7 +56,7 @@ async fn two_targets_one_fails_other_is_written() {
     )
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
 
     // außerhalb der Wurzel / Symlink nach draußen → abgelehnt
     let outside = srv.dir.path().join("draussen");

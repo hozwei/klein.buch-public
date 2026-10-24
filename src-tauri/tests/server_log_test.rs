@@ -104,8 +104,34 @@ async fn no_passphrase_or_session_id_in_logs() {
     let cookie2 = session_cookie(&reply);
     let reauth_reply = reauth(&srv, &cookie2).await;
     assert!(reauth_reply.status.is_success());
-    let r = call(&srv.app, &cookie2, "contacts_list", serde_json::json!({})).await;
+    let cookie3 = session_cookie(&reauth_reply);
+    let r = call(&srv.app, &cookie3, "contacts_list", serde_json::json!({})).await;
     assert!(r.status.is_success());
+    // W14: SMTP-Passwort beim Anlegen eines Kontos (SecretStore) und das
+    // TOTP-Geheimnis dürfen ebenfalls nie im Log stehen.
+    let smtp_password = "smtp-log-geheim-4711";
+    let r = call(
+        &srv.app,
+        &cookie3,
+        "mail_account_create",
+        serde_json::json!({
+            "input": {
+                "label": "Log-Test", "authType": "smtp_password", "smtpHost": "smtp.example.org",
+                "smtpPort": 587, "smtpUser": "kb@example.org", "smtpUseTls": true,
+                "fromEmail": "rechnung@example.org", "fromName": "Beispiel IT-Service",
+                "isDefault": true, "oauthTenantId": null, "oauthClientId": null
+            },
+            "password": smtp_password
+        }),
+    )
+    .await;
+    assert!(r.status.is_success(), "{}", r.text());
+    let totp_b32: String = {
+        let path = srv.state.ctx.paths.data_dir.join("auth").join("totp.json");
+        let file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        file["secret_b32"].as_str().unwrap().to_string()
+    };
     let _ = send(
         &srv.app,
         get("/api/auth/status?probe=geheim-im-query", None),
@@ -123,6 +149,7 @@ async fn no_passphrase_or_session_id_in_logs() {
         "falsche-passphrase-0000000",
         cookie.as_str(),
         cookie2.as_str(),
+        cookie3.as_str(),
         "geheim-im-query",
         setup_token.as_str(),
         // 6 Ziffern kämen zufällig in Zeitstempeln vor → im JSON-Kontext suchen
@@ -130,6 +157,8 @@ async fn no_passphrase_or_session_id_in_logs() {
         "totpCode",
         recovery[0].as_str(),
         recovery[9].as_str(),
+        smtp_password,
+        totp_b32.as_str(),
     ] {
         assert!(!text.contains(secret), "Geheimnis im Log: {secret}");
     }

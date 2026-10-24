@@ -277,6 +277,8 @@ async fn receipt_logo_and_legal_document_via_upload() {
     );
     // Gegenprüfung W7: der Logo-Dateiname kommt nie vom Client (sonst Lesen/
     // Löschen beliebiger Dateien über seller_logo_data/seller_logo_clear).
+    // Seit W14 verlangt seller_profile_upsert eine Re-Auth (Zahlungsdaten).
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let secret = srv.state.ctx.paths.data_dir.join("auth").join("totp.json");
     let r = call(
         &srv.app,

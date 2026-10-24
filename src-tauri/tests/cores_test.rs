@@ -124,6 +124,10 @@ async fn setup(unlocked: bool) -> Env {
 }
 
 async fn locked_invoice(env: &Env) -> String {
+    locked_invoice_on(env, klein_buch_lib::clock::today_berlin()).await
+}
+
+async fn locked_invoice_on(env: &Env, today: NaiveDate) -> String {
     let pool = env.ctx.pool().unwrap();
     let contact_id = contacts::create(
         &pool,
@@ -148,7 +152,6 @@ async fn locked_invoice(env: &Env) -> String {
     .await
     .unwrap()
     .id;
-    let today = klein_buch_lib::clock::today_berlin();
     let input = InvoiceInput {
         direction: InvoiceDirection::Issued,
         invoice_date: today,
@@ -232,6 +235,67 @@ async fn storno_core_cancels_original_and_locks_storno() {
     .await
     .unwrap_err();
     assert!(err.to_string().contains("bereits storniert"), "{err}");
+}
+
+/// W14 (GoBD): Storno-Datum nicht vor der Rechnung, nicht in der Zukunft, nicht
+/// in einem abgeschlossenen Geschäftsjahr — die EÜR eines festgeschriebenen
+/// Jahres darf sich nicht nachträglich ändern.
+#[tokio::test]
+async fn storno_date_must_be_in_an_open_year_after_the_invoice() {
+    use chrono::Datelike as _;
+    let env = setup(true).await;
+    let today = klein_buch_lib::clock::today_berlin();
+    let last_year = today.year() - 1;
+    let invoice_date = NaiveDate::from_ymd_opt(last_year, 12, 10).unwrap();
+    let id = locked_invoice_on(&env, invoice_date).await;
+    let cancel = |date: Option<NaiveDate>| {
+        inv_cmd::invoices_cancel(
+            &env.ctx,
+            inv_cmd::InvoicesCancelArgs {
+                args: inv_cmd::CancelArgs {
+                    invoice_id: id.clone(),
+                    reason: "Fehler im Betrag".into(),
+                    storno_date: date,
+                },
+            },
+        )
+    };
+    let err = cancel(NaiveDate::from_ymd_opt(last_year, 12, 1))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Storno-Datum"),
+        "vor der Rechnung: {err}"
+    );
+    let err = cancel(today.checked_add_days(chrono::Days::new(1)))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("Storno-Datum"), "Zukunft: {err}");
+
+    let pool = env.ctx.pool().unwrap();
+    let session = klein_buch_lib::backup::BackupSession::default();
+    session.set("passphrase-1234".into());
+    klein_buch_lib::fiscal_year::lock::close_year(
+        &pool,
+        &env.ctx.paths,
+        &session,
+        last_year as i64,
+        today,
+    )
+    .await
+    .unwrap();
+    let err = cancel(NaiveDate::from_ymd_opt(last_year, 12, 20))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("abgeschlossen"),
+        "geschlossenes Jahr: {err}"
+    );
+    let resp = cancel(Some(today)).await.unwrap();
+    assert_eq!(
+        resp.original.status, "canceled",
+        "Storno im offenen Jahr geht"
+    );
 }
 
 #[tokio::test]

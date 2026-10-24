@@ -7,8 +7,9 @@
 //!   warten)
 //! - Timeout [`REQUEST_TIMEOUT`] auf `/api/*`; Längeres läuft als Job
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::extract::{Request, State};
@@ -21,6 +22,10 @@ use super::state::ServerState;
 use crate::commands::registry::Cost;
 
 pub const MAX_CONCURRENT_REQUESTS: usize = 64;
+/// Höchstens so viele gleichzeitige Anfragen mit Körper (POST) je Client-Adresse
+/// (IPv6 je /64), damit langsam gesendete Körper eines Clients nicht die
+/// globale Grenze füllen (W14). GETs (SPA, Dateien) zählen nicht.
+pub const MAX_CONCURRENT_POSTS_PER_CLIENT: usize = 16;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// So lange wartet ein direkter Aufruf auf eine Genehmigung seiner
 /// Kostenklasse, bevor er mit 503 abgelehnt wird.
@@ -47,6 +52,8 @@ pub struct Admission {
     /// Erteilte Zulassungen je Klasse (Nachweis „keine KDF ohne gültiges
     /// TOTP“, Plan W6).
     admitted: [AtomicUsize; 5],
+    /// Laufende POST-Anfragen je Client-Schlüssel.
+    posts_by_client: Mutex<HashMap<String, usize>>,
 }
 
 /// Siehe [`Admission::running`].
@@ -72,8 +79,56 @@ impl Default for Admission {
             running: Default::default(),
             peak: Default::default(),
             admitted: Default::default(),
+            posts_by_client: Mutex::default(),
         }
     }
+}
+
+/// Platz einer POST-Anfrage je Client; gibt ihn beim Drop frei.
+struct ClientSlot {
+    st: Arc<ServerState>,
+    key: String,
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        let mut map = self
+            .st
+            .admission
+            .posts_by_client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(n) = map.get_mut(&self.key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                map.remove(&self.key);
+            }
+        }
+    }
+}
+
+fn client_slot(st: &Arc<ServerState>, req: &Request) -> Result<Option<ClientSlot>, ApiError> {
+    if req.method() != axum::http::Method::POST {
+        return Ok(None);
+    }
+    let Some(info) = req.extensions().get::<super::policy::ClientInfo>() else {
+        return Ok(None);
+    };
+    let key = super::ratelimit::key_for(None, info.ip);
+    let mut map = st
+        .admission
+        .posts_by_client
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let n = map.entry(key.clone()).or_insert(0);
+    if *n >= MAX_CONCURRENT_POSTS_PER_CLIENT {
+        return Err(ApiError::busy(2));
+    }
+    *n += 1;
+    Ok(Some(ClientSlot {
+        st: st.clone(),
+        key,
+    }))
 }
 
 fn index(cost: Cost) -> usize {
@@ -161,10 +216,15 @@ pub async fn global_limit(
     if req.uri().path() == "/healthz" {
         return next.run(req).await;
     }
+    let slot = match client_slot(&st, &req) {
+        Ok(slot) => slot,
+        Err(e) => return e.into_response(),
+    };
     match st.admission.global.clone().try_acquire_owned() {
         Ok(permit) => {
             let response = next.run(req).await;
             drop(permit);
+            drop(slot);
             response
         }
         Err(_) => ApiError::busy(1).into_response(),

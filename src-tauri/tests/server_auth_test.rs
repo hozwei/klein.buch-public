@@ -315,6 +315,113 @@ async fn backoff_per_ip_and_device_cookie_exemption() {
 }
 
 #[tokio::test]
+async fn global_budget_never_locks_out_recovery_codes_and_device_cookie_slides() {
+    // W14: Ein Angreifer mit vielen Adressen schöpft das globale Budget aus.
+    // Ein neues Gerät mit TOTP muss warten, ein Einmal-Code kommt trotzdem
+    // hinein, und das Gerätecookie wird mit gleichem Wert erneuert.
+    let srv = test_server();
+    let reply = setup_reply(&srv).await;
+    let codes: Vec<String> = serde_json::from_value(reply.json()["recoveryCodes"].clone()).unwrap();
+    let device_of = |r: &Reply| {
+        r.headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find(|v| v.starts_with("__Host-kb_device="))
+            .map(|v| v.split(';').next().unwrap().to_string())
+    };
+    let device = device_of(&reply).unwrap();
+    // Alle folgenden Anmeldungen laufen durch die KDF; nicht parallel zu
+    // anderen Tests (ein KDF-Platz, sonst 30-s-Zeitlimit dort).
+    let _serial = kdf_serial().await;
+    for i in 0..60 {
+        let peer = format!("203.0.113.{}:4000", i + 1);
+        let req = from_peer(
+            post("/api/auth/login", &login_body(PASS, "000000"), None, None),
+            &peer,
+        );
+        send(&srv.app, req).await;
+    }
+    let code = next_totp(&srv);
+    let fresh_device = from_peer(
+        post("/api/auth/login", &login_body(PASS, &code), None, None),
+        "198.51.100.77:4000",
+    );
+    let r = send(&srv.app, fresh_device).await;
+    assert_eq!(
+        r.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "globales Budget greift"
+    );
+    let body = serde_json::json!({ "passphrase": PASS, "recoveryCode": codes[0] }).to_string();
+    let r = send(
+        &srv.app,
+        from_peer(
+            post("/api/auth/login", &body, None, None),
+            "198.51.100.78:4000",
+        ),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "Einmal-Code trotz Budget: {}",
+        r.text()
+    );
+    let code = next_totp(&srv);
+    let mut req = from_peer(
+        post("/api/auth/login", &login_body(PASS, &code), None, None),
+        "198.51.100.79:4000",
+    );
+    req.headers_mut()
+        .insert(header::COOKIE, device.parse().unwrap());
+    let r = send(&srv.app, req).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(
+        device_of(&r).as_deref(),
+        Some(device.as_str()),
+        "gleitend erneuert"
+    );
+}
+
+#[tokio::test]
+async fn reauth_rotates_session_and_old_cookie_loses_reauth() {
+    let srv = test_server();
+    let old = setup(&srv).await;
+    let new = reauth_cookie(&srv, &old).await;
+    assert_ne!(old, new);
+    let probe = |cookie: &str| {
+        post(
+            "/api/cmd/backup_target_remove",
+            r#"{"id":"gibt-es-nicht"}"#,
+            Some(cookie),
+            None,
+        )
+    };
+    let r = send(&srv.app, probe(&new)).await;
+    assert_ne!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "neues Cookie trägt die Re-Auth"
+    );
+    let r = send(&srv.app, probe(&old)).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        r.json()["code"],
+        "reauth_required",
+        "altes Cookie ohne Re-Auth"
+    );
+    let r = call(&srv.app, &old, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "altes Cookie gilt noch kurz");
+    let r = reauth(&srv, &old).await;
+    assert_eq!(
+        r.status,
+        StatusCode::UNAUTHORIZED,
+        "ersetzte Sitzung nicht erneut"
+    );
+}
+
+#[tokio::test]
 async fn forwarded_for_only_from_trusted_proxies() {
     let srv = test_server_with(|cfg| {
         cfg.policy.trusted_proxies = parse_trusted_proxies("192.0.2.0/24").unwrap();
@@ -458,7 +565,7 @@ async fn reauth_commands_require_fresh_reauth() {
         .filter(|c| c.exposed() && c.auth == Auth::Reauth)
         .map(|c| c.name)
         .collect();
-    assert_eq!(reauth_cmds.len(), 16);
+    assert_eq!(reauth_cmds.len(), 21);
     for name in &reauth_cmds {
         let r = send(
             &srv.app,
@@ -468,8 +575,7 @@ async fn reauth_commands_require_fresh_reauth() {
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{name}");
         assert_eq!(r.json()["code"], "reauth_required", "{name}");
     }
-    let r = reauth(&srv, &cookie).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = reauth_cookie(&srv, &cookie).await;
     for name in &reauth_cmds {
         let r = send(
             &srv.app,
@@ -564,7 +670,7 @@ async fn passphrase_change_rekeys_db_and_keeps_old_backups_readable() {
     )
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let short = serde_json::json!({ "newPassphrase": "zu-kurz" }).to_string();
     let r = send(
         &srv.app,
@@ -665,7 +771,9 @@ async fn totp_and_recovery_renewal_need_reauth() {
     )
     .await;
     assert_eq!(r.status, StatusCode::FORBIDDEN);
-    assert_eq!(reauth(&srv, &cookie).await.status, StatusCode::OK);
+    // zweite Sitzung (anderes Gerät), die die Erneuerung beenden muss (W14)
+    let other = session_cookie(&login(&srv, PASS).await);
+    let cookie = reauth_cookie(&srv, &cookie).await;
     let r = send(
         &srv.app,
         post("/api/auth/recovery/renew", "{}", Some(&cookie), None),
@@ -673,6 +781,8 @@ async fn totp_and_recovery_renewal_need_reauth() {
     .await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.json()["recoveryCodes"].as_array().unwrap().len(), 10);
+    let r = call(&srv.app, &other, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "andere Sitzung beendet");
 
     let offer = send(
         &srv.app,

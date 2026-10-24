@@ -114,7 +114,13 @@
       <form id="cancel-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
         <label>
           Storno-Datum *
-          <input type="date" bind:value={stornoDate} required />
+          <input
+            type="date"
+            bind:value={stornoDate}
+            min={inv.invoiceDate}
+            max={todayBerlin()}
+            required
+          />
         </label>
         <label>
           Grund * (steht später auf dem Storno-Beleg)

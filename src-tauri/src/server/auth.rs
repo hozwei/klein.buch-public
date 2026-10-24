@@ -182,19 +182,38 @@ async fn read_request(req: Request) -> Result<AuthRequest, ApiError> {
     })
 }
 
-/// Schlüssel für das Rate-Limit (gültiges Gerätecookie, sonst Client-IP).
-fn rate_key(st: &ServerState, headers: &HeaderMap, info: &ClientInfo) -> (String, bool) {
-    let device = session::cookie_from_headers(headers, DEVICE_COOKIE)
-        .and_then(|v| st.ratelimit.device_id(&v));
+/// Schlüssel für das Rate-Limit (gültiges Gerätecookie, sonst Client-IP),
+/// „hat Gerätecookie“ und dessen Wert (zum Erneuern nach Erfolg, W14).
+fn rate_key(
+    st: &ServerState,
+    headers: &HeaderMap,
+    info: &ClientInfo,
+) -> (String, bool, Option<String>) {
+    let cookie = session::cookie_from_headers(headers, DEVICE_COOKIE);
+    let device = cookie.as_deref().and_then(|v| st.ratelimit.device_id(v));
     let has_device = device.is_some();
-    (ratelimit::key_for(device.as_deref(), info.ip), has_device)
+    let value = if has_device { cookie } else { None };
+    (
+        ratelimit::key_for(device.as_deref(), info.ip),
+        has_device,
+        value,
+    )
 }
 
-/// Antwort mit neuer Sitzung (und ggf. neuem Gerätecookie).
+/// `Set-Cookie` für das Gerätecookie: vorhandenen gültigen Wert mit frischer
+/// Laufzeit erneuern (gleitend, W14), sonst einen neuen ausstellen.
+fn device_cookie(st: &ServerState, existing: Option<&str>) -> Option<HeaderValue> {
+    let value = existing
+        .map(str::to_string)
+        .unwrap_or_else(|| st.ratelimit.new_device_cookie());
+    HeaderValue::from_str(&ratelimit::device_cookie_header(&value)).ok()
+}
+
+/// Antwort mit neuer Sitzung und erneuertem bzw. neuem Gerätecookie.
 fn with_new_session(
     st: &ServerState,
     mut body: serde_json::Value,
-    set_device_cookie: bool,
+    device: Option<&str>,
 ) -> Response {
     let token = st.sessions.create();
     if let Some(obj) = body.as_object_mut() {
@@ -204,11 +223,8 @@ fn with_new_session(
     if let Ok(v) = HeaderValue::from_str(&session::set_cookie_value(&token)) {
         response.headers_mut().append(header::SET_COOKIE, v);
     }
-    if set_device_cookie {
-        let device = st.ratelimit.new_device_cookie();
-        if let Ok(v) = HeaderValue::from_str(&ratelimit::device_cookie_header(&device)) {
-            response.headers_mut().append(header::SET_COOKIE, v);
-        }
+    if let Some(v) = device_cookie(st, device) {
+        response.headers_mut().append(header::SET_COOKIE, v);
     }
     response
 }
@@ -337,7 +353,7 @@ pub async fn setup(State(st): State<Arc<ServerState>>, req: Request) -> Response
     if !st.policy.auth_transport_ok(&request.info) {
         return insecure_transport().into_response();
     }
-    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
+    let (key, has_device, device) = rate_key(&st, &request.headers, &request.info);
     if let Err(wait) = st.ratelimit.check(&key, has_device) {
         return rate_limited(wait).into_response();
     }
@@ -363,7 +379,7 @@ pub async fn setup(State(st): State<Arc<ServerState>>, req: Request) -> Response
     }
     let task_state = st.clone();
     detached(&st, async move {
-        setup_final(task_state, request, key, has_device).await
+        setup_final(task_state, request, key, has_device, device).await
     })
     .await
 }
@@ -390,6 +406,7 @@ async fn setup_final(
     request: AuthRequest,
     key: String,
     has_device: bool,
+    device: Option<String>,
 ) -> Result<Response, ApiError> {
     let _transition = st.transition.lock().await;
     // Erneut unter der Sperre: parallele Versuche bekommen nicht mehr Anläufe.
@@ -487,7 +504,7 @@ async fn setup_final(
     Ok(with_new_session(
         &st,
         serde_json::json!({ "recoveryCodes": codes }),
-        !has_device,
+        device.as_deref(),
     ))
 }
 
@@ -504,14 +521,20 @@ pub async fn login(State(st): State<Arc<ServerState>>, req: Request) -> Response
     if !st.policy.auth_transport_ok(&request.info) {
         return insecure_transport().into_response();
     }
-    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
-    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+    let (key, has_device, device) = rate_key(&st, &request.headers, &request.info);
+    // W14: Ein Login mit Einmal-Code (10 Codes zu 50 Bit, Raten aussichtslos)
+    // zählt nur unter dem eigenen Schlüssel, nicht im globalen Budget — sonst
+    // könnte ein Angreifer das Budget dauerhaft ausschöpfen und den Inhaber auf
+    // jedem neuen Gerät aussperren. Die Passphrase bleibt Pflicht.
+    let recovery_only = request.body.recovery_code.is_some() && request.body.totp_code.is_none();
+    let exempt = has_device || recovery_only;
+    if let Err(wait) = st.ratelimit.check(&key, exempt) {
         tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={} reason=rate_limited", request.info.ip);
         return rate_limited(wait).into_response();
     }
     let task_state = st.clone();
     detached(&st, async move {
-        login_inner(task_state, request, key, has_device).await
+        login_inner(task_state, request, key, exempt, device).await
     })
     .await
 }
@@ -531,6 +554,7 @@ async fn login_inner(
     request: AuthRequest,
     key: String,
     has_device: bool,
+    device: Option<String>,
 ) -> Result<Response, ApiError> {
     let _transition = st.transition.lock().await;
     let ip = request.info.ip;
@@ -586,7 +610,7 @@ async fn login_inner(
             "usedRecoveryCode": used_recovery,
             "recoveryLeft": st.totp.recovery_left(),
         }),
-        !has_device,
+        device.as_deref(),
     ))
 }
 
@@ -733,7 +757,7 @@ pub async fn reauth(State(st): State<Arc<ServerState>>, req: Request) -> Respons
     if !st.policy.auth_transport_ok(&request.info) {
         return insecure_transport().into_response();
     }
-    let (key, has_device) = rate_key(&st, &request.headers, &request.info);
+    let (key, has_device, device) = rate_key(&st, &request.headers, &request.info);
     if let Err(wait) = st.ratelimit.check(&key, has_device) {
         return rate_limited(wait).into_response();
     }
@@ -762,13 +786,24 @@ pub async fn reauth(State(st): State<Arc<ServerState>>, req: Request) -> Respons
             return Err(auth_failed());
         }
         st.ratelimit.clear(&key);
-        st.sessions.mark_reauth(id);
+        // W14: neue Sitzungs-ID mit frischer Re-Auth; die alte (womöglich
+        // gestohlene) verliert das Re-Auth-Recht und läuft kurz danach ab.
+        let Some(token) = st.sessions.rotate_with_reauth(id) else {
+            return Err(ApiError::unauthenticated());
+        };
         audit(&st, "auth.reauth.ok").await;
-        Ok(Json(serde_json::json!({
+        let mut response = Json(serde_json::json!({
             "state": "ok",
             "reauthSeconds": session::REAUTH_WINDOW.as_secs(),
         }))
-        .into_response())
+        .into_response();
+        if let Ok(v) = HeaderValue::from_str(&session::set_cookie_value(&token)) {
+            response.headers_mut().append(header::SET_COOKIE, v);
+        }
+        if let Some(v) = device_cookie(&st, device.as_deref()) {
+            response.headers_mut().append(header::SET_COOKIE, v);
+        }
+        Ok(response)
     })
     .await
 }
@@ -822,6 +857,8 @@ pub async fn totp_renew(State(st): State<Arc<ServerState>>, req: Request) -> Res
                 .totp
                 .install(&secret, confirmed_step)
                 .map_err(|e| generic_failure("TOTP", &e))?;
+            // W14: Andere Sitzungen enden (Verdacht auf Kompromittierung).
+            st.sessions.retain_only(id);
             audit(&st, "auth.totp.renewed").await;
             Ok(Json(serde_json::json!({ "state": "ok", "recoveryCodes": codes })).into_response())
         }
@@ -843,6 +880,7 @@ pub async fn recovery_renew(State(st): State<Arc<ServerState>>, req: Request) ->
                 .totp
                 .renew_recovery()
                 .map_err(|e| generic_failure("Einmal-Codes", &e))?;
+            st.sessions.retain_only(id);
             audit(&st, "auth.recovery.renewed").await;
             Ok(Json(serde_json::json!({ "state": "ok", "recoveryCodes": codes })).into_response())
         }

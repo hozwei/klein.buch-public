@@ -887,6 +887,19 @@ pub async fn invoices_cancel(
         .await?
         .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
     let storno_date = args.storno_date.unwrap_or_else(today_berlin);
+    // W14 (GoBD): Das Storno wirkt in der EÜR im Jahr seines Datums. Nicht vor
+    // der Original-Rechnung, nicht in der Zukunft und nur in einem offenen
+    // Geschäftsjahr — sonst änderte sich ein festgeschriebenes Jahr nachträglich
+    // (wie beim Kosten-Storno, R2-003, und bei Zahlungen).
+    let original_date = parse_date(&original.invoice.invoice_date)?;
+    if storno_date < original_date || storno_date > today_berlin() {
+        return Err(Error::Domain(format!(
+            "Das Storno-Datum muss zwischen dem Rechnungsdatum ({}) und heute liegen.",
+            original_date.format("%d.%m.%Y")
+        )));
+    }
+    crate::fiscal_year::guard::ensure_year_open(pool, chrono::Datelike::year(&storno_date) as i64)
+        .await?;
 
     // Domain-Storno bauen.
     let original_view = OriginalInvoiceView {

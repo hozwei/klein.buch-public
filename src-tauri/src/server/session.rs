@@ -50,13 +50,26 @@ struct SessionData {
     last_seen: Instant,
     reauth_until: Option<Instant>,
     heavy_calls: VecDeque<Instant>,
+    /// Nach einer Rotation (Re-Auth) gilt die alte ID nur noch kurz.
+    retire_at: Option<Instant>,
 }
 
 impl SessionData {
     fn expired(&self, now: Instant) -> bool {
         now.duration_since(self.last_seen) >= IDLE_TIMEOUT
             || now.duration_since(self.created) >= ABSOLUTE_TIMEOUT
+            || self.retire_at.is_some_and(|at| now >= at)
     }
+}
+
+/// Wie lange eine durch Re-Auth ersetzte Sitzungs-ID noch gilt (laufende
+/// Anfragen des eigenen Browsers), ohne Re-Auth-Recht.
+pub const ROTATION_GRACE: Duration = Duration::from_secs(10);
+
+fn new_token() -> String {
+    let mut raw = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut raw);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
 }
 
 #[derive(Default)]
@@ -76,9 +89,7 @@ impl SessionStore {
 
     /// Neue Sitzung; liefert den Cookie-Wert.
     pub fn create(&self) -> String {
-        let mut raw = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut raw);
-        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+        let token = new_token();
         let now = Instant::now();
         let seq = self
             .next_seq
@@ -102,9 +113,36 @@ impl SessionStore {
                 last_seen: now,
                 reauth_until: None,
                 heavy_calls: VecDeque::new(),
+                retire_at: None,
             },
         );
         token
+    }
+
+    /// Re-Auth bestätigt (W14): neue Sitzungs-ID mit frischer Re-Auth
+    /// ([`REAUTH_WINDOW`]); die alte verliert das Re-Auth-Recht und gilt nur
+    /// noch [`ROTATION_GRACE`]. Ein gestohlenes Cookie endet so mit der
+    /// Bestätigung des Inhabers. Liefert den neuen Cookie-Wert.
+    pub fn rotate_with_reauth(&self, old: SessionId) -> Option<String> {
+        let now = Instant::now();
+        let token = new_token();
+        let mut map = self.lock();
+        let data = map.get_mut(&old)?;
+        if data.expired(now) || data.retire_at.is_some() {
+            return None;
+        }
+        let rotated = SessionData {
+            seq: data.seq,
+            created: data.created,
+            last_seen: now,
+            reauth_until: Some(now + REAUTH_WINDOW),
+            heavy_calls: data.heavy_calls.clone(),
+            retire_at: None,
+        };
+        data.reauth_until = None;
+        data.retire_at = Some(now + ROTATION_GRACE);
+        map.insert(hash_token(&token), rotated);
+        Some(token)
     }
 
     /// Gültige Sitzung zum Cookie-Wert (Idle- und Absolut-Timeout geprüft;
@@ -313,5 +351,28 @@ mod tests {
         assert!(store.validate(&other).is_none());
         store.remove(id);
         assert!(store.validate(&token).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reauth_rotates_the_session_id() {
+        let store = SessionStore::default();
+        let old = store.create();
+        let old_id = store.validate(&old).unwrap();
+        let new = store.rotate_with_reauth(old_id).unwrap();
+        let new_id = store.validate(&new).unwrap();
+        assert_ne!(old, new);
+        assert!(store.reauth_fresh(new_id), "neue ID trägt die Re-Auth");
+        assert!(!store.reauth_fresh(old_id), "alte ID ohne Re-Auth");
+        assert!(store.validate(&old).is_some(), "alte ID gilt noch kurz");
+        assert!(
+            store.rotate_with_reauth(old_id).is_none(),
+            "eine ersetzte ID lässt sich nicht erneut rotieren"
+        );
+        tokio::time::advance(ROTATION_GRACE).await;
+        assert!(
+            store.validate(&old).is_none(),
+            "alte ID nach der Frist ungültig"
+        );
+        assert!(store.validate(&new).is_some());
     }
 }

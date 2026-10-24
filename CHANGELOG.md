@@ -10,6 +10,20 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **Sicherheit (W14):** Anmeldung lässt sich nicht mehr durch fremde
+  Fehlversuche dauerhaft blockieren (Einmal-Code kommt immer durch,
+  Gerätecookie wird erneuert); langsam gesendete Anfragen belegen den Server
+  nicht mehr; die Bestätigung mit Passphrase und Code (Re-Auth) erneuert die
+  Sitzung, ein gestohlenes Sitzungs-Cookie verliert damit seine Rechte; das
+  Ändern von Bankverbindung, Zahlungskonten und §19-Status, das Anonymisieren
+  und der Geschäftsjahres-Abschluss verlangen diese Bestätigung; Vorlagennamen
+  können keine Pfade mehr sein; Fehlerantworten werden nicht mehr dauerhaft im
+  Browser zwischengespeichert; präparierte ZUGFeRD-PDFs (Dekompressionsbombe)
+  werden abgewiesen.
+- **Storno-Datum:** muss zwischen Rechnungsdatum und heute in einem offenen
+  Geschäftsjahr liegen; vorher konnte ein Storno die EÜR eines bereits
+  abgeschlossenen Jahres ändern. (W14)
+
 - **Rechnung ohne Fälligkeitsdatum:** Der echte Validator lehnt eine
   E-Rechnung mit offenem Betrag ohne Fälligkeitsdatum ab (BR-CO-25). Das
   Festschreiben meldet das jetzt vorab mit klarer Meldung. (W11)
