@@ -1,12 +1,17 @@
 # Changelog
 
-Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/) und
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
+`JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
-## [Unreleased]
+## [2026.10.0] — Web-/Docker-Fassung, veröffentlicht 2026-10-24
 
-Umbau zur Web-/Docker-Fassung (Phase W). Bis zum nächsten Release nur auf dem
-Arbeitszweig `phase-w`.
+Erstes Release als Webapp im öffentlichen Docker-Image
+`ghcr.io/hozwei/klein-buch:2026.10.0` (Phase W, ADR 0039): ein Server
+(`klein-buch-server`) mit Bedienung im Browser, Anmeldung mit Passphrase und TOTP,
+verschlüsselte Datenbank, Backups auf mehrere externe Ziele (Verzeichnis, SFTP),
+Responsive-Oberfläche für Smartphone, Tablet und Desktop. Die Windows-Desktop-App
+(Tauri) entfällt; einen Datenumzug aus v2026.5.x gibt es nicht (E17). Image
+signiert (cosign), mit SBOM und Quellarchiv der Komponenten Dritter am Release.
 
 ### Fixed
 

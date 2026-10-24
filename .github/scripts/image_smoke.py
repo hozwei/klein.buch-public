@@ -88,20 +88,23 @@ def reauth(secret_b32, cookie):
     return session_from(h)
 
 
-def wait_state(want, timeout=180):
+def wait_restart(timeout=180):
+    """Wartet, bis der Server herunterfährt (503 bzw. keine Verbindung) und
+    wieder mit 200 antwortet. `/healthz` liefert von außerhalb des Containers
+    nur den Statuscode (Details nur über Loopback, W14-006)."""
     deadline = time.time() + timeout
-    last = None
+    down = False
     while time.time() < deadline:
         try:
-            s, _, b = request("GET", "/healthz")
-            if s == 200:
-                last = b.get("state")
-                if last == want:
-                    return
+            s, _, _ = request("GET", "/healthz")
         except (urllib.error.URLError, ConnectionError, OSError):
-            pass
-        time.sleep(2)
-    fail(f"Zustand {want} nicht erreicht (zuletzt {last})")
+            s = None
+        if s != 200:
+            down = True
+        elif down:
+            return
+        time.sleep(0.5)
+    fail("Neustart nach dem Restore nicht beobachtet")
 
 
 def totp(secret_b32, step=None):
@@ -243,8 +246,10 @@ def main():
     if not report.get("requiresRestart"):
         fail(f"Restore ohne Neustart: {report}")
     print("Restore angewendet, Server startet neu", flush=True)
-    time.sleep(12)
-    wait_state("locked")
+    wait_restart()
+    s, _, st = request("GET", "/api/auth/status")
+    if s != 200 or (st or {}).get("state") != "login_required":
+        fail(f"Zustand nach dem Neustart: {s} {st}")
     s, h, body = request("POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)})
     if s != 200:
         fail(f"Anmeldung nach Restore: {s} {body}")
