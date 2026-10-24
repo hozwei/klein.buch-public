@@ -1,4 +1,4 @@
-//! Tauri-Commands für den Mail-Versand (Block 5, SMTP) und später OAuth
+//! Commands für den Mail-Versand (Block 5, SMTP) und später OAuth
 //! (Block 16).
 //!
 //! Orchestriert:
@@ -841,7 +841,7 @@ pub async fn mail_send_quote(
 }
 
 // =============================================================================
-// Core (ohne Tauri-State — für Integration-/E2E-Tests aufrufbar)
+// Core (ohne `AppCtx` — für Integration-/E2E-Tests aufrufbar)
 // =============================================================================
 
 /// Rendert Betreff + Body einer Rechnungs-Mail aus dem `invoice-de`-Template.
@@ -857,7 +857,7 @@ pub async fn render_invoice_mail(
 }
 
 /// Kern-Pipeline für den Rechnungsversand. Public, damit E2E-Tests sie ohne
-/// Tauri-AppHandle treiben können (Paths kommen aus tempdir).
+/// Server treiben können (Paths kommen aus tempdir).
 #[allow(clippy::too_many_arguments)]
 pub async fn send_invoice_core(
     pool: &SqlitePool,
@@ -982,7 +982,7 @@ pub async fn render_quote_mail(
 }
 
 /// Kern-Pipeline für den Angebotsversand (Bundle als Multi-Attachment). Public,
-/// damit E2E-Tests sie ohne Tauri-AppHandle treiben können.
+/// damit E2E-Tests sie ohne Server treiben können.
 #[allow(clippy::too_many_arguments)]
 pub async fn send_quote_core(
     pool: &SqlitePool,

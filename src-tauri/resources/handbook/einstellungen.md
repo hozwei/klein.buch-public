@@ -67,8 +67,10 @@ Hier richtest Du die externen Backup-Ziele ein, auch mehrere
 gleichzeitig: Ordner unter `/backup-targets`, die Du als Betreiber in
 den Container einbindest (zum Beispiel eine NAS-Freigabe oder den
 Ordner eines Sync-Programms), und SFTP-Server. Außerdem löst Du hier
-mit "Jetzt sichern" eine Sicherung aus, siehst den
-Backup-Verlauf und stellst ein Backup wieder her. Über die PageBar
+mit "Jetzt sichern" eine Sicherung aus, stellst die Uhrzeit des täglichen
+Backups ein (Standard 02:30), siehst den Backup-Verlauf, stellst ein Backup
+wieder her und siehst unter "Nummernkreise" die zuletzt vergebenen Nummern
+(Anheben nach einer Wiederherstellung in eine neue Instanz). Über die PageBar
 oben rechts kommst Du ins Backup-Protokoll mit Zeitpunkt, Status,
 Auslöser, Ziel, Datei und Größe jeder Sicherung. Mehr dazu im Kapitel
 "Backup und Wiederherstellen".

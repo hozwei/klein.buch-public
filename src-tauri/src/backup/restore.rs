@@ -1,15 +1,19 @@
 //! Restore-Wizard (Block 4) — verify-then-apply, zweiphasig.
 //!
-//! Warum zweiphasig? Während die App läuft, hält der sqlx-Pool die SQLite-Datei
-//! (inkl. WAL) offen. Unter Windows lässt sich eine geöffnete DB-Datei nicht
-//! zuverlässig ersetzen. Daher:
+//! Warum zweiphasig? Während der Server läuft, hält der sqlx-Pool die
+//! SQLite-Datei (inkl. WAL) offen; ein Tausch der Datei unter einer offenen
+//! Verbindung ist nicht sicher. Daher:
 //!
-//! 1. **Phase A — [`apply`]** (App läuft): Pre-Restore-Backup erstellen,
-//!    Backup-Datei entschlüsseln + Hash verifizieren, Inhalt in ein
-//!    Staging-Verzeichnis entpacken, eine **Marker-Datei** schreiben und einen
-//!    Neustart anfordern.
-//! 2. **Phase B — [`apply_pending`]** (App-Start, **vor** dem Öffnen des Pools):
-//!    Staging-DB über die echte DB legen, Archive ersetzen, Marker löschen.
+//! 1. **Phase A — [`apply`]** (Server läuft, Änderungen gesperrt):
+//!    Pre-Restore-Backup erstellen, Backup-Datei entschlüsseln + Hash
+//!    verifizieren, Inhalt in ein Staging-Verzeichnis entpacken, die
+//!    Nummernkreise der laufenden DB festhalten (D-24), eine **Marker-Datei**
+//!    schreiben und einen Neustart anfordern.
+//! 2. **Phase B — [`apply_pending`]** (Serverstart, **vor** dem Öffnen des
+//!    Pools): Staging-DB über die echte DB legen, Archive ersetzen, Marker
+//!    löschen. Das erste Entsperren danach (`db::run_migrations`) schreibt den
+//!    Audit, setzt die Pause der automatischen Abläufe (W14-023), hebt die
+//!    Nummernkreise an und gleicht die Backup-Historie ab (D-22).
 //!
 //! Die Marker-Datei liegt im Dateisystem (nicht in der DB!), weil die DB selbst
 //! ausgetauscht wird.
@@ -27,7 +31,6 @@ use crate::backup::{create_now, encrypt, manifest, snapshot, BackupSession};
 use crate::config::Paths;
 use crate::db::schema_version::{EXPECTED_SCHEMA_VERSION, MIN_RESTORE_SCHEMA_VERSION};
 use crate::error::{Error, Result};
-use chrono::Utc;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::fs;
@@ -157,7 +160,7 @@ pub async fn apply(
     limits: RestoreLimits,
 ) -> Result<RestoreReport> {
     let current = session.get().ok_or_else(|| {
-        Error::Backup("Vor dem Restore bitte die App entsperren (aktuelle Passphrase).".into())
+        Error::Backup("Vor dem Restore bitte die Instanz entsperren (aktuelle Passphrase).".into())
     })?;
     // Ein schon vorgemerkter Restore würde sonst sein Staging verlieren
     // (Gegenprüfung W7).
@@ -238,11 +241,44 @@ pub async fn apply(
         return Err(e);
     }
 
+    // Nummernkreise der laufenden DB (Lauf F, D-24): nach dem Tausch hebt das
+    // erste Entsperren die Zähler der eingespielten DB auf diese Stände an,
+    // falls sie höher sind — bereits vergebene Nummern werden nie erneut
+    // vergeben. Seit der Annahme des Restores sind Änderungen gesperrt; die
+    // Stände bleiben bis zum Tausch gültig.
+    let counters = match crate::db::numbering::snapshot(pool).await {
+        Ok(c) => c,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    // F1d: nächste Termine der Abo-Reihen (bereits abgerechnete Perioden
+    // werden nach dem Restore nicht erneut abgerechnet) und Nummern
+    // festgeschriebener Belege (wiederhergestellte Entwürfe mit diesen Nummern
+    // werden vorgemerkt), siehe `backup::after_restore`.
+    let series = match crate::backup::after_restore::snapshot_series(pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    let locked_numbers = match crate::backup::after_restore::snapshot_locked_numbers(pool).await {
+        Ok(n) => n,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+
     // Marker vorbereiten (Dateisystem, nicht DB). Er wird erst nach dem
     // Pflicht-Audit an seinen Platz gebracht (Review W2 S1-6): scheitert der
     // Audit, meldet der Restore einen Fehler und wird beim Neustart auch NICHT
     // angewendet.
-    let staged_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let staged_at = crate::clock::now_utc()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
     let marker = paths.data_dir.join(RESTORE_MARKER);
     let marker_tmp = paths.data_dir.join(format!("{RESTORE_MARKER}.tmp"));
     let info = serde_json::json!({
@@ -252,6 +288,10 @@ pub async fn apply(
         "pre_restore_backup": pre.file_name,
         "format_version": header.format_version,
         "schema_version": header.schema_version,
+        "backup_created_at": header.created_at,
+        "counters": counters,
+        "series": series,
+        "locked_numbers": locked_numbers,
     });
     let written = (|| -> Result<()> {
         use std::io::Write;
@@ -354,7 +394,7 @@ async fn remove_staging(staging: &Path) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     tracing::warn!(
-        "Restore-Staging ließ sich nicht vollständig entfernen (wird beim Start aufgeräumt)"
+        "Restore-Staging ließ sich nicht vollständig entfernen (wird beim nächsten Serverstart aufgeräumt)"
     );
 }
 
@@ -507,6 +547,21 @@ pub struct AppliedInfo {
     pub pre_restore_backup: String,
     #[serde(default)]
     pub schema_version: Option<i32>,
+    /// Erstellungszeit des eingespielten Backups (Manifest, UTC ISO-8601).
+    #[serde(default)]
+    pub backup_created_at: Option<String>,
+    /// Nummernkreise der ersetzten DB (Lauf F, D-24); leer bei Markern aus
+    /// älteren Versionen und bei einer frisch eingerichteten Instanz.
+    #[serde(default)]
+    pub counters: Vec<crate::db::numbering::CounterState>,
+    /// Nächste Termine der Abo-Reihen der ersetzten DB (F1d); leer bei einer
+    /// frisch eingerichteten Instanz.
+    #[serde(default)]
+    pub series: Vec<crate::backup::after_restore::SeriesState>,
+    /// Nummern der festgeschriebenen Rechnungen, Stornos und Angebote der
+    /// ersetzten DB (F1d).
+    #[serde(default)]
+    pub locked_numbers: Vec<String>,
 }
 
 /// Datei im `data_dir`: angewendeter Restore, dessen Audit noch aussteht
@@ -548,7 +603,7 @@ const BRANDING_ROLLBACK_DIR: &str = "branding.rollback";
 /// Zustandsdatei des Phase-B-Tauschs (Review W2 S0-2). Sie sagt
 /// [`recover_pending_rollback`] nach einem Abbruch eindeutig, ob die Originale
 /// zurückgeholt oder nur noch aufgeräumt werden müssen — statt das aus der
-/// Existenz von Ordnern abzuleiten (ein beim Start neu angelegtes leeres
+/// Existenz von Ordnern abzuleiten (ein beim Serverstart neu angelegtes leeres
 /// `archive/` sah sonst wie „Tausch fertig“ aus und das echte Archiv in
 /// `archive.rollback` wurde gelöscht).
 pub const RESTORE_SWAP_STATE: &str = "RESTORE_SWAP_STATE.json";
@@ -772,7 +827,7 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-/// Phase B: wird beim App-Start **vor** dem Öffnen des Pools aufgerufen. Wenn ein
+/// Phase B: wird beim Serverstart **vor** dem Öffnen des Pools aufgerufen. Wenn ein
 /// Marker existiert, wird die Staging-DB über die echte DB gelegt und das Archive
 /// (ab Backup-Format 2 auch `data/branding`) ersetzt. `inputs/` bleibt
 /// unangetastet (Hardline).
@@ -827,6 +882,25 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         .get("schema_version")
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
+    let backup_created_at = info
+        .get("backup_created_at")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let counters: Vec<crate::db::numbering::CounterState> = info
+        .get("counters")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let series: Vec<crate::backup::after_restore::SeriesState> = info
+        .get("series")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let locked_numbers: Vec<String> = info
+        .get("locked_numbers")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
     let staged_db = staging.join("klein-buch.sqlite");
     if !staged_db.is_file() {
@@ -928,6 +1002,10 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         branding_restored: restore_branding,
         pre_restore_backup,
         schema_version,
+        backup_created_at,
+        counters,
+        series,
+        locked_numbers,
     };
     {
         use std::io::Write;
@@ -1252,6 +1330,18 @@ mod tests {
                 verified_at TEXT) STRICT",
             "CREATE TABLE marker (id INTEGER PRIMARY KEY, v TEXT) STRICT",
             "INSERT INTO marker (v) VALUES ('original-data')",
+            // Nummernkreise (Phase A hält sie für das Anheben fest, D-24)
+            "CREATE TABLE doc_number_counters (doc_type TEXT NOT NULL, fiscal_year INTEGER NOT NULL,
+                last_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (doc_type, fiscal_year)) STRICT",
+            // Abo-Termine und festgeschriebene Nummern (Phase A, F1d)
+            "CREATE TABLE recurring_invoices (id TEXT PRIMARY KEY NOT NULL,
+                next_due_date TEXT NOT NULL) STRICT",
+            "CREATE TABLE recurring_subscriptions (id TEXT PRIMARY KEY NOT NULL,
+                next_due_date TEXT NOT NULL) STRICT",
+            "CREATE TABLE invoices (id TEXT PRIMARY KEY NOT NULL, invoice_number TEXT NOT NULL,
+                locked_at TEXT) STRICT",
+            "CREATE TABLE quotes (id TEXT PRIMARY KEY NOT NULL, quote_number TEXT NOT NULL,
+                locked_at TEXT) STRICT",
             // für die Prüfungen in Phase A (Archivpfade, Migrationen)
             "CREATE TABLE archive_entries (id TEXT PRIMARY KEY NOT NULL, file_path TEXT NOT NULL)",
             "CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, checksum BLOB NOT NULL,

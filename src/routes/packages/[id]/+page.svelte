@@ -9,7 +9,7 @@
   import Button from "$lib/Button.svelte";
   import Badge from "$lib/Badge.svelte";
   import { flash } from "$lib/toast.svelte";
-  import { euro } from "$lib/format";
+  import { euro, date } from "$lib/format";
   import { mdPreview } from "$lib/markdownPreview";
   import MarkdownEditor from "$lib/MarkdownEditor.svelte";
   import {
@@ -89,7 +89,6 @@
   onMount(load);
 
   const cents = () => Math.round((priceEuro ?? 0) * 100);
-  const fmtDate = (s: string) => (s ? s.slice(0, 10).split("-").reverse().join(".") : "");
   const revByNum = (n: number | null) => revisions.find((r) => r.revision === n);
 
   async function save() {
@@ -221,7 +220,7 @@
           <div class="rev-main">
             <strong>Version {r.revision}</strong>
             {#if r.revision === pkg.currentRevision}<Badge tone="primary">aktiv</Badge>{/if}
-            <span class="muted small">· {fmtDate(r.createdAt)} · {r.title} · {euro(r.defaultUnitPriceCents)}</span>
+            <span class="muted small">· {date(r.createdAt)} · {r.title} · {euro(r.defaultUnitPriceCents)}</span>
             {#if r.note}<span class="muted small">· {r.note}</span>{/if}
           </div>
           {#if r.revision !== pkg.currentRevision}
@@ -253,7 +252,7 @@
         {#each [revByNum(compareA), revByNum(compareB)] as rev}
           <div class="cmp-col">
             {#if rev}
-              <div class="cmp-h">Version {rev.revision} · {fmtDate(rev.createdAt)}</div>
+              <div class="cmp-h">Version {rev.revision} · {date(rev.createdAt)}</div>
               <div class="cmp-meta">{rev.title} · {euro(rev.defaultUnitPriceCents)}</div>
               <div class="md-preview">{@html mdPreview(rev.bodyMarkup)}</div>
             {/if}

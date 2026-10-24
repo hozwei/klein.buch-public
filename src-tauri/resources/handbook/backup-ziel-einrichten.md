@@ -142,8 +142,14 @@ legst es neu an. In der Liste der Ziele hat jedes SFTP-Ziel den Knopf
 "Testen". Er prüft die Verbindung mit dem gespeicherten Passwort und dem
 gemerkten Fingerprint.
 
-Alte Backups löscht Klein.Buch auf einem SFTP-Server nicht. Dort räumst
-Du von Zeit zu Zeit selbst auf.
+Alte Backups löscht Klein.Buch auf einem SFTP-Server bewusst nicht: Eine
+kompromittierte Instanz soll die externen Kopien nicht vernichten können.
+Dort räumst Du oder der Betreiber des Servers selbst auf, etwa mit
+Snapshots oder einem zeitgesteuerten Aufräumen nach dem Muster "30 Tage
+vollständig, danach eines je Monat" (Platzbedarf siehe "[Speicher und
+Ressourcen](/help/speicherbedarf)"). Während Klein.Buch nach einer
+Wiederherstellung angehalten ist, schreibt es nichts auf die externen
+Ziele.
 
 ## Ziel entfernen
 

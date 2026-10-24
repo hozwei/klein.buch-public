@@ -1,8 +1,9 @@
-//! Tauri-Commands für Kontakte (Block 2).
+//! Commands für Kontakte (Block 2).
 //!
 //! Frontend ruft via `invoke("contacts_list", { includeArchived: false })` etc.
-//! Argumente kommen camelCase rein (Tauri-Default), wir nennen sie hier
-//! snake_case und überlassen die Konvertierung Tauri.
+//! (`POST /api/cmd/{name}`). Argumente kommen als JSON-Objekt mit
+//! camelCase-Schlüsseln; die Args-Structs übersetzen per
+//! `serde(rename_all = "camelCase")` in snake_case.
 
 use crate::app_ctx::AppCtx;
 use crate::db::models::ContactRow;
@@ -188,15 +189,23 @@ pub async fn contacts_anonymize_check(
 pub async fn anonymize_core(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
     // Vor dem Überschreiben zählen, was erhalten bleibt (fürs Audit-Detail).
     let (locked_invoices, locked_quotes) = contacts::count_locked_documents(pool, id).await?;
-    let row = contacts::anonymize(pool, id).await?;
+    // W14-031: Vorlagen und Kosten-Abos dieses Kontakts werden mit pausiert.
+    let (row, paused_templates, paused_subscriptions) =
+        contacts::anonymize_with_pauses(pool, id).await?;
     audit_log::append(
         pool,
         "contact.anonymize",
         "contact",
         id,
-        Some(&format!(
-            r#"{{"retainedInvoices":{locked_invoices},"retainedQuotes":{locked_quotes}}}"#
-        )),
+        Some(
+            &serde_json::json!({
+                "retainedInvoices": locked_invoices,
+                "retainedQuotes": locked_quotes,
+                "pausedRecurringInvoices": paused_templates,
+                "pausedRecurringSubscriptions": paused_subscriptions,
+            })
+            .to_string(),
+        ),
     )
     .await?;
     Ok(row)

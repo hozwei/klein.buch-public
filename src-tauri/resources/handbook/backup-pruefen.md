@@ -98,14 +98,16 @@ So gehst Du vor:
 
 Danach startet die Test-Instanz neu und enthält alle Deine Daten und
 Einstellungen. Dazu gehören auch die Mail-Konten mit Passwort, die
-SFTP-Ziele und Deine Abo-Rechnungen. Sobald Du Dich dort anmeldest,
-beginnt Klein.Buch sofort mit seinen geplanten Aufgaben. Fällige
-Abo-Rechnungen würden festgeschrieben und, je nach Einstellung, per
-E-Mail an Deine Kunden verschickt, und Backups gingen an Deine SFTP-Ziele.
-Melde Dich in der Test-Instanz deshalb nur an, wenn sie keine Verbindung
-nach außen hat (also weder Mail-Server noch SFTP-Server erreicht). Sonst
-hörst Du nach Schritt 4 auf: Der Betreiber hält die Test-Instanz an und
-löscht ihre Ordner.
+SFTP-Ziele und Deine Abo-Rechnungen. Nach der Anmeldung bleiben die
+automatischen Abläufe angehalten: Klein.Buch schreibt keine
+Abo-Rechnungen fest, verschickt nichts und kopiert Backups nicht auf die
+externen Ziele (Hinweis "Automatische Abo-Läufe angehalten" oben). In
+der Test-Instanz klickst Du **nie** auf "Prüfen und freigeben" — das ist
+nur für die produktive Instanz. So kannst Du Dich dort gefahrlos anmelden,
+stichprobenartig Rechnungen öffnen und die Archiv-Prüfung starten.
+Danach hält der Betreiber die Test-Instanz an und löscht ihre Ordner.
+Ganz ohne Verbindung nach außen (weder Mail-Server noch SFTP-Server
+erreichbar) ist die Test-Instanz trotzdem am sichersten.
 
 Klappt die Wiederherstellung nicht, lies das Kapitel "[Fehler beim
 Wiederherstellen](/help/troubleshooting-restore)".

@@ -55,12 +55,7 @@ pub fn prepare_dirs(root: &Path) -> Paths {
 }
 
 pub fn ctx_for(paths: Paths) -> Arc<AppCtx> {
-    Arc::new(AppCtx::new(
-        paths,
-        Arc::new(klein_buch_lib::notify::InboxOnly),
-        Arc::new(NoDesktop),
-        "test",
-    ))
+    Arc::new(AppCtx::new(paths, Arc::new(NoDesktop), "test"))
 }
 
 pub fn local_config() -> ServerConfig {

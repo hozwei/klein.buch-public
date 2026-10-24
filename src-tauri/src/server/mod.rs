@@ -53,7 +53,7 @@ use crate::config::Paths;
 use crate::error::{Error, Result};
 use state::ServerState;
 
-/// Kennung der Anwendung (früher Tauri-Identifier), für die Info-Anzeige.
+/// Kennung der Anwendung (aus der Desktop-Fassung übernommen), für die Info-Anzeige.
 pub const APP_IDENTIFIER: &str = "de.wildbach.kleinbuch";
 
 /// Router mit allen Routen und Middleware (Plan W5/W6).
@@ -220,39 +220,58 @@ fn run_server() -> ExitCode {
 async fn serve_main() -> Result<()> {
     let cfg = config::ServerConfig::from_env()?;
     let paths = Paths::from_env()?;
-    let ctx = Arc::new(AppCtx::new(
-        paths,
-        Arc::new(crate::notify::InboxOnly),
-        Arc::new(NoDesktop),
-        APP_IDENTIFIER,
-    ));
+    let ctx = Arc::new(AppCtx::new(paths, Arc::new(NoDesktop), APP_IDENTIFIER));
     let state = prepare(ctx, &cfg)?;
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
         .map_err(|e| Error::Config(format!("Port {} nicht verfügbar: {e}", cfg.listen)))?;
     tracing::info!("Klein.Buch lauscht auf {}", cfg.listen);
 
-    // Abgelaufene Downloads und Uploads unabhängig von Anfragen löschen
-    // (Plan W7: „nach 1 h gelöscht“, Gegenprüfung).
+    // Minütlich: abgelaufene Downloads und Uploads löschen (Plan W7: „nach 1 h
+    // gelöscht“). Stündlich: alte Reste in data/tmp und abgebrochene
+    // Backup-Teildateien (D-13). Alle 6 h im gesperrten Zustand ein Hinweis im
+    // Log (D-19). Gesperrt nach dem Start: sofort.
+    log_if_locked(&state);
     let sweeper = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut minutes: u64 = 0;
         loop {
             tokio::select! {
                 _ = tick.tick() => {
                     sweeper.ctx.downloads.sweep();
                     sweeper.ctx.uploads.sweep();
+                    if minutes > 0 && minutes.is_multiple_of(60) {
+                        let paths = sweeper.ctx.paths.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            startup::sweep_tmp(&paths.data_dir, startup::TMP_MAX_AGE);
+                            startup::sweep_partial_backups(&paths.backups_dir, startup::TMP_MAX_AGE);
+                        })
+                        .await;
+                    }
+                    if minutes > 0 && minutes.is_multiple_of(LOCKED_LOG_EVERY_MINUTES) {
+                        log_if_locked(&sweeper);
+                    }
+                    minutes += 1;
                 }
                 _ = sweeper.shutdown.cancelled() => break,
             }
         }
     });
 
+    // Signal → geordnet herunterfahren. Der Scheduler erhält die
+    // Abbruch-Anforderung sofort (auch beim Neustart nach einem Restore),
+    // nicht erst nach dem Abwarten der Verbindungen (W14-025b).
     let token = state.shutdown.clone();
     tokio::spawn(async move {
         wait_for_signal().await;
         tracing::info!("Signal empfangen — fahre geordnet herunter");
         token.cancel();
+    });
+    let stopper = state.clone();
+    tokio::spawn(async move {
+        stopper.shutdown.cancelled().await;
+        crate::scheduler::tick::request_stop(&stopper.ctx);
     });
 
     http::serve(listener, router(state.clone()), state.shutdown.clone()).await?;
@@ -293,6 +312,19 @@ pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<Serve
         state.ensure_setup_token();
     }
     Ok(state)
+}
+
+/// Abstand des Log-Hinweises „Instanz gesperrt“ (D-19).
+const LOCKED_LOG_EVERY_MINUTES: u64 = 6 * 60;
+
+/// Gesperrter Zustand sichtbar im Container-Log (D-19, E3: nach einem Neustart
+/// läuft nichts, bis im Browser entsperrt wird).
+fn log_if_locked(state: &ServerState) {
+    if state.instance_state() == state::InstanceState::Locked {
+        tracing::info!(
+            "Instanz gesperrt — Backups, Abo-Läufe und Prüfungen ruhen bis zur Anmeldung im Browser"
+        );
+    }
 }
 
 async fn wait_for_signal() {

@@ -1071,8 +1071,24 @@ export interface RecurringSubscription {
 /** Korrespondiert zu `ProcessReport` (scheduler::recurring) in Rust. */
 export interface RecurringProcessReport {
   skippedLocked: boolean;
+  /** Grund einer Pause der automatischen Belegerzeugung (Lauf F), sonst null. */
+  skippedHold?: string | null;
   processedSubscriptions: number;
   createdExpenses: number;
+  failedSubscriptions?: number;
+  /** Abos mit Rückstand über der Grenze — warten auf „Rückstand …“. */
+  awaitingDecision?: number;
+}
+
+/** Wahl bei verpassten Terminen (Fortsetzen nach Pause, Rückstand). */
+export type ResumeMode = "catchUp" | "skip";
+
+/** Pause der automatischen Belegerzeugung (Uhrsprung, Restore; ADR 0040). */
+export interface SchedulerHoldStatus {
+  held: boolean;
+  reason: string | null;
+  since: string | null;
+  message: string | null;
 }
 
 // ---- Wiederkehrende Ausgangsrechnungen / Abo-Rechnungen (Block RI) ----------
@@ -1146,8 +1162,12 @@ export interface RecurringInvoiceInputDto {
 /** Korrespondiert zu `ProcessReport` (scheduler::recurring_invoice) in Rust. */
 export interface RecurringInvoiceProcessReport {
   skippedLocked: boolean;
+  skippedHold?: string | null;
   processedTemplates: number;
   createdInvoices: number;
+  failedTemplates?: number;
+  awaitingDecision?: number;
+  resumed?: number;
 }
 
 // ---- Anlagen / Assets + AfA (Block 12) -------------------------------------
@@ -1474,7 +1494,7 @@ export interface NotificationRule {
   enabled: number; // 0|1
   configJson: string;
   deliverInApp: number; // 0|1
-  deliverOsNative: number; // 0|1
+  deliverOsNative: number; // 0|1 — Spalte der Desktop-Fassung, ohne Wirkung (Lauf F)
   createdAt: Iso8601;
 }
 

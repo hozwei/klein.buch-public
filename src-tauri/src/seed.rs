@@ -1,15 +1,20 @@
 //! Seed von `/inputs` aus dem Image mit Manifest (Plan W11 Punkt 6, ADR 0039).
 //!
 //! `/inputs/.seed-manifest.json` merkt sich je Datei den SHA-256 der zuletzt
-//! geseedeten Fassung. Beim Start gilt je Datei der Image-Quelle:
+//! geseedeten Fassung. Beim Serverstart gilt je Datei der Image-Quelle:
 //! - fehlt im Ziel → kopieren;
 //! - im Ziel unverändert (Hash = Manifest) und das Image bringt eine neue
 //!   Fassung → ersetzen, Hinweis in die Inbox;
 //! - vom Nutzer geändert (Hash weder Manifest noch neue Fassung) → nie
-//!   anfassen; die neue Fassung landet als `<name>.neu`, Hinweis in die Inbox.
+//!   anfassen; die neue Fassung landet **einmal** als `<name>.neu`, Hinweis in
+//!   die Inbox. Das Manifest merkt sich die angebotene Fassung (`offered`,
+//!   Lauf F D-10): Löscht der Nutzer die `.neu`-Datei, kommt sie nicht wieder;
+//!   erst eine weitere Image-Fassung wird erneut angeboten.
 //!
 //! Die Hinweise stehen bis zum nächsten Entsperren im Manifest
-//! (`pending_notices`), weil die Datenbank beim Start noch zu ist.
+//! (`pending_notices`), weil die Datenbank beim Serverstart noch gesperrt ist;
+//! jeder trägt einen `dedup_key` (`seed:<art>:<datei>:<hash>`), damit eine
+//! abgebrochene Auslieferung keinen Hinweis doppelt anlegt.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -30,6 +35,11 @@ pub struct Manifest {
     /// Relativer Pfad (mit `/`) → SHA-256 (hex) der zuletzt geseedeten Fassung.
     #[serde(default)]
     pub files: BTreeMap<String, String>,
+    /// Relativer Pfad → SHA-256 der Image-Fassung, die schon als `<rel>.neu`
+    /// angeboten wurde (D-10). Dieselbe Fassung wird nicht erneut angeboten,
+    /// auch wenn der Nutzer die `.neu`-Datei gelöscht hat.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub offered: BTreeMap<String, String>,
     #[serde(default)]
     pub pending_notices: Vec<Notice>,
 }
@@ -38,6 +48,10 @@ pub struct Manifest {
 pub struct Notice {
     pub title: String,
     pub body: String,
+    /// Schlüssel gegen doppelte Hinweise (`notifications.dedup_key`); fehlt in
+    /// Manifesten vor Lauf F.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedup_key: Option<String>,
 }
 
 /// Was der Seed je Datei getan hat (für Tests und Log).
@@ -115,29 +129,37 @@ pub fn seed(bundled: &Path, target: &Path, image_version: &str) -> Result<Report
         if !dst.exists() {
             write_atomic(&dst, &std::fs::read(&src)?)?;
             manifest.files.insert(rel.clone(), new_hash);
+            manifest.offered.remove(&rel);
             report.copied.push(rel);
             continue;
         }
         let dst_hash = sha256_file(&dst)?;
         if dst_hash == new_hash {
+            manifest.offered.remove(&rel);
             manifest.files.insert(rel, new_hash);
             continue;
         }
         if manifest.files.get(&rel) == Some(&dst_hash) {
             // unverändert seit dem letzten Seed → neue Fassung übernehmen
             write_atomic(&dst, &std::fs::read(&src)?)?;
-            manifest.files.insert(rel.clone(), new_hash);
+            manifest.files.insert(rel.clone(), new_hash.clone());
+            manifest.offered.remove(&rel);
             manifest.pending_notices.push(Notice {
                 title: "Vorlage aktualisiert".into(),
                 body: format!(
                     "Die mitgelieferte Datei „{rel}“ in /inputs wurde mit der neuen Fassung \
                      aus Klein.Buch {image_version} ersetzt (sie war unverändert)."
                 ),
+                dedup_key: Some(format!("seed:updated:{rel}:{new_hash}")),
             });
             report.updated.push(rel);
             continue;
         }
-        // vom Nutzer geändert → nie anfassen, neue Fassung daneben
+        // vom Nutzer geändert → nie anfassen, neue Fassung einmal daneben (D-10)
+        if manifest.offered.get(&rel) == Some(&new_hash) {
+            // Diese Fassung wurde schon angeboten; eine gelöschte `.neu` bleibt weg.
+            continue;
+        }
         let neu = target.join(format!("{rel}{NEW_SUFFIX}"));
         let neu_hash = sha256_file(&neu).ok();
         if neu_hash.as_deref() != Some(new_hash.as_str()) {
@@ -147,11 +169,16 @@ pub fn seed(bundled: &Path, target: &Path, image_version: &str) -> Result<Report
                 body: format!(
                     "Du hast „{rel}“ in /inputs geändert; sie bleibt unverändert. Die neue \
                      Fassung aus Klein.Buch {image_version} liegt daneben als „{rel}{NEW_SUFFIX}“ \
-                     — bitte vergleichen und bei Bedarf übernehmen."
+                     — bitte vergleichen und bei Bedarf übernehmen. Die .neu-Datei darfst du \
+                     danach löschen; Klein.Buch legt dieselbe Fassung nicht wieder an."
                 ),
+                dedup_key: Some(format!("seed:new:{rel}:{new_hash}")),
             });
-            report.kept_with_new.push(rel);
+            report.kept_with_new.push(rel.clone());
         }
+        // Liegt die Fassung schon als `.neu` (Bestand vor Lauf F), gilt sie als
+        // angeboten, ohne neuen Hinweis.
+        manifest.offered.insert(rel, new_hash);
     }
     manifest.image_version = image_version.to_string();
     if manifest != before {
@@ -176,6 +203,7 @@ pub async fn deliver_notices(pool: &sqlx::SqlitePool, target: &Path) -> Result<u
                 body: &n.body,
                 severity: "info",
                 action_url: Some("/settings/pdf-templates"),
+                dedup_key: n.dedup_key.as_deref(),
                 ..Default::default()
             },
         )
@@ -258,5 +286,109 @@ mod tests {
         seed(&src, &dst, "2026.7.0").unwrap();
         assert_eq!(read(&dst, "pdf-templates/eigene.typ"), "x");
         assert_eq!(read(&dst, "pdf-templates/eigene.typ.neu"), "y");
+    }
+
+    /// Lauf F, D-10: Eine gelöschte `.neu`-Datei kommt beim nächsten Start
+    /// nicht wieder, auch kein neuer Hinweis; erst eine weitere Image-Fassung
+    /// wird erneut angeboten.
+    #[test]
+    fn deleted_neu_file_is_not_offered_again() {
+        let t = tempfile::tempdir().unwrap();
+        let (src, dst) = (t.path().join("img"), t.path().join("inputs"));
+        let rel = "pdf-templates/default.typ";
+        put(&src, rel, "v1");
+        seed(&src, &dst, "2026.6.0").unwrap();
+        put(&dst, rel, "meine Fassung");
+        put(&src, rel, "v2");
+        seed(&src, &dst, "2026.7.0").unwrap();
+        let neu = dst.join(format!("{rel}{NEW_SUFFIX}"));
+        assert_eq!(read(&dst, &format!("{rel}{NEW_SUFFIX}")), "v2");
+        let m = read_manifest(&dst);
+        assert_eq!(m.pending_notices.len(), 1);
+        let v2_hash = format!("{:x}", Sha256::digest(b"v2"));
+        assert_eq!(m.offered.get(rel), Some(&v2_hash));
+        assert_eq!(
+            m.pending_notices[0].dedup_key.as_deref(),
+            Some(format!("seed:new:{rel}:{v2_hash}").as_str())
+        );
+
+        // Nutzer löscht die .neu-Datei, der Server startet neu (mehrmals)
+        std::fs::remove_file(&neu).unwrap();
+        for _ in 0..2 {
+            let r = seed(&src, &dst, "2026.7.0").unwrap();
+            assert!(r.kept_with_new.is_empty());
+            assert!(!neu.exists(), ".neu darf nicht wiederkommen");
+            assert_eq!(read_manifest(&dst).pending_notices.len(), 1);
+        }
+        assert_eq!(read(&dst, rel), "meine Fassung");
+
+        // Eine weitere Image-Fassung wird wieder angeboten
+        put(&src, rel, "v3");
+        let r = seed(&src, &dst, "2026.8.0").unwrap();
+        assert_eq!(r.kept_with_new, vec![rel.to_string()]);
+        assert_eq!(read(&dst, &format!("{rel}{NEW_SUFFIX}")), "v3");
+        let m = read_manifest(&dst);
+        assert_eq!(m.pending_notices.len(), 2);
+        let v3_hash = format!("{:x}", Sha256::digest(b"v3"));
+        assert_eq!(m.offered.get(rel), Some(&v3_hash));
+    }
+
+    /// Bestand vor Lauf F: Liegt die Fassung schon als `.neu`, gilt sie als
+    /// angeboten — kein neuer Hinweis, und nach dem Löschen bleibt sie weg.
+    #[test]
+    fn existing_neu_from_older_manifest_counts_as_offered() {
+        let t = tempfile::tempdir().unwrap();
+        let (src, dst) = (t.path().join("img"), t.path().join("inputs"));
+        let rel = "mail-templates/invoice-de.txt";
+        put(&src, rel, "v1");
+        seed(&src, &dst, "2026.6.0").unwrap();
+        put(&dst, rel, "eigen");
+        put(&dst, &format!("{rel}{NEW_SUFFIX}"), "v2");
+        put(&src, rel, "v2");
+        // Manifest wie vor Lauf F: ohne `offered`
+        let mut m = read_manifest(&dst);
+        m.offered.clear();
+        write_manifest(&dst, &m).unwrap();
+        let raw = std::fs::read_to_string(dst.join(MANIFEST)).unwrap();
+        assert!(!raw.contains("offered"), "leere Map wird nicht geschrieben");
+
+        let r = seed(&src, &dst, "2026.7.0").unwrap();
+        assert!(r.kept_with_new.is_empty());
+        let m = read_manifest(&dst);
+        assert!(m.pending_notices.is_empty());
+        assert!(m.offered.contains_key(rel));
+        std::fs::remove_file(dst.join(format!("{rel}{NEW_SUFFIX}"))).unwrap();
+        seed(&src, &dst, "2026.7.0").unwrap();
+        assert!(!dst.join(format!("{rel}{NEW_SUFFIX}")).exists());
+    }
+
+    /// Übernimmt der Nutzer die neue Fassung, ist das Angebot erledigt; eine
+    /// spätere Fassung ersetzt die Datei dann wie eine unveränderte.
+    #[test]
+    fn adopting_new_version_clears_offer() {
+        let t = tempfile::tempdir().unwrap();
+        let (src, dst) = (t.path().join("img"), t.path().join("inputs"));
+        let rel = "pdf-templates/default.typ";
+        put(&src, rel, "v1");
+        seed(&src, &dst, "2026.6.0").unwrap();
+        put(&dst, rel, "eigen");
+        put(&src, rel, "v2");
+        seed(&src, &dst, "2026.7.0").unwrap();
+        // Nutzer übernimmt die .neu-Fassung
+        put(&dst, rel, "v2");
+        seed(&src, &dst, "2026.7.0").unwrap();
+        assert!(!read_manifest(&dst).offered.contains_key(rel));
+        put(&src, rel, "v3");
+        let r = seed(&src, &dst, "2026.8.0").unwrap();
+        assert_eq!(r.updated, vec![rel.to_string()]);
+        assert_eq!(read(&dst, rel), "v3");
+        let m = read_manifest(&dst);
+        let last = m.pending_notices.last().unwrap();
+        assert_eq!(last.title, "Vorlage aktualisiert");
+        assert!(last
+            .dedup_key
+            .as_deref()
+            .unwrap()
+            .starts_with("seed:updated:pdf-templates/default.typ:"));
     }
 }

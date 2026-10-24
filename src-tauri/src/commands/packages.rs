@@ -1,4 +1,4 @@
-//! Tauri-Commands für den Paket-Katalog (Block P2).
+//! Commands für den Paket-Katalog (Block P2).
 //!
 //! Pakete sind **Stammdaten**, kein §14-Beleg → **kein** GoBD-Auto-Backup-Hook
 //! (normaler Audit-Log-Eintrag genügt). Revisionen sind append-only (DB-Trigger);
@@ -713,8 +713,8 @@ pub async fn package_catalog_send(
     send_catalog_core(&pool, &paths, &args).await
 }
 
-/// Kern-Pipeline für den Broschüren-Versand (ohne Tauri-State). Public, damit
-/// Integrationstests sie ohne `AppHandle` treiben können (Paths aus tempdir) —
+/// Kern-Pipeline für den Broschüren-Versand (ohne `AppCtx`). Public, damit
+/// Integrationstests sie ohne Server treiben können (Paths aus tempdir) —
 /// analog `commands::mail::send_invoice_core`/`send_quote_core`. Rendert die
 /// Broschüre, mailt sie als einzelnen PDF-Anhang und protokolliert den Versuch
 /// genau einmal im append-only `email_log` (`related_kind = 'package_catalog'`).

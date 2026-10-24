@@ -234,44 +234,73 @@ pub async fn set_active(pool: &SqlitePool, id: &str, active: bool) -> Result<()>
     Ok(())
 }
 
+/// Marker: Standardkonten wurden (einmalig) angelegt bzw. waren nicht nötig.
+pub const DEFAULTS_SEEDED_KEY: &str = "payment_accounts_defaults_seeded";
+
 /// Idempotenter Seed: legt — falls noch GAR kein Konto existiert — die zwei
 /// Standard-Konten "Hauptkonto" (bank, default) und "Bargeld" (cash) an.
-/// Liefert `true`, wenn geseedet wurde.
+/// Zählen und Anlegen laufen in **einer** Schreib-Transaktion (Lauf F, D-14):
+/// zwei gleichzeitige Aufrufe ergeben nie vier Konten. Liefert `true`, wenn
+/// geseedet wurde.
 pub async fn ensure_defaults(pool: &SqlitePool) -> Result<bool> {
-    use sqlx::Row;
-    let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM payment_accounts")
-        .fetch_one(pool)
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let seeded = seed_defaults_in(&mut tx).await?;
+    tx.commit().await?;
+    Ok(seeded)
+}
+
+/// Einmal je Instanz (Einrichtung bzw. erstes Entsperren nach dem Update,
+/// aufgerufen aus `db::run_migrations`): Standardkonten anlegen, falls noch kein
+/// Konto existiert, und den Marker [`DEFAULTS_SEEDED_KEY`] setzen — in einer
+/// Transaktion. Danach nie wieder (auch wenn der Nutzer seine Konten später
+/// deaktiviert). Seitenaufrufe legen nichts mehr an.
+pub async fn seed_defaults_once(pool: &SqlitePool) -> Result<bool> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let first = sqlx::query("INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, '1')")
+        .bind(DEFAULTS_SEEDED_KEY)
+        .execute(&mut *tx)
         .await?
-        .try_get("n")?;
+        .rows_affected()
+        == 1;
+    let seeded = if first {
+        seed_defaults_in(&mut tx).await?
+    } else {
+        false
+    };
+    if seeded {
+        crate::db::repo::audit_log::append_in(
+            &mut tx,
+            "payment_account.seed_defaults",
+            "payment_account",
+            "-",
+            Some(r#"{"created":["Hauptkonto","Bargeld"]}"#),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(seeded)
+}
+
+async fn seed_defaults_in(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payment_accounts")
+        .fetch_one(&mut *conn)
+        .await?;
     if n > 0 {
         return Ok(false);
     }
-    create(
-        pool,
-        &PaymentAccountInput {
-            label: "Hauptkonto".into(),
-            account_type: "bank".into(),
-            iban: None,
-            bic: None,
-            is_default: true,
-            show_on_invoice: false,
-            details: None,
-        },
-    )
-    .await?;
-    create(
-        pool,
-        &PaymentAccountInput {
-            label: "Bargeld".into(),
-            account_type: "cash".into(),
-            iban: None,
-            bic: None,
-            is_default: false,
-            show_on_invoice: false,
-            details: None,
-        },
-    )
-    .await?;
+    for (label, account_type, is_default) in [("Hauptkonto", "bank", 1i64), ("Bargeld", "cash", 0)]
+    {
+        sqlx::query(
+            "INSERT INTO payment_accounts (id, label, \"type\", iban, bic, is_default, active, show_on_invoice, details)
+             VALUES (?, ?, ?, NULL, NULL, ?, 1, 0, NULL)",
+        )
+        .bind(Uuid::now_v7().to_string())
+        .bind(label)
+        .bind(account_type)
+        .bind(is_default)
+        .execute(&mut *conn)
+        .await?;
+    }
     Ok(true)
 }
 

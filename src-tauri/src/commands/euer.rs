@@ -1,4 +1,4 @@
-//! Tauri-Commands für die EÜR-Auswertung (Block 13).
+//! Commands für die EÜR-Auswertung (Block 13).
 //!
 //! Reine **Lese**-Auswertung (Cash-Basis, §4 Abs. 3 EStG): keine DB-Mutation,
 //! kein Lock, kein Backup-Hook, kein Audit-Eintrag. Die Periodenzuordnung +

@@ -9,6 +9,70 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 
 ### Changed
 
+- **Abo-Läufe im Dauerbetrieb (Lauf F, ADR 0040):** Verpasste Termine holt
+  Klein.Buch nur noch bis drei je Abo bzw. Vorlage selbst nach; bei Abo-Rechnungen
+  folgt nur der jüngste Termin der Automatik (ausstellen, versenden), ältere
+  entstehen als Entwurf und gehen nie automatisch hinaus. Bei mehr offenen
+  Terminen fragt Klein.Buch über einen Hinweis und „Rückstand …“ in der Liste
+  (nachholen bis 24 oder ab heute fortsetzen); dieselbe Wahl beim Fortsetzen
+  einer pausierten Reihe. Neue Abo-Rechnungs-Vorlagen beginnen nicht in der
+  Vergangenheit.
+- **Pause bei falscher Uhr:** Steht die Server-Uhr vor dem letzten Lauf oder
+  mehr als 400 Tage danach, hält Klein.Buch Abo-Läufe und Auto-AfA an, bis der
+  Inhaber im Banner freigibt (Re-Auth).
+- **Kosten-Abos im Modus „Erinnerung“** erzeugen am Stichtag den Hinweis
+  „Abo fällig“; das Handbuch beschreibt die Zahlungslogik richtig (Position
+  „noch nicht bezahlt“).
+- **Keine Schreibwirkung beim Öffnen von Seiten:** Die Seite „Wiederkehrende
+  Rechnungen“ löst beim Öffnen keinen Lauf mehr aus; Standard-Zahlungskonten legt
+  der Server einmal bei der Einrichtung bzw. beim ersten Entsperren an.
+- **Anonymisieren eines Kontakts** pausiert seine Abo-Rechnungs-Vorlagen und
+  Kosten-Abos.
+- **Uhr injizierbar:** Scheduler und Rechnungsweg lesen die Zeit über die Uhr
+  des Anwendungskontexts (Tests mit fester Uhr über alle Threads).
+- **Pause nach einer Wiederherstellung (Lauf F, ADR 0040):** Nach dem Einspielen
+  eines Backups bleiben Abo-Rechnungen, Abo-Kosten, Auto-AfA und Versand
+  angehalten, und Backups gehen nur in den lokalen Ordner, bis der Inhaber im
+  Banner bestätigt, dass dies die produktive Instanz ist (Re-Auth). Eine
+  Probe-Instanz verschickt damit nichts und schreibt keine älteren Stände auf
+  die externen Ziele.
+- **Tages-Backup kalenderfest:** genau eines je Kalendertag (Europe/Berlin) ab
+  einer einstellbaren Uhrzeit (Standard 02:30, Einstellungen → Backups), nach
+  einer Sperre genau eines; der Backoff nach einem Fehlschlag übersteht
+  Neustarts. Die Einrichtung legt nur noch ein Erst-Backup an.
+- **Aufbewahrung nach Kalendertagen:** Je Tag, Monat und Jahr bleibt das
+  jüngste Backup (Floor 7/3/1, Ordner-Ziele 30/12/7); viele Festschreibungen an
+  einem Tag verdrängen die Vortage nicht mehr, die Monatsklasse hängt nicht mehr
+  am Monatsersten. Auf SFTP-Zielen löscht Klein.Buch nichts (Rotation beim
+  Betreiber, Platzbedarf im Handbuch). Während einer Pause ruht die Rotation.
+- **Nach dem Entsperren gestaffelt:** Der erste Lauf folgt frühestens eine
+  Minute nach der Anmeldung, ohne Archiv-Vollscan; Abo-Läufe eines Durchgangs
+  ergeben zusammen genau ein Backup. Das Container-Log meldet den gesperrten
+  Zustand beim Serverstart und alle 6 h; nach mehr als zwei Tagen Sperre gibt es einen
+  Hinweis.
+- **Herunterfahren:** Der Scheduler hält beim Signal sofort an; Tick und Jobs
+  haben höchstens 30 s, das Herunterfahren bleibt unter 70 s.
+  `stop_grace_period` im Compose-Beispiel und in der Doku auf 90 s.
+- **Aufräumen im Betrieb:** Reste in `/data/tmp` und abgebrochene
+  Backup-Teildateien entfernt Klein.Buch stündlich (älter als 6 h), nicht nur
+  beim Serverstart.
+- **Zeitangaben in Berliner Zeit:** Protokolle (Audit, E-Mail, Backup),
+  Hinweise, Geschäftsjahr, Versionsprüfung, Versandprotokolle von Angeboten und
+  Rechnungen und die Backup-Liste zeigen Datum und Uhrzeit in Europe/Berlin,
+  unabhängig von der Zeitzone des Geräts; die Backup-Liste zeigt die Zeitpunkte
+  nicht mehr roh. Die Spalte „Zeitpunkt (UTC)“ im Audit-Protokoll heißt
+  „Zeitpunkt“.
+- **Neue Fassungen geänderter Vorlagen:** Eine `.neu`-Datei in `/inputs` legt
+  Klein.Buch je Image-Fassung nur einmal an und meldet sie einmal; nach dem
+  Vergleich darf sie gelöscht werden.
+- **Meldungen für den Server-Betrieb:** „Bitte den Container neu starten“,
+  „das Image der passenden Version einsetzen“ und „die Instanz entsperren“
+  statt Hinweisen auf App-Neustart und App-Update. Doku, ADRs (Amendments zu
+  0003, 0023, 0027, 0033, 0039) und Handbuch beschreiben Serverstart und
+  Entsperren statt des Programmstarts der Desktop-Fassung.
+- **Nur noch die Inbox:** Der ungenutzte Weiterleitungskanal für
+  OS-Benachrichtigungen aus der Desktop-Fassung ist entfernt.
+
 - **Storno im Folgejahr:** Ein Storno-Beleg bekommt Geschäftsjahr und Nummer aus
   seinem eigenen Datum (`ST-2027-0001` vom Januar 2027 zu einer Rechnung vom
   Dezember 2026) statt aus der Original-Rechnung (GoBD Rz. 51). Ein
@@ -35,6 +99,89 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Java 21; Dependabot schlägt dort keine Major-Sprünge mehr vor.
 
 ### Fixed
+
+- **Keine doppelten Belegnummern nach einem Restore:** Wird ein älteres Backup
+  in dieselbe Instanz eingespielt, übernimmt Klein.Buch die höheren
+  Zählerstände von vor der Wiederherstellung (Audit, Hinweis); bereits vergebene
+  Rechnungs-, Storno- und Kostennummern werden nicht erneut vergeben. Für die
+  Wiederherstellung in eine neue Instanz lässt sich ein Nummernkreis unter
+  Einstellungen → Backups → Nummernkreise anheben (nur aufwärts, Begründung,
+  Re-Auth).
+- **Backups nach dem eingespielten Stand** stehen nach einem Restore wieder im
+  Backup-Verlauf (wählbar, nie automatisch gelöscht); fehlende Dateien
+  verschwinden aus der Liste.
+- **SFTP-Historie:** Die Rotation entfernt keine SFTP-Einträge mehr samt
+  Audit „prune“, ohne dass die Datei gelöscht wurde.
+- **Archiv-Prüfung:** Ein gescheiterter Monats-Vollscan läuft nicht mehr alle
+  5 Minuten neu (6 h Wartezeit, Hinweis), Monats-Cron und „Jetzt prüfen“ laufen
+  nie gleichzeitig („läuft bereits“), Sperren und Herunterfahren brechen den
+  Scan je Datei ab.
+- **„Backup überfällig“** rechnet mit dem Berliner Datum des Backups (vorher
+  zwischen 0 und 2 Uhr einen Tag zu früh).
+- **Entsperren:** Scheitert der Pflicht-Audit-Eintrag, bleibt die Instanz
+  gesperrt (vorher lief sie ohne Sitzung entsperrt weiter).
+- **Kosten-Abos ohne Doppelbuchung:** Tick, „Alle fälligen buchen“ und „Buchen“
+  laufen je Abo unter einer Sperre; Nummer, Beleg, Audit und Vorrücken des
+  Stichtags sind eine Transaktion mit Compare-and-Swap. Ein fehlerhaftes Abo
+  bricht den Lauf nicht mehr ab, das Backup für bereits gebuchte Belege entsteht
+  trotzdem. Ein Stichtag im abgeschlossenen Geschäftsjahr ergibt einen Hinweis
+  statt einer Warnung bei jedem Tick.
+- **Abo-Rechnungen absturzfest:** Entwurf und Vorrücken der Vorlage sind eine
+  Transaktion; bricht der Prozess vor dem Ausstellen oder Versand ab, setzt der
+  nächste Lauf dort fort, statt eine zweite Rechnung mit neuer Nummer anzulegen.
+  Bearbeiten und Pausieren nehmen die Vorlagen-Sperre; Vorlagen mit
+  archiviertem/anonymisiertem Kunden oder USt-Ausweis trotz §19 erzeugen keinen
+  nummerierten Entwurf mehr.
+- **„Datenbank sperren“ und „Passphrase ändern“** warten höchstens 10 s auf
+  einen laufenden Abo-Lauf (der Lauf hört nach dem aktuellen Termin auf);
+  Sitzungen enden beim Sperren sofort.
+- **Auto-AfA:** Eintrag, Restbuchwert und Audit sind eine Transaktion; ein
+  Fehler erzeugt einen Hinweis und wartet 6 Stunden statt bei jedem Tick neu zu
+  scheitern.
+- **Restore eines älteren Backups (Lauf F, F1d):** Abo-Vorlagen und Kosten-Abos
+  stellen einen nach dem Backup schon abgerechneten Zeitraum nicht noch einmal
+  in Rechnung (nächste Termine nur vorwärts auf den Stand vor der
+  Wiederherstellung, Audit, Hinweis); Reihen ohne bekannten Stand warten auf
+  „Rückstand …“ (Nachholen nur als Entwurf, „ab heute“ auch ohne den heutigen
+  Termin). Begonnene Abo-Rechnungen und Nachhol-Bestätigungen aus dem Backup
+  gelten nicht mehr. Ein wiederhergestellter Entwurf, dessen Nummer vor dem
+  Restore schon festgeschrieben war, lässt sich erst nach dem bestätigten
+  Abgleich mit dem Original festschreiben (Re-Auth, Begründung im Audit-Log).
+  Der Hinweis „Nummernkreise“ unterscheidet „keine Lücke“ von der Anleitung für
+  eine neue Instanz.
+- **Nachhol-Bestätigung** gilt nur für Termine bis zu ihrem Tag; spätere folgen
+  wieder der Grenze von drei. Fehlerhinweise nennen den gescheiterten Termin.
+- **Tages-Backup** holt einen verpassten Slot nach (Uhrzeit kurz vor
+  Mitternacht, Anmeldung vor der Uhrzeit nach einer Sperre); ein beim Sperren
+  oder Herunterfahren ausgefallenes Backup nach dem Festschreiben holt der
+  erste Lauf nach dem Entsperren nach.
+- **Integritätsprüfung und Rotation bei vorgestellter Uhr:** Ein zukünftig
+  datierter Prüflauf löst keinen Vollscan bei jedem Tick mehr aus; zukünftig
+  datierte Backups verdrängen keine echten Tagesstände.
+- **Entsperren** hängt nicht mehr an einem beim Sperren noch laufenden Abo-Lauf.
+  „Jetzt erstellen“ schließt einen abgebrochenen Termin derselben Vorlage zuerst
+  ab. Eine gleichzeitige Anonymisierung lässt keinen Abo-Entwurf mit den alten
+  Kundendaten mehr entstehen. Der Hinweis „Instanz war N Tage gesperrt“ kommt
+  auch, solange die Pause nach einem Restore besteht.
+- **Anzeige:** Abgelaufene Abo-Vorlagen gelten nicht mehr als „überfällig“
+  (Badge „beendet“, auch in der Übersicht); das Ergebnis je Backup-Ziel steht
+  in Berliner Zeit statt roh.
+- **Standard-Zahlungskonten** entstehen nicht mehr doppelt, wenn die Seite in
+  zwei Tabs geöffnet wird.
+- **Fälligkeiten nach Berliner Datum:** „heute fällig“, „in N Tagen“,
+  „überfällig“ und der Zähler „fällig“ der Abo-Listen sowie die überfälligen
+  Tage und das Alter des letzten Off-Site-Backups in der Übersicht rechnen mit
+  dem Berliner Kalender statt mit der Uhr des Geräts (ein Backup von gestern
+  23 Uhr heißt am Morgen „Gestern“, nicht „Heute“).
+- **Datumsanzeige:** Reine Daten erschienen auf Geräten westlich von UTC einen
+  Tag zu früh, Zeitstempel zwischen 0 und 2 Uhr mit dem Vortag, und ob ein
+  Zeitstempel der Datenbank überhaupt lesbar war, hing vom Browser ab (WebKit).
+  Ungültige Werte zeigen „—“ statt eines Fehlers.
+- **`.neu`-Dateien** kamen nach dem Löschen bei jedem Start mit einem neuen
+  Hinweis wieder.
+- **Neuere Datenbank beim Entsperren:** Läuft ein älteres Image gegen eine
+  Datenbank einer neueren Version, nennt die Meldung das passende Image statt
+  eines Migrationsfehlers; die Instanz bleibt wie bisher gesperrt.
 
 - **Storno-Absicherung:** Ein liegengebliebener Storno-Entwurf (nach einem
   gescheiterten Festschreiben) lässt sich nicht mehr über „Rechnung ausstellen“

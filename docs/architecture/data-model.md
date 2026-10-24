@@ -217,6 +217,14 @@ Hash der Passphrase), `backup_targets` (JSON-Liste der Off-Site-Ziele, W7),
 `backup_offsite_results` (Ergebnis je Ziel für den Status `offsite`),
 `update_check_enabled`/`update_check_last_at` (opt-in Versionsprüfung, W12),
 `invoice_due_days`, `quote_valid_days`, `travel_cost_per_km_cents`.
+Dauerbetrieb (Lauf F, ADR 0040, ohne Migration): `scheduler_hold`/
+`scheduler_hold_since` (Pause der automatischen Belegerzeugung, Grund
+`clock_backwards`/`clock_jump`/`restore`), `scheduler_last_seen_at`
+(Uhr-Bremse), `recurring_invoice_pending:<vorlage>` (Fortsetzungs-Marker einer
+Abo-Rechnung), `backup_daily_time`/`backup_daily_last_on`/
+`backup_daily_last_failure_at` (kalenderfestes Tages-Backup),
+`integrity_last_failure_at` und `depreciation_auto_last_failure_at` (Backoff),
+`payment_accounts_defaults_seeded` (Standardkonten einmal je Instanz).
 `drop_folder_enabled`/`drop_folder_path` (Migration 0029) bleiben aus der
 Desktop-Fassung stehen, werden im Server aber nicht mehr gelesen (E11).
 Zugangsdaten stehen **nicht** hier, sondern in `secrets`.
@@ -310,11 +318,12 @@ migrate_with_backup`), nicht beim Prozessstart — vorher ist die DB zu:
   (ADR 0039 E15, W7). Scheitert es, wird nicht migriert und die Instanz bleibt
   gesperrt (409 `pre_migration_backup_failed`). Danach läuft
   `db::run_migrations` (`sqlx::migrate!`) die fehlenden Migrationen.
+- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 31): `db::run_migrations`
+  lehnt vor dem Migrations-Runner mit `Error::SchemaMismatch` und dem Hinweis
+  auf das Image der passenden Version ab, kein Entsperren (ein älteres Programm
+  liest keine neuere DB — unklar, welche neuen Constraints existieren; Lauf F).
 - **Danach** vergleicht `db::schema_version::check_compatible` den Stand mit
-  dem einkompilierten `EXPECTED_SCHEMA_VERSION` (31). **DB-Version >
-  EXPECTED** ⇒ `Error::SchemaMismatch` mit Update-Hinweis, kein Entsperren
-  (alte App liest neue DB — verboten, weil unklar, welche neuen Constraints
-  existieren).
+  dem einkompilierten `EXPECTED_SCHEMA_VERSION`.
 - **Restore** nimmt Backups mit `MIN_RESTORE_SCHEMA_VERSION` (30) ≤ Schema ≤
   EXPECTED an und migriert sie beim nächsten Entsperren vorwärts.
 

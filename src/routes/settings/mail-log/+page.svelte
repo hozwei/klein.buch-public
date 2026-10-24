@@ -4,6 +4,7 @@
   import type { EmailLogEntry, EmailLogFilter } from "$lib/types";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
 
   let entries = $state<EmailLogEntry[]>([]);
   let loading = $state(true);
@@ -63,12 +64,6 @@
     !!(search.trim() || dateFrom || dateTo || statusF !== "all" || kindF !== "all" || channelF !== "all"),
   );
 
-  function fmtDateTime(ts: string | null): string {
-    if (!ts) return "—";
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
   function kindLabel(k: string): string {
     return k === "invoice" ? "Rechnung" : k === "quote" ? "Angebot" : k === "test" ? "Test-Mail" : k;
   }
@@ -167,7 +162,7 @@
       <tbody>
         {#each entries as e (e.id)}
           <tr class:bad={e.status === "failed"}>
-            <td class="ts" data-label="Zeitpunkt">{fmtDateTime(e.createdAt)}</td>
+            <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
             <td data-label="Status">
               {#if e.status === "success"}
                 <span class="ok">✓ versendet</span>

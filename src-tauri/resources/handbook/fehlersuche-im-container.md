@@ -9,7 +9,7 @@ keywords: [fehlersuche, docker logs, log, healthcheck, startfehler, fail2ban, fe
 # Fehlersuche im Container
 
 Fast jede Störung im Betrieb erklärt das Container-Log. Dort schreibt
-Klein.Buch beim Start jede Prüfung, die scheitert, und im Betrieb alle
+Klein.Buch beim Containerstart jede Prüfung, die scheitert, und im Betrieb alle
 Fehler, die es der Oberfläche aus Sicherheitsgründen nur allgemein
 meldet. Dieses Kapitel zeigt, wo Du nachsiehst und was die häufigsten
 Meldungen bedeuten.
@@ -51,13 +51,18 @@ stiehlt, hätte dann Deine Daten im Klartext.
 
 Solange Klein.Buch gesperrt ist, läuft nichts Geplantes: kein
 Tages-Backup, keine Abo-Rechnungen, keine Prüfung des Archivs, keine
-Versionsprüfung. Nach der Anmeldung holt Klein.Buch Fälliges nach. Der
-Healthcheck zählt "gesperrt" als gesund, damit Docker den Container nicht
-endlos neu startet. Willst Du gewarnt werden, wenn Klein.Buch nach einem
-nächtlichen Neustart gesperrt bleibt, lass Deine Überwachung die Ausgabe
-des Healthcheck-Befehls auf `locked` prüfen.
+Versionsprüfung. Das Log sagt das beim Containerstart und danach alle sechs
+Stunden mit der Zeile "Instanz gesperrt — Backups, Abo-Läufe und
+Prüfungen ruhen bis zur Anmeldung im Browser". Eine bis fünf Minuten nach
+der Anmeldung holt Klein.Buch Fälliges nach, gestaffelt: zuerst Abo-Läufe und
+genau ein Backup, die Archiv-Prüfung frühestens fünf Minuten später. War
+die Instanz länger als zwei Tage gesperrt, steht unter "Hinweise", wie
+lange. Der Healthcheck zählt "gesperrt" als gesund, damit Docker den
+Container nicht endlos neu startet. Willst Du gewarnt werden, wenn
+Klein.Buch nach einem nächtlichen Neustart gesperrt bleibt, lass Deine
+Überwachung die Ausgabe des Healthcheck-Befehls auf `locked` prüfen.
 
-## Typische Fehler beim Start
+## Typische Fehler beim Containerstart
 
 Scheitert eine Prüfung, steht im Log eine Zeile der Stufe `ERROR` mit
 "Start abgebrochen:" und dem Grund, und Docker startet den Container

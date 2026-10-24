@@ -32,3 +32,18 @@ ohne zentrale Sequenz vergebbar und zeitlich sortierbar sein.
 | Postgres | Server-Prozess, gegen local-first |
 | Float/Decimal-Text für Geld | Drift bzw. Parsing-Overhead, fehleranfällig |
 | Auto-Increment-PK | Nicht dezentral, verrät Mengen, schlecht für Merge/Backup |
+
+## Amendment 2026-10-24 — Schema-Prüfung im Server-Betrieb (Lauf F, ADR 0040)
+
+**Status:** Akzeptiert. Präzisiert den Satz „`EXPECTED_SCHEMA_VERSION`-Check beim
+Start; App startet bei Mismatch nicht“ für den Server-Betrieb (ADR 0039): Der
+Server startet immer gesperrt (E3). Geprüft wird beim **Entsperren**, bevor
+Pool, Passphrase und Scheduler eingehängt werden (`db::run_migrations`: zuerst
+der Vergleich der gespeicherten Schema-Version, erst dann der Migrations-Runner
+und `schema_version::check_compatible`). Ist die Datenbank neuer als das
+Programm, scheitert das Entsperren mit dem Hinweis auf das Image der passenden
+Version, und die Instanz bleibt gesperrt (Down-Migration-Schutz; Test
+`db::tests::newer_database_is_rejected_on_unlock`).
+Ist sie älter, entsteht zuerst das Pflicht-Backup, dann wird vorwärts migriert
+(ADR 0039 E15, D-R8-19). PRD-Revision 9 löst die PRD-Stellen (G13, D-49, §6.1) entsprechend
+ab.

@@ -59,14 +59,41 @@ Lieferant, Beschreibung, Brutto-Betrag, Kategorie, Rhythmus
 (monatlich, vierteljährlich, halbjährlich, jährlich), Stichtag und
 Modus ein. Es gibt zwei Modi:
 
-**Automatisch.** Klein.Buch bucht am Stichtag selbst und nimmt den
-Stichtag als Zahlungs-Datum. Sinnvoll für stehende Lastschriften,
-bei denen der Betrag pünktlich auf den Cent gleich bleibt.
+**Automatisch.** Klein.Buch bucht am Stichtag selbst eine
+Kosten-Position mit dem Stichtag als Beleg-Datum. Die Position entsteht
+"noch nicht bezahlt": Das Zahlungs-Datum bestätigst Du, wenn die
+Abbuchung auf dem Konto steht (erst dann zählt sie in der EÜR).
+Sinnvoll für stehende Lastschriften mit gleichem Betrag.
 
-**Erinnerung.** Klein.Buch legt am Stichtag nur einen Eintrag unter
-"Hinweise" an. Du öffnest ihn, klickst auf "buchen", prüfst den
-Betrag und das tatsächliche Zahlungs-Datum und speicherst. Sinnvoll,
-wenn der echte Betrag je Monat etwas abweicht.
+**Erinnerung.** Klein.Buch bucht nichts selbst. Am Stichtag erscheint
+unter "Hinweise" der Eintrag "Abo fällig", und das Abo steht in der
+Liste als "fällig". Klick dort auf "Buchen", prüfe Betrag und Datum
+der Kosten-Position und bestätige die Zahlung, sobald sie abgebucht
+ist. Sinnvoll, wenn der echte Betrag je Monat etwas abweicht.
+
+### Verpasste Termine
+
+War Klein.Buch längere Zeit gesperrt (etwa nach einem Neustart des
+Servers, bis sich jemand anmeldet) oder war ein Abo pausiert, sind
+mehrere Termine offen. Bis zu drei offene Termine eines automatischen
+Abos bucht Klein.Buch beim nächsten Lauf selbst nach, je Termin mit
+dem jeweiligen Stichtag; ein Hinweis nennt die nachgebuchten Termine.
+
+Sind mehr Termine offen, bucht Klein.Buch nichts und meldet unter
+"Hinweise": "Entscheidung nötig". Klick in der Abo-Liste beim Abo auf
+"Rückstand …" und wähle:
+
+- **Nachholen:** Der nächste Lauf bucht die offenen Termine (höchstens
+  24). Termine in einem bereits abgeschlossenen Geschäftsjahr werden
+  übersprungen, weil dort nichts mehr gebucht werden kann.
+- **Ab heute fortsetzen:** Die verpassten Termine werden ausgelassen;
+  das Abo macht mit dem ersten Termin ab heute weiter. Fehlende
+  Belege erfasst Du bei Bedarf einzeln.
+
+Dieselbe Frage kommt, wenn Du ein pausiertes automatisches Abo mit
+verpassten Terminen fortsetzt. Eine Bestätigung zum Nachholen gilt für die
+Termine bis zu dem Tag, an dem Du sie gibst; kommen danach wieder mehr als
+drei Termine zusammen, fragt Klein.Buch erneut.
 
 ## Beleg-Anhang anschauen
 
@@ -101,4 +128,4 @@ das EÜR-Jahr 2027. Das ist die Cash-Basis nach §11 EStG.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

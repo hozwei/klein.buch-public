@@ -71,7 +71,7 @@ nicht (E1).
 | | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | umgesetzt (W6; IPv6 je /64, globales Budget ohne Gerätecookie; W14: Gerätecookie gleitend erneuert, Einmal-Code-Login nicht im globalen Budget) |
 | Überlast durch langsame Körper | Körper kleiner Anfragen höchstens 10 s, höchstens 16 gleichzeitige POSTs je Client-Adresse | umgesetzt (W14) |
 | | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
-| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel, Zahlungsdaten/§19-Status, Anonymisieren, GJ-Abschluss; Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung beendet andere Sitzungen | umgesetzt (W6; W14 Rotation und erweiterte Liste) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel, Zahlungsdaten/§19-Status, Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung beendet andere Sitzungen | umgesetzt (W6; W14 Rotation und erweiterte Liste) |
 | CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | umgesetzt (W5/W6) |
 | Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | umgesetzt (W6) |
 | Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
@@ -127,7 +127,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Lesen der Belege | **Archivdateien (PDF/XML), Logo und Unterschrift liegen unverschlüsselt im Volume.** Schutz ist Sache des Betreibers (Host-Zugriff, Volume-Verschlüsselung). | bewusst akzeptiert |
 | Löschen oder Ersetzen von Archivdateien | Erkennung statt Verhinderung, siehe „Write-once unter Linux" | umgesetzt (W2), Doku W3 |
 | Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
-| | alle Temp-Dateien unter `/data/tmp`: Uploads, Downloads, Exporte, DSGVO-Auskunft (W7), Java-Sidecar über `TMPDIR=/data/tmp` im Image (W11); Reste beim Start und minütlich aufgeräumt | umgesetzt (W7/W11) |
+| | alle Temp-Dateien unter `/data/tmp`: Uploads, Downloads, Exporte, DSGVO-Auskunft (W7), Java-Sidecar über `TMPDIR=/data/tmp` im Image (W11); alle Reste beim Serverstart, Up-/Downloads minütlich, übrige Reste und Backup-Teildateien stündlich ab 6 h Alter (Lauf F, D-13) | umgesetzt (W7/W11, Lauf F) |
 | Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | umgesetzt (W5; Stichprobe beim Entsperren, die DB ist vorher verschlüsselt) |
 | Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | umgesetzt (W11; Image-Smoke prüft UID, read-only Root-FS und `CapEff` 0) |
 
@@ -163,7 +163,9 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 **Passphrase im Speicher.** Nach dem Entsperren liegt die Passphrase im
 Prozessspeicher (`BackupSession`). Die KDF-Pfade arbeiten mit `Zeroizing`-Kopien
 (umgesetzt). „Datenbank sperren" (Pool zu, Scheduler pausiert, Passphrase per
-`zeroize` gelöscht, alle Sitzungen ungültig) ist umgesetzt (W6). Nach einem
+`zeroize` gelöscht, alle Sitzungen ungültig) ist umgesetzt (W6). Die Sitzungen
+enden sofort; auf einen laufenden Scheduler-Tick wartet das Sperren höchstens
+10 s und sperrt dann trotzdem (Lauf F, ADR 0040 Nr. 9). Nach einem
 Neustart bleibt die Instanz gesperrt, bis der Nutzer im Browser entsperrt; ein
 Auto-Unlock ist ausgeschlossen (E3).
 
@@ -396,12 +398,18 @@ der Schema-Check der DB selbst.
 - **Schreiben ins Verzeichnis** (Floor und Off-Site, W2): Temp-Datei
   `.<name>.<uuid>.part` im Zielordner, `fsync`, `rename`, Verzeichnis-`fsync`.
   Ein Abbruch hinterlässt nie eine halbe `.kbk` unter dem endgültigen Namen.
-- **Aufbewahrung:** Floor 7 tägliche / 3 monatliche / 1 jährliche, solange ein
-  Off-Site-Ziel zuletzt erfolgreich war, sonst wie Off-Site 30 / 12 / 7 (§3.5);
-  Off-Site je Ziel rotiert.
-- **Tages-Backup** (W2): im Scheduler-Tick, sobald das letzte Backup älter als
-  24 h ist — im laufenden Betrieb, nicht nur beim Entsperren. Nach einem
-  Fehlschlag frühestens nach einer Stunde erneut.
+- **Aufbewahrung:** nach Kalender-Eimern (§3.5): Floor 7 Tage / 3 Monate /
+  1 Jahr, solange ein Off-Site-Ziel zuletzt erfolgreich war, sonst wie
+  Off-Site 30 / 12 / 7; Ordner-Ziele je Ziel rotiert, **SFTP nie** (ADR 0040).
+- **Tages-Backup** (W2, kalenderfest seit Lauf F): genau eines je Berliner
+  Kalendertag ab der eingestellten Uhrzeit (`app_settings.backup_daily_time`,
+  Standard 02:30), beim ersten Tick danach; gemerkt in
+  `backup_daily_last_on`. Nach einem Fehlschlag frühestens nach einer Stunde
+  erneut (persistiert, `backup_daily_last_failure_at`).
+- **Nach einem Restore** (D-23): bis zur Freigabe nur Floor, keine Spiegelung
+  (Audit `backup.mirror.skipped`) — eine Probe-Instanz schreibt keinen älteren
+  Datenstand mit neuerem Zeitstempel neben die echten Backups. Während jeder
+  Pause der automatischen Abläufe ruht die Rotation.
 
 **Kein** proprietäres Cloud-API; Cloud-Speicher nur über einen Ordner, den der
 Betreiber als Volume unter `/backup-targets` einbindet. Die Auto-Erkennung von
@@ -434,10 +442,15 @@ Re-Auth.
 
 ### 3.5 Rotation
 
-`backup::rotation::run(pool, backups_dir)` prunt pro Klasse (`daily` /
-`monthly` / `yearly`) und Ablage (Floor bzw. Off-Site, zugeordnet über den
-`target_path`). `manual`- und `pre_restore`-Backups werden **nie** automatisch
-gelöscht. **Invariante** (G1-HARDEN.5): das **global neueste** Backup wird
+`backup::rotation::run(pool, backups_dir, targets_root)` behält je Ablage
+(Floor bzw. Ordner-Ziel, zugeordnet über den `target_path`) das jüngste
+automatische Backup je Berliner Kalendertag, Monat und Jahr für die jüngsten
+`keep_*` Eimer mit Backup (Lauf F, D-05) — unabhängig von der Zahl der
+Lock-Backups eines Tages und vom Datum des Erstellens. `manual`- und
+`pre_restore`-Backups (auch nach einem Restore übernommene) werden **nie**
+automatisch gelöscht; SFTP-Einträge plant die Rotation nie ein (D-06: keine
+Löschung durch Klein.Buch, Historie und Audit bleiben wahr). Während einer
+Pause der automatischen Abläufe ruft `create_with` die Rotation nicht auf. **Invariante** (G1-HARDEN.5): das **global neueste** Backup wird
 **nie** gelöscht, auch wenn keep-Werte auf 0 stehen würden. Eine garantierte
 Mindestzahl bleibt immer erhalten.
 
@@ -502,8 +515,12 @@ Browser-Sitzungen sind davon getrennt (umgesetzt W5/W6).
    Passphrase öffnen + Probe-Read, Archivpfad-Stichprobe, bei älterem Schema
    Pflicht-Backup vor der Migration, Migrationen + Schema-Check, dann
    `activate_unlocked`: Passphrase in die `BackupSession` (Prozessspeicher),
-   Pool in den Kontext, Audit, ausstehender Restore-Audit, Scheduler-Start; das
-   fällige Tages-Backup legt der erste Tick an.
+   zuerst das Pflicht-Audit (scheitert es, bleibt die Instanz gesperrt, D-21),
+   dann Passphrase in die `BackupSession` (Prozessspeicher), Pool in den
+   Kontext, Scheduler-Start; der erste Tick folgt frühestens 60 s später
+   (D-19) und legt das fällige Tages-Backup an. Ein ausstehender Restore wird
+   davor in `run_migrations` abgeschlossen (Audit, Pause `restore`,
+   Nummernkreise, Historie).
 
 **Solange ein Restore offen ist** — Marker, Zustandsdatei
 `RESTORE_SWAP_STATE.json` oder `*.rollback`-Reste vorhanden — lehnen
@@ -768,14 +785,15 @@ Linux deshalb **keine physische Unveränderbarkeit**.
    lesbare Dateien werden getrennt gemeldet, Manipulation und Verlust als
    dringender Hinweis.
 4. **Off-Site-Backups** — verschlüsselt, mit Archiv, lange aufbewahrt
-   (30 tägliche / 12 monatliche / 7 jährliche). Eine veränderte oder gelöschte
+   (je ein Backup für 30 Tage / 12 Monate / 7 Jahre; SFTP ohne Löschung durch
+   Klein.Buch). Eine veränderte oder gelöschte
    Datei lässt sich aus einem älteren Backup zurückholen.
 5. **Snapshots des Dateisystems beim Betreiber** — schreibgeschützte Snapshots
    des Daten-Volumes (z. B. ZFS oder Btrfs) liegen außerhalb der Reichweite des
    Server-Benutzers. Das ist Betriebsaufgabe und im Betriebshandbuch empfohlen
    (`../operations-guide.md` §5, W13).
 
-Ergänzend: Selbsttest beim Start (`chmod 0400` im Archiv anlegen und prüfen;
+Ergänzend: Selbsttest beim Serverstart (`chmod 0400` im Archiv anlegen und prüfen;
 scheitert er, etwa als root oder wegen NFSv4-ACLs, startet der Server nicht;
 umgesetzt W5) und der Hinweis, DB und Archiv nicht auf NFS/SMB/exFAT zu legen
 (`../operations-guide.md` §2, W13).

@@ -8,16 +8,22 @@
 //! - legt fehlende Subdirs an.
 //!
 //! Hintergrund: Bis V2026.5 fehlte `inputs/` komplett im Bundle, weshalb das
-//! AfA-Formular bei jeder Production-Installation crashte. R7-INPUTS bundelt
-//! die Default-Inputs (`specs`, `pdf-templates`, `mail-templates`, `branding`)
-//! als read-only Resource-Mirror und kopiert sie beim ersten Start in den
-//! user-editierbaren `app_local_data_dir/inputs/`. Diese Tests sichern, dass
-//! eine spätere BMF-Update-Aktion des Users (z.B. `afa-tabellen.json` editiert)
-//! NICHT vom nächsten App-Start überschrieben wird.
+//! AfA-Formular bei jeder Production-Installation crashte. Seit R7-INPUTS
+//! bringt das Programm die Default-Inputs (`specs`, `pdf-templates`,
+//! `mail-templates`, `branding`) als read-only Quelle mit; im Container kopiert
+//! der Serverstart fehlende Dateien in das Volume `/inputs` (Seed-Manifest,
+//! ADR 0039). Diese Tests sichern, dass eine spätere Änderung des Nutzers (z. B.
+//! `afa-tabellen.json` editiert) NICHT vom nächsten Serverstart überschrieben
+//! wird und dass eine angebotene `.neu`-Fassung nach dem Löschen nicht
+//! wiederkommt (Lauf F, D-10).
 
 use std::fs;
+use std::str::FromStr;
 
 use klein_buch_lib::config::{ensure_inputs_seeded, seed_inputs_for_test, Paths};
+use klein_buch_lib::db::MIGRATOR;
+use klein_buch_lib::seed;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tempfile::TempDir;
 
 /// Helper: legt eine Datei mit gegebenem Inhalt an. Eltern-Verzeichnisse
@@ -244,7 +250,7 @@ fn ensure_inputs_seeded_fails_without_seed_source() {
     assert!(err.to_string().contains("Seed-Quelle"), "{err}");
 }
 
-/// Quelle und Ziel identisch (Desktop-Dev: Repo-`inputs/`) → No-op.
+/// Quelle und Ziel identisch (Entwicklung mit dem Repo-`inputs/`) → No-op.
 #[test]
 fn ensure_inputs_seeded_is_noop_when_source_is_target() {
     let tmp = TempDir::new().unwrap();
@@ -261,4 +267,79 @@ fn ensure_inputs_seeded_is_noop_when_source_is_target() {
         fs::read_to_string(repo.join("inputs").join("specs").join("a.json")).unwrap(),
         "x"
     );
+}
+
+/// Lauf F, D-10: Die neue Fassung einer geänderten Vorlage wird genau einmal
+/// angeboten und gemeldet — nach dem Löschen der `.neu`-Datei und weiteren
+/// Serverstarts entsteht weder die Datei noch ein zweiter Hinweis; eine doppelt
+/// ausgelieferte Hinweis-Liste (Abbruch zwischen Inbox und Manifest) legt dank
+/// `dedup_key` keinen zweiten Eintrag an.
+#[tokio::test]
+async fn neu_file_is_offered_and_notified_once() {
+    let tmp = TempDir::new().unwrap();
+    let bundle = tmp.path().join("bundle");
+    let target = tmp.path().join("inputs");
+    let rel = "pdf-templates/default.typ";
+    write_file(&bundle.join(rel), "v1");
+    seed::seed(&bundle, &target, "2026.10.0").unwrap();
+    write_file(&target.join(rel), "eigene Fassung");
+    write_file(&bundle.join(rel), "v2");
+    seed::seed(&bundle, &target, "2026.11.0").unwrap();
+    let neu = target.join(format!("{rel}{}", seed::NEW_SUFFIX));
+    assert!(neu.exists());
+
+    let db = tmp.path().join("kb.sqlite");
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+        .unwrap()
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    MIGRATOR.run(&pool).await.unwrap();
+    let count = |pool: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'seed:%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    // Abbruch nach der Inbox, vor dem Manifest: dieselben Hinweise noch einmal
+    let pending = seed::read_manifest(&target);
+    assert_eq!(seed::deliver_notices(&pool, &target).await.unwrap(), 1);
+    fs::write(
+        target.join(seed::MANIFEST),
+        serde_json::to_vec_pretty(&pending).unwrap(),
+    )
+    .unwrap();
+    seed::deliver_notices(&pool, &target).await.unwrap();
+    assert_eq!(
+        count(pool.clone()).await,
+        1,
+        "Hinweis nur einmal in der Inbox"
+    );
+
+    // Nutzer löscht die .neu-Datei; zwei weitere Serverstarts mit Entsperren
+    fs::remove_file(&neu).unwrap();
+    for _ in 0..2 {
+        seed::seed(&bundle, &target, "2026.11.0").unwrap();
+        assert!(!neu.exists(), ".neu kommt nicht wieder");
+        assert_eq!(seed::deliver_notices(&pool, &target).await.unwrap(), 0);
+    }
+    assert_eq!(count(pool.clone()).await, 1);
+    assert_eq!(
+        fs::read_to_string(target.join(rel)).unwrap(),
+        "eigene Fassung"
+    );
+
+    // Eine weitere Image-Fassung wird wieder angeboten und gemeldet
+    write_file(&bundle.join(rel), "v3");
+    seed::seed(&bundle, &target, "2026.12.0").unwrap();
+    assert_eq!(fs::read_to_string(&neu).unwrap(), "v3");
+    assert_eq!(seed::deliver_notices(&pool, &target).await.unwrap(), 1);
+    assert_eq!(count(pool.clone()).await, 2);
 }

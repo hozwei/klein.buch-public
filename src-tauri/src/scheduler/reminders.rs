@@ -7,10 +7,15 @@
 //!
 //! Manuel-Auswahl Block 15: monthly_doc_check, fiscal_year_lock_pending,
 //! backup_overdue, invoice_overdue (alle vier aktiv).
+//!
+//! Lauf F (D-01, ADR 0040): Kosten-Abos im Modus „Erinnerung“
+//! (`auto_create_expense = 0`) erzeugen am Stichtag einen Hinweis „Abo fällig“
+//! (einmal je Abo und Stichtag). Die Regel `recurring_due` steht seit Migration
+//! 0012 im CHECK, ist aber nicht geseedet; bis zur Seed-Migration läuft sie ohne
+//! Regel-Zeile (immer aktiv).
 
 use crate::error::Result;
 use crate::fiscal_year::guard;
-use crate::notify::Notifier;
 use crate::notify::{self, rules, NewNotification};
 use chrono::{Datelike, NaiveDate};
 use sqlx::SqlitePool;
@@ -22,44 +27,90 @@ use std::path::Path;
 /// `targets_root` ist die Wurzel der Verzeichnis-Ziele
 /// (`paths.backup_targets_dir`); die `backup_overdue`-Regel braucht sie, um die
 /// konfigurierten Off-Site-Ziele zu lesen (G1-NOTIFY, Plan W7).
-pub async fn run(
-    pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
-    today: NaiveDate,
-    targets_root: &Path,
-) -> Result<usize> {
+pub async fn run(pool: &SqlitePool, today: NaiveDate, targets_root: &Path) -> Result<usize> {
     let mut created = 0usize;
 
     if let Some(rule) = rules::get_enabled_by_type(pool, "monthly_doc_check").await? {
-        created += monthly_doc_check(pool, notifier, &rule, today).await?;
+        created += monthly_doc_check(pool, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "fiscal_year_lock_pending").await? {
-        created += fiscal_year_lock_pending(pool, notifier, &rule, today).await?;
+        created += fiscal_year_lock_pending(pool, &rule, today).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "backup_overdue").await? {
-        created += backup_overdue(pool, notifier, &rule, today, targets_root).await?;
+        created += backup_overdue(pool, &rule, today, targets_root).await?;
     }
     if let Some(rule) = rules::get_enabled_by_type(pool, "invoice_overdue").await? {
-        created += invoice_overdue(pool, notifier, &rule, today).await?;
+        created += invoice_overdue(pool, &rule, today).await?;
+    }
+    created += recurring_due(pool, today).await?;
+    Ok(created)
+}
+
+/// „Abo fällig“ für Kosten-Abos im Modus Erinnerung. Dedup je Abo und Stichtag;
+/// der Stichtag rückt erst mit „Buchen“ (`recurring_run_now`) vor.
+async fn recurring_due(pool: &SqlitePool, today: NaiveDate) -> Result<usize> {
+    // Eine abgeschaltete Regel (falls sie per Migration geseedet ist) gilt.
+    if let Some(rule) = rules::get_by_type(pool, "recurring_due").await? {
+        if rule.enabled == 0 {
+            return Ok(0);
+        }
+    }
+    let due = crate::db::repo::recurring::list_due_reminders(pool, &today.to_string()).await?;
+    let mut created = 0usize;
+    for sub in &due {
+        let date = NaiveDate::parse_from_str(&sub.next_due_date, "%Y-%m-%d")
+            .map(|d| d.format("%d.%m.%Y").to_string())
+            .unwrap_or_else(|_| sub.next_due_date.clone());
+        let body = format!(
+            "„{}“ ist seit {date} fällig (erwartet {}). Die Kosten-Position legst du unter \
+             Kosten → Wiederkehrende Abos mit „Buchen“ an.",
+            sub.label,
+            euro(sub.expected_amount_cents)
+        );
+        let key = format!("recurring_due:{}:{}", sub.id, sub.next_due_date);
+        created += emit_one(
+            pool,
+            NewNotification {
+                title: "Abo fällig",
+                body: &body,
+                severity: "info",
+                related_entity_type: Some("recurring"),
+                related_entity_id: Some(&sub.id),
+                action_url: Some("/expenses/recurring"),
+                dedup_key: Some(&key),
+                ..Default::default()
+            },
+        )
+        .await?;
     }
     Ok(created)
 }
 
-async fn emit_one(
-    pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
-    n: NewNotification<'_>,
-) -> Result<usize> {
-    Ok(notify::emit(pool, notifier, n)
-        .await?
-        .map(|_| 1)
-        .unwrap_or(0))
+/// Cent → „1.234,56 €“.
+fn euro(cents: i64) -> String {
+    let neg = cents < 0;
+    let abs = cents.unsigned_abs();
+    let mut euros = (abs / 100).to_string();
+    let mut grouped = String::new();
+    while euros.len() > 3 {
+        let split = euros.len() - 3;
+        grouped = format!(".{}{grouped}", &euros[split..]);
+        euros.truncate(split);
+    }
+    format!(
+        "{}{euros}{grouped},{:02} €",
+        if neg { "-" } else { "" },
+        abs % 100
+    )
+}
+
+async fn emit_one(pool: &SqlitePool, n: NewNotification<'_>) -> Result<usize> {
+    Ok(notify::emit(pool, n).await?.map(|_| 1).unwrap_or(0))
 }
 
 /// Monatlicher Doku-Check ab Tag N (Default 10.). Dedup pro Kalendermonat.
 async fn monthly_doc_check(
     pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -70,7 +121,6 @@ async fn monthly_doc_check(
     let key = format!("monthly_doc_check:{:04}-{:02}", today.year(), today.month());
     emit_one(
         pool,
-        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Belege erfassen",
@@ -88,7 +138,6 @@ async fn monthly_doc_check(
 /// solange es nicht abgeschlossen ist. Dedup pro Zieljahr.
 async fn fiscal_year_lock_pending(
     pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -111,7 +160,6 @@ async fn fiscal_year_lock_pending(
     );
     emit_one(
         pool,
-        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title: "Geschäftsjahr abschließen",
@@ -133,10 +181,14 @@ async fn fiscal_year_lock_pending(
 ///   append-only `backup_log` (G1-LOG). Der lokale Floor ist ohnehin fast immer
 ///   frisch (Lock-/Tages-Backup) — die Off-Site-Kopie ist das, was ausfallen kann.
 /// - Ohne Off-Site-Ziel bleibt es beim lokalen Floor (`backup_history`): warnt,
-///   wenn überhaupt keine Sicherung mehr lief (App lange nicht geöffnet).
+///   wenn überhaupt keine Sicherung mehr lief (z. B. Tages-Backup scheitert).
+///
+/// Das Alter rechnet in Europe/Berlin (Lauf F, D-08): der UTC-Zeitstempel
+/// wird erst umgerechnet, sonst lag ein Backup zwischen 0 und 2 Uhr einen Tag
+/// zu früh. Eine Lücke durch lange Sperre meldet das Entsperren selbst
+/// (`commands::backup::locked_gap_notice`).
 async fn backup_overdue(
     pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
     targets_root: &Path,
@@ -179,11 +231,8 @@ async fn backup_overdue(
 
     let overdue = match last.as_deref() {
         None => true,
-        Some(ts) => match ts
-            .get(0..10)
-            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        {
-            Some(d) => (today - d).num_days() > max_age,
+        Some(ts) => match crate::clock::db_utc_to_berlin(ts) {
+            Some(b) => (today - b.date_naive()).num_days() > max_age,
             None => false,
         },
     };
@@ -192,7 +241,6 @@ async fn backup_overdue(
     }
     emit_one(
         pool,
-        notifier,
         NewNotification {
             rule_id: Some(&rule.id),
             title,
@@ -210,7 +258,6 @@ async fn backup_overdue(
 /// Rechnung (nur ein Hinweis, bis abgehakt).
 async fn invoice_overdue(
     pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
     rule: &rules::NotificationRule,
     today: NaiveDate,
 ) -> Result<usize> {
@@ -238,7 +285,6 @@ async fn invoice_overdue(
         let action = format!("/invoices/{id}");
         created += emit_one(
             pool,
-            notifier,
             NewNotification {
                 rule_id: Some(&rule.id),
                 title: "Rechnung überfällig",
@@ -300,21 +346,12 @@ mod tests {
             .unwrap();
         let day15 = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
         // erster Lauf erzeugt einen Hinweis
-        assert_eq!(
-            monthly_doc_check(&pool, None, &rule, day15).await.unwrap(),
-            1
-        );
+        assert_eq!(monthly_doc_check(&pool, &rule, day15).await.unwrap(), 1);
         // zweiter Lauf im selben Monat: Dedup
-        assert_eq!(
-            monthly_doc_check(&pool, None, &rule, day15).await.unwrap(),
-            0
-        );
+        assert_eq!(monthly_doc_check(&pool, &rule, day15).await.unwrap(), 0);
         // vor dem Stichtag: nichts
         let day5 = NaiveDate::from_ymd_opt(2026, 7, 5).unwrap();
-        assert_eq!(
-            monthly_doc_check(&pool, None, &rule, day5).await.unwrap(),
-            0
-        );
+        assert_eq!(monthly_doc_check(&pool, &rule, day5).await.unwrap(), 0);
     }
 
     // ---- backup_overdue (G1-NOTIFY, Off-Site-bewusst) --------------------
@@ -368,12 +405,7 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
         let floor = Path::new("/backup-targets");
         // Kein Off-Site-Ziel, kein Backup → überfällig über den Floor-Pfad.
-        assert_eq!(
-            backup_overdue(&pool, None, &rule, today, floor)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(backup_overdue(&pool, &rule, today, floor).await.unwrap(), 1);
         let title: String = sqlx::query_scalar("SELECT title FROM notifications LIMIT 1")
             .fetch_one(&pool)
             .await
@@ -392,12 +424,7 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
         let floor = Path::new("/backup-targets");
         // Off-Site konfiguriert, aber noch kein erfolgreiches Off-Site-Backup → überfällig.
-        assert_eq!(
-            backup_overdue(&pool, None, &rule, today, floor)
-                .await
-                .unwrap(),
-            1
-        );
+        assert_eq!(backup_overdue(&pool, &rule, today, floor).await.unwrap(), 1);
         let (title, key): (String, String) =
             sqlx::query_as("SELECT title, dedup_key FROM notifications LIMIT 1")
                 .fetch_one(&pool)
@@ -405,6 +432,33 @@ mod tests {
                 .unwrap();
         assert_eq!(title, "Off-Site-Backup überfällig");
         assert_eq!(key, "offsite_backup_overdue:2026-06-15");
+    }
+
+    /// D-08: Ein Backup um 23:30 UTC gehört zum Berliner Folgetag. Am
+    /// 15.06. mit Grenze 7 Tage ist ein Backup vom 07.06. 23:30 UTC
+    /// (= 08.06. 01:30 Berlin) noch nicht überfällig.
+    #[tokio::test]
+    async fn backup_overdue_uses_berlin_date_of_utc_timestamp() {
+        let pool = backup_pool().await;
+        sqlx::query(
+            "INSERT INTO backup_history (id, created_at) VALUES ('b1', '2026-06-07 23:30:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let rule = rules::get(&pool, "rule_backup_overdue")
+            .await
+            .unwrap()
+            .unwrap();
+        let floor = Path::new("/backup-targets");
+        let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+        assert_eq!(
+            backup_overdue(&pool, &rule, today, floor).await.unwrap(),
+            0,
+            "Berliner Tag 08.06. → 7 Tage, nicht überfällig"
+        );
+        let next = NaiveDate::from_ymd_opt(2026, 6, 16).unwrap();
+        assert_eq!(backup_overdue(&pool, &rule, next, floor).await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -433,11 +487,6 @@ mod tests {
             .unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
         let floor = Path::new("/backup-targets");
-        assert_eq!(
-            backup_overdue(&pool, None, &rule, today, floor)
-                .await
-                .unwrap(),
-            0
-        );
+        assert_eq!(backup_overdue(&pool, &rule, today, floor).await.unwrap(), 0);
     }
 }

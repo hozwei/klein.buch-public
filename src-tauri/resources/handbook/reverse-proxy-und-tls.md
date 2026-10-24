@@ -27,7 +27,7 @@ festen Pfaden ab `/` aufeinander (etwa `/api/…` oder `/help/…`), und die
 Anmelde-Cookies gelten für die ganze Adresse. Ein Unterpfad wie
 `https://example.org/buchhaltung` funktioniert deshalb nicht. Eine
 Adresse mit Pfad, Abfrage-Teil oder Benutzername lehnt Klein.Buch schon
-beim Start ab. Nimm eine eigene Subdomain, also einen Namen vor Deiner
+beim Containerstart ab. Nimm eine eigene Subdomain, also einen Namen vor Deiner
 Domain wie `buch.` in `buch.example.org`. Ein anderer Port als 443 ist
 erlaubt (`https://buch.example.org:8443`), dann muss der Proxy auf
 diesem Port lauschen.
@@ -85,7 +85,7 @@ der ersten Anmeldung ein Gerätecookie hat. Auch fail2ban (siehe Kapitel
 
 Trag nie `0.0.0.0/0` oder `::/0` ein. Dann vertraut Klein.Buch jedem,
 und die Regeln für HTTPS und Fehlversuche lassen sich umgehen.
-Klein.Buch warnt in diesem Fall beim Start im Log.
+Klein.Buch warnt in diesem Fall beim Containerstart im Log.
 
 ## Was der Proxy tun muss
 

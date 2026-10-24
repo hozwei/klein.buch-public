@@ -4,6 +4,7 @@
   import type { BackupLogEntry, BackupLogFilter } from "$lib/api";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
 
   let entries = $state<BackupLogEntry[]>([]);
   let loading = $state(true);
@@ -63,12 +64,6 @@
     !!(search.trim() || dateFrom || dateTo || statusF !== "all" || triggerF !== "all" || targetF !== "all"),
   );
 
-  function fmtDateTime(ts: string | null): string {
-    if (!ts) return "—";
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
   function triggerLabel(t: string): string {
     return t === "manual"
       ? "Manuell"
@@ -191,7 +186,7 @@
       <tbody>
         {#each entries as e (e.id)}
           <tr class:bad={e.status === "failed"}>
-            <td class="ts" data-label="Zeitpunkt">{fmtDateTime(e.createdAt)}</td>
+            <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
             <td data-label="Status">
               {#if e.status === "ok"}
                 <span class="ok">✓ gesichert</span>

@@ -92,6 +92,12 @@ const REAUTH: &[&str] = &[
     "payment_accounts_update",
     "contacts_anonymize",
     "fiscal_year_close",
+    // Lauf F: Freigabe nach Pause der automatischen Belegerzeugung
+    "scheduler_release_hold",
+    // Lauf F (D-24): Nummernkreis anheben
+    "numbering_raise",
+    // Lauf F (F1d): wiederhergestellten Entwurf mit vergebener Nummer freigeben
+    "numbering_restored_draft_confirm",
 ];
 
 /// Jobs laut Plan W5.6.
@@ -161,9 +167,12 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        185,
+        194,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
-         - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12)"
+         - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
+         + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
+         + Tages-Backup-Uhrzeit + 2 Nummernkreise (Lauf F1b) \
+         + 2 vorgemerkte Entwürfe + Restore-Prüfung der Abos (Lauf F1d)"
     );
 
     for spec in REGISTRY.iter() {

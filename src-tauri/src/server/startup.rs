@@ -90,6 +90,9 @@ pub fn run_checks(ctx: &AppCtx, opts: &StartupOptions) -> Result<std::fs::File> 
 
     archive_selftest(&paths.archive_dir)?;
     clean_tmp(&paths.data_dir)?;
+    // Beim Start läuft noch kein Backup: jede Teildatei stammt aus einem
+    // abgebrochenen Lauf (W13-GRACE-BACKUP).
+    sweep_partial_backups(&paths.backups_dir, std::time::Duration::ZERO);
     Ok(lock)
 }
 
@@ -270,6 +273,101 @@ fn clean_tmp(data_dir: &Path) -> Result<()> {
         tracing::info!("{removed} Rest(e) in {} entfernt", tmp.display());
     }
     Ok(())
+}
+
+/// Alter, ab dem der stündliche Sweeper Reste in `<data>/tmp` und
+/// abgebrochene Backup-Teildateien löscht (D-13). Laufende Snapshots und
+/// Exporte sind jünger.
+pub const TMP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/// Räumt `<data>/tmp` im laufenden Betrieb auf (Lauf F, D-13): Einträge
+/// außer `downloads/` und `uploads/` (eigene Ablauflogik), deren letzte
+/// Änderung länger als `max_age` zurückliegt; Verzeichnisse rekursiv (ein
+/// leeres, altes Verzeichnis fällt mit). Liefert die Zahl gelöschter
+/// Einträge. Fehler einzelner Einträge werden protokolliert, nicht gemeldet.
+pub fn sweep_tmp(data_dir: &Path, max_age: std::time::Duration) -> usize {
+    let tmp = data_dir.join("tmp");
+    let Ok(entries) = std::fs::read_dir(&tmp) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == "downloads" || name == "uploads" {
+            continue;
+        }
+        removed += sweep_entry(&entry.path(), max_age);
+    }
+    if removed > 0 {
+        tracing::info!("{removed} alte(r) Rest(e) in {} entfernt", tmp.display());
+    }
+    removed
+}
+
+/// Löscht `path`, falls älter als `max_age` (Verzeichnis: erst den Inhalt).
+fn sweep_entry(path: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    let old = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.elapsed().ok())
+        .is_some_and(|age| age >= max_age);
+    if meta.is_dir() {
+        let mut removed = 0usize;
+        if let Ok(children) = std::fs::read_dir(path) {
+            for child in children.flatten() {
+                removed += sweep_entry(&child.path(), max_age);
+            }
+        }
+        let empty = std::fs::read_dir(path)
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(false);
+        // Das Verzeichnis selbst nur, wenn es leer ist und vor dem Aufräumen
+        // schon alt war (ein gerade angelegtes Export-Verzeichnis bleibt).
+        if empty && old && std::fs::remove_dir(path).is_ok() {
+            removed += 1;
+        }
+        return removed;
+    }
+    if !old {
+        return 0;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::warn!("tmp-Rest {} nicht löschbar: {e}", path.display());
+            0
+        }
+    }
+}
+
+/// Entfernt abgebrochene Backup-Teildateien (`.klein-buch-*.part`, Temp-Datei
+/// vor dem `rename`, D-13/W13-GRACE-BACKUP) im lokalen Backup-Ordner, die
+/// älter als `max_age` sind. Fertige Backups (`*.kbk`) bleiben unberührt.
+pub fn sweep_partial_backups(backups_dir: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(backups_dir) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name.starts_with(".klein-buch-") && name.ends_with(".part")) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_file() && sweep_entry(&path, max_age) > 0 {
+            removed += 1;
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            "{removed} abgebrochene Backup-Teildatei(en) in {} entfernt",
+            backups_dir.display()
+        );
+    }
+    removed
 }
 
 /// Mountpoints aus `/proc/self/mountinfo` (5. Feld, Oktal-Escapes wie `\040`).

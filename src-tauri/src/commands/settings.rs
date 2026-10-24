@@ -1,4 +1,4 @@
-//! Tauri-Commands für Settings.
+//! Commands für Settings.
 //!
 //! Block 2 implementiert nur `seller_profile_{get,upsert}` inkl. §19-Toggle
 //! mit 5-Jahres-Bindungs-Schutz. Weitere Settings (mail, payment-accounts, pdf,

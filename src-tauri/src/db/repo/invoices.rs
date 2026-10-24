@@ -96,13 +96,31 @@ pub async fn create_draft(
     buyer: &BuyerSnapshot<'_>,
     totals: &Totals,
 ) -> Result<InvoiceRow> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let id = create_draft_in(&mut tx, payload, invoice_number, seller, buyer, totals).await?;
+    tx.commit().await?;
+
+    get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+}
+
+/// Draft-INSERT (Kopf + Positionen) innerhalb einer laufenden Transaktion;
+/// liefert die neue ID. Nummer und Audit vergibt bzw. schreibt der Aufrufer in
+/// derselben Transaktion (Lauf F).
+pub async fn create_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    payload: &DraftCreatePayload,
+    invoice_number: &str,
+    seller: &SellerSnapshot<'_>,
+    buyer: &BuyerSnapshot<'_>,
+    totals: &Totals,
+) -> Result<String> {
     let id = Uuid::now_v7().to_string();
     let direction_str = match payload.input.direction {
         crate::domain::invoice::InvoiceDirection::Issued => "issued",
         crate::domain::invoice::InvoiceDirection::Received => "received",
     };
-
-    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO invoices (
@@ -150,7 +168,7 @@ pub async fn create_draft(
     .bind(buyer.vat_id)
     .bind(buyer.email)
     .bind(payload.derived_from_quote_id.as_deref())
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     for (item, computed) in payload.input.items.iter().zip(totals.items.iter()) {
@@ -176,15 +194,10 @@ pub async fn create_draft(
         .bind(item.description_markup.as_deref())
         .bind(item.source_package_id.as_deref())
         .bind(item.source_package_revision)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
-
-    tx.commit().await?;
-
-    get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+    Ok(id)
 }
 
 // ---- READ ------------------------------------------------------------------

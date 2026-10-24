@@ -304,14 +304,37 @@ pub async fn count_locked_documents(pool: &SqlitePool, contact_id: &str) -> Resu
 /// [`crate::domain::anonymize::anonymization_blocker`]) oder der Kontakt bereits
 /// anonymisiert ist.
 pub async fn anonymize(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
-    let existing = get(pool, id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {id}")))?;
+    Ok(anonymize_with_pauses(pool, id).await?.0)
+}
+
+/// Wie [`anonymize`]; pausiert zusätzlich in derselben Transaktion alle aktiven
+/// Abo-Rechnungs-Vorlagen an diesen Kontakt und Kosten-Abos dieses Lieferanten
+/// (Lauf F, W14-031: an einen anonymisierten Kontakt entstehen keine Belege
+/// mehr). Liefert `(kontakt, pausierte_vorlagen, pausierte_abos)`.
+pub async fn anonymize_with_pauses(pool: &SqlitePool, id: &str) -> Result<(ContactRow, u64, u64)> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let existing: Option<ContactRow> = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let existing =
+        existing.ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {id}")))?;
     if existing.anonymized_at.is_some() {
         return Err(Error::Domain("Kontakt ist bereits anonymisiert.".into()));
     }
 
-    let (inv_drafts, quote_drafts) = count_open_drafts(pool, id).await?;
+    let inv_drafts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invoices WHERE contact_id = ? AND locked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let quote_drafts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM quotes WHERE contact_id = ? AND locked_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
     if let Some(msg) = anonymize_domain::anonymization_blocker(inv_drafts, quote_drafts) {
         return Err(Error::Domain(msg));
     }
@@ -331,17 +354,34 @@ pub async fn anonymize(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
     )
     .bind(&placeholder)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
             "Anonymisierung fehlgeschlagen (Kontakt nicht gefunden oder bereits anonymisiert): {id}"
         )));
     }
+    let paused_templates = sqlx::query(
+        "UPDATE recurring_invoices SET active = 0, updated_at = datetime('now','utc')
+          WHERE contact_id = ? AND active = 1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let paused_subscriptions = sqlx::query(
+        "UPDATE recurring_subscriptions SET active = 0 WHERE vendor_contact_id = ? AND active = 1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
 
-    get(pool, id)
+    let row = get(pool, id)
         .await?
-        .ok_or_else(|| Error::Domain("anonymize: post-UPDATE SELECT leer".into()))
+        .ok_or_else(|| Error::Domain("anonymize: post-UPDATE SELECT leer".into()))?;
+    Ok((row, paused_templates, paused_subscriptions))
 }
 
 /// Case-insensitive Substring-Suche über `name`, `email`, `vat_id`,

@@ -38,7 +38,7 @@ use super::policy::ClientInfo;
 use super::ratelimit::{self, DEVICE_COOKIE};
 use super::session::{self, SessionId};
 use super::startup::check_archive_paths;
-use super::state::{InstanceState, ServerState, DB_GATE_WAIT};
+use super::state::{InstanceState, ServerState, DB_GATE_WAIT, SCHEDULER_STOP_WAIT};
 use super::totp::{self, Check};
 use crate::commands::backup::{
     activate_unlocked, backup_setup_passphrase, ensure_no_pending_restore, open_encrypted,
@@ -703,9 +703,11 @@ pub async fn logout(State(st): State<Arc<ServerState>>, req: Request) -> Respons
     )
 }
 
-/// `POST /api/auth/lock` — „Datenbank sperren“: wartet auf laufende Aktionen,
-/// hält den Scheduler an, schließt den Pool, überschreibt die Passphrase im RAM
-/// und beendet alle Sitzungen.
+/// `POST /api/auth/lock` — „Datenbank sperren“: beendet sofort alle Sitzungen,
+/// bittet den Scheduler um Abbruch nach dem laufenden Termin, wartet auf
+/// laufende Aktionen (höchstens [`DB_GATE_WAIT`]) und den Tick (höchstens
+/// [`SCHEDULER_STOP_WAIT`]), schließt den Pool und überschreibt die Passphrase
+/// im RAM (W14-027).
 pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response {
     let request = match read_request(req).await {
         Ok(r) => r,
@@ -724,22 +726,50 @@ pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response 
 }
 
 /// Sperrt die Datenbank (auch für Tests aufrufbar).
+///
+/// Reihenfolge (W14-027, ADR 0040): Sitzungen und Klartext-Downloads zuerst
+/// (eine fremde Sitzung ist sofort draußen), dann die kooperative
+/// Abbruch-Anforderung an den Scheduler, dann die Schreibsperre. Läuft der
+/// Tick nach [`SCHEDULER_STOP_WAIT`] noch (hängender Sidecar, SMTP-Timeout),
+/// wird trotzdem gesperrt: Pool und Passphrase sind weg, der Tick scheitert am
+/// nächsten Datenbankzugriff und weitere Ticks laufen leer.
 pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     let _transition = st.transition.lock().await;
-    let _gate = tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write())
-        .await
-        .map_err(|_| ApiError::busy(10))?;
-    audit(st, "auth.lock").await;
-    crate::scheduler::tick::stop(&st.ctx).await;
-    if let Some(pool) = st.ctx.take_pool() {
-        pool.close().await;
-    }
-    st.ctx.session.clear();
     st.sessions.clear();
     // Exporte (Klartext!) und Uploads nicht über das Sperren hinaus liegen
     // lassen (Gegenprüfung W7).
     st.ctx.downloads.clear();
     st.ctx.uploads.clear();
+    crate::scheduler::tick::request_stop(&st.ctx);
+    let _gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
+        Ok(gate) => gate,
+        Err(_) => {
+            // Gesperrt wird nicht; der Scheduler läuft weiter. Die Sitzungen
+            // bleiben beendet (Anmeldung nötig, dann erneut sperren).
+            crate::scheduler::tick::withdraw_stop(&st.ctx);
+            return Err(ApiError::busy(10));
+        }
+    };
+    audit(st, "auth.lock").await;
+    if !crate::scheduler::tick::stop_within(&st.ctx, SCHEDULER_STOP_WAIT).await {
+        tracing::warn!(
+            target: "klein_buch_lib::auth",
+            "Datenbank sperren: Scheduler-Tick läuft nach {} s noch — Sperre ohne Abwarten",
+            SCHEDULER_STOP_WAIT.as_secs()
+        );
+    }
+    if let Some(pool) = st.ctx.take_pool() {
+        // Neue Zugriffe scheitern ab sofort; auf ausgeliehene Verbindungen
+        // höchstens DB_GATE_WAIT warten.
+        if tokio::time::timeout(DB_GATE_WAIT, pool.close())
+            .await
+            .is_err()
+        {
+            tracing::warn!(target: "klein_buch_lib::auth", "Datenbank sperren: Pool schließt verzögert");
+        }
+    }
+    st.ctx.session.clear();
+    st.sessions.clear();
     tracing::info!(target: "klein_buch_lib::auth", "Datenbank gesperrt");
     Ok(())
 }
@@ -942,15 +972,26 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
             "Die neue Passphrase ist dieselbe wie die bisherige.",
         ));
     }
+    // W14-027: Scheduler zuerst um Abbruch bitten, dann Schreibsperre; auf den
+    // Tick höchstens SCHEDULER_STOP_WAIT warten (der Wechsel braucht die Datei
+    // exklusiv — läuft der Tick noch, lieber 503 als unbegrenzt warten).
+    crate::scheduler::tick::request_stop(&ctx);
     let gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
         Ok(g) => g,
         Err(_) => {
+            crate::scheduler::tick::withdraw_stop(&ctx);
             old.zeroize();
             new.zeroize();
             return Err(ApiError::busy(10));
         }
     };
-    crate::scheduler::tick::stop(&ctx).await;
+    if !crate::scheduler::tick::stop_within(&ctx, SCHEDULER_STOP_WAIT).await {
+        crate::scheduler::tick::withdraw_stop(&ctx);
+        drop(gate);
+        old.zeroize();
+        new.zeroize();
+        return Err(ApiError::busy(30));
+    }
     if let Some(pool) = ctx.take_pool() {
         pool.close().await;
     }

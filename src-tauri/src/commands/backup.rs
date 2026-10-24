@@ -28,6 +28,8 @@ pub struct BackupSettings {
     pub targets: Vec<TargetView>,
     /// `missing` | `failing` | `ok` (Plan W7).
     pub offsite_status: String,
+    /// Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F, D-04).
+    pub daily_time: String,
 }
 
 /// Off-Site-Ziel fürs UI (kein Passwort).
@@ -71,7 +73,7 @@ pub struct BackupHistoryItem {
 pub fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
     if crate::backup::restore::restore_incomplete(paths) {
         return Err(Error::Backup(
-            "Eine Wiederherstellung ist noch nicht abgeschlossen. Bitte die App neu \
+            "Eine Wiederherstellung ist noch nicht abgeschlossen. Bitte den Container neu \
              starten; bleibt diese Meldung, ist das Datenverzeichnis zu prüfen \
              (Datei RESTORE_PENDING.json bzw. *.rollback)."
                 .into(),
@@ -183,7 +185,40 @@ pub async fn backup_get_settings(
         offsite_status: backup::target::offsite_status(&pool, root)
             .await?
             .to_string(),
+        daily_time: backup::daily_time(&pool).await?.format("%H:%M").to_string(),
     })
+}
+
+/// Argumente von [`backup_set_daily_time`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSetDailyTimeArgs {
+    /// `HH:MM` (Europe/Berlin).
+    pub time: String,
+}
+
+/// Uhrzeit des Tages-Backups setzen (Lauf F, D-04). Genau ein Tages-Backup je
+/// Berliner Kalendertag, frühestens zu dieser Uhrzeit (bzw. beim ersten Tick
+/// danach). Audit `backup.daily_time_set`.
+pub async fn backup_set_daily_time(
+    ctx: &Arc<AppCtx>,
+    args: BackupSetDailyTimeArgs,
+) -> Result<String> {
+    let pool = ctx.pool()?;
+    let time = backup::parse_daily_time(&args.time).ok_or_else(|| {
+        Error::BadRequest("Uhrzeit bitte als HH:MM angeben (z. B. 02:30).".into())
+    })?;
+    let value = time.format("%H:%M").to_string();
+    crate::db::repo::app_settings::set(&pool, backup::DAILY_TIME_KEY, &value).await?;
+    crate::db::repo::audit_log::append(
+        &pool,
+        "backup.daily_time_set",
+        "backup",
+        "daily_time",
+        Some(&serde_json::json!({ "time": value }).to_string()),
+    )
+    .await?;
+    Ok(value)
 }
 
 /// Argumente von [`backup_setup_passphrase`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -236,11 +271,30 @@ pub async fn backup_setup_passphrase(
 
     ctx.set_pool(pool.clone());
 
-    // Scheduler erst jetzt starten (Pool liegt im State).
+    // Erst-Backup direkt nach Setup (PRD Done-Check) — VOR dem Scheduler-Start
+    // und als Tages-Backup des heutigen Tages vermerkt, damit der erste Tick
+    // kein zweites Voll-Backup anlegt (D-12). Scheitert es, holt der Tick das
+    // Tages-Backup nach.
+    let now = ctx.clock().now_utc();
+    let outcome = backup::create_with(
+        &pool,
+        &paths,
+        &passphrase,
+        "manual",
+        backup::CreateOptions {
+            mirror: backup::Mirror::Auto,
+            now,
+        },
+    )
+    .await;
+    if outcome.is_ok() {
+        if let Err(e) = backup::mark_daily_done(&pool, crate::clock::berlin_date(now)).await {
+            tracing::warn!("Tages-Backup-Vermerk nach der Einrichtung fehlt: {e}");
+        }
+    }
+    ctx.mark_unlocked();
     crate::scheduler::tick::ensure_started(ctx);
-
-    // Erst-Backup direkt nach Setup (PRD Done-Check).
-    backup::create_now(&pool, &paths, &passphrase, "manual").await
+    outcome
 }
 
 /// Argumente von [`backup_unlock`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -324,8 +378,31 @@ pub async fn migrate_with_backup(
     else {
         return db::run_migrations(ctx, pool).await;
     };
+    // D-23: Ein gerade eingespielter (älterer) Stand geht nicht auf die
+    // Off-Site-Ziele, bevor seine Pause gesetzt ist (`run_migrations`).
+    let restore_pending = ctx
+        .pending_restore
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_some();
+    let mirror = if restore_pending {
+        backup::Mirror::FloorOnly
+    } else {
+        backup::Mirror::Auto
+    };
     let backup = async {
-        let outcome = backup::create_now(pool, &ctx.paths, passphrase, "manual").await?;
+        let outcome = backup::create_with(
+            pool,
+            &ctx.paths,
+            passphrase,
+            "manual",
+            backup::CreateOptions {
+                mirror,
+                now: ctx.clock().now_utc(),
+            },
+        )
+        .await?;
         backup::verify_backup_file(std::path::Path::new(&outcome.file_path), passphrase).await?;
         Ok::<_, Error>(outcome)
     }
@@ -379,30 +456,131 @@ pub async fn migrate_with_backup(
     Ok(())
 }
 
-/// Hängt einen geprüften, migrierten Pool ein: Pool, Passphrase der Sitzung,
-/// Scheduler, Audit `backup.unlock.ok`.
+/// Hängt einen geprüften, migrierten Pool ein. Reihenfolge (D-21): zuerst
+/// das Pflicht-Audit `backup.unlock.ok` auf dem neuen Pool — scheitert es,
+/// bleibt die Instanz gesperrt (Pool geschlossen, Passphrase überschrieben,
+/// kein Scheduler). Erst danach Pool, Passphrase der Sitzung und Scheduler.
+///
+/// Fällige Jobs legt der Scheduler an — gestaffelt frühestens
+/// [`crate::scheduler::tick::UNLOCK_SETTLE`] nach dem Entsperren (D-19).
+/// War die Instanz länger als [`LOCKED_GAP_NOTICE_DAYS`] Tage ohne Aktivität
+/// (gesperrt oder gestoppt), entsteht ein Hinweis (D-08).
 pub async fn activate_unlocked(
     ctx: &Arc<AppCtx>,
     pool: sqlx::SqlitePool,
     passphrase: String,
 ) -> Result<()> {
+    let now = ctx.clock().now_utc();
+    // D-08: letzte Aktivität vor diesem Entsperren (vor dem neuen Audit).
+    let last_activity = last_activity(&pool, now).await.ok().flatten();
+    // R2-026: Pflicht-Audit (Security-Event) — vor dem Einhängen (D-21).
+    if let Err(e) =
+        crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
+            .await
+    {
+        pool.close().await;
+        let mut p = passphrase;
+        zeroize::Zeroize::zeroize(&mut p);
+        return Err(e);
+    }
     ctx.set_pool(pool.clone());
     ctx.session.set(passphrase);
+    ctx.mark_unlocked();
     // Nach „Datenbank sperren“ (W6) ist der Scheduler pausiert.
     crate::scheduler::tick::resume(ctx).await;
     crate::scheduler::tick::ensure_started(ctx);
-    // R2-026: Pflicht-Audit (Security-Event), Fehler propagieren.
-    crate::db::repo::audit_log::append(&pool, "backup.unlock.ok", "backup", "passphrase", None)
-        .await?;
+    if let Some(last) = last_activity {
+        locked_gap_notice(&pool, last, now).await;
+    }
     // Hinweise des Seeds von /inputs (Plan W11) in die Inbox.
     if let Err(e) = crate::seed::deliver_notices(&pool, &ctx.paths.inputs_dir).await {
         tracing::warn!("Seed-Hinweise nicht übernommen: {e}");
     }
-
-    // „Täglich beim App-Start“: das fällige Tages-Backup legt der erste
-    // Scheduler-Tick an (läuft sofort nach `ensure_started`, Plan W2.4). Ein
-    // zusätzlicher Aufruf hier erzeugte zwei volle Backups (Review W2 S3).
     Ok(())
+}
+
+/// Ab so vielen Tagen ohne Aktivität meldet das Entsperren die Lücke (D-08).
+pub const LOCKED_GAP_NOTICE_DAYS: i64 = 2;
+
+/// Jüngste Aktivität vor dem laufenden Entsperren (UTC) laut Audit-Log,
+/// Scheduler und Beginn einer Pause. Einträge der letzten
+/// [`UNLOCK_FLOW_WINDOW`] gehören zum Entsperren selbst (Pflicht-Backup und
+/// Audit vor einer Migration) und zählen nicht. Wendet genau dieses
+/// Entsperren einen Restore an (Pause `restore` seit weniger als
+/// [`UNLOCK_FLOW_WINDOW`]), gibt es keine Aussage — der eingespielte Stand ist
+/// alt, die Instanz war aber nicht gesperrt. Bei jedem späteren Entsperren
+/// zählt die Lücke wieder (F1d), der Beginn der Pause ist dann selbst eine
+/// Aktivität.
+async fn last_activity(
+    pool: &sqlx::SqlitePool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let hold_since = crate::scheduler::hold::current(pool).await?.and_then(|h| {
+        let since = h.since.as_deref().and_then(crate::clock::db_utc)?;
+        Some((h.reason, since))
+    });
+    if hold_since.as_ref().is_some_and(|(reason, since)| {
+        reason == crate::scheduler::hold::REASON_RESTORE && now - *since < UNLOCK_FLOW_WINDOW
+    }) {
+        return Ok(None);
+    }
+    let before = crate::clock::to_db_utc(now - UNLOCK_FLOW_WINDOW);
+    let audit: Option<String> =
+        sqlx::query_scalar("SELECT MAX(timestamp_utc) FROM audit_log WHERE timestamp_utc < ?")
+            .bind(&before)
+            .fetch_one(pool)
+            .await?;
+    let seen = crate::db::repo::app_settings::get(pool, crate::scheduler::hold::KEY_LAST_SEEN)
+        .await?
+        .filter(|s| s.as_str() < before.as_str());
+    let hold = hold_since.map(|(_, since)| crate::clock::to_db_utc(since));
+    Ok([audit, seen, hold]
+        .iter()
+        .flatten()
+        .filter_map(|t| crate::clock::db_utc(t))
+        .max())
+}
+
+/// Zeitfenster des laufenden Entsperrens (Migration samt Pflicht-Backup).
+const UNLOCK_FLOW_WINDOW: chrono::Duration = chrono::Duration::minutes(15);
+
+/// Hinweis „Instanz war N Tage gesperrt“ (D-08): In dieser Zeit liefen weder
+/// Backups noch Abo-Läufe; das Tages-Backup holt der erste Tick nach, über den
+/// Rückstand der Abos entscheidet die Nachhol-Regel (ADR 0040 Nr. 4).
+pub async fn locked_gap_notice(
+    pool: &sqlx::SqlitePool,
+    last: chrono::DateTime<chrono::Utc>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let days = (now - last).num_days();
+    if days <= LOCKED_GAP_NOTICE_DAYS {
+        return false;
+    }
+    let since = crate::clock::to_db_utc(last);
+    let from = last
+        .with_timezone(&chrono_tz::Europe::Berlin)
+        .format("%d.%m.%Y %H:%M");
+    let body = format!(
+        "Seit {from} (rund {days} Tage) war die Instanz gesperrt oder gestoppt. In dieser Zeit \
+         liefen keine Backups, Abo-Rechnungen, Abo-Kosten und Prüfungen. Das Tages-Backup holt \
+         Klein.Buch jetzt nach; fällige Abo-Termine folgen der Nachhol-Regel (größere Rückstände \
+         nur nach Rückfrage). Damit die Instanz nach einem Neustart nicht unbemerkt gesperrt \
+         bleibt, den Healthcheck bzw. das Container-Log überwachen."
+    );
+    crate::notify::store::create(
+        pool,
+        crate::notify::NewNotification {
+            title: &format!("Instanz war {days} Tage gesperrt"),
+            body: &body,
+            severity: "warning",
+            action_url: Some("/settings/backup"),
+            dedup_key: Some(&format!("locked_gap:{since}")),
+            ..Default::default()
+        },
+    )
+    .await
+    .map(|created| created.is_some())
+    .unwrap_or(false)
 }
 
 /// Argumente von [`backup_create_now`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

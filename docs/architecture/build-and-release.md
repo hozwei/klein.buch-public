@@ -151,10 +151,14 @@ HTTP-Schritte des Smoke-Tests dieselben Wege ab.
 
 ---
 
-## 6. Release (`release-image.yml`, Job `release`)
+## 6. Release (`release-image.yml`, Jobs `release` und `publish`)
 
-**Auslöser:** ein Tag `v*` im öffentlichen Repository. Rechte nur hier:
-`contents: write`, `packages: write`, `id-token: write` (für cosign keyless).
+**Auslöser:** ein Tag `v*` im öffentlichen Repository. Zwei Jobs (Lauf F): `release` baut und
+prüft **nur lesend** (`contents: read`) und übergibt OCI-Layout, Quellarchiv und SBOM als
+Artefakt; `publish` (`contents: write`, `packages: write`, `id-token: write` für cosign keyless)
+holt genau diesen Build, prüft dessen Digest gegen den geprüften Index und veröffentlicht.
+„Re-run failed jobs“ wiederholt nur `publish` mit demselben Build. Schritte 1–4 laufen in
+`release`, ab 5 in `publish`.
 
 1. **Tag-Commit liegt auf `main`**, sonst Abbruch: Ein Tag auf einem
    Arbeitszweig baut kein Image.

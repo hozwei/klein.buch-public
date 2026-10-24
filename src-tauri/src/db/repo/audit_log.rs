@@ -6,7 +6,7 @@
 //! in `details_json` schreiben.
 
 use crate::error::Result;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 /// Hängt einen Eintrag an. `actor` wird als "system" gesetzt (Single-User-App).
 pub async fn append(
@@ -25,6 +25,28 @@ pub async fn append(
     .bind(entity_id)
     .bind(details_json)
     .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Wie [`append`], innerhalb einer laufenden Transaktion (Beleg und Audit
+/// gemeinsam committet, Lauf F).
+pub async fn append_in(
+    conn: &mut SqliteConnection,
+    action: &str,
+    entity_type: &str,
+    entity_id: &str,
+    details_json: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO audit_log (actor, action, entity_type, entity_id, details_json)
+         VALUES ('system', ?, ?, ?, ?)",
+    )
+    .bind(action)
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(details_json)
+    .execute(conn)
     .await?;
     Ok(())
 }

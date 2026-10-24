@@ -4,6 +4,7 @@
   import { waitForRestart } from "$lib/transport";
   import HelpAnchor from "$lib/HelpAnchor.svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
   import { flash } from "$lib/toast.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
   import {
@@ -16,8 +17,15 @@
     backupTargetRemove,
     backupList,
     backupRestoreApply,
+    backupSetDailyTime,
+    numberingCountersList,
+    numberingRaise,
+    numberingRestoredDraftsList,
+    numberingRestoredDraftConfirm,
     uploadFile,
     type BackupSettings,
+    type NumberingCounter,
+    type RestoredDraftConflict,
     type BackupHistoryItem,
     type TargetView,
     type SftpProbe,
@@ -63,15 +71,103 @@
   let restorePassInput = $state<HTMLInputElement | null>(null);
   let restoreFileInput = $state<HTMLInputElement | null>(null);
 
+  // Tages-Backup-Uhrzeit (Lauf F, D-04) und Nummernkreise (D-24).
+  let dailyTime = $state("02:30");
+  let counters = $state<NumberingCounter[]>([]);
+  let raiseFor = $state<NumberingCounter | null>(null);
+  let raiseValue = $state<number | null>(null);
+  let raiseReason = $state("");
+  // Wiederhergestellte Entwürfe mit vor dem Restore festgeschriebener Nummer (F1d).
+  let restoredDrafts = $state<RestoredDraftConflict[]>([]);
+  let confirmFor = $state<RestoredDraftConflict | null>(null);
+  let confirmReason = $state("");
+
   onMount(load);
 
   async function load() {
     try {
       settings = await backupGetSettings();
+      dailyTime = settings.dailyTime;
       if (!dirChoice && settings.availableDirs.length > 0) dirChoice = settings.availableDirs[0];
       history = await backupList();
+      counters = await numberingCountersList();
+      restoredDrafts = await numberingRestoredDraftsList();
     } catch (e) {
       flash(String(e), "error");
+    }
+  }
+
+  async function saveDailyTime() {
+    busy = true;
+    try {
+      dailyTime = await backupSetDailyTime(dailyTime);
+      flash(`Tages-Backup künftig ab ${dailyTime} Uhr.`);
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
+  function startRaise(c: NumberingCounter) {
+    raiseFor = c;
+    raiseValue = c.lastValue + 1;
+    raiseReason = "";
+  }
+
+  async function doRaise() {
+    const c = raiseFor;
+    if (!c || raiseValue === null) return;
+    if (
+      !(await confirmDialog({
+        title: `Nummernkreis ${c.label} ${c.fiscalYear} anheben?`,
+        body:
+          `Als zuletzt vergeben gilt danach ${raiseValue}; die nächste Nummer ist ${raiseValue + 1}. ` +
+          "Die Nummern dazwischen bleiben als dokumentierte Lücke (Audit-Log). " +
+          "Absenken ist danach nicht möglich.",
+        confirmLabel: "Anheben",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    busy = true;
+    try {
+      counters = await numberingRaise({
+        docType: c.docType,
+        fiscalYear: c.fiscalYear,
+        lastValue: raiseValue,
+        reason: raiseReason,
+      });
+      raiseFor = null;
+      flash("Nummernkreis angehoben.");
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
+  // F1d: Abgleich eines wiederhergestellten Entwurfs mit dem versandten
+  // Original bestätigen (Re-Auth, Begründung im Audit-Log). Die Gestaltung
+  // übernimmt der UI/UX-Lauf.
+  async function doConfirmDraft() {
+    const c = confirmFor;
+    if (!c) return;
+    busy = true;
+    try {
+      restoredDrafts = await numberingRestoredDraftConfirm({
+        kind: c.kind,
+        id: c.id,
+        reason: confirmReason,
+      });
+      confirmFor = null;
+      confirmReason = "";
+      flash(`${c.number} lässt sich jetzt festschreiben.`);
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      busy = false;
     }
   }
 
@@ -375,9 +471,9 @@
               <div class="path">{targetLocation(t)}</div>
               {#if t.lastResult}
                 {#if t.lastResult.ok}
-                  <div class="hint">Zuletzt erfolgreich: {t.lastResult.at}</div>
+                  <div class="hint">Zuletzt erfolgreich: {dateTime(t.lastResult.at)}</div>
                 {:else}
-                  <div class="bad">Fehlgeschlagen ({t.lastResult.at}): {t.lastResult.error}</div>
+                  <div class="bad">Fehlgeschlagen ({dateTime(t.lastResult.at)}): {t.lastResult.error}</div>
                 {/if}
               {:else}
                 <div class="hint">Noch kein Backup auf dieses Ziel.</div>
@@ -506,6 +602,15 @@
     {#if !settings.unlocked}
       <p class="hint">Backup ist gesperrt — bitte zuerst mit dem Backup-Passwort entsperren.</p>
     {/if}
+    <label class="daily-time">
+      Tägliches Backup ab (Uhrzeit, Europe/Berlin)
+      <input type="time" bind:value={dailyTime} disabled={busy} />
+    </label>
+    <button onclick={saveDailyTime} disabled={busy || !dailyTime}>Uhrzeit speichern</button>
+    <p class="muted">
+      Einmal je Kalendertag, zur eingestellten Uhrzeit oder beim ersten Lauf danach (etwa nach
+      einer Sperre). Sicherungen nach dem Festschreiben laufen unabhängig davon.
+    </p>
   </section>
 
   <section class="card wide">
@@ -533,7 +638,7 @@
         <tbody>
           {#each history as item}
             <tr>
-              <td data-label="Erstellt">{item.createdAt}</td>
+              <td data-label="Erstellt">{dateTime(item.createdAt)}</td>
               <td data-label="Grund">{reasonLabel(item.triggerReason)}</td>
               <td class="ort cards-full" data-label="Ort">
                 {locationLabel(item.targetPath)}
@@ -575,7 +680,7 @@
       />
     </label>
     {#if restoreFromList}
-      <p>Ausgewählt: <strong>Backup vom {restoreFromList.createdAt}</strong></p>
+      <p>Ausgewählt: <strong>Backup vom {dateTime(restoreFromList.createdAt)}</strong></p>
     {/if}
     {#if restoreFile || restoreFromList}
       <label>
@@ -597,6 +702,104 @@
 
     {#if restoreReport}
       <p class="ok-box">{restoreReport}</p>
+    {/if}
+  </section>
+
+  <section class="card wide">
+    <h2>Nummernkreise <HelpAnchor slug="disaster-recovery" /></h2>
+    <p class="muted">
+      Zuletzt vergebene Nummer je Belegart und Geschäftsjahr. Nach einer Wiederherstellung
+      in eine neue Instanz: Wurden nach dem Stand des Backups noch Belege nummeriert, den
+      Nummernkreis hier auf die zuletzt vergebene Nummer anheben — nur aufwärts, mit
+      Begründung im Audit-Log.
+    </p>
+    {#if restoredDrafts.length > 0}
+      <div class="bad">
+        <p>
+          Diese Entwürfe stammen aus dem eingespielten Backup. Ihre Nummern waren vor der
+          Wiederherstellung bereits festgeschrieben und vermutlich versandt. Passe den Entwurf an
+          das versandte Original an und bestätige danach den Abgleich — erst dann lässt er sich
+          festschreiben (nie zwei verschiedene Belege mit derselben Nummer).
+        </p>
+        <ul>
+          {#each restoredDrafts as c (c.kind + c.id)}
+            <li>
+              <a href={c.kind === "quote" ? `/quotes/${c.id}` : `/invoices/${c.id}`}>{c.number}</a>
+              <button class="link" onclick={() => ((confirmFor = c), (confirmReason = ""))} disabled={busy}>
+                Abgleich bestätigen …
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </div>
+      {#if confirmFor}
+        <div class="raise-form">
+          <p><strong>{confirmFor.number}</strong> entspricht dem versandten Original</p>
+          <label>
+            Begründung (Audit-Log)
+            <input
+              type="text"
+              maxlength="500"
+              bind:value={confirmReason}
+              placeholder="z. B. an das Original laut Mail-Ausgang angepasst"
+            />
+          </label>
+          <button class="primary" onclick={doConfirmDraft} disabled={busy || confirmReason.trim().length < 10}>
+            Bestätigen
+          </button>
+          <button onclick={() => (confirmFor = null)} disabled={busy}>Abbrechen</button>
+        </div>
+      {/if}
+    {/if}
+    {#if counters.length === 0}
+      <p class="muted">Noch keine Nummern vergeben.</p>
+    {:else}
+      <div class="table-wrap">
+        <table class="cards">
+          <thead>
+            <tr>
+              <th>Belegart</th>
+              <th>Jahr</th>
+              <th>Zuletzt vergeben</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each counters as c (c.docType + c.fiscalYear)}
+              <tr>
+                <td data-label="Belegart">{c.label}</td>
+                <td data-label="Jahr">{c.fiscalYear}</td>
+                <td data-label="Zuletzt vergeben">{c.lastNumber ?? "—"}</td>
+                <td class="actions">
+                  <button class="link" onclick={() => startRaise(c)} disabled={busy}>Anheben …</button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+    {#if raiseFor}
+      <div class="raise-form">
+        <p><strong>{raiseFor.label} {raiseFor.fiscalYear}</strong> — derzeit {raiseFor.lastValue}</p>
+        <label>
+          Zuletzt vergebene Nummer (laufende Nummer)
+          <input type="number" min={raiseFor.lastValue + 1} bind:value={raiseValue} />
+        </label>
+        <label>
+          Begründung (Audit-Log)
+          <input
+            type="text"
+            maxlength="500"
+            bind:value={raiseReason}
+            placeholder="z. B. letzte Rechnung laut Mail-Ausgang RE-2026-0042"
+          />
+        </label>
+        <button class="primary" onclick={doRaise} disabled={busy || raiseValue === null || raiseReason.trim().length < 10}>
+          Anheben
+        </button>
+        <button onclick={() => (raiseFor = null)} disabled={busy}>Abbrechen</button>
+      </div>
     {/if}
   </section>
 {:else}

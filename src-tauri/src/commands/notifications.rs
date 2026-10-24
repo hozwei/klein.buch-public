@@ -117,11 +117,14 @@ pub async fn notifications_run_checks(
 ) -> Result<usize> {
     let pool = ctx.pool()?;
 
-    let today = crate::clock::today_berlin();
+    let now = ctx.clock().now_utc();
+    let today = crate::clock::berlin_date(now);
     let pool = &pool;
     let paths = ctx.paths.clone();
-    integrity_check_cron::run(pool, ctx.notifier(), today)
+    // Läuft gerade ein Scan (Cron oder „Jetzt prüfen“), nicht darauf warten.
+    let never = std::sync::atomic::AtomicBool::new(false);
+    integrity_check_cron::run(pool, now, &never, false)
         .await
         .ok();
-    reminders::run(pool, ctx.notifier(), today, &paths.backup_targets_dir).await
+    reminders::run(pool, today, &paths.backup_targets_dir).await
 }

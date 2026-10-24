@@ -57,9 +57,10 @@ docker compose pull
 docker compose up -d
 ```
 
-Docker ersetzt dabei den Container. Angefangene Aufgaben dürfen bis zu
-60 Sekunden zu Ende laufen (`stop_grace_period`). Danach ist Klein.Buch
-gesperrt, bis Du Dich anmeldest.
+Docker ersetzt dabei den Container. Klein.Buch hält zuerst seine
+geplanten Aufgaben an; angefangene Aufgaben dürfen bis zu 30 Sekunden zu
+Ende laufen (innerhalb der `stop_grace_period` von 90 Sekunden). Danach
+ist Klein.Buch gesperrt, bis Du Dich anmeldest.
 
 Bringt die neue Version eine Umstellung der Datenbank mit (eine
 Migration), passiert sie bei Deiner ersten Anmeldung. Vorher schreibt
@@ -74,8 +75,10 @@ Backup schreiben."; die Einzelheiten stehen im Container-Log (Zeile
 Platz oder korrigiere die Rechte von `/data` und melde Dich erneut an.
 
 Bringt das Image neue Fassungen der Vorlagen in `/inputs` mit, gleicht
-Klein.Buch sie beim Start ab und meldet das unter "Hinweise" (Kapitel
-"Volumes und Rechte").
+Klein.Buch sie beim Containerstart ab und meldet das unter "Hinweise"
+(Kapitel "Volumes und Rechte"). Eine `.neu`-Datei neben einer von Dir
+geänderten Vorlage legt es je Fassung nur einmal an; Du darfst sie nach
+dem Vergleich löschen.
 
 ## Signatur prüfen
 

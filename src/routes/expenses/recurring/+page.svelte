@@ -6,9 +6,13 @@
     recurringSetActive,
     recurringRunNow,
     recurringRunDueCheck,
+    recurringResolveBacklog,
+    recurringRestoreReviewList,
   } from "$lib/api";
-  import type { RecurringSubscription } from "$lib/types";
+  import type { RecurringSubscription, ResumeMode } from "$lib/types";
+  import { askBacklogChoice } from "$lib/recurringChoice";
   import { euro, date } from "$lib/format";
+  import { daysUntilBerlin } from "$lib/date";
   import { expenseCategoryLabel, frequencyLabel } from "$lib/labels";
   import Banner from "$lib/Banner.svelte";
   import Button from "$lib/Button.svelte";
@@ -22,12 +26,15 @@
   let includeInactive = $state(false);
   let busyId = $state<string | null>(null);
   let checking = $state(false);
+  // Abos, die nach einer Wiederherstellung auf „Rückstand …“ warten (F1d).
+  let reviewIds = $state<Set<string>>(new Set());
 
   async function load() {
     loading = true;
     error = null;
     try {
       subs = await recurringList(includeInactive);
+      reviewIds = new Set((await recurringRestoreReviewList()).subscriptions);
     } catch (e) {
       error = String(e);
     } finally {
@@ -37,16 +44,20 @@
 
   onMount(load);
 
-  // Tage bis zur Fälligkeit (negativ = überfällig). Lokale Mitternacht.
+  // Tage bis zur Fälligkeit (negativ = überfällig) ab dem Berliner Datum,
+  // nicht in der Zeitzone des Geräts (Lauf F, D-15).
   function daysUntil(iso: string): number {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const d = new Date(iso.slice(0, 10) + "T00:00:00");
-    return Math.round((d.getTime() - today.getTime()) / 86_400_000);
+    return daysUntilBerlin(iso);
   }
 
   function isDue(s: RecurringSubscription): boolean {
     return s.active === 1 && daysUntil(s.nextDueDate) <= 0;
+  }
+
+  // Rückstand: verpasste Termine oder offene Prüfung nach einer Wiederherstellung (F1d).
+  function hasBacklog(s: RecurringSubscription): boolean {
+    const n = daysUntil(s.nextDueDate);
+    return s.autoCreateExpense === 1 && (n < 0 || (reviewIds.has(s.id) && n <= 0));
   }
 
   type Tone = "neutral" | "primary" | "info" | "success" | "warning" | "danger";
@@ -70,9 +81,17 @@
   let activeCount = $derived(subs.filter((s) => s.active === 1).length);
 
   async function toggleActive(s: RecurringSubscription) {
+    // Beim Fortsetzen eines Auto-Abos mit verpassten Terminen verlangt der
+    // Server die Wahl „nachholen“ oder „ab heute fortsetzen“ (W14-026).
+    let resumeMode: ResumeMode | undefined;
+    if (s.active !== 1 && hasBacklog(s)) {
+      const choice = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+      if (!choice) return;
+      resumeMode = choice;
+    }
     busyId = s.id;
     try {
-      await recurringSetActive(s.id, s.active !== 1);
+      await recurringSetActive(s.id, s.active !== 1, resumeMode);
       await load();
     } catch (e) {
       flash("Statuswechsel fehlgeschlagen: " + String(e), "error");
@@ -93,12 +112,37 @@
     }
   }
 
+  // Rückstand eines aktiven Auto-Abos (Hinweis „Entscheidung nötig“ bzw.
+  // Termin im abgeschlossenen Geschäftsjahr, W14-026/-034).
+  async function resolveBacklog(s: RecurringSubscription) {
+    const mode = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+    if (!mode) return;
+    busyId = s.id;
+    try {
+      await recurringResolveBacklog(s.id, mode);
+      flash(
+        mode === "catchUp"
+          ? "Nachholen bestätigt — der nächste Lauf bucht die offenen Termine."
+          : "Verpasste Termine ausgelassen.",
+      );
+      await load();
+    } catch (e) {
+      flash("Fehlgeschlagen: " + String(e), "error");
+    } finally {
+      busyId = null;
+    }
+  }
+
   async function bookAllDue() {
     checking = true;
     try {
       const r = await recurringRunDueCheck();
       if (r.skippedLocked) {
         flash("Übersprungen: Backup ist gesperrt — zuerst entsperren.", "error");
+      } else if (r.skippedHold) {
+        flash("Automatische Abo-Läufe sind angehalten — siehe Hinweis oben.", "error");
+      } else if (r.createdExpenses === 0 && (r.awaitingDecision ?? 0) > 0) {
+        flash("Rückstand über der Nachhol-Grenze — bitte beim Abo „Rückstand …“ wählen.", "error");
       } else if (r.createdExpenses === 0) {
         flash("Keine fälligen Auto-Abos.");
       } else {
@@ -128,7 +172,7 @@
 
 <p class="legend">
   <Badge tone="info">Automatisch</Badge> = wird am Stichtag selbst als Kosten gebucht.
-  <Badge tone="primary">Erinnerung</Badge> = erscheint nur als „fällig", du buchst per Knopf.
+  <Badge tone="primary">Erinnerung</Badge> = am Stichtag ein Hinweis „Abo fällig“, du buchst per Knopf.
 </p>
 
 {#if loading}
@@ -201,6 +245,10 @@
                 {#if isDue(s)}
                   <Button variant="primary" size="sm" onclick={() => bookNow(s)} disabled={busyId === s.id}
                     title="Eine Kostenposition für den fälligen Stichtag jetzt buchen">Buchen</Button>
+                {/if}
+                {#if hasBacklog(s)}
+                  <Button variant="secondary" size="sm" onclick={() => resolveBacklog(s)} disabled={busyId === s.id}
+                    title="Verpasste Termine nachholen oder ab heute fortsetzen">Rückstand …</Button>
                 {/if}
                 <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`}>Bearbeiten</Button>
                 <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Pausieren</Button>

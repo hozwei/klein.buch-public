@@ -1,4 +1,4 @@
-//! Tauri-Commands für Kosten (Block 9; E-Rechnung-Empfang folgt in Block 11).
+//! Commands für Kosten (Block 9; E-Rechnung-Empfang folgt in Block 11).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::expense::validate_expense`]) — Hard-Block.
@@ -176,7 +176,7 @@ pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Res
     Ok(detail)
 }
 
-/// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
+/// Testbarer Kern von [`expenses_create`] (ohne `AppCtx`).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,
@@ -434,7 +434,7 @@ pub async fn expenses_parse_einvoice(
 }
 
 /// Headless-Helfer hinter [`expenses_parse_einvoice`]: identische Logik, aber
-/// ohne `AppHandle`/`State`-Abhaengigkeit — damit der Drop-Folder-Scheduler
+/// ohne `AppCtx`-Abhängigkeit — damit der Drop-Folder-Scheduler
 /// (Block PV1-DROP) **dieselbe** Pipeline benutzt wie der UI-Pfad und nicht
 /// gabelt. Aufrufer reicht eine fertige [`Paths`]-Instanz.
 pub async fn parse_einvoice_with_paths(
@@ -539,7 +539,7 @@ pub async fn expenses_create_from_einvoice(
 
 /// Headless-Helfer hinter [`expenses_create_from_einvoice`]: identische
 /// Pipeline (Validate → Belegnummer → Archive → Expense → Audit → Auto-Backup),
-/// aber ohne `AppHandle`/`State`. Verwendet vom Drop-Folder-Scheduler (Block
+/// aber ohne `AppCtx`. Verwendet vom Drop-Folder-Scheduler (Block
 /// PV1-DROP) — UI-Pfad und automatischer Pfad teilen sich genau diese Funktion.
 pub async fn create_from_einvoice_with(
     pool: &SqlitePool,
@@ -787,7 +787,7 @@ pub struct ExpensesReceiptXmlTextArgs {
     pub expense_id: String,
 }
 
-/// Tauri-Wrapper um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
+/// Command um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
 /// für ZUGFeRD-PDF-Extraktion ein.
 pub async fn expenses_receipt_xml_text(
     ctx: &Arc<AppCtx>,

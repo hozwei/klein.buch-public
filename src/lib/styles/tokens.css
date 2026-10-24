@@ -380,7 +380,7 @@ tbody tr:hover td { background: var(--c-surface-2); }
  * die neue Seite steigt leicht hoch herein. Dauer = --t-base (200 ms),
  * Easing = --ease-apple (ease-out-quart).
  *
- * Engine-Support: WebView2 (Tauri-Win) ab Chromium 111. Wenn die API fehlt,
+ * Browser-Support: Chromium ab 111, Safari ab 18. Wenn die API fehlt,
  * navigiert SvelteKit weiterhin direkt — kein Schaden, nur kein Effekt.
  *
  * System-Setting „Bewegung reduzieren" wird respektiert. */

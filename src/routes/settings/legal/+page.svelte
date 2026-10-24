@@ -11,6 +11,7 @@
   } from "$lib/api";
   import type { LegalDocument } from "$lib/types";
   import { date } from "$lib/format";
+  import { todayBerlin } from "$lib/date";
   import Banner from "$lib/Banner.svelte";
   import { flash } from "$lib/toast.svelte";
 
@@ -151,7 +152,7 @@
         </label>
         <label>
           Titel (optional)
-          <input type="text" bind:value={uploadTitle[t.key]} placeholder={`z. B. ${t.label} Stand ${new Date().toLocaleDateString("de-DE")}`} />
+          <input type="text" bind:value={uploadTitle[t.key]} placeholder={`z. B. ${t.label} Stand ${date(todayBerlin())}`} />
         </label>
         <button class="btn-primary" onclick={() => upload(t.key)} disabled={busy || !uploadFile[t.key]}>
           {busy ? "…" : "Hochladen"}

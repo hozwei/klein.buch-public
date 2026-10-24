@@ -2,7 +2,7 @@
 //!
 //! - SQLite-Connection-Management via sqlx Pool
 //! - Migration-Runner (forward-only)
-//! - Schema-Version-Check beim Start
+//! - Schema-Version-Check beim Entsperren (vor dem Einhängen des Pools)
 //! - Numbering-Counter (atomar)
 //! - GoBD-Triggers werden in Migrationen erzeugt, hier nur dokumentiert
 //!   in `triggers.rs`.
@@ -24,7 +24,7 @@ use std::sync::Mutex;
 /// Migrations werden zur Compile-Zeit in die Binary eingebettet.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// Hält einen beim App-Start angewendeten Restore zwischen, bis der Pool
+/// Hält einen beim Serverstart angewendeten Restore zwischen, bis der Pool
 /// (nach dem Entsperren) offen ist und der Audit-Eintrag geschrieben werden
 /// kann. Der Restore-Swap selbst passiert filesystem-only **vor** dem Öffnen
 /// des Pools (eine offene Verbindung hielte die alte Datei samt WAL weiter
@@ -195,9 +195,20 @@ pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
 }
 
 /// Migrationen anwenden (forward-only) + Schema-Version verifizieren + einen
-/// ggf. gepufferten Restore-Audit-Eintrag schreiben. Setzt einen offenen Pool
-/// voraus (für die verschlüsselte DB nach erfolgreichem `PRAGMA key`).
+/// ggf. gepufferten Restore abschließen ([`finish_restore`]). Setzt einen
+/// offenen Pool voraus (für die verschlüsselte DB nach erfolgreichem
+/// `PRAGMA key`).
 pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> Result<()> {
+    // Down-Migration-Schutz (Schema-Hardline, Lauf F D-17/D-18): Eine neuere
+    // Datenbank gar nicht erst dem Migrations-Runner geben — der meldete nur
+    // „Migration fehlt“ —, sondern mit dem Hinweis auf das passende Image
+    // ablehnen. Die Instanz bleibt gesperrt.
+    if schema_version::read(pool)
+        .await?
+        .is_some_and(|v| v > schema_version::EXPECTED_SCHEMA_VERSION)
+    {
+        return schema_version::check_compatible(pool).await;
+    }
     MIGRATOR.run(pool).await?;
     schema_version::check_compatible(pool).await?;
 
@@ -209,55 +220,242 @@ pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> 
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(info) = info {
-            // R1-010 (v2026.5-Re-Review): Restore-Audit-Append-Fehler NICHT
-            // mehr schlucken. Die GoBD-relevante Aussage „Restore wurde
-            // angewendet" muss audit-bar sein — schlägt der Append fehl
-            // (DB-Bug, Trigger-Verletzung), bricht der App-Start ab und der
-            // Holder bleibt für den nächsten Start gefüllt.
-            crate::db::repo::audit_log::append(
-                pool,
-                "backup.restore.applied",
-                "backup",
-                "restore",
-                Some(
-                    &serde_json::json!({
-                        "source": info.source,
-                        "staged_at": info.staged_at,
-                        "branding_restored": info.branding_restored,
-                        "pre_restore_backup": info.pre_restore_backup,
-                        "schema": info.schema_version,
-                    })
-                    .to_string(),
-                ),
-            )
-            .await
-            .map_err(|e| {
-                // Holder wieder befüllen, damit der nächste App-Start den
-                // Audit-Eintrag nachholen kann.
+            if let Err(e) = finish_restore(ctx, pool, &info).await {
+                // R1-010: Die GoBD-relevante Aussage „Restore wurde angewendet"
+                // muss im Audit stehen. Scheitert die Transaktion, bricht das
+                // Entsperren ab und der Holder bleibt für den nächsten Versuch
+                // gefüllt (RESTORE_APPLIED.json bleibt ohnehin liegen).
                 if let Ok(mut guard) = holder.0.lock() {
                     *guard = Some(info.clone());
                 }
-                Error::Config(format!(
-                    "Restore-Audit konnte nicht geschrieben werden ({e}). \
-                     Bitte App-Start erneut versuchen; bei Wiederholung Support kontaktieren."
-                ))
-            })?;
-            tracing::info!("Restore angewendet (Quelle: {})", info.source);
-            // Das Pre-Restore-Backup stand nur in der verworfenen DB — hier in
-            // die Historie übernehmen (Restore aus der Liste möglich).
-            crate::backup::record_existing_backup(
-                pool,
-                &ctx.paths.backups_dir,
-                &info.pre_restore_backup,
-                "pre_restore",
-            )
-            .await
-            .ok();
-            crate::backup::restore::warn_missing_templates(&ctx.paths, pool, &info.staged_at).await;
-            crate::backup::restore::clear_applied(&ctx.paths);
+                return Err(Error::Config(format!(
+                    "Wiederherstellung konnte nicht protokolliert werden ({e}) — bitte erneut \
+                     anmelden; bleibt der Fehler, das Server-Log prüfen (Handbuch: Fehlersuche \
+                     im Container)."
+                )));
+            }
         }
     }
+    // Standard-Zahlungskonten einmalig und transaktional (Lauf F, D-14) — bei
+    // der Einrichtung bzw. beim ersten Entsperren nach dem Update, nicht mehr
+    // beim Öffnen der Einstellungsseite.
+    if let Err(e) = crate::db::repo::payment_accounts::seed_defaults_once(pool).await {
+        tracing::warn!("Standard-Zahlungskonten nicht angelegt: {e}");
+    }
     Ok(())
+}
+
+/// Schließt einen beim Serverstart angewendeten Restore im ersten Entsperren
+/// ab (Lauf F, ADR 0040):
+///
+/// 1. In **einer** Transaktion: Audit `backup.restore.applied`, Pause der
+///    automatischen Belegerzeugung mit Grund `restore` (W14-023 — sie steht in
+///    der eingespielten DB und übersteht damit Neustart und Sperren), das
+///    Anheben der Nummernkreise auf die Stände der ersetzten DB, wo diese
+///    höher waren (D-24, Audit `numbering.raised_after_restore`), und der
+///    Abgleich der Abo-Termine, Marker und Entwürfe
+///    ([`crate::backup::after_restore::apply_in`], F1d).
+/// 2. Danach (best-effort): Hinweise zur Pause, zu den Nummernkreisen und den
+///    Abo-Terminen, Pre-Restore-Backup und verwaiste Backups in die Historie
+///    (D-22), Warnung zu fehlenden PDF-Vorlagen, `RESTORE_APPLIED.json`
+///    entfernen.
+async fn finish_restore(
+    ctx: &crate::app_ctx::AppCtx,
+    pool: &SqlitePool,
+    info: &AppliedInfo,
+) -> Result<()> {
+    let now = ctx.clock().now_utc();
+    let today = ctx.clock().today_berlin();
+    let mut tx = begin_immediate(pool).await?;
+    // Reihenfolge im Audit: Restore angewendet → je angehobenem Kreis →
+    // Pause gesetzt.
+    let mut raised = Vec::new();
+    for c in &info.counters {
+        if let Some(r) =
+            numbering::raise_in(&mut tx, &c.doc_type, c.fiscal_year, c.last_value).await?
+        {
+            raised.push(r);
+        }
+    }
+    crate::db::repo::audit_log::append_in(
+        &mut tx,
+        "backup.restore.applied",
+        "backup",
+        "restore",
+        Some(
+            &serde_json::json!({
+                "source": info.source,
+                "staged_at": info.staged_at,
+                "branding_restored": info.branding_restored,
+                "pre_restore_backup": info.pre_restore_backup,
+                "schema": info.schema_version,
+                "backup_created_at": info.backup_created_at,
+                "counters_raised": raised.len(),
+            })
+            .to_string(),
+        ),
+    )
+    .await?;
+    for r in &raised {
+        crate::db::repo::audit_log::append_in(
+            &mut tx,
+            "numbering.raised_after_restore",
+            "numbering",
+            &format!("{}:{}", r.doc_type, r.fiscal_year),
+            Some(
+                &serde_json::json!({
+                    "doc_type": r.doc_type,
+                    "fiscal_year": r.fiscal_year,
+                    "from": r.from,
+                    "to": r.to,
+                })
+                .to_string(),
+            ),
+        )
+        .await?;
+    }
+    let followup =
+        crate::backup::after_restore::apply_in(&mut tx, &info.series, &info.locked_numbers, today)
+            .await?;
+    let hold = crate::scheduler::hold::set_restore_in(&mut tx, now).await?;
+    tx.commit().await?;
+    tracing::info!(
+        "Restore angewendet (Quelle: {}); automatische Abläufe pausiert bis zur Freigabe \
+         ({} Abo-Reihe(n) vorgerückt, {} zu prüfen, {} Entwurf/Entwürfe vorgemerkt)",
+        info.source,
+        followup.advanced.len(),
+        followup.review.len(),
+        followup.conflicts.len()
+    );
+
+    crate::scheduler::hold::notice(pool, &hold).await;
+    numbering_notice(pool, info, &raised, &followup.conflicts).await;
+    crate::backup::after_restore::notice(pool, &info.staged_at, &followup).await;
+    // Das Pre-Restore-Backup stand nur in der verworfenen DB — hier in die
+    // Historie übernehmen (Restore aus der Liste möglich).
+    if let Err(e) = crate::backup::record_existing_backup(
+        pool,
+        &ctx.paths.backups_dir,
+        &info.pre_restore_backup,
+        "pre_restore",
+    )
+    .await
+    {
+        tracing::warn!("Pre-Restore-Backup nicht in die Historie übernommen: {e}");
+    }
+    // D-22: Backups zwischen eingespieltem Stand und Restore übernehmen.
+    match crate::backup::rescan_floor(pool, &ctx.paths.backups_dir).await {
+        Ok((added, removed)) if added > 0 || removed > 0 => tracing::info!(
+            "Backup-Historie abgeglichen: {added} übernommen, {removed} fehlende entfernt"
+        ),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Backup-Historie nicht abgeglichen: {e}"),
+    }
+    crate::backup::restore::warn_missing_templates(&ctx.paths, pool, &info.staged_at).await;
+    crate::backup::restore::clear_applied(&ctx.paths);
+    Ok(())
+}
+
+/// Hinweis zu den Nummernkreisen nach einem Restore (D-24). Angehobene Kreise
+/// werden genannt; ohne Stände der ersetzten DB (Disaster Recovery in eine
+/// frische Instanz) erklärt er, wie nachträglich vergebene Nummern zu
+/// berücksichtigen sind; mit Ständen, aber ohne Anhebung, meldet er knapp
+/// „unverändert“ (F1d). Vorgemerkte Entwürfe mit bereits festgeschriebener
+/// Nummer werden immer genannt (F1d).
+async fn numbering_notice(
+    pool: &SqlitePool,
+    info: &AppliedInfo,
+    raised: &[numbering::Raised],
+    conflicts: &[crate::backup::after_restore::Conflict],
+) {
+    let backup_date = info
+        .backup_created_at
+        .as_deref()
+        .and_then(crate::clock::db_utc_to_berlin)
+        .map(|b| b.format("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_else(|| "unbekannt".into());
+    let mut severity = "urgent";
+    let mut body = if raised.is_empty() && !info.counters.is_empty() {
+        severity = "info";
+        format!(
+            "Das eingespielte Backup hat den Stand vom {backup_date}. Die Nummernkreise standen \
+             dort schon auf denselben Ständen wie vor der Wiederherstellung — es fehlen keine \
+             Nummern, und keine wird doppelt vergeben."
+        )
+    } else if raised.is_empty() {
+        format!(
+            "Das eingespielte Backup hat den Stand vom {backup_date}. Wurden danach außerhalb \
+             dieser Instanz weitere Rechnungen, Stornos, Kosten oder andere Belege nummeriert \
+             (etwa auf einem ausgefallenen Server), vergibt Klein.Buch diese Nummern sonst \
+             erneut. Prüfe den Mail-Ausgang bzw. die Korrespondenz und hebe die betroffenen \
+             Nummernkreise unter Einstellungen → Backup → Nummernkreise auf die zuletzt \
+             vergebene Nummer an (die Lücke ist dokumentiert, eine Doppelvergabe wäre unzulässig)."
+        )
+    } else {
+        let list = raised
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {} von {} auf {}",
+                    label(&r.doc_type),
+                    r.fiscal_year,
+                    r.from,
+                    r.to
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Das eingespielte Backup hat den Stand vom {backup_date}. Danach vergebene Nummern \
+             werden nicht erneut vergeben: Die Nummernkreise wurden auf die Stände vor der \
+             Wiederherstellung angehoben ({list}). Die dazwischen liegenden Belege fehlen in \
+             dieser Datenbank — die Lücke ist im Audit-Log dokumentiert."
+        )
+    };
+    if !conflicts.is_empty() {
+        severity = "urgent";
+        let list = conflicts
+            .iter()
+            .map(|c| c.number.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        body.push_str(&format!(
+            "\n\nAchtung: Diese Entwürfe tragen Nummern, die vor der Wiederherstellung bereits \
+             festgeschrieben waren und vermutlich versandt wurden: {list}. Sie sind ein älterer \
+             Stand dieser Belege. Klein.Buch schreibt sie erst fest, wenn Du sie an das versandte \
+             Original angepasst und unter Einstellungen → Backups → Nummernkreise bestätigt hast \
+             (sonst gäbe es zwei verschiedene Belege mit derselben Nummer)."
+        ));
+    }
+    let dedup = format!("restore_numbering:{}", info.staged_at);
+    if let Err(e) = crate::notify::store::create(
+        pool,
+        crate::notify::NewNotification {
+            title: "Nummernkreise nach der Wiederherstellung",
+            body: &body,
+            severity,
+            action_url: Some("/settings/backup"),
+            dedup_key: Some(&dedup),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::warn!("Hinweis zu den Nummernkreisen nicht angelegt: {e}");
+    }
+}
+
+/// Anzeigename eines Nummernkreises.
+pub fn label(doc_type: &str) -> &'static str {
+    match doc_type {
+        "invoice" => "Rechnungen (RE)",
+        "storno_invoice" => "Stornos (ST)",
+        "quote" => "Angebote (AN)",
+        "expense" => "Kosten (KO)",
+        "private_movement" => "Privatbewegungen (PV)",
+        "asset" => "Anlagen (AV)",
+        _ => "Nummernkreis",
+    }
 }
 
 /// Öffnet den Pool (mit oder ohne SQLCipher-Key) und initialisiert ihn
@@ -524,6 +722,55 @@ mod tests {
             !bytes.starts_with(b"SQLite format 3\0"),
             "Datei sieht wie eine unverschlüsselte SQLite-DB aus"
         );
+    }
+
+    /// Schema-Hardline im Server-Betrieb (Lauf F, D-18; ADR 0003 Amendment
+    /// 2026-10-24): Eine Datenbank, die neuer ist als das Programm, lässt sich
+    /// nicht entsperren — weder mit einer unbekannten angewendeten Migration
+    /// noch mit einer höheren `schema_version`. `run_migrations` ist der
+    /// Schritt des Entsperrens vor dem Einhängen von Pool und Scheduler.
+    #[tokio::test]
+    async fn newer_database_is_rejected_on_unlock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = crate::app_ctx::AppCtx::for_tests(crate::config::Paths::under(dir.path()));
+        std::fs::create_dir_all(&ctx.paths.data_dir).unwrap();
+        let pool = open_pool(&ctx.paths.db_file, None).await.expect("open");
+        run_migrations(&ctx, &pool).await.expect("frische DB");
+
+        // höhere schema_version (alle Migrationen bekannt)
+        sqlx::query("UPDATE app_settings SET value = ? WHERE key = 'schema_version'")
+            .bind((schema_version::EXPECTED_SCHEMA_VERSION + 1).to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = run_migrations(&ctx, &pool).await.unwrap_err();
+        assert!(
+            matches!(err, Error::SchemaMismatch { found, .. } if found == schema_version::EXPECTED_SCHEMA_VERSION + 1),
+            "{err}"
+        );
+
+        // wie eine echte neuere DB: zusätzlich eine unbekannte, bereits
+        // angewendete Migration — derselbe verständliche Hinweis, nicht die
+        // Meldung des Migrations-Runners
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES (99999, 'aus einer neueren Version', 1, x'00', 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let err = run_migrations(&ctx, &pool).await.unwrap_err();
+        assert!(matches!(err, Error::SchemaMismatch { .. }), "{err}");
+        assert!(err.to_string().contains("Image"), "{err}");
+
+        // nur die unbekannte Migration (Versionsstand gleich): abgelehnt
+        sqlx::query("UPDATE app_settings SET value = ? WHERE key = 'schema_version'")
+            .bind(schema_version::EXPECTED_SCHEMA_VERSION.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(run_migrations(&ctx, &pool).await.is_err());
+        pool.close().await;
     }
 
     /// Der Klartext-Pfad (`key = None`) bleibt funktionsfähig — er trägt das

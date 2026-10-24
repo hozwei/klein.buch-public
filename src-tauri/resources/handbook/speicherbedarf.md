@@ -72,15 +72,19 @@ Im Daten-Ordner (`/data`) liegen:
 
 1. Die Datenbank und das Beleg-Archiv. Beide wachsen mit jedem Beleg.
 2. Die lokalen Backups in `/data/backups`. Solange mindestens ein
-   externes Ziel funktioniert, behält Klein.Buch dort die 7 neuesten
-   gewöhnlichen Backups, die 3 neuesten Monats-Backups und das neueste
-   Jahres-Backup. Ohne funktionierendes externes Ziel sind es bis zu 30,
-   12 und 7. Manuelle Backups und Sicherheits-Backups vor einer
-   Wiederherstellung löscht Klein.Buch nie, sie kommen jedes Mal dazu.
+   externes Ziel funktioniert, behält Klein.Buch dort je ein Backup für
+   die letzten 7 Tage mit Backup, die letzten 3 Monate und das letzte
+   Jahr. Ohne funktionierendes externes Ziel sind es bis zu 30 Tage,
+   12 Monate und 7 Jahre. Manuelle Backups, Sicherheits-Backups vor einer
+   Wiederherstellung und die nach einer Wiederherstellung übernommenen
+   Backups löscht Klein.Buch nie, sie kommen jedes Mal dazu. Während die
+   automatischen Abläufe angehalten sind (nach einer Wiederherstellung),
+   sortiert Klein.Buch nichts aus.
 3. Zwischendateien in `/data/tmp`: Exporte bis zum Herunterladen (höchstens
    eine Stunde), hochgeladene Dateien bis zu ihrer Verarbeitung (ebenfalls
    höchstens eine Stunde) und die Kopie der Datenbank, die beim Backup
-   kurz entsteht.
+   kurz entsteht. Reste abgebrochener Läufe räumt Klein.Buch stündlich auf,
+   sobald sie älter als sechs Stunden sind, und beim Containerstart vollständig.
 
 Bevor Klein.Buch eine hochgeladene Datei annimmt, prüft es den freien
 Platz. Nach dem Hochladen muss eine Reserve frei bleiben. Ihre Größe
@@ -110,12 +114,23 @@ und auch eine Datenbank-Umstellung nach einem Update unterbleibt.
 
 ## Platz auf den Backup-Zielen
 
-Auf jedem Ordner-Ziel behält Klein.Buch die 30 neuesten gewöhnlichen
-Backups, die 12 neuesten Monats-Backups und die 7 neuesten
-Jahres-Backups. Auf Dauer sind das bis zu 49 Backups, dazu alle
-manuellen Backups und Sicherheits-Backups, die Klein.Buch nie löscht. Auf
-SFTP-Servern löscht Klein.Buch überhaupt nichts. Dort wächst der Bestand
-mit jedem Backup, und der Betreiber räumt selbst auf.
+Auf jedem Ordner-Ziel behält Klein.Buch je ein Backup für die letzten
+30 Tage mit Backup, die letzten 12 Monate und die letzten 7 Jahre. Auf
+Dauer sind das höchstens 49 Backups (oft weniger, weil ein Backup
+zugleich für Tag, Monat und Jahr steht), dazu alle manuellen Backups und
+Sicherheits-Backups, die Klein.Buch nie löscht.
+
+Auf SFTP-Servern löscht Klein.Buch bewusst nichts: Eine kompromittierte
+Instanz soll die externen Kopien nicht vernichten können. Dort wächst der
+Bestand mit jedem Backup — mit einem Tages-Backup und einigen
+Festschreibungen am Tag sind das grob 400 bis 1 000 Backups im Jahr. Bei
+300 MiB je Backup wären das 120 bis 300 GiB im Jahr. Der Betreiber des
+SFTP-Servers räumt deshalb selbst auf, am besten nach demselben Muster
+(zum Beispiel die letzten 30 Tage vollständig, danach ein Backup je Monat,
+nach einem Jahr eines je Jahr), oder er nutzt Snapshots des Servers mit
+eigener Aufbewahrung. Steht für den SFTP-Benutzer eine Speichergrenze
+(Quota), schlägt die Spiegelung fehl, sobald sie erreicht ist; das zeigt
+das Backup-Protokoll.
 
 ## Ein Rechenbeispiel
 
@@ -137,13 +152,14 @@ manuellen Backups.
 ## Weitere Grenzen im Compose-Beispiel
 
 `pids_limit: 256` begrenzt die Zahl der Prozesse und Threads im
-Container. `stop_grace_period: 60s` ist die Zeit, die Docker Klein.Buch
-beim Anhalten gibt, um laufende Arbeiten wie ein Festschreiben oder ein
-Backup zu Ende zu bringen. Klein.Buch selbst wartet beim Herunterfahren
-bis zu zehn Minuten auf laufende Arbeiten. Dauert ein Backup auf ein
-langsames Ziel länger als die 60 Sekunden, bricht Docker es ab. Dann
-lohnt es sich, die Frist zu erhöhen. Die Angaben unter `logging:` sorgen
-dafür, dass das Container-Log höchstens fünf Dateien mit je 10 MB belegt.
+Container. `stop_grace_period: 90s` ist die Zeit, die Docker Klein.Buch
+beim Anhalten gibt. Klein.Buch selbst bleibt darunter: höchstens 30
+Sekunden für offene Verbindungen, dann höchstens 30 Sekunden für laufende
+Arbeiten wie ein Festschreiben oder ein Backup, dann das Schließen der
+Datenbank. Ein Backup, das in dieser Zeit nicht fertig wird, bricht ab,
+ohne eine halbe Datei zu hinterlassen; das nächste Tages-Backup holt es
+nach. Die Angaben unter `logging:` sorgen dafür, dass das Container-Log
+höchstens fünf Dateien mit je 10 MB belegt.
 
 ---
 

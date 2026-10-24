@@ -9,7 +9,7 @@
 //! - **R4-006** Migration-Export läuft als TX-Snapshot durch (Smoke: erfolgreicher
 //!   End-to-End-Lauf mit allen Tabellen + Archive + Manifest).
 //! - **R4-007** Scheduler-Recurring-Invoice-Notice landet in der Inbox via
-//!   `notify::store::create` (keine OS-Push via `os_native::push`).
+//!   `notify::store::create` (Inbox, kein Kanal außerhalb).
 
 use klein_buch_lib::backup::restore::{apply_pending, recover_pending_rollback, RESTORE_MARKER};
 use klein_buch_lib::config::Paths;

@@ -1,7 +1,7 @@
 <script lang="ts">
   // Einheitlicher In-App-Bestätigungs-Dialog. Genau einmal im Root-Layout gemountet.
   // Gesteuert über confirmStore / confirmDialog() (siehe confirm.svelte.ts).
-  import { confirmStore, settleConfirm } from "$lib/confirm.svelte";
+  import { confirmStore, settleConfirm, settleChoice } from "$lib/confirm.svelte";
   import { pushModal, popModal } from "$lib/modalStack.svelte";
 
   let confirmBtn = $state<HTMLButtonElement | null>(null);
@@ -64,6 +64,11 @@
         <button class="btn-cancel" onclick={() => settleConfirm(false)}>
           {c.cancelLabel ?? "Abbrechen"}
         </button>
+        {#if c.altLabel}
+          <button class="btn-cancel" onclick={() => settleChoice("alt")}>
+            {c.altLabel}
+          </button>
+        {/if}
         <button
           class="btn-confirm"
           class:danger={c.danger}
@@ -125,6 +130,7 @@
   }
   .actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
     gap: 0.6rem;
     margin-top: 1.25rem;

@@ -37,7 +37,7 @@ pub fn ensure_supported_format(format_version: u32) -> Result<()> {
     } else {
         Err(Error::Backup(format!(
             "Backup-Format {format_version} wird nicht unterstützt (erwartet \
-             {MIN_SUPPORTED_FORMAT_VERSION}–{FORMAT_VERSION}) — bitte eine passende App-Version verwenden."
+             {MIN_SUPPORTED_FORMAT_VERSION}–{FORMAT_VERSION}) — bitte eine passende Klein.Buch-Version (Image) verwenden."
         )))
     }
 }

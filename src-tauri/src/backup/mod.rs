@@ -17,6 +17,7 @@
 //! - [`create_now`] — die Backup-Erstellungs-Pipeline.
 //! - [`auto_backup_if_unlocked`] — best-effort Auto-Hook für `lock`-Events.
 
+pub mod after_restore;
 pub mod encrypt;
 pub mod manifest;
 pub mod restore;
@@ -28,7 +29,7 @@ pub mod target;
 use crate::config::Paths;
 use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
 use crate::error::{Error, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::sync::Mutex;
@@ -280,12 +281,13 @@ async fn insert_history_row(
     trigger_reason: &str,
     app_version: &str,
     db_schema_version: i32,
+    created_at: &str,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO backup_history
             (id, target_path, file_hash_sha256, file_size_bytes, is_encrypted,
-             retention_tag, trigger_reason, db_schema_version, app_version)
-         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)",
+             retention_tag, trigger_reason, db_schema_version, app_version, created_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(target_path)
@@ -295,6 +297,7 @@ async fn insert_history_row(
     .bind(trigger_reason)
     .bind(db_schema_version)
     .bind(app_version)
+    .bind(created_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -302,10 +305,9 @@ async fn insert_history_row(
 
 /// Pro-Lauf-Backup-Ergebnis-Hinweis (G1-NOTIFY), gated über die abschaltbare
 /// Regel `rule_backup_result` (Migration `0027`). Schreibt in die In-App-Inbox
-/// (Quelle der Wahrheit, ADR 0027); **kein** Kanal außerhalb der Inbox —
-/// `create_now` bekommt keinen `Notifier`, und im Server gibt es ohnehin nur
-/// die Inbox (`notify::InboxOnly`). Best-effort: ein Hinweis-Fehler darf ein Backup nie
-/// beeinflussen. Enthält **nie** ein Geheimnis (nur Status/Dateiname).
+/// (Quelle der Wahrheit und einziger Kanal, ADR 0027). Best-effort: ein
+/// Hinweis-Fehler darf ein Backup nie beeinflussen. Enthält **nie** ein
+/// Geheimnis (nur Status/Dateiname).
 async fn notify_backup_result(
     pool: &SqlitePool,
     severity: &str,
@@ -322,11 +324,7 @@ async fn notify_backup_result(
     if !enabled {
         return;
     }
-    // Direkt in die In-App-Inbox schreiben (NICHT über `notify::emit`): Der
-    // Pro-Lauf-Hinweis ist Inbox-only, und `create_now` hat keinen `Notifier` →
-    // `store::create` genügt (Dedup über `dedup_key` wie bei `emit`). Die frühere
-    // Begründung — der WinRT-Pfad der Desktop-Benachrichtigung in Testbinaries —
-    // ist mit W5 entfallen (ADR 0027 Pt. 5, ADR 0039).
+    // In die In-App-Inbox; Dedup über `dedup_key` (`notify::emit` ist dasselbe).
     crate::notify::store::create(
         pool,
         crate::notify::NewNotification {
@@ -352,6 +350,24 @@ pub fn seal_backup(
     passphrase: &str,
     schema_version: i32,
 ) -> Result<(manifest::Manifest, Vec<u8>)> {
+    seal_backup_at(
+        zip_bytes,
+        content_sha256,
+        passphrase,
+        schema_version,
+        crate::clock::now_utc(),
+    )
+}
+
+/// Wie [`seal_backup`], mit vorgegebenem Erstellungszeitpunkt im Manifest
+/// (injizierte Uhr, Lauf F).
+pub fn seal_backup_at(
+    zip_bytes: &[u8],
+    content_sha256: &str,
+    passphrase: &str,
+    schema_version: i32,
+    created_at: DateTime<Utc>,
+) -> Result<(manifest::Manifest, Vec<u8>)> {
     let salt = encrypt::random_bytes(encrypt::SALT_LEN);
     let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
     let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
@@ -361,7 +377,7 @@ pub fn seal_backup(
         format_version: manifest::FORMAT_VERSION,
         schema_version,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
-        created_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        created_at: created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         kdf: manifest::KdfParams {
             algo: "argon2id".to_string(),
             m_cost_kib: encrypt::KDF_M_COST_KIB,
@@ -378,20 +394,20 @@ pub fn seal_backup(
 }
 
 /// Trägt eine vorhandene `.kbk` im lokalen Backup-Ordner in `backup_history`
-/// ein (Pre-Restore-Backup nach dem Tausch, Gegenprüfung W7). Schema-Version
-/// aus dem Manifest; unbekannte oder fremde Namen werden ignoriert.
+/// ein (Pre-Restore-Backup nach dem Tausch, Gegenprüfung W7; verwaiste
+/// Backups nach einem Restore, D-22). Schema-Version und Erstellungszeit aus
+/// dem Manifest; Aufbewahrungsklasse `manual` (nie automatisch gelöscht).
+/// Unbekannte oder fremde Namen werden ignoriert. `true` = neu eingetragen.
 pub async fn record_existing_backup(
     pool: &SqlitePool,
     backups_dir: &std::path::Path,
     file_name: &str,
     trigger_reason: &str,
-) -> Result<()> {
+) -> Result<bool> {
     if file_name.is_empty() || file_name.contains(['/', '\\']) || !file_name.ends_with(".kbk") {
-        return Ok(());
+        return Ok(false);
     }
     let path = backups_dir.join(file_name);
-    let bytes = tokio::fs::read(&path).await?;
-    let header = manifest::read_manifest_only(&bytes)?;
     let target = path.to_string_lossy().to_string();
     let exists: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM backup_history WHERE target_path = ?")
@@ -399,8 +415,13 @@ pub async fn record_existing_backup(
             .fetch_one(pool)
             .await?;
     if exists > 0 {
-        return Ok(());
+        return Ok(false);
     }
+    let bytes = tokio::fs::read(&path).await?;
+    let header = manifest::read_manifest_only(&bytes)?;
+    let created_at = crate::clock::db_utc(&header.created_at)
+        .map(crate::clock::to_db_utc)
+        .unwrap_or_else(|| crate::clock::to_db_utc(crate::clock::now_utc()));
     insert_history_row(
         pool,
         &uuid::Uuid::now_v7().to_string(),
@@ -411,8 +432,67 @@ pub async fn record_existing_backup(
         trigger_reason,
         &header.app_version,
         header.schema_version,
+        &created_at,
     )
-    .await
+    .await?;
+    Ok(true)
+}
+
+/// Gleicht nach einem Restore die Historie mit dem lokalen Backup-Ordner ab
+/// (D-22): `klein-buch-*.kbk` ohne Zeile (entstanden nach dem Stand des
+/// eingespielten Backups) werden als `manual` übernommen — nie automatisch
+/// gelöscht, in der Restore-Liste wählbar. Zeilen des Floors, deren Datei
+/// fehlt (seit dem Backup wegrotiert), werden entfernt. Liefert
+/// `(übernommen, entfernt)`; Audit `backup.history_rescanned`.
+pub async fn rescan_floor(
+    pool: &SqlitePool,
+    backups_dir: &std::path::Path,
+) -> Result<(usize, usize)> {
+    let mut names: Vec<String> = match std::fs::read_dir(backups_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with("klein-buch-") && n.ends_with(".kbk"))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    names.sort();
+    let mut added = 0usize;
+    for name in &names {
+        match record_existing_backup(pool, backups_dir, name, "manual").await {
+            Ok(true) => added += 1,
+            Ok(false) => {}
+            // Unlesbare oder fremde Datei: nicht übernehmen, Abgleich läuft weiter.
+            Err(e) => tracing::warn!("Backup {name} nicht in die Historie übernommen: {e}"),
+        }
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, target_path FROM backup_history")
+        .fetch_all(pool)
+        .await?;
+    let mut removed = 0usize;
+    for (id, target) in rows {
+        if rotation::is_floor_path(&target, backups_dir)
+            && matches!(std::fs::metadata(&target), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        {
+            sqlx::query("DELETE FROM backup_history WHERE id = ?")
+                .bind(&id)
+                .execute(pool)
+                .await?;
+            removed += 1;
+        }
+    }
+    if added > 0 || removed > 0 {
+        crate::db::repo::audit_log::append(
+            pool,
+            "backup.history_rescanned",
+            "backup",
+            "floor",
+            Some(&serde_json::json!({ "added": added, "removed": removed }).to_string()),
+        )
+        .await?;
+    }
+    Ok((added, removed))
 }
 
 /// Liest eine geschriebene `.kbk` und prüft sie vollständig (Entschlüsseln +
@@ -426,20 +506,72 @@ pub async fn verify_backup_file(path: &std::path::Path, passphrase: &str) -> Res
     .await
 }
 
-/// Erstellt **jetzt** ein verschlüsseltes Backup: Snapshot → Argon2id-Key →
-/// AES-256-GCM → Manifest-Frame → **Floor schreiben** (immer lokal) →
-/// `backup_history` → Audit → **Off-Site-Spiegelung** (best-effort, G1-BKP.4) →
-/// Rotation. Surfaced Floor-Fehler an den Aufrufer; ein fehlgeschlagener
-/// Off-Site-Mirror ist **nicht** fatal (der Floor ist die Sicherheit).
+/// Spiegelung eines neuen Backups auf die Off-Site-Ziele.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mirror {
+    /// Auf alle Ziele — außer während einer Pause nach einer Wiederherstellung
+    /// (D-23): dann nur der lokale Floor, bis der Inhaber freigibt.
+    Auto,
+    /// Nur der lokale Floor (Pflicht-Backup vor der Migration eines gerade
+    /// eingespielten Stands, dessen Pause noch nicht gesetzt ist; D-23).
+    FloorOnly,
+}
+
+/// Optionen für [`create_with`].
+#[derive(Debug, Clone, Copy)]
+pub struct CreateOptions {
+    pub mirror: Mirror,
+    /// Erstellungszeitpunkt (Manifest, Dateiname, Historie, Klasse) — aus der
+    /// injizierten Uhr des Aufrufers (Lauf F, D-04/D-20).
+    pub now: DateTime<Utc>,
+}
+
+/// Fehltext der ausgesetzten Spiegelung (Ergebnis je Ziel).
+pub const MIRROR_SUSPENDED: &str =
+    "Ausgesetzt bis zur Freigabe nach der Wiederherstellung (nur lokale Kopie).";
+
+/// Erstellt **jetzt** ein verschlüsseltes Backup (Systemuhr, Spiegelung wie
+/// konfiguriert), siehe [`create_with`].
 pub async fn create_now(
     pool: &SqlitePool,
     paths: &Paths,
     passphrase: &str,
     trigger_reason: &str,
 ) -> Result<BackupOutcome> {
+    create_with(
+        pool,
+        paths,
+        passphrase,
+        trigger_reason,
+        CreateOptions {
+            mirror: Mirror::Auto,
+            now: crate::clock::now_utc(),
+        },
+    )
+    .await
+}
+
+/// Erstellt ein verschlüsseltes Backup: Snapshot → Argon2id-Key →
+/// AES-256-GCM → Manifest-Frame → **Floor schreiben** (immer lokal) →
+/// `backup_history` → Audit → **Off-Site-Spiegelung** (best-effort, G1-BKP.4) →
+/// Rotation. Surfaced Floor-Fehler an den Aufrufer; ein fehlgeschlagener
+/// Off-Site-Mirror ist **nicht** fatal (der Floor ist die Sicherheit).
+///
+/// Lauf F: Während einer Pause nach einer Wiederherstellung (`scheduler_hold =
+/// restore`) oder mit [`Mirror::FloorOnly`] wird nicht gespiegelt (D-23,
+/// Audit `backup.mirror.skipped`); während jeder Pause ruht die Rotation
+/// (keine Löschung nach einem Uhrsprung oder auf einer Probe-Instanz).
+pub async fn create_with(
+    pool: &SqlitePool,
+    paths: &Paths,
+    passphrase: &str,
+    trigger_reason: &str,
+    opts: CreateOptions,
+) -> Result<BackupOutcome> {
     // Plan W2.3: Backups laufen nacheinander (Auto-Backup nach Lock, Tages-Backup
     // im Tick, manuell, Pre-Restore) — nie zwei gleichzeitig.
     let _serial = BACKUP_LOCK.lock().await;
+    let now_berlin = opts.now.with_timezone(&chrono_tz::Europe::Berlin);
 
     // 1. Konsistenter Content-Snapshot. Die DB ist mit derselben Passphrase
     //    verschlüsselt (eine Passphrase-Kette, ADR 0035); Klartext nur in Tests.
@@ -459,24 +591,31 @@ pub async fn create_now(
             zip_bytes,
             sha256_hex,
         } = content;
+        let now = opts.now;
         crate::limits::run_blocking(&crate::limits::KDF, move || {
-            seal_backup(&zip_bytes, &sha256_hex, &pass, schema_version)
+            seal_backup_at(&zip_bytes, &sha256_hex, &pass, schema_version, now)
         })
         .await?
     };
     let app_version = man.app_version.clone();
     let created_at = man.created_at.clone();
+    let history_created_at = crate::clock::to_db_utc(opts.now);
     let file_hash = snapshot::sha256_hex(&file_bytes);
     let size_bytes = file_bytes.len() as i64;
     // Millisekunden + Kurz-UUID: zwei Backups in derselben Sekunde ergeben zwei
     // Dateien (Plan W2.3).
-    let stamp = crate::clock::now_berlin()
-        .format("%Y%m%d-%H%M%S%3f")
-        .to_string();
+    let stamp = now_berlin.format("%Y%m%d-%H%M%S%3f").to_string();
     let short = uuid::Uuid::now_v7().simple().to_string();
     let file_name = format!("klein-buch-{stamp}-{}.kbk", &short[short.len() - 8..]);
     let retention_tag =
-        rotation::classify_retention(crate::clock::today_berlin(), trigger_reason).to_string();
+        rotation::classify_retention(now_berlin.date_naive(), trigger_reason).to_string();
+    // Pause der automatischen Belegerzeugung (Lauf F): Grund `restore` setzt
+    // die Spiegelung aus (D-23), jede Pause die Rotation.
+    let hold = crate::scheduler::hold::current(pool).await.ok().flatten();
+    let mirror_suspended = opts.mirror == Mirror::FloorOnly
+        || hold
+            .as_ref()
+            .is_some_and(|h| h.reason == crate::scheduler::hold::REASON_RESTORE);
 
     // 4. Floor schreiben — IMMER lokal (`paths.backups_dir`). Das ist die
     //    primäre, nicht-abschaltbare Sicherheits-Kopie (G1-BKP.4 Tier-Modell).
@@ -517,7 +656,7 @@ pub async fn create_now(
                  Prüfe Speicherplatz und Schreibrechte. Details im Backup-Protokoll.",
                 &format!(
                     "backup_result_failed_floor:{}",
-                    crate::clock::now_berlin().format("%Y-%m-%d")
+                    now_berlin.format("%Y-%m-%d")
                 ),
             )
             .await;
@@ -536,6 +675,7 @@ pub async fn create_now(
         trigger_reason,
         &app_version,
         schema_version,
+        &history_created_at,
     )
     .await?;
     crate::db::repo::audit_log::append(
@@ -549,6 +689,14 @@ pub async fn create_now(
     )
     .await
     .ok();
+    // Ein ausstehendes Lock-Backup ist damit erledigt, sofern es vor diesem
+    // Backup vermerkt wurde (F1d; jüngere Vermerke bleiben stehen).
+    sqlx::query("DELETE FROM app_settings WHERE key = ? AND value <= ?")
+        .bind(PENDING_KEY)
+        .bind(&history_created_at)
+        .execute(pool)
+        .await
+        .ok();
     // Floor-Erfolg ins Backup-Protokoll (G1-LOG, append-only; nie fatal).
     crate::db::repo::backup_log::insert(
         pool,
@@ -575,12 +723,42 @@ pub async fn create_now(
     let mut offsite = Vec::new();
     // Seit W7 auch das Pre-Restore-Backup (einzige vollständige Kopie des
     // ersetzten Stands, Gegenprüfung W7); nur die Rotation spart es aus.
-    {
-        let targets = target::list_targets(pool, &paths.backup_targets_dir).await?;
+    let targets = target::list_targets(pool, &paths.backup_targets_dir).await?;
+    if mirror_suspended && !targets.is_empty() {
+        // D-23: Eine wiederhergestellte (oder Probe-)Instanz schreibt keinen
+        // älteren Datenstand mit neuerem Zeitstempel neben die echten Backups.
+        crate::db::repo::audit_log::append(
+            pool,
+            "backup.mirror.skipped",
+            "backup",
+            &history_id,
+            Some(
+                &serde_json::json!({
+                    "reason": "restore_hold",
+                    "targets": targets.len(),
+                    "trigger": trigger_reason,
+                })
+                .to_string(),
+            ),
+        )
+        .await
+        .ok();
+        tracing::info!(
+            "Off-Site-Spiegelung ausgesetzt (Pause nach Wiederherstellung) — nur lokale Kopie"
+        );
+        for entry in &targets {
+            offsite.push(OffsiteResult {
+                target_id: entry.id.clone(),
+                label: entry.label.clone(),
+                location: None,
+                error: Some(MIRROR_SUSPENDED.to_string()),
+            });
+        }
+    } else {
         if targets.is_empty() {
             // Dedup je Kalenderwoche: solange kein Ziel eingerichtet ist,
             // kommt der Hinweis wöchentlich wieder.
-            let week = crate::clock::today_berlin().format("%G-W%V").to_string();
+            let week = now_berlin.format("%G-W%V").to_string();
             crate::notify::store::create(
                 pool,
                 crate::notify::NewNotification {
@@ -629,7 +807,9 @@ pub async fn create_now(
                 },
                 Err(e) => Err((e, entry.target.clone())),
             };
-            let at = crate::clock::now_berlin().to_rfc3339();
+            // Zeitpunkt aus der injizierten Uhr des Aufrufers (F1d), nicht
+            // der Systemuhr.
+            let at = now_berlin.to_rfc3339();
             match written {
                 Ok(offsite_path) => {
                     let mirror_id = uuid::Uuid::now_v7().to_string();
@@ -643,6 +823,7 @@ pub async fn create_now(
                         trigger_reason,
                         &app_version,
                         schema_version,
+                        &history_created_at,
                     )
                     .await
                     .ok();
@@ -736,7 +917,7 @@ pub async fn create_now(
                             dedup_key: Some(&format!(
                                 "backup_result_failed_offsite:{}:{}",
                                 entry.id,
-                                crate::clock::now_berlin().format("%Y-%m-%d")
+                                now_berlin.format("%Y-%m-%d")
                             )),
                             ..Default::default()
                         },
@@ -763,9 +944,20 @@ pub async fn create_now(
         target::store_results(pool, &targets, &run).await.ok();
     }
 
-    // 6. Rotation (getiert) — außer direkt vor einem Restore (Pre-Restore nie prunen).
-    if trigger_reason != "pre_restore" {
-        let _ = rotation::run(pool, &paths.backups_dir, &paths.backup_targets_dir).await;
+    // 6. Rotation (getiert) — außer direkt vor einem Restore (Pre-Restore nie
+    //    prunen), bei reiner Floor-Kopie und während einer Pause (Lauf F: ein
+    //    Uhrsprung oder der Stand einer Probe-Instanz darf keine echten
+    //    Backups wegrotieren).
+    if trigger_reason != "pre_restore" && opts.mirror == Mirror::Auto && hold.is_none() {
+        let _ = rotation::run(
+            pool,
+            &paths.backups_dir,
+            &paths.backup_targets_dir,
+            opts.now,
+        )
+        .await;
+    } else if hold.is_some() {
+        tracing::info!("Backup-Rotation ruht während der Pause der automatischen Abläufe");
     }
 
     // 7. Pro-Lauf-Erfolgs-Hinweis NUR bei manuellem Backup (G1-NOTIFY). Auto-Lock-/
@@ -818,23 +1010,43 @@ pub async fn auto_backup_if_unlocked(
     session: &BackupSession,
     event: &str,
 ) -> Result<Option<BackupOutcome>> {
+    auto_backup_at(pool, paths, session, event, crate::clock::now_utc()).await
+}
+
+/// Wie [`auto_backup_if_unlocked`], mit dem Zeitpunkt der injizierten Uhr des
+/// Aufrufers (Scheduler-Tick, Lauf F).
+pub async fn auto_backup_at(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &BackupSession,
+    event: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<BackupOutcome>> {
     let Some(passphrase) = session.get() else {
         crate::db::repo::audit_log::append(
             pool,
             "backup.skipped_locked",
             "backup",
             "auto",
-            Some(&format!(r#"{{"event":"{event}"}}"#)),
+            Some(&serde_json::json!({ "event": event }).to_string()),
         )
         .await
         .ok();
+        // F1d: Das erste Entsperren holt es nach (best-effort; nach dem
+        // Sperren ist der Pool womöglich schon zu — dann steht der Vermerk
+        // aus dem Sammeln des Ticks).
+        mark_pending(pool, now).await.ok();
         tracing::warn!("Auto-Backup übersprungen: Session nicht entsperrt ({event})");
         return Ok(None);
     };
 
     // Lock-Event-Label → gültige `backups.trigger_reason`-Kategorie. Das konkrete
     // Event bleibt im Audit-Log (`event`) nachvollziehbar.
-    match create_now(pool, paths, &passphrase, db_trigger_reason(event)).await {
+    let opts = CreateOptions {
+        mirror: Mirror::Auto,
+        now,
+    };
+    match create_with(pool, paths, &passphrase, db_trigger_reason(event), opts).await {
         Ok(outcome) => Ok(Some(outcome)),
         Err(e) => {
             tracing::error!("Auto-Backup fehlgeschlagen ({event}): {e}");
@@ -843,10 +1055,7 @@ pub async fn auto_backup_if_unlocked(
                 "backup.failed",
                 "backup",
                 "auto",
-                Some(&format!(
-                    r#"{{"event":"{event}","error":"{}"}}"#,
-                    e.to_string().replace('"', "'")
-                )),
+                Some(&serde_json::json!({ "event": event, "error": e.to_string() }).to_string()),
             )
             .await
             .ok();
@@ -855,65 +1064,193 @@ pub async fn auto_backup_if_unlocked(
     }
 }
 
-/// Auto-Daily beim App-Start, wenn das letzte erfolgreiche Backup älter als
-/// 24 h ist (und die Session entsperrt ist).
+// ---------------------------------------------------------------------------
+// Ausstehendes Lock-Backup (Lauf F, F1d)
+// ---------------------------------------------------------------------------
+
+/// `app_settings`: Zeitpunkt (UTC) des ältesten noch nicht gesicherten
+/// Festschreibens. Gesetzt, wenn der Tick ein Lock-Backup sammelt oder ein
+/// Lock-Backup mangels Passphrase ausfällt; entfernt von jedem erfolgreichen
+/// Backup, das danach entstand. Übersteht „Datenbank sperren“ und das
+/// Herunterfahren mitten im Tick.
+pub const PENDING_KEY: &str = "backup_pending_since";
+/// `app_settings`: letzter Fehlschlag beim Nachholen (Backoff, UTC).
+pub const PENDING_BACKOFF_KEY: &str = "backup_pending_last_failure_at";
+
+/// Vermerkt ein ausstehendes Lock-Backup (der älteste Vermerk bleibt).
+pub async fn mark_pending(pool: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
+    sqlx::query("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
+        .bind(PENDING_KEY)
+        .bind(crate::clock::to_db_utc(now))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Holt ein ausstehendes Lock-Backup nach (erster Tick nach Entsperren oder
+/// Serverstart), unabhängig vom Tages-Vermerk. Nach einem Fehlschlag
+/// frühestens nach [`DAILY_RETRY_AFTER_HOURS`] erneut (persistiert).
+/// `Ok(Some)` = erstellt.
+pub async fn pending_backup_if_due(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &BackupSession,
+    now: DateTime<Utc>,
+) -> Result<Option<BackupOutcome>> {
+    if !session.is_unlocked()
+        || crate::db::repo::app_settings::get(pool, PENDING_KEY)
+            .await?
+            .is_none()
+    {
+        return Ok(None);
+    }
+    if crate::scheduler::backoff::blocked(
+        pool,
+        PENDING_BACKOFF_KEY,
+        now,
+        chrono::Duration::hours(DAILY_RETRY_AFTER_HOURS),
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+    let outcome = auto_backup_at(pool, paths, session, "backup.pending", now).await?;
+    match &outcome {
+        Some(_) => crate::scheduler::backoff::clear(pool, PENDING_BACKOFF_KEY).await?,
+        None => crate::scheduler::backoff::record_failure(pool, PENDING_BACKOFF_KEY, now).await?,
+    }
+    Ok(outcome)
+}
+
+// ---------------------------------------------------------------------------
+// Tages-Backup, kalenderfest (Lauf F, D-04)
+// ---------------------------------------------------------------------------
+
+/// `app_settings`: Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin).
+pub const DAILY_TIME_KEY: &str = "backup_daily_time";
+/// Standard-Uhrzeit des Tages-Backups (nachts, außerhalb der Arbeitszeit).
+pub const DAILY_DEFAULT_TIME: &str = "02:30";
+/// `app_settings`: Berliner Datum des zuletzt erstellten Tages-Backups
+/// (`YYYY-MM-DD`). Unabhängig von der Historie, die die Rotation ausdünnt.
+pub const DAILY_LAST_ON_KEY: &str = "backup_daily_last_on";
+/// `app_settings`: letzter Fehlschlag des Tages-Backups (Backoff, UTC).
+pub const DAILY_BACKOFF_KEY: &str = "backup_daily_last_failure_at";
+/// Wartezeit nach einem fehlgeschlagenen Tages-Backup (Review W2 S2-3).
+pub const DAILY_RETRY_AFTER_HOURS: i64 = 1;
+
+/// Liest `HH:MM` (00:00–23:59).
+pub fn parse_daily_time(s: &str) -> Option<chrono::NaiveTime> {
+    let t = s.trim();
+    let (h, m) = t.split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    chrono::NaiveTime::from_hms_opt(h.parse().ok()?, m.parse().ok()?, 0)
+}
+
+/// Eingestellte Uhrzeit des Tages-Backups (Standard [`DAILY_DEFAULT_TIME`]).
+pub async fn daily_time(pool: &SqlitePool) -> Result<chrono::NaiveTime> {
+    let stored = crate::db::repo::app_settings::get(pool, DAILY_TIME_KEY).await?;
+    Ok(stored
+        .as_deref()
+        .and_then(parse_daily_time)
+        .or_else(|| parse_daily_time(DAILY_DEFAULT_TIME))
+        .unwrap_or(chrono::NaiveTime::MIN))
+}
+
+/// Zuletzt fälliger Slot (pure, F1d): heute, wenn die eingestellte Uhrzeit
+/// erreicht ist, sonst gestern. Am Tag der Zeitumstellung gilt die Wanduhr:
+/// eine übersprungene Uhrzeit (29.03. 02:30) ist ab 03:00 erreicht.
+pub fn daily_slot(now_berlin: chrono::NaiveDateTime, at: chrono::NaiveTime) -> chrono::NaiveDate {
+    let today = now_berlin.date();
+    if now_berlin.time() >= at {
+        today
+    } else {
+        today.pred_opt().unwrap_or(today)
+    }
+}
+
+/// Pure Fälligkeit: genau ein Tages-Backup je Slot (Berliner Kalendertag ab
+/// der eingestellten Uhrzeit). Fällig, solange für den zuletzt fälligen Slot
+/// ([`daily_slot`]) noch keines entstand — so holt der erste Tick nach einem
+/// verpassten Slot (Uhrzeit kurz vor Mitternacht zwischen zwei Ticks, Sperre
+/// über Tage, Anmeldung vor der Uhrzeit) genau eines nach (F1d). Eine doppelte
+/// Uhrzeit (25.10. 02:30) löst nur einmal aus. Steht das gemerkte Datum nach
+/// heute (Uhr zurückgestellt), zählt es nicht als erledigt.
+pub fn daily_due(
+    now_berlin: chrono::NaiveDateTime,
+    last_on: Option<chrono::NaiveDate>,
+    at: chrono::NaiveTime,
+) -> bool {
+    let slot = daily_slot(now_berlin, at);
+    match last_on {
+        None => true,
+        Some(last) => last < slot || last > now_berlin.date(),
+    }
+}
+
+/// Tages-Backup (Trigger `auto_daily`), wenn für den zuletzt fälligen Slot
+/// (Europe/Berlin, eingestellte Uhrzeit) noch keines entstand (D-04, F1d).
+/// Gemerkt wird der Slot. Nach einem Fehlschlag frühestens nach
+/// [`DAILY_RETRY_AFTER_HOURS`] erneut (persistiert). `Ok(Some)` = erstellt,
+/// `Ok(None)` = nicht fällig, gesperrt oder fehlgeschlagen (protokolliert).
 pub async fn auto_daily_if_due(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
+    now: DateTime<Utc>,
 ) -> Result<Option<BackupOutcome>> {
     if !session.is_unlocked() {
         return Ok(None);
     }
-    let last: Option<String> =
-        sqlx::query("SELECT MAX(created_at) AS last FROM backup_history WHERE is_encrypted = 1")
+    let now_berlin = now.with_timezone(&chrono_tz::Europe::Berlin);
+    let last_on = match crate::db::repo::app_settings::get(pool, DAILY_LAST_ON_KEY).await? {
+        Some(v) => chrono::NaiveDate::parse_from_str(v.trim(), "%Y-%m-%d").ok(),
+        // Bestand vor Lauf F: Datum aus der Historie (jüngstes `auto_daily`).
+        None => {
+            let ts: Option<String> = sqlx::query_scalar(
+                "SELECT MAX(created_at) FROM backup_history WHERE trigger_reason = 'auto_daily'",
+            )
             .fetch_one(pool)
-            .await?
-            .try_get::<Option<String>, _>("last")
-            .unwrap_or(None);
-
-    let due = match last {
-        None => true,
-        Some(ts) => {
-            // created_at ist 'YYYY-MM-DD HH:MM:SS' (UTC). Vergleich gegen jetzt-24h.
-            let threshold = (Utc::now() - chrono::Duration::hours(24))
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string();
-            ts < threshold
+            .await?;
+            ts.as_deref()
+                .and_then(crate::clock::db_utc_to_berlin)
+                .map(|b| b.date_naive())
         }
     };
-
-    if !due {
+    let at = daily_time(pool).await?;
+    if !daily_due(now_berlin.naive_local(), last_on, at) {
         return Ok(None);
     }
-    // Review W2 S2-3: nach einem Fehlschlag (z. B. Platte voll) frühestens nach
-    // einer Stunde erneut — sonst alle 5 min ein `backup.failed` im
-    // append-only Audit-Log, samt Snapshot und Argon2id.
+    let slot = daily_slot(now_berlin.naive_local(), at);
+    if crate::scheduler::backoff::blocked(
+        pool,
+        DAILY_BACKOFF_KEY,
+        now,
+        chrono::Duration::hours(DAILY_RETRY_AFTER_HOURS),
+    )
+    .await?
     {
-        let last = DAILY_LAST_FAILURE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(t) = *last {
-            if t.elapsed() < DAILY_RETRY_AFTER {
-                return Ok(None);
-            }
-        }
+        return Ok(None);
     }
-    let outcome = auto_backup_if_unlocked(pool, paths, session, "auto_daily").await?;
-    *DAILY_LAST_FAILURE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = match outcome {
-        Some(_) => None,
+    let outcome = auto_backup_at(pool, paths, session, "auto_daily", now).await?;
+    match &outcome {
+        Some(_) => {
+            mark_daily_done(pool, slot).await?;
+            crate::scheduler::backoff::clear(pool, DAILY_BACKOFF_KEY).await?;
+        }
         // Session war entsperrt (oben geprüft) → `None` heißt fehlgeschlagen.
-        None => Some(std::time::Instant::now()),
-    };
+        None => crate::scheduler::backoff::record_failure(pool, DAILY_BACKOFF_KEY, now).await?,
+    }
     Ok(outcome)
 }
 
-/// Zeitpunkt des letzten fehlgeschlagenen Tages-Backups (Backoff, S2-3).
-static DAILY_LAST_FAILURE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-/// Wartezeit nach einem fehlgeschlagenen Tages-Backup.
-const DAILY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+/// Merkt `day` als Tag mit erledigtem Tages-Backup (auch das Erst-Backup der
+/// Einrichtung zählt, D-12).
+pub async fn mark_daily_done(pool: &SqlitePool, day: chrono::NaiveDate) -> Result<()> {
+    crate::db::repo::app_settings::set(pool, DAILY_LAST_ON_KEY, &day.format("%Y-%m-%d").to_string())
+        .await
+}
 
 #[cfg(test)]
 mod tests {

@@ -30,7 +30,7 @@ den Server und den Container verwaltet.
 Diese Meldung (oder "Backup-Ziel-Wurzel /backup-targets fehlt") heißt:
 Der Ordner, der als Ziel eingetragen ist, kommt im Container nicht an.
 Meist wurde der Container ohne die passende Zeile unter `volumes:` neu
-erzeugt, oder der Ordner auf dem Server war beim Start nicht da, etwa
+erzeugt, oder der Ordner auf dem Server war beim Containerstart nicht da, etwa
 weil das NAS noch nicht verbunden war.
 
 Lösung für den Betreiber: In der Compose-Datei prüfen, ob die Zeile für
@@ -148,8 +148,20 @@ Rückfall](/help/updates-und-rueckfall)".
 
 Nach jedem Neustart des Servers ist Klein.Buch gesperrt, bis sich jemand
 anmeldet. Solange laufen keine geplanten Aufgaben, auch nicht das
-tägliche Backup. Nach der Anmeldung holt Klein.Buch es nach. Melde Dich
-nach einem Neustart deshalb bald wieder an.
+tägliche Backup. Nach der Anmeldung holt Klein.Buch es nach (genau eines,
+auch nach mehreren Tagen und auch, wenn Du Dich vor der eingestellten
+Uhrzeit anmeldest). Ein Backup nach dem Festschreiben, das wegen "Datenbank
+sperren" oder eines Neustarts ausfiel, holt es ebenfalls kurz nach der
+Anmeldung nach. Melde Dich nach einem Neustart deshalb bald wieder an; das
+Container-Log meldet den gesperrten Zustand alle sechs Stunden.
+
+## Nach einer Wiederherstellung kommt nichts auf den externen Zielen an
+
+Das ist Absicht: Bis Du oben im Hinweis "Automatische Abo-Läufe angehalten"
+bestätigst, dass dies die produktive Instanz ist, schreibt Klein.Buch Backups
+nur in den lokalen Ordner (siehe "[Backup und
+Wiederherstellen](/help/backup-und-wiederherstellen)"). Das Backup-Ergebnis
+nennt die Ziele als "ausgesetzt".
 
 ## Wenn nichts hilft
 

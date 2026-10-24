@@ -18,6 +18,8 @@ use std::io::Write;
 use axum::http::StatusCode;
 use klein_buch_lib::backup::restore::{RESTORE_MARKER, RESTORE_STAGING};
 use klein_buch_lib::db::schema_version::{EXPECTED_SCHEMA_VERSION, MIN_RESTORE_SCHEMA_VERSION};
+use klein_buch_lib::domain::recurring::RecurringInput;
+use klein_buch_lib::domain::recurring_invoice::RecurringInvoiceInput;
 use server_support::*;
 
 const OTHER: &str = "anderes-pferd-batterie-klammer";
@@ -128,7 +130,10 @@ async fn destroy_and_recreate(srv: TestServer) -> TestServer {
 }
 
 async fn scheduler_paused(srv: &TestServer) -> bool {
-    *srv.state.ctx.scheduler_gate.lock().await
+    srv.state
+        .ctx
+        .scheduler_paused
+        .load(std::sync::atomic::Ordering::SeqCst)
 }
 
 async fn assert_rejected(srv: &TestServer, cookie: &str, kbk: &[u8], needle: &str) {
@@ -288,6 +293,25 @@ async fn disaster_recovery_with_other_passphrase() {
     )
     .await;
     assert_eq!(warned, 1, "Inbox-Warnung zur fehlenden Vorlage");
+    // Lauf F: Pause nach dem Restore (W14-023) und Hinweis zu den
+    // Nummernkreisen ohne Stände einer ersetzten DB (D-24, Disaster Recovery).
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM app_settings WHERE key = 'scheduler_hold' AND value = 'restore'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+             AND body LIKE '%Nummernkreise unter Einstellungen%'"
+        )
+        .await,
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -711,4 +735,772 @@ async fn applied_audit_survives_restart_before_unlock() {
         1
     );
     assert!(!applied.exists());
+}
+
+/// Manuelles Backup über den Command; liefert das Ergebnis (`BackupOutcome`).
+async fn backup_now(srv: &TestServer, cookie: &str) -> serde_json::Value {
+    let _serial = kdf_serial().await;
+    let r = call(&srv.app, cookie, "backup_create_now", serde_json::json!({})).await;
+    let body = r.json();
+    if body.get("state").is_some() {
+        assert_eq!(body["state"], "done", "{}", r.text());
+        body["result"].clone()
+    } else {
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+        body
+    }
+}
+
+async fn scalar_text(srv: &TestServer, sql: &str) -> Option<String> {
+    let pool = srv.state.ctx.pool().unwrap();
+    sqlx::query_scalar(sql).fetch_optional(&pool).await.unwrap()
+}
+
+/// Lauf F (W14-023, D-22, D-23, D-24): Restore eines **älteren** Backups auf
+/// derselben Instanz.
+/// - bereits vergebene Rechnungsnummern werden nicht erneut vergeben (Zähler
+///   auf den Stand vor dem Restore angehoben, Audit, Hinweis),
+/// - Abo-Läufe und Versand pausieren bis zur Freigabe (Re-Auth),
+/// - Backups gehen bis dahin nur in den lokalen Ordner (keine Spiegelung),
+/// - die nach dem Backup entstandenen Backups stehen wieder in der Historie.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_release() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    std::fs::create_dir_all(srv.state.ctx.paths.backup_targets_dir.join("nas")).unwrap();
+    let r = call(
+        &srv.app,
+        &cookie,
+        "backup_target_add_directory",
+        serde_json::json!({ "label": "NAS", "directory": "nas/kb" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    // Stand A: eine Rechnung. Danach zwei weitere (Nummern 2 und 3).
+    let _ = locked_invoice(&srv, &cookie).await;
+    let a = backup_now(&srv, &cookie).await;
+    let a_id = a["historyId"].as_str().unwrap().to_string();
+    let _ = locked_invoice(&srv, &cookie).await;
+    let _ = locked_invoice(&srv, &cookie).await;
+    let year = scalar_i64(&srv, "SELECT MAX(fiscal_year) FROM invoices").await;
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT last_value FROM doc_number_counters WHERE doc_type = 'invoice'"
+        )
+        .await,
+        3
+    );
+
+    let r = {
+        let _serial = kdf_serial().await;
+        call(
+            &srv.app,
+            &cookie,
+            "backup_restore_apply",
+            serde_json::json!({ "backupId": a_id, "passphrase": PASS }),
+        )
+        .await
+    };
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    let srv = restart(srv).await;
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = session_cookie(&r);
+
+    // D-24: Stand A, Zähler aber auf 3 — die nächste Rechnung ist Nr. 4.
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM invoices").await, 1);
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT last_value FROM doc_number_counters WHERE doc_type = 'invoice'"
+        )
+        .await,
+        3
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'numbering.raised_after_restore'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+             AND body LIKE '%von 1 auf 3%'"
+        )
+        .await,
+        1
+    );
+    let draft = draft_invoice(&srv).await;
+    let number = scalar_text(
+        &srv,
+        &format!("SELECT invoice_number FROM invoices WHERE id = '{draft}'"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(number, format!("RE-{year}-0004"), "keine Doppelvergabe");
+
+    // W14-023: Pause mit Grund „restore“, Abo-Läufe ausgesetzt.
+    assert_eq!(
+        scalar_text(
+            &srv,
+            "SELECT value FROM app_settings WHERE key = 'scheduler_hold'"
+        )
+        .await
+        .as_deref(),
+        Some("restore")
+    );
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        let clock = srv.state.ctx.clock();
+        let job =
+            klein_buch_lib::scheduler::JobCtx::from_app(&srv.state.ctx, &pool, clock.as_ref());
+        let report = klein_buch_lib::scheduler::recurring_invoice::process_due(&job)
+            .await
+            .unwrap();
+        assert_eq!(report.skipped_hold.as_deref(), Some("restore"));
+        let report = klein_buch_lib::scheduler::recurring::process_due(&job)
+            .await
+            .unwrap();
+        assert_eq!(report.skipped_hold.as_deref(), Some("restore"));
+    }
+
+    // D-22: jede Backup-Datei im lokalen Ordner steht in der Historie.
+    let floor = srv.state.ctx.paths.backups_dir.clone();
+    let files: Vec<String> = std::fs::read_dir(&floor)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("klein-buch-") && n.ends_with(".kbk"))
+        .collect();
+    assert!(files.len() >= 4, "{files:?}");
+    for name in &files {
+        let path = floor.join(name).to_string_lossy().to_string();
+        assert_eq!(
+            scalar_i64(
+                &srv,
+                &format!("SELECT COUNT(*) FROM backup_history WHERE target_path = '{path}'")
+            )
+            .await,
+            1,
+            "{name} fehlt in der Historie"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.history_rescanned'"
+        )
+        .await,
+        1
+    );
+
+    // D-23: bis zur Freigabe nur lokal.
+    let mirrored =
+        "SELECT COUNT(*) FROM backup_log WHERE target_kind = 'directory' AND status = 'ok'";
+    let before = scalar_i64(&srv, mirrored).await;
+    let out = backup_now(&srv, &cookie).await;
+    assert_eq!(
+        out["offsite"][0]["error"].as_str(),
+        Some(klein_buch_lib::backup::MIRROR_SUSPENDED),
+        "{out}"
+    );
+    assert_eq!(scalar_i64(&srv, mirrored).await, before, "keine Spiegelung");
+    assert!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.mirror.skipped'"
+        )
+        .await
+            >= 1
+    );
+
+    // Freigabe (Re-Auth) → Spiegelung und Abo-Läufe wieder aktiv.
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "scheduler_release_hold",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["held"], false, "{}", r.text());
+    let out = backup_now(&srv, &cookie).await;
+    assert!(out["offsite"][0]["error"].is_null(), "{out}");
+    assert_eq!(scalar_i64(&srv, mirrored).await, before + 1);
+}
+
+/// Vorlage (monatlich, heute fällig) für die F1d-Tests.
+fn tmpl_today(contact: &str, label: &str, mode: &str) -> RecurringInvoiceInput {
+    use chrono::Datelike;
+    let today = klein_buch_lib::clock::today_berlin();
+    RecurringInvoiceInput {
+        label: label.into(),
+        contact_id: contact.into(),
+        frequency: "monthly".into(),
+        day_of_period: today.day() as i64,
+        next_due_date: today,
+        start_date: None,
+        end_date: None,
+        auto_mode: mode.into(),
+        payment_terms_days: 14,
+        pdf_template: "default".into(),
+        service_period_note: true,
+        notes: None,
+        items: vec![klein_buch_lib::domain::invoice::InvoiceItemInput {
+            position: 1,
+            description: "Server-Wartung (Pauschale)".into(),
+            quantity: 1.0,
+            unit_code: "C62".into(),
+            unit_price_cents: 9_900,
+            tax_rate_percent: 0.0,
+            tax_category_code: "E".into(),
+            description_title: None,
+            description_markup: None,
+            source_package_id: None,
+            source_package_revision: None,
+        }],
+    }
+}
+
+/// Kosten-Abo (monatlich, heute fällig, automatisch) für die F1d-Tests.
+fn sub_today(label: &str) -> RecurringInput {
+    use chrono::Datelike;
+    let today = klein_buch_lib::clock::today_berlin();
+    RecurringInput {
+        label: label.into(),
+        vendor_contact_id: None,
+        frequency: "monthly".into(),
+        day_of_period: today.day() as i64,
+        next_due_date: today,
+        expected_amount_cents: 1_190,
+        category: "software".into(),
+        description_template: format!("{label} — Abo"),
+        auto_create_expense: true,
+        reverse_charge_13b_default: false,
+    }
+}
+
+/// Hält den Scheduler-Tick der Instanz an (bis zum nächsten Entsperren), damit
+/// er unter Last nicht vor dem Backup fällige Termine abarbeitet; die
+/// Abbruch-Anforderung wird zurückgenommen, damit die Läufe des Tests arbeiten.
+async fn pause_instance_scheduler(srv: &TestServer) {
+    klein_buch_lib::scheduler::tick::stop(&srv.state.ctx).await;
+    klein_buch_lib::scheduler::tick::withdraw_stop(&srv.state.ctx);
+}
+
+/// Abo-Läufe (Rechnungen, Kosten) mit der Uhr der Instanz; KDF-lastig
+/// (Lock-Backups), daher serialisiert.
+async fn run_recurring(srv: &TestServer) -> (usize, usize, usize) {
+    let _serial = kdf_serial().await;
+    let pool = srv.state.ctx.pool().unwrap();
+    let clock = srv.state.ctx.clock();
+    let job = klein_buch_lib::scheduler::JobCtx::from_app(&srv.state.ctx, &pool, clock.as_ref());
+    let inv = klein_buch_lib::scheduler::recurring_invoice::process_due(&job)
+        .await
+        .unwrap();
+    let sub = klein_buch_lib::scheduler::recurring::process_due(&job)
+        .await
+        .unwrap();
+    (
+        inv.created_invoices,
+        sub.created_expenses,
+        inv.awaiting_decision + sub.awaiting_decision,
+    )
+}
+
+async fn restore_from_history(srv: TestServer, cookie: &str, backup_id: &str) -> TestServer {
+    let r = {
+        let _serial = kdf_serial().await;
+        call(
+            &srv.app,
+            cookie,
+            "backup_restore_apply",
+            serde_json::json!({ "backupId": backup_id, "passphrase": PASS }),
+        )
+        .await
+    };
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    restart(srv).await
+}
+
+/// Lauf F1d (S1, S2, Nummernkreis-Hinweis): Restore eines **älteren** Backups
+/// in dieselbe Instanz.
+/// - Ein nach dem Backup abgerechneter Abo-Termin und ein gebuchtes Kosten-Abo
+///   werden nach der Freigabe nicht erneut abgerechnet (Termine auf den Stand
+///   vor dem Restore vorgerückt, Audit, Hinweis).
+/// - Ein Entwurf, dessen Nummer nach dem Backup festgeschrieben wurde, lässt
+///   sich erst nach der Bestätigung (Re-Auth, Begründung) festschreiben.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn older_backup_restore_bills_no_period_twice_and_guards_used_draft_numbers() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let today = klein_buch_lib::clock::today_berlin().to_string();
+    pause_instance_scheduler(&srv).await;
+    // Entwurf D (Nummer 1), Vorlage und Kosten-Abo, beide heute fällig.
+    let d_id = draft_invoice(&srv).await;
+    let (tmpl_id, sub_id) = {
+        let pool = srv.state.ctx.pool().unwrap();
+        let contact: String = sqlx::query_scalar("SELECT contact_id FROM invoices WHERE id = ?")
+            .bind(&d_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let t = klein_buch_lib::db::repo::recurring_invoice::create(
+            &pool,
+            &tmpl_today(&contact, "Wartung", "draft"),
+        )
+        .await
+        .unwrap();
+        let s = klein_buch_lib::db::repo::recurring::create(&pool, &sub_today("Hosting"))
+            .await
+            .unwrap();
+        (t.template.id, s.id)
+    };
+    let a = backup_now(&srv, &cookie).await;
+    let a_id = a["historyId"].as_str().unwrap().to_string();
+
+    // Nach dem Backup: Termin abgerechnet bzw. gebucht (vom Lauf hier oder vom
+    // Scheduler-Tick der Instanz — geprüft wird der Stand), D festgeschrieben.
+    run_recurring(&srv).await;
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM invoices").await, 2);
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM expenses").await, 1);
+    let r = call(
+        &srv.app,
+        &cookie,
+        "invoices_lock_and_issue",
+        serde_json::json!({ "id": d_id }),
+    )
+    .await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    let d_number = scalar_text(
+        &srv,
+        &format!("SELECT invoice_number FROM invoices WHERE id = '{d_id}'"),
+    )
+    .await
+    .unwrap();
+    let tmpl_next =
+        |id: &str| format!("SELECT next_due_date FROM recurring_invoices WHERE id = '{id}'");
+    let sub_next =
+        |id: &str| format!("SELECT next_due_date FROM recurring_subscriptions WHERE id = '{id}'");
+    let next_tmpl = scalar_text(&srv, &tmpl_next(&tmpl_id)).await.unwrap();
+    let next_sub = scalar_text(&srv, &sub_next(&sub_id)).await.unwrap();
+    assert!(next_tmpl > today && next_sub > today);
+
+    let srv = restore_from_history(srv, &cookie, &a_id).await;
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = session_cookie(&r);
+
+    // S1: Termine auf dem Stand vor dem Restore, Audit und Hinweis.
+    assert_eq!(
+        scalar_text(&srv, &tmpl_next(&tmpl_id)).await.unwrap(),
+        next_tmpl
+    );
+    assert_eq!(
+        scalar_text(&srv, &sub_next(&sub_id)).await.unwrap(),
+        next_sub
+    );
+    for action in [
+        "recurring_invoice.advanced_after_restore",
+        "recurring.advanced_after_restore",
+    ] {
+        assert_eq!(
+            scalar_i64(
+                &srv,
+                &format!("SELECT COUNT(*) FROM audit_log WHERE action = '{action}'")
+            )
+            .await,
+            1,
+            "{action}"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_recurring:%'
+             AND body LIKE '%vorgerückt%'"
+        )
+        .await,
+        1
+    );
+    // S2: D ist vorgemerkt, der Hinweis nennt die Nummer.
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            &format!(
+                "SELECT COUNT(*) FROM app_settings WHERE key = 'restored_number_conflict:invoice:{d_id}'"
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            &format!(
+                "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+                 AND severity = 'urgent' AND body LIKE '%{d_number}%'"
+            )
+        )
+        .await,
+        1
+    );
+
+    // Freigabe → kein zweiter Termin, keine zweite Kosten-Position.
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "scheduler_release_hold",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(run_recurring(&srv).await, (0, 0, 0));
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM invoices").await, 1);
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM expenses").await, 0);
+
+    // D lässt sich erst nach der Bestätigung festschreiben.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "invoices_lock_and_issue",
+        serde_json::json!({ "id": d_id }),
+    )
+    .await;
+    assert_eq!(r.json()["state"], "failed", "{}", r.text());
+    assert!(r.text().contains("bereits festgeschrieben"), "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_restored_drafts_list",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()[0]["number"], d_number.as_str(), "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_restored_draft_confirm",
+        serde_json::json!({ "kind": "invoice", "id": d_id, "reason": "kurz" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_restored_draft_confirm",
+        serde_json::json!({
+            "kind": "invoice",
+            "id": d_id,
+            "reason": "an das versandte Original laut Mail-Ausgang angepasst",
+        }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json().as_array().map(Vec::len), Some(0), "{}", r.text());
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'numbering.restored_draft_confirmed'
+             AND details_json LIKE '%Mail-Ausgang%'"
+        )
+        .await,
+        1
+    );
+    let r = call(
+        &srv.app,
+        &cookie,
+        "invoices_lock_and_issue",
+        serde_json::json!({ "id": d_id }),
+    )
+    .await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+}
+
+/// Lauf F1d (S1, ohne bekannten Stand): Kennt Klein.Buch den Stand einer Reihe
+/// vor dem Restore nicht — hier simuliert, indem die Reihen nach dem Backup aus
+/// der laufenden Datenbank verschwinden, wie bei einer Wiederherstellung in
+/// eine leere Instanz —, verlangt ein offener Termin bis zum Restore-Tag die
+/// Entscheidung, auch unter der Nachhol-Grenze. „Ab heute fortsetzen“ lässt
+/// den heutigen Termin aus, „nachholen“ erstellt nur Entwürfe; Marker aus dem
+/// Backup gelten nicht mehr. Ein Restore ohne höhere Zähler meldet „keine
+/// Lücke“ statt des Textes für eine leere Instanz.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restore_without_series_state_requires_decision_and_never_auto_issues() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let today = klein_buch_lib::clock::today_berlin().to_string();
+    pause_instance_scheduler(&srv).await;
+    let d_id = draft_invoice(&srv).await;
+    let (skip_id, catch_id, sub_id) = {
+        let pool = srv.state.ctx.pool().unwrap();
+        let contact: String = sqlx::query_scalar("SELECT contact_id FROM invoices WHERE id = ?")
+            .bind(&d_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let t1 = klein_buch_lib::db::repo::recurring_invoice::create(
+            &pool,
+            &tmpl_today(&contact, "Wartung A", "issue_send"),
+        )
+        .await
+        .unwrap();
+        let t2 = klein_buch_lib::db::repo::recurring_invoice::create(
+            &pool,
+            &tmpl_today(&contact, "Wartung B", "issue"),
+        )
+        .await
+        .unwrap();
+        let s = klein_buch_lib::db::repo::recurring::create(&pool, &sub_today("Hosting"))
+            .await
+            .unwrap();
+        // Marker, die nicht aus dem Backup weiterwirken dürfen.
+        klein_buch_lib::db::repo::app_settings::set(
+            &pool,
+            &format!("recurring_catch_up_ok:inv:{}", t1.template.id),
+            &today,
+        )
+        .await
+        .unwrap();
+        (t1.template.id, t2.template.id, s.id)
+    };
+    let a = backup_now(&srv, &cookie).await;
+    let a_id = a["historyId"].as_str().unwrap().to_string();
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        for sql in [
+            "DELETE FROM recurring_invoice_items",
+            "DELETE FROM recurring_invoices",
+            "DELETE FROM recurring_subscriptions",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+    }
+
+    let srv = restore_from_history(srv, &cookie, &a_id).await;
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = session_cookie(&r);
+
+    // Prüfung je Reihe, Marker aus dem Backup verworfen, Hinweise.
+    for key in [
+        format!("recurring_restore_review:inv:{skip_id}"),
+        format!("recurring_restore_review:inv:{catch_id}"),
+        format!("recurring_restore_review:sub:{sub_id}"),
+    ] {
+        assert_eq!(
+            scalar_text(
+                &srv,
+                &format!("SELECT value FROM app_settings WHERE key = '{key}'")
+            )
+            .await
+            .as_deref(),
+            Some(today.as_str()),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'recurring|_catch|_up|_ok:%' ESCAPE '|'"
+        )
+        .await,
+        0
+    );
+    let r = call(
+        &srv.app,
+        &cookie,
+        "recurring_restore_review_list",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["templates"].as_array().map(Vec::len), Some(2));
+    assert_eq!(r.json()["subscriptions"][0], sub_id.as_str());
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_recurring:%'
+             AND body LIKE '%kennt Klein.Buch den Stand%'"
+        )
+        .await,
+        1
+    );
+    // Gleiche Zählerstände: kurzer Hinweis „keine Lücke“ (kein DR-Text).
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+             AND severity = 'info' AND body LIKE '%keine wird doppelt vergeben%'"
+        )
+        .await,
+        1
+    );
+
+    // Nach der Freigabe: nichts automatisch, nur „Entscheidung nötig“.
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "scheduler_release_hold",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(run_recurring(&srv).await, (0, 0, 3));
+
+    // „Ab heute fortsetzen“ lässt auch den heutigen Termin aus.
+    for (cmd, id) in [
+        ("recurring_invoices_resolve_backlog", skip_id.as_str()),
+        ("recurring_resolve_backlog", sub_id.as_str()),
+    ] {
+        let r = call(
+            &srv.app,
+            &cookie,
+            cmd,
+            serde_json::json!({ "id": id, "mode": "skip" }),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::OK, "{cmd}: {}", r.text());
+        assert!(
+            r.json()["nextDueDate"].as_str().unwrap() > today.as_str(),
+            "{cmd}: {}",
+            r.text()
+        );
+    }
+    // „Nachholen“: nur als Entwurf, auch im Modus „Auto-Rechnung“.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "recurring_invoices_resolve_backlog",
+        serde_json::json!({ "id": catch_id, "mode": "catchUp" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    // Lauf hier oder Scheduler-Tick der Instanz — geprüft wird der Stand.
+    run_recurring(&srv).await;
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM invoices WHERE locked_at IS NOT NULL"
+        )
+        .await,
+        0,
+        "nachgeholt nur als Entwurf"
+    );
+    assert_eq!(scalar_i64(&srv, "SELECT COUNT(*) FROM invoices").await, 2);
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'recurring|_restore|_review:%' ESCAPE '|'"
+        )
+        .await,
+        0,
+        "alle Prüfungen erledigt"
+    );
+    assert_eq!(run_recurring(&srv).await, (0, 0, 0));
+}
+
+/// D-24 (Disaster Recovery): Nummernkreis von Hand anheben — nur aufwärts,
+/// mit Begründung, Re-Auth, Audit; die nächste Nummer folgt dem neuen Stand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn numbering_raise_only_upwards_with_reason() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let first = draft_invoice(&srv).await;
+    let year = scalar_i64(
+        &srv,
+        &format!("SELECT fiscal_year FROM invoices WHERE id = '{first}'"),
+    )
+    .await;
+    let raise = |value: i64, reason: &str| {
+        serde_json::json!({
+            "docType": "invoice",
+            "fiscalYear": year,
+            "lastValue": value,
+            "reason": reason,
+        })
+    };
+    // ohne Re-Auth → 403
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_raise",
+        raise(41, "laut Mail-Ausgang RE-41"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    // zu kurze Begründung, Absenken, unbekannter Kreis → abgelehnt
+    let r = call(&srv.app, &cookie, "numbering_raise", raise(41, "kurz")).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_raise",
+        raise(1, "Absenken versucht"),
+    )
+    .await;
+    assert!(r.status.is_client_error(), "{}", r.text());
+    assert!(r.text().contains("absenken"), "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_raise",
+        serde_json::json!({ "docType": "x", "fiscalYear": year, "lastValue": 5, "reason": "unbekannter Kreis" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
+    // gültig
+    let r = call(
+        &srv.app,
+        &cookie,
+        "numbering_raise",
+        raise(41, "laut Mail-Ausgang zuletzt RE-41"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let list = r.json();
+    let invoice = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["docType"] == "invoice")
+        .unwrap();
+    assert_eq!(invoice["lastValue"], 41);
+    assert_eq!(invoice["lastNumber"], format!("RE-{year}-0041"));
+    let details: String = scalar_text(
+        &srv,
+        "SELECT details_json FROM audit_log WHERE action = 'numbering.raised'",
+    )
+    .await
+    .unwrap();
+    assert!(
+        details.contains("\"from\":1")
+            && details.contains("\"to\":41")
+            && details.contains("Mail-Ausgang"),
+        "{details}"
+    );
+    let next = draft_invoice(&srv).await;
+    assert_eq!(
+        scalar_text(
+            &srv,
+            &format!("SELECT invoice_number FROM invoices WHERE id = '{next}'"),
+        )
+        .await
+        .unwrap(),
+        format!("RE-{year}-0042")
+    );
 }

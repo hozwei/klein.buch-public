@@ -3,7 +3,6 @@
   import PageBar from "$lib/PageBar.svelte";
   import Toggle from "$lib/Toggle.svelte";
   import {
-    paymentAccountsEnsureDefaults,
     paymentAccountsList,
     paymentAccountsCreate,
     paymentAccountsUpdate,
@@ -58,8 +57,8 @@
     loading = true;
     error = null;
     try {
-      // Beim ersten Öffnen Standard-Konten anlegen (idempotent).
-      await paymentAccountsEnsureDefaults();
+      // Reines Lesen: Standardkonten legt der Server einmalig bei der
+      // Einrichtung bzw. beim ersten Entsperren an (Lauf F, D-14).
       accounts = await paymentAccountsList(showInactive);
     } catch (e) {
       error = String(e);

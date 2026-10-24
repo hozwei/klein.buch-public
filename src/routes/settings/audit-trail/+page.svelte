@@ -8,6 +8,7 @@
   import { flash } from "$lib/toast.svelte";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
 
   let entries = $state<AuditEntry[]>([]);
   let history = $state<IntegrityCheckRow[]>([]);
@@ -60,12 +61,6 @@
     }
   }
 
-  function fmtDateTime(ts: string | null): string {
-    if (!ts) return "—";
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
 
   const ACTION_LABELS: Record<string, string> = {
     "invoice.lock": "Rechnung festgeschrieben",
@@ -127,7 +122,7 @@
         <tbody>
           {#each history as h (h.id)}
             <tr class:bad={h.filesFailed > 0}>
-              <td data-label="Zeitpunkt">{fmtDateTime(h.startedAt)}</td>
+              <td data-label="Zeitpunkt">{dateTime(h.startedAt)}</td>
               <td class="num" data-label="Geprüft">{h.filesChecked}</td>
               <td class="num" data-label="Ok">{h.filesPassed}</td>
               <td class="num" data-label="Fehler">{h.filesFailed}</td>
@@ -147,7 +142,7 @@
       <table class="cards">
         <thead>
           <tr>
-            <th>Zeitpunkt (UTC)</th>
+            <th>Zeitpunkt</th>
             <th>Aktion</th>
             <th>Bezug</th>
           </tr>
@@ -155,7 +150,7 @@
         <tbody>
           {#each entries as e (e.id)}
             <tr>
-              <td class="ts" data-label="Zeitpunkt (UTC)">{fmtDateTime(e.timestampUtc)}</td>
+              <td class="ts" data-label="Zeitpunkt">{dateTime(e.timestampUtc)}</td>
               <td class="cards-full" data-label="Aktion">
                 {actionLabel(e.action)}
                 <span class="raw">{e.action}</span>

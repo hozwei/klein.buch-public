@@ -1,5 +1,6 @@
 //! Plan W4: Tests über die Command-Kerne für Stellen, die bisher nur per
-//! Host-Smoke geprüft waren (der Tauri-Command brauchte ein `AppHandle`):
+//! Host-Smoke geprüft waren (der Command der Desktop-Fassung brauchte ein
+//! `AppHandle`):
 //!
 //! - Storno-Orchestrierung `invoices_cancel` (vorher nur nachgebaut in
 //!   `invoice_lock_pipeline_test.rs`).
@@ -79,12 +80,7 @@ async fn setup(unlocked: bool) -> Env {
     .unwrap();
 
     let desktop = Arc::new(RecordingDesktop::default());
-    let ctx = Arc::new(AppCtx::new(
-        paths,
-        Arc::new(klein_buch_lib::notify::InboxOnly),
-        desktop.clone(),
-        "test",
-    ));
+    let ctx = Arc::new(AppCtx::new(paths, desktop.clone(), "test"));
     if unlocked {
         let pool = klein_buch_lib::db::open_pool(&ctx.paths.db_file, None)
             .await

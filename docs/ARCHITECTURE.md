@@ -138,7 +138,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |
 | `mail::oauth_ms` | Core+Shell | Microsoft-Graph-Versand (ADR 0028); im Server gesperrt (E9), Code noch vorhanden |
-| `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht (`InboxOnly`) |
+| `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit und einziger Kanal), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht |
 | `fiscal_year::{lock,transition,guard}` | Shell | prüfungssicherer GJ-Abschluss + `ensure_year_open`-Guard (ADR 0027) |
 | `scheduler::{tick,recurring,reminders,integrity_check_cron,depreciation_year_close,recurring_invoice,update_check}` | Shell | 5-Min-Tick, nur entsperrt, Catch-up (ADR 0023/0027, §5) |
 | `assets::afa_tabellen` | Shell | AfA-Tabellen-Laden aus `inputs/afa-tabellen.json` |
@@ -169,7 +169,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `db::rekey_db_file` | Shell | Neuverschlüsseln mit neuer Passphrase: `ATTACH … KEY` + `sqlcipher_export` in eine Temp-Datei, Probe-Read, atomarer Tausch (gemeinsamer Kern `reencrypt_db_file`; Passphrase-Wechsel, W6) |
 | `backup::target` | Shell | Floor + Off-Site: Ordner unter `/backup-targets` (`canonicalize`) und SFTP, höchstens 10 Ziele, Status `offsite` (ADR 0034 + Amendment, Nr. 77) |
 | `backup::sftp` | Shell | `russh`/`russh-sftp`, Host-Key-Pinning (SHA-256), Passwort je Ziel im `secrets`-Store, Upload unter `.<name>.part` + `rename` |
-| `backup::rotation` | Shell | Floor 7/3/1 (bei erfolgreichem Off-Site-Ziel, sonst 30/12/7), Off-Site je Ziel 30/12/7; `manual`/`pre_restore` nie rotiert |
+| `backup::rotation` | Shell | Kalender-Eimer (Europe/Berlin): Floor 7/3/1 Tage/Monate/Jahre (bei erfolgreichem Off-Site-Ziel, sonst 30/12/7), Ordner-Ziele je Ziel 30/12/7, SFTP nie; `manual`/`pre_restore` nie rotiert (ADR 0040) |
 | `db::repo::backup_log` | Shell | Append-only `backup_log` (Migration 0026): Datum, Name, Größe, Pfad, Ziel-Typ, Status, Auslöser. **Keine Passphrase.** |
 | `notify::rules::rule_backup_result` | Shell | Off-Site-bewusster `backup_overdue` + Erfolg/Fehler-Hinweis, Inbox-only (Migration 0027) |
 
@@ -230,7 +230,9 @@ Zeitstempel, Nr. 94), OpenSSL ohne `atexit` (Nr. 98), `PR_SET_DUMPABLE` 0. Dann
    `db::prepare_filesystem` (Seed von `/inputs`; vorgemerkter Factory Reset →
    Abbruch, E7; Reste eines Restore-Stagings aufräumen, vorgemerkten Restore
    anwenden, §4.4); Datenbank und Instanz-Marker passen zusammen; keine
-   Klartext-DB; Selbsttest `0o400` im Archiv; `<data>/tmp` leeren.
+   Klartext-DB; Selbsttest `0o400` im Archiv; `<data>/tmp` leeren, abgebrochene
+   Backup-Teildateien entfernen (im Betrieb räumt der Sweeper stündlich Reste
+   älter als 6 h, D-13).
 4. Gerätecookie-Schlüssel laden, Setup-Token erzeugen, falls keine DB oder kein
    TOTP vorhanden ist (eigene Zeile auf stderr, nie im `tracing`-Log).
 5. Port binden. Erst jetzt ist der Server erreichbar; `/healthz` meldet `locked`
@@ -301,16 +303,20 @@ aus der lokalen Historie → Manifest, Format (1–2), Schema
 `30 ≤ s ≤ EXPECTED` → Entschlüsseln (falsche Passphrase schreibt nichts) → Audit
 `backup.restore.requested` → Pre-Restore-Backup → Platzprüfung → gehärtet ins
 Staging entpacken → gestagte DB prüfen (Schema, Archivpfade,
-Migrations-Prüfsummen) → Marker. Ab der Annahme lehnt der Server Änderungen mit
-503 ab und pausiert den Scheduler; nach Erfolg fährt er geordnet herunter
+Migrations-Prüfsummen) → Nummernkreise der laufenden DB festhalten (D-24) →
+Marker. Ab der Annahme lehnt der Server Änderungen mit 503 ab und pausiert den
+Scheduler; nach Erfolg fährt er geordnet herunter
 (Exit 0), die Container-Verwaltung startet ihn neu.
 
 **Phase B (nächster Start, `db::prepare_filesystem`, vor dem Port-Bind):**
 `restore::apply_pending` tauscht DB, `archive/` und `branding/` in drei Stufen
 mit Zustandsdatei und Rückabwicklung; die Angaben landen in
-`RESTORE_APPLIED.json`. Das erste Entsperren schreibt `backup.restore.applied`
-in die wiederhergestellte DB und übernimmt das Pre-Restore-Backup in die
-Historie. `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
+`RESTORE_APPLIED.json`. Das erste Entsperren schreibt in **einer** Transaktion
+`backup.restore.applied`, die Pause `scheduler_hold = restore` (W14-023) und das
+Anheben der Nummernkreise auf die festgehaltenen Stände, wo diese höher waren
+(D-24, Audit `numbering.raised_after_restore`), legt Hinweise an und übernimmt
+das Pre-Restore-Backup und die nach dem eingespielten Stand entstandenen
+Floor-Backups in die Historie (D-22). `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
 §6.
 
 ### 4.5 Backup erstellen (G1, W2, W7)
@@ -320,9 +326,10 @@ Historie. `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
 Runtime, KDF-Semaphore) → `.kbk` mit Klartext-Manifest → Floor
 `/data/backups` (Temp-Datei, `fsync`, `rename`) und jedes Off-Site-Ziel (Ordner
 unter `/backup-targets`, SFTP) mit Zeitlimit je Ziel → `backup_log` je Ziel
-(**niemals** Passphrase) → Rotation je Ablage → Hinweis über
-`rule_backup_result`. Ein gescheitertes Ziel ist nicht fatal (Status
-`offsite = failing`, Inbox).
+(**niemals** Passphrase) → Rotation je Ablage (Kalender-Eimer; SFTP nie; ruht
+während einer Pause) → Hinweis über `rule_backup_result`. Ein gescheitertes
+Ziel ist nicht fatal (Status `offsite = failing`, Inbox). Nach einem Restore
+geht bis zur Freigabe nichts auf die Off-Site-Ziele (D-23).
 
 ### 4.6 Im Server entfallene Abläufe
 - **Factory Reset** (ADR 0036): im Server abgeschaltet (E7), Code entfernt
@@ -336,7 +343,8 @@ unter `/backup-targets`, SFTP) mit Zeitlimit je Ziel → `backup_log` je Ziel
 
 ### 4.7 Passphrase und zweiter Faktor ändern (W6)
 Re-Auth, dann `POST /api/auth/passphrase`: warten auf laufende Commands/Jobs
-(`db_gate`, höchstens 60 s) → `db::rekey_db_file` mit der neuen
+(`db_gate`, höchstens 60 s) und auf den Scheduler-Tick (höchstens 10 s, sonst
+503) → `db::rekey_db_file` mit der neuen
 Passphrase (Probe, `quick_check`, `fsync`, Tausch) → andere Sitzungen abmelden →
 Backup (`manual`) als nachverfolgter Task. Ältere Backups bleiben mit der alten
 Passphrase einspielbar. TOTP und Einmal-Codes erneuert `POST
@@ -425,14 +433,17 @@ offenen Entwürfe; einmalig + irreversibel. ADR 0032.
 
 ### 4.17 Abo-Rechnungen / Ausgangsseite (Phase 4)
 Abo-Vorlage (`recurring_invoices`, Stammdatum) → der Scheduler-Job im Tick (nur
-entsperrt, plus Fälligkeits-Check beim Öffnen der Abo-Seite) materialisiert am
+entsperrt; die Seite löst beim Öffnen keinen Lauf aus) materialisiert am
 Stichtag über **dieselbe** draft→lock-Pipeline (§4.1): Belegdatum = **heute**
 (nie rückdatiert, §14 Abs. 4 Nr. 3), Leistungszeitraum als `delivery_date`.
 `auto_mode` steuert je Vorlage Entwurf / Festschreiben / Festschreiben+Versand.
-§19 wird beim Vorlagen-Speichern serverseitig erzwungen. Catch-up holt
-verpasste Perioden nach (alle mit heutigem Belegdatum) — auch die Zeit, in der
-die Instanz nach einem Neustart gesperrt war. Gegen Doppel: Sperre je Vorlage
-plus Compare-and-Swap (Nr. 8). ADR 0033.
+§19 wird beim Speichern und vor jeder Materialisierung serverseitig erzwungen.
+Nummer, Entwurf, Audit und Vorrücken committen in einer Transaktion;
+Festschreiben/Versand setzt ein Lauf nach einem Abbruch fort (Marker). Bis drei
+fällige Termine holt der Lauf selbst nach (nur der jüngste nach `auto_mode`,
+ältere als Entwurf), mehr nur nach Bestätigung („Rückstand …“). Gegen Doppel:
+Sperre je Vorlage (auch Bearbeiten/Pausieren) plus Compare-and-Swap. ADR 0033,
+ADR 0040.
 
 ### 4.18 Rechnungseingang per Upload (E11, ersetzt den Drop-Folder)
 Eingangsrechnungen lädt der Nutzer im Browser hoch (`POST /api/upload/erechnung`,
@@ -475,37 +486,76 @@ CSP `sandbox`.
 Ein Hintergrund-Task (`scheduler::tick::start`), Tokio-Interval **5 Minuten**
 (`TICK_INTERVAL_SECS = 300`). Verpasste Ticks werden **nicht nachgefeuert**
 (`MissedTickBehavior::Skip`) — der nächste reguläre Tick deckt den Rückstand
-ab, weil alle Jobs idempotent über ihr Stichtags-Raster sind.
+ab, weil alle Jobs ihre Fälligkeit aus persistierten Werten bestimmen. Die Zeit
+kommt aus der Uhr des `AppCtx` (`clock::Clock`, in Tests `FixedClock`); Jobs
+bekommen sie mit Pool, Pfaden, Sitzung und Abbruch-Anforderung über
+`scheduler::JobCtx` (ADR 0040).
 
 **Gating.** Der Scheduler startet erst **nach** dem ersten erfolgreichen
-Entsperren (§3), einmal pro Prozess. Ohne Pool (gesperrt) tut ein Tick nichts.
-Restore, Herunterfahren und „Datenbank sperren" pausieren ihn über ein Gate
-(ein laufender Tick wird abgewartet). Nach einem Neustart läuft nichts, bis
-jemand entsperrt (E3); fällige Jobs holt der erste Tick nach.
+Entsperren (§3), einmal pro Prozess. Ohne Pool (gesperrt) tut ein Tick nichts;
+das Log meldet den gesperrten Zustand beim Serverstart und alle 6 h.
+Restore, Herunterfahren und „Datenbank sperren" pausieren ihn über ein Gate;
+vorher setzen sie die kooperative Abbruch-Anforderung (`AppCtx::scheduler_stop`),
+damit ein laufender Abo-Lauf nach dem aktuellen Termin und der Archiv-Vollscan
+nach der aktuellen Datei aufhört. „Datenbank sperren“ wartet darauf höchstens
+10 s und sperrt dann trotzdem; „Passphrase ändern“ antwortet nach dieser Frist
+mit 503. Das Herunterfahren setzt die Abbruch-Anforderung schon beim Signal und
+wartet dann gleichzeitig höchstens 25 s auf den Tick und 30 s auf abgekoppelte
+Tasks (`stop_grace_period` 90 s, ADR 0040). Nach einem Neustart läuft nichts,
+bis jemand entsperrt (E3); der erste Tick nach dem Entsperren wartet 60 s
+(`tick::UNLOCK_SETTLE`), lässt den Vollscan aus und holt Fälliges nach —
+Abo-Läufe mit Grenze (bis drei Termine selbst, mehr nach Bestätigung), genau
+ein Tages-Backup. Mehr als zwei Tage ohne Aktivität meldet das Entsperren als
+Hinweis.
+
+**Pause.** `app_settings.scheduler_hold` hält Abo-Rechnungen, Abo-Kosten und
+Auto-AfA an (Tick und manuelle Auslöser), bis der Inhaber im Browser freigibt
+(`scheduler_release_hold`, Re-Auth). Gesetzt bei unplausibler Uhr (mehr als 1 h
+zurück oder mehr als 400 Tage vor dem zuletzt gesehenen Lauf) und nach einem
+Restore (in der Transaktion des Restore-Audits). Backups, Integritätsprüfung und
+Hinweise laufen weiter; die Backup-Rotation ruht, und nach einem Restore gehen
+Backups bis zur Freigabe nur in den Floor. In derselben Transaktion rückt
+`backup::after_restore` die Abo-Reihen nur vorwärts auf ihre Termine vor dem
+Restore, merkt Reihen ohne bekannten Stand zur Entscheidung vor, verwirft
+Fortsetzungs- und Nachhol-Marker aus dem Backup und merkt Entwürfe vor, deren
+Nummer vor dem Restore schon festgeschrieben war (ADR 0040, F1d). Die Pause des
+Schedulers selbst (`AppCtx::scheduler_paused`) hebt das Entsperren auf, ohne auf
+einen beim Sperren noch laufenden Tick zu warten.
 
 **Jobs pro Tick (in dieser Reihenfolge, jeder Job isoliert):**
 
-0. **Tages-Backup** (`backup::auto_daily_if_due`) — fällig, wenn das letzte
-   Backup älter als 24 h ist; nach einem Fehlschlag 1 h Pause (W2).
-1. **`scheduler::recurring`** — fällige eingangsseitige Recurring-Kosten
-   materialisieren (Block 10).
-2. **`scheduler::depreciation_year_close`** — Auto-AfA zur GJ-Wende, default-an
-   per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`), abschaltbar (Block 15).
-3. **`scheduler::integrity_check_cron`** — monatlicher Archiv-Hash-Verify;
-   manipuliert, fehlt und nicht lesbar getrennt (`archive.integrity_fail`,
-   `_missing`, `_unreadable`).
-4. **`scheduler::reminders`** — Regel-getriebene Hinweise (`notify::rules`),
-   inkl. Off-Site-bewusstem `backup_overdue` und Hinweis ohne Off-Site-Ziel.
-5. **`scheduler::recurring_invoice`** — fällige Abo-Rechnungen materialisieren
+1. **`scheduler::recurring`** — fällige Kosten-Abos buchen (Block 10): je Abo
+   unter Sperre, Beleg + Audit + Vorrücken in einer Transaktion, Fehler je Abo.
+2. **`scheduler::recurring_invoice`** — fällige Abo-Rechnungen materialisieren
    (Phase 4).
-6. **`scheduler::update_check`** — opt-in Versionsprüfung (Standard aus;
+3. **`scheduler::depreciation_year_close`** — Auto-AfA zur GJ-Wende, default-an
+   per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`), abschaltbar (Block 15);
+   je Anlage und Jahr eine Transaktion, Fehler mit Hinweis und 6 h Backoff.
+4. **Backup** — Tages-Backup (`backup::auto_daily_if_due`): genau eines je
+   Berliner Kalendertag ab `backup_daily_time` (Standard 02:30; fällig ist der
+   zuletzt fällige Slot, ein verpasster wird beim ersten Tick nachgeholt), nach
+   einem Fehlschlag 1 h Backoff (persistiert). Es deckt die Lock-Ereignisse der
+   Schritte 1 und 2 mit ab; sonst legt der Tick genau ein Lock-Backup an
+   (D-19, Backup-Hardline). Ein ausgefallenes Lock-Backup (Vermerk
+   `backup_pending_since`) holt der erste Tick danach nach
+   (`backup::pending_backup_if_due`).
+5. **`scheduler::integrity_check_cron`** — monatlicher Archiv-Hash-Verify
+   (nicht im ersten Tick nach dem Entsperren); gemeinsame Sperre mit „Jetzt
+   prüfen“, 6 h Backoff nach Fehlschlag; manipuliert, fehlt und nicht lesbar
+   getrennt (`archive.integrity_fail`, `_missing`, `_unreadable`).
+6. **`scheduler::reminders`** — Regel-getriebene Hinweise (`notify::rules`),
+   inkl. Off-Site-bewusstem `backup_overdue` (Alter in Europe/Berlin), Hinweis
+   ohne Off-Site-Ziel und „Abo fällig“ für Kosten-Abos im Modus Erinnerung.
+7. **`scheduler::update_check`** — opt-in Versionsprüfung (Standard aus;
    höchstens alle 24 h, nur GET, ohne Weiterleitungen, Hinweis nur als Text;
    Nr. 111). Läuft außerhalb der DB-Jobs, damit deren Tests nie ins Netz gehen.
 
 Manuelle Trigger: Seiten, die einen Job kennen, bieten „Jetzt prüfen"
 (`recurring_run_due_check`, `recurring_invoices_run_due_check`,
 `archive_integrity_run`, `notifications_run_checks`). Diese Wege rufen die
-Job-Funktionen direkt auf, unabhängig vom Tick.
+Job-Funktionen direkt auf, unabhängig vom Tick, mit denselben Sperren, Grenzen
+und Pausen. Seiten lösen beim Öffnen keinen Lauf und keinen Schreib-Command aus
+(Vitest `no-side-effects-on-open`).
 
 ---
 
@@ -592,6 +642,11 @@ den verlinkten ADRs.
   die opt-in Versionsprüfung.
 - **Zeitzone** (E12). Fachliche Daten immer Europe/Berlin (`crate::clock`,
   `src/lib/date.ts`); das Geschäftsjahr bestimmt der Server aus dem Belegdatum.
+  Zeitabhängige Abläufe lesen die Uhr aus dem `AppCtx` (ADR 0040). Die DB
+  speichert Zeitpunkte in UTC (`YYYY-MM-DD HH:MM:SS`); die Oberfläche zeigt sie
+  über `date()`/`dateTime()` aus `src/lib/format.ts` mit Berliner Tag und
+  Uhrzeit, Tage bis zur Fälligkeit über `daysUntilBerlin` — unabhängig von der
+  Zeitzone des Geräts (Lauf F, D-15/D-25).
 
 ---
 

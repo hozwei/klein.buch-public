@@ -240,6 +240,17 @@ pub async fn set_book_value(
     book_value_cents: i64,
     last_depreciation_year: Option<i64>,
 ) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    set_book_value_in(&mut conn, id, book_value_cents, last_depreciation_year).await
+}
+
+/// [`set_book_value`] innerhalb einer laufenden Transaktion (Lauf F, D-03).
+pub async fn set_book_value_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    book_value_cents: i64,
+    last_depreciation_year: Option<i64>,
+) -> Result<()> {
     let res = sqlx::query(
         "UPDATE assets SET book_value_cents = ?, last_depreciation_year = ?,
                 updated_at = datetime('now','utc')
@@ -248,7 +259,7 @@ pub async fn set_book_value(
     .bind(book_value_cents)
     .bind(last_depreciation_year)
     .bind(id)
-    .execute(pool)
+    .execute(conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(

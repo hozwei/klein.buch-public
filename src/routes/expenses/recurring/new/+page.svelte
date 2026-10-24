@@ -182,8 +182,9 @@
           <input type="radio" name="autoMode" value="auto" bind:group={autoMode} />
           <span>
             <strong>Automatisch als Kosten buchen.</strong>
-            Klein.Buch legt die Kostenposition am Stichtag von selbst an — auch
-            rückwirkend für jede verpasste Periode, falls die App länger zu war.
+            Klein.Buch legt die Kostenposition am Stichtag von selbst an. Waren
+            Termine offen (z. B. weil die Instanz gesperrt war), holt es bis zu drei
+            selbst nach; bei mehr fragt es vorher nach (Hinweis).
             Die Position ist zunächst <em>„noch nicht bezahlt"</em>; du bestätigst
             später nur die echte Abbuchung.
           </span>
@@ -192,9 +193,9 @@
           <input type="radio" name="autoMode" value="manual" bind:group={autoMode} />
           <span>
             <strong>Nur an die Fälligkeit erinnern.</strong>
-            Das Abo erscheint am Stichtag als <em>„fällig"</em> in der Liste —
-            gebucht wird nichts automatisch. Die Kostenposition legst du selbst
-            per Knopf <em>„Jetzt erfassen"</em> an.
+            Am Stichtag erscheint ein Hinweis, und das Abo steht als
+            <em>„fällig"</em> in der Liste — gebucht wird nichts automatisch. Die
+            Kostenposition legst du selbst per Knopf <em>„Buchen"</em> an.
           </span>
         </label>
       </fieldset>

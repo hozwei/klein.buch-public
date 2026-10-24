@@ -134,7 +134,9 @@ Anfahrt-Positionen, optionaler Paket-Katalog als Broschüre.
 
 **Abo-Rechnungen** — wiederkehrende Ausgangsrechnungen mit drei
 Automatik-Stufen (nur Entwurf / festschreiben / festschreiben und versenden);
-der Scheduler prüft alle fünf Minuten und holt verpasste Perioden nach.
+der Scheduler prüft alle fünf Minuten und holt bis zu drei verpasste Perioden
+selbst nach (nur die jüngste mit Automatik, ältere als Entwurf); größere
+Rückstände erst nach Rückfrage.
 
 **Eingangs-Rechnungen** — XRechnung (CII + UBL) und ZUGFeRD per Upload im
 Browser lesen, KoSIT-prüfen (beratend), Original GoBD-konform archivieren, als
@@ -299,8 +301,8 @@ jlink-Laufzeit zusammen. Build, CI und Release: `docs/architecture/build-and-rel
 ```
 
 `inputs/` ist tabu für automatische Schreib-Operationen: Der Container kopiert
-die mitgelieferten Dateien beim Start ins Volume `/inputs` und überschreibt dort
-nie, was der Nutzer geändert hat (neue Fassungen landen als `<name>.neu`).
+die mitgelieferten Dateien beim Containerstart ins Volume `/inputs` und überschreibt dort
+nie, was der Nutzer geändert hat (neue Fassungen landen je Fassung einmal als `<name>.neu`).
 
 ---
 

@@ -52,3 +52,11 @@ Ein Restore darf nie unbemerkt Daten zerstören.
 - **Pflicht-Backup vor jeder Migration** (ADR 0039, E15): Beim Entsperren mit älterem Schema
   und nach dem Restore eines älteren Backups entsteht vorher ein verifiziertes Backup
   (Auslöser `manual`, wird nie rotiert); scheitert es, wird nicht migriert.
+
+## Amendment 2026-10-24 — Rotation nach Kalender-Eimern (Lauf F, ADR 0040)
+
+Die Aufbewahrung 30/12/7 zählt seit Lauf F Kalender-Eimer (jüngstes Backup je
+Berliner Tag, Monat, Jahr) statt Backups je Klasse; der Floor behält bei
+erfolgreichem Off-Site-Ziel 7/3/1. Das Tages-Backup entsteht einmal je
+Kalendertag zu einer festen Uhrzeit. Auf SFTP-Zielen löscht Klein.Buch nichts.
+Einzelheiten: ADR 0034 (Amendment 2026-10-24), ADR 0040 Nr. 15 und 16.

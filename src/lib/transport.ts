@@ -1,4 +1,4 @@
-// HTTP-Transport zum Server (Plan W5.11, ADR 0039) — ersetzt die Tauri-Bridge.
+// HTTP-Transport zum Server (Plan W5.11, ADR 0039) — ersetzt die Bridge der Desktop-Fassung.
 //
 // `invoke(name, args)` schickt `POST /api/cmd/{name}` mit JSON-Argumenten,
 // Pflicht-Header `X-KleinBuch-Request` und einem Idempotenz-Schlüssel je

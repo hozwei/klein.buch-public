@@ -1,8 +1,9 @@
 //! Persistente In-App-Inbox (Block 15).
 //!
-//! Die Inbox ist die Quelle der Wahrheit für Hinweise. OS-native Pushes sind nur
-//! ein zusätzlicher Kanal (siehe [`crate::notify::os_native`]). Einträge werden
-//! nicht hart gelöscht, sondern als „gelesen" (`dismissed_at`) markiert.
+//! Die Inbox ist die Quelle der Wahrheit und im Server-Betrieb der einzige Kanal
+//! für Hinweise (keine OS-Benachrichtigungen, ADR 0027 Amendment 2026-10-24).
+//! Einträge werden nicht hart gelöscht, sondern als „gelesen" (`dismissed_at`)
+//! markiert.
 //!
 //! Dedup: über den optionalen `dedup_key` (Unique-Index) wird verhindert, dass
 //! derselbe periodische Reminder mehrfach erzeugt wird (z. B.

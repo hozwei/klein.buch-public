@@ -189,6 +189,45 @@ pub fn is_due(next_due_date: NaiveDate, today: NaiveDate) -> bool {
     next_due_date <= today
 }
 
+/// Anzahl fälliger Termine ab `first` (einschließlich) bis `today`, höchstens
+/// bis `end` (Laufzeit-Ende) — gezählt bis `cap` (Obergrenze gegen
+/// Endlosschleifen bei unplausiblen Daten). Lauf F, W14-026.
+pub fn count_due_occurrences(
+    frequency: Frequency,
+    day_of_period: u32,
+    first: NaiveDate,
+    today: NaiveDate,
+    end: Option<NaiveDate>,
+    cap: usize,
+) -> usize {
+    let mut n = 0usize;
+    let mut at = first;
+    while n < cap && at <= today && end.is_none_or(|e| at <= e) {
+        n += 1;
+        at = compute_next_due_date(frequency, day_of_period, at);
+    }
+    n
+}
+
+/// Erster Termin der Reihe ab `first`, der auf oder nach `date` liegt
+/// („ab heute fortsetzen“). Liefert zusätzlich die Zahl übersprungener Termine.
+pub fn first_occurrence_on_or_after(
+    frequency: Frequency,
+    day_of_period: u32,
+    first: NaiveDate,
+    date: NaiveDate,
+) -> (NaiveDate, usize) {
+    let mut at = first;
+    let mut skipped = 0usize;
+    // Jede Periode rückt mindestens 28 Tage vor; 10 000 Schritte reichen für
+    // jedes plausible Datum (> 800 Jahre monatlich).
+    while at < date && skipped < 10_000 {
+        at = compute_next_due_date(frequency, day_of_period, at);
+        skipped += 1;
+    }
+    (at, skipped)
+}
+
 // ---- Fehler-Texte ----------------------------------------------------------
 
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI).
@@ -368,6 +407,56 @@ mod tests {
     fn day_31_in_leap_february() {
         let feb = compute_next_due_date(Frequency::Monthly, 31, d(2028, 1, 31));
         assert_eq!(feb, d(2028, 2, 29), "Schaltjahr → 29.02.");
+    }
+
+    #[test]
+    fn counts_due_occurrences_with_end_and_cap() {
+        let f = Frequency::Monthly;
+        // 01.03., 01.04., 01.05. bis 20.05.
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2026, 3, 1), d(2026, 5, 20), None, 100),
+            3
+        );
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2026, 6, 1), d(2026, 5, 20), None, 100),
+            0
+        );
+        // Laufzeit-Ende 15.04. → nur 01.03. und 01.04.
+        assert_eq!(
+            count_due_occurrences(
+                f,
+                1,
+                d(2026, 3, 1),
+                d(2026, 5, 20),
+                Some(d(2026, 4, 15)),
+                100
+            ),
+            2
+        );
+        // Obergrenze
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2016, 1, 1), d(2026, 5, 20), None, 24),
+            24
+        );
+    }
+
+    #[test]
+    fn first_occurrence_on_or_after_skips_backlog() {
+        let f = Frequency::Monthly;
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 1, 1), d(2026, 5, 20)),
+            (d(2026, 6, 1), 5)
+        );
+        // Termin genau heute bleibt
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 1, 1), d(2026, 5, 1)),
+            (d(2026, 5, 1), 4)
+        );
+        // nichts verpasst
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 7, 1), d(2026, 5, 20)),
+            (d(2026, 7, 1), 0)
+        );
     }
 
     #[test]

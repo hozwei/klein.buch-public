@@ -18,7 +18,10 @@ fn login_body(pass: &str, code: &str) -> String {
 #[tokio::test]
 async fn setup_requires_valid_token_and_token_dies_after_success() {
     let srv = test_server();
-    let token = srv.state.setup_token_for_tests().expect("Token beim Start");
+    let token = srv
+        .state
+        .setup_token_for_tests()
+        .expect("Token beim Serverstart");
     for body in [
         serde_json::json!({ "step": "totp" }),
         serde_json::json!({ "setupToken": "FALSCH", "step": "totp" }),
@@ -565,7 +568,11 @@ async fn reauth_commands_require_fresh_reauth() {
         .filter(|c| c.exposed() && c.auth == Auth::Reauth)
         .map(|c| c.name)
         .collect();
-    assert_eq!(reauth_cmds.len(), 21);
+    assert_eq!(
+        reauth_cmds.len(),
+        24,
+        "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d)"
+    );
     for name in &reauth_cmds {
         let r = send(
             &srv.app,
@@ -599,7 +606,10 @@ async fn lock_closes_pool_and_ends_sessions() {
         "Passphrase aus dem RAM"
     );
     assert!(
-        *srv.state.ctx.scheduler_gate.lock().await,
+        srv.state
+            .ctx
+            .scheduler_paused
+            .load(std::sync::atomic::Ordering::SeqCst),
         "Scheduler angehalten"
     );
     let r = call(&srv.app, &cookie, "contacts_list", serde_json::json!({})).await;
@@ -612,7 +622,11 @@ async fn lock_closes_pool_and_ends_sessions() {
     let r = login(&srv, PASS).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(srv.state.ctx.is_unlocked());
-    assert!(!*srv.state.ctx.scheduler_gate.lock().await);
+    assert!(!srv
+        .state
+        .ctx
+        .scheduler_paused
+        .load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -825,4 +839,160 @@ async fn control_characters_in_secrets_are_rejected() {
         .to_string();
     let r = send(&srv.app, post("/api/auth/login", &body, None, None)).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
+}
+
+/// W14-027: „Datenbank sperren“ wartet nicht unbegrenzt auf einen laufenden
+/// Scheduler-Tick (hier vom Test gehalten): Sitzungen sind sofort ungültig,
+/// gesperrt wird nach höchstens `SCHEDULER_STOP_WAIT`, der Tick bekommt die
+/// Abbruch-Anforderung.
+#[tokio::test]
+async fn lock_does_not_wait_forever_for_running_tick() {
+    use klein_buch_lib::server::state::SCHEDULER_STOP_WAIT;
+    use std::sync::atomic::Ordering;
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let tick = srv.state.ctx.scheduler_gate.lock().await; // simulierter langer Tick
+    let started = std::time::Instant::now();
+    let lock = {
+        let state = srv.state.clone();
+        tokio::spawn(async move { klein_buch_lib::server::auth::lock_database(&state).await })
+    };
+    for _ in 0..200 {
+        if srv.state.sessions.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let r = call(&srv.app, &cookie, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(
+        r.status,
+        StatusCode::UNAUTHORIZED,
+        "Sitzungen sofort ungültig"
+    );
+    assert!(lock.await.unwrap().is_ok(), "gesperrt trotz laufendem Tick");
+    // Obergrenze: Frist für den Tick + Schließen des Pools (unter Volllast mit
+    // fsync auf ZFS mehrere Sekunden) — der Tick selbst hängt unbegrenzt.
+    assert!(
+        started.elapsed() < SCHEDULER_STOP_WAIT + std::time::Duration::from_secs(20),
+        "nach {:?}",
+        started.elapsed()
+    );
+    assert!(!srv.state.ctx.is_unlocked(), "Pool zu");
+    assert!(
+        srv.state.ctx.session.get().is_none(),
+        "Passphrase aus dem RAM"
+    );
+    assert!(
+        srv.state.ctx.scheduler_stop.load(Ordering::SeqCst),
+        "Tick hört nach dem laufenden Termin auf"
+    );
+    drop(tick);
+    // Anmelden setzt den Scheduler fort
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!srv.state.ctx.scheduler_stop.load(Ordering::SeqCst));
+    assert!(!srv
+        .state
+        .ctx
+        .scheduler_paused
+        .load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// F1d: Läuft der beim Sperren noch aktive Tick weiter (hängender Sidecar,
+/// SMTP-Timeout), hängt das Entsperren nicht an ihm — `tick::resume` wartet
+/// nicht auf die Tick-Sperre.
+#[tokio::test]
+async fn unlock_does_not_wait_for_tick_still_running_from_lock() {
+    use std::sync::atomic::Ordering;
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let tick = srv.state.ctx.scheduler_gate.lock().await; // alter Tick läuft weiter
+    let r = send(&srv.app, post("/api/auth/lock", "{}", Some(&cookie), None)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!srv.state.ctx.is_unlocked());
+    let started = std::time::Instant::now();
+    let r = tokio::time::timeout(std::time::Duration::from_secs(60), login(&srv, PASS))
+        .await
+        .expect("Entsperren hängt am laufenden Tick");
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "nach {:?}",
+        started.elapsed()
+    );
+    assert!(srv.state.ctx.is_unlocked());
+    assert!(!srv.state.ctx.scheduler_stop.load(Ordering::SeqCst));
+    assert!(!srv.state.ctx.scheduler_paused.load(Ordering::SeqCst));
+    drop(tick);
+}
+
+/// W14-027: „Passphrase ändern“ braucht die Datei exklusiv — läuft der Tick nach
+/// `SCHEDULER_STOP_WAIT` noch, antwortet der Server mit 503 statt unbegrenzt zu
+/// warten; nichts ist geändert, der Scheduler läuft weiter.
+#[tokio::test]
+async fn passphrase_change_does_not_wait_forever_for_running_tick() {
+    use klein_buch_lib::server::state::SCHEDULER_STOP_WAIT;
+    use std::sync::atomic::Ordering;
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let tick = srv.state.ctx.scheduler_gate.lock().await;
+    let started = std::time::Instant::now();
+    let body =
+        serde_json::json!({ "newPassphrase": "ganz neue lange Passphrase 2026" }).to_string();
+    let r = send(
+        &srv.app,
+        post("/api/auth/passphrase", &body, Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE, "{}", r.text());
+    assert_eq!(r.json()["code"], "busy");
+    assert!(started.elapsed() < SCHEDULER_STOP_WAIT + std::time::Duration::from_secs(5));
+    drop(tick);
+    assert!(srv.state.ctx.is_unlocked());
+    assert!(
+        !srv.state.ctx.scheduler_stop.load(Ordering::SeqCst),
+        "Anforderung zurückgenommen"
+    );
+    let pool = srv.state.ctx.pool().unwrap();
+    assert!(klein_buch_lib::backup::verify_passphrase(&pool, PASS)
+        .await
+        .unwrap());
+}
+
+/// W5-STOP-GRACE / W14-025b: Das Herunterfahren fordert den Abbruch des
+/// laufenden Ticks an, wartet höchstens `SCHEDULER_SHUTDOWN_WAIT` (hier hält
+/// der Test den Tick fest) und schließt danach Pool und Sitzung — innerhalb
+/// der `stop_grace_period` des Compose-Beispiels.
+#[tokio::test]
+async fn shutdown_does_not_wait_forever_for_running_tick() {
+    use klein_buch_lib::server::state::{
+        JOB_DRAIN_TIMEOUT, POOL_CLOSE_WAIT, SCHEDULER_SHUTDOWN_WAIT,
+    };
+    use std::sync::atomic::Ordering;
+    let srv = test_server();
+    let _cookie = setup(&srv).await;
+    let tick = srv.state.ctx.scheduler_gate.lock().await; // simulierter langer Tick
+    let started = std::time::Instant::now();
+    srv.state.finish_shutdown().await;
+    let took = started.elapsed();
+    // Vertrag: höchstens max(Tick, Tasks) + Pool schließen (+ Messreserve).
+    let bound = JOB_DRAIN_TIMEOUT.max(SCHEDULER_SHUTDOWN_WAIT)
+        + POOL_CLOSE_WAIT
+        + std::time::Duration::from_secs(3);
+    assert!(took < bound, "nach {took:?}");
+    assert!(
+        took >= SCHEDULER_SHUTDOWN_WAIT - std::time::Duration::from_secs(1),
+        "hat auf den Tick gewartet: {took:?}"
+    );
+    assert!(
+        srv.state.ctx.scheduler_stop.load(Ordering::SeqCst),
+        "Abbruch angefordert"
+    );
+    assert!(!srv.state.ctx.is_unlocked(), "Pool geschlossen");
+    assert!(
+        srv.state.ctx.session.get().is_none(),
+        "Passphrase aus dem RAM"
+    );
+    drop(tick);
 }

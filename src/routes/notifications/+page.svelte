@@ -11,6 +11,7 @@
   import Banner from "$lib/Banner.svelte";
   import Button from "$lib/Button.svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
 
   let items = $state<AppNotification[]>([]);
   let includeDismissed = $state(false);
@@ -76,12 +77,6 @@
     return s === "urgent" ? "Dringend" : s === "warning" ? "Achtung" : "Info";
   }
 
-  function fmtDateTime(ts: string | null): string {
-    if (!ts) return "—";
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
 </script>
 
 <PageBar title="Hinweise">
@@ -123,7 +118,7 @@
           <div class="line">
             <span class="badge sev-{item.severity}">{severityLabel(item.severity)}</span>
             <strong>{item.title}</strong>
-            <span class="ts">{fmtDateTime(item.triggeredAt)}</span>
+            <span class="ts">{dateTime(item.triggeredAt)}</span>
           </div>
           <p class="text">{item.body}</p>
         </div>

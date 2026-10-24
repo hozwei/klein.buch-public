@@ -1,4 +1,4 @@
-//! Tauri-Commands für Anhänge.
+//! Commands für Anhänge.
 //!
 //! - **Lesen/Öffnen** ([`attachments_open`] / [`attachments_reveal`]): zeigt
 //!   einen bereits archivierten Anhang (z. B. unterschriebener Vertrag, Beleg)

@@ -1,4 +1,4 @@
-//! Tauri-Commands für Privatentnahmen / -einlagen (Block 9).
+//! Commands für Privatentnahmen / -einlagen (Block 9).
 //!
 //! Privatbewegungen sind EÜR-neutral (siehe domain::private_movement) und dienen
 //! nur der Vollständigkeit der Kasse. Erfassung schreibt sofort fest (Lock-Event
@@ -97,7 +97,7 @@ pub async fn private_movements_create(
     Ok(row)
 }
 
-/// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).
+/// Testbarer Kern von [`private_movements_create`] (ohne `AppCtx`).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,

@@ -131,7 +131,15 @@ fn auth_of(name: &str) -> Auth {
         | "payment_accounts_create"
         | "payment_accounts_update"
         | "contacts_anonymize"
-        | "fiscal_year_close" => Auth::Reauth,
+        | "fiscal_year_close"
+        // Lauf F: Freigabe nach einer Pause der automatischen Belegerzeugung
+        // (Uhrsprung, Restore) — danach können Rechnungen hinausgehen.
+        | "scheduler_release_hold"
+        // Lauf F (D-24): Anheben eines Nummernkreises (dokumentierte Lücke).
+        | "numbering_raise"
+        // Lauf F (F1d): Freigabe eines wiederhergestellten Entwurfs, dessen
+        // Nummer vor dem Restore schon festgeschrieben war.
+        | "numbering_restored_draft_confirm" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -286,6 +294,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("backup_needs_onboarding", h::backup_needs_onboarding),
     ("backup_is_unlocked", h::backup_is_unlocked),
     ("backup_get_settings", h::backup_get_settings),
+    ("backup_set_daily_time", h::backup_set_daily_time),
     ("backup_setup_passphrase", h::backup_setup_passphrase),
     ("backup_unlock", h::backup_unlock),
     ("backup_create_now", h::backup_create_now),
@@ -410,10 +419,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("package_catalog_render", h::package_catalog_render),
     ("package_catalog_send", h::package_catalog_send),
     ("payment_accounts_list", h::payment_accounts_list),
-    (
-        "payment_accounts_ensure_defaults",
-        h::payment_accounts_ensure_defaults,
-    ),
     ("payment_accounts_create", h::payment_accounts_create),
     ("payment_accounts_update", h::payment_accounts_update),
     (
@@ -443,6 +448,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("recurring_set_active", h::recurring_set_active),
     ("recurring_run_now", h::recurring_run_now),
     ("recurring_run_due_check", h::recurring_run_due_check),
+    ("recurring_resolve_backlog", h::recurring_resolve_backlog),
     ("recurring_invoices_list", h::recurring_invoices_list),
     ("recurring_invoices_get", h::recurring_invoices_get),
     ("recurring_invoices_create", h::recurring_invoices_create),
@@ -452,6 +458,10 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::recurring_invoices_set_active,
     ),
     ("recurring_invoices_run_now", h::recurring_invoices_run_now),
+    (
+        "recurring_invoices_resolve_backlog",
+        h::recurring_invoices_resolve_backlog,
+    ),
     (
         "recurring_invoices_run_due_check",
         h::recurring_invoices_run_due_check,
@@ -486,6 +496,22 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("archive_integrity_run", h::archive_integrity_run),
     ("archive_integrity_history", h::archive_integrity_history),
     ("app_info", h::app_info),
+    ("scheduler_hold_status", h::scheduler_hold_status),
+    ("scheduler_release_hold", h::scheduler_release_hold),
+    ("numbering_counters_list", h::numbering_counters_list),
+    ("numbering_raise", h::numbering_raise),
+    (
+        "numbering_restored_drafts_list",
+        h::numbering_restored_drafts_list,
+    ),
+    (
+        "numbering_restored_draft_confirm",
+        h::numbering_restored_draft_confirm,
+    ),
+    (
+        "recurring_restore_review_list",
+        h::recurring_restore_review_list,
+    ),
     ("third_party_licenses_path", h::third_party_licenses_path),
 ];
 
@@ -1599,17 +1625,6 @@ mod h {
         })
     }
 
-    pub fn payment_accounts_ensure_defaults(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::payment_accounts::PaymentAccountsEnsureDefaultsArgs =
-                parse(v)?;
-            let out =
-                crate::commands::payment_accounts::payment_accounts_ensure_defaults(&ctx, args)
-                    .await?;
-            Ok(serde_json::to_value(out)?)
-        })
-    }
-
     pub fn payment_accounts_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::payment_accounts::PaymentAccountsCreateArgs = parse(v)?;
@@ -1831,6 +1846,98 @@ mod h {
             let args: crate::commands::recurring::RecurringRunNowArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::recurring::recurring_run_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_resolve_backlog(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringResolveBacklogArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_resolve_backlog(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_resolve_backlog(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesResolveBacklogArgs =
+                parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_resolve_backlog(&ctx, args)
+                    .await?,
+            )?)
+        })
+    }
+
+    pub fn scheduler_hold_status(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::SchedulerHoldStatusArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::scheduler_hold_status(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn scheduler_release_hold(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::SchedulerReleaseHoldArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::scheduler_release_hold(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_counters_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingCountersListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_counters_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_raise(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRaiseArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_raise(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_restored_drafts_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRestoredDraftsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_restored_drafts_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_restored_draft_confirm(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRestoredDraftConfirmArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_restored_draft_confirm(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_restore_review_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringRestoreReviewListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_restore_review_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_set_daily_time(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupSetDailyTimeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_set_daily_time(&ctx, args).await?,
             )?)
         })
     }

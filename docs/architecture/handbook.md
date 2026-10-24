@@ -12,7 +12,7 @@
 
 - Alle Handbuch-Seiten liegen als reine Markdown-Dateien unter
   `klein-buch/src-tauri/resources/handbook/*.md` (der Ordnername stammt
-  aus der Desktop-Fassung; eine Tauri-Resource gibt es seit Phase W nicht
+  aus der Desktop-Fassung; deren Ressourcen-Bündel gibt es seit Phase W nicht
   mehr, ADR 0039). Eingebunden werden sie beim Build der SPA:
   `src/lib/handbook/index.ts` lädt sie per Vite-Glob
   (`import.meta.glob`, `?raw`, eager) in das Frontend-Bundle. Der Server

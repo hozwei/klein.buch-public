@@ -2,8 +2,8 @@
 //!
 //! Testet [`klein_buch_lib::commands::expenses::load_receipt_xml`] direkt
 //! über die zugrundeliegende Pipeline (Expenses-Repo + Archive). Die
-//! Tauri-Command-Hülle (`expenses_receipt_xml_text`) hängt nur den realen
-//! Mustang-Sidecar ein und ist ohne `AppHandle` nicht aufrufbar; deshalb
+//! Command-Hülle (`expenses_receipt_xml_text`) hängt nur den realen
+//! Mustang-Sidecar ein; deshalb
 //! injizieren die Tests die PDF→XML-Extraktion als Closure und umgehen so
 //! den Java-Sidecar (kein heavy JRE in CI).
 //!

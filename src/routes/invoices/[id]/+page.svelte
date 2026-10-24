@@ -12,7 +12,7 @@
     emailLogFor,
   } from "$lib/api";
   import type { InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "$lib/types";
-  import { euro, date } from "$lib/format";
+  import { euro, date, dateTime } from "$lib/format";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { flash } from "$lib/toast.svelte";
@@ -47,11 +47,6 @@
     }
   }
 
-  function fmtLogTime(ts: string): string {
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
 
   onMount(load);
 
@@ -315,7 +310,7 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td data-label="Zeitpunkt">{fmtLogTime(e.createdAt)}</td>
+              <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
               <td data-label="Status">{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>

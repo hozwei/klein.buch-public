@@ -140,7 +140,7 @@ sofort gemeldet, nicht ignoriert. Re-Hash läuft monatlich
 (`scheduler::integrity_check_cron`) und manuell
 (`commands::system::archive_integrity_run`). Unter Linux heißt write-once
 Erkennung statt Verhinderung (`security.md`, „Write-once unter Linux"); der
-Server prüft `0o400` beim Start per Selbsttest (`server::startup`).
+Server prüft `0o400` beim Serverstart per Selbsttest (`server::startup`).
 
 **Tests.** Roundtrip (store + read + hash-match), Tamper-Detection (Datei
 modifizieren → next read schlägt fehl), Waisen-Detection (Datei löschen →
@@ -156,7 +156,7 @@ ADRs: 0006.
 |---|---|---|
 | `db::mod` | Shell | `open_pool(db_file, key)` (SQLCipher-Pool, `PRAGMA key`), `open_and_init`, `begin_immediate` (Schreib-Transaktion, W2), `prepare_filesystem` (vor jedem Pool-Open: Seed von `/inputs`, vorgemerkter Factory Reset → Start-Abbruch (E7), Restore-Staging aufräumen, vorgemerkten Restore anwenden), `run_migrations` (`sqlx::migrate!` aus `migrations/`, Schema-Check, Restore-Audit), `rekey_db_file` (Passphrase-Wechsel, W6), `db_file_is_plaintext` |
 | `db::models` | Shell | sqlx-Row-Typen (DB-nahe), nicht zu verwechseln mit Domain-Typen — Mapping in den Repos |
-| `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq` |
+| `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq`; `snapshot` und `raise_in` (nur aufwärts) für Restore und `numbering_raise` (Lauf F, D-24) |
 | `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (31), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
 | `db::triggers` | Shell-Stub | Dokumentiert die in den Migrations-SQLs definierten Trigger (Code-Stub, die Wahrheit lebt in `migrations/*.sql`) |
 | `db::repo::*` | Shell | Repo pro Domäne (21 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
@@ -185,29 +185,37 @@ ADRs: 0003, 0006, 0035 (SQLCipher), 0039 (Pflicht-Backup vor Migration, E15).
 
 | Datei | Schicht | Verantwortung |
 |---|---|---|
-| `scheduler::tick` | Shell | Tokio-Interval (300 s), `MissedTickBehavior::Skip`, `ensure_started` (genau ein Start pro Prozess, nach dem ersten Entsperren), `stop`/`resume` über `AppCtx::scheduler_gate`. Je Tick: Tages-Backup (`backup::auto_daily_if_due`), die fünf DB-Jobs in fester Reihenfolge, danach `update_check` (Reihenfolge: `../ARCHITECTURE.md` §5). |
-| `scheduler::recurring` | Shell | Fällige eingangsseitige Recurring-Kosten materialisieren (`process_due`, `run_now`), idempotent über das Stichtags-Raster |
-| `scheduler::depreciation_year_close` | Shell | Auto-AfA zur GJ-Wende, default-an per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`) |
-| `scheduler::integrity_check_cron` | Shell | Monatlicher Archiv-Hash-Verify, Hinweis über `rule_archive_integrity_failed` |
-| `scheduler::reminders` | Shell | Regel-getriebene Hinweise: Monats-Doku-Check, GJ-Abschluss fällig, `backup_overdue` (Off-Site-bewusst: mit Off-Site-Ziel zählt das letzte erfolgreiche Off-Site-Backup aus `backup_log`), überfällige Rechnungen |
-| `scheduler::recurring_invoice` | Shell | Fällige ausgangsseitige Abo-Rechnungen über die normale draft→lock-Pipeline materialisieren (`process_due`, `catch_up`, `run_now`), Belegdatum = heute, Sperre je Vorlage |
+| `scheduler` (`mod.rs`) | Shell | `JobCtx`: Pool, Pfade, Sitzung, Notifier, Uhr (`clock::Clock`), kooperative Abbruch-Anforderung, im Tick gesammelte Lock-Backups (`lock_backup`) und Markierung „erster Tick nach dem Entsperren“ (ADR 0040) |
+| `scheduler::tick` | Shell | Tokio-Interval (300 s), `MissedTickBehavior::Skip`, `ensure_started` (genau ein Start pro Prozess, nach dem ersten Entsperren), `request_stop`/`stop`/`stop_within`/`resume` über `AppCtx::scheduler_stop` und `AppCtx::scheduler_gate`. Je Tick (isoliert, Reihenfolge `../ARCHITECTURE.md` §5): Kosten-Abos, Abo-Rechnungen, Auto-AfA, Backup (Tages-Backup kalenderfest bzw. genau ein Lock-Backup, D-19), Integritäts-Cron (nicht im ersten Tick nach dem Entsperren), Hinweise, danach `update_check`. Erster Tick frühestens `UNLOCK_SETTLE` (60 s) nach dem Entsperren. |
+| `scheduler::hold` | Shell | Pause der automatischen Belegerzeugung (`app_settings.scheduler_hold`), Uhr-Plausibilität (`scheduler_last_seen_at`), Freigabe mit Audit |
+| `scheduler::catch_up` | Shell | Nachhol-Regeln (bis 3 selbst, bestätigt bis 24), Bestätigungs-Marker, `ResumeMode` |
+| `scheduler::backoff` | Shell | Persistierter Backoff nach Fehlschlägen (`app_settings`, UTC-Zeitpunkt) |
+| `scheduler::recurring` | Shell | Fällige Kosten-Abos buchen (`process_due`, `run_now`, `apply_resume_mode`): Sperre je Abo, Beleg + Audit + Vorrücken (CAS) in einer Transaktion, Fehler je Abo |
+| `scheduler::depreciation_year_close` | Shell | Auto-AfA zur GJ-Wende, default-an per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`); Pause, Hinweis und 6 h Backoff bei Fehler |
+| `scheduler::integrity_check_cron` | Shell | Monatlicher Archiv-Hash-Verify (Monat in Europe/Berlin), gemeinsame Sperre `integrity_check::SCAN_LOCK` mit „Jetzt prüfen“, 6 h Backoff nach Fehlschlag (`integrity_last_failure_at`), Abbruch je Datei; Hinweis über `rule_archive_integrity_failed` |
+| `scheduler::reminders` | Shell | Regel-getriebene Hinweise: Monats-Doku-Check, GJ-Abschluss fällig, `backup_overdue` (Off-Site-bewusst: mit Off-Site-Ziel zählt das letzte erfolgreiche Off-Site-Backup aus `backup_log`), überfällige Rechnungen, „Abo fällig“ (Kosten-Abos im Modus Erinnerung) |
+| `scheduler::recurring_invoice` | Shell | Fällige ausgangsseitige Abo-Rechnungen über die normale draft→lock-Pipeline materialisieren (`process_due`, `run_now`, `resume_pending`, `apply_resume_mode`), Belegdatum = heute, Sperre je Vorlage und Termin, Entwurf + Vorrücken in einer Transaktion, Fortsetzen nach Abbruch |
 | `scheduler::update_check` | Shell | Opt-in Versionsprüfung (`app_settings.update_check_enabled`, Standard aus): höchstens alle 24 h ein GET auf die GitHub-Releases, ohne Weiterleitungen und ohne Instanzdaten; neuere Version → Inbox-Eintrag nur als Text (E14) |
 
 **Gating.** Der Scheduler startet erst nach dem ersten erfolgreichen
 Entsperren; ohne Pool (gesperrt) tut ein Tick nichts. Restore, Herunterfahren
-und „Datenbank sperren" pausieren ihn über das Gate (ein laufender Tick wird
-abgewartet). Nach einem Neustart läuft nichts, bis jemand entsperrt (E3);
-fällige Jobs holt der erste Tick nach. Details: `../ARCHITECTURE.md` §3 + §5.
+und „Datenbank sperren" pausieren ihn über das Gate; vorher bitten sie laufende
+Abo-Läufe, nach dem aktuellen Termin aufzuhören („Datenbank sperren“ wartet
+höchstens 10 s). Nach einem Neustart läuft nichts, bis jemand entsperrt (E3);
+fällige Jobs holt der erste Tick nach (Abo-Läufe mit Grenze). Details:
+`../ARCHITECTURE.md` §3 + §5, ADR 0040.
 
 Der Drop-Folder-Job (`scheduler::drop_folder`, ADR 0037) ist im Server
 entfallen (E11, Code entfernt in W11); Eingangsrechnungen kommen per Upload
 (`../ARCHITECTURE.md` §4.18).
 
-**Tests.** Jeder Job hat einen `process_due`-Unit-Test mit gestelltem
-`today` + Fixture-DB. Tick-Loop hat einen `scheduler_starts_only_once`-Test
-(Einmal-Guard).
+**Tests.** Jeder Job hat Tests mit fester Uhr (`clock::FixedClock`) +
+Fixture-DB; `tests/recurring_scheduler_test.rs` prüft parallele Auslöser,
+Abbruch, Nachhol-Grenze, Uhrsprung, Zeitumstellung und die Job-Isolation im
+Tick. Tick-Loop hat einen `scheduler_starts_only_once`-Test (Einmal-Guard).
 
-ADRs: 0023, 0027, 0033, 0039 (Tages-Backup im Tick, Versionsprüfung E14).
+ADRs: 0023, 0027, 0033, 0039 (Tages-Backup im Tick, Versionsprüfung E14), 0040
+(Dauerbetrieb).
 
 ---
 
@@ -215,14 +223,15 @@ ADRs: 0023, 0027, 0033, 0039 (Tages-Backup im Tick, Versionsprüfung E14).
 
 | Datei | Schicht | Verantwortung |
 |---|---|---|
-| `backup::mod` | Shell | `BackupSession` (Passphrase der laufenden Sitzung, nur im RAM), `setup_passphrase`, `store_verifier`, `unlock`, `verify_passphrase`, `create_now` (prozessweit serialisiert: Snapshot → Hülle → Floor → Off-Site-Ziele → Rotation), `auto_backup_if_unlocked` (Lock-Events), `auto_daily_if_due` (Tick), `verify_backup_file`, Hinweis `rule_backup_result` (Inbox-only) |
+| `backup::mod` | Shell | `BackupSession` (Passphrase der laufenden Sitzung, nur im RAM), `setup_passphrase`, `store_verifier`, `unlock`, `verify_passphrase`, `create_now`/`create_with` (prozessweit serialisiert: Snapshot → Hülle → Floor → Off-Site-Ziele → Rotation; Zeit aus der injizierten Uhr; während der Pause nach einem Restore nur Floor, während jeder Pause keine Rotation), `auto_backup_if_unlocked`/`auto_backup_at` (Lock-Events), `auto_daily_if_due` (Tick, kalenderfest ab `backup_daily_time`, zuletzt fälliger Slot, Backoff persistiert), `mark_pending`/`pending_backup_if_due` (ausgefallenes Lock-Backup nachholen), `rescan_floor` (Historie nach Restore), `verify_backup_file`, Hinweis `rule_backup_result` (Inbox-only) |
+| `backup::after_restore` | Shell | Abgleich im ersten Entsperren nach einem Restore (Lauf F, F1d): Abo-Termine nur vorwärts, Prüfung für Reihen ohne bekannten Stand, Marker aus dem Backup verwerfen, Entwürfe mit vor dem Restore festgeschriebener Nummer vormerken (`ensure_no_conflict` in der Lock-Pipeline und bei `quotes_issue`, `confirm_conflict`) |
 | `backup::snapshot` | Shell | Content-ZIP: DB-Snapshot per `VACUUM INTO` über eine eigene Verbindung (bleibt SQLCipher-verschlüsselt) + `archive/` + `branding/` |
 | `backup::manifest` | Shell | Klartext-Kopf der `.kbk` (Magic + einzeiliges Manifest-JSON: Format, Schema- und App-Version, Zeitpunkt, KDF-Parameter, Salt, Nonce, SHA-256 und Größe des Inhalts), damit der Restore die Angaben ohne Passphrase zeigen kann |
 | `backup::encrypt` | Shell | Argon2id-Schlüsselableitung + AES-256-GCM für die Backup-Hülle; **getrennt** von der SQLCipher-Kette (die ist im DB-Header) |
 | `backup::target` | Shell | Off-Site-Ziele als JSON-Liste in `app_settings.backup_targets` (höchstens 10): Ordner unter `/backup-targets` (relativ gespeichert, beim Schreiben per `canonicalize` gegen die Wurzel geprüft) oder SFTP; `write_backup`, `offsite_status`. Keine Cloud-Ordner-Erkennung mehr (Amendment ADR 0034). |
 | `backup::sftp` | Shell | `russh`/`russh-sftp`, Host-Key-Pinning (SHA-256, TOFU über `probe`), Passwort je Ziel in `secrets` (`sftp:<ziel-id>`), nur Passwort-Auth, Upload unter `.<name>.part` + `rename` |
-| `backup::rotation` | Shell | GVS-Tags (`daily`/`monthly`/`yearly`/`manual`); Floor 7/3/1 bei erfolgreichem Off-Site-Ziel, sonst 30/12/7; Off-Site je Ziel 30/12/7; `manual`/`pre_restore` nie rotiert. Planung pur (`plan_tiered_deletions`), Löschen in `run`. |
-| `backup::restore` | Shell | Phase A (`apply`: Pre-Restore-Backup, Entschlüsseln, Schema `30 ≤ s ≤ EXPECTED`, gehärtet ins Staging entpacken, Marker) und Phase B (`apply_pending` beim nächsten Start in `db::prepare_filesystem`: Tausch von DB, `archive/` und `branding/` mit Zustandsdatei und Rückabwicklung, Angaben in `RESTORE_APPLIED.json`) |
+| `backup::rotation` | Shell | Kalender-Eimer (jüngstes Backup je Berliner Tag/Monat/Jahr); Floor 7/3/1 bei erfolgreichem Off-Site-Ziel, sonst 30/12/7; Ordner-Ziele je Ziel 30/12/7; SFTP nie; `manual`/`pre_restore` nie rotiert (Tag nur informativ). Planung pur (`plan_tiered_deletions`), Löschen in `run`. |
+| `backup::restore` | Shell | Phase A (`apply`: Pre-Restore-Backup, Entschlüsseln, Schema `30 ≤ s ≤ EXPECTED`, gehärtet ins Staging entpacken, Nummernkreise, Abo-Termine und festgeschriebene Nummern festhalten, Marker) und Phase B (`apply_pending` beim nächsten Start in `db::prepare_filesystem`: Tausch von DB, `archive/` und `branding/` mit Zustandsdatei und Rückabwicklung, Angaben in `RESTORE_APPLIED.json`) |
 
 **Wichtig.** Phase A ändert die Live-DB nie; nach Erfolg fährt der Server
 geordnet herunter (Exit 0), die Container-Verwaltung startet ihn neu.
@@ -290,13 +299,13 @@ ADRs: 0026 (im Kontext EÜR-Export), 0039 (E10, Downloads statt Server-Pfade).
 |---|---|---|
 | `notify::store` | Shell | CRUD auf `notifications`: `create` (mit `dedup_key` idempotent, `None` bei Treffer), `list`, `count_unread`, `dismiss`, `dismiss_all` |
 | `notify::rules` | Shell | Schaltbare Regeln aus `notification_rules` (per Migration geseedet, u. a. `rule_backup_overdue`, `rule_backup_result`, `rule_invoice_overdue`, `rule_archive_integrity_failed`, `rule_fiscal_year_lock_pending`, `rule_monthly_doc_check`): `list`, `get`, `get_enabled_by_type`, `set_enabled` |
-| `notify::mod` | Shell | `emit` (Inbox + ggf. Weitergabe an den `Notifier`), Trait `Notifier`, `InboxOnly` (Server und Tests: kein Kanal außerhalb der Inbox) |
+| `notify::mod` | Shell | `emit` (schreibt in die Inbox, idempotent über `dedup_key`); einen Kanal außerhalb der Inbox gibt es nicht (Trait `Notifier`/`InboxOnly` mit Lauf F entfernt, D-16) |
 
 Ausgewertet werden die Regeln in `scheduler::reminders`,
 `scheduler::integrity_check_cron` und `backup::mod` (`rule_backup_result`).
-OS-Benachrichtigungen gibt es im Server nicht (W5); die Spalte
-`deliver_os_native` und die Regeln des Drop-Folders aus Migration 0029 bleiben
-in der DB stehen (forward-only), wirken aber nicht.
+OS-Benachrichtigungen gibt es im Server nicht (W5, ADR 0027 Amendment
+2026-10-24); die Spalte `deliver_os_native` und die Regeln des Drop-Folders aus
+Migration 0029 bleiben in der DB stehen (forward-only), wirken aber nicht.
 
 **Disziplin.** Manuelle Backups → Erfolgs-Hinweis ist OK (der Nutzer hat
 explizit ausgelöst). Auto-Backups (Lock-Events, Tages-Backup) → nur
@@ -335,7 +344,7 @@ ADRs: 0027.
 
 | Datei | Schicht | Verantwortung |
 |---|---|---|
-| `assets::afa_tabellen` | Shell | `load(inputs_dir)`/`parse`: AfA-Tabellen aus `/inputs/specs/afa-tabellen.json` (vom Menschen gepflegt, beim Start aus dem Image geseedet, nie überschrieben) |
+| `assets::afa_tabellen` | Shell | `load(inputs_dir)`/`parse`: AfA-Tabellen aus `/inputs/specs/afa-tabellen.json` (vom Menschen gepflegt, beim Serverstart aus dem Image geseedet, nie überschrieben; ohne Cache, jede Verwendung liest die Datei) |
 | `depreciation::compute` | Core | Re-Export aus `domain::depreciation` (`compute_yearly`, `annual_linear_cents`, …) unter dem historischen Pfad |
 | `depreciation::accrue_yearly` | Shell | `accrue_for_year`: bucht die AfA bis einschließlich GJ für alle aktiven Anlagen als `depreciation_entries` (holt fehlende Jahre nach), Audit; `reset_asset` setzt ungelockte AfA einer Anlage revisionssicher zurück |
 
@@ -420,7 +429,7 @@ und §3; Bedrohungsmodell: `security.md`.
 | `server::mod` | `main_entry` (Subcommands `serve`, `healthcheck`, `totp-reset`, `version`), Router, Zusammenbau vor dem Port-Bind |
 | `server::config` | `ServerConfig::from_env` (`KLEIN_BUCH_LISTEN`, `…_PUBLIC_URL`, `…_TRUSTED_PROXIES`, `…_INSECURE_HTTP`, `…_ALLOW_UNMOUNTED`); Upload- und Port-Grenzen |
 | `server::policy` | öffentliche URL, vertraute Proxys, Client-IP, Host-/Origin-Prüfung (421/403), Transport-Regel für Einrichten/Anmelden; kein TLS im Prozess |
-| `server::startup` | fail-closed-Prüfungen vor dem Port-Bind (Sperre `/data/.klein-buch.lock`, Mounts, `db::prepare_filesystem`, Instanz-Marker, keine Klartext-DB, `0o400`-Selbsttest, `<data>/tmp` leeren); Archivpfad-Stichprobe beim Entsperren |
+| `server::startup` | fail-closed-Prüfungen vor dem Port-Bind (Sperre `/data/.klein-buch.lock`, Mounts, `db::prepare_filesystem`, Instanz-Marker, keine Klartext-DB, `0o400`-Selbsttest, `<data>/tmp` leeren, Backup-Teildateien entfernen); `sweep_tmp`/`sweep_partial_backups` für den stündlichen Sweeper (Reste älter als 6 h, D-13); Archivpfad-Stichprobe beim Entsperren |
 | `server::instance` | Instanz-Marker `/data/.klein-buch-instance` |
 | `server::state` | Zustand `setup`/`locked`/`unlocked`, Sitzungen, Jobs, Lastgrenzen, Setup-Token (nur stderr) |
 | `server::auth` | Einrichtung, Anmeldung = Entsperren, Re-Auth, „Datenbank sperren", Passphrase- und TOTP-Wechsel |
@@ -446,9 +455,9 @@ ADRs: 0039 (E1–E17), 0014 (AGPL §13, `/legal/`).
 |---|---|
 | `main.rs` | Binary `klein-buch-server`; ruft `server::main_entry` mit den Kommandozeilen-Argumenten |
 | `lib.rs` | Modul-Deklarationen der Bibliothek `klein_buch_lib`; Einstieg ist `server` |
-| `app_ctx.rs` | `AppCtx` — Anwendungskontext der Kerne (ersetzt Tauri-`State`/`AppHandle`): Pfade, Pool (`None`, solange gesperrt), `BackupSession`, `PendingRestoreAudit`, `Notifier` (`InboxOnly`), `NetTests`, `DesktopActions` (`NoDesktop`), Scheduler-Guard und -Gate, Download- und Upload-Ablage (ADR 0039 Nr. 19–23) |
+| `app_ctx.rs` | `AppCtx` — Anwendungskontext der Kerne (früher `State`/`AppHandle` der Desktop-Shell): Pfade, Pool (`None`, solange gesperrt), `BackupSession`, `PendingRestoreAudit`, Uhr (`clock::Clock`, ADR 0040), `NetTests`, `DesktopActions` (`NoDesktop`), Scheduler-Guard und -Gate, Download- und Upload-Ablage (ADR 0039 Nr. 19–23) |
 | `config.rs` | `Paths` (`data_dir`, `db_file` = `klein-buch.sqlite`, `archive_dir`, `backups_dir`, `inputs_dir`, `sidecar_dir`, `resource_dir`, `web_dir`, `backup_targets_dir`); `Paths::from_env` (Pflicht: `KLEIN_BUCH_DATA_DIR`, `…_INPUTS_DIR`, `…_RESOURCE_DIR`, `…_WEB_DIR`; optional `…_BACKUP_TARGETS_DIR`); `ensure_inputs_seeded` |
-| `seed.rs` | Seed von `/inputs` aus dem Image mit `.seed-manifest.json`: fehlende Dateien kopieren, unveränderte ersetzen, vom Nutzer geänderte nie anfassen (neue Fassung als `<name>.neu`, Hinweis in die Inbox) |
+| `seed.rs` | Seed von `/inputs` aus dem Image mit `.seed-manifest.json`: fehlende Dateien kopieren, unveränderte ersetzen, vom Nutzer geänderte nie anfassen (neue Fassung je Fassung einmal als `<name>.neu`, gemerkt in `offered`, Hinweis mit `dedup_key` in die Inbox; D-10) |
 | `secrets.rs` | Zugangsdaten in der Tabelle `secrets` der verschlüsselten DB (Migration 0031, E6): `get`, `set`, `delete`; Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie in Log, Audit, Migrations- oder DSGVO-Export |
 | `uploads.rs`, `downloads.rs` | Upload-Ablage (`<data>/tmp/uploads/<uuid>`, Typprüfung am Inhalt, Größe je Art, Platzprüfung, höchstens 1 h) und Download-Ablage (`<data>/tmp/downloads/<uuid>/<Dateiname>`, Exporte einmal abrufbar, Vorschauen mehrfach) — E10 |
 | `nettest.rs` | Verbindungstests (SMTP, SFTP): Port-Allowlist, höchstens 10 Tests je Minute, Fehler ohne Unterscheidung, SFTP-Fingerprint aus der letzten Probe (10 min) |

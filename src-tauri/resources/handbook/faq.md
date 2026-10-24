@@ -54,6 +54,14 @@ abgeglichen werden. Eine Instanz ist für genau ein Unternehmen und
 eine Person gedacht. Mehrere Benutzer mit eigenen Zugängen gibt es
 nicht.
 
+## In welcher Zeitzone zeigt Klein.Buch Datum und Uhrzeit?
+
+Immer in deutscher Zeit (Europe/Berlin), egal wo Dein Gerät gerade
+steht oder welche Zeitzone es eingestellt hat. Das gilt für Belegdaten,
+"heute fällig" bei Abos, Zeitpunkte in den Protokollen und Hinweisen und
+für das Alter des letzten Backups. Bist Du auf Reisen, siehst Du also
+dieselben Tage und Uhrzeiten wie auf Deinen Belegen.
+
 ## Wie kommt meine Rechnung zum Steuerberater?
 
 Am bequemsten über das Steuerberater-Paket. Klick im Hauptmenü auf
@@ -152,7 +160,8 @@ Schlüssel zur Datenbank. Nach jedem Neustart des Containers kann
 Klein.Buch die Datenbank erst öffnen, wenn Du Dich im Browser mit
 Daten-Passwort und App-Code anmeldest. Bis dahin laufen auch keine
 Hintergrund-Aufgaben. Fällige Arbeiten wie das Tages-Backup oder
-Abo-Rechnungen holt Klein.Buch nach der Anmeldung nach.
+Abo-Rechnungen holt Klein.Buch eine bis fünf Minuten nach der Anmeldung nach
+(genau ein Tages-Backup, größere Abo-Rückstände nur nach Rückfrage).
 
 ## Wie spiele ich ein Update ein?
 

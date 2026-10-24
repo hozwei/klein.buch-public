@@ -6,6 +6,7 @@
   // Abfrage der GitHub-Releases; Hinweise landen in der Inbox.
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
+  import { dateTime } from "$lib/format";
   import { flash } from "$lib/toast.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
   import {
@@ -74,13 +75,6 @@
     }
   }
 
-  function fmtDateTime(iso: string | null): string {
-    if (!iso) return "noch nie";
-    const d = new Date(iso);
-    return isNaN(d.getTime())
-      ? iso
-      : d.toLocaleString("de-DE", { timeZone: "Europe/Berlin" });
-  }
 
   async function renewRecovery() {
     if (
@@ -262,7 +256,7 @@
       Nach neuen Versionen suchen
     </label>
     {#if updateCheck.enabled}
-      <p class="muted">Zuletzt geprüft: {fmtDateTime(updateCheck.lastCheckAt)}</p>
+      <p class="muted">Zuletzt geprüft: {dateTime(updateCheck.lastCheckAt, "noch nie")}</p>
     {/if}
   {:else}
     <p class="muted">Lade …</p>

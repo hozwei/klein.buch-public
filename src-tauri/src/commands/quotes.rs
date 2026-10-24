@@ -1,4 +1,4 @@
-//! Tauri-Commands für Angebote (Block 6).
+//! Commands für Angebote (Block 6).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::quote::validate_quote`])
@@ -190,7 +190,7 @@ pub async fn quotes_create_draft(
     create_draft_core(&pool, args).await
 }
 
-/// Testbarer Kern von [`quotes_create_draft`] (ohne Tauri-State).
+/// Testbarer Kern von [`quotes_create_draft`] (ohne `AppCtx`).
 pub async fn create_draft_core(
     pool: &SqlitePool,
     mut args: CreateDraftArgs,
@@ -376,6 +376,9 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
     // GJ-Festschreibung (Block 15): kein Angebot mit Datum in einem
     // abgeschlossenen Geschäftsjahr festschreiben.
     crate::fiscal_year::guard::ensure_year_open(pool, detail.quote.fiscal_year).await?;
+    // F1d: wiederhergestellter Entwurf mit vor dem Restore festgeschriebener
+    // Nummer erst nach Bestätigung.
+    crate::backup::after_restore::ensure_no_conflict(pool, "quote", &id).await?;
     let seller_row = seller_profile::get(pool)
         .await?
         .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;

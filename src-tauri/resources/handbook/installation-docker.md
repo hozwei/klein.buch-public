@@ -70,7 +70,7 @@ services:
       core: 0
     pids_limit: 256
     mem_limit: 2g
-    stop_grace_period: 60s
+    stop_grace_period: 90s
     logging:
       driver: json-file
       options:
@@ -132,10 +132,15 @@ Betriebssystems. `ulimits: core: 0` verhindert Speicherabbilder bei
 einem Absturz, die Dein Daten-Passwort enthalten könnten. `pids_limit`
 und `mem_limit` begrenzen Prozesse und Arbeitsspeicher.
 
-`stop_grace_period: 60s` gibt Klein.Buch beim Stoppen bis zu 60
-Sekunden Zeit. In dieser Zeit laufen angefangene Aufgaben wie ein
-Festschreiben oder ein Backup zu Ende. Docker wartet sonst nur 10
-Sekunden und beendet den Prozess dann hart. Verkürze diesen Wert nicht.
+`stop_grace_period: 90s` gibt Klein.Buch beim Stoppen bis zu 90
+Sekunden Zeit. Klein.Buch hält zuerst seine geplanten Aufgaben an (ein
+Abo-Lauf beendet den gerade bearbeiteten Termin), wartet höchstens 30
+Sekunden auf offene Verbindungen und weitere 30 Sekunden auf angefangene
+Aufgaben wie ein Festschreiben oder ein Backup und schließt dann die
+Datenbank. Docker wartet sonst nur 10 Sekunden und beendet den Prozess
+dann hart. Verkürze diesen Wert nicht. Ein abgebrochenes Backup ist
+unkritisch: Es wird erst unter einem Zwischennamen geschrieben und erst
+am Ende umbenannt; Reste räumt Klein.Buch beim nächsten Start auf.
 
 `logging` begrenzt das Container-Log auf fünf Dateien zu je 10 MB. Im
 Log stehen der Setup-Token und fehlgeschlagene Anmeldungen mit
@@ -176,7 +181,7 @@ Die Pfade im Container (`KLEIN_BUCH_DATA_DIR`, `KLEIN_BUCH_INPUTS_DIR`,
 
 Einen ungültigen Wert bei öffentlicher Adresse, Proxys, `KLEIN_BUCH_LISTEN`,
 der Wurzel der Backup-Ziele, den beiden Platzgrenzen oder den Test-Ports
-meldet Klein.Buch beim Start im Log und startet nicht. Zwei Schalter gibt es nur für Tests, nie für den Betrieb:
+meldet Klein.Buch beim Containerstart im Log und startet nicht. Zwei Schalter gibt es nur für Tests, nie für den Betrieb:
 `KLEIN_BUCH_INSECURE_HTTP=1` erlaubt die Anmeldung ohne HTTPS, und
 `KLEIN_BUCH_ALLOW_UNMOUNTED=1` schaltet die Prüfung der Volumes ab.
 

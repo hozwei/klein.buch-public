@@ -36,7 +36,7 @@ use crate::{
     domain::numbering::{format, DocType},
     error::Result,
 };
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 
 /// Allokiert die nächste Belegnummer und liefert die formatierte Version.
 ///
@@ -51,8 +51,32 @@ pub async fn next_number(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32)
 /// Allokiert nur den Counter (ohne Formatierung). Hauptsächlich für Tests
 /// und sehr seltene Sonderfälle, die den Slug direkt brauchen.
 pub async fn next_seq(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32) -> Result<u32> {
-    let slug = doc_type.db_slug();
     let mut tx = crate::db::begin_immediate(pool).await?;
+    let seq = next_seq_in(&mut tx, doc_type, fiscal_year).await?;
+    tx.commit().await?;
+    Ok(seq)
+}
+
+/// Wie [`next_number`], aber innerhalb einer laufenden Schreib-Transaktion
+/// (`db::begin_immediate`): Nummer, Beleg-INSERT und Audit werden zusammen
+/// committet oder zusammen verworfen (Lauf F, W14-022/-025) — eine
+/// zurückgerollte Transaktion verbraucht keine Nummer.
+pub async fn next_number_in(
+    conn: &mut SqliteConnection,
+    doc_type: DocType,
+    fiscal_year: i32,
+) -> Result<String> {
+    let seq = next_seq_in(conn, doc_type, fiscal_year).await?;
+    Ok(format(doc_type, fiscal_year, seq))
+}
+
+/// Counter-Schritt innerhalb einer laufenden Transaktion.
+pub async fn next_seq_in(
+    conn: &mut SqliteConnection,
+    doc_type: DocType,
+    fiscal_year: i32,
+) -> Result<u32> {
+    let slug = doc_type.db_slug();
 
     // Zeile für (slug, year) sicherstellen — kollidiert sie schon, ignorieren.
     sqlx::query(
@@ -61,7 +85,7 @@ pub async fn next_seq(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32) ->
     )
     .bind(slug)
     .bind(fiscal_year)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
     // Atomar inkrementieren + neuen Wert zurückgeben.
@@ -73,12 +97,10 @@ pub async fn next_seq(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32) ->
     )
     .bind(slug)
     .bind(fiscal_year)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
 
     let last_value: i64 = row.try_get("last_value")?;
-    tx.commit().await?;
-
     if last_value < 1 {
         return Err(crate::error::Error::Domain(format!(
             "doc_number_counters.last_value < 1 für ({}, {}): {}",
@@ -86,6 +108,84 @@ pub async fn next_seq(pool: &SqlitePool, doc_type: DocType, fiscal_year: i32) ->
         )));
     }
     Ok(last_value as u32)
+}
+
+/// Stand eines Nummernkreises (eine Zeile von `doc_number_counters`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CounterState {
+    pub doc_type: String,
+    pub fiscal_year: i64,
+    pub last_value: i64,
+}
+
+/// Alle Nummernkreise (für Restore-Abgleich und Anzeige), sortiert.
+pub async fn snapshot(pool: &SqlitePool) -> Result<Vec<CounterState>> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT doc_type, fiscal_year, last_value FROM doc_number_counters
+         ORDER BY fiscal_year DESC, doc_type",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(doc_type, fiscal_year, last_value)| CounterState {
+            doc_type,
+            fiscal_year,
+            last_value,
+        })
+        .collect())
+}
+
+/// Ergebnis einer Anhebung: Nummernkreis mit altem und neuem Stand.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Raised {
+    pub doc_type: String,
+    pub fiscal_year: i64,
+    pub from: i64,
+    pub to: i64,
+}
+
+/// Hebt einen Nummernkreis innerhalb einer laufenden Schreib-Transaktion
+/// **nur aufwärts** auf `last_value` an (Lauf F, D-24). Die nächste Nummer ist
+/// danach `last_value + 1`; die übersprungenen Nummern bleiben eine
+/// dokumentierte Lücke (GoBD: lieber Lücke als Doppelvergabe, §14 Abs. 4 Nr. 4
+/// UStG). Belege werden nicht angefasst. `None` = Stand war schon gleich oder
+/// höher (keine Änderung).
+pub async fn raise_in(
+    conn: &mut SqliteConnection,
+    doc_type: &str,
+    fiscal_year: i64,
+    last_value: i64,
+) -> Result<Option<Raised>> {
+    let current: Option<i64> = sqlx::query_scalar(
+        "SELECT last_value FROM doc_number_counters WHERE doc_type = ? AND fiscal_year = ?",
+    )
+    .bind(doc_type)
+    .bind(fiscal_year)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let from = current.unwrap_or(0);
+    if last_value <= from {
+        return Ok(None);
+    }
+    sqlx::query(
+        "INSERT INTO doc_number_counters (doc_type, fiscal_year, last_value) VALUES (?, ?, ?)
+         ON CONFLICT(doc_type, fiscal_year) DO UPDATE SET last_value = excluded.last_value
+         WHERE excluded.last_value > doc_number_counters.last_value",
+    )
+    .bind(doc_type)
+    .bind(fiscal_year)
+    .bind(last_value)
+    .execute(&mut *conn)
+    .await?;
+    Ok(Some(Raised {
+        doc_type: doc_type.to_string(),
+        fiscal_year,
+        from,
+        to: last_value,
+    }))
 }
 
 /// Liefert den aktuellen Counter-Stand, ohne ihn zu verändern. Für UI und
@@ -197,6 +297,43 @@ mod tests {
         got.sort_unstable();
         let expected: Vec<u32> = (1..=50).collect();
         assert_eq!(got, expected, "parallele Allokation hat Lücken/Duplikate");
+    }
+
+    /// D-24: Anheben nur aufwärts, nächste Nummer = Stand + 1.
+    #[tokio::test]
+    async fn raise_only_upwards_then_next_follows() {
+        let pool = fresh_pool().await;
+        for _ in 0..3 {
+            next_seq(&pool, DocType::Invoice, 2026).await.unwrap();
+        }
+        let mut tx = pool.begin().await.unwrap();
+        assert_eq!(raise_in(&mut tx, "invoice", 2026, 2).await.unwrap(), None);
+        assert_eq!(raise_in(&mut tx, "invoice", 2026, 3).await.unwrap(), None);
+        let r = raise_in(&mut tx, "invoice", 2026, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.from, r.to), (3, 7));
+        // fehlender Kreis (anderes Jahr) wird angelegt
+        let r = raise_in(&mut tx, "storno_invoice", 2025, 4)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!((r.from, r.to), (0, 4));
+        tx.commit().await.unwrap();
+        assert_eq!(
+            next_number(&pool, DocType::Invoice, 2026).await.unwrap(),
+            "RE-2026-0008"
+        );
+        assert_eq!(
+            next_number(&pool, DocType::StornoInvoice, 2025)
+                .await
+                .unwrap(),
+            "ST-2025-0005"
+        );
+        let snap = snapshot(&pool).await.unwrap();
+        assert_eq!(snap.len(), 2);
+        assert_eq!(snap[0].fiscal_year, 2026);
     }
 
     #[tokio::test]

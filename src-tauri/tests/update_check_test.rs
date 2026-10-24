@@ -90,13 +90,13 @@ async fn without_opt_in_no_connection_is_made() {
     let (_dir, pool) = pool().await;
 
     // Standard: aus
-    let outcome = run_if_due(&pool, None, &mock.url, now()).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, now()).await.unwrap();
     assert_eq!(outcome, Outcome::Disabled);
     // ausdrücklich aus
     app_settings::set_bool(&pool, SETTING_ENABLED, false)
         .await
         .unwrap();
-    let outcome = run_if_due(&pool, None, &mock.url, now()).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, now()).await.unwrap();
     assert_eq!(outcome, Outcome::Disabled);
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -115,7 +115,7 @@ async fn with_opt_in_newer_version_creates_one_text_hint() {
         .await
         .unwrap();
 
-    let outcome = run_if_due(&pool, None, &mock.url, now()).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, now()).await.unwrap();
     assert_eq!(
         outcome,
         Outcome::NewVersion {
@@ -154,13 +154,13 @@ async fn with_opt_in_newer_version_creates_one_text_hint() {
 
     // am selben Tag keine zweite Abfrage
     let later = now() + Duration::hours(23);
-    let outcome = run_if_due(&pool, None, &mock.url, later).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, later).await.unwrap();
     assert_eq!(outcome, Outcome::NotDue);
     assert_eq!(mock.connections.load(Ordering::SeqCst), 1);
 
     // am nächsten Tag wieder, aber derselbe Hinweis nur einmal (je Version)
     let next_day = now() + Duration::hours(25);
-    let outcome = run_if_due(&pool, None, &mock.url, next_day).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, next_day).await.unwrap();
     assert_eq!(
         outcome,
         Outcome::NewVersion {
@@ -179,7 +179,7 @@ async fn same_or_older_version_creates_no_hint() {
     app_settings::set_bool(&pool, SETTING_ENABLED, true)
         .await
         .unwrap();
-    let outcome = run_if_due(&pool, None, &mock.url, now()).await.unwrap();
+    let outcome = run_if_due(&pool, &mock.url, now()).await.unwrap();
     assert_eq!(
         outcome,
         Outcome::UpToDate {
@@ -200,7 +200,7 @@ async fn unreachable_endpoint_counts_as_daily_attempt() {
     app_settings::set_bool(&pool, SETTING_ENABLED, true)
         .await
         .unwrap();
-    assert!(run_if_due(&pool, None, &url, now()).await.is_err());
-    let outcome = run_if_due(&pool, None, &url, now()).await.unwrap();
+    assert!(run_if_due(&pool, &url, now()).await.is_err());
+    let outcome = run_if_due(&pool, &url, now()).await.unwrap();
     assert_eq!(outcome, Outcome::NotDue, "höchstens einmal täglich");
 }

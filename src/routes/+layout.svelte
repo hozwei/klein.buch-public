@@ -13,7 +13,16 @@
   import { flash } from "$lib/toast.svelte";
   import { appState } from "$lib/stores.svelte";
   import { modalStack } from "$lib/modalStack.svelte";
-  import { notificationsUnreadCount, appInfo, authLogout, authLock } from "$lib/api";
+  import {
+    notificationsUnreadCount,
+    appInfo,
+    authLogout,
+    authLock,
+    schedulerHoldStatus,
+    schedulerReleaseHold,
+  } from "$lib/api";
+  import type { SchedulerHoldStatus } from "$lib/types";
+  import Banner from "$lib/Banner.svelte";
   import { openAboutDialog } from "$lib/aboutModal.svelte";
   import { formatVersionDisplay } from "$lib/version";
   let { children } = $props();
@@ -39,8 +48,56 @@
     $page.url.pathname; // bei Navigation neu laden
     // Erst nach dem Entsperren (G1-ENC Schritt 2) liegt der DB-Pool im State —
     // vorher keine Command-Aufrufe absetzen.
-    if (appState.ready) refreshUnread();
+    if (appState.ready) {
+      refreshUnread();
+      refreshHold();
+    }
   });
+
+  // Lauf F (ADR 0040): Pause der automatischen Belegerzeugung (Uhrsprung,
+  // Restore) sichtbar machen; Freigabe nur mit Re-Auth (Server).
+  let hold = $state<SchedulerHoldStatus | null>(null);
+  let releasing = $state(false);
+  async function refreshHold() {
+    try {
+      hold = await schedulerHoldStatus();
+    } catch {
+      hold = null;
+    }
+  }
+  async function releaseHold() {
+    // Nach einer Wiederherstellung (D-23): Freigabe heißt auch, dass Backups
+    // wieder auf die externen Ziele gehen — nur auf der produktiven Instanz.
+    const afterRestore = hold?.reason === "restore";
+    const ok = await confirmDialog({
+      title: afterRestore
+        ? "Ist dies die produktive Instanz?"
+        : "Automatische Abo-Läufe freigeben?",
+      body:
+        (hold?.message ?? "") +
+        "\n\nNach der Freigabe erstellt Klein.Buch fällige Abo-Rechnungen und -Kosten wieder " +
+        "selbst (größere Rückstände nur nach Rückfrage) und versendet Rechnungen im Modus " +
+        "„Auto + Versand“." +
+        (afterRestore
+          ? "\n\nAußerdem gehen Backups wieder auf die externen Ziele — auf einer Probe-Instanz " +
+            "würden dort Dateien mit älterem Datenstand neben den echten Backups landen. " +
+            "Vorher prüfen: Nummernkreise und vorgemerkte Entwürfe (Einstellungen → Backup) sowie " +
+            "Abo-Vorlagen und ihre nächsten Termine (Hinweis „Abo-Termine nach der Wiederherstellung“)."
+          : ""),
+      confirmLabel: afterRestore ? "Ja, produktiv — freigeben" : "Freigeben",
+      cancelLabel: "Abbrechen",
+    });
+    if (!ok) return;
+    releasing = true;
+    try {
+      hold = await schedulerReleaseHold();
+      flash("Automatische Abo-Läufe freigegeben.");
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      releasing = false;
+    }
+  }
 
   // G4.1-Fix (Manuel 2026-05-26): App-Version im Sidebar-Footer und als
   // Suffix am „Über"-Eintrag. Format kommt aus `formatVersionDisplay`
@@ -332,6 +389,15 @@
   </nav>
 
   <main inert={modalStack.count > 0 || undefined}>
+    {#if hold?.held}
+      <Banner kind="warning">
+        <strong>Automatische Abo-Läufe angehalten.</strong>
+        {hold.message}
+        <button class="hold-release" onclick={releaseHold} disabled={releasing}>
+          {releasing ? "Gebe frei …" : "Prüfen und freigeben"}
+        </button>
+      </Banner>
+    {/if}
     {@render children?.()}
   </main>
 {/if}
@@ -584,5 +650,15 @@
     main > :global(:first-child) {
       margin-top: 0;
     }
+  }
+  .hold-release {
+    margin-left: 0.5rem;
+    border: 1px solid currentColor;
+    background: transparent;
+    color: inherit;
+    border-radius: var(--r-md);
+    padding: 0.2rem 0.6rem;
+    font-weight: 600;
+    cursor: pointer;
   }
 </style>

@@ -1,6 +1,6 @@
 // Backend-Aufrufe. Jede Funktion ruft einen Command-Kern über
 // `invoke<T>(name, args)` auf — seit Plan W5 per HTTP (`src/lib/transport.ts`,
-// `POST /api/cmd/{name}`), vorher über die Tauri-Bridge.
+// `POST /api/cmd/{name}`), vorher über die Bridge der Desktop-Fassung.
 // Block 2: contacts_* + seller_profile_* + paragraph_19_info.
 // Block 3b: invoices_* — Draft, Lock-and-Issue, Cancel, Payment.
 
@@ -89,6 +89,8 @@ import type {
   PrivateMovementCreateArgs,
   AddAttachmentArgs,
   RecurringSubscription,
+  ResumeMode,
+  SchedulerHoldStatus,
   RecurringInputDto,
   RecurringProcessReport,
   RecurringInvoiceRow,
@@ -624,10 +626,6 @@ export function paymentAccountsList(includeInactive = false): Promise<PaymentAcc
   return invoke<PaymentAccount[]>("payment_accounts_list", { includeInactive });
 }
 
-export function paymentAccountsEnsureDefaults(): Promise<PaymentAccount[]> {
-  return invoke<PaymentAccount[]>("payment_accounts_ensure_defaults");
-}
-
 export function paymentAccountsCreate(input: PaymentAccountInput): Promise<PaymentAccount> {
   return invoke<PaymentAccount>("payment_accounts_create", { input });
 }
@@ -728,8 +726,28 @@ export function recurringUpdate(
   return invoke<RecurringSubscription>("recurring_update", { id, input });
 }
 
-export function recurringSetActive(id: string, active: boolean): Promise<RecurringSubscription> {
-  return invoke<RecurringSubscription>("recurring_set_active", { id, active });
+/**
+ * Pausieren/Fortsetzen. Beim Fortsetzen eines Auto-Abos mit verpassten Terminen
+ * verlangt der Server `resumeMode` (nachholen oder ab heute fortsetzen).
+ */
+export function recurringSetActive(
+  id: string,
+  active: boolean,
+  resumeMode?: ResumeMode,
+): Promise<RecurringSubscription> {
+  return invoke<RecurringSubscription>("recurring_set_active", {
+    id,
+    active,
+    resumeMode: resumeMode ?? null,
+  });
+}
+
+/** Entscheidung zu verpassten Terminen eines aktiven Abos („Rückstand …“). */
+export function recurringResolveBacklog(
+  id: string,
+  mode: ResumeMode,
+): Promise<RecurringSubscription> {
+  return invoke<RecurringSubscription>("recurring_resolve_backlog", { id, mode });
 }
 
 /** „Jetzt erfassen" — legt die Kosten-Position für den aktuellen Stichtag an. */
@@ -765,11 +783,28 @@ export function recurringInvoicesUpdate(
   return invoke<RecurringInvoiceDetail>("recurring_invoices_update", { id, input });
 }
 
+/**
+ * Pausieren/Fortsetzen. Beim Fortsetzen einer Vorlage mit verpassten Terminen
+ * verlangt der Server `resumeMode` (nachholen oder ab heute fortsetzen).
+ */
 export function recurringInvoicesSetActive(
   id: string,
   active: boolean,
+  resumeMode?: ResumeMode,
 ): Promise<RecurringInvoiceRow> {
-  return invoke<RecurringInvoiceRow>("recurring_invoices_set_active", { id, active });
+  return invoke<RecurringInvoiceRow>("recurring_invoices_set_active", {
+    id,
+    active,
+    resumeMode: resumeMode ?? null,
+  });
+}
+
+/** Entscheidung zu verpassten Terminen einer aktiven Vorlage („Rückstand …“). */
+export function recurringInvoicesResolveBacklog(
+  id: string,
+  mode: ResumeMode,
+): Promise<RecurringInvoiceRow> {
+  return invoke<RecurringInvoiceRow>("recurring_invoices_resolve_backlog", { id, mode });
 }
 
 /** „Jetzt erstellen" — erzeugt die Rechnung für den aktuellen Stichtag. Liefert die Rechnungs-ID. */
@@ -918,6 +953,8 @@ export interface BackupSettings {
   targets: TargetView[];
   /** `missing` | `failing` | `ok`. */
   offsiteStatus: "missing" | "failing" | "ok";
+  /** Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F). */
+  dailyTime: string;
 }
 
 export interface BackupOutcome {
@@ -998,6 +1035,11 @@ export interface ExportReport {
 
 export function backupGetSettings(): Promise<BackupSettings> {
   return invoke<BackupSettings>("backup_get_settings");
+}
+
+/** Uhrzeit des Tages-Backups setzen (`HH:MM`, Europe/Berlin). */
+export function backupSetDailyTime(time: string): Promise<string> {
+  return invoke<string>("backup_set_daily_time", { time });
 }
 
 export function backupCreateNow(): Promise<BackupOutcome> {
@@ -1147,6 +1189,70 @@ export function archiveIntegrityHistory(limit?: number): Promise<IntegrityCheckR
 // ---- „Über"-Dialog (Block G2-DOC.3.5) --------------------------------------
 
 /** Statische App-Metadaten (Version, Schema-Version, Build-Commit, Lizenz). */
+/** Pause der automatischen Belegerzeugung (Uhrsprung, Restore). */
+export function schedulerHoldStatus(): Promise<SchedulerHoldStatus> {
+  return invoke<SchedulerHoldStatus>("scheduler_hold_status");
+}
+
+/** Pause aufheben (Re-Auth). */
+export function schedulerReleaseHold(): Promise<SchedulerHoldStatus> {
+  return invoke<SchedulerHoldStatus>("scheduler_release_hold");
+}
+
+/** Nummernkreis (zuletzt vergebene Nummer je Art und Jahr; Lauf F, D-24). */
+export interface NumberingCounter {
+  docType: string;
+  label: string;
+  fiscalYear: number;
+  lastValue: number;
+  lastNumber: string | null;
+}
+
+export function numberingCountersList(): Promise<NumberingCounter[]> {
+  return invoke<NumberingCounter[]>("numbering_counters_list");
+}
+
+/** Nummernkreis anheben (nur aufwärts, Re-Auth, Begründung im Audit-Log). */
+export function numberingRaise(args: {
+  docType: string;
+  fiscalYear: number;
+  lastValue: number;
+  reason: string;
+}): Promise<NumberingCounter[]> {
+  return invoke<NumberingCounter[]>("numbering_raise", args);
+}
+
+/** Wiederhergestellter Entwurf, dessen Nummer vor dem Restore schon festgeschrieben war (F1d). */
+export interface RestoredDraftConflict {
+  /** `invoice` (auch Storno) oder `quote`. */
+  kind: "invoice" | "quote";
+  id: string;
+  number: string;
+}
+
+export function numberingRestoredDraftsList(): Promise<RestoredDraftConflict[]> {
+  return invoke<RestoredDraftConflict[]>("numbering_restored_drafts_list");
+}
+
+/** Abgleich mit dem versandten Original bestätigen (Re-Auth, Begründung im Audit-Log). */
+export function numberingRestoredDraftConfirm(args: {
+  kind: "invoice" | "quote";
+  id: string;
+  reason: string;
+}): Promise<RestoredDraftConflict[]> {
+  return invoke<RestoredDraftConflict[]>("numbering_restored_draft_confirm", args);
+}
+
+/** Reihen, die nach einer Wiederherstellung auf „Rückstand …“ warten (F1d). */
+export interface RestoreReviewList {
+  templates: string[];
+  subscriptions: string[];
+}
+
+export function recurringRestoreReviewList(): Promise<RestoreReviewList> {
+  return invoke<RestoreReviewList>("recurring_restore_review_list");
+}
+
 export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }

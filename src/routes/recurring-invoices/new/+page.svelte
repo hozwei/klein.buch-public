@@ -306,7 +306,15 @@
         </label>
         <label>
           Nächste Fälligkeit
-          <input type="date" bind:value={nextDueDate} />
+          <!-- Neue Vorlagen beginnen nicht in der Vergangenheit (R1-S2-NEXTDUE);
+               bei bestehenden schreibt Klein.Buch den Termin selbst fort. -->
+          <input
+            type="date"
+            bind:value={nextDueDate}
+            min={editId ? undefined : todayBerlin()}
+            disabled={!!editId}
+            title={editId ? "Wird von Klein.Buch fortgeschrieben (Rückstand: in der Liste „Rückstand …“)" : undefined}
+          />
         </label>
         <label>
           Laufzeit-Ende (optional)

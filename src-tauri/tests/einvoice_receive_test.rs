@@ -1,6 +1,6 @@
 //! Integration-Tests für den E-Rechnung-Empfang (Block 11).
 //!
-//! Deckt die Empfangs-Pipeline auf Repo-/Core-Ebene ab (ohne Tauri-AppHandle):
+//! Deckt die Empfangs-Pipeline auf Repo-/Core-Ebene ab (ohne Server):
 //! Parsen → Mapping → Archiv (`ReceivedEinvoice`, write-once) → `expenses::create`
 //! (sofort gelockt) → KoSIT-Befund persistieren. Der Command
 //! `expenses_create_from_einvoice` orchestriert genau diese Schritte.

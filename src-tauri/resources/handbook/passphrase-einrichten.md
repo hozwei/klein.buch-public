@@ -121,8 +121,10 @@ sich auch nicht selbst entsperren.
 
 Solange Klein.Buch gesperrt ist, laufen keine geplanten Aufgaben: keine
 Abo-Rechnungen, kein tägliches Backup, keine Archiv-Prüfung. Nach Deiner
-Anmeldung holt Klein.Buch Fälliges nach. Melde Dich nach einem Neustart
-deshalb bald wieder an.
+Anmeldung holt Klein.Buch Fälliges nach, frühestens eine Minute später:
+genau ein Tages-Backup, bis zu drei offene Termine je Abo; größere
+Rückstände erst nach Deiner Rückfrage (Kapitel "Abo-Rechnungen"). Melde
+Dich nach einem Neustart deshalb bald wieder an.
 
 ## Was technisch im Hintergrund passiert
 

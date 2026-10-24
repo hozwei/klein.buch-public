@@ -1,4 +1,4 @@
-//! Tauri-Commands für AfA-Buchungen (Block 12, Phase 2C).
+//! Commands für AfA-Buchungen (Block 12, Phase 2C).
 //!
 //! - [`depreciation_accrue_year`] — „AfA für Jahr X jetzt buchen" (Erstanwendung
 //!   + manuelles Nachbuchen). Ruft die Shell [`crate::depreciation::accrue_yearly`].

@@ -43,14 +43,15 @@ Uhrzeit der Sicherung, zum Beispiel
 
 Vergleiche diesen Zeitpunkt mit Deiner zuletzt verschickten Rechnung.
 Alles, was nach dem Backup festgeschrieben wurde, fehlt nach der
-Wiederherstellung. Klein.Buch kennt diese Belege dann nicht und vergibt
-ihre Nummern erneut. Dasselbe gilt für Abo-Rechnungen: Waren sie laut
-Backup noch fällig, schreibt Klein.Buch sie gleich nach der ersten
-Anmeldung fest und verschickt sie, wenn sie so eingestellt sind, auch per
-E-Mail. Prüfe deshalb direkt nach der Anmeldung die Rechnungen (siehe
-Schritt 4). Klein.Buch ist ein Werkzeug, kein Steuerberater. Bei Lücken
-oder doppelten Rechnungen sprich mit Deiner Steuerberatung, bevor Du
-etwas stornierst.
+Wiederherstellung. Die neue Instanz kennt diese Belege nicht und damit
+auch nicht ihre Nummern. Damit keine Nummer doppelt vergeben wird
+(§14 Abs. 4 Nr. 4 UStG), hebst Du die betroffenen Nummernkreise vor der
+ersten neuen Rechnung an (Schritt 4). Eine Lücke ist zulässig und
+dokumentiert, eine doppelte Nummer nicht. Abo-Rechnungen, Abo-Kosten und
+der Versand bleiben nach der Wiederherstellung angehalten, bis Du sie
+freigibst; es geht also nichts automatisch hinaus. Klein.Buch ist ein
+Werkzeug, kein Steuerberater. Bei Lücken oder doppelten Rechnungen sprich
+mit Deiner Steuerberatung, bevor Du etwas stornierst.
 
 ## Schritt 1: Neue Instanz anlegen
 
@@ -68,7 +69,7 @@ Der Betreiber installiert Klein.Buch neu, wie im Kapitel "[Installation mit Dock
    Ziele kommt mit dem Backup zurück, und Klein.Buch erkennt die Ordner
    an diesen Namen.
 4. Seine Kopie von `/inputs` legt der Betreiber vor dem ersten Start in
-   den neuen Vorlagen-Ordner. Klein.Buch ergänzt beim Start fehlende
+   den neuen Vorlagen-Ordner. Klein.Buch ergänzt beim Containerstart fehlende
    Dateien aus dem Image und überschreibt nie eine Datei, die Du geändert
    hast. Bringt das Image eine neuere Fassung einer solchen Datei mit,
    legt Klein.Buch sie mit der Endung `.neu` daneben und meldet das unter
@@ -110,7 +111,7 @@ Version und ob die Datenbank im Backup zu diesem Server passt. Erst dann
 legt es ein Sicherheits-Backup des aktuellen Stands an. Das ist vor
 jeder Wiederherstellung Pflicht, auch wenn die neue Instanz noch leer
 ist. Danach meldet es "Wiederherstellung vorbereitet", der Server startet
-neu und spielt das Backup beim Start ein. Das Sicherheits-Backup der
+neu und spielt das Backup beim Neustart ein. Das Sicherheits-Backup der
 leeren Instanz steht später im Backup-Verlauf ("Vor einer
 Wiederherstellung"). Du kannst es ignorieren.
 
@@ -123,17 +124,34 @@ Datenbank auf das aktuelle Format um.
 
 Danach prüfst Du:
 
-1. Unter "Rechnungen": Ist Deine letzte Rechnung da? Sind gerade
-   Abo-Rechnungen entstanden, die es schon gab?
+1. Unter "Rechnungen", "Kosten" und den anderen Belegen: Welche Nummer
+   wurde nach dem Stand des Backups zuletzt vergeben (Mail-Ausgang,
+   Korrespondenz, Kontoauszug)? Fehlen Belege, hebst Du unter
+   "Einstellungen" → "Backups" → "Nummernkreise" den betroffenen Kreis
+   mit "Anheben …" auf die zuletzt vergebene laufende Nummer an. Klein.Buch
+   verlangt eine Begründung (sie steht im Audit-Log) und lässt nur ein
+   Anheben zu, nie ein Absenken. Der Hinweis "Nummernkreise nach der
+   Wiederherstellung" unter "Hinweise" erinnert daran.
 2. Unter "Einstellungen" und "Backups": Sind die externen Ziele wieder
-   da? Klick auf "Jetzt sichern" und schau, ob die Kopie auf jedes Ziel
-   klappt.
+   da? Bis zur Freigabe (Punkt 5) gehen Backups nur in den lokalen
+   Ordner. Unter "Wiederkehrende Rechnungen" und "Wiederkehrende Abos":
+   Reihen mit einem offenen Termin bis heute zeigen "Rückstand …".
+   Prüfe im Mail-Ausgang bzw. auf dem Kontoauszug, ob der Termin auf dem
+   alten Server schon abgerechnet wurde. "Ab heute fortsetzen" lässt die
+   offenen Termine aus, auch einen heute fälligen; "Nachholen" legt
+   Rechnungen nur als Entwurf an.
 3. Unter "Hinweise": Meldet Klein.Buch "PDF-Vorlagen nach dem Restore
    fehlen", fehlt in `/inputs` eine Vorlage, die Deine Daten benutzen.
    Dann muss der Betreiber seine Kopie von `/inputs` zurücklegen.
 4. Unter "Einstellungen" und "Protokoll & Datensicherheit": Starte in der
    Karte "Archiv-Integrität" mit "Jetzt prüfen" eine Prüfung des
    Archivs.
+5. Erst wenn alles stimmt: Oben im Hinweis "Automatische Abo-Läufe
+   angehalten" auf "Prüfen und freigeben" klicken und bestätigen, dass
+   dies die produktive Instanz ist. Danach laufen Abo-Rechnungen,
+   Abo-Kosten und Versand wieder (größere Rückstände nur nach Rückfrage),
+   und Backups gehen wieder auf die externen Ziele. Klick danach auf
+   "Jetzt sichern" und schau, ob die Kopie auf jedes Ziel klappt.
 
 Mail-Konten und SFTP-Ziele samt Passwörtern kommen mit dem Backup zurück,
 auf dem Stand des Backups.

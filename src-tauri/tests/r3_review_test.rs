@@ -9,10 +9,10 @@
 //! - **R3-008** Parser meldet fehlende EN-16931-Pflichtfelder (BT-1/-2/-5).
 //! - **R3-009** Parser-Currency-Whitelist (single-currency EUR).
 //!
-//! R3-004 (klausel_check in Vorschau) verlangt Tauri-`AppHandle` und ist nur
-//! per Host-Smoke verifizierbar — siehe Done-Report. R3-006 (UTF-8-Härtung im
-//! Receive-Pfad) lebt im Tauri-Command und ist hier nicht integrationstestbar
-//! ohne `AppHandle`; das pinned Verhalten wird per Host-Smoke verifiziert.
+//! R3-004 (klausel_check in Vorschau) verlangte das `AppHandle` der
+//! Desktop-Fassung und war nur per Host-Smoke verifizierbar — siehe
+//! Done-Report. R3-006 (UTF-8-Härtung im Receive-Pfad) lebt im Command und war
+//! hier ohne `AppHandle` nicht integrationstestbar; das pinned Verhalten wird per Host-Smoke verifiziert.
 
 use chrono::NaiveDate;
 use klein_buch_lib::domain::invoice::{

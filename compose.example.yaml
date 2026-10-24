@@ -39,8 +39,10 @@ services:
     # Faustregel: 512 MiB Grundbedarf + 3 × größtes Backup für einen Restore
     # (ADR 0039 Nr. 72); Java-Sidecar höchstens 512 MiB je Lauf.
     mem_limit: 2g
-    # Laufende Jobs (Festschreiben, Backup) dürfen zu Ende laufen.
-    stop_grace_period: 60s
+    # Herunterfahren: Verbindungen bis 30 s, laufende Jobs und Scheduler-Tick
+    # bis 30 s, Pool schließen bis 5 s — 90 s lassen Reserve. Ein abgebrochenes
+    # Backup ist unkritisch (Temp-Datei + rename).
+    stop_grace_period: 90s
     logging:
       driver: json-file
       options:

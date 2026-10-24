@@ -11,24 +11,29 @@
 //! Backup-Gate: ohne entsperrte Session bucht [`crate::depreciation::accrue_yearly`]
 //! nichts (`skipped_locked`) — dann wird das Jahr NICHT als erledigt markiert,
 //! der nächste Tick nach dem Entsperren holt es nach.
+//!
+//! Lauf F (D-03, ADR 0040): Pause ([`crate::scheduler::hold`]) stoppt auch die
+//! Auto-AfA (ein Uhrsprung nach vorn buchte sonst Jahre im Voraus). Scheitert
+//! der Lauf, entsteht ein Hinweis (einmal je Jahr) und ein persistierter
+//! Backoff von [`FAILURE_BACKOFF_HOURS`] Stunden statt einer Warnung bei jedem
+//! Tick. Jede Buchung (Eintrag, Restbuchwert, Audit) ist eine Transaktion
+//! ([`crate::depreciation::accrue_yearly`]).
 
-use crate::backup::BackupSession;
-use crate::config::Paths;
 use crate::db::repo::app_settings;
 use crate::depreciation::accrue_yearly;
 use crate::error::Result;
-use crate::notify::Notifier;
 use crate::notify::{self, NewNotification};
-use chrono::{Datelike, NaiveDate};
-use sqlx::SqlitePool;
+use crate::scheduler::{backoff, hold, JobCtx};
+use chrono::Datelike;
 
-pub async fn run(
-    pool: &SqlitePool,
-    paths: &Paths,
-    session: &BackupSession,
-    notifier: Option<&dyn Notifier>,
-    today: NaiveDate,
-) -> Result<()> {
+/// Schlüssel des Backoffs nach einem gescheiterten Auto-AfA-Lauf.
+pub const BACKOFF_KEY: &str = "depreciation_auto_last_failure_at";
+/// Wartezeit nach einem Fehlschlag.
+pub const FAILURE_BACKOFF_HOURS: i64 = 6;
+
+pub async fn run(job: &JobCtx<'_>) -> Result<()> {
+    let (pool, paths, session) = (job.pool, job.paths, job.session);
+    let today = job.today();
     // Setting-Gate (Default an).
     if !app_settings::get_bool(pool, "depreciation_auto_year_close", true).await? {
         return Ok(());
@@ -48,8 +53,42 @@ pub async fn run(
     if !session.is_unlocked() {
         return Ok(());
     }
+    if hold::gate(pool, job.now()).await?.is_some() {
+        return Ok(());
+    }
+    if backoff::blocked(
+        pool,
+        BACKOFF_KEY,
+        job.now(),
+        chrono::Duration::hours(FAILURE_BACKOFF_HOURS),
+    )
+    .await?
+    {
+        return Ok(());
+    }
 
-    let report = accrue_yearly::accrue_for_year(pool, paths, session, target_year, today).await?;
+    let report =
+        match accrue_yearly::accrue_for_year(pool, paths, session, target_year, today).await {
+            Ok(r) => r,
+            Err(e) => {
+                backoff::record_failure(pool, BACKOFF_KEY, job.now()).await?;
+                let body = failure_text(target_year, &e);
+                notify::emit(
+                    pool,
+                    NewNotification {
+                        title: "Abschreibung fehlgeschlagen",
+                        body: &body,
+                        severity: "warning",
+                        action_url: Some("/assets"),
+                        dedup_key: Some(&format!("afa_auto_failed:{target_year}")),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                return Err(e);
+            }
+        };
+    backoff::clear(pool, BACKOFF_KEY).await?;
     if report.skipped_locked {
         return Ok(());
     }
@@ -71,7 +110,6 @@ pub async fn run(
         );
         notify::emit(
             pool,
-            notifier,
             NewNotification {
                 rule_id: None,
                 title: "Abschreibung gebucht",
@@ -85,6 +123,17 @@ pub async fn run(
         .await?;
     }
     Ok(())
+}
+
+/// Text des Hinweises „Abschreibung fehlgeschlagen“ (pure; F1d: eine Zeile
+/// ohne eingebettete Leerzeichen-Blöcke).
+fn failure_text(target_year: i64, e: &dyn std::fmt::Display) -> String {
+    format!(
+        "Die automatische Abschreibung für {target_year} ist fehlgeschlagen ({e}). \
+         Bereits gebuchte Anlagen bleiben gebucht; Klein.Buch versucht es in \
+         {FAILURE_BACKOFF_HOURS} Stunden erneut. Bitte die Anlage prüfen oder die \
+         AfA unter Anschaffungen manuell buchen."
+    )
 }
 
 /// Cent → "1.234,56 €" (deutsche Schreibweise, ohne externe Abhängigkeit).
@@ -117,5 +166,15 @@ mod tests {
         assert_eq!(euro(5), "0,05 €");
         assert_eq!(euro(123_456), "1.234,56 €");
         assert_eq!(euro(-9_900), "-99,00 €");
+    }
+
+    /// F1d: Der Hinweistext hat keine Blöcke aus Leerzeichen (verlorene
+    /// Zeilenfortsetzungen).
+    #[test]
+    fn failure_text_has_single_spaces() {
+        let t = failure_text(2026, &"Datenbank gesperrt");
+        assert!(!t.contains("  "), "{t}");
+        assert!(t.contains("(Datenbank gesperrt). Bereits gebuchte"), "{t}");
+        assert!(t.contains("in 6 Stunden erneut"), "{t}");
     }
 }

@@ -1,4 +1,4 @@
-//! Tauri-Commands für Rechtsdokumente (AGB + Datenschutz), Block 8.
+//! Commands für Rechtsdokumente (AGB + Datenschutz), Block 8.
 //!
 //! Versionierte PDF-Uploads. Jede Version wird write-once archiviert
 //! ([`crate::archive::store_bytes`], `ArchiveKind::LegalDocument`); die

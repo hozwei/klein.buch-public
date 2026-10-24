@@ -19,6 +19,8 @@ pub struct NotificationRule {
     pub enabled: i64,
     pub config_json: String,
     pub deliver_in_app: i64,
+    /// Spalte aus Migration 0012 (OS-Benachrichtigung der Desktop-Fassung);
+    /// bleibt forward-only bestehen, wird seit Lauf F nicht mehr gelesen.
     pub deliver_os_native: i64,
     pub created_at: String,
 }
@@ -75,6 +77,17 @@ pub async fn get_enabled_by_type(
         "SELECT * FROM notification_rules
           WHERE rule_type = ? AND enabled = 1
           ORDER BY id ASC LIMIT 1",
+    )
+    .bind(rule_type)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Holt die (erste) Regel eines Typs, egal ob aktiv. `None`, wenn keine existiert.
+pub async fn get_by_type(pool: &SqlitePool, rule_type: &str) -> Result<Option<NotificationRule>> {
+    let row = sqlx::query_as::<_, NotificationRule>(
+        "SELECT * FROM notification_rules WHERE rule_type = ? ORDER BY id ASC LIMIT 1",
     )
     .bind(rule_type)
     .fetch_optional(pool)

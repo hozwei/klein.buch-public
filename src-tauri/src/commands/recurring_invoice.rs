@@ -1,4 +1,4 @@
-//! Tauri-Commands für wiederkehrende Ausgangsrechnungen (Block RI-3).
+//! Commands für wiederkehrende Ausgangsrechnungen (Block RI-3, Lauf F).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::recurring_invoice::validate_recurring_invoice`]).
@@ -18,11 +18,13 @@ use std::sync::Arc;
 
 use crate::db::models::{RecurringInvoiceDetail, RecurringInvoiceRow};
 use crate::db::repo::{audit_log, recurring_invoice, seller_profile};
-use crate::domain::invoice::compute_totals;
+use crate::domain::invoice::{compute_totals, InvoiceItemInput};
 use crate::domain::kleinunternehmer::{self, ItemVatCheck, KleinunternehmerStatus};
 use crate::domain::recurring_invoice::{self as domain, RecurringInvoiceInput};
 use crate::error::{Error, Result};
-use crate::scheduler::recurring_invoice::{process_due, run_now, ProcessReport};
+use crate::scheduler::catch_up::ResumeMode;
+use crate::scheduler::recurring_invoice::{apply_resume_mode, process_due, run_now, ProcessReport};
+use crate::scheduler::JobCtx;
 
 // =============================================================================
 // Read
@@ -82,7 +84,18 @@ pub async fn recurring_invoices_create(
     let pool = ctx.pool()?;
 
     validate(&input)?;
-    assert_no_vat_when_kleinunternehmer(&pool, &input).await?;
+    // R1-S2-NEXTDUE: Eine neue Vorlage beginnt nicht in der Vergangenheit —
+    // sonst holte der nächste Lauf ohne Rückfrage Rechnungen für vergangene
+    // Zeiträume nach.
+    let today = ctx.clock().today_berlin();
+    if input.next_due_date < today {
+        return Err(Error::Domain(format!(
+            "Die erste Fälligkeit ({}) liegt in der Vergangenheit. Bitte heute oder ein späteres \
+             Datum wählen; Rechnungen für vergangene Zeiträume bitte einzeln anlegen.",
+            input.next_due_date.format("%d.%m.%Y")
+        )));
+    }
+    check_items_no_vat(&pool, &input.items).await?;
     let detail = recurring_invoice::create(&pool, &input).await?;
     audit_log::append(
         &pool,
@@ -111,7 +124,9 @@ pub async fn recurring_invoices_update(
     let pool = ctx.pool()?;
 
     validate(&input)?;
-    assert_no_vat_when_kleinunternehmer(&pool, &input).await?;
+    check_items_no_vat(&pool, &input.items).await?;
+    // W14-031: nie gleichzeitig mit einem Lauf auf derselben Vorlage.
+    let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
     let detail = recurring_invoice::update(&pool, &id, &input).await?;
     audit_log::append(
         &pool,
@@ -130,15 +145,42 @@ pub async fn recurring_invoices_update(
 pub struct RecurringInvoicesSetActiveArgs {
     pub id: String,
     pub active: bool,
+    /// Pflicht beim Fortsetzen einer Vorlage mit verpassten Terminen
+    /// (`next_due_date` vor heute): nachholen oder ab heute fortsetzen (W14-026).
+    #[serde(default)]
+    pub resume_mode: Option<ResumeMode>,
 }
 
 pub async fn recurring_invoices_set_active(
     ctx: &Arc<AppCtx>,
     args: RecurringInvoicesSetActiveArgs,
 ) -> Result<RecurringInvoiceRow> {
-    let RecurringInvoicesSetActiveArgs { id, active } = args;
+    let RecurringInvoicesSetActiveArgs {
+        id,
+        active,
+        resume_mode,
+    } = args;
     let pool = ctx.pool()?;
+    let today = ctx.clock().today_berlin();
 
+    // W14-031: unter der Vorlagen-Sperre — ein laufender Termin wird fertig,
+    // danach wirkt die Pause.
+    let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
+    let tmpl = recurring_invoice::get_row(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))?;
+    let mut applied = None;
+    if active && tmpl.active == 0 && has_backlog(&pool, &tmpl, today).await? {
+        let mode = resume_mode.ok_or_else(|| {
+            Error::Domain(format!(
+                "Die Vorlage hat verpasste Termine seit {}. Bitte wählen: nachholen (ältere \
+                 Termine als Entwurf) oder ab heute fortsetzen.",
+                tmpl.next_due_date
+            ))
+        })?;
+        apply_resume_mode(&pool, &tmpl, mode, today).await?;
+        applied = Some(mode);
+    }
     recurring_invoice::set_active(&pool, &id, active).await?;
     audit_log::append(
         &pool,
@@ -149,12 +191,79 @@ pub async fn recurring_invoices_set_active(
         },
         "recurring_invoice",
         &id,
-        None,
+        applied
+            .map(|m| serde_json::json!({ "resume_mode": m }).to_string())
+            .as_deref(),
     )
     .await?;
     recurring_invoice::get_row(&pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))
+}
+
+/// Argumente von [`recurring_invoices_resolve_backlog`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoicesResolveBacklogArgs {
+    pub id: String,
+    pub mode: ResumeMode,
+}
+
+/// Entscheidung zu verpassten Terminen einer aktiven Vorlage (Hinweis
+/// „Entscheidung nötig“, W14-026): nachholen (Bestätigung für den nächsten
+/// Lauf, ältere Termine als Entwurf) oder ab heute fortsetzen.
+pub async fn recurring_invoices_resolve_backlog(
+    ctx: &Arc<AppCtx>,
+    args: RecurringInvoicesResolveBacklogArgs,
+) -> Result<RecurringInvoiceRow> {
+    let RecurringInvoicesResolveBacklogArgs { id, mode } = args;
+    let pool = ctx.pool()?;
+    let today = ctx.clock().today_berlin();
+    let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
+    let tmpl = recurring_invoice::get_row(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))?;
+    if tmpl.active == 0 {
+        return Err(Error::Domain(
+            "Die Vorlage ist pausiert — die Wahl erfolgt beim Fortsetzen.".into(),
+        ));
+    }
+    apply_resume_mode(&pool, &tmpl, mode, today).await?;
+    recurring_invoice::get_row(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))
+}
+
+/// Verpasste Termine (Stichtag vor heute, innerhalb der Laufzeit) oder eine
+/// offene Prüfung nach einer Wiederherstellung (F1d: auch ein heute fälliger
+/// Termin verlangt dann die Wahl)?
+async fn has_backlog(
+    pool: &SqlitePool,
+    tmpl: &RecurringInvoiceRow,
+    today: chrono::NaiveDate,
+) -> Result<bool> {
+    let Ok(next) = chrono::NaiveDate::parse_from_str(&tmpl.next_due_date, "%Y-%m-%d") else {
+        return Ok(false);
+    };
+    let within = tmpl
+        .end_date
+        .as_deref()
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+        .is_none_or(|end| next <= end);
+    if !within {
+        return Ok(false);
+    }
+    if next < today {
+        return Ok(true);
+    }
+    Ok(crate::scheduler::catch_up::restore_review_through(
+        pool,
+        crate::scheduler::catch_up::Series::Template,
+        &tmpl.id,
+        &tmpl.next_due_date,
+    )
+    .await?
+    .is_some_and(|_| next <= today))
 }
 
 // =============================================================================
@@ -178,10 +287,8 @@ pub async fn recurring_invoices_run_now(
 ) -> Result<String> {
     let RecurringInvoicesRunNowArgs { id } = args;
     let pool = ctx.pool()?;
-    let session = &ctx.session;
-
-    let paths = ctx.paths.clone();
-    run_now(&pool, &paths, session, ctx.notifier(), &id, today_berlin()).await
+    let clock = ctx.clock();
+    run_now(&JobCtx::from_app(ctx, &pool, clock.as_ref()), &id).await
 }
 
 /// Argumente von [`recurring_invoices_run_due_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -189,18 +296,16 @@ pub async fn recurring_invoices_run_now(
 #[serde(rename_all = "camelCase")]
 pub struct RecurringInvoicesRunDueCheckArgs {}
 
-/// Manueller Due-Check für ALLE fälligen Vorlagen (gleiche Logik wie der
-/// Scheduler-Tick). Nützlich direkt nach dem Entsperren, ohne auf den nächsten
-/// Tick zu warten.
+/// Manueller Due-Check für ALLE fälligen Vorlagen (gleiche Logik und Grenzen
+/// wie der Scheduler-Tick, Button „Alle fälligen erstellen“). Die Seite löst
+/// ihn nicht mehr beim Öffnen aus (W14-030).
 pub async fn recurring_invoices_run_due_check(
     ctx: &Arc<AppCtx>,
     _args: RecurringInvoicesRunDueCheckArgs,
 ) -> Result<ProcessReport> {
     let pool = ctx.pool()?;
-    let session = &ctx.session;
-
-    let paths = ctx.paths.clone();
-    process_due(&pool, &paths, session, ctx.notifier(), today_berlin()).await
+    let clock = ctx.clock();
+    process_due(&JobCtx::from_app(ctx, &pool, clock.as_ref())).await
 }
 
 // =============================================================================
@@ -220,14 +325,16 @@ fn validate(input: &RecurringInvoiceInput) -> Result<()> {
     Ok(())
 }
 
-/// KB-0053: §14c-Schutz beim Speichern der Vorlage (Defense-in-Depth unter der
-/// UI-Sperre). Bei aktivem §19 dürfen die Vorlagen-Positionen keine USt tragen —
-/// sonst entstünden daraus bei jeder Materialisierung USt-behaftete Entwürfe, die
-/// erst beim Festschreiben (`assert_no_vat` in der Lock-Pipeline) scheitern.
-/// Nutzt denselben Domain-Check wie der Rechnungsweg (`kleinunternehmer::assert_no_vat`).
-async fn assert_no_vat_when_kleinunternehmer(
+/// KB-0053 / R1-017: §14c-Schutz für Vorlagen-Positionen — beim Speichern
+/// (Defense-in-Depth unter der UI-Sperre) und vor jeder Materialisierung im
+/// Scheduler. Bei aktivem §19 dürfen die Positionen keine USt tragen — sonst
+/// entstünden nummerierte Entwürfe, die erst beim Festschreiben (`assert_no_vat`
+/// in der Lock-Pipeline) scheitern. Nutzt denselben Domain-Check wie der
+/// Rechnungsweg (`kleinunternehmer::assert_no_vat`) mit dem aktuellen
+/// §19-Status.
+pub(crate) async fn check_items_no_vat(
     pool: &SqlitePool,
-    input: &RecurringInvoiceInput,
+    items: &[InvoiceItemInput],
 ) -> Result<()> {
     // Onboarding erzwingt das Verkäuferprofil vor der ersten Rechnung; solange
     // keins existiert, ist der §19-Status nicht bestimmbar → kein Block.
@@ -241,8 +348,7 @@ async fn assert_no_vat_when_kleinunternehmer(
             .as_deref()
             .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
     };
-    let checks: Vec<ItemVatCheck> = input
-        .items
+    let checks: Vec<ItemVatCheck> = items
         .iter()
         .map(|it| ItemVatCheck {
             position: it.position,
@@ -275,11 +381,6 @@ fn audit_details(t: &RecurringInvoiceRow) -> String {
         esc(&t.frequency),
         esc(&t.auto_mode)
     )
-}
-
-/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
-fn today_berlin() -> chrono::NaiveDate {
-    crate::clock::today_berlin()
 }
 
 fn esc(s: &str) -> String {

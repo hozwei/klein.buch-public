@@ -1,4 +1,4 @@
-//! Tauri-Commands für wiederkehrende Abos (Block 10).
+//! Commands für wiederkehrende Kosten-Abos (Block 10, Lauf F).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::recurring::validate_recurring`]).
@@ -18,7 +18,9 @@ use crate::db::models::{ExpenseRow, RecurringSubscriptionRow};
 use crate::db::repo::{audit_log, recurring};
 use crate::domain::recurring::{self as domain, RecurringInput};
 use crate::error::{Error, Result};
-use crate::scheduler::recurring::{process_due, run_now, ProcessReport};
+use crate::scheduler::catch_up::{self, ResumeMode, Series};
+use crate::scheduler::recurring::{apply_resume_mode, process_due, run_now, ProcessReport};
+use crate::scheduler::JobCtx;
 
 // =============================================================================
 // Read
@@ -111,7 +113,11 @@ pub async fn recurring_update(
     let pool = ctx.pool()?;
 
     validate(&input)?;
+    // W14-022: nie gleichzeitig mit einem Lauf auf demselben Abo.
+    let _guard = crate::locks::RECURRING_SUBSCRIPTIONS.lock(&id).await;
     let row = recurring::update(&pool, &id, &input).await?;
+    // Ein neuer Stichtag überholt eine Bestätigung zum Nachholen.
+    catch_up::clear(&pool, Series::Subscription, &id).await?;
     audit_log::append(
         &pool,
         "recurring.update",
@@ -134,15 +140,45 @@ pub async fn recurring_update(
 pub struct RecurringSetActiveArgs {
     pub id: String,
     pub active: bool,
+    /// Pflicht beim Fortsetzen eines Auto-Abos mit verpassten Terminen
+    /// (`next_due_date` vor heute): nachholen oder ab heute fortsetzen (W14-026).
+    #[serde(default)]
+    pub resume_mode: Option<ResumeMode>,
 }
 
 pub async fn recurring_set_active(
     ctx: &Arc<AppCtx>,
     args: RecurringSetActiveArgs,
 ) -> Result<RecurringSubscriptionRow> {
-    let RecurringSetActiveArgs { id, active } = args;
+    let RecurringSetActiveArgs {
+        id,
+        active,
+        resume_mode,
+    } = args;
     let pool = ctx.pool()?;
+    let today = ctx.clock().today_berlin();
 
+    // W14-022: unter der Abo-Sperre (kein Lauf dazwischen).
+    let _guard = crate::locks::RECURRING_SUBSCRIPTIONS.lock(&id).await;
+    let sub = recurring::get(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))?;
+    let mut applied = None;
+    if active
+        && sub.active == 0
+        && sub.auto_create_expense == 1
+        && has_backlog(&pool, &sub, today).await?
+    {
+        let mode = resume_mode.ok_or_else(|| {
+            Error::Domain(format!(
+                "Das Abo hat verpasste Termine seit {}. Bitte wählen: nachholen oder ab heute \
+                 fortsetzen.",
+                sub.next_due_date
+            ))
+        })?;
+        apply_resume_mode(&pool, &sub, mode, today).await?;
+        applied = Some(mode);
+    }
     recurring::set_active(&pool, &id, active).await?;
     audit_log::append(
         &pool,
@@ -153,12 +189,97 @@ pub async fn recurring_set_active(
         },
         "recurring",
         &id,
-        None,
+        applied
+            .map(|m| serde_json::json!({ "resume_mode": m }).to_string())
+            .as_deref(),
     )
     .await?;
     recurring::get(&pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))
+}
+
+/// Argumente von [`recurring_resolve_backlog`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringResolveBacklogArgs {
+    pub id: String,
+    pub mode: ResumeMode,
+}
+
+/// Entscheidung zu verpassten Terminen eines aktiven Abos (Hinweis
+/// „Entscheidung nötig“, W14-026/-034): nachholen (Bestätigung für den
+/// nächsten Lauf) oder ab heute fortsetzen.
+pub async fn recurring_resolve_backlog(
+    ctx: &Arc<AppCtx>,
+    args: RecurringResolveBacklogArgs,
+) -> Result<RecurringSubscriptionRow> {
+    let RecurringResolveBacklogArgs { id, mode } = args;
+    let pool = ctx.pool()?;
+    let today = ctx.clock().today_berlin();
+    let _guard = crate::locks::RECURRING_SUBSCRIPTIONS.lock(&id).await;
+    let sub = recurring::get(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))?;
+    if sub.active == 0 {
+        return Err(Error::Domain(
+            "Das Abo ist pausiert — die Wahl erfolgt beim Fortsetzen.".into(),
+        ));
+    }
+    apply_resume_mode(&pool, &sub, mode, today).await?;
+    recurring::get(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))
+}
+
+/// Verpasste Termine (Stichtag vor heute) oder eine offene Prüfung nach einer
+/// Wiederherstellung (F1d: auch ein heute fälliger Termin verlangt dann die
+/// Wahl)?
+async fn has_backlog(
+    pool: &sqlx::SqlitePool,
+    sub: &RecurringSubscriptionRow,
+    today: chrono::NaiveDate,
+) -> Result<bool> {
+    let Ok(next) = chrono::NaiveDate::parse_from_str(&sub.next_due_date, "%Y-%m-%d") else {
+        return Ok(false);
+    };
+    if next < today {
+        return Ok(true);
+    }
+    Ok(
+        catch_up::restore_review_through(pool, Series::Subscription, &sub.id, &sub.next_due_date)
+            .await?
+            .is_some_and(|_| next <= today),
+    )
+}
+
+/// Argumente von [`recurring_restore_review_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringRestoreReviewListArgs {}
+
+/// Reihen mit offener Prüfung nach einer Wiederherstellung (F1d).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreReviewList {
+    /// IDs der Abo-Rechnungs-Vorlagen.
+    pub templates: Vec<String>,
+    /// IDs der Kosten-Abos.
+    pub subscriptions: Vec<String>,
+}
+
+/// Welche Reihen warten nach einer Wiederherstellung auf die Entscheidung
+/// „Rückstand …“ (Stand der ersetzten Datenbank unbekannt, F1d)? Die Listen
+/// zeigen dafür den Knopf auch bei einem heute fälligen Termin.
+pub async fn recurring_restore_review_list(
+    ctx: &Arc<AppCtx>,
+    _args: RecurringRestoreReviewListArgs,
+) -> Result<RestoreReviewList> {
+    let pool = ctx.pool()?;
+    Ok(RestoreReviewList {
+        templates: catch_up::restore_review_ids(&pool, Series::Template).await?,
+        subscriptions: catch_up::restore_review_ids(&pool, Series::Subscription).await?,
+    })
 }
 
 // =============================================================================
@@ -178,10 +299,8 @@ pub struct RecurringRunNowArgs {
 pub async fn recurring_run_now(ctx: &Arc<AppCtx>, args: RecurringRunNowArgs) -> Result<ExpenseRow> {
     let RecurringRunNowArgs { id } = args;
     let pool = ctx.pool()?;
-    let session = &ctx.session;
-
-    let paths = ctx.paths.clone();
-    run_now(&pool, &paths, session, &id, today_berlin()).await
+    let clock = ctx.clock();
+    run_now(&JobCtx::from_app(ctx, &pool, clock.as_ref()), &id).await
 }
 
 /// Argumente von [`recurring_run_due_check`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -189,17 +308,15 @@ pub async fn recurring_run_now(ctx: &Arc<AppCtx>, args: RecurringRunNowArgs) -> 
 #[serde(rename_all = "camelCase")]
 pub struct RecurringRunDueCheckArgs {}
 
-/// Manueller Due-Check für ALLE Auto-Abos (gleiche Logik wie der Scheduler-Tick).
-/// Nützlich direkt nach dem Entsperren, ohne auf den nächsten Tick zu warten.
+/// Manueller Due-Check für ALLE Auto-Abos (gleiche Logik und Grenzen wie der
+/// Scheduler-Tick, Button „Alle fälligen buchen“).
 pub async fn recurring_run_due_check(
     ctx: &Arc<AppCtx>,
     _args: RecurringRunDueCheckArgs,
 ) -> Result<ProcessReport> {
     let pool = ctx.pool()?;
-    let session = &ctx.session;
-
-    let paths = ctx.paths.clone();
-    process_due(&pool, &paths, session, today_berlin()).await
+    let clock = ctx.clock();
+    process_due(&JobCtx::from_app(ctx, &pool, clock.as_ref())).await
 }
 
 // =============================================================================
@@ -217,11 +334,6 @@ fn validate(input: &RecurringInput) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-/// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
-fn today_berlin() -> chrono::NaiveDate {
-    crate::clock::today_berlin()
 }
 
 fn esc(s: &str) -> String {

@@ -5,7 +5,7 @@
     fiscalYearAutoCloseSet,
   } from "$lib/api";
   import type { FiscalYearOverview, FiscalYearStatus } from "$lib/types";
-  import { euro, date } from "$lib/format";
+  import { euro, date, dateTime } from "$lib/format";
   import { flash } from "$lib/toast.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
   import Banner from "$lib/Banner.svelte";
@@ -86,12 +86,6 @@
     }
   }
 
-  function fmtDateTime(ts: string | null): string {
-    if (!ts) return "—";
-    const iso = ts.includes("T") ? ts : ts.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? ts : d.toLocaleString("de-DE");
-  }
 </script>
 
 <PageBar title="Geschäftsjahr">
@@ -144,7 +138,7 @@
             <td data-label="Status">
               {#if y.closed}
                 <span class="badge closed">Abgeschlossen</span>
-                <span class="muted small">{fmtDateTime(y.closedAt)}</span>
+                <span class="muted small">{dateTime(y.closedAt)}</span>
               {:else}
                 <span class="badge open">Offen</span>
               {/if}

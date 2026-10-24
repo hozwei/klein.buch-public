@@ -216,20 +216,29 @@ async fn accrue_asset(
         useful_life_years: asset.useful_life_years,
     };
 
-    // Restbuchwert, der in das nächste zu buchende Jahr geht. Da Buchungen
-    // sequenziell + lückenlos erfolgen, spiegelt der gespeicherte Restbuchwert
-    // den Stand nach dem zuletzt gebuchten Jahr.
-    let mut running = asset.book_value_cents;
-
+    // Je Jahr eine Schreib-Transaktion (Lauf F, D-03): Restbuchwert frisch aus
+    // der Zeile lesen, Eintrag anlegen, Restbuchwert fortschreiben und
+    // auditieren — zusammen oder gar nicht. Ein Abbruch dazwischen ließe sonst
+    // einen veralteten Restbuchwert stehen, aus dem das Folgejahr eine zu hohe
+    // AfA berechnete. Die Schreibsperre schließt zugleich parallele Läufe aus.
     for year in asset.acquisition_fiscal_year..=target_year {
+        let mut tx = crate::db::begin_immediate(pool).await?;
+        let running: i64 = sqlx::query_scalar("SELECT book_value_cents FROM assets WHERE id = ?")
+            .bind(&asset.id)
+            .fetch_one(&mut *tx)
+            .await?;
         if running <= 0 {
             break;
         }
         // Bereits gebucht? → überspringen (idempotent), Restbuchwert bleibt.
-        if depreciation_repo::get_for_asset_year(pool, &asset.id, year)
-            .await?
-            .is_some()
-        {
+        let booked: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM depreciation_entries WHERE asset_id = ? AND fiscal_year = ?",
+        )
+        .bind(&asset.id)
+        .bind(year)
+        .fetch_one(&mut *tx)
+        .await?;
+        if booked > 0 {
             continue;
         }
 
@@ -238,28 +247,29 @@ async fn accrue_asset(
             continue;
         }
 
-        depreciation_repo::book_entry(pool, &asset.id, year, &calc).await?;
-        running = calc.book_value_after_cents;
-
+        depreciation_repo::book_entry_in(&mut tx, &asset.id, year, &calc).await?;
         // Restbuchwert fortschreiben. KEIN Lock — die Festschreibung erfolgt erst
         // zum GJ-Abschluss (Block 15), bis dahin ist die AfA korrigierbar.
-        assets::set_book_value(pool, &asset.id, running, Some(year)).await?;
-
-        audit_log::append(
-            pool,
+        assets::set_book_value_in(&mut tx, &asset.id, calc.book_value_after_cents, Some(year))
+            .await?;
+        audit_log::append_in(
+            &mut tx,
             "depreciation.accrue",
             "asset",
             &asset.id,
-            Some(&format!(
-                r#"{{"asset_number":"{}","fiscal_year":{},"amount":{},"book_value_after":{},"full_writeoff":{}}}"#,
-                esc(&asset.asset_number),
-                year,
-                calc.depreciation_amount_cents,
-                calc.book_value_after_cents,
-                calc.is_full_writeoff
-            )),
+            Some(
+                &serde_json::json!({
+                    "asset_number": asset.asset_number,
+                    "fiscal_year": year,
+                    "amount": calc.depreciation_amount_cents,
+                    "book_value_after": calc.book_value_after_cents,
+                    "full_writeoff": calc.is_full_writeoff,
+                })
+                .to_string(),
+            ),
         )
         .await?;
+        tx.commit().await?;
 
         result.entries += 1;
         result.total_cents += calc.depreciation_amount_cents;

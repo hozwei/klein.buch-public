@@ -46,11 +46,28 @@ impl InstanceState {
 /// Wie lange der Server nach einem erfolgreichen Restore noch antwortet, damit
 /// der Browser das Job-Ergebnis abholen kann, bevor er neu startet.
 pub const RESTART_GRACE: Duration = Duration::from_secs(10);
-/// Höchstens so lange wartet das Herunterfahren auf laufende Jobs.
-pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(600);
+/// Höchstens so lange wartet das Herunterfahren auf laufende Commands und Jobs
+/// (W5-STOP-GRACE, W14-025b). Zusammen mit dem Abwarten offener Verbindungen
+/// (`http::CONNECTION_DRAIN_TIMEOUT`, 30 s) und dem Schließen des Pools
+/// ([`POOL_CLOSE_WAIT`]) bleibt das Herunterfahren unter 70 s — deutlich unter
+/// `stop_grace_period: 90s` im Compose-Beispiel. Ein abgebrochenes Backup ist
+/// unkritisch (Temp-Datei + rename, Reste räumt der Sweeper).
+pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// So lange wartet das Herunterfahren auf den laufenden Scheduler-Tick
+/// (gleichzeitig mit [`JOB_DRAIN_TIMEOUT`]); die Abbruch-Anforderung steht
+/// schon seit dem Signal.
+pub const SCHEDULER_SHUTDOWN_WAIT: Duration = Duration::from_secs(25);
+/// Höchstens so lange wartet das Herunterfahren auf das Schließen des Pools
+/// (WAL-Checkpoint, ausgeliehene Verbindungen).
+pub const POOL_CLOSE_WAIT: Duration = Duration::from_secs(5);
 /// So lange warten „Datenbank sperren“ und „Passphrase ändern“ auf laufende
 /// Aktionen, bevor sie mit 503 abbrechen.
 pub const DB_GATE_WAIT: Duration = Duration::from_secs(60);
+/// So lange warten „Datenbank sperren“ und „Passphrase ändern“ darauf, dass ein
+/// laufender Scheduler-Tick nach dem aktuellen Termin aufhört (W14-027, ADR
+/// 0040). Danach sperrt „Datenbank sperren“ trotzdem (der Tick läuft ohne Pool
+/// und Passphrase leer); „Passphrase ändern“ bricht mit 503 ab.
+pub const SCHEDULER_STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// Setup-Token und ausstehende TOTP-Geheimnisse (Plan W6).
 #[derive(Default)]
@@ -285,25 +302,41 @@ impl ServerState {
         });
     }
 
-    /// Nach dem Ende der Annahme-Schleife: abgekoppelte Tasks und Jobs
-    /// abwarten, Scheduler-Tick abwarten und anhalten, Pool schließen
-    /// (WAL-Checkpoint).
+    /// Nach dem Ende der Annahme-Schleife (W5-STOP-GRACE, W14-025b, ADR 0040):
+    /// zuerst den Scheduler anhalten (Abbruch-Anforderung — laufende Abo-Läufe
+    /// beenden ihren Termin, der Vollscan die Datei), dann gleichzeitig den
+    /// Tick ([`SCHEDULER_SHUTDOWN_WAIT`]) und abgekoppelte Tasks und Jobs
+    /// ([`JOB_DRAIN_TIMEOUT`]) abwarten, zuletzt den Pool schließen
+    /// (WAL-Checkpoint, [`POOL_CLOSE_WAIT`]). Alle Fristen zusammen liegen unter
+    /// der `stop_grace_period` des Compose-Beispiels.
     pub async fn finish_shutdown(&self) {
+        crate::scheduler::tick::request_stop(&self.ctx);
         self.tasks.close();
-        if tokio::time::timeout(JOB_DRAIN_TIMEOUT, self.tasks.wait())
-            .await
-            .is_err()
-        {
+        let (scheduler_stopped, tasks_done) = tokio::join!(
+            crate::scheduler::tick::stop_within(&self.ctx, SCHEDULER_SHUTDOWN_WAIT),
+            tokio::time::timeout(JOB_DRAIN_TIMEOUT, self.tasks.wait()),
+        );
+        if !scheduler_stopped {
             tracing::warn!(
-                "Herunterfahren: {} Task(s), davon {} Job(s), nach {} s noch aktiv",
+                "Herunterfahren: Scheduler-Tick nach {} s noch aktiv — wird abgebrochen",
+                SCHEDULER_SHUTDOWN_WAIT.as_secs()
+            );
+        }
+        if tasks_done.is_err() {
+            tracing::warn!(
+                "Herunterfahren: {} Task(s), davon {} Job(s), nach {} s noch aktiv — werden abgebrochen",
                 self.tasks.len(),
                 self.jobs.active(),
                 JOB_DRAIN_TIMEOUT.as_secs()
             );
         }
-        crate::scheduler::tick::stop(&self.ctx).await;
         if let Some(pool) = self.ctx.take_pool() {
-            pool.close().await;
+            if tokio::time::timeout(POOL_CLOSE_WAIT, pool.close())
+                .await
+                .is_err()
+            {
+                tracing::warn!("Herunterfahren: Pool schließt verzögert");
+            }
         }
         self.ctx.session.clear();
         self.sessions.clear();

@@ -244,3 +244,26 @@ Desktops gibt es nicht (ADR 0039, E8).
 - **Entfällt:** OneDrive-/iCloud-Erkennung (Pt. 2) und die Ordner-Dialoge der
   Desktop-App. Das SFTP-Passwort zieht vom OS-Keychain in die verschlüsselte
   Secret-Tabelle (Block W8, Amendment ADR 0011/0028).
+
+## Amendment 2026-10-24 — Dauerbetrieb (Lauf F, ADR 0040)
+
+**Status:** Akzeptiert · Lauf F (Block F1b). Keine Migration. Einzelheiten und
+Begründung in ADR 0040 Nr. 13–16 und den Umsetzungs-Entscheidungen 16–19.
+
+- **Tages-Backup kalenderfest** statt „24 h nach dem letzten Backup“ (die
+  Tier-Tabelle oben mit „täglich beim Start“ ist überholt): genau eines je
+  Berliner Kalendertag ab `app_settings.backup_daily_time` (Standard 02:30),
+  beim ersten Tick danach; Backoff persistiert.
+- **Aufbewahrung nach Kalender-Eimern:** je Ablage das jüngste automatische
+  Backup je Tag, Monat und Jahr für die jüngsten 7/3/1 (Floor bei
+  erfolgreichem Off-Site-Ziel) bzw. 30/12/7 Eimer mit Backup. `retention_tag`
+  bleibt als Information. `manual`/`pre_restore` nie gelöscht.
+- **SFTP: keine Löschung durch Klein.Buch** — weder Dateien noch
+  Historienzeilen (bisher: Zeilen samt Audit „prune“ gelöscht, Dateien nicht).
+  Der Betreiber rotiert serverseitig; Platzbedarf im Handbuch
+  „Speicher und Ressourcen“. Schutz der Off-Site-Kopien vor einer
+  kompromittierten Instanz.
+- **Nach einem Restore:** bis zur Freigabe der Pause (ADR 0040 Nr. 11) nur
+  Floor, keine Spiegelung (`backup.mirror.skipped`); Floor-Backups, die nach
+  dem eingespielten Stand entstanden, kommen als `manual` in die Historie.
+  Während jeder Pause ruht die Rotation.

@@ -99,8 +99,9 @@ Benutzer und Passwort.
   Zahlungsdatum (Cash-Basis), Teilzahlungen auch über Jahresgrenzen.
 - **Wiederkehrende Rechnungen** (Button auf der Rechnungen-Seite): Abo-Vorlagen
   mit Frequenz und Stichtag; je Vorlage nur Entwurf, automatisch ausstellen oder
-  ausstellen und senden. Das Belegdatum ist immer der Erstellungstag; verpasste
-  Perioden holt Klein.Buch nach.
+  ausstellen und senden. Das Belegdatum ist immer der Erstellungstag. Bis drei
+  verpasste Perioden holt Klein.Buch selbst nach (ältere als Entwurf, nie
+  automatisch versendet), bei mehr fragt es über „Rückstand …“ nach.
 
 ## 3. Angebote
 
@@ -129,7 +130,9 @@ bleiben als Nachweis erhalten und werden nie gelöscht.
   `EXTENDED` und `XRECHNUNG`; `MINIMUM` und `BASIC-WL` sind keine gültigen
   E-Rechnungen und werden abgelehnt. Die Roh-XML einer empfangenen Rechnung
   zeigt die Detailseite.
-- **Wiederkehrende Abos** für regelmäßige Kosten (Miete, Software).
+- **Wiederkehrende Abos** für regelmäßige Kosten (Miete, Software): automatisch
+  buchen oder nur am Stichtag erinnern (Hinweis „Abo fällig“); verpasste Termine
+  wie bei den Abo-Rechnungen (bis drei selbst, mehr nach Rückfrage).
 - **Privat-Geld** dokumentiert Entnahmen und Einlagen (EÜR-neutral).
 
 ## 5. Anschaffungen und Abschreibung
@@ -175,8 +178,12 @@ Unter **Einstellungen → Backups**:
   aktuellen Stand und startet danach neu; anschließend gilt das Daten-Passwort
   des Backups.
 
-Automatische Backups entstehen bei jedem Festschreiben und einmal täglich, vor
-jeder Wiederherstellung und vor jeder Datenbank-Umstellung durch ein Update.
+Automatische Backups entstehen bei jedem Festschreiben, einmal je Kalendertag
+zur eingestellten Uhrzeit (Standard 02:30), vor jeder Wiederherstellung und vor
+jeder Datenbank-Umstellung durch ein Update. Nach einer Wiederherstellung bleiben
+Abo-Läufe und Versand angehalten und Backups gehen nur in den lokalen Ordner,
+bis Du im Banner freigibst; bereits vergebene Belegnummern werden nicht erneut
+vergeben (Einstellungen → Backups → Nummernkreise).
 Eigene Vorlagen in `/inputs` sind **nicht** Teil der Backups; die sichert der
 Betreiber.
 

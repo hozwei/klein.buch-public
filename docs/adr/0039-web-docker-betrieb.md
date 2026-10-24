@@ -1084,3 +1084,54 @@ ADR 0002, 0038 (abgelöst); ADR 0006 (GoBD), 0009 (Backup-Krypto), 0013 (Local-F
 (SQLCipher, Passphrase), 0036 (Factory Reset), 0037 (Drop-Folder). Code aus W1/W2:
 `src-tauri/src/clock.rs`, `src-tauri/src/limits.rs`, `src-tauri/src/locks.rs`,
 `src-tauri/src/backup/restore.rs`, `src-tauri/src/archive/store.rs`, `src/lib/date.ts`.
+
+## Amendment 2026-10-24 — Dauerbetrieb: Start- und Zeitlogik (Lauf F, ADR 0040)
+
+**Status:** Akzeptiert · Lauf F (Block F1). Die Start- und Zeitlogik des
+Server-Betriebs ist in **ADR 0040** entschieden; dort stehen Zielmodell,
+Entscheidungen und Begründungen. Die folgenden Einträge oben gelten nur noch mit
+diesen Änderungen (die Historie bleibt unverändert stehen):
+
+- **E3 / Konsequenzen „holt der Scheduler nach dem Entsperren nach“:** Nachholen
+  begrenzt (bis drei Termine selbst, mehr nur nach Bestätigung, nachgeholte
+  Rechnungen nie automatisch versendet), erster Tick 60 s nach dem Entsperren
+  ohne Vollscan, ein gesammeltes Lock-Backup je Tick; der gesperrte Zustand steht
+  beim Serverstart und alle 6 h im Log (ADR 0040 Nr. 4, 18).
+- **Nr. 33 (Jobs) und Nr. 44 (Restore):** Nach dem Einspielen eines Backups
+  pausieren Abo-Läufe, Auto-AfA, Versand und Off-Site-Spiegelung bis zur
+  Freigabe im Browser; Nummernkreise werden auf den Stand vor dem Restore
+  angehoben, Floor-Backups nach dem eingespielten Stand kommen in die Historie
+  (ADR 0040 Nr. 11–14).
+- **Nr. 45 (Herunterfahren bis 10 min):** ersetzt durch sofortige
+  Abbruch-Anforderung an den Scheduler, höchstens 30 s für Verbindungen, dann
+  gleichzeitig höchstens 25 s Tick und 30 s Jobs, 5 s Pool;
+  `stop_grace_period` 90 s (ADR 0040 Nr. 19).
+- **Nr. 54 (Sperren und Passphrase-Wechsel warten bis 60 s):** Der Scheduler-Tick
+  bekommt höchstens 10 s; „Datenbank sperren“ beendet die Sitzungen sofort und
+  sperrt danach auch bei laufendem Tick (ADR 0040 Nr. 9). Die 60 s für
+  laufende Commands und Jobs (`db_gate`) bleiben.
+- **Nr. 65 (`tmp`-Reste nur beim Serverstart):** Reste in `data/tmp` und
+  abgebrochene Backup-Teildateien räumt zusätzlich ein stündlicher Sweeper
+  (älter als 6 h, ADR 0040 Nr. 19, Umsetzung 24).
+- **Nr. 77 (Rotation je SFTP-Ordner):** Auf SFTP-Zielen löscht Klein.Buch
+  nichts mehr; Ordner-Ziele und Floor rotieren nach Kalender-Eimern (ADR 0040
+  Nr. 16, Amendment ADR 0034).
+- **Nr. 13 (Tages-Backup im Tick, W2):** kalenderfest
+  einmal je Berliner Tag ab einer einstellbaren Uhrzeit (Standard 02:30) statt
+  24 h nach dem letzten Backup (ADR 0040 Nr. 15).
+- **Nr. 91 (Kanal „System-Mitteilung“):** Der zuletzt tote Trait `Notifier`
+  (`InboxOnly`) ist entfernt; `notify::emit` schreibt nur in die Inbox (Amendment
+  ADR 0027).
+- **Nr. 103 (Seed-Manifest):** Die neue Fassung einer vom Nutzer geänderten
+  Datei wird je Fassung einmal als `<name>.neu` angeboten (`offered` im
+  Manifest); eine gelöschte `.neu`-Datei kommt erst mit einer weiteren
+  Image-Fassung wieder. Hinweise tragen einen `dedup_key` (Lauf F, D-10).
+- **Nr. 120 (Re-Auth, 21 Commands):** Mit `scheduler_release_hold` und
+  `numbering_raise` sind es 23, mit `numbering_restored_draft_confirm` (F1d,
+  ADR 0040 Entscheidung 35) 24.
+- **E12 (Zeitzone) in der Oberfläche:** DB-Zeitstempel (UTC) zeigt die
+  Oberfläche über `date()`/`dateTime()` (`src/lib/format.ts`) in Europe/Berlin,
+  Tage bis zur Fälligkeit über `daysUntilBerlin` (`src/lib/date.ts`) — nicht
+  mehr in der Zeitzone des Geräts (Lauf F, D-15/D-25).
+- **PRD:** Revision 9 „Dauerbetrieb (Lauf F)“ löst die PRD-Stellen mit
+  Start-Logik der Desktop-Fassung ab.

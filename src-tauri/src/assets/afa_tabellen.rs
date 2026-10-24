@@ -122,6 +122,19 @@ mod tests {
         assert!(t.category("does_not_exist").is_none());
     }
 
+    /// Lauf F (SL-AFA-CACHES, ADR 0040): kein Cache — eine im Betrieb gepflegte
+    /// Datei gilt beim nächsten Lesen, ohne Neustart.
+    #[test]
+    fn load_reads_current_file_without_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("specs")).unwrap();
+        let file = dir.path().join("specs").join("afa-tabellen.json");
+        std::fs::write(&file, SAMPLE).unwrap();
+        assert_eq!(load(dir.path()).unwrap().gwg_threshold_cents, 80_000);
+        std::fs::write(&file, SAMPLE.replace("80000", "100000")).unwrap();
+        assert_eq!(load(dir.path()).unwrap().gwg_threshold_cents, 100_000);
+    }
+
     #[test]
     fn rejects_empty_categories() {
         let json = r#"{ "version": "x", "categories": [], "gwg_threshold_cents": 80000 }"#;

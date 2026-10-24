@@ -12,13 +12,17 @@ Ein Backup ist eine verschlüsselte Sicherheits-Kopie Deiner Datenbank und
 Deines Beleg-Archivs. Klein.Buch legt es automatisch an: nach jeder
 Festschreibung (zum Beispiel wenn Du eine Rechnung ausstellst, eine
 Ausgabe oder Privatbewegung festschreibst oder etwas stornierst) und
-zusätzlich einmal am Tag. Du brauchst Dich im Alltag nicht darum zu
-kümmern. Wenn doch einmal ein älterer Stand zurück muss, gibt es die
-Wiederherstellung (auf Englisch "Restore").
+zusätzlich einmal je Kalendertag zu einer festen Uhrzeit (Standard 02:30
+Uhr, einstellbar unter "Backups" in der Karte "Backup jetzt erstellen").
+Du brauchst Dich im Alltag nicht darum zu kümmern. Wenn doch einmal ein
+älterer Stand zurück muss, gibt es die Wiederherstellung (auf Englisch
+"Restore").
 
 Das tägliche Backup läuft nur, solange Klein.Buch entsperrt ist. Nach
 einem Neustart des Servers ist Klein.Buch gesperrt, bis Du Dich wieder
-anmeldest. Erst dann holt es das fällige Backup nach.
+anmeldest. Kurz nach der Anmeldung holt es das fällige Backup nach, und
+zwar genau eines, auch wenn mehrere Tage dazwischen lagen. War Klein.Buch
+länger als zwei Tage gesperrt, sagt es Dir das unter "Hinweise".
 
 ## Wo die Backups liegen
 
@@ -53,33 +57,41 @@ stehen im "Backup-Protokoll". Wie Du es liest, erklärt das Kapitel
 ## Aufbewahrung
 
 Klein.Buch hebt nicht jedes Backup für immer auf, sondern sortiert ältere
-automatisch aus. Es unterscheidet dabei drei Klassen: Monats-Backups
-(alle, die an einem Monatsersten entstehen), Jahres-Backups (alle vom
-1. Januar) und alle übrigen.
+automatisch aus. Es denkt dabei in Kalendertagen, Monaten und Jahren
+(deutsche Zeit): Von jedem Tag, Monat und Jahr bleibt das jeweils
+jüngste Backup erhalten.
 
-Auf jedem externen Ziel behält Klein.Buch die 30 neuesten gewöhnlichen
-Backups, die 12 neuesten Monats-Backups und die 7 neuesten
-Jahres-Backups. Im lokalen Backup-Ordner sind es nur die 7 neuesten
-gewöhnlichen, die 3 neuesten Monats-Backups und das neueste
-Jahres-Backup. Die kurze lokale Reihe gilt aber nur, solange mindestens
-ein externes Ziel beim letzten Mal erfolgreich war. Gibt es kein
-funktionierendes externes Ziel, ist der lokale Ordner Deine einzige Kopie
-und behält deshalb die lange Reihe.
+Auf jedem externen Ordner-Ziel behält Klein.Buch je ein Backup für die
+letzten 30 Tage mit Backup, für die letzten 12 Monate und für die letzten
+7 Jahre. Im lokalen Backup-Ordner sind es 7 Tage, 3 Monate und 1 Jahr.
+Die kurze lokale Reihe gilt aber nur, solange mindestens ein externes
+Ziel beim letzten Mal erfolgreich war. Gibt es kein funktionierendes
+externes Ziel, ist der lokale Ordner Deine einzige Kopie und behält
+deshalb die lange Reihe.
 
-Gezählt werden Backups, nicht Tage. Schreibst Du an einem Tag zehn
-Rechnungen fest, sind die sieben neuesten lokalen Backups alle von diesem
-Tag. Die längere Reihe liegt auf den externen Zielen.
+Schreibst Du an einem Tag zehn Rechnungen fest, bleibt von diesem Tag nur
+das letzte Backup; es enthält alles. Die Vortage verdrängt das nicht.
+Gezählt werden Tage, an denen ein Backup entstand: Nach einer langen
+Pause bleiben die letzten Stände also erhalten.
 
 Nie automatisch gelöscht werden manuelle Backups ("Jetzt sichern") und
 die Sicherheits-Backups vor einer Wiederherstellung. Dasselbe gilt für
 die Backups, die Klein.Buch vor einer Datenbank-Umstellung nach einem
-Update und nach einem Wechsel des Daten-Passworts anlegt. Sie erscheinen
-im Verlauf als "Manuell". Diese Backups sammeln sich mit der Zeit an.
-Plane den Platz dafür ein (siehe "[Speicher und Ressourcen](/help/speicherbedarf)").
+Update und nach einem Wechsel des Daten-Passworts anlegt, und für Backups,
+die es nach einer Wiederherstellung im lokalen Ordner vorfindet (siehe
+unten). Sie erscheinen im Verlauf als "Manuell". Diese Backups sammeln
+sich mit der Zeit an. Plane den Platz dafür ein (siehe "[Speicher und
+Ressourcen](/help/speicherbedarf)").
 
-Auf SFTP-Servern entfernt Klein.Buch alte Backups nur aus seiner eigenen
-Liste. Die Dateien auf dem Server selbst löscht es nicht. Dort räumst Du
-oder der Betreiber des Servers von Zeit zu Zeit selbst auf.
+Auf SFTP-Servern löscht Klein.Buch nichts — weder Dateien noch die
+Einträge im Verlauf. So kann auch eine kompromittierte Instanz Deine
+externen Kopien nicht vernichten. Alte Backups auf dem SFTP-Server
+räumst Du oder der Betreiber des Servers selbst auf (siehe
+"[Off-Site-Backup einrichten](/help/backup-ziel-einrichten)").
+
+Während die automatischen Abläufe angehalten sind (nach einer
+Wiederherstellung oder wenn die Server-Uhr springt, siehe unten), sortiert
+Klein.Buch nichts aus.
 
 ## Manuelles Backup auslösen
 
@@ -125,7 +137,7 @@ So läuft es ab:
    Sicherheits-Backup an und bereitet die Wiederherstellung vor.
 5. Klein.Buch meldet "Wiederherstellung vorbereitet" mit dem Namen des
    Sicherheits-Backups. Der Server startet jetzt neu und spielt das
-   Backup beim Start ein. Bis dahin nimmt er keine Änderungen an. Warte,
+   Backup beim Neustart ein. Bis dahin nimmt er keine Änderungen an. Warte,
    bis die Anmeldung wieder erscheint.
 6. Melde Dich an, und zwar mit der Passphrase des eingespielten Backups
    und dem Code aus Deiner Authenticator-App.
@@ -153,6 +165,72 @@ Betreiber Klein.Buch aktualisieren. Backups der früheren Desktop-Fassung
 lassen sich nur einspielen, solange ihr Beleg-Archiv leer ist. Enthalten
 sie festgeschriebene Belege, lehnt Klein.Buch sie ab, denn einen Umzug
 von der Desktop-Fassung in den Server gibt es nicht.
+
+## Nach der Wiederherstellung
+
+Nach dem Einspielen hält Klein.Buch an, bis Du ausdrücklich freigibst.
+Oben erscheint dann der Hinweis "Automatische Abo-Läufe angehalten":
+
+- Es entstehen keine Abo-Rechnungen, keine Abo-Kosten und keine
+  automatischen Abschreibungen, und nichts wird automatisch versendet.
+  So verschickt ein eingespielter älterer Stand keine Rechnungen, die Du
+  längst gestellt hast.
+- Backups laufen weiter, gehen aber nur in den lokalen Ordner. Auf die
+  externen Ziele schreibt Klein.Buch erst nach der Freigabe. Sonst lägen
+  dort neue Dateien mit einem alten Datenstand neben Deinen echten
+  Backups — wer später "das neueste Backup" nimmt, verlöre alles danach.
+- Die Rotation ruht (kein Backup wird aussortiert).
+
+Prüfe vor der Freigabe Rechnungen, Kosten, Nummernkreise sowie Deine
+Abo-Vorlagen und Abo-Kosten mit ihren nächsten Terminen. Freigeben
+kannst Du mit "Prüfen und freigeben" im Hinweis oben; Klein.Buch fragt,
+ob dies die produktive Instanz ist, und verlangt eine Bestätigung mit
+Daten-Passwort und Authenticator-Code. Eine Probe-Instanz (zum Beispiel
+zum Testen eines Backups) gibst Du nie frei.
+
+**Nummernkreise:** Eine Rechnungsnummer darf nur einmal vergeben werden
+(§14 Abs. 4 Nr. 4 UStG). Spielst Du ein älteres Backup in dieselbe
+Instanz ein, übernimmt Klein.Buch deshalb die Zählerstände von vor der
+Wiederherstellung, wo sie höher waren: Die nächste Rechnung bekommt die
+nächste noch nie vergebene Nummer. Die Belege dazwischen fehlen in der
+eingespielten Datenbank; die Lücke steht im Audit-Log, und der Hinweis
+"Nummernkreise nach der Wiederherstellung" nennt die angehobenen Kreise.
+Bei einer Wiederherstellung in eine neue, leere Instanz (der alte Server
+ist weg) kennt Klein.Buch die späteren Nummern nicht. Dann hebst Du die
+betroffenen Kreise unter "Einstellungen" → "Backups" → "Nummernkreise"
+selbst auf die zuletzt vergebene Nummer an (siehe "[Wiederherstellung
+nach einem Totalausfall](/help/disaster-recovery)").
+
+**Entwürfe mit bereits vergebener Nummer:** Ein Rechnungs-Entwurf bekommt
+seine Nummer schon beim Anlegen. Liegt im eingespielten Backup ein Entwurf,
+dessen Nummer Du danach festgeschrieben und verschickt hast, ist er ein
+älterer Stand dieser Rechnung. Klein.Buch merkt ihn vor und nennt ihn im
+Hinweis "Nummernkreise nach der Wiederherstellung". Festschreiben lässt er
+sich erst, wenn Du ihn an die verschickte Rechnung angepasst und das unter
+"Einstellungen" → "Backups" → "Nummernkreise" mit "Abgleich bestätigen …"
+bestätigt hast (mit Begründung, Daten-Passwort und Authenticator-Code). So
+steht die verschickte Rechnung unter ihrer Nummer genau einmal in Deinen
+Büchern. Dasselbe gilt für Storno-Entwürfe und Angebote.
+
+**Abo-Vorlagen und Abo-Kosten:** Hat eine Vorlage nach dem Stand des Backups
+schon eine Rechnung erzeugt (oder ein Abo schon Kosten gebucht), rückt
+Klein.Buch ihren nächsten Termin auf den Stand vor der Wiederherstellung vor.
+So stellt es denselben Zeitraum nach der Freigabe nicht noch einmal in
+Rechnung. Der Hinweis "Abo-Termine nach der Wiederherstellung" nennt die
+vorgerückten Reihen; die Rechnungen dieser Termine fehlen in der
+eingespielten Datenbank (Lücke im Nummernkreis). Kennt Klein.Buch den Stand
+einer Reihe nicht (etwa nach einer Wiederherstellung in eine neue Instanz),
+entsteht für sie nichts automatisch: In der Liste steht dann "Rückstand …".
+"Nachholen" legt die offenen Rechnungen nur als Entwurf an, "Ab heute
+fortsetzen" lässt die offenen Termine aus, auch einen heute fälligen.
+Bestätigungen zum Nachholen und begonnene Abo-Rechnungen aus dem Backup
+gelten nach der Wiederherstellung nicht mehr.
+
+**Backup-Verlauf:** Backups, die nach dem Stand des eingespielten Backups
+im lokalen Ordner entstanden sind, nimmt Klein.Buch wieder in den Verlauf
+auf (als "Manuell", sie werden nie automatisch gelöscht). So kannst Du
+auch auf einen neueren Stand zurück, falls Du versehentlich ein zu altes
+Backup gewählt hast.
 
 ## Zurück zum Stand vor der Wiederherstellung
 

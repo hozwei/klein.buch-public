@@ -6,10 +6,14 @@
     recurringInvoicesSetActive,
     recurringInvoicesRunNow,
     recurringInvoicesRunDueCheck,
+    recurringInvoicesResolveBacklog,
+    recurringRestoreReviewList,
     contactsList,
   } from "$lib/api";
-  import type { RecurringInvoiceRow, Contact } from "$lib/types";
+  import { askBacklogChoice, withinTerm } from "$lib/recurringChoice";
+  import type { RecurringInvoiceRow, Contact, ResumeMode } from "$lib/types";
   import { date } from "$lib/format";
+  import { daysUntilBerlin } from "$lib/date";
   import { frequencyLabel } from "$lib/labels";
   import Banner from "$lib/Banner.svelte";
   import Button from "$lib/Button.svelte";
@@ -25,12 +29,15 @@
   let includeInactive = $state(false);
   let busyId = $state<string | null>(null);
   let checking = $state(false);
+  // Vorlagen, die nach einer Wiederherstellung auf „Rückstand …“ warten (F1d).
+  let reviewIds = $state<Set<string>>(new Set());
 
   async function load() {
     loading = true;
     error = null;
     try {
       rows = await recurringInvoicesList(includeInactive);
+      reviewIds = new Set((await recurringRestoreReviewList()).templates);
       if (Object.keys(contactNames).length === 0) {
         const cs = await contactsList(true);
         contactNames = Object.fromEntries(cs.map((c: Contact) => [c.id, c.name]));
@@ -42,42 +49,32 @@
     }
   }
 
-  // Beim Öffnen der Seite zusätzlich einen Fälligkeits-Check auslösen: der
-  // Scheduler-Tick beim App-Start läuft, solange das Backup noch gesperrt ist,
-  // ins Leere — hier ist es entsperrt, also fällige Auto-Rechnungen sofort erstellen.
-  async function triggerDueOnOpen() {
-    try {
-      const r = await recurringInvoicesRunDueCheck();
-      if (!r.skippedLocked && r.createdInvoices > 0) {
-        flash(`${r.createdInvoices} fällige Abo-Rechnung(en) automatisch erstellt.`);
-        await load();
-      }
-    } catch {
-      // Vor dem Entsperren / Bootstrap nicht verfügbar — der Scheduler-Tick holt es nach.
-    }
-  }
+  // Das Öffnen der Seite löst keinen Lauf aus (W14-030, Lauf F): fällige
+  // Rechnungen erstellt der Scheduler-Tick; „fällige jetzt erstellen“ ist ein
+  // ausdrücklicher Knopf.
+  onMount(load);
 
-  onMount(async () => {
-    await load();
-    await triggerDueOnOpen();
-  });
-
-  // Tage bis zur Fälligkeit (negativ = überfällig). Lokale Mitternacht.
+  // Tage bis zur Fälligkeit (negativ = überfällig) ab dem Berliner Datum,
+  // nicht in der Zeitzone des Geräts (Lauf F, D-15).
   function daysUntil(iso: string): number {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const d = new Date(iso.slice(0, 10) + "T00:00:00");
-    return Math.round((d.getTime() - today.getTime()) / 86_400_000);
+    return daysUntilBerlin(iso);
   }
 
+  // Fällig nur innerhalb der Laufzeit (F1d, wie `has_backlog` im Server).
   function isDue(s: RecurringInvoiceRow): boolean {
-    return s.active === 1 && daysUntil(s.nextDueDate) <= 0;
+    return s.active === 1 && withinTerm(s) && daysUntil(s.nextDueDate) <= 0;
+  }
+
+  // Rückstand: verpasste Termine oder offene Prüfung nach einer Wiederherstellung.
+  function hasBacklog(s: RecurringInvoiceRow): boolean {
+    return withinTerm(s) && (daysUntil(s.nextDueDate) < 0 || (reviewIds.has(s.id) && daysUntil(s.nextDueDate) <= 0));
   }
 
   type Tone = "neutral" | "primary" | "info" | "success" | "warning" | "danger";
 
   function dueBadge(s: RecurringInvoiceRow): { label: string; tone: Tone } | null {
     if (s.active !== 1) return null;
+    if (!withinTerm(s)) return { label: "beendet", tone: "neutral" };
     const n = daysUntil(s.nextDueDate);
     if (n < 0) return { label: "überfällig", tone: "danger" };
     if (n === 0) return { label: "heute fällig", tone: "warning" };
@@ -104,8 +101,15 @@
   let activeCount = $derived(rows.filter((s) => s.active === 1).length);
 
   async function toggleActive(s: RecurringInvoiceRow) {
-    // KB-0057: Nur das Pausieren bestätigen lassen — es stoppt die automatische
-    // Rechnungserzeugung. Das Fortsetzen ist unkritisch und läuft direkt.
+    // KB-0057: Das Pausieren bestätigen lassen — es stoppt die automatische
+    // Rechnungserzeugung. Beim Fortsetzen mit verpassten Terminen verlangt der
+    // Server die Wahl „nachholen“ oder „ab heute fortsetzen“ (W14-026).
+    let resumeMode: ResumeMode | undefined;
+    if (s.active !== 1 && hasBacklog(s)) {
+      const choice = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+      if (!choice) return;
+      resumeMode = choice;
+    }
     if (s.active === 1) {
       const ok = await confirmDialog({
         title: "Vorlage pausieren?",
@@ -119,7 +123,7 @@
     }
     busyId = s.id;
     try {
-      await recurringInvoicesSetActive(s.id, s.active !== 1);
+      await recurringInvoicesSetActive(s.id, s.active !== 1, resumeMode);
       await load();
     } catch (e) {
       flash("Statuswechsel fehlgeschlagen: " + String(e), "error");
@@ -140,12 +144,36 @@
     }
   }
 
+  // Rückstand einer aktiven Vorlage (Hinweis „Entscheidung nötig“, W14-026).
+  async function resolveBacklog(s: RecurringInvoiceRow) {
+    const mode = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+    if (!mode) return;
+    busyId = s.id;
+    try {
+      await recurringInvoicesResolveBacklog(s.id, mode);
+      flash(
+        mode === "catchUp"
+          ? "Nachholen bestätigt — der nächste Lauf erstellt die offenen Termine."
+          : "Verpasste Termine ausgelassen.",
+      );
+      await load();
+    } catch (e) {
+      flash("Fehlgeschlagen: " + String(e), "error");
+    } finally {
+      busyId = null;
+    }
+  }
+
   async function createAllDue() {
     checking = true;
     try {
       const r = await recurringInvoicesRunDueCheck();
       if (r.skippedLocked) {
         flash("Übersprungen: Backup ist gesperrt — zuerst entsperren.", "error");
+      } else if (r.skippedHold) {
+        flash("Automatische Abo-Läufe sind angehalten — siehe Hinweis oben.", "error");
+      } else if (r.createdInvoices === 0 && (r.awaitingDecision ?? 0) > 0) {
+        flash("Rückstand über der Nachhol-Grenze — bitte bei der Vorlage „Rückstand …“ wählen.", "error");
       } else if (r.createdInvoices === 0) {
         flash("Keine fälligen Abo-Rechnungen.");
       } else {
@@ -240,6 +268,10 @@
                 {#if isDue(s)}
                   <Button variant="primary" size="sm" onclick={() => createNow(s)} disabled={busyId === s.id}
                     title="Rechnung für den fälligen Stichtag jetzt erstellen">Jetzt erstellen</Button>
+                {/if}
+                {#if hasBacklog(s)}
+                  <Button variant="secondary" size="sm" onclick={() => resolveBacklog(s)} disabled={busyId === s.id}
+                    title="Verpasste Termine nachholen oder ab heute fortsetzen">Rückstand …</Button>
                 {/if}
                 <Button variant="secondary" size="sm" href={`/recurring-invoices/new?id=${s.id}`}>Bearbeiten</Button>
                 <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Pausieren</Button>

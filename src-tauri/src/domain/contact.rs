@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Eingabe-Datenmodell für create/update. Wird von Tauri-Commands deserialisiert.
+/// Eingabe-Datenmodell für create/update. Wird von den Commands deserialisiert.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactInput {

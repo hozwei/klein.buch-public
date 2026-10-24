@@ -230,10 +230,14 @@ Mutationen schreiben einen Eintrag (Auswahl, Namen wie im Code):
 - Geschäftsjahr und AfA: `fiscal_year.close`, `depreciation.accrue`,
   `depreciation.lock`, `depreciation.reset`. Ein „Wieder-Öffnen" gibt es nicht.
 - Backup und Restore: `backup.created`, `backup.failed`, `backup.mirror.ok`,
-  `backup.mirror.failed`, `backup.rotation.prune`, `backup.pre_migration`,
-  `backup.restore.requested` (steht im Pre-Restore-Backup des ersetzten
-  Stands), `backup.restore.applied` (in der wiederhergestellten DB),
-  `backup.passphrase.setup`, `backup.passphrase.changed`.
+  `backup.mirror.failed`, `backup.mirror.skipped` (Pause nach Restore),
+  `backup.rotation.prune`, `backup.pre_migration`, `backup.daily_time_set`,
+  `backup.history_rescanned`, `backup.restore.requested` (steht im
+  Pre-Restore-Backup des ersetzten Stands), `backup.restore.applied` (in der
+  wiederhergestellten DB), `backup.passphrase.setup`, `backup.passphrase.changed`.
+- Nummernkreise und Pause (Lauf F): `numbering.raised_after_restore`,
+  `numbering.raised` (mit Begründung), `scheduler.hold_set`,
+  `scheduler.hold_released`.
 - Anmeldung: `auth.setup.ok`, `auth.login.ok`, `auth.reauth.ok`,
   `auth.totp.setup`, `auth.totp.renewed`, `auth.recovery.renewed`.
   **Fehlversuche stehen nicht im Audit-Log**, nur im Server-Log (ADR 0039 E5).
@@ -302,6 +306,48 @@ neutralisiert.
   blockt jedes `DELETE` (Migration 0028, R1-001).
 
 ---
+
+### 5.4 Nummernkreise nach einem Restore (Lauf F, D-24)
+
+Eine Rechnungsnummer darf nur **einmal** vergeben werden (§14 Abs. 4 Nr. 4
+UStG); eine dokumentierte Lücke ist zulässig, eine Doppelvergabe nicht. Spielt
+der Inhaber ein **älteres** Backup ein, wären die seither vergebenen Nummern
+sonst erneut frei. Deshalb:
+
+- **Restore in dieselbe Instanz:** Phase A hält die Stände aller
+  `doc_number_counters` der laufenden DB im Restore-Marker fest. Das erste
+  Entsperren danach hebt jeden Kreis der eingespielten DB auf diesen Stand an,
+  wo er höher war — in derselben Transaktion wie `backup.restore.applied`, je
+  Kreis ein Audit `numbering.raised_after_restore` (alt/neu). Ein Hinweis nennt
+  die angehobenen Kreise; die fehlenden Belege dazwischen sind die
+  dokumentierte Lücke.
+- **Disaster Recovery in eine leere Instanz:** Die späteren Stände sind
+  unbekannt. Der Hinweis „Nummernkreise nach der Wiederherstellung“ und das
+  Handbuch (`disaster-recovery`) verlangen, die zuletzt vergebene Nummer aus
+  Mail-Ausgang bzw. Korrespondenz zu ermitteln und den Kreis unter
+  Einstellungen → Backups → Nummernkreise anzuheben (`numbering_raise`,
+  Re-Auth, Begründung Pflicht, Audit `numbering.raised`).
+- **Nur aufwärts.** `db::numbering::raise_in` senkt nie ab; `numbering_raise`
+  lehnt gleiche oder kleinere Werte ab. Belege werden nicht verändert.
+- Bis zur Freigabe der Pause nach dem Restore entstehen keine automatischen
+  Belege (ADR 0040 Nr. 5); der Inhaber kann die Kreise vorher prüfen.
+- **Entwürfe mit bereits vergebener Nummer (F1d).** Ein Entwurf trägt seine
+  Nummer ab dem Anlegen. Phase A hält die Nummern aller festgeschriebenen
+  Rechnungen, Stornos und Angebote der laufenden DB fest; ein Entwurf des
+  eingespielten Stands mit einer dieser Nummern ist ein älterer Stand eines
+  bereits ausgestellten (meist versandten) Belegs. Er wird vorgemerkt (Audit
+  `numbering.restored_draft_flagged`, dringender Hinweis) und lässt sich erst
+  festschreiben, nachdem der Inhaber ihn an das Original angepasst und das mit
+  Re-Auth und Begründung bestätigt hat (`numbering_restored_draft_confirm`,
+  Audit `numbering.restored_draft_confirmed`). Nicht neu nummeriert: Der Beleg
+  soll unter der Nummer, die der Kunde hat, genau einmal in den Büchern stehen
+  (ADR 0040 Entscheidung 35).
+- **Abo-Termine (F1d).** Die nächsten Termine der Abo-Vorlagen und
+  Kosten-Abos der ersetzten DB werden wie die Zähler nur vorwärts übernommen
+  (Audit `…advanced_after_restore`); ein bereits abgerechneter Zeitraum wird
+  nicht erneut in Rechnung gestellt oder gebucht. Ohne bekannten Stand
+  verlangt jede Reihe mit offenem Termin die Entscheidung des Inhabers;
+  nachgeholte Rechnungen entstehen dann nur als Entwurf.
 
 ## 6. Aufbewahrung und kein Löschen-UI
 

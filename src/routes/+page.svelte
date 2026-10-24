@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { APP_TIME_ZONE, dayOfYearBerlin, daysInYear, todayBerlin, yearBerlin } from "$lib/date";
+  import {
+    APP_TIME_ZONE,
+    berlinDateOf,
+    dayOfYearBerlin,
+    daysBetweenIso,
+    daysInYear,
+    todayBerlin,
+    yearBerlin,
+  } from "$lib/date";
   // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
   // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
@@ -19,6 +27,7 @@
   } from "$lib/api";
   import type { BackupLogEntry } from "$lib/api";
   import { euro, date as fmtDate } from "$lib/format";
+  import { withinTerm } from "$lib/recurringChoice";
   import type {
     SellerProfile,
     Paragraph19Info,
@@ -197,19 +206,17 @@
       .filter((i) => i.dueDate !== null && i.dueDate.slice(0, 10) < todayIso)
       .map((i) => ({
         ...i,
-        overdueDays: Math.max(
-          1,
-          Math.floor(
-            (today.getTime() - new Date(((i.dueDate as string).slice(0, 10)) + "T00:00:00").getTime()) / 86_400_000,
-          ),
-        ),
+        // Kalendertage in Europe/Berlin, nicht in der Zeitzone des Geräts (D-15).
+        overdueDays: Math.max(1, daysBetweenIso((i.dueDate as string).slice(0, 10), todayIso) || 1),
       }))
       .sort((a, b) => b.overdueDays - a.overdueDays),
   );
 
-  // Fällige Abo-Rechnungen.
+  // Fällige Abo-Rechnungen (nur innerhalb der Laufzeit, F1d).
   const recurringDue = $derived(
-    recurring?.filter((r) => r.active === 1 && r.nextDueDate.slice(0, 10) <= todayIso) ?? [],
+    recurring?.filter(
+      (r) => r.active === 1 && withinTerm(r) && r.nextDueDate.slice(0, 10) <= todayIso,
+    ) ?? [],
   );
 
   // Letzter erfolgreicher Off-Site-Backup. `backupLog === null` ⇒ noch nicht
@@ -222,13 +229,13 @@
           (e) => e.status === "ok" && (e.targetKind === "directory" || e.targetKind === "sftp"),
         ) ?? null),
   );
-  const backupDaysAgo = $derived(
-    lastOffSiteBackup
-      ? Math.floor(
-          (today.getTime() - new Date(lastOffSiteBackup.createdAt).getTime()) / 86_400_000,
-        )
-      : null,
-  );
+  // Kalendertage seit dem Berliner Tag des Backups (D-15/D-25): `createdAt` ist
+  // ein UTC-Zeitstempel der DB; „Heute“/„Gestern“ folgen dem Kalender.
+  const backupDaysAgo = $derived.by(() => {
+    if (!lastOffSiteBackup) return null;
+    const n = daysBetweenIso(berlinDateOf(lastOffSiteBackup.createdAt) ?? "", todayIso);
+    return Number.isNaN(n) ? null : Math.max(0, n);
+  });
   const backupAmpel: BackupAmpel | null = $derived(
     backupLog === null
       ? null

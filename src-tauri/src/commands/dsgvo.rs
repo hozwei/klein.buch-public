@@ -1,4 +1,4 @@
-//! Tauri-Command für die **DSGVO-Auskunft nach Art. 15** (Block 18).
+//! Command für die **DSGVO-Auskunft nach Art. 15** (Block 18).
 //!
 //! Reiner **Lese-/Export-Pfad**: sammelt alle Daten zu einem Kontakt
 //! ([`crate::db::repo::dsgvo`]), baut den Report ([`crate::domain::dsgvo`]) und
@@ -13,9 +13,9 @@
 //! protokolliert (`action = 'dsgvo.export'`) — ohne personenbezogene Inhalte,
 //! nur Kontakt-ID + Zählwerte. Keine DB-Mutation an Belegen, keine Migration.
 //!
-//! Testbarer Kern: [`export_core`] (nimmt `&Paths` statt `AppHandle`, wie
-//! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne
-//! Tauri-/Opener-Hülle.
+//! Testbarer Kern: [`export_core`] (nimmt `&Paths` statt `AppCtx`, wie
+//! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne Hülle
+//! darum.
 
 use crate::app_ctx::AppCtx;
 use serde::Serialize;
@@ -70,8 +70,7 @@ async fn build_controller(pool: &SqlitePool) -> Result<ControllerInfo> {
     })
 }
 
-/// Testbarer Kern: sammeln → Report → ZIP schreiben → Audit. Kein Opener, kein
-/// AppHandle. `generated_at` (Anzeige) und `file_date` (Dateiname) kommen vom
+/// Testbarer Kern: sammeln → Report → ZIP schreiben → Audit. Ohne `AppCtx`. `generated_at` (Anzeige) und `file_date` (Dateiname) kommen vom
 /// Aufrufer, damit der Test deterministisch ist.
 pub async fn export_core(
     pool: &SqlitePool,
@@ -80,7 +79,7 @@ pub async fn export_core(
     generated_at: &str,
     file_date: &str,
 ) -> Result<DsgvoExportResult> {
-    // Eigenes Verzeichnis unter <data>/tmp (beim Start geleert); bei einem
+    // Eigenes Verzeichnis unter <data>/tmp (Reste räumt der Sweeper, D-13); bei einem
     // Fehler wird es sofort gelöscht — keine halbe Auskunft mit Personendaten
     // bleibt liegen (Gegenprüfung W7).
     let out_dir = paths

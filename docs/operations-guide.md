@@ -32,8 +32,10 @@ fasst die Fakten zusammen und verweist dorthin:
 - **Zustände:** `setup` (leeres `/data`) → `locked` (Datenbank zu, kein
   Scheduler) ↔ `unlocked`. Nach **jedem** Start ist die Instanz `locked`, bis sich
   der Nutzer im Browser anmeldet (E3). Bis dahin laufen weder Tages-Backup noch
-  Abo-Rechnungen oder Integritätsprüfung; der Scheduler holt Fälliges nach dem
-  Entsperren nach.
+  Abo-Rechnungen oder Integritätsprüfung (Log-Zeile „Instanz gesperrt …“ beim
+  Serverstart und alle 6 h); der Scheduler holt Fälliges ab einer Minute nach dem
+  Entsperren gestaffelt nach (ein Backup je Tick, Vollscan frühestens im
+  zweiten Tick). Mehr als zwei Tage ohne Aktivität meldet die Inbox.
 - **TLS** terminiert ein Reverse-Proxy des Betreibers; der Container spricht nur
   HTTP auf Port 8080.
 - **Verbindungen nach außen** nur für Versand (SMTP), Off-Site-Backup (SFTP) und
@@ -70,7 +72,7 @@ Einstellungen darin und ihr Zweck:
 | `read_only: true`, `tmpfs: /tmp` | Root-Dateisystem schreibgeschützt; Temp-Dateien der Anwendung liegen unter `/data/tmp` (`TMPDIR`), `/tmp` ist `HOME` |
 | `cap_drop: [ALL]`, `no-new-privileges`, `ulimits.core: 0` | keine Capabilities, keine Rechteausweitung, keine Core-Dumps (der Server setzt zusätzlich `PR_SET_DUMPABLE` 0) |
 | `pids_limit: 256`, `mem_limit: 2g` | Grenzen gegen Ausreißer; Speicher siehe §10 |
-| `stop_grace_period: 60s` | laufende Jobs (Festschreiben, Backup) dürfen zu Ende laufen; der Server wartet beim Herunterfahren auf abgekoppelte Aufgaben (höchstens 10 min). Der Docker-Standard von 10 s ist zu kurz. |
+| `stop_grace_period: 90s` | Herunterfahren (ADR 0040): Scheduler sofort anhalten (Abo-Lauf beendet den Termin), offene Verbindungen höchstens 30 s, laufende Jobs und Tick höchstens 30 s, Pool schließen höchstens 5 s — zusammen unter 70 s. Ein abgebrochenes Backup ist unkritisch (Temp-Datei + rename, Reste räumt der Start). Der Docker-Standard von 10 s ist zu kurz. |
 | `logging: json-file`, `max-size`/`max-file` | Log-Rotation |
 
 Erster Start: `docker compose up -d`, dann den Setup-Token aus dem Log lesen
@@ -135,7 +137,7 @@ Alle Volumes müssen der UID aus `user:` gehören und für sie beschreibbar sein
 | `backups/` | lokale Backups (Floor), verschlüsselt |
 | `auth/totp.json` | TOTP-Geheimnis, gehashte Einmal-Codes (Datei 0600, Ordner 0700); nicht Teil der Backups |
 | `auth/device.key` | Schlüssel für die Gerätecookies des Rate-Limits; nicht Teil der Backups |
-| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Start geleert |
+| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Serverstart geleert, im Betrieb stündlich von Resten älter als 6 h befreit (Up-/Downloads nach 1 h) |
 | `.klein-buch-instance`, `.klein-buch.lock` | Instanz-Marker; Sperre gegen einen zweiten Prozess |
 | `restore-staging/`, `RESTORE_*.json`, `*.rollback` | nur während bzw. nach einem Restore |
 
@@ -148,12 +150,14 @@ es sich nur aus Backups oder Snapshots (`docs/architecture/security.md`,
 „Write-once unter Linux“).
 
 **`/inputs`** — vom Menschen gepflegte Dateien: PDF-Vorlagen
-(`pdf-templates/`), Mail-Vorlagen, AfA-Tabelle, Beispiele. Beim Start ergänzt der
-Container fehlende Dateien aus dem Image. `/inputs/.seed-manifest.json` merkt
+(`pdf-templates/`), Mail-Vorlagen, AfA-Tabelle, Beispiele. Beim Containerstart ergänzt
+Klein.Buch fehlende Dateien aus dem Image. `/inputs/.seed-manifest.json` merkt
 sich die zuletzt kopierte Fassung: Eine unveränderte Datei ersetzt ein Update
 durch die neue Fassung; eine vom Nutzer geänderte bleibt unangetastet, die neue
-Fassung liegt daneben als `<name>.neu` (Hinweis in der Inbox nach dem
-Entsperren). **`/inputs` ist nicht Teil der Klein.Buch-Backups** und braucht eine
+Fassung liegt einmal daneben als `<name>.neu` (Hinweis in der Inbox nach dem
+Entsperren). Das Manifest merkt sich angebotene Fassungen (`offered`): Eine
+gelöschte `.neu`-Datei kommt erst mit einer weiteren Image-Fassung wieder
+(Lauf F, D-10). **`/inputs` ist nicht Teil der Klein.Buch-Backups** und braucht eine
 eigene Sicherung beim Betreiber. Nach einem Restore meldet die Inbox Vorlagen, die
 in der Datenbank referenziert sind, aber in `/inputs` fehlen.
 
@@ -214,24 +218,36 @@ und dem Daten-Passwort zum Zeitpunkt des Backups. **Nicht** enthalten:
 `/inputs`, `/data/auth/totp.json` und die Compose-Datei bzw. Umgebung — die sichert
 der Betreiber selbst.
 
-**Wann.** Bei jedem Festschreiben (Rechnung, Storno, Kosten, Privatbewegung),
-täglich über den Scheduler (fällig nach 24 h, nach einem Fehlschlag frühestens
-nach 1 h erneut; nur entsperrt), manuell, vor jedem Restore (Pre-Restore), vor
-jeder Datenbank-Umstellung (§8) und nach einem Passphrase-Wechsel.
+**Wann.** Bei jedem Festschreiben (Rechnung, Storno, Kosten, Privatbewegung;
+Abo-Läufe eines Ticks ergeben zusammen genau ein Backup), einmal je
+Kalendertag (Europe/Berlin) ab der eingestellten Uhrzeit (Standard 02:30,
+Einstellungen → Backups; beim ersten Tick danach, nach einer Sperre genau
+eines; nach einem Fehlschlag frühestens nach 1 h erneut, persistiert; nur
+entsperrt), manuell, vor jedem Restore (Pre-Restore), vor jeder
+Datenbank-Umstellung (§8) und nach einem Passphrase-Wechsel. Das Erst-Backup
+der Einrichtung zählt als Tages-Backup dieses Tages.
 
 **Wohin.**
 
-- **Floor** unter `/data/backups`, immer. Aufbewahrung 7 tägliche / 3 monatliche
-  / 1 jährliches, solange ein Off-Site-Ziel zuletzt erfolgreich war, sonst
-  30 / 12 / 7.
+- **Floor** unter `/data/backups`, immer. Aufbewahrung nach Kalender-Eimern
+  (ADR 0040): je das jüngste Backup der letzten 7 Tage mit Backup, der
+  letzten 3 Monate und des letzten Jahres, solange ein Off-Site-Ziel zuletzt
+  erfolgreich war, sonst 30 / 12 / 7.
 - **Off-Site-Ziele**, beliebig kombinierbar (höchstens 10): Ordner unter
   `/backup-targets/…` und SFTP-Server (Passwort-Anmeldung, Host-Key-Fingerprint
   wird beim Anlegen aus dem Verbindungstest übernommen und danach geprüft). Jedes
-  Backup geht an jedes Ziel, je Ziel mit Zeitlimit; Aufbewahrung je Ziel
-  30 / 12 / 7. SFTP-Ziele lassen sich nicht ändern, nur entfernen und neu anlegen.
-- Manuelle Backups (dazu zählt das Backup vor einer Umstellung) und
-  Pre-Restore-Backups werden **nie** automatisch gelöscht; der Platz auf `/data`
-  und den Zielen wächst damit.
+  Backup geht an jedes Ziel, je Ziel mit Zeitlimit; Aufbewahrung je Ordner-Ziel
+  30 Tage / 12 Monate / 7 Jahre. **Auf SFTP-Zielen löscht Klein.Buch nichts**
+  (Schutz der Off-Site-Kopien vor einer kompromittierten Instanz); dort rotiert
+  der Betreiber selbst (Snapshots oder zeitgesteuertes Aufräumen, Platzbedarf im
+  Handbuch „Speicher und Ressourcen“). SFTP-Ziele lassen sich nicht ändern, nur
+  entfernen und neu anlegen.
+- Manuelle Backups (dazu zählt das Backup vor einer Umstellung), Pre-Restore-
+  Backups und nach einem Restore übernommene Backups werden **nie** automatisch
+  gelöscht; der Platz auf `/data` und den Zielen wächst damit.
+- Während einer Pause der automatischen Abläufe (nach einem Restore oder einem
+  Uhrsprung, ADR 0040) ruht die Rotation; nach einem Restore gehen Backups bis
+  zur Freigabe nur in den Floor.
 
 **Überwachung.** Ein gescheitertes Ziel steht im append-only Backup-Protokoll
 und als Hinweis in der Inbox; ohne Ziel kommt wöchentlich ein Hinweis, die
@@ -285,6 +301,17 @@ Danach lehnt der Server Änderungen ab, beendet sich geordnet (Exit 0), und die
 Container-Verwaltung startet ihn neu; der Tausch läuft vor dem Port-Bind. Danach
 gilt das Daten-Passwort des Backups; der zweite Faktor (TOTP) bleibt der der
 Instanz.
+
+Nach dem Restore (erstes Entsperren, ADR 0040): Die **automatischen Abläufe
+pausieren** (Abo-Rechnungen, Abo-Kosten, Auto-AfA, Versand; Grund `restore`),
+Backups gehen **nur in den Floor**, die Rotation ruht — bis der Inhaber im
+Browser freigibt (Re-Auth, Frage „produktive Instanz?“). Eine Probe-Instanz
+wird nie freigegeben. Die **Nummernkreise** der ersetzten Datenbank werden
+übernommen, wo sie höher waren (keine Doppelvergabe, Audit
+`numbering.raised_after_restore`); bei Disaster Recovery in eine leere Instanz
+hebt der Inhaber sie unter Einstellungen → Backups → Nummernkreise an (Re-Auth,
+Begründung, nur aufwärts). Backups im Floor, die nach dem eingespielten Stand
+entstanden, stehen wieder in der Historie (als manuell).
 
 Voraussetzungen und Grenzen:
 
@@ -400,8 +427,10 @@ Kapitel: `fehlersuche-im-container`.
   ein Code gilt nur einmal, auch über Neustarts. Sitzungen enden nach 30 min ohne
   Nutzung bzw. nach 12 h; Re-Auth gilt 5 min. Sitzungen leben nur im Speicher:
   Ein Neustart meldet alle Geräte ab.
-- „Datenbank sperren“ (in der Oberfläche) schließt die Datenbank, meldet alle
-  Geräte ab und pausiert den Scheduler.
+- „Datenbank sperren“ (in der Oberfläche) meldet sofort alle Geräte ab,
+  schließt die Datenbank und pausiert den Scheduler. Ein laufender Abo-Lauf
+  beendet den aktuellen Termin, der Archiv-Vollscan die aktuelle Datei;
+  gesperrt wird spätestens nach 10 s.
 - **Gerät mit der Authenticator-App verloren** und keine Einmal-Codes mehr:
 
   ```sh

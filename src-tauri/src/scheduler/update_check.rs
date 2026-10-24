@@ -19,7 +19,7 @@ use sqlx::SqlitePool;
 
 use crate::db::repo::app_settings;
 use crate::error::{Error, Result};
-use crate::notify::{self, NewNotification, Notifier};
+use crate::notify::{self, NewNotification};
 
 /// Schalter (Standard aus).
 pub const SETTING_ENABLED: &str = "update_check_enabled";
@@ -186,12 +186,7 @@ async fn fetch_latest(url: &str) -> std::result::Result<Release, String> {
 
 /// Ein Lauf: prüft Opt-in und Abstand, fragt ab und legt ggf. den Hinweis an.
 /// Ohne Opt-in entsteht keine Verbindung.
-pub async fn run_if_due(
-    pool: &SqlitePool,
-    notifier: Option<&dyn Notifier>,
-    url: &str,
-    now: DateTime<Utc>,
-) -> Result<Outcome> {
+pub async fn run_if_due(pool: &SqlitePool, url: &str, now: DateTime<Utc>) -> Result<Outcome> {
     if !app_settings::get_bool(pool, SETTING_ENABLED, false).await? {
         return Ok(Outcome::Disabled);
     }
@@ -236,7 +231,6 @@ pub async fn run_if_due(
     let key = format!("update_available:{tag}");
     let created = notify::emit(
         pool,
-        notifier,
         NewNotification {
             title: &title,
             body: &body,

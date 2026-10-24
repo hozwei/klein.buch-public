@@ -51,8 +51,8 @@
     /* Hairline statt 1 px solid — wirkt dezenter, betont das Glas-Gefühl. */
     border-bottom: 1px solid rgba(16, 36, 44, 0.08);
   }
-  /* Fallback für (sehr alte) Engines ohne backdrop-filter — auf WebView2 (Tauri)
-     ist die API seit Chromium 76 (2019) verfügbar, deshalb in der Praxis selten. */
+  /* Fallback für (sehr alte) Browser ohne backdrop-filter — Chromium hat die API
+     seit Version 76 (2019), Safari seit 9 (mit Präfix), deshalb in der Praxis selten. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .pagebar { background: var(--c-bg); }
   }

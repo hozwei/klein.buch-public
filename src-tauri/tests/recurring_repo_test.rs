@@ -7,12 +7,14 @@
 
 use chrono::NaiveDate;
 use klein_buch_lib::backup::BackupSession;
+use klein_buch_lib::clock::FixedClock;
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::db::repo::{expenses, recurring};
 use klein_buch_lib::db::MIGRATOR;
 use klein_buch_lib::domain::expense::ExpenseInput;
 use klein_buch_lib::domain::recurring::RecurringInput;
 use klein_buch_lib::scheduler;
+use klein_buch_lib::scheduler::JobCtx;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use std::path::Path;
@@ -56,6 +58,11 @@ fn paths_for(dir: &Path) -> Paths {
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
+}
+
+/// Test-Uhr: 12:00 Uhr Berliner Zeit am Tag `day` (D-20).
+fn noon(day: NaiveDate) -> FixedClock {
+    FixedClock::at_berlin(day, 12, 0)
 }
 
 /// Legt eine echte (sofort gelockte) Kosten-Position an und liefert ihre ID —
@@ -231,13 +238,21 @@ async fn advance_writes_next_and_last() {
     .unwrap();
     let expense_id = mk_expense(&pool, "KO-2026-9999").await;
 
-    recurring::advance(&pool, &row.id, &expense_id, "2026-06-01")
+    recurring::advance(&pool, &row.id, "2026-05-01", &expense_id, "2026-06-01")
         .await
         .unwrap();
     let after = recurring::get(&pool, &row.id).await.unwrap().unwrap();
     assert_eq!(after.next_due_date, "2026-06-01");
     assert_eq!(after.last_expense_id.as_deref(), Some(expense_id.as_str()));
     assert!(after.last_executed_at.is_some());
+
+    // W14-022: Compare-and-Swap — ein veralteter Stichtag rückt nicht vor.
+    let err = recurring::advance(&pool, &row.id, "2026-05-01", &expense_id, "2026-07-01")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("vorgerückt"), "{err}");
+    let after = recurring::get(&pool, &row.id).await.unwrap().unwrap();
+    assert_eq!(after.next_due_date, "2026-06-01", "Zeile unverändert");
 }
 
 // ---- scheduler::process_due ------------------------------------------------
@@ -255,9 +270,14 @@ async fn process_due_skips_when_locked() {
     .await
     .unwrap();
 
-    let report = scheduler::recurring::process_due(&pool, &paths, &session, d(2026, 5, 20))
-        .await
-        .unwrap();
+    let report = scheduler::recurring::process_due(&JobCtx::new(
+        &pool,
+        &paths,
+        &session,
+        &noon(d(2026, 5, 20)),
+    ))
+    .await
+    .unwrap();
     assert!(
         report.skipped_locked,
         "gesperrte Session → Lauf übersprungen"
@@ -286,9 +306,14 @@ async fn process_due_catches_up_all_missed_periods() {
 
     // Heute 2026-05-20 → fällige Stichtage 03-01, 04-01, 05-01 (3 Stück);
     // nächster 06-01 liegt in der Zukunft.
-    let report = scheduler::recurring::process_due(&pool, &paths, &session, d(2026, 5, 20))
-        .await
-        .unwrap();
+    let report = scheduler::recurring::process_due(&JobCtx::new(
+        &pool,
+        &paths,
+        &session,
+        &noon(d(2026, 5, 20)),
+    ))
+    .await
+    .unwrap();
     assert!(!report.skipped_locked);
     assert_eq!(report.processed_subscriptions, 1);
     assert_eq!(
@@ -332,9 +357,14 @@ async fn process_due_catches_up_all_missed_periods() {
     );
 
     // Zweiter Lauf am selben Tag legt nichts Neues an (idempotent über Stichtag).
-    let again = scheduler::recurring::process_due(&pool, &paths, &session, d(2026, 5, 20))
-        .await
-        .unwrap();
+    let again = scheduler::recurring::process_due(&JobCtx::new(
+        &pool,
+        &paths,
+        &session,
+        &noon(d(2026, 5, 20)),
+    ))
+    .await
+    .unwrap();
     assert_eq!(again.created_expenses, 0);
 }
 
@@ -354,9 +384,12 @@ async fn run_now_creates_one_and_advances() {
     .await
     .unwrap();
 
-    let expense = scheduler::recurring::run_now(&pool, &paths, &session, &sub.id, d(2026, 5, 20))
-        .await
-        .unwrap();
+    let expense = scheduler::recurring::run_now(
+        &JobCtx::new(&pool, &paths, &session, &noon(d(2026, 5, 20))),
+        &sub.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(expense.expense_date, "2026-05-01");
     assert_eq!(
         expense.recurring_subscription_id.as_deref(),
@@ -393,7 +426,11 @@ async fn run_now_rejects_future_due() {
 
     // next_due 2026-06-01 liegt nach today 2026-05-20 → vorzeitige Erfassung
     // würde ein zukünftiges Beleg-Datum erzeugen → Fehler.
-    let res = scheduler::recurring::run_now(&pool, &paths, &session, &sub.id, d(2026, 5, 20)).await;
+    let res = scheduler::recurring::run_now(
+        &JobCtx::new(&pool, &paths, &session, &noon(d(2026, 5, 20))),
+        &sub.id,
+    )
+    .await;
     assert!(res.is_err());
     let list = expenses::list(&pool, &expenses::ListFilter::default())
         .await
@@ -416,6 +453,10 @@ async fn run_now_rejects_paused_subscription() {
     .unwrap();
     recurring::set_active(&pool, &sub.id, false).await.unwrap();
 
-    let res = scheduler::recurring::run_now(&pool, &paths, &session, &sub.id, d(2026, 5, 20)).await;
+    let res = scheduler::recurring::run_now(
+        &JobCtx::new(&pool, &paths, &session, &noon(d(2026, 5, 20))),
+        &sub.id,
+    )
+    .await;
     assert!(res.is_err(), "pausiertes Abo darf nicht erfasst werden");
 }

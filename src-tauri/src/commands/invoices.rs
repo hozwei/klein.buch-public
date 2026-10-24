@@ -1,4 +1,4 @@
-//! Tauri-Commands für die Invoice-Pipeline (Block 3b).
+//! Commands für die Invoice-Pipeline (Block 3b).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::invoice::validate_for_issue`])
@@ -249,6 +249,61 @@ pub async fn create_invoice_draft_from_input(
     input: &InvoiceInput,
     derived_from_quote_id: Option<&str>,
 ) -> Result<InvoiceDetail> {
+    create_invoice_draft_on(
+        pool,
+        contact_id,
+        input,
+        derived_from_quote_id,
+        today_berlin(),
+    )
+    .await
+}
+
+/// Wie [`create_invoice_draft_from_input`], mit ausdrücklichem „heute“
+/// (Europe/Berlin) für die Plausibilitätsprüfung — der Scheduler übergibt das
+/// Datum seiner injizierten Uhr (D-20, ADR 0040). Nummer, Entwurf und Audit
+/// entstehen in **einer** Transaktion (Lauf F): scheitert ein Schritt, ist
+/// keine Nummer verbraucht.
+pub async fn create_invoice_draft_on(
+    pool: &SqlitePool,
+    contact_id: &str,
+    input: &InvoiceInput,
+    derived_from_quote_id: Option<&str>,
+    today: NaiveDate,
+) -> Result<InvoiceDetail> {
+    let prepared =
+        prepare_invoice_draft(pool, contact_id, input, derived_from_quote_id, today).await?;
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let (id, _number) = insert_prepared_draft(&mut tx, &prepared).await?;
+    tx.commit().await?;
+    invoices::get_detail(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
+}
+
+/// Geprüfter, noch nicht gespeicherter Rechnungsentwurf (Ergebnis von
+/// [`prepare_invoice_draft`]). Alle Lesezugriffe und Prüfungen sind erledigt;
+/// [`insert_prepared_draft`] schreibt ihn in einer laufenden Transaktion.
+pub struct PreparedDraft {
+    contact_id: String,
+    fiscal_year: i64,
+    doc_type: DocType,
+    input: InvoiceInput,
+    buyer_row: crate::db::models::ContactRow,
+    seller_row: crate::db::models::SellerProfileRow,
+    totals: invoice::Totals,
+    derived_from_quote_id: Option<String>,
+}
+
+/// Liest Empfänger und Stammdaten, prüft die strukturellen Vorbedingungen und
+/// das Geschäftsjahr — ohne zu schreiben.
+pub async fn prepare_invoice_draft(
+    pool: &SqlitePool,
+    contact_id: &str,
+    input: &InvoiceInput,
+    derived_from_quote_id: Option<&str>,
+    today: NaiveDate,
+) -> Result<PreparedDraft> {
     // GJ = Jahr des Rechnungsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
     // den Nummernkreis.
     let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
@@ -256,17 +311,10 @@ pub async fn create_invoice_draft_from_input(
     ));
     // P3: Positionen mit Markdown-Body → `description` (XRechnung-BT-154) aus dem
     // Markup als Klartext neu berechnen, damit das XML auch nach Edits stimmt.
-    let owned_input;
-    let input = if input.items.iter().any(item_has_markup) {
-        owned_input = {
-            let mut o = input.clone();
-            recompute_markup_descriptions(&mut o.items);
-            o
-        };
-        &owned_input
-    } else {
-        input
-    };
+    let mut input = input.clone();
+    if input.items.iter().any(item_has_markup) {
+        recompute_markup_descriptions(&mut input.items);
+    }
 
     let buyer_row = contacts::get(pool, contact_id)
         .await?
@@ -278,34 +326,34 @@ pub async fn create_invoice_draft_from_input(
         )
     })?;
 
-    let seller_view = make_seller_view(&seller_row);
-    let buyer_view = make_buyer_view(&buyer_row);
-
-    let today = today_berlin();
-    if let Err(errs) = invoice::validate_for_issue(input, &seller_view, &buyer_view, today) {
-        let blockers: Vec<_> = errs
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    invoice::InvoiceValidationError::NoItems
-                        | invoice::InvoiceValidationError::CurrencyEmpty
-                        | invoice::InvoiceValidationError::TotalNotPositive
-                        | invoice::InvoiceValidationError::ItemInvalidTaxCategoryCode { .. }
-                        | invoice::InvoiceValidationError::ItemDuplicatePosition(_)
-                )
-            })
-            .cloned()
-            .collect();
-        if !blockers.is_empty() {
-            return Err(Error::Domain(format!(
-                "Draft kann nicht angelegt werden: {}",
-                blockers
-                    .iter()
-                    .map(invoice::message)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )));
+    {
+        let seller_view = make_seller_view(&seller_row);
+        let buyer_view = make_buyer_view(&buyer_row);
+        if let Err(errs) = invoice::validate_for_issue(&input, &seller_view, &buyer_view, today) {
+            let blockers: Vec<_> = errs
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        invoice::InvoiceValidationError::NoItems
+                            | invoice::InvoiceValidationError::CurrencyEmpty
+                            | invoice::InvoiceValidationError::TotalNotPositive
+                            | invoice::InvoiceValidationError::ItemInvalidTaxCategoryCode { .. }
+                            | invoice::InvoiceValidationError::ItemDuplicatePosition(_)
+                    )
+                })
+                .cloned()
+                .collect();
+            if !blockers.is_empty() {
+                return Err(Error::Domain(format!(
+                    "Draft kann nicht angelegt werden: {}",
+                    blockers
+                        .iter()
+                        .map(invoice::message)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )));
+            }
         }
     }
 
@@ -313,16 +361,36 @@ pub async fn create_invoice_draft_from_input(
     // (Gegenprüfung Lauf E; wie bei Kosten und Privatbewegungen).
     crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
 
-    // Counter allokieren — Draft "verbraucht" eine Nummer (siehe
-    // db::repo::invoices::create_draft Docs).
+    // Draft "verbraucht" eine Nummer (siehe db::repo::invoices::create_draft Docs).
     let doc_type = if input.is_storno_for.is_some() {
         DocType::StornoInvoice
     } else {
         DocType::Invoice
     };
-    let invoice_number = numbering::next_number(pool, doc_type, fiscal_year as i32).await?;
-
     let totals = invoice::compute_totals(&input.items);
+    Ok(PreparedDraft {
+        contact_id: contact_id.to_string(),
+        fiscal_year,
+        doc_type,
+        input,
+        buyer_row,
+        seller_row,
+        totals,
+        derived_from_quote_id: derived_from_quote_id.map(str::to_string),
+    })
+}
+
+/// Schreibt einen [`PreparedDraft`] in einer laufenden Transaktion: Nummer,
+/// Entwurf (Kopf + Positionen) und Audit `invoice.draft_create`. Liefert
+/// `(id, nummer)`.
+pub async fn insert_prepared_draft(
+    conn: &mut sqlx::SqliteConnection,
+    prepared: &PreparedDraft,
+) -> Result<(String, String)> {
+    let invoice_number =
+        numbering::next_number_in(conn, prepared.doc_type, prepared.fiscal_year as i32).await?;
+    let seller_row = &prepared.seller_row;
+    let buyer_row = &prepared.buyer_row;
     let snapshot = invoices::SellerSnapshot {
         name: seller_row.name.as_str(),
         street: seller_row.street.as_str(),
@@ -342,44 +410,41 @@ pub async fn create_invoice_draft_from_input(
     };
 
     let payload = invoices::DraftCreatePayload {
-        contact_id: contact_id.to_string(),
-        fiscal_year,
+        contact_id: prepared.contact_id.clone(),
+        fiscal_year: prepared.fiscal_year,
         is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
-        input: input.clone(),
-        derived_from_quote_id: derived_from_quote_id.map(|s| s.to_string()),
+        input: prepared.input.clone(),
+        derived_from_quote_id: prepared.derived_from_quote_id.clone(),
     };
 
-    let row = invoices::create_draft(
-        pool,
+    let id = invoices::create_draft_in(
+        conn,
         &payload,
         &invoice_number,
         &snapshot,
         &buyer_snapshot,
-        &totals,
+        &prepared.totals,
     )
     .await?;
 
-    audit_log::append(
-        pool,
+    audit_log::append_in(
+        conn,
         "invoice.draft_create",
         "invoice",
-        &row.id,
+        &id,
         Some(&format!(
             r#"{{"number":"{}","gross":{},"items":{}{}}}"#,
             invoice_number,
-            totals.gross_amount_cents,
-            input.items.len(),
-            match derived_from_quote_id {
+            prepared.totals.gross_amount_cents,
+            prepared.input.items.len(),
+            match prepared.derived_from_quote_id.as_deref() {
                 Some(qid) => format!(r#","derived_from_quote_id":"{}""#, escape(qid)),
                 None => String::new(),
             }
         )),
     )
     .await?;
-
-    invoices::get_detail(pool, &row.id)
-        .await?
-        .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
+    Ok((id, invoice_number))
 }
 
 /// Argumente von [`invoices_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -499,7 +564,7 @@ pub struct LockCancelPair<'a> {
 /// Core-Pipeline für `lock_and_issue`. Auch von `invoices_cancel` für
 /// den Storno-Beleg verwendet.
 ///
-/// Public, damit Integration-Tests sie ohne Tauri-AppHandle ausführen
+/// Public, damit Integration-Tests sie ohne Server ausführen
 /// können (Tests bauen Paths direkt aus tempdir + Mock-Sidecar).
 pub async fn run_lock_pipeline(
     pool: &SqlitePool,
@@ -507,7 +572,28 @@ pub async fn run_lock_pipeline(
     invoice_id: &str,
     buyer_reference: &str,
 ) -> Result<LockResponse> {
-    run_lock_pipeline_inner(pool, paths, invoice_id, buyer_reference, None).await
+    run_lock_pipeline_inner(
+        pool,
+        paths,
+        invoice_id,
+        buyer_reference,
+        None,
+        today_berlin(),
+    )
+    .await
+}
+
+/// Wie [`run_lock_pipeline`], mit ausdrücklichem „heute“ (Europe/Berlin) für
+/// die §14-Prüfung — der Scheduler übergibt das Datum seiner injizierten Uhr
+/// (D-20, ADR 0040).
+pub async fn run_lock_pipeline_on(
+    pool: &SqlitePool,
+    paths: &Paths,
+    invoice_id: &str,
+    buyer_reference: &str,
+    today: NaiveDate,
+) -> Result<LockResponse> {
+    run_lock_pipeline_inner(pool, paths, invoice_id, buyer_reference, None, today).await
 }
 
 /// Wie [`run_lock_pipeline`], aber mit optionalem Storno-Paar-Cancel im
@@ -519,7 +605,15 @@ pub async fn run_lock_pipeline_with_pair(
     buyer_reference: &str,
     pair: LockCancelPair<'_>,
 ) -> Result<LockResponse> {
-    run_lock_pipeline_inner(pool, paths, invoice_id, buyer_reference, Some(pair)).await
+    run_lock_pipeline_inner(
+        pool,
+        paths,
+        invoice_id,
+        buyer_reference,
+        Some(pair),
+        today_berlin(),
+    )
+    .await
 }
 
 async fn run_lock_pipeline_inner(
@@ -528,6 +622,7 @@ async fn run_lock_pipeline_inner(
     invoice_id: &str,
     buyer_reference: &str,
     cancel_pair: Option<LockCancelPair<'_>>,
+    today: NaiveDate,
 ) -> Result<LockResponse> {
     // Review W2 S0-1: Festschreiben derselben Rechnung läuft nie doppelt
     // (Doppelklick, zwei Browser-Tabs); der zweite Lauf sieht danach `locked_at`.
@@ -541,6 +636,10 @@ async fn run_lock_pipeline_inner(
             "invoice {invoice_id} ist bereits gelockt"
         )));
     }
+    // F1d: Ein wiederhergestellter Entwurf, dessen Nummer vor dem Restore schon
+    // festgeschrieben war, wird erst nach der Bestätigung des Inhabers
+    // festgeschrieben (nie zwei verschiedene Belege mit derselben Nummer).
+    crate::backup::after_restore::ensure_no_conflict(pool, "invoice", invoice_id).await?;
     let seller_row = seller_profile::get(pool)
         .await?
         .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
@@ -590,7 +689,6 @@ async fn run_lock_pipeline_inner(
         }
         None => None,
     };
-    let today = today_berlin();
 
     // 1. Domain-Validation — Hard-Block bei §14/§19-Fehlern.
     invoice::validate_for_issue(&input, &seller_view, &buyer_view, today).map_err(|errs| {
@@ -790,7 +888,7 @@ async fn run_lock_pipeline_inner(
     // Das eigentliche Auto-Critical-Backup wird vom Command-Wrapper
     // (`invoices_lock_and_issue` / `invoices_cancel`) via
     // `backup::auto_backup_if_unlocked` ausgelöst — nur dort ist die
-    // Session-Passphrase (Tauri-State) verfügbar. `run_lock_pipeline` selbst
+    // Session-Passphrase (`AppCtx::session`) verfügbar. `run_lock_pipeline` selbst
     // bleibt I/O-frei bzgl. Backup, damit Integration-Tests sie ohne
     // entsperrte Session ausführen können.
     audit_log::append(

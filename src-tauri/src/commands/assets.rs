@@ -1,4 +1,4 @@
-//! Tauri-Commands für Anlagen (Block 12, Phase 2C).
+//! Commands für Anlagen (Block 12, Phase 2C).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::asset::validate_asset`]) — Hard-Block.

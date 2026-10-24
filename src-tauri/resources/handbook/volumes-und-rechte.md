@@ -11,7 +11,7 @@ keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, s
 Ein Volume ist ein Ordner auf Deinem Server, den Docker in den Container
 einblendet. Klein.Buch speichert nichts Dauerhaftes im Container selbst:
 Alles, was bleiben soll, liegt in Volumes. Ein Container lässt sich
-jederzeit wegwerfen und neu anlegen, die Volumes nicht. Fehlt beim Start
+jederzeit wegwerfen und neu anlegen, die Volumes nicht. Fehlt beim Containerstart
 ein Volume, bricht Klein.Buch ab, statt Daten an einer Stelle zu
 schreiben, die mit dem Container verschwinden würde.
 
@@ -108,7 +108,7 @@ Dein Verkäuferprofil, offene Entwürfe und Abo-Rechnungen nennen, in
 
 ## Wie Klein.Buch /inputs aktuell hält
 
-Bei jedem Start vergleicht Klein.Buch `/inputs` mit den Dateien, die das
+Bei jedem Containerstart vergleicht Klein.Buch `/inputs` mit den Dateien, die das
 Image mitbringt. Dafür führt es die Datei `/inputs/.seed-manifest.json`.
 Sie merkt sich zu jeder Datei eine Prüfsumme (SHA-256, eine Art
 Fingerabdruck des Inhalts) der Fassung, die Klein.Buch zuletzt dort
@@ -119,15 +119,17 @@ abgelegt hat. Daraus folgt für jede Datei:
 - Hast Du sie nicht verändert und das Image bringt eine neue Fassung,
   ersetzt Klein.Buch sie und schreibt einen Hinweis.
 - Hast Du sie verändert, fasst Klein.Buch sie nie an. Die neue Fassung
-  legt es daneben als `<Name>.neu` ab, zum Beispiel
+  legt es einmal daneben als `<Name>.neu` ab, zum Beispiel
   `pdf-templates/default.typ.neu`, und schreibt einen Hinweis.
 
 Die Hinweise erscheinen nach der nächsten Anmeldung unter "Hinweise",
-weil die Datenbank beim Start noch verschlossen ist. Vergleiche Deine
-Datei mit der `.neu`-Fassung und übernimm, was Du brauchst. Übernimmst
-Du die neue Fassung ganz, kannst Du die `.neu`-Datei danach löschen.
-Behältst Du Deine eigene Fassung, lass die `.neu`-Datei liegen: Fehlt
-sie, legt der nächste Start sie mit einem neuen Hinweis wieder an.
+weil die Datenbank beim Containerstart noch verschlossen ist. Vergleiche
+Deine Datei mit der `.neu`-Fassung und übernimm, was Du brauchst. Danach
+kannst Du die `.neu`-Datei löschen, egal ob Du die neue Fassung
+übernommen oder Deine eigene behalten hast: Klein.Buch merkt sich in der
+Manifest-Datei, dass es diese Fassung schon angeboten hat, und legt sie
+nicht wieder an. Erst wenn ein späteres Image eine weitere Fassung
+mitbringt, liegt wieder eine `.neu`-Datei daneben, mit neuem Hinweis.
 
 Ändere oder lösche `.seed-manifest.json` nicht. Ohne sie hält Klein.Buch
 jede Datei, die vom Image abweicht, für von Dir verändert und legt

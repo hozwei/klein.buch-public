@@ -116,8 +116,7 @@ pub async fn create_zugferd_with_profile(
     tokio::fs::write(&xml_path, xml).await?;
 
     // cwd auf tmpdir setzen — vermeidet, dass Java-Sidecar relative Outputs
-    // (Logs, temp-XML, etc.) ins Sidecar-Bundle schreibt. Tauri-Dev-Mode-
-    // Watcher würde sonst die App mitten in der Pipeline rebuilten.
+    // (Logs, temp-XML, etc.) ins (read-only) Sidecar-Verzeichnis schreibt.
     let cwd = tmpdir.path();
 
     // Ein-Schritt-Combine: Plain-PDF → PDF/A-3 + eingebettetes XML.

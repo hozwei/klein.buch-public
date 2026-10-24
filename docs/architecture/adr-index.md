@@ -1,15 +1,15 @@
 # ADR-Index
 
 > Vertiefung zu „ADR-Liste in `docs/adr/`" aus `../ARCHITECTURE.md`. Diese
-> Datei ist die navigations-freundliche Sicht auf alle 39 Architecture
+> Datei ist die navigations-freundliche Sicht auf alle 40 Architecture
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0039-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0040-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** alle 39 ADRs sind **akzeptiert** (Stand 2026-10-23);
+**Status-Konvention:** alle 40 ADRs sind **akzeptiert** (Stand 2026-10-24);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -61,6 +61,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/); Drop-Folder im Server entfallen (E11, §6 Hinweis) |
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
+| 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
 
 ---
 
@@ -99,7 +100,8 @@ Plus AfA: 0025.
 
 **Scheduler/Notifications:** 0023, 0027, 0037 (Drop-Folder als sechster
 Tick-Job, Inbox-only-Regeln; im Server-Betrieb entfällt der Drop-Folder-Job,
-Amendment 0037 / ADR 0039 E11).
+Amendment 0037 / ADR 0039 E11), 0040 (Dauerbetrieb: Sperre/CAS/Transaktion,
+Nachhol-Grenze, Pause, injizierte Uhr; nur noch die Inbox, Amendment 0027).
 
 ---
 
@@ -141,6 +143,21 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
 - **ADR 0036** — Factory Reset im Server-Betrieb abgeschaltet.
 - **ADR 0037** — Rechnungseingang per Upload im Browser statt Drop-Folder.
 
+**Amendments 2026-10-24 — Dauerbetrieb (Lauf F, ADR 0040):**
+
+- **ADR 0009 / 0034** — Tages-Backup kalenderfest, Aufbewahrung nach
+  Kalender-Eimern, keine Löschung auf SFTP-Zielen, nach einem Restore bis zur
+  Freigabe nur Floor; übernommene Floor-Backups als `manual`.
+- **ADR 0023 / 0033** — Abo-Läufe mit Sperre, Transaktion und Nachhol-Grenze,
+  Pause nach Uhrsprung und Restore (Teil F1a, dort beschrieben); Tages-Backup
+  kalenderfest, kein Job am Start, Tests ohne OS-Notification-Bridge (F1c).
+- **ADR 0027** — nur noch die Inbox (Trait `Notifier` entfernt), Integritäts-Cron
+  mit Sperre und Backoff, Auto-AfA atomar, Erinnerungen in Europe/Berlin.
+- **ADR 0003** — Schema-Prüfung beim Entsperren: eine neuere Datenbank lässt sich
+  nicht entsperren, die Instanz bleibt gesperrt.
+- **ADR 0039** — Verweise der überholten Einträge (E3, Nr. 13, 33, 44, 45, 54,
+  65, 77, 91, 103, 120, E12 in der Oberfläche) auf ADR 0040.
+
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
 explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
@@ -165,5 +182,5 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 ## Letzte Verifikation
 
-Stand: 2026-10-23, ADR-Files 0001–0039. Bei einer neuen ADR diese Tabelle
+Stand: 2026-10-24, ADR-Files 0001–0040. Bei einer neuen ADR diese Tabelle
 am Ende verlängern und das passende Vertiefungs-Dokument verlinken.

@@ -2,7 +2,7 @@
 //!
 //! Konvention:
 //! - `FromRow` für sqlx-Mappings (alle Spalten in DB-Reihenfolge).
-//! - `Serialize` für Tauri-Bridge ans Frontend (camelCase).
+//! - `Serialize` für die JSON-Antworten ans Frontend (camelCase).
 //! - Booleans sind in SQLite INTEGER (0/1); wir mappen über `i64` und reichen
 //!   das so ans Frontend. Optional kann das Frontend einen Boolean draus machen.
 //! - Timestamps als `String` (ISO-8601), weil chrono+sqlx-Default für TEXT-Spalten

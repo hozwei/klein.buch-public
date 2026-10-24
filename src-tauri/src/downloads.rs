@@ -7,7 +7,8 @@
 //! `GET /files/download/{id}`. Exporte sind einmalig abrufbar und verfallen
 //! nach [`EXPORT_TTL`], Vorschauen sind mehrfach abrufbar (PDF-Ansicht lädt
 //! nach) und verfallen nach [`PREVIEW_TTL`]. Abgelaufene werden bei jedem
-//! Registrieren und Abrufen gelöscht, Reste beim Start (`<data>/tmp`).
+//! Registrieren und Abrufen gelöscht, Reste beim Serverstart
+//! und durch den stündlichen Sweeper (`<data>/tmp`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
