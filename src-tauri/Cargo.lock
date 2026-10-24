@@ -2525,6 +2525,7 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "lopdf",
+ "openssl-sys",
  "pulldown-cmark",
  "qrcode",
  "quick-xml 0.36.2",

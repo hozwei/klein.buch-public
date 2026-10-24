@@ -780,6 +780,14 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Screenshots unter `/data/test/Buchhaltung/arbeit/screens/w10`; zusätzlich als Information
     die Bereiche, die in sich seitlich scrollen. Kernabläufe als E2E bei 390×844 mit Touch
     (`isMobile`). Echte Geräte prüft Manuel nach W14.
+98. **OpenSSL ohne `atexit` (W10, CI-Fund).** Ein Testbinary stürzte nach allen grünen Tests
+    beim Beenden ab („double free or corruption“, lokal nicht reproduziert). Wahrscheinliche
+    Ursache: Das vendored OpenSSL von SQLCipher räumt
+    sich per `atexit` auf, während sqlx-Threads noch Verbindungen schließen. `db::init_crypto`
+    (`openssl_sys::init()`, `OPENSSL_INIT_NO_ATEXIT`) läuft vor dem ersten SQLCipher-Zugriff
+    (`open_pool`, Snapshot, Serverstart); `openssl-sys` ist dafür direkte Abhängigkeit (dieselbe
+    Version wie über `libsqlite3-sys`). Die Testhilfe setzt `KLEIN_BUCH_SIDECAR_MOCK` nur noch
+    einmal je Prozess.
 
 ## Konsequenzen
 

@@ -94,7 +94,10 @@ pub fn test_server() -> TestServer {
 
 /// Wie [`test_server`], mit angepasster Konfiguration (z. B. Policy).
 pub fn test_server_with(adjust: impl FnOnce(&mut ServerConfig)) -> TestServer {
-    std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1");
+    // Einmal je Prozess: `set_var` neben laufenden Threads anderer Tests ist
+    // riskant (glibc-Umgebung ohne Sperre für nativen Code).
+    static MOCK_ENV: std::sync::Once = std::sync::Once::new();
+    MOCK_ENV.call_once(|| std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1"));
     let dir = tempfile::tempdir().unwrap();
     let paths = prepare_dirs(dir.path());
     let mut cfg = local_config();

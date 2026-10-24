@@ -68,6 +68,9 @@ sqlx = { version = "0.8", default-features = false, features = [
 # Falls EXAKT-Pin bricht (sqlx-Update): `cargo tree -i libsqlite3-sys` muss GENAU
 # EINE Version zeigen, sonst greift die Unification nicht.
 libsqlite3-sys = { version = "=0.30.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Dasselbe (vendored) OpenSSL wie SQLCipher, nur für `openssl_sys::init()`:
+# Initialisierung mit OPENSSL_INIT_NO_ATEXIT (siehe `db::init_crypto`).
+openssl-sys = "0.9"
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }

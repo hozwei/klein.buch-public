@@ -140,6 +140,7 @@ pub fn main_entry(args: Vec<OsString>) -> ExitCode {
     // Prozess-TZ. Gesetzt vor jedem weiteren Thread und vor dem ersten
     // Zugriff auf die Zeitzone.
     std::env::set_var("TZ", "UTC");
+    crate::db::init_crypto();
     let sub = args.first().and_then(|a| a.to_str()).unwrap_or("serve");
     match sub {
         "serve" => run_server(),

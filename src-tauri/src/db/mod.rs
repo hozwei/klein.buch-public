@@ -71,7 +71,17 @@ pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15)
 /// Das `key`-Pragma muss vor jedem anderen Statement laufen; sqlx wendet die
 /// via [`SqliteConnectOptions::pragma`] gesetzten Pragmas beim Verbindungs-
 /// aufbau zuerst an.
+/// Initialisiert das von SQLCipher genutzte OpenSSL **ohne** Aufräumen per
+/// `atexit`: sqlx schließt Verbindungen in eigenen Threads, die beim
+/// Prozessende noch laufen können; das `atexit`-Aufräumen von OpenSSL gab dann
+/// „double free or corruption“ (CI-Fund W10, Testbinary nach allen grünen
+/// Tests). Muss vor dem ersten SQLCipher-Zugriff laufen; mehrfach aufrufbar.
+pub fn init_crypto() {
+    openssl_sys::init();
+}
+
 pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> {
+    init_crypto();
     let url = format!("sqlite://{}", db_file.to_string_lossy());
 
     // Statement-Logging aus (Review W2 S0-3, Plan W5.9): sqlx führt

@@ -10,6 +10,10 @@ Arbeitszweig `phase-w`.
 
 ### Fixed
 
+- **Sporadischer Absturz beim Beenden:** Das von SQLCipher genutzte OpenSSL
+  räumte sich beim Prozessende per `atexit` auf, während Hintergrund-Threads
+  noch Datenbankverbindungen schlossen („double free or corruption“, in CI
+  aufgefallen). OpenSSL wird jetzt ohne dieses Aufräumen initialisiert. (W10)
 - **Zeitstempel um 1–2 Stunden zu früh:** Bei einer Prozess-Zeitzone ungleich
   UTC (z. B. `TZ=Europe/Berlin`; vermutlich auch die Desktop-Fassung) lagen
   alle von der Datenbank gesetzten Zeitstempel — Audit-Log, Backup- und

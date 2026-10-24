@@ -99,6 +99,7 @@ pub fn tmp_dir(paths: &Paths) -> PathBuf {
 /// Verbindung auf eine DB-Datei, ohne Statement-Logging (die Passphrase steht
 /// im `PRAGMA key`, Plan W5.9).
 async fn connect_file(file: &Path, key: Option<&str>) -> Result<sqlx::SqliteConnection> {
+    crate::db::init_crypto();
     let url = format!("sqlite://{}", file.to_string_lossy());
     let mut opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
