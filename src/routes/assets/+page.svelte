@@ -196,7 +196,7 @@
   {#if items.length === 0}
     <p class="muted">Keine Anlagen passen zu den Filtern.</p>
   {:else}
-    <table class="kb-table">
+    <table class="kb-table cards">
       <thead>
         <tr>
           <th>Nr.</th>
@@ -213,18 +213,18 @@
         {#each items as a (a.id)}
           {@const b = statusBadge(a)}
           <tr class={a.disposed === 1 ? "disposed" : ""}>
-            <td><a href={`/assets/${a.id}`}>{a.assetNumber}</a></td>
-            <td>{a.label}</td>
-            <td>{date(a.acquisitionDate)}</td>
-            <td class="num">{euro(a.acquisitionCostCents)}</td>
-            <td>
+            <td data-label="Nr."><a href={`/assets/${a.id}`}>{a.assetNumber}</a></td>
+            <td data-label="Bezeichnung">{a.label}</td>
+            <td data-label="Angeschafft">{date(a.acquisitionDate)}</td>
+            <td class="num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
+            <td data-label="Abschreibung">
               <span class="cat">
                 {depreciationMethodShort(a.depreciationMethod)}
                 {#if a.businessSharePercent < 100}<Badge tone="info">{a.businessSharePercent}%</Badge>{/if}
               </span>
             </td>
-            <td class="num">{euro(a.bookValueCents)}</td>
-            <td><Badge tone={b.tone}>{b.text}</Badge></td>
+            <td class="num" data-label="Restbuchwert">{euro(a.bookValueCents)}</td>
+            <td data-label="Status"><Badge tone={b.tone}>{b.text}</Badge></td>
             <td class="right"><Button variant="secondary" size="sm" href={`/assets/${a.id}`}>Öffnen</Button></td>
           </tr>
         {/each}

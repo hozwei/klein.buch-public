@@ -519,7 +519,7 @@
       <p class="muted">Noch keine Backups.</p>
     {:else}
       <div class="table-wrap">
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Erstellt</th>
@@ -533,14 +533,14 @@
         <tbody>
           {#each history as item}
             <tr>
-              <td>{item.createdAt}</td>
-              <td>{reasonLabel(item.triggerReason)}</td>
-              <td class="ort">
+              <td data-label="Erstellt">{item.createdAt}</td>
+              <td data-label="Grund">{reasonLabel(item.triggerReason)}</td>
+              <td class="ort cards-full" data-label="Ort">
                 {locationLabel(item.targetPath)}
                 <div class="path">{item.targetPath}</div>
               </td>
-              <td>{retentionLabel(item.retentionTag)}</td>
-              <td>{fmtBytes(item.fileSizeBytes)}</td>
+              <td data-label="Aufbewahrung">{retentionLabel(item.retentionTag)}</td>
+              <td data-label="Größe">{fmtBytes(item.fileSizeBytes)}</td>
               <td class="actions">
                 {#if isLocalPath(item.targetPath)}
                   <button class="link" onclick={() => pickForRestore(item)}>Auswählen ↓</button>
@@ -646,6 +646,7 @@
   }
   .row {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
   }
   input[type="text"],
@@ -711,7 +712,24 @@
   /* ORT trägt den vollen Pfad: darf umbrechen + reserviert Mindestbreite. */
   td.ort {
     white-space: normal;
-    min-width: 22rem;
+  }
+  @media (min-width: 601px) {
+    td.ort {
+      min-width: 22rem;
+    }
+  }
+  @media (max-width: 820px) {
+    th,
+    td {
+      white-space: normal;
+    }
+    ul.targets li {
+      flex-wrap: wrap;
+    }
+    .row label {
+      min-width: 0;
+      max-width: 100%;
+    }
   }
   .preview {
     margin-top: 0.8rem;

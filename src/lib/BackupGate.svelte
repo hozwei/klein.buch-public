@@ -377,6 +377,7 @@
     width: 32rem;
     max-width: calc(100vw - 2rem);
     max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   }

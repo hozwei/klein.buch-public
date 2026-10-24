@@ -607,6 +607,25 @@
     font-size: var(--fs-xs);
   }
 
+  /* Handy/schmale Tablets (Plan W10): Inhaltsverzeichnis und Text
+     untereinander; die Seite scrollt als Ganzes statt der Spalten. */
+  @media (max-width: 760px) {
+    .help-shell {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      height: auto;
+    }
+    .help-sidebar {
+      height: auto;
+      max-height: 50vh;
+    }
+    .help-content {
+      height: auto;
+      overflow-y: visible;
+      padding: 1rem;
+    }
+  }
+
   /* --- Druck (G2-DOC.3.4) ------------------------------------------- */
   @media print {
     .help-shell {

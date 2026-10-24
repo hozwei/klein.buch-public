@@ -248,7 +248,7 @@
 
   <section class="card">
     <h2>Positionen</h2>
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>#</th>
@@ -266,34 +266,34 @@
       <tbody>
         {#each detail.items as it (it.id)}
           <tr>
-            <td>{it.position}</td>
-            <td>{it.description}</td>
-            <td class="right">{it.quantity}</td>
-            <td>{it.unitCode}</td>
-            <td class="right">{euro(it.unitPriceCents)}</td>
+            <td data-label="Pos.">{it.position}</td>
+            <td class="cards-full" data-label="Beschreibung">{it.description}</td>
+            <td class="right" data-label="Menge">{it.quantity}</td>
+            <td data-label="Einheit">{it.unitCode}</td>
+            <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
             {#if inv.isKleinunternehmer === 0}
-              <td class="right">{it.taxRatePercent}</td>
-              <td>{it.taxCategoryCode}</td>
+              <td class="right" data-label="USt %">{it.taxRatePercent}</td>
+              <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
-            <td class="right">{euro(it.netAmountCents)}</td>
+            <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
           </tr>
         {/each}
       </tbody>
       <tfoot>
-        <tr><td colspan={inv.isKleinunternehmer === 1 ? 6 : 8} class="right">Netto</td>
-            <td class="right">{euro(inv.netAmountCents)}</td></tr>
+        <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
+            <td class="right" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
         {#if inv.taxAmountCents !== 0}
-          <tr><td colspan={inv.isKleinunternehmer === 1 ? 6 : 8} class="right">USt</td>
-              <td class="right">{euro(inv.taxAmountCents)}</td></tr>
+          <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
+              <td class="right" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
         {/if}
-        <tr class="grand"><td colspan={inv.isKleinunternehmer === 1 ? 6 : 8} class="right">
+        <tr class="grand"><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
               <strong>Brutto</strong></td>
-            <td class="right"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
+            <td class="right" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
         {#if inv.paidAmountCents > 0}
-          <tr><td colspan={inv.isKleinunternehmer === 1 ? 6 : 8} class="right">Bezahlt</td>
-              <td class="right">{euro(inv.paidAmountCents)}</td></tr>
-          <tr><td colspan={inv.isKleinunternehmer === 1 ? 6 : 8} class="right">Offen</td>
-              <td class="right">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
+          <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Bezahlt</td>
+              <td class="right" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
+          <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Offen</td>
+              <td class="right" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
         {/if}
       </tfoot>
     </table>
@@ -302,7 +302,7 @@
   {#if sendLog.length > 0}
     <section class="card">
       <h2>Versand-Historie</h2>
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -315,11 +315,11 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td>{fmtLogTime(e.createdAt)}</td>
-              <td>{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
-              <td>{e.toEmail}</td>
-              <td>{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
-              <td>
+              <td data-label="Zeitpunkt">{fmtLogTime(e.createdAt)}</td>
+              <td data-label="Status">{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
+              <td data-label="Empfänger">{e.toEmail}</td>
+              <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
+              <td class="cards-full" data-label="Antwort des Anbieters">
                 {#if e.status === "success"}
                   {[e.providerCode, e.providerMessage].filter(Boolean).join(" ")}
                   {#if e.requestId}<br /><small class="muted">request-id: {e.requestId}</small>{/if}
@@ -352,7 +352,7 @@
 
 <style>
   .sub { color: var(--c-text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .ref-inline { padding: 0.4rem 0.5rem; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); width: 10rem; font: inherit; }
+  .ref-inline { padding: 0.4rem 0.5rem; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); width: 10rem; max-width: 100%; font: inherit; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
   /* .card entfernt — globale Definition aus tokens.css. */
   dl { display: grid; grid-template-columns: 6rem 1fr; gap: 0.25rem 0.75rem; }
@@ -380,4 +380,10 @@
   .muted { color: #6b7280; }
   .err { color: #b91c1c; }
   .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
+  /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
+     Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
+  @media (max-width: 820px) {
+    td.sum-label { display: none; }
+    td { overflow-wrap: anywhere; }
+  }
 </style>

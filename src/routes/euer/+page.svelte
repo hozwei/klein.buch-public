@@ -205,7 +205,7 @@
   /* .intro / .card / .card h2 entfernt — globale .lead, .card aus tokens.css. */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
     gap: 1rem;
     margin: 1rem 0;
   }
@@ -217,6 +217,7 @@
     padding: 0.4rem 0;
     border-bottom: 1px solid #f3f4f6;
     font-size: 0.9rem;
+    overflow-wrap: anywhere;
   }
   .num {
     text-align: right;
@@ -235,6 +236,7 @@
   }
   .result {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: baseline;
     gap: 1rem;

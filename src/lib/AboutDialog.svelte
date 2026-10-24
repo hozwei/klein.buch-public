@@ -316,6 +316,7 @@
     box-shadow: var(--sh-xl);
     width: min(640px, 100%);
     max-height: calc(100vh - 4rem);
+    max-height: calc(100dvh - 4rem);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -471,5 +472,11 @@
     padding: 0.75rem 1.25rem;
     border-top: 1px solid var(--c-border);
     background: var(--c-surface-2);
+  }
+  /* Plan W10: auf dem Handy fast randlos */
+  @media (max-width: 600px) {
+    .backdrop {
+      padding: 0.5rem;
+    }
   }
 </style>

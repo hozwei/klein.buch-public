@@ -205,7 +205,7 @@
 {:else if accounts.length === 0}
   <p class="muted">Keine Konten.</p>
 {:else}
-  <table>
+  <table class="cards">
     <thead>
       <tr><th>Bezeichnung</th><th>Typ</th><th>IBAN</th><th>Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th></th></tr>
     </thead>
@@ -213,17 +213,17 @@
       {#each accounts as a (a.id)}
         {#if editId === a.id}
           <tr class="edit-row">
-            <td><input type="text" bind:value={editForm.label} /></td>
-            <td>
+            <td data-label="Bezeichnung"><input type="text" bind:value={editForm.label} /></td>
+            <td data-label="Typ">
               <select bind:value={editForm.accountType}>
                 {#each TYPES as t}<option value={t.value}>{t.label}</option>{/each}
               </select>
             </td>
-            <td><input type="text" bind:value={editForm.iban} placeholder="IBAN" /></td>
-            <td><input type="text" bind:value={editForm.details} placeholder="z. B. PayPal-Link" /></td>
-            <td><input type="checkbox" bind:checked={editForm.showOnInvoice} /></td>
-            <td><input type="checkbox" bind:checked={editForm.isDefault} /></td>
-            <td class="muted">{a.active === 1 ? "aktiv" : "inaktiv"}</td>
+            <td data-label="IBAN"><input type="text" bind:value={editForm.iban} placeholder="IBAN" /></td>
+            <td class="cards-full" data-label="Details"><input type="text" bind:value={editForm.details} placeholder="z. B. PayPal-Link" /></td>
+            <td data-label="Auf Beleg"><input type="checkbox" bind:checked={editForm.showOnInvoice} /></td>
+            <td data-label="Standard"><input type="checkbox" bind:checked={editForm.isDefault} /></td>
+            <td class="muted" data-label="Status">{a.active === 1 ? "aktiv" : "inaktiv"}</td>
             <td class="row-actions">
               <button class="btn-primary btn-sm" onclick={saveEdit} disabled={busy}>Speichern</button>
               <button class="btn-secondary btn-sm" onclick={() => (editId = null)}>Abbrechen</button>
@@ -231,13 +231,13 @@
           </tr>
         {:else}
           <tr class={a.active !== 1 ? "inactive" : ""}>
-            <td>{a.label}</td>
-            <td>{typeLabel(a.accountType)}</td>
-            <td class="muted">{a.iban ?? "—"}</td>
-            <td class="muted">{a.details ?? "—"}</td>
-            <td>{#if a.showOnInvoice === 1}<span class="badge ok">✓</span>{:else}—{/if}</td>
-            <td>{#if a.isDefault === 1}<span class="badge ok">Standard</span>{/if}</td>
-            <td>{#if a.active === 1}<span class="badge ok">aktiv</span>{:else}<span class="badge muted-badge">inaktiv</span>{/if}</td>
+            <td data-label="Bezeichnung">{a.label}</td>
+            <td data-label="Typ">{typeLabel(a.accountType)}</td>
+            <td class="muted" data-label="IBAN">{a.iban ?? "—"}</td>
+            <td class="muted cards-full" data-label="Details">{a.details ?? "—"}</td>
+            <td data-label="Auf Beleg">{#if a.showOnInvoice === 1}<span class="badge ok">✓</span>{:else}—{/if}</td>
+            <td data-label="Standard">{#if a.isDefault === 1}<span class="badge ok">Standard</span>{/if}</td>
+            <td data-label="Status">{#if a.active === 1}<span class="badge ok">aktiv</span>{:else}<span class="badge muted-badge">inaktiv</span>{/if}</td>
             <td class="row-actions">
               <button class="btn-secondary btn-sm" onclick={() => startEdit(a)} disabled={busy}>Bearbeiten</button>
               <button class="btn-secondary btn-sm" onclick={() => toggleActive(a)} disabled={busy}>
@@ -262,7 +262,7 @@
   th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
   th { background: #f3f4f6; font-weight: 600; font-size: 0.8rem; }
   tr.inactive { opacity: 0.55; }
-  .row-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+  .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
   .badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
   .badge.ok { background: #d1fae5; color: #065f46; }
   .muted-badge { background: #e5e7eb; color: #374151; }
@@ -272,4 +272,11 @@
      aus tokens.css statt 8px 16px (Border 0 statt 1px). */
   button:disabled { opacity: 0.6; cursor: not-allowed; }
   .muted { color: #6b7280; }
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 820px) {
+    td input[type="checkbox"] { width: auto; flex: none; }
+    td { overflow-wrap: anywhere; }
+  }
 </style>

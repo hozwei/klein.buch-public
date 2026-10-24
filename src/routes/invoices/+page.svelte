@@ -97,7 +97,7 @@
 {:else if rows.length === 0}
   <p class="muted">Keine Rechnungen.</p>
 {:else}
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr>
         <th>Nummer</th>
@@ -113,16 +113,16 @@
     <tbody>
       {#each rows as r (r.id)}
         <tr class:storno={r.isStornoFor !== null} class:canceled={r.status === "canceled"}>
-          <td>
+          <td data-label="Nummer">
             <a href={`/invoices/${r.id}`}>{r.invoiceNumber}</a>
             {#if r.isStornoFor}<Badge tone="warning">Storno</Badge>{/if}
           </td>
-          <td>{date(r.invoiceDate)}</td>
-          <td>{r.contactName}</td>
-          <td class="right">{euro(r.grossAmountCents)}</td>
-          <td class="right">{euro(r.paidAmountCents)}</td>
-          <td><Badge tone={statusTone(r.status)} strike={r.status === "canceled"}>{statusLabel(r.status)}</Badge></td>
-          <td>{date(r.dueDate)}</td>
+          <td data-label="Datum">{date(r.invoiceDate)}</td>
+          <td data-label="Empfänger">{r.contactName}</td>
+          <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
+          <td class="right" data-label="Bezahlt">{euro(r.paidAmountCents)}</td>
+          <td data-label="Status"><Badge tone={statusTone(r.status)} strike={r.status === "canceled"}>{statusLabel(r.status)}</Badge></td>
+          <td data-label="Fällig">{date(r.dueDate)}</td>
           <td class="right"><Button variant="secondary" size="sm" href={`/invoices/${r.id}`}>Öffnen</Button></td>
         </tr>
       {/each}

@@ -148,4 +148,8 @@
     color: #4b5563;
     min-width: 2.4rem;
   }
+  .body {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
 </style>

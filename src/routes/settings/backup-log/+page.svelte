@@ -177,7 +177,7 @@
   {#if entries.length === 0}
     <p class="muted">Keine Einträge gefunden.</p>
   {:else}
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>Zeitpunkt</th>
@@ -191,24 +191,24 @@
       <tbody>
         {#each entries as e (e.id)}
           <tr class:bad={e.status === "failed"}>
-            <td class="ts">{fmtDateTime(e.createdAt)}</td>
-            <td>
+            <td class="ts" data-label="Zeitpunkt">{fmtDateTime(e.createdAt)}</td>
+            <td data-label="Status">
               {#if e.status === "ok"}
                 <span class="ok">✓ gesichert</span>
               {:else}
                 <span class="fail">✗ fehlgeschlagen</span>
               {/if}
             </td>
-            <td>{triggerLabel(e.trigger)}</td>
-            <td>{targetLabel(e)}</td>
-            <td class="file">
+            <td data-label="Auslöser">{triggerLabel(e.trigger)}</td>
+            <td data-label="Ziel">{targetLabel(e)}</td>
+            <td class="file cards-full" data-label="Datei">
               <span class="fname">{e.fileName}</span>
               <span class="path">{e.fullPath}</span>
               {#if e.status === "failed" && e.detail}
                 <span class="errtext">{e.detail}</span>
               {/if}
             </td>
-            <td class="size">{fmtSize(e.sizeBytes)}</td>
+            <td class="size" data-label="Größe">{fmtSize(e.sizeBytes)}</td>
           </tr>
         {/each}
       </tbody>
@@ -224,9 +224,9 @@
   .filterbar .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
   .filterbar .row + .row { margin-top: 0.6rem; }
   .filterbar label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; color: #6b7280; }
-  .filterbar label.grow { flex: 1 1 18rem; }
+  .filterbar label.grow { flex: 1 1 18rem; min-width: 0; max-width: 100%; }
   .filterbar input, .filterbar select { padding: 0.4rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
-  .btns { display: flex; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
+  .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #f3f4f6; font-size: 0.85rem; text-align: left; vertical-align: top; }
@@ -236,7 +236,7 @@
   .ok { color: #15803d; font-weight: 600; white-space: nowrap; }
   .fail { color: #b91c1c; font-weight: 600; white-space: nowrap; }
   .size { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .file .fname { display: block; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .file .fname { display: block; font-family: ui-monospace, monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
   .file .path { display: block; color: #9ca3af; font-size: 0.72rem; word-break: break-all; }
   .file .errtext { display: block; color: #b91c1c; font-size: 0.8rem; margin-top: 0.15rem; }
 </style>

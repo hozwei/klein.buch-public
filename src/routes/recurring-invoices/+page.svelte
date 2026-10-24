@@ -200,7 +200,7 @@
     {/if}
   </div>
 
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr>
         <th>Vorlage</th>
@@ -215,15 +215,15 @@
         {@const due = dueBadge(s)}
         {@const mode = modeBadge(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
-          <td>
+          <td class="cards-full" data-label="Vorlage">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {contactNames[s.contactId] ?? "—"}
               {#if s.active !== 1}<Badge tone="neutral">pausiert</Badge>{/if}
             </div>
           </td>
-          <td class="muted-cell">{rhythm(s)}</td>
-          <td>
+          <td class="muted-cell" data-label="Rhythmus">{rhythm(s)}</td>
+          <td data-label="Nächste Fälligkeit">
             {#if s.active === 1}
               <span class="due-cell">
                 {date(s.nextDueDate)}
@@ -233,7 +233,7 @@
               <span class="muted-cell">—</span>
             {/if}
           </td>
-          <td><Badge tone={mode.tone}>{mode.label}</Badge></td>
+          <td data-label="Modus"><Badge tone={mode.tone}>{mode.label}</Badge></td>
           <td class="actions">
             <div class="act-row">
               {#if s.active === 1}
@@ -275,4 +275,9 @@
   .empty { text-align: center; padding: 2.5rem 1rem; color: var(--c-text-muted); background: var(--c-surface); border: 1px dashed var(--c-border-strong); border-radius: var(--r-lg); }
   .empty p { margin: 0 0 1rem; }
   .muted { color: var(--c-text-muted); }
+  /* W10: In der Karten-Ansicht dürfen die Aktions-Buttons umbrechen. */
+  @media (max-width: 820px) {
+    td.actions { white-space: normal; }
+    .act-row { min-width: 0; }
+  }
 </style>

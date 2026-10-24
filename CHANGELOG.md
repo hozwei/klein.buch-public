@@ -253,6 +253,11 @@ Arbeitszweig `phase-w`.
   einen Proxy auf den lokalen Server.
 - Backup-Protokoll: Auslöser „Täglich (automatisch)“ statt „Täglich
   (App-Start)“ (der Tageslauf kommt seit W2 aus dem Scheduler). (W9)
+- **Auf dem Smartphone bedienbar (W10):** Navigation als ausklappbares Menü,
+  Listen und Positionen als Karten, einspaltige Formulare, größere Schaltflächen
+  (mind. 44 px), Meldungen unten. PDFs öffnen auf dem Handy in der PDF-Ansicht
+  des Browsers; Belege lassen sich direkt mit der Kamera fotografieren. Geprüft
+  auf allen Seiten bei 390, 768 und 1280 px Breite.
 
 ### Documentation
 

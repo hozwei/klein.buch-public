@@ -132,6 +132,7 @@
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .who { margin: 0 0 1rem; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .info-cell { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; justify-content: center; }

@@ -72,7 +72,7 @@
 {:else if contacts.length === 0}
   <p class="muted">Keine Kontakte gefunden.</p>
 {:else}
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr>
         <th>Name</th>
@@ -86,14 +86,14 @@
     <tbody>
       {#each contacts as c (c.id)}
         <tr class:archived={c.archived === 1}>
-          <td>
+          <td data-label="Name">
             <a href={`/contacts/${c.id}`}>{c.name}</a>
             {#if c.archived === 1}<Badge tone="warning">archiviert</Badge>{/if}
           </td>
-          <td>{typeLabel(c.contactType)}</td>
-          <td>{c.postalCode ?? ""} {c.city ?? ""}</td>
-          <td>{c.vatId ?? "—"}</td>
-          <td>{c.email ?? "—"}</td>
+          <td data-label="Typ">{typeLabel(c.contactType)}</td>
+          <td data-label="Ort">{c.postalCode ?? ""} {c.city ?? ""}</td>
+          <td data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
+          <td data-label="E-Mail">{c.email ?? "—"}</td>
           <td class="right"><Button variant="secondary" size="sm" href={`/contacts/${c.id}`}>Öffnen</Button></td>
         </tr>
       {/each}
@@ -109,9 +109,10 @@
     margin-bottom: 1rem;
     flex-wrap: wrap;
   }
-  .search { flex: 1; min-width: 14rem; }
+  .search { flex: 1; min-width: 14rem; max-width: 100%; }
   .chk { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; color: var(--c-text-muted); }
   td.right { text-align: right; }
+  @media (max-width: 820px) { td { overflow-wrap: anywhere; } }
   tr.archived td { color: var(--c-text-subtle); }
   .muted { color: var(--c-text-muted); }
 </style>

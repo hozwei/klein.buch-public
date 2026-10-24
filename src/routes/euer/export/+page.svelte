@@ -315,14 +315,14 @@
   <!-- 1. Anlage EÜR (Formularzeilen) -->
   <section class="card">
     <h2>Anlage EÜR — zum Übertragen ins ELSTER-Formular</h2>
-    <table>
+    <table class="cards">
       <thead><tr><th class="z">Zeile</th><th>Position</th><th class="num">Betrag</th></tr></thead>
       <tbody>
         {#each entryLines as l (l.zeile + l.bezeichnung)}
           <tr>
-            <td class="z">{l.zeile === 0 ? "—" : l.zeile}</td>
-            <td>{l.bezeichnung}</td>
-            <td class="num">{euro(l.amountCents)}</td>
+            <td class="z" data-label="Zeile">{l.zeile === 0 ? "—" : l.zeile}</td>
+            <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
+            <td class="num" data-label="Betrag">{euro(l.amountCents)}</td>
           </tr>
         {/each}
         {#if entryLines.length === 0}
@@ -332,9 +332,9 @@
       <tfoot>
         {#each sumLines as l (l.bezeichnung)}
           <tr class="sum">
-            <td class="z">{l.zeile === 0 ? "—" : l.zeile}</td>
-            <td>{l.bezeichnung}</td>
-            <td class="num">{euro(l.amountCents)}</td>
+            <td class="z" data-label="Zeile">{l.zeile === 0 ? "—" : l.zeile}</td>
+            <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
+            <td class="num" data-label="Summe">{euro(l.amountCents)}</td>
           </tr>
         {/each}
       </tfoot>
@@ -347,7 +347,7 @@
     {#if pkg.assets.length === 0}
       <p class="muted">Keine Anlagegüter im Geschäftsjahr.</p>
     {:else}
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th class="z">AV-Nr.</th><th>Bezeichnung</th><th>Anschaffung</th>
@@ -358,13 +358,13 @@
         <tbody>
           {#each pkg.assets as a (a.assetNumber)}
             <tr>
-              <td class="z">{a.assetNumber}</td>
-              <td>{a.label}{#if a.disposedInYear}<span class="tag">Abgang {a.disposalDate}</span>{/if}</td>
-              <td>{a.acquisitionDate}</td>
-              <td class="num">{euro(a.acquisitionCostCents)}</td>
-              <td>{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted"> · {a.businessSharePercent}% betr.</span>{/if}</td>
-              <td class="num">{euro(a.afaYearCents)}</td>
-              <td class="num">{euro(a.bookValueEndCents)}</td>
+              <td class="z" data-label="AV-Nr.">{a.assetNumber}</td>
+              <td data-label="Bezeichnung">{a.label}{#if a.disposedInYear}<span class="tag">Abgang {a.disposalDate}</span>{/if}</td>
+              <td data-label="Anschaffung">{a.acquisitionDate}</td>
+              <td class="num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
+              <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted"> · {a.businessSharePercent}% betr.</span>{/if}</td>
+              <td class="num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
+              <td class="num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -378,29 +378,29 @@
     {#if pkg.income.length === 0 && pkg.storno.length === 0}
       <p class="muted">Keine Zahlungseingänge im Geschäftsjahr.</p>
     {:else}
-      <table>
+      <table class="cards">
         <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
         <tbody>
           {#each pkg.income as i (i.invoiceNumber + i.paidDate + i.amountCents)}
             <tr>
-              <td>{i.paidDate}</td><td>{i.invoiceNumber}</td><td>{i.customer}</td>
-              <td>{i.description}</td>
-              <td class="num">{euro(i.amountCents)}</td>
+              <td data-label="Datum">{i.paidDate}</td><td data-label="Rechnungsnr.">{i.invoiceNumber}</td><td data-label="Kunde">{i.customer}</td>
+              <td class="cards-full" data-label="Beschreibung">{i.description}</td>
+              <td class="num" data-label="Betrag">{euro(i.amountCents)}</td>
             </tr>
           {/each}
           {#each pkg.storno as s (s.stornoNumber)}
             <tr class="reduce">
-              <td>{s.stornoDate}</td><td>{s.stornoNumber}</td>
-              <td>Storno zu {s.originalNumber}</td>
-              <td>—</td>
-              <td class="num">−{euro(s.refundedCents)}</td>
+              <td data-label="Datum">{s.stornoDate}</td><td data-label="Rechnungsnr.">{s.stornoNumber}</td>
+              <td data-label="Kunde">Storno zu {s.originalNumber}</td>
+              <td data-label="Beschreibung">—</td>
+              <td class="num" data-label="Betrag">−{euro(s.refundedCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum">
-            <td colspan="4">Summe Zahlungseingänge</td>
-            <td class="num">{euro(incomeSum)}</td>
+            <td colspan="4" class="cards-full">Summe Zahlungseingänge</td>
+            <td class="num" data-label="Summe">{euro(incomeSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -413,22 +413,22 @@
     {#if pkg.expenses.length === 0}
       <p class="muted">Keine bezahlten Kosten im Geschäftsjahr.</p>
     {:else}
-      <table>
+      <table class="cards">
         <thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Lieferant</th><th>Kategorie</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
         <tbody>
           {#each pkg.expenses as e (e.expenseNumber)}
             <tr>
-              <td>{e.paidDate}</td><td>{e.expenseNumber}</td><td>{e.vendor}</td>
-              <td>{expenseCategoryLabel(e.category)}</td>
-              <td>{e.description}</td>
-              <td class="num">{euro(e.grossCents)}</td>
+              <td data-label="Datum">{e.paidDate}</td><td data-label="Beleg-Nr.">{e.expenseNumber}</td><td data-label="Lieferant">{e.vendor}</td>
+              <td data-label="Kategorie">{expenseCategoryLabel(e.category)}</td>
+              <td class="cards-full" data-label="Beschreibung">{e.description}</td>
+              <td class="num" data-label="Betrag">{euro(e.grossCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum">
-            <td colspan="5">Summe Betriebsausgaben (Kosten)</td>
-            <td class="num">{euro(expenseSum)}</td>
+            <td colspan="5" class="cards-full">Summe Betriebsausgaben (Kosten)</td>
+            <td class="num" data-label="Summe">{euro(expenseSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -439,15 +439,15 @@
   {#if pkg.disposals.length > 0}
     <section class="card">
       <h2>Anlagen-Veräußerungen</h2>
-      <table>
+      <table class="cards">
         <thead><tr><th>Datum</th><th>AV-Nr.</th><th>Bezeichnung</th><th class="num">Erlös</th><th class="num">Restwert</th><th class="num">Gewinn/Verlust</th></tr></thead>
         <tbody>
           {#each pkg.disposals as d (d.assetNumber)}
             <tr>
-              <td>{d.disposalDate}</td><td class="z">{d.assetNumber}</td><td>{d.label}</td>
-              <td class="num">{euro(d.proceedsCents)}</td>
-              <td class="num">{euro(d.residualBookValueCents)}</td>
-              <td class="num">{euro(d.gainLossCents)}</td>
+              <td data-label="Datum">{d.disposalDate}</td><td class="z" data-label="AV-Nr.">{d.assetNumber}</td><td data-label="Bezeichnung">{d.label}</td>
+              <td class="num" data-label="Erlös">{euro(d.proceedsCents)}</td>
+              <td class="num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
+              <td class="num" data-label="Gewinn/Verlust">{euro(d.gainLossCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -474,12 +474,13 @@
   th, td { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--c-border); font-size: 0.88rem; text-align: left; vertical-align: top; }
   th { color: var(--c-text-subtle); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
   .z { width: 5.5rem; color: var(--c-text-muted); font-variant-numeric: tabular-nums; }
+  @media (max-width: 820px) { td.z { width: auto; } }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   tr.reduce td { color: var(--c-danger-700); }
   tfoot tr.sum td { border-top: 2px solid var(--c-border-strong); border-bottom: none; padding-top: 0.55rem; font-weight: 600; color: var(--c-text); }
   .tag { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.4rem; background: var(--c-warning-50); border: 1px solid #f3dcae; border-radius: var(--r-sm); font-size: 0.7rem; color: var(--c-warning-700); }
   .export .exp-row { display: flex; gap: 0.6rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  .export .exp-label { flex: 1; min-width: 18rem; font-weight: 600; font-size: 0.9rem; align-self: center; }
+  .export .exp-label { flex: 1; min-width: min(18rem, 100%); font-weight: 600; font-size: 0.9rem; align-self: center; }
   .export label { font-weight: 600; font-size: 0.8rem; display: block; }
   .export label.skr { flex: 0 0 auto; min-width: 0; }
   .export label.skr select {

@@ -218,14 +218,28 @@
         deine Buchung korrekt ist (im Zweifel Steuerberater fragen).
       </p>
     {/if}
-    <label class="span2">
-      Beleg (PDF/Bild, optional)
-      <input
-        type="file"
-        accept="application/pdf,image/*"
-        onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
-      />
-    </label>
+    <div class="span2 receipt">
+      <label>
+        Beleg (PDF/Bild, optional)
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+      </label>
+      <!-- Plan W10: auf dem Smartphone direkt die Kamera öffnen -->
+      <label class="btn-secondary camera">
+        Beleg fotografieren
+        <input
+          class="visually-hidden"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onchange={(e) => (receiptFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+      </label>
+      {#if receiptFile}<span class="receipt-name">Ausgewählt: {receiptFile.name}</span>{/if}
+    </div>
     <label class="span2">
       Notiz (optional)
       <textarea rows="2" bind:value={notes}></textarea>
@@ -237,6 +251,12 @@
 <style>
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .receipt { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; }
+  .receipt > label:first-child { flex: 1 1 16rem; }
+  label.camera { flex-direction: row; min-height: 44px; cursor: pointer; }
+  .receipt-name { flex-basis: 100%; font-size: 0.82rem; color: #4b5563; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .lbl-hint { font-weight: 400; color: #9ca3af; font-size: 0.78rem; }

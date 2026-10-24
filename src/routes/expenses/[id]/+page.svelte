@@ -323,9 +323,10 @@
   dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin: 0; }
   dl div { display: flex; flex-direction: column; }
   dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; }
+  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
   .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; }
+  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; max-width: 100%; }
   .pay-grid { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
   .pay-grid label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .pay-grid input, .pay-grid select { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }

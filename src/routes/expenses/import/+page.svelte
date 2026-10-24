@@ -337,6 +337,7 @@
   /* .caveat / .card entfernt — globale Definitionen aus tokens.css. */
   .src { font-size: 0.85rem; color: #4b5563; margin: 0.25rem 0 0.75rem; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
   .lbl-hint { font-weight: 400; color: #9ca3af; font-size: 0.78rem; }
@@ -345,13 +346,13 @@
   input, select, textarea { padding: 0.45rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
   input.ro { background: #f3f4f6; font-weight: 600; }
   .hint { font-size: 0.82rem; color: #3730a3; background: #eef2ff; border: 1px solid #c7d2fe; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0; }
-  .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   button:disabled { opacity: 0.6; cursor: not-allowed; }
   .findings { font-size: 0.85rem; margin: 0 0 1rem; }
   .findings summary { cursor: pointer; color: #4b5563; }
   .findings ul { margin: 0.5rem 0 0; padding-left: 1rem; }
-  .findings li { margin: 0.25rem 0; line-height: 1.4; }
+  .findings li { margin: 0.25rem 0; line-height: 1.4; overflow-wrap: anywhere; }
   .findings code { background: #f3f4f6; padding: 0 0.25rem; border-radius: 3px; font-size: 0.8rem; }
   .sev { font-size: 0.72rem; padding: 0.05rem 0.4rem; border-radius: 3px; margin-right: 0.3rem; }
   .sev-error { background: #fee2e2; color: #991b1b; }

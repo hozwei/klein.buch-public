@@ -153,7 +153,7 @@
     {/if}
   </div>
 
-  <table class="kb-table">
+  <table class="kb-table cards">
     <thead>
       <tr>
         <th>Abo</th>
@@ -168,7 +168,7 @@
       {#each subs as s (s.id)}
         {@const due = dueBadge(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
-          <td>
+          <td class="cards-full" data-label="Abo">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {expenseCategoryLabel(s.category)}
@@ -176,8 +176,8 @@
               {#if s.active !== 1}<Badge tone="neutral">pausiert</Badge>{/if}
             </div>
           </td>
-          <td class="muted-cell">{rhythm(s)}</td>
-          <td>
+          <td class="muted-cell" data-label="Rhythmus">{rhythm(s)}</td>
+          <td data-label="Nächste Fälligkeit">
             {#if s.active === 1}
               <span class="due-cell">
                 {date(s.nextDueDate)}
@@ -187,8 +187,8 @@
               <span class="muted-cell">—</span>
             {/if}
           </td>
-          <td class="num">{euro(s.expectedAmountCents)}</td>
-          <td>
+          <td class="num" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
+          <td data-label="Modus">
             {#if s.autoCreateExpense === 1}
               <Badge tone="info">Automatisch</Badge>
             {:else}

@@ -55,6 +55,18 @@
         >
       </header>
       <iframe class="body" src={pdfPreviewStore.url} title={pdfPreviewStore.title}></iframe>
+      <!-- Plan W10: Mobile Browser zeigen PDFs im iframe nicht (Android) oder
+           nur die erste Seite (iOS) — dort öffnet die PDF-Ansicht des Browsers. -->
+      <div class="mobile-open">
+        <p>Die PDF-Datei öffnet sich in der PDF-Ansicht deines Browsers.</p>
+        <a
+          class="btn-primary"
+          href={pdfPreviewStore.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-sveltekit-reload>PDF öffnen</a
+        >
+      </div>
       <footer>
         <a
           class="btn-secondary btn-sm"
@@ -143,5 +155,39 @@
   }
   footer a {
     text-decoration: none;
+  }
+  .mobile-open {
+    display: none;
+  }
+  @media (max-width: 600px) {
+    .backdrop {
+      padding: 0;
+    }
+    .dialog {
+      width: 100%;
+      height: 100dvh;
+      border-radius: 0;
+    }
+    .body {
+      display: none;
+    }
+    .mobile-open {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      padding: 1.5rem;
+      text-align: center;
+      color: var(--c-text-muted);
+    }
+    .close {
+      min-width: 44px;
+      min-height: 44px;
+    }
+    footer {
+      flex-wrap: wrap;
+    }
   }
 </style>

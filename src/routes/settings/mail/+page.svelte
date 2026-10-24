@@ -293,7 +293,7 @@
   {:else if accounts.length === 0}
     <p class="muted">Noch kein Postfach eingerichtet.</p>
   {:else}
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>Bezeichnung</th>
@@ -308,24 +308,24 @@
       <tbody>
         {#each accounts as a (a.id)}
           <tr class:editing={editingId === a.id}>
-            <td>{a.label}</td>
-            <td>{a.fromName} &lt;{a.fromEmail}&gt;</td>
-            <td>
+            <td data-label="Bezeichnung">{a.label}</td>
+            <td class="cards-full" data-label="Absender">{a.fromName} &lt;{a.fromEmail}&gt;</td>
+            <td data-label="Typ">
               {#if a.authType === "smtp_password"}
                 SMTP ({a.smtpHost ?? "—"}:{a.smtpPort ?? "—"})
               {:else}
                 Microsoft 365
               {/if}
             </td>
-            <td>
+            <td data-label="Verbindung">
               {#if a.authType === "smtp_password"}
                 {a.smtpUseTls === 1 ? "verschlüsselt" : "unverschlüsselt"}
               {:else}
                 <span class="status-warn">im Server-Betrieb nicht verfügbar</span>
               {/if}
             </td>
-            <td>{a.isDefault === 1 ? "★" : ""}</td>
-            <td>{date(a.lastUsedAt)}</td>
+            <td data-label="Standard">{a.isDefault === 1 ? "★" : ""}</td>
+            <td data-label="Zuletzt genutzt">{date(a.lastUsedAt)}</td>
             <td class="row-actions">
               {#if a.authType === "smtp_password"}
                 <button class="link" onclick={() => testSaved(a)} disabled={testingId === a.id}>
@@ -461,12 +461,12 @@
 
 <style>
   /* .card entfernt — globale Definition aus tokens.css. */
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem 1rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 0.75rem 1rem; }
   label { display: flex; flex-direction: column; font-size: 0.85rem; color: #374151; gap: 0.25rem; }
   input[type="text"], input[type="email"], input[type="password"], input[type="number"] {
     padding: 0.45rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem;
   }
-  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
@@ -476,7 +476,7 @@
   .testmail { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
   .testmail-label { font-size: 0.9rem; color: #374151; font-weight: 600; }
   .testmail input[type="email"], .testmail select {
-    padding: 0.45rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; min-width: 16rem;
+    padding: 0.45rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; min-width: 16rem; max-width: 100%;
   }
   .testmail select { min-width: 10rem; }
   .hint { font-size: 0.8rem; margin: 0.4rem 0 0; }
@@ -485,4 +485,7 @@
   .link.danger { color: #b91c1c; }
   .link:disabled { opacity: 0.6; cursor: not-allowed; }
   .muted { color: #6b7280; }
+  @media (max-width: 820px) {
+    td { overflow-wrap: anywhere; }
+  }
 </style>

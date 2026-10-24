@@ -18,6 +18,14 @@
   import { formatVersionDisplay } from "$lib/version";
   let { children } = $props();
 
+  // Plan W10: Unter 900 px ist die Navigation ein Drawer (Menü-Knopf in der
+  // oberen Leiste); er schließt sich bei jedem Seitenwechsel und mit Escape.
+  let navOpen = $state(false);
+  $effect(() => {
+    $page.url.pathname;
+    navOpen = false;
+  });
+
   // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
   let unread = $state(0);
   async function refreshUnread() {
@@ -175,6 +183,10 @@
     return false;
   }
   function onWindowKeydown(ev: KeyboardEvent): void {
+    if (ev.key === "Escape" && navOpen) {
+      navOpen = false;
+      return;
+    }
     if (ev.key !== "F1") return;
     if (isEditableTarget(ev.target)) return;
     // Modifikatoren ignorieren — Ctrl+F1 / Shift+F1 sind nicht „unser" F1.
@@ -205,7 +217,39 @@
   <!-- R5-014: `inert` solange ein Modal offen ist — Tab kann nicht aus dem
        Modal in die Sidebar springen. `|| undefined` weil Svelte `inert=false`
        sonst als String-Attribut rendert, was die a11y-Semantik invertiert. -->
-  <nav class="sidebar" inert={modalStack.count > 0 || undefined}>
+  <header class="mobilebar" inert={modalStack.count > 0 || undefined}>
+    <button
+      type="button"
+      class="menu-toggle"
+      aria-label={navOpen ? "Menü schließen" : "Menü öffnen"}
+      aria-expanded={navOpen}
+      aria-controls="app-nav"
+      onclick={() => (navOpen = !navOpen)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        aria-hidden="true"
+        ><path d="M4 7h16M4 12h16M4 17h16" /></svg
+      >
+      {#if unread > 0}<span class="nav-badge menu-badge">{unread}</span>{/if}
+    </button>
+    <a class="mobile-brand" href="/">Klein.Buch</a>
+  </header>
+  {#if navOpen}
+    <!-- Schließt den Drawer per Tipp daneben (Tastatur: Escape). -->
+    <button
+      type="button"
+      class="nav-backdrop"
+      aria-label="Menü schließen"
+      tabindex="-1"
+      onclick={() => (navOpen = false)}
+    ></button>
+  {/if}
+  <nav id="app-nav" class="sidebar" class:open={navOpen} inert={modalStack.count > 0 || undefined}>
     <ul>
       {#each nav as item}
         <li class:active={isActive($page.url.pathname, item.href)}>
@@ -431,6 +475,93 @@
   /* … außer die sticky PageBar, die soll bündig oben sitzen. */
   main > :global(.pagebar) {
     margin-top: 0;
+  }
+
+  /* --- Mobil / schmale Fenster (Plan W10) --------------------------------
+     Unter 900 px: obere Leiste mit Menü-Knopf, Navigation als Drawer von
+     links, Inhalt scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). */
+  .mobilebar {
+    display: none;
+  }
+  @media (max-width: 900px) {
+    :global(body) {
+      display: block;
+    }
+    .mobilebar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      height: var(--mobilebar-h);
+      padding: 0 0.5rem;
+      background: var(--c-primary-800);
+      color: #fff;
+    }
+    .menu-toggle {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 0;
+      border-radius: var(--r-md);
+      color: inherit;
+      cursor: pointer;
+    }
+    .menu-toggle svg {
+      width: 24px;
+      height: 24px;
+    }
+    .menu-badge {
+      position: absolute;
+      top: 4px;
+      right: 2px;
+    }
+    .mobile-brand {
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .nav-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      border: 0;
+      padding: 0;
+      background: rgba(10, 25, 32, 0.4);
+    }
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 50;
+      width: min(280px, 85vw);
+      height: 100dvh;
+      transform: translateX(-100%);
+      visibility: hidden;
+      transition:
+        transform var(--t-base) var(--ease-apple),
+        visibility 0s linear var(--t-base);
+    }
+    .sidebar.open {
+      transform: none;
+      visibility: visible;
+      box-shadow: var(--sh-xl);
+      transition: transform var(--t-base) var(--ease-apple);
+    }
+    .sidebar a,
+    .sidebar .nav-button {
+      min-height: 44px;
+    }
+    main {
+      height: auto;
+      min-height: calc(100dvh - var(--mobilebar-h));
+      overflow: visible;
+    }
   }
 
   /* --- Druck (G2-DOC.3.4) -----------------------------------------------

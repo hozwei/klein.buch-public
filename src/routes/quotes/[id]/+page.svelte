@@ -418,7 +418,7 @@
 
   <section class="card">
     <h2>Positionen</h2>
-    <table>
+    <table class="cards">
       <thead>
         <tr>
           <th>#</th>
@@ -436,29 +436,29 @@
       <tbody>
         {#each detail.items as it (it.id)}
           <tr>
-            <td>{it.position}</td>
-            <td>{it.description}</td>
-            <td class="right">{it.quantity}</td>
-            <td>{it.unitCode}</td>
-            <td class="right">{euro(it.unitPriceCents)}</td>
+            <td data-label="Pos.">{it.position}</td>
+            <td class="cards-full" data-label="Beschreibung">{it.description}</td>
+            <td class="right" data-label="Menge">{it.quantity}</td>
+            <td data-label="Einheit">{it.unitCode}</td>
+            <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
             {#if q.isKleinunternehmer === 0}
-              <td class="right">{it.taxRatePercent}</td>
-              <td>{it.taxCategoryCode}</td>
+              <td class="right" data-label="USt %">{it.taxRatePercent}</td>
+              <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
-            <td class="right">{euro(it.netAmountCents)}</td>
+            <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
           </tr>
         {/each}
       </tbody>
       <tfoot>
-        <tr><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">Netto</td>
-            <td class="right">{euro(q.netAmountCents)}</td></tr>
+        <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
+            <td class="right" data-label="Netto">{euro(q.netAmountCents)}</td></tr>
         {#if q.taxAmountCents !== 0}
-          <tr><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">USt</td>
-              <td class="right">{euro(q.taxAmountCents)}</td></tr>
+          <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
+              <td class="right" data-label="USt">{euro(q.taxAmountCents)}</td></tr>
         {/if}
-        <tr class="grand"><td colspan={q.isKleinunternehmer === 1 ? 6 : 8} class="right">
+        <tr class="grand"><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
               <strong>Brutto</strong></td>
-            <td class="right"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
+            <td class="right" data-label="Brutto"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
       </tfoot>
     </table>
   </section>
@@ -514,7 +514,7 @@
   {#if sendLog.length > 0}
     <section class="card">
       <h2>Versand-Historie</h2>
-      <table>
+      <table class="cards">
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -527,11 +527,11 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td>{fmtLogTime(e.createdAt)}</td>
-              <td>{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
-              <td>{e.toEmail}</td>
-              <td>{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
-              <td>
+              <td data-label="Zeitpunkt">{fmtLogTime(e.createdAt)}</td>
+              <td data-label="Status">{e.status === "success" ? "✓ versendet" : "✗ fehlgeschlagen"}</td>
+              <td data-label="Empfänger">{e.toEmail}</td>
+              <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
+              <td class="cards-full" data-label="Antwort des Anbieters">
                 {#if e.status === "success"}
                   {[e.providerCode, e.providerMessage].filter(Boolean).join(" ")}
                   {#if e.requestId}<br /><small class="muted">request-id: {e.requestId}</small>{/if}
@@ -564,11 +564,11 @@
   .accept-panel { border-left: 4px solid #2563eb; }
   .cancel-panel { border-left: 4px solid #ef4444; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; }
+  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; min-width: 0; }
   label.block { width: 100%; }
   input, textarea { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
-  .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+  .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
   dl { display: grid; grid-template-columns: 7rem 1fr; gap: 0.25rem 0.75rem; }
   dt { color: #6b7280; font-size: 0.85rem; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
@@ -580,6 +580,7 @@
   .klein-note { color: #1e40af; font-size: 0.85rem; }
   .att { list-style: none; padding: 0; margin: 0; }
   .att li { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
+  .att-info { min-width: 0; overflow-wrap: anywhere; }
   .att-actions { display: flex; gap: 0.4rem; }
   /* .btn-sm entfernt — Buttons app-weit gleich groß (Manuel-Hardline 2026-05-26). */
   .status { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
@@ -596,4 +597,10 @@
   .muted { color: #6b7280; }
   .err { color: #b91c1c; }
   .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
+  /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
+     Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
+  @media (max-width: 820px) {
+    td.sum-label { display: none; }
+    td { overflow-wrap: anywhere; }
+  }
 </style>

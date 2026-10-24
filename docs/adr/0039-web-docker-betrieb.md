@@ -759,6 +759,27 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     explizit). Bestehende Zeitstempel werden nicht korrigiert (GoBD, E17). Test:
     `server_binary_test` startet das Binary mit `TZ=Europe/Berlin` und prüft
     `audit_log.timestamp_utc` gegen die UTC-Uhr; `kb-gate` und README: Tests mit `TZ=UTC` wie CI.
+95. **Responsiv (W10).** Bruchstellen 900 px (Navigation als Drawer mit Menüknopf in einer
+    klebenden Leiste, Dokument- statt `main`-Scroll, schmalere Ränder, Eingaben 16 px gegen den
+    iOS-Zoom), 820 px (Tabellen als Karten; Handy und Tablet hochkant) und 600 px (einspaltige Formulare, PageBar nicht
+    klebend, Toasts unten, PDF-Dialog vollflächig). Zentrale Bausteine in `tokens.css`:
+    `table.cards` mit `data-label` je Zelle (Label als float, Inhalt rechtsbündig im Textfluss,
+    `td.cards-full` für lange Texte/Beschreibungs-Eingaben), Tabellen außerhalb von Karten
+    scrollen in sich, Labels dürfen schrumpfen (lange Auswahltexte). Touch-Ziele: primäre Buttons
+    überall ≥ 44 × 44 px, auf Touch-Geräten und unter 900 px alle Aktions-Buttons ≥ 44 px hoch.
+    Angewendet auf 38 Seiten (Workflow mit 4 Agenten, getrennte Dateigruppen, keine Builds;
+    Prüfung, Messung und Korrekturen danach zentral).
+96. **PDF und Fotobeleg mobil (W10).** Mobile Browser zeigen PDFs im iframe nicht (Android) oder
+    nur die erste Seite (iOS): unter 600 px zeigt der PDF-Dialog statt des iframes „PDF öffnen“
+    (Ansicht des Browsers) und „Herunterladen“. Die Kostenerfassung hat neben der Dateiauswahl
+    „Beleg fotografieren“ (`accept="image/*" capture="environment"`); iOS liefert dabei JPEG,
+    das der Upload (Art `beleg`) annimmt. `viewport-fit=cover`, `theme-color`, `lang="de"`.
+97. **Messung (W10).** Playwright über alle 54 Routen bei 390×844, 768×1024 und 1280×800 mit
+    Testdaten: Dokument und `main` ohne seitlichen Überlauf, keine überstehenden Elemente
+    außerhalb eigener Scroll-Container, primäre Buttons ≥ 44 px, keine Konsolenfehler,
+    Screenshots unter `/data/test/Buchhaltung/arbeit/screens/w10`; zusätzlich als Information
+    die Bereiche, die in sich seitlich scrollen. Kernabläufe als E2E bei 390×844 mit Touch
+    (`isMobile`). Echte Geräte prüft Manuel nach W14.
 
 ## Konsequenzen
 
