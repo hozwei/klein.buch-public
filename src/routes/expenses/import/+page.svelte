@@ -22,6 +22,7 @@
   import { euro } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import Banner from "#lib/Banner.svelte";
+  import { REVERSE_CHARGE_13B_HINT, reverseChargeTaxError } from "#lib/tax.ts";
 
   // Phasen: Datei wählen → Vorschau prüfen.
   let phase = $state<"select" | "review">("select");
@@ -135,6 +136,11 @@
     }
     if (grossCents <= 0) {
       flash("Betrag muss größer als 0 sein.", "error");
+      return;
+    }
+    const rcError = reverseChargeTaxError(reverseCharge13b, Math.round(taxEuros * 100));
+    if (rcError) {
+      flash(rcError, "error");
       return;
     }
     busy = true;
@@ -316,6 +322,9 @@
         <input type="checkbox" bind:checked={reverseCharge13b} />
         §13b Reverse-Charge (Steuerschuldnerschaft des Leistungsempfängers)
       </label>
+      {#if reverseCharge13b}
+        <p class="hint span2">{REVERSE_CHARGE_13B_HINT}</p>
+      {/if}
       <label class="span2">
         Notiz (optional)
         <textarea rows="2" bind:value={notes}></textarea>

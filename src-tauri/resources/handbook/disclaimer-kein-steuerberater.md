@@ -46,8 +46,10 @@ besondere Lage ab.
    beachten oder auf das nächste Klein.Buch-Update warten.
 3. Internationale Geschäfte (innergemeinschaftliche Lieferungen,
    Reverse Charge, Drittland-Lieferungen) sind in Version 1.0
-   nicht abgebildet. Wenn Du solche Geschäfte hast, brauchst Du
-   ergänzende Beratung.
+   nicht abgebildet. Eingangsrechnungen nach §13b UStG kann
+   Klein.Buch markieren, die Steuer berechnet und meldet es aber
+   nicht. Wenn Du solche Geschäfte hast, brauchst Du ergänzende
+   Beratung.
 4. Personalwesen (Lohnabrechnungen, Sozialabgaben) ist nicht Teil
    von Klein.Buch.
 
@@ -85,4 +87,4 @@ die professionelle Einschätzung in nicht-trivialen Fällen.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

@@ -65,3 +65,10 @@ Container gibt es keinen OS-Keychain (kein Secret-Service, keine Desktop-Anmeldu
   für gespeicherte Konten nur per ID; `use_tls=false` nur ohne Zugangsdaten.
 - **Nur SMTP:** OAuth/MS-Graph (ADR 0028) ist im Server-Betrieb ausgeblendet.
 - Passwörter bleiben aus Logs und `audit_log` heraus (Backup-Hardline unverändert).
+
+## Amendment 2026-10-25 — Test-Mailserver Mailpit (Lauf F7a)
+
+Der SMTP-E2E-Test (`tests/e2e_test.rs`) läuft in CI gegen Mailpit
+(`axllent/mailpit`, per Digest gepinnt) statt MailHog, das seit Jahren keine
+Fassung mehr bekommt und ohne Tag und Digest eingebunden war (W14-021). Die
+Nennungen von MailHog oben sind historisch. Begründung: ADR 0039 Nr. 142 (1).

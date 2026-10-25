@@ -103,12 +103,12 @@ Repository `hozwei/klein.buch-public`.
 
 | Job | Schritte |
 |---|---|
-| `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst MailHog (SMTP 1025, API 8025) für den SMTP-E2E-Test. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
-| `frontend` | pnpm + Node 24; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); `pnpm build` mit Prüfung von `build/index.html` und `build/legal/js-licenses.json` (wie die Stufe `web`); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
+| `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst Mailpit (`axllent/mailpit` per Digest, SMTP 1025, API 8025; bis Lauf F7a MailHog) für den SMTP-E2E-Test `tests/e2e_test.rs`. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
+| `frontend` | pnpm + Node 24; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); `pnpm build` mit Prüfung von `build/index.html` und `build/legal/js-licenses.json` (wie die Stufe `web`) und Vergleich der Paketliste mit der Prüfliste der Lizenzseite in `image_smoke.sh`; `openapi_from_registry.py` (ZAP-Scan); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
 | `rust-supply-chain` | `cargo deny --locked check advisories licenses` (`src-tauri/deny.toml`); `cargo audit` über das ganze `Cargo.lock` mit denselben begründeten Ausnahmen |
-| `js-audit` | `pnpm audit --prod --audit-level high` |
+| `js-audit` | `pnpm audit --prod --audit-level high` und `pnpm audit --audit-level high` (mit Entwicklungsabhängigkeiten, blockierend; Lauf F7a, ADR 0039 Nr. 142 (5)); Ausnahmen nur über `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` mit Begründung und Ablaufdatum |
 | `secrets` | `gitleaks dir` über den Arbeitsbaum (Funde geschwärzt) |
-| `java-inventory` | `legal/check_java_inventory.py` (Java-Inventar ↔ JARs), `legal/check_base_images.py` (Basis-Images ↔ `versions.json`) |
+| `java-inventory` | `legal/check_java_inventory.py` (Java-Inventar ↔ JARs), `legal/check_base_images.py` (Basis-Images ↔ `versions.json`; dazu jedes Image der Workflows und CI-Skripte mit Digest, Lauf F7a) |
 
 Die Rust-Tests laufen mit dem Sidecar-Mock (`KLEIN_BUCH_SIDECAR_MOCK`, nur in
 Debug-Builds wirksam). Die echten Validator-Tests (`tests/sidecar_real_test.rs`,
@@ -151,12 +151,16 @@ mehr), `cargo clippy` erzeugt keinen Code und ist davon kaum betroffen.
    Seed-Manifest; über HTTP Einrichtung mit Setup-Token und TOTP, Festschreiben
    mit echtem KoSIT + Mustang (PDF/A-3), ZUGFeRD-Extraktion im Rechnungseingang,
    Ablehnung einer manipulierten XRechnung; Lizenz- und Quelldateien,
-   `/legal/`, `/api/public/info` mit dem Build-Commit.
-5. SBOM mit syft (SPDX-JSON).
-6. trivy: CRITICAL/HIGH mit verfügbarem Fix brechen ab; Ausnahmen begründet und
+   `/legal/` (Prüfliste der JS-Pakete), `/api/public/info` mit dem Build-Commit;
+   das Rechnungs-PDF geht nach `SMOKE_PDF_OUT`.
+5. PDF/A-3b mit veraPDF (R3-018, Lauf F7a): veraPDF 1.30.3 (Installer per SHA-256,
+   Java 21 des Runners) prüft das Rechnungs-PDF mit `--flavour 3b`; nicht konform
+   bricht ab, der Bericht kommt ins Artefakt. Nur im Trockenlauf.
+6. SBOM mit syft (SPDX-JSON).
+7. trivy: CRITICAL/HIGH mit verfügbarem Fix brechen ab; Ausnahmen begründet und
    befristet in `.trivyignore`.
-7. Quellarchiv „Quellen Dritter“ (`.github/scripts/build_sources_archive.sh`).
-8. SBOM und Quellarchiv als Workflow-Artefakt (14 Tage).
+8. Quellarchiv „Quellen Dritter“ (`.github/scripts/build_sources_archive.sh`).
+9. SBOM, veraPDF-Bericht und Quellarchiv als Workflow-Artefakt (14 Tage).
 
 ---
 
@@ -176,7 +180,8 @@ holt genau diesen Build, prüft dessen Digest gegen den geprüften Index und ver
    Tags mit Zusatz (z. B. `-rc.1`) ergeben kein Release.
 3. Build **ohne Cache** mit `pull: true`, SBOM- und Provenance-Attestierung,
    Build-Argumente mit Commit und Tag.
-4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf.
+4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf (ohne veraPDF:
+   der Stand von `main` ist vorher als `phase-w` geprüft).
 5. **Release zuerst** (Lauf E, ADR 0039 Nr. 123): `gh release create --verify-tag
    --latest` — veröffentlicht, kein Entwurf — mit Notizen (Einleitung des
    CHANGELOG-Abschnitts, Tag und Digest, Prüfbefehl, Quellen) und den Assets

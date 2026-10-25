@@ -440,13 +440,13 @@ mod tests {
     #[test]
     fn sftp_uri_format() {
         assert_eq!(
-            sftp_uri("kb", "host.de", 22, "backups/a.kbk"),
-            "sftp://kb@host.de:22/backups/a.kbk"
+            sftp_uri("kb", "backup.example.org", 22, "backups/a.kbk"),
+            "sftp://kb@backup.example.org:22/backups/a.kbk"
         );
         // Absoluter Remote-Pfad bekommt keinen doppelten Slash.
         assert_eq!(
-            sftp_uri("kb", "host.de", 2222, "/srv/a.kbk"),
-            "sftp://kb@host.de:2222/srv/a.kbk"
+            sftp_uri("kb", "backup.example.org", 2222, "/srv/a.kbk"),
+            "sftp://kb@backup.example.org:2222/srv/a.kbk"
         );
     }
 }

@@ -39,7 +39,7 @@ fn good_input(name: &str) -> ContactInput {
         postal_code: "84028".into(),
         city: "Landshut".into(),
         country_code: "DE".into(),
-        email: Some("info@beispiel.de".into()),
+        email: Some("info@beispiel.example.org".into()),
         phone: None,
         iban: None,
         bic: None,
@@ -90,40 +90,40 @@ async fn update_changes_fields_and_updated_at() {
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
     let mut input = good_input("Geändert");
-    input.email = Some("neu@beispiel.de".into());
+    input.email = Some("neu@beispiel.example.org".into());
     let updated = contacts::update(&pool, &c.id, &input).await.unwrap();
 
     assert_eq!(updated.name, "Geändert");
-    assert_eq!(updated.email.as_deref(), Some("neu@beispiel.de"));
+    assert_eq!(updated.email.as_deref(), Some("neu@beispiel.example.org"));
     assert_ne!(updated.updated_at, before_updated);
 }
 
 #[tokio::test]
 async fn search_finds_by_name_email_vatid_city_postal() {
     let (pool, _d) = setup_pool().await;
-    let mut input1 = good_input("Wildbach Computerhilfe");
-    input1.email = Some("info@wildbach.de".into());
+    let mut input1 = good_input("Beispiel IT-Service");
+    input1.email = Some("info@beispiel-it.example.org".into());
     input1.vat_id = Some("DE111111111".into());
     input1.city = "Landshut".into();
     input1.postal_code = "84028".into();
     contacts::create(&pool, &input1).await.unwrap();
 
     let mut input2 = good_input("Andere Firma");
-    input2.email = Some("kontakt@andere.de".into());
+    input2.email = Some("kontakt@andere.example.org".into());
     input2.vat_id = Some("DE222222222".into());
     input2.city = "München".into();
     input2.postal_code = "80331".into();
     contacts::create(&pool, &input2).await.unwrap();
 
     assert_eq!(
-        contacts::search(&pool, "wildbach", false)
+        contacts::search(&pool, "it-service", false)
             .await
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        contacts::search(&pool, "ANDERE.DE", false)
+        contacts::search(&pool, "ANDERE.EXAMPLE", false)
             .await
             .unwrap()
             .len(),

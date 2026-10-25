@@ -273,12 +273,16 @@ fn registry_source_matches_openapi_pattern() {
     assert!(found.len() >= 100, "Untergrenze des Skripts (100)");
 }
 
-/// Lauf F6-fix: `tools/veroeffentlichen/Veroeffentlichen.ps1` übernimmt keinen
-/// Pfad, in dem ein Ordner einen dieser Namen trägt (`$NamenAus`; bei Änderung
-/// dort hier nachziehen). Dateien, die Tests oder der Build lesen, dürfen daher
-/// nicht unter solchen Ordnern liegen — im öffentlichen CI fehlten sie sonst
-/// (so geschehen mit der App-Icon-Vorlage unter `docs/assets/logo/`).
-const PUBLISH_EXCLUDED_DIRS: &[&str] = &[
+/// Lauf F6-fix, vervollständigt in F7a: Nachbau des Veröffentlichungs-Filters
+/// `Ausgeschlossen` aus `tools/veroeffentlichen/Veroeffentlichen.ps1` (das Werkzeug
+/// selbst wird nicht veröffentlicht). Ein Pfadteil (Ordner oder Datei), der in
+/// `$NamenAus` steht oder auf ein Muster aus `$MusterAus` passt, wird samt Inhalt
+/// ausgelassen. PowerShell vergleicht dabei ohne Rücksicht auf Groß-/Kleinschreibung
+/// (`-contains`, `-like`). **Beide Listen bei jeder Änderung im Skript hier
+/// nachziehen.** Dateien, die Tests oder der Image-Build lesen, dürfen nicht
+/// darunter fallen — im öffentlichen CI fehlten sie sonst (so geschehen mit der
+/// App-Icon-Vorlage unter `docs/assets/logo/`).
+const PUBLISH_EXCLUDED_NAMES: &[&str] = &[
     ".git",
     "memory",
     "data",
@@ -291,23 +295,155 @@ const PUBLISH_EXCLUDED_DIRS: &[&str] = &[
     ".cache",
     ".idea",
     "logo",
+    "CLAUDE.md",
+    "TASKS.md",
+    "dashboard.html",
+    "PRD-klein-buch.md",
+    "REVIEW-LOG.md",
+    "REVIEW-V2026.5.md",
+    "RELEASE-1.0-GUIDE.md",
+    "QA-HANDBUCH.md",
 ];
+const PUBLISH_EXCLUDED_PATTERNS: &[&str] = &[
+    "HB-AUDIT*.md",
+    "*.db",
+    "*.sqlite*",
+    "*.bak",
+    "*.log",
+    "*.kbk",
+    ".env",
+    ".env.*",
+    ".~lock.*",
+    "~$*",
+    "*~",
+    "*.part",
+    "*.tmp",
+    "Thumbs.db",
+    ".DS_Store",
+    "desktop.ini",
+    ".sync_*.db*",
+    ".nextcloudsync.log",
+    ".owncloudsync.log",
+];
+
+/// PowerShell `-like` ohne Zeichenklassen (die Muster oben nutzen nur `*` und `?`),
+/// ohne Rücksicht auf Groß-/Kleinschreibung.
+fn like_ci(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let n: Vec<char> = name.to_lowercase().chars().collect();
+    let (mut pi, mut ni) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while ni < n.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
+fn publish_excluded(name: &str) -> bool {
+    PUBLISH_EXCLUDED_NAMES
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(name))
+        || PUBLISH_EXCLUDED_PATTERNS.iter().any(|m| like_ci(m, name))
+}
+
+#[test]
+fn publish_filter_replica_matches_script_semantics() {
+    for name in [
+        "logo",
+        "LOGO",
+        "Data",
+        "claude.md",
+        "a.DB",
+        "x.sqlite-wal",
+        "klein.sqlite",
+        "backup.KBK",
+        ".env.local",
+        "notiz.txt~",
+        "~$brief.docx",
+        ".~lock.a.ods#",
+        "HB-AUDIT-UI.md",
+        ".sync_abc.db-wal",
+        "server.log",
+    ] {
+        assert!(publish_excluded(name), "{name} müsste ausgeschlossen sein");
+    }
+    for name in [
+        "default.typ",
+        "logo-1024.png",
+        "database.rs",
+        "data-model.md",
+        "logos",
+        "builder.rs",
+        "README.md",
+        "versions.json",
+        "env.rs",
+        "out.rs.txt",
+    ] {
+        assert!(!publish_excluded(name), "{name} wird veröffentlicht");
+    }
+}
 
 #[test]
 fn files_read_by_tests_survive_publication() {
     let root = manifest_dir().join("..");
-    // Vom Test-Code über CARGO_MANIFEST_DIR gelesene Repo-Dateien
+    // Von Tests (CARGO_MANIFEST_DIR, include_str!) und vom Image-Build (COPY im
+    // Dockerfile) bzw. von CI-Schritten gelesene Dateien und Ordner
     for rel in [
         "docs/assets/app-icon/logo-1024.png",
         "docs/assets/app-icon/logo-1024.svg",
         "inputs/pdf-templates/default.typ",
+        "inputs/mail-templates/invoice-de.txt",
         "src/lib/api.ts",
         "compose.example.yaml",
+        "Dockerfile",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "vite.config.js",
+        "tsconfig.json",
+        "LICENSE",
+        "COPYRIGHT",
+        "THIRD-PARTY-NOTICES.md",
+        ".trivyignore",
+        "legal/build_legal.py",
+        "legal/legal.css",
+        "legal/check_base_images.py",
+        "legal/check_java_inventory.py",
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "src-tauri/rust-toolchain.toml",
+        "src-tauri/deny.toml",
+        "src-tauri/about.toml",
+        "src-tauri/about.hbs",
+        "src-tauri/migrations/0032_gobd_hardening.sql",
+        "src-tauri/src/server/passphrase_blocklist.txt",
+        "src-tauri/sidecar/versions.json",
+        "src-tauri/sidecar/klein-buch-java.sh",
+        "src-tauri/sidecar/THIRD-PARTY-JAVA.md",
+        "src-tauri/sidecar/lib/kosit-validator.jar",
+        "src-tauri/sidecar/lib/mustang.jar",
+        "src-tauri/sidecar/notices",
+        "src-tauri/sidecar/xrechnung-config",
+        "src-tauri/resources/handbook",
+        "static",
     ] {
-        assert!(root.join(rel).is_file(), "{rel} fehlt");
+        assert!(root.join(rel).exists(), "{rel} fehlt");
         for part in rel.split('/') {
             assert!(
-                !PUBLISH_EXCLUDED_DIRS.contains(&part),
+                !publish_excluded(part),
                 "{rel}: Pfadteil {part} wird nicht veröffentlicht"
             );
         }
@@ -316,20 +452,21 @@ fn files_read_by_tests_survive_publication() {
         !root.join("docs/assets/logo").exists(),
         "App-Icon-Vorlage liegt unter docs/assets/app-icon/ (Lauf F6-fix)"
     );
-    // Kein Ordner mit ausgeschlossenem Namen in den veröffentlichten Quellbäumen
-    fn walk(dir: &Path, hits: &mut Vec<String>) {
+    // Kein Ordner und keine Datei mit ausgeschlossenem Namen in den Bäumen, die
+    // Tests, Build oder CI ganz lesen (Fixtures, docs/assets, resources, inputs, …).
+    // In `docs/` liegen bewusst interne Dateien (z. B. `HB-AUDIT*.md`); dort nur Ordner.
+    fn walk(dir: &Path, dirs_only: bool, hits: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if PUBLISH_EXCLUDED_DIRS.contains(&name.as_str()) {
-                    hits.push(path.display().to_string());
-                } else {
-                    walk(&path, hits);
-                }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = path.is_dir();
+            if publish_excluded(&name) && (is_dir || !dirs_only) {
+                hits.push(path.display().to_string());
+            } else if is_dir {
+                walk(&path, dirs_only, hits);
             }
         }
     }
@@ -337,18 +474,44 @@ fn files_read_by_tests_survive_publication() {
     for tree in [
         "src-tauri/src",
         "src-tauri/tests",
-        "src-tauri/resources/handbook",
+        "src-tauri/resources",
         "src-tauri/migrations",
+        "src-tauri/sidecar/lib",
+        "src-tauri/sidecar/notices",
+        "src-tauri/sidecar/xrechnung-config",
         "inputs",
-        "docs",
+        "docs/assets",
         "static",
         "src",
         "legal",
     ] {
-        walk(&root.join(tree), &mut hits);
+        let dir = root.join(tree);
+        assert!(dir.is_dir(), "{tree} fehlt");
+        walk(&dir, false, &mut hits);
     }
+    walk(&root.join("docs"), true, &mut hits);
     assert!(
         hits.is_empty(),
-        "Ordner, die das Veröffentlichen auslässt: {hits:?}"
+        "Einträge, die das Veröffentlichen auslässt: {hits:?}"
     );
+}
+
+/// Lauf F7-fix: Die Monitoring-Tabelle im Betriebshandbuch nennt die Logzeile
+/// für Verbindungen, die die Grenze je Gegenstelle abweist (sie erscheinen nicht
+/// im Zugriffsprotokoll), mit den Grenzen aus `server::http`.
+#[test]
+fn operations_guide_names_connection_limit_log_line() {
+    use klein_buch_lib::server::http::{MAX_CONNECTIONS, MAX_CONNECTIONS_PER_PEER};
+    let ops = std::fs::read_to_string(manifest_dir().join("../docs/operations-guide.md")).unwrap();
+    let src = std::fs::read_to_string(manifest_dir().join("src/server/http.rs")).unwrap();
+    assert!(
+        src.contains("abgewiesen: mehr als {} offene Verbindungen dieser"),
+        "Logzeile in server/http.rs geändert — Monitoring-Tabelle nachziehen"
+    );
+    assert!(ops.contains(&format!(
+        "`Verbindung von … abgewiesen: mehr als {MAX_CONNECTIONS_PER_PEER} offene Verbindungen dieser Gegenstelle`"
+    )));
+    assert!(ops.contains(&format!(
+        "Die globale Grenze von {MAX_CONNECTIONS} offenen Verbindungen"
+    )));
 }

@@ -1,8 +1,9 @@
 # Release-Image (Plan W12, ADR 0039).
 #
 # Trockenlauf auf `phase-w`: Build mit SBOM- und Provenance-Attestierung, Smoke-Test,
-# SBOM (syft), Scan (trivy), Quellarchiv „Quellen Dritter“ — Ergebnisse als
-# Workflow-Artefakt. KEIN Push, KEINE Signatur, nur `contents: read`.
+# PDF/A-3b-Prüfung des Rechnungs-PDFs (veraPDF, R3-018), SBOM (syft), Scan (trivy),
+# Quellarchiv „Quellen Dritter“ — Ergebnisse als Workflow-Artefakt. KEIN Push, KEINE
+# Signatur, nur `contents: read`.
 #
 # Release auf Tags `v*`: dieselben Schritte, danach das Release (Quellarchiv, SBOM, Digest,
 # Notes) VERÖFFENTLICHEN und erst dann Push nach ghcr.io/<owner>/klein-buch:<CalVer> und cosign
@@ -128,7 +129,61 @@ jobs:
       - name: Smoke-Test
         env:
           EXPECT_COMMIT: ${{ github.sha }}
+          SMOKE_PDF_OUT: ${{ runner.temp }}/smoke-rechnung.pdf
         run: bash .github/scripts/image_smoke.sh klein-buch:ci
+
+      # R3-018 (Lauf F7a): Das vom Image festgeschriebene Rechnungs-PDF (Typst +
+      # ZUGFeRD über Mustang) muss nach veraPDF PDF/A-3b-konform sein. veraPDF mit
+      # fester Version, Installer per SHA-256 geprüft (Signatur des veraPDF-Projekts,
+      # Schlüssel 13DD 102B 4DD6 9354 D12D E5A8 3184 8632 78B1 7FE7, am 25.10.2026
+      # gegen diese Prüfsumme verifiziert); Java 21 des Runners. Nur im Trockenlauf:
+      # Ein Release kommt aus main, dessen Stand vorher hier geprüft wurde.
+      - name: PDF/A-3b (veraPDF)
+        working-directory: ${{ runner.temp }}
+        env:
+          VERAPDF_SERIES: "1.30"
+          VERAPDF_VERSION: "1.30.3"
+          VERAPDF_SHA256: b512bf24945503a33fc10738ecffc1f2dccaaf8593a448e94ee9ac86a9559a59
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -s smoke-rechnung.pdf || { echo "Kein Rechnungs-PDF aus dem Smoke-Test"; exit 1; }
+          curl -fsSL --retry 3 -o verapdf.zip \
+            "https://software.verapdf.org/releases/${VERAPDF_SERIES}/verapdf-greenfield-${VERAPDF_VERSION}-installer.zip"
+          echo "${VERAPDF_SHA256}  verapdf.zip" | sha256sum -c -
+          mkdir -p verapdf-setup && unzip -q verapdf.zip -d verapdf-setup
+          export JAVA_HOME="${JAVA_HOME_21_X64:?Java 21 fehlt auf dem Runner}"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' \
+            '<AutomatedInstallation langpack="eng">' \
+            '  <com.izforge.izpack.panels.htmlhello.HTMLHelloPanel id="welcome"/>' \
+            '  <com.izforge.izpack.panels.target.TargetPanel id="install_dir">' \
+            "    <installpath>${RUNNER_TEMP}/verapdf</installpath>" \
+            '  </com.izforge.izpack.panels.target.TargetPanel>' \
+            '  <com.izforge.izpack.panels.packs.PacksPanel id="sdk_pack_select">' \
+            '    <pack index="0" name="veraPDF GUI" selected="true"/>' \
+            '    <pack index="1" name="veraPDF Mac and *nix Scripts" selected="true"/>' \
+            '    <pack index="2" name="veraPDF Validation model" selected="false"/>' \
+            '    <pack index="3" name="veraPDF Documentation" selected="false"/>' \
+            '    <pack index="4" name="veraPDF Sample Plugins" selected="false"/>' \
+            '  </com.izforge.izpack.panels.packs.PacksPanel>' \
+            '  <com.izforge.izpack.panels.install.InstallPanel id="install"/>' \
+            '  <com.izforge.izpack.panels.finish.FinishPanel id="finish"/>' \
+            '</AutomatedInstallation>' > verapdf-auto.xml
+          "$JAVA_HOME/bin/java" -Djava.awt.headless=true \
+            -jar "verapdf-setup/verapdf-greenfield-${VERAPDF_VERSION}/verapdf-izpack-installer-${VERAPDF_VERSION}.jar" \
+            verapdf-auto.xml
+          "$RUNNER_TEMP/verapdf/verapdf" --version
+          report="$RUNNER_TEMP/dist/klein-buch-${VERSION}-verapdf.xml"
+          mkdir -p "$RUNNER_TEMP/dist"
+          "$RUNNER_TEMP/verapdf/verapdf" --flavour 3b smoke-rechnung.pdf > "$report" || true
+          grep -E '<validationReport |<details |failedRules|<batchSummary' "$report" || true
+          if ! grep -q 'isCompliant="true"' "$report" || grep -q 'isCompliant="false"' "$report"; then
+            echo "Rechnungs-PDF ist nicht PDF/A-3b-konform (veraPDF):"
+            grep -E '<rule |<description>' "$report" | head -80 || true
+            exit 1
+          fi
+          echo "PDF/A-3b: konform (veraPDF ${VERAPDF_VERSION})"
 
       - name: SBOM (syft, SPDX-JSON)
         env:

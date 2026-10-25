@@ -332,8 +332,8 @@ mod tests {
                 storno_of: None,
             },
             seller: SellerCtx {
-                name: "Wildbach Computerhilfe".into(),
-                email: "schmidm@wildbach-computerhilfe.de".into(),
+                name: "Beispiel IT-Service".into(),
+                email: "inhaber@example.org".into(),
                 phone: Some("+49 871 1234567".into()),
             },
             kleinunternehmer: KleinCtx {
@@ -354,10 +354,7 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
     #[test]
     fn render_splits_subject_and_body() {
         let r = render(TEMPLATE, &ctx()).unwrap();
-        assert_eq!(
-            r.subject,
-            "Rechnung RE-2026-0001 von Wildbach Computerhilfe"
-        );
+        assert_eq!(r.subject, "Rechnung RE-2026-0001 von Beispiel IT-Service");
         assert!(r.body.starts_with("Sehr geehrte Damen und Herren,"));
         assert!(r.body.contains("595,00 €"));
         assert!(r
@@ -381,7 +378,7 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
         let r = render(DEFAULT_STORNO_MAIL, &c).unwrap();
         assert_eq!(
             r.subject,
-            "Stornorechnung ST-2026-0001 zu Rechnung RE-2025-0042 von Wildbach Computerhilfe"
+            "Stornorechnung ST-2026-0001 zu Rechnung RE-2025-0042 von Beispiel IT-Service"
         );
         assert!(r
             .body
@@ -425,8 +422,8 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
                 is_kleinunternehmer: true,
             },
             seller: SellerCtx {
-                name: "Wildbach Computerhilfe".into(),
-                email: "schmidm@wildbach-computerhilfe.de".into(),
+                name: "Beispiel IT-Service".into(),
+                email: "inhaber@example.org".into(),
                 phone: None,
             },
             kleinunternehmer: KleinCtx {
@@ -434,7 +431,7 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
             },
         };
         let r = render_quote_mail(DEFAULT_QUOTE_MAIL, &ctx).unwrap();
-        assert_eq!(r.subject, "Angebot AN-2026-0001 von Wildbach Computerhilfe");
+        assert_eq!(r.subject, "Angebot AN-2026-0001 von Beispiel IT-Service");
         assert!(r.body.contains("gültig bis 19.06.2026"));
         assert!(r.body.contains("AGB"));
         assert!(r

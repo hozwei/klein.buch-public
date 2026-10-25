@@ -159,6 +159,31 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
   nicht entsperren, die Instanz bleibt gesperrt.
 - **ADR 0039** — Verweise der überholten Einträge (E3, Nr. 13, 33, 44, 45, 54,
   65, 77, 91, 103, 120, E12 in der Oberfläche) auf ADR 0040.
+- **ADR 0014** (Lauf E, ADR 0039 Nr. 122/123) — vorerst keine Code-Beiträge Dritter
+  (Entscheidung statt offener Frage), Quellangebot für Bestandteile Dritter.
+
+**Amendments 2026-10-25 — Lauf F3–F7:**
+
+- **ADR 0003** (F5a) — Rechenregeln für Cent-Beträge: `i64`, USt je Steuergruppe aus der
+  Nettosumme (BR-CO-17), ganzzahlige AfA, Domänengrenzen und `overflow-checks`; Obergrenze
+  1 Mrd. € je einzeln erfasstem Betrag (F5-fix).
+- **ADR 0008** (F5c) — ZUGFeRD-Profil XRECHNUNG passend zum eingebetteten XRechnung-XML.
+- **ADR 0008** (F6b) — Typst 0.15: Daten über `json(bytes(…))`, Hinweis bei alten eigenen
+  Vorlagen, Warnungstest der eingebauten Vorlagen.
+- **ADR 0009** (F3a) — Backup-Format 3 mit dem Klartext-Kopf als AAD; Restore nimmt 1–3;
+  Lock-Backups im Hintergrund.
+- **ADR 0009** (F3c) — Pflicht-Backup vor einer Migration im Format der Vorversion.
+- **ADR 0011** (F7a) — SMTP-E2E-Test gegen Mailpit (per Digest) statt MailHog.
+- **ADR 0024** (F5c) — strenger Parser (abgeschnittenes XML), alle Gutschrift-Codes
+  abgelehnt, Rundung auf Cent.
+- **ADR 0025** (F5b) — aktivierte Kosten sind keine Betriebsausgabe mehr, nur die AfA.
+- **ADR 0026** (F5b) — Ausfüllhilfe nach dem Vordruck des Jahres mit Kennzahl, DATEV-Geldkonto
+  je Zahlungskonto, Anlagenverkauf mit Restbuchwert.
+- **ADR 0028** (F6a) — Graph-Code (`mail::oauth_ms`, OAuth-Commands) entfernt.
+- **ADR 0034** (F3a) — Off-Site-Status „veraltet“, Download lokaler Backups, Rotation nur
+  unter den Wurzeln.
+- **ADR 0034** (F6b) — Krypto-Linie mit russh 0.64, `sha2`/`hmac`/`sha1` neu mit gleichen
+  Hexwerten.
 
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
@@ -184,5 +209,6 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24, ADR-Files 0001–0040. Bei einer neuen ADR diese Tabelle
-am Ende verlängern und das passende Vertiefungs-Dokument verlinken.
+Stand: 2026-10-25, ADR-Files 0001–0040 (Amendments bis Lauf F7). Bei einer neuen
+ADR diese Tabelle am Ende verlängern und das passende Vertiefungs-Dokument verlinken;
+bei einem neuen Amendment eine Zeile in Abschnitt 3 ergänzen.

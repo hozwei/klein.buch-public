@@ -288,13 +288,13 @@ jlink-Laufzeit zusammen. Build, CI und Release: `docs/architecture/build-and-rel
 │                           Design-Tokens, Komponenten
 ├── src-tauri/              Rust-Crate (Name aus der Desktop-Zeit beibehalten)
 │   ├── src/                Backend (Functional Core / Imperative Shell), server/
-│   ├── migrations/         Forward-only SQL-Migrationen (0001–0031)
+│   ├── migrations/         Forward-only SQL-Migrationen (0001–0032)
 │   ├── tests/              Integrationstests
 │   ├── resources/handbook/ Benutzer- und Betriebshandbuch (Markdown)
 │   └── sidecar/            Java-Sidecar: JARs, XRechnung-Konfiguration,
 │                           Launcher, versions.json, Lizenzinventar
 ├── legal/                  Erzeugung und Prüfung der Lizenzseite /legal/
-├── docs/                   ARCHITECTURE, ADRs (0001–0039), Betriebshandbuch
+├── docs/                   ARCHITECTURE, ADRs (0001–0040), Betriebshandbuch
 ├── inputs/                 Menschen-gepflegt: PDF-Vorlagen, AfA-Tabelle,
 │                           Beispiel-Daten (Seed für das Volume /inputs)
 └── .github/                CI, Image- und Release-Workflows
@@ -372,8 +372,8 @@ Issue, Forks unter der AGPL willkommen. Einzelheiten: `CONTRIBUTING.md`.
 - **Architektur** — `docs/ARCHITECTURE.md` für den Überblick,
   `docs/architecture/` für Vertiefungen (Sicherheit, GoBD, §19, Datenmodell,
   Build und Release).
-- **Architecture Decision Records** — `docs/adr/` (0001–0039); der Umbau zur
-  Docker-Fassung steht in ADR 0039.
+- **Architecture Decision Records** — `docs/adr/` (0001–0040); der Umbau zur
+  Docker-Fassung steht in ADR 0039, Dauerbetrieb und Zeitlogik in ADR 0040.
 - **Änderungen** — `CHANGELOG.md`.
 
 ---

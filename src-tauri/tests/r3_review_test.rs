@@ -25,14 +25,14 @@ use klein_buch_lib::einvoice::parser::{self, ParseError};
 
 fn seller_kleinunternehmer() -> SellerView<'static> {
     SellerView {
-        name: "Wildbach Computerhilfe",
-        street: "Wildbachstraße 2",
+        name: "Beispiel IT-Service",
+        street: "Beispielweg 2",
         postal_code: "84036",
         city: "Landshut",
         country_code: "DE",
         tax_number: Some("133/456/7890"),
         vat_id: None,
-        email: "schmidm@wildbach-computerhilfe.de",
+        email: "inhaber@example.org",
         phone: Some("+49 000 000000"),
         contact_name: None,
         iban: Some("DE02120300000000202051"),

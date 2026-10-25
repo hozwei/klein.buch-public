@@ -133,7 +133,7 @@ async fn mk_locked_invoice(
         derived_from_quote_id: None,
     };
     let seller = SellerSnapshot {
-        name: "Wildbach Computerhilfe",
+        name: "Beispiel IT-Service",
         street: "Weg 1",
         postal_code: "84028",
         city: "Landshut",

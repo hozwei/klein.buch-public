@@ -244,7 +244,7 @@ mod tests {
             postal_code: "84028".into(),
             city: "Landshut".into(),
             country_code: "DE".into(),
-            email: Some("info@beispiel.de".into()),
+            email: Some("info@beispiel.example.org".into()),
             phone: None,
             iban: Some("DE89370400440532013000".into()),
             bic: None,
@@ -346,7 +346,7 @@ mod tests {
         assert!(validate(&i)
             .unwrap_err()
             .contains(&ValidationError::InvalidEmail));
-        i.email = Some("a@b.de".into());
+        i.email = Some("a@b.example.org".into());
         assert!(validate(&i).is_ok());
     }
 
@@ -357,8 +357,8 @@ mod tests {
         assert!(!is_valid_email("info@example.1"));
         assert!(!is_valid_email("info@example."));
         assert!(is_valid_email("info@example.org"));
-        assert!(is_valid_email("info@example.museum"));
-        assert!(is_valid_email("info@example.xn--p1ai"));
+        assert!(is_valid_email("info@kunde.example"));
+        assert!(is_valid_email("info@example.xn--zckzah"));
         assert!(!is_valid_email("info@example.xn--"));
     }
 

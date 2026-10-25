@@ -64,7 +64,7 @@ async fn mk_quote(pool: &SqlitePool, root: &Path) -> String {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("info@kunde.de".into()),
+            email: Some("info@kunde.example.org".into()),
             phone: None,
             iban: None,
             bic: None,
@@ -102,7 +102,7 @@ async fn mk_quote(pool: &SqlitePool, root: &Path) -> String {
         input,
     };
     let seller = SellerSnapshot {
-        name: "Wildbach Computerhilfe",
+        name: "Beispiel IT-Service",
         street: "Beispielweg 1",
         postal_code: "84028",
         city: "Landshut",
@@ -116,7 +116,7 @@ async fn mk_quote(pool: &SqlitePool, root: &Path) -> String {
         city: Some("München"),
         country_code: "DE",
         vat_id: Some("DE123456789"),
-        email: Some("info@kunde.de"),
+        email: Some("info@kunde.example.org"),
     };
     quotes::create_draft(pool, &payload, "AN-2026-0001", &seller, &buyer, &totals)
         .await

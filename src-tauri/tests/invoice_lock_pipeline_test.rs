@@ -77,7 +77,7 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -85,7 +85,7 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "inhaber@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -131,7 +131,7 @@ async fn create_test_contact(pool: &SqlitePool) -> String {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("info@kunde.de".into()),
+            email: Some("info@kunde.example.org".into()),
             phone: None,
             iban: None,
             bic: None,

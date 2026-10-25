@@ -674,14 +674,14 @@ mod tests {
 
     fn seller_klein() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: Some("+49 000 000000"),
             contact_name: None,
             iban: None,
@@ -699,7 +699,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 

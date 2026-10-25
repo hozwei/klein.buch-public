@@ -43,11 +43,15 @@ Im Formular gibst Du ein:
    vollen Brutto-Betrag als Ausgabe (siehe "Warum Brutto" unten).
 8. **Zahlungs-Konto** — über welches Konto die Ausgabe gelaufen
    ist (Bankkonto, Bargeld-Kasse, PayPal, Stripe, Sonstiges).
-9. **§13b-Reverse-Charge** — Toggle für Eingangsrechnungen
-   ausländischer Anbieter, die ihre Leistung ohne Umsatzsteuer
-   stellen und die Steuerschuld auf Dich übertragen. Für §19-
-   Kleinunternehmer fast nie zutreffend; lass den Toggle aus, wenn
-   Du Dir unsicher bist.
+9. **§13b-Reverse-Charge** — Schalter für Eingangsrechnungen, bei
+   denen nicht der Lieferant, sondern Du die Umsatzsteuer schuldest.
+   Das betrifft auch Kleinunternehmer, zum Beispiel Online-Werbung
+   bei Anbietern mit Sitz im EU-Ausland oder Software-Abos aus dem
+   Ausland. Die Rechnung kommt dann ohne Umsatzsteuer; Du trägst
+   Netto = Brutto und eine Umsatzsteuer von 0 ein. Beim Anschalten
+   stellt das Formular den USt-Satz auf 0 % und sperrt die übrigen
+   Sätze; Klein.Buch lehnt §13b mit einem Umsatzsteuer-Betrag ab.
+   Was Du sonst noch tun musst, steht unten unter "§13b: Du schuldest die Steuer".
 10. **Beleg-Anhang** — PDF oder Bild der Eingangsrechnung. Auf dem
     Handy öffnet der Knopf "Beleg fotografieren" direkt die Kamera.
 11. **Notiz** — freier Text.
@@ -65,6 +69,37 @@ Brutto-Betrag als Kosten.
 Klein.Buch v1.0 ist für §19-Kleinunternehmer gebaut. Regelbesteuerte
 Workflows (Vorsteuer-Abzug, Umsatzsteuer-Voranmeldung) sind nicht
 voll abgebildet.
+
+## §13b: Du schuldest die Steuer
+
+Bei manchen Leistungen schuldet der Empfänger die Umsatzsteuer statt
+des Lieferanten ("Reverse-Charge", §13b UStG). Typisch sind
+Leistungen von Unternehmen mit Sitz im Ausland, etwa Werbeanzeigen,
+Cloud-Dienste oder Software-Lizenzen aus dem EU-Ausland. Die
+Kleinunternehmer-Regelung hilft hier nicht: Auch als
+Kleinunternehmer schuldest Du diese Steuer (§13b Abs. 5 und 8
+UStG). Auf der Rechnung steht dann meist "Steuerschuldnerschaft des
+Leistungsempfängers" oder "Reverse Charge".
+
+Was Du tun musst:
+
+1. In Klein.Buch die Rechnung netto erfassen (Umsatzsteuer 0) und
+   den Schalter "§13b-Reverse-Charge" anschalten.
+2. Für den Monat, in dem die Steuer entsteht (in der Regel der Monat
+   der Leistung, spätestens der Folgemonat), eine
+   Umsatzsteuer-Voranmeldung über ELSTER abgeben und die Steuer
+   zahlen (§18 Abs. 4a UStG). Klein.Buch berechnet diese Steuer
+   nicht und erstellt keine Voranmeldung.
+3. Vorsteuer darfst Du als Kleinunternehmer nicht abziehen. Die an
+   das Finanzamt gezahlte Umsatzsteuer ist deshalb im Jahr der
+   Zahlung eine Betriebsausgabe. Trag die Zahlung ans Finanzamt als
+   eigene Kosten ein oder lass sie Deinen Steuerberater in der EÜR
+   ergänzen.
+
+Wenn Du unsicher bist, ob eine Rechnung unter §13b fällt, frag
+Deinen Steuerberater. Eine E-Rechnung, die neben §13b-Positionen
+auch Umsatzsteuer ausweist, übernimmt Klein.Buch ohne den Schalter
+und mit einem Hinweis in der Notiz.
 
 ## Kategorien
 
@@ -133,4 +168,4 @@ dazu im Kapitel "Privatbewegungen".
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

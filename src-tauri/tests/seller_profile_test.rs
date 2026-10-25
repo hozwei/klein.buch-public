@@ -28,7 +28,7 @@ async fn setup_pool() -> (SqlitePool, tempfile::TempDir) {
 
 fn base_input() -> SellerProfileInput {
     SellerProfileInput {
-        name: "Wildbach Computerhilfe".into(),
+        name: "Beispiel IT-Service".into(),
         legal_form: Some("e.K.".into()),
         street: "Hauptstr. 1".into(),
         postal_code: "84028".into(),
@@ -36,7 +36,7 @@ fn base_input() -> SellerProfileInput {
         country_code: "DE".into(),
         tax_number: Some("132/456/7890".into()),
         vat_id: None,
-        email: "info@wildbach-computerhilfe.de".into(),
+        email: "info@example.org".into(),
         phone: Some("+49 000 000000".into()),
         iban: None,
         bic: None,
@@ -59,7 +59,7 @@ async fn upsert_creates_singleton() {
     let (pool, _d) = setup_pool().await;
     let row = seller_profile::upsert(&pool, &base_input()).await.unwrap();
     assert_eq!(row.id, 1);
-    assert_eq!(row.name, "Wildbach Computerhilfe");
+    assert_eq!(row.name, "Beispiel IT-Service");
     assert_eq!(row.is_kleinunternehmer, 1);
     assert!(row.waived_paragraph_19_since.is_none());
 

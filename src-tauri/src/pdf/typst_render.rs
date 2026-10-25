@@ -1064,14 +1064,14 @@ mod tests {
 
     fn seller() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: None,
             contact_name: None,
             iban: None,
@@ -1089,7 +1089,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 
@@ -1379,10 +1379,10 @@ mod tests {
             "isKleinunternehmer": true,
             "kleinunternehmerHinweis": "Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen.",
             "seller": {
-                "name": "Wildbach Computerhilfe", "street": "Weg 1",
+                "name": "Beispiel IT-Service", "street": "Weg 1",
                 "postalCode": "84028", "city": "Landshut",
                 "taxNumber": "123/456/7890", "vatId": serde_json::Value::Null,
-                "email": "schmidm@wildbach-computerhilfe.de",
+                "email": "inhaber@example.org",
             },
             "form": {
                 "lines": [
@@ -1471,7 +1471,7 @@ mod tests {
             &entries,
             &seller(),
             Some("Kunde GmbH"),
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             None,
             "2026-05-24",
         )
@@ -1497,7 +1497,7 @@ mod tests {
             &one,
             &seller(),
             None,
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             "2026-05-24",
             None,
             None,
@@ -1517,7 +1517,7 @@ mod tests {
             &many,
             &seller(),
             Some("Kunde GmbH"),
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             "2026-05-24",
             None,
             None,
@@ -1647,10 +1647,10 @@ mod tests {
             "expenseTotal": "4.000,00 €",
             "surplus": "6.000,00 €",
             "seller": {
-                "name": "Wildbach Computerhilfe", "street": "Weg 1",
+                "name": "Beispiel IT-Service", "street": "Weg 1",
                 "postalCode": "84028", "city": "Landshut",
                 "taxNumber": "123/456/7890", "vatId": serde_json::Value::Null,
-                "email": "a@b.de",
+                "email": "a@b.example.org",
             },
             "contents": [
                 "00-deckblatt.pdf — dieses Deckblatt",
@@ -1709,8 +1709,8 @@ mod tests {
         };
         // Bank-Konto (IBAN) + PayPal → übt Fuß-Iteration, §19-Beträge, Zahlungshinweis.
         let accounts = serde_json::json!([
-            {"type":"bank","label":"Geschäftskonto","holder":"Manuel Schmid","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null},
-            {"type":"paypal","label":"PayPal","holder":"Manuel Schmid","iban":null,"bic":null,"details":"paypal.me/ich"}
+            {"type":"bank","label":"Geschäftskonto","holder":"Max Mustermann","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null},
+            {"type":"paypal","label":"PayPal","holder":"Max Mustermann","iban":null,"bic":null,"details":"paypal.me/ich"}
         ]);
         let regel = SellerView {
             is_kleinunternehmer: false,
@@ -1735,7 +1735,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1756,7 +1756,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1772,7 +1772,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1790,7 +1790,7 @@ mod tests {
                 None,
                 None,
                 true,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
             )
             .unwrap_or_else(|e| panic!("{name} Angebot §19: {e}"));
@@ -1843,7 +1843,7 @@ mod tests {
         ))
         .expect("default.typ");
         let accounts = serde_json::json!([
-            {"type":"bank","label":"Geschäftskonto","holder":"Manuel Schmid","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
+            {"type":"bank","label":"Geschäftskonto","holder":"Max Mustermann","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
         ]);
         let mut storno = invoice();
         storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
@@ -1861,7 +1861,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
                 p,

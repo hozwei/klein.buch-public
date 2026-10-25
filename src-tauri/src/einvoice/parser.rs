@@ -544,8 +544,16 @@ pub fn build_expense_input(p: &ParsedEInvoice, today: NaiveDate) -> ExpenseInput
         tax_amount_cents: tax,
         gross_amount_cents: net + tax,
         currency_code: p.currency_code.clone().unwrap_or_else(|| "EUR".to_string()),
-        reverse_charge_13b: p.reverse_charge,
-        notes: None,
+        // R1-S2-13B (Lauf F7): §13b nur vorbelegen, wenn die Rechnung keine USt
+        // ausweist (Domain-Regel). Eine gemischte Rechnung (Kategorie „AE“ neben
+        // ausgewiesener USt) bekommt stattdessen einen Hinweis; der Nutzer teilt
+        // sie bei Bedarf selbst auf.
+        reverse_charge_13b: p.reverse_charge && tax == 0,
+        notes: (p.reverse_charge && tax != 0).then(|| {
+            "Die E-Rechnung enthält §13b-Positionen (Steuerkategorie AE) neben \
+             ausgewiesener Umsatzsteuer. Den §13b-Anteil gesondert prüfen."
+                .to_string()
+        }),
     }
 }
 
@@ -794,14 +802,14 @@ mod tests {
 
     fn seller_klein() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: None,
             contact_name: None,
             iban: None,
@@ -819,7 +827,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 
@@ -891,7 +899,7 @@ mod tests {
             Some(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
         );
         assert_eq!(p.currency_code.as_deref(), Some("EUR"));
-        assert_eq!(p.seller_name.as_deref(), Some("Wildbach Computerhilfe"));
+        assert_eq!(p.seller_name.as_deref(), Some("Beispiel IT-Service"));
         assert_eq!(p.seller_tax_number.as_deref(), Some("123/456/78901"));
         assert_eq!(p.buyer_name.as_deref(), Some("Kunde GmbH"));
         // §19: 250,00 € Netto, 0 USt, 250,00 € Brutto.
@@ -916,7 +924,7 @@ mod tests {
         .unwrap();
         let p = parse(&xml).unwrap();
         let input = build_expense_input(&p, today());
-        assert_eq!(input.vendor_name, "Wildbach Computerhilfe");
+        assert_eq!(input.vendor_name, "Beispiel IT-Service");
         assert_eq!(input.vendor_invoice_number.as_deref(), Some("RE-2026-0001"));
         assert_eq!(input.category, "other");
         assert_eq!(input.gross_amount_cents, 25_000);
@@ -962,7 +970,7 @@ mod tests {
   <cac:AccountingCustomerParty>
     <cac:Party>
       <cac:PartyLegalEntity>
-        <cbc:RegistrationName>Wildbach Computerhilfe</cbc:RegistrationName>
+        <cbc:RegistrationName>Beispiel IT-Service</cbc:RegistrationName>
       </cac:PartyLegalEntity>
     </cac:Party>
   </cac:AccountingCustomerParty>
@@ -1003,7 +1011,7 @@ mod tests {
         // RegistrationName hat Vorrang vor PartyName/Name.
         assert_eq!(p.seller_name.as_deref(), Some("Lieferant Telekom GmbH"));
         assert_eq!(p.seller_vat_id.as_deref(), Some("DE123456789"));
-        assert_eq!(p.buyer_name.as_deref(), Some("Wildbach Computerhilfe"));
+        assert_eq!(p.buyer_name.as_deref(), Some("Beispiel IT-Service"));
         // Header-USt aus Invoice/TaxTotal/TaxAmount, nicht aus dem Subtotal verdoppelt.
         assert_eq!(p.tax_amount_cents, Some(1_900));
         assert_eq!(p.net_amount_cents, Some(10_000));
@@ -1077,10 +1085,30 @@ mod tests {
             "<cac:TaxCategory><cbc:ID>S</cbc:ID></cac:TaxCategory>",
             "<cac:TaxCategory><cbc:ID>AE</cbc:ID></cac:TaxCategory>",
         );
+        // Gemischt bzw. unstimmig: AE, aber 19,00 € USt ausgewiesen → kein
+        // §13b-Flag (Domain-Regel tax == 0), dafür ein Hinweis (R1-S2-13B).
         let p = parse(&xml).unwrap();
         assert!(p.reverse_charge);
         let input = build_expense_input(&p, today());
+        assert!(!input.reverse_charge_13b);
+        assert!(input.notes.as_deref().unwrap_or("").contains("§13b"));
+        assert!(crate::domain::expense::validate_expense(&input, today()).is_ok());
+
+        // Reine §13b-Rechnung (netto, ohne USt) → Flag gesetzt, gültig.
+        let net_only = xml
+            .replace(
+                "<cbc:TaxAmount currencyID=\"EUR\">19.00</cbc:TaxAmount>",
+                "<cbc:TaxAmount currencyID=\"EUR\">0.00</cbc:TaxAmount>",
+            )
+            .replace("119.00", "100.00");
+        let p = parse(&net_only).unwrap();
+        assert!(p.reverse_charge);
+        let input = build_expense_input(&p, today());
         assert!(input.reverse_charge_13b);
+        assert_eq!(input.tax_amount_cents, 0);
+        assert_eq!(input.gross_amount_cents, 10_000);
+        assert!(input.notes.is_none());
+        assert!(crate::domain::expense::validate_expense(&input, today()).is_ok());
     }
 
     /// KB-0015: abgeschnittene bzw. unbalancierte Dateien sind strikt ein Fehler.

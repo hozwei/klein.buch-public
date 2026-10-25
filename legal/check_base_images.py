@@ -7,6 +7,10 @@ Quellarchiv nennen die Basis-Images und die JDK-Version aus
 Dockerfiles. Ändert ein Update (z. B. ein Dependabot-Vorschlag) nur eines
 davon, schlägt diese Prüfung in CI fehl.
 
+Außerdem (W14-021, Lauf F7a): Jedes Container-Image, das die Workflows als
+Dienst oder Job-Container (`image:`) bzw. die CI-Skripte als feste Variable
+(`…_IMAGE="…"`) nutzen, ist per Digest gepinnt (`name:tag@sha256:…`).
+
 Aufruf aus der Wurzel des öffentlichen Repos (bzw. `klein-buch/`):
     python3 -I legal/check_base_images.py
 Exit 0 = gleich, 1 = Abweichung, 2 = Datei fehlt oder unlesbar.
@@ -20,6 +24,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = ROOT / "Dockerfile"
 VERSIONS = ROOT / "src-tauri" / "sidecar" / "versions.json"
+# Öffentliches Repo: .github/ in der Wurzel; Projektordner: neben klein-buch/.
+GITHUB_DIRS = [ROOT / ".github", ROOT.parent / ".github"]
 
 # Stufe im Dockerfile → Schlüssel in versions.json
 STAGES = {
@@ -30,6 +36,27 @@ STAGES = {
     "runtime-base": ("images", "runtime"),
 }
 FROM = re.compile(r"^FROM\s+(\S+)\s+AS\s+(\S+)\s*$", re.IGNORECASE)
+WORKFLOW_IMAGE = re.compile(r"""^\s*(?:-\s+)?image:\s*['"]?([^\s'"#]+)""")
+SCRIPT_IMAGE = re.compile(r"""^\s*[A-Z0-9_]*IMAGE=['"]?([^\s'"$]+)['"]?\s*$""")
+
+
+def ci_image_problems():
+    """Images aus Workflows (`image:`) und CI-Skripten (`…_IMAGE=…`) ohne Digest."""
+    gh = next((d for d in GITHUB_DIRS if (d / "workflows").is_dir()), None)
+    if gh is None:
+        return ["kein .github/workflows gefunden"], 0
+    problems, count = [], 0
+    sources = [(p, WORKFLOW_IMAGE) for p in sorted((gh / "workflows").glob("*.y*ml"))]
+    sources += [(p, SCRIPT_IMAGE) for p in sorted((gh / "scripts").glob("*.sh"))]
+    for path, pattern in sources:
+        for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            m = pattern.match(line)
+            if not m:
+                continue
+            count += 1
+            if "@sha256:" not in m.group(1):
+                problems.append(f"{path.parent.name}/{path.name}:{no}: {m.group(1)} ohne Digest")
+    return problems, count
 
 
 def main() -> int:
@@ -59,11 +86,17 @@ def main() -> int:
     jdk_version = (versions.get("jdk") or {}).get("version", "")
     if jdk_version and jdk_version.replace("+", "_") not in jdk_image:
         problems.append(f"Stufe jre: {jdk_image} passt nicht zu jdk.version {jdk_version}")
+    try:
+        ci_problems, ci_count = ci_image_problems()
+    except OSError as e:
+        print(f"nicht lesbar: {e}", file=sys.stderr)
+        return 2
+    problems += ci_problems
     for p in problems:
         print(p, file=sys.stderr)
     if problems:
         return 1
-    print(f"Basis-Images ok ({len(STAGES)} Stufen).")
+    print(f"Basis-Images ok ({len(STAGES)} Stufen), CI-Images mit Digest ({ci_count}).")
     return 0
 
 

@@ -49,7 +49,7 @@ async fn create_contact(pool: &SqlitePool, name: &str) -> String {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("erika@example.de".into()),
+            email: Some("erika@example.org".into()),
             phone: Some("0123456".into()),
             iban: Some("DE89370400440532013000".into()),
             bic: Some("COBADEFFXXX".into()),
@@ -85,9 +85,9 @@ async fn insert_invoice(
              buyer_name, buyer_street, buyer_postal_code, buyer_city,
              buyer_country_code, buyer_vat_id, buyer_email)
          VALUES (?, ?, 2026, 'issued', '2026-03-01', ?,
-             'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+             'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
              10000, 10000, 'paid', ?,
-             ?, 'Hauptstr. 7', '80331', 'München', 'DE', 'DE123456789', 'erika@example.de')",
+             ?, 'Hauptstr. 7', '80331', 'München', 'DE', 'DE123456789', 'erika@example.org')",
     )
     .bind(id)
     .bind(number)

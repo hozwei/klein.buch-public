@@ -53,7 +53,7 @@ async fn setup_env() -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -61,7 +61,7 @@ async fn setup_env() -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "inhaber@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -139,7 +139,7 @@ async fn insert_invoice(
              seller_name, seller_street, seller_postal_code, seller_city,
              net_amount_cents, gross_amount_cents, status, pdf_archive_id)
          VALUES (?, ?, 2026, 'issued', '2026-03-01', ?,
-             'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+             'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
              10000, 10000, 'paid', ?)",
     )
     .bind(id)
@@ -170,11 +170,17 @@ async fn export_creates_zip_with_pdf_json_and_bundles_originals_only_for_this_co
     let target = create_contact(
         &env.pool,
         "Ziel Kunde",
-        Some("ziel@example.de"),
+        Some("ziel@example.org"),
         Some("INTERN: zahlt spät"),
     )
     .await;
-    let other = create_contact(&env.pool, "Anderer Kunde", Some("anderer@example.de"), None).await;
+    let other = create_contact(
+        &env.pool,
+        "Anderer Kunde",
+        Some("anderer@example.org"),
+        None,
+    )
+    .await;
 
     // Archivierte Rechnung-PDF (write-once) für den Ziel-Kontakt.
     let stored = store_bytes(
@@ -204,7 +210,7 @@ async fn export_creates_zip_with_pdf_json_and_bundles_originals_only_for_this_co
         "INSERT INTO email_log
             (id, channel, related_kind, related_id, related_number, from_email, to_email, subject, status, attachment_count)
          VALUES ('m-1', 'graph', 'invoice', 'i-target', 'RE-2026-0001',
-             'info@wildbach.de', 'ziel@example.de', 'Ihre Rechnung RE-2026-0001', 'success', 1)",
+             'info@beispiel-it.example.org', 'ziel@example.org', 'Ihre Rechnung RE-2026-0001', 'success', 1)",
     )
     .execute(&env.pool)
     .await
@@ -486,7 +492,7 @@ async fn export_includes_templates_subscriptions_assets_and_voided_drafts() {
              seller_name, seller_street, seller_postal_code, seller_city,
              net_amount_cents, gross_amount_cents, status, buyer_name)
          VALUES ('i-void', 'RE-2026-0002', 2026, 'issued', '2026-03-05', ?,
-             'Wildbach', 'Beispielweg 1', '84028', 'Landshut', 5000, 5000, 'draft', 'Ziel Kunde')",
+             'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut', 5000, 5000, 'draft', 'Ziel Kunde')",
     )
     .bind(&target)
     .execute(pool)

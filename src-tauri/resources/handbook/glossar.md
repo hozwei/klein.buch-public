@@ -461,6 +461,15 @@ Das Zufluss- und Abfluss-Prinzip. Eine Einnahme zählt im Jahr des
 Geld-Eingangs, eine Ausgabe im Jahr der Zahlung. Daraus folgt die
 Cash-Basis (siehe dort).
 
+### §13b UStG
+
+Reverse-Charge: Bei bestimmten Leistungen, vor allem von Anbietern
+im Ausland, schuldet der Empfänger die Umsatzsteuer statt des
+Lieferanten. Das gilt auch für Kleinunternehmer; sie melden die
+Steuer an und zahlen sie, ohne Vorsteuerabzug. Klein.Buch markiert
+solche Kosten, berechnet die Steuer aber nicht (Kapitel "Kosten
+erfassen").
+
 ### §14 UStG
 
 Listet die Pflichtangaben für Rechnungen auf. Klein.Buch prüft
@@ -495,4 +504,4 @@ Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

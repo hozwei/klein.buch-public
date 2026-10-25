@@ -18,7 +18,7 @@
 //!
 //! Keine. Der Sidecar (KoSIT/Mustang) ist über `KLEIN_BUCH_SIDECAR_MOCK=1`
 //! gemockt; der Keychain läuft im plattform-unabhängigen Mock-Store. Läuft
-//! also ohne Java/MailHog/Secret-Service in jedem `cargo test`.
+//! also ohne Java/Mailpit/Secret-Service in jedem `cargo test`.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -87,7 +87,7 @@ async fn setup_env() -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -95,7 +95,7 @@ async fn setup_env() -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "inhaber@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -149,7 +149,7 @@ async fn happy_path_invoice_lock_payment_expense_flows_into_euer() {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("empfaenger@kunde-test.de".into()),
+            email: Some("empfaenger@kunde.example.org".into()),
             phone: None,
             iban: None,
             bic: None,

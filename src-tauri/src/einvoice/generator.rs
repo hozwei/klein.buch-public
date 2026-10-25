@@ -597,14 +597,14 @@ mod tests {
 
     fn seller_klein() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: Some("+49 000 000000"),
             contact_name: None,
             iban: None,
@@ -622,7 +622,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 
@@ -773,8 +773,7 @@ mod tests {
         // BT-1 Nummer
         assert!(xml.contains("<ram:ID>RE-2026-0001</ram:ID>"));
         // BT-34 Seller electronic address
-        assert!(xml
-            .contains("<ram:URIID schemeID=\"EM\">schmidm@wildbach-computerhilfe.de</ram:URIID>"));
+        assert!(xml.contains("<ram:URIID schemeID=\"EM\">inhaber@example.org</ram:URIID>"));
         // BG-16 Payment Instructions
         assert!(xml.contains("<ram:SpecifiedTradeSettlementPaymentMeans>"));
     }
@@ -928,10 +927,10 @@ mod tests {
         assert!(pos("<ram:ID>123/456/78901</ram:ID>") < pos("<ram:Name>"));
         assert!(pos("<ram:Name>") < pos("<ram:DefinedTradeContact>"));
         assert!(pos("<ram:DefinedTradeContact>") < pos("<ram:PostalTradeAddress>"));
-        assert!(party.contains("<ram:PersonName>Wildbach Computerhilfe</ram:PersonName>"));
+        assert!(party.contains("<ram:PersonName>Beispiel IT-Service</ram:PersonName>"));
         assert!(party.contains("<ram:CompleteNumber>+49 000 000000</ram:CompleteNumber>"));
         assert!(party.contains(
-            "<ram:EmailURIUniversalCommunication>\n            <ram:URIID>schmidm@wildbach-computerhilfe.de</ram:URIID>"
+            "<ram:EmailURIUniversalCommunication>\n            <ram:URIID>inhaber@example.org</ram:URIID>"
         ));
         assert!(party.contains("<ram:ID schemeID=\"FC\">123/456/78901</ram:ID>"));
     }
@@ -989,7 +988,7 @@ mod tests {
         // BT-84 IBAN — Leerzeichen entfernt
         assert!(xml.contains("<ram:IBANID>DE02120300000000202051</ram:IBANID>"));
         // BT-85 Kontoinhaber + BT-86 BIC
-        assert!(xml.contains("<ram:AccountName>Wildbach Computerhilfe</ram:AccountName>"));
+        assert!(xml.contains("<ram:AccountName>Beispiel IT-Service</ram:AccountName>"));
         assert!(xml.contains("<ram:BICID>BYLADEM1001</ram:BICID>"));
         // Reihenfolge: PaymentReference vor InvoiceCurrencyCode (CII-Schema)
         let pr = xml.find("PaymentReference").expect("PaymentReference");

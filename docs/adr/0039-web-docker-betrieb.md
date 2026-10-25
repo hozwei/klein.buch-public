@@ -516,8 +516,9 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Sitzung + Re-Auth `totp/renew` (zweistufig wie die Einrichtung), `recovery/renew`,
     `passphrase`.
 57. **Klartext-Übergangspfad entfernt (W6, E17):** Adoption in der Einrichtung, Klartext-Zweig beim
-    Entsperren und `migrate_plaintext_to_encrypted` samt Test; `encrypt_db_file_in_place` bleibt
-    als gemeinsamer Kern des Neuverschlüsselns.
+    Entsperren und `migrate_plaintext_to_encrypted` samt Test. Gemeinsamer Kern des
+    Neuverschlüsselns ist `db::reencrypt_db_file` (Passphrase-Wechsel über `rekey_db_file`);
+    `encrypt_db_file_in_place` ist nur noch eine Test-Hilfe (`#[cfg(test)]`, berichtigt Lauf F7).
 58. **„Fehlversuche seit der letzten Anmeldung“ nur im RAM (W6);** ein Neustart setzt den Zähler
     zurück. Fehlversuche stehen dauerhaft nur im Log (`WARN auth.login.failed ip=… reason=…`).
 59. **Rate-Limit gegen Adress-Rotation (W6, Gegenprüfung).** IPv6-Clients zählen je /64. Dazu ein
@@ -2271,6 +2272,120 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `backup::tests::setup_then_verify_roundtrip` prüft den Verifier direkt. (4) `modules.md`
     verweist nicht mehr auf `Route::Cmd` (404 für jeden Namen außerhalb der Registry,
     `registry::find`).
+142. **CI und Betrieb (Lauf F, Block F7a, 2026-10-25; keine Migration, keine neue
+    Abhängigkeit).** (1) **Mailpit statt MailHog (W14-021):** Der SMTP-E2E-Test in CI
+    läuft gegen `axllent/mailpit:v1.32.0@sha256:0790692b…0498` (gepflegt; MailHog ist
+    seit Jahren ohne Release und lief ohne Tag und Digest). `tests/e2e_test.rs` liest
+    die angekommene Mail über `GET /api/v1/message/latest` (Empfänger, Betreff, Anhang
+    mit Dateiname und Content-Type) und prüft den HTTP-Status. `legal/check_base_images.py`
+    prüft zusätzlich, dass jedes Image der Workflows (`image:`) und jede feste Image-Variable
+    der CI-Skripte (`…_IMAGE="…"`) einen Digest trägt; Dependabot hebt Service-Images nicht,
+    neue Fassungen von Hand mit Digest aus dem Registry-Index. (2) **Testadressen
+    (tasks:W8-TEST-ADDRESSES):** Tests und Testmodule nutzen nur Domains nach RFC 2606/6761
+    (`example.org/.com/.net` samt Subdomains, `.example`, `.invalid`, `.test`, `.localhost`,
+    IDN-Test-TLD `xn--zckzah`) und neutrale Namen („Beispiel IT-Service“, „Max Mustermann“).
+    `tests/test_addresses_test.rs` prüft das positiv (jede Mailadresse, jeder URL-Host, jeder
+    Hostname als String-Literal und jedes IPv4-Literal muss in einen erlaubten Bereich
+    fallen: Dokumentationsnetze nach RFC 5737 und nicht routbare Bereiche für SSRF-Tests),
+    ohne eine Liste verbotener Namen zu veröffentlichen. Ausnahmen nur zeilenweise mit
+    `testadresse-ausnahme` und Begründung (derzeit keine). Urheber-Angaben (README,
+    COPYRIGHT, `Cargo.toml`, Info-Dialog) sind keine Testadressen und bleiben. (3) **ASVS
+    8.1.4, V11.1.7, V11.1.8 (Alarmierung, Auswertung ungewöhnlicher Abläufe):** entschieden,
+    nicht in der Anwendung. Ein Inhaber, eine Instanz: Klein.Buch begrenzt selbst (Wartezeiten
+    je Client und global, Obergrenze für TOTP ohne Gerätecookie, Render-/JVM-/Test-Limits) und
+    schreibt dafür auswertbare, injektionssichere Logzeilen (`auth.*.failed`, `auth.totp_locked`,
+    `reason=rate_limited`, Zugriffsprotokoll mit IP, Sitzung und Status, also auch
+    von Limits abgewiesene Anfragen mit 429); das append-only
+    `audit_log` hält jede Buchung fest, nach der Anmeldung erscheint ein Hinweis auf
+    Fehlversuche. Alarmieren (Mail, Push, Sperren auf Netzebene) ist Aufgabe des Betreibers über
+    fail2ban und Log-/Container-Monitoring; das Betriebshandbuch nennt die Zeilen
+    (`operations-guide.md` §„Monitoring und Alarmierung“). Eine eingebaute Anomalie-Erkennung
+    wäre für einen Nutzer nicht verhältnismäßig und bräuchte einen Kanal außerhalb der Instanz
+    (wie V2.2.3, Nr. 130). (4) **PDF/A-3b mit veraPDF (R3-018):** Der Trockenlauf in
+    `release-image.yml` prüft das vom Image festgeschriebene Rechnungs-PDF (Smoke-Test,
+    `SMOKE_PDF_OUT`) mit veraPDF 1.30.3 (`--flavour 3b`); der Installer ist per SHA-256
+    gepinnt (Signatur des veraPDF-Projekts einmalig geprüft), Java 21 kommt vom Runner, der
+    Bericht liegt im Artefakt. Nicht im Image (Größe) und nicht im Release-Lauf (der Stand
+    von `main` ist vorher als `phase-w` geprüft). (5) **`pnpm audit` mit
+    Entwicklungsabhängigkeiten:** blockierend ab „high“ zusätzlich zur Prüfung der
+    Laufzeitabhängigkeiten, weil Vite, Svelte-Compiler und Testwerkzeuge in CI und beim Bau
+    des Images laufen (Lieferkette des Bundles). Ausnahmen nur über `auditConfig.ignoreGhsas`
+    in `pnpm-workspace.yaml` mit Begründung und Ablaufdatum. (6) **Veröffentlichungs-Filter
+    im Wächtertest:** `core_cut_test` bildet `$NamenAus` und `$MusterAus` aus
+    `tools/veroeffentlichen/Veroeffentlichen.ps1` vollständig nach (Namen und Dateimuster je
+    Pfadteil, ohne Rücksicht auf Groß-/Kleinschreibung wie `-contains`/`-like`), prüft die
+    von Tests, Image-Build und CI gelesenen Dateien einzeln und die ganz gelesenen Bäume
+    (Quellen, Tests, Migrationen, Handbuch, Sidecar-Dateien, `inputs`, `docs/assets`,
+    `static`, `src`, `legal`) auf ausgeschlossene Einträge; in `docs/` nur Ordner, weil dort
+    interne Dateien bewusst liegen. (7) **Lizenz-Prüfliste im Image-Smoke:** nennt genau die
+    JS-Pakete des Bundles (seit Kit 3 mit `devalue`, ohne `esm-env`); der Frontend-Job
+    vergleicht sie bei jedem Lauf mit `build/legal/js-licenses.json`. (8) **Sidecar
+    (R3-S2-SIDECAR-NITS):** keine automatische Wiederholung und keine vorgewärmte JVM
+    (seltener, vom Nutzer ausgelöster Vorgang; der Kaltstart liegt in den 120 s, eine
+    Wiederholung verdeckte nur eine zu knappe Speichergrenze); Report als Text ausgewertet,
+    höchstens 20 Befunde zur Anzeige, gezählt alle; dokumentiert in `architecture/modules.md`.
+143. **§13b bei Kosten, Doku-Abgleich (Lauf F, Block F7b, 2026-10-25; keine Migration, keine
+    neue Abhängigkeit).** (1) **§13b nur netto (review-v2026:R1-S2-13B):** Bei Leistungen nach
+    § 13b UStG schuldet der Empfänger die Steuer, auch als Kleinunternehmer (§ 13b Abs. 5
+    Satz 1 und Abs. 8 UStG); er meldet sie in der Voranmeldung an (§ 18 Abs. 4a UStG), ohne
+    Vorsteuerabzug. Die Lieferantenrechnung weist deshalb keine Umsatzsteuer aus. Kosten mit
+    `reverse_charge_13b` und `tax_amount_cents ≠ 0` lehnt `domain::expense::validate_expense`
+    ab (`ExpenseValidationError::ReverseChargeWithTax`, Meldung mit Erklärung) — ein solcher
+    Eintrag wäre fast sicher ein Erfassungsfehler, der die EÜR um eine nie gezahlte Steuer
+    erhöht. Die selbst geschuldete Steuer berechnet Klein.Buch weiterhin nicht (PRD G16):
+    eine Anmeldung samt Zeitpunkt der Steuerentstehung und eine Buchung der Zahlung an das
+    Finanzamt sind Fachlogik der Umsatzsteuer, die für die §19-Zielgruppe selten ist und
+    beim Steuerberater bzw. in ELSTER besser aufgehoben bleibt; das Handbuch („Kosten
+    erfassen“, „Kleinunternehmer-Regelung“, Glossar, FAQ, Disclaimer) beschreibt das
+    Vorgehen (Voranmeldung, Zahlung als Betriebsausgabe im Abflussjahr). **Empfang:** Eine
+    E-Rechnung mit Steuerkategorie AE **und** ausgewiesener Umsatzsteuer (gemischt bzw.
+    unstimmig) belegt `einvoice::parser::build_expense_input` ohne das §13b-Flag vor und
+    schreibt einen Hinweis in die Notiz; der Nutzer teilt sie bei Bedarf auf. Eine reine
+    AE-Rechnung (Steuer 0) bekommt das Flag wie bisher. Bestand: bereits erfasste Kosten
+    sind festgeschrieben und bleiben unverändert (GoBD); die Prüfung gilt für neue
+    Erfassungen, Abo-Kosten (immer netto) und den Import. Den Hinweistext am Schalter berichtigt
+    F7-fix (Nr. 144); die Gestaltung kommt im UI/UX-Lauf. Tests: `domain::expense::tests::reverse_charge_13b_rejects_tax_amount`,
+    `…::reverse_charge_13b_net_invoice_is_valid`,
+    `einvoice::parser::tests::detects_reverse_charge_ubl` (gemischt und rein),
+    `tests/expense_reverse_charge_test.rs`
+    (`reverse_charge_with_tax_amount_is_rejected_without_side_effects`: Ablehnung ohne
+    verbrauchte Belegnummer, danach netto erfasst als `KO-2026-0001`). (2) **Nr. 57
+    berichtigt (tasks:W13-ADR57):** Kern des Neuverschlüsselns ist `db::reencrypt_db_file`;
+    `encrypt_db_file_in_place` ist nur noch `#[cfg(test)]`. (3) **ON DELETE CASCADE
+    (review-v2026:R1-S2-ONDELETE):** drei Kaskaden im Schema, zwei davon tot durch die
+    no-delete-Trigger auf `invoices`/`quotes`, eine gewollt (Positionen einer
+    Abo-Vorlage); neue Kaskaden auf Beleg-Tabellen sind unzulässig. Dokumentiert in
+    `architecture/data-model.md` §5. (4) **Doku-Drift (tasks:SL-DOCS, R2-001,
+    tasks:N8-TASKS-PFLEGE):** PRD-Revision 9 um „R9.4 — Nachträge aus Lauf F“ ergänzt
+    (Schema 32, Backup-Format 3, Lock-Backup im Hintergrund, Re-Auth, ELSTER-Kennzahlen,
+    DATEV-Geldkonten, Storno-Überhang, Mustang-Profil XRECHNUNG, Werkzeugkette); README,
+    ARCHITECTURE und CLAUDE.md-Dateien auf Schema 32, ADRs 0001–0040, Node 24 LTS,
+    SvelteKit 3 und Typst 0.15; Stellen mit Desktop-/Tauri-/App-Start-Modell sind entweder
+    berichtigt oder ausdrücklich als historisch gekennzeichnet (ADRs mit Amendment, PRD über
+    Revision 8/9). Die Review-Dokumente der Desktop-Zeit sind als historisch markiert; die
+    Zuordnung aller offenen Altpunkte steht im (unveröffentlichten) Projektordner unter
+    „R6 – Schluss-Triage 2026-10“.
+144. **Nachbesserung F7 (Lauf F7-fix, 2026-10-25; keine Migration, keine neue
+    Abhängigkeit).** (1) **§13b im Formular:** Der Hinweis am Schalter in „Kosten erfassen“
+    und „E-Rechnung übernehmen“ verleitete zur USt-Eingabe, die Nr. 143 ablehnt. Er lautet
+    jetzt wie das Handbuch (USt-Betrag 0, Netto = Brutto, Steuer per Voranmeldung;
+    `tax.ts::REVERSE_CHARGE_13B_HINT`); beim Einschalten sind die Sätze 19 %, 7 % und
+    „individuell“ gesperrt, und beide Formulare prüfen vor dem Senden wie der Server
+    (`reverseChargeTaxError`). Gestaltung und Feldfehler im UI/UX-Lauf. Tests:
+    `src/lib/tax.test.ts` („reverseChargeTaxError“). (2) **Spec `inputs/specs/ust-paragraph-13b.md`**
+    sagt noch, §13b sei mit §19 „gegenstandslos“, und nennt das alte Feld
+    `is_reverse_charge`. `inputs/` ist für Maschinen tabu (Hard-Rule); die Berichtigung
+    nimmt Manuel vor: Auch Kleinunternehmer schulden die Steuer (§ 13b Abs. 5 Satz 1,
+    Abs. 8 UStG), melden sie nach § 18 Abs. 4a UStG an und ziehen keine Vorsteuer ab; Feld
+    `reverse_charge_13b`; maßgeblich ist Nr. 143. (3) **Betreiber-Hinweise:** CHANGELOG nennt
+    höchstens 75 s für das Herunterfahren und im Block „Hinweise für Betreiber“ die
+    Anhebung von `stop_grace_period` auf 90 s sowie die Rotation von SFTP-Zielen durch den
+    Betreiber; `backup_schedule_test::shutdown_budget_fits_stop_grace_period` prüft
+    CHANGELOG und Betriebshandbuch gegen die Konstanten. (4) **Monitoring:** Die Tabelle im
+    Betriebshandbuch nennt die WARN-Zeile für Verbindungen über der Grenze je Gegenstelle
+    (nicht im Zugriffsprotokoll) und wie die globale Grenze von außen sichtbar wird
+    (`core_cut_test::operations_guide_names_connection_limit_log_line`). (5) **ADR-Index**
+    um die Amendments vom 24./25.10.2026 ergänzt.
 
 ## Konsequenzen
 

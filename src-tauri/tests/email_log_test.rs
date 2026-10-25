@@ -29,12 +29,12 @@ async fn setup_pool() -> (SqlitePool, tempfile::TempDir) {
 fn success_entry(kind: &str, id: Option<&str>, number: Option<&str>, to: &str) -> EmailLogEntry {
     EmailLogEntry {
         account_id: Some("acc-1".into()),
-        account_label: Some("Wildbach M365".into()),
+        account_label: Some("Beispiel M365".into()),
         channel: "graph".into(),
         related_kind: kind.into(),
         related_id: id.map(str::to_string),
         related_number: number.map(str::to_string),
-        from_email: "rechnung@wildbach-computerhilfe.de".into(),
+        from_email: "rechnung@example.org".into(),
         to_email: to.into(),
         subject: "Rechnung".into(),
         attachment_count: 1,
@@ -49,12 +49,12 @@ fn success_entry(kind: &str, id: Option<&str>, number: Option<&str>, to: &str) -
 fn failed_entry(kind: &str, id: Option<&str>, to: &str) -> EmailLogEntry {
     EmailLogEntry {
         account_id: Some("acc-1".into()),
-        account_label: Some("Wildbach M365".into()),
+        account_label: Some("Beispiel M365".into()),
         channel: "smtp".into(),
         related_kind: kind.into(),
         related_id: id.map(str::to_string),
         related_number: None,
-        from_email: "rechnung@wildbach-computerhilfe.de".into(),
+        from_email: "rechnung@example.org".into(),
         to_email: to.into(),
         subject: "Test-Mail".into(),
         attachment_count: 0,

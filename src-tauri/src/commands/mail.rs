@@ -993,7 +993,7 @@ async fn dispatch_send(
 ) -> Result<SendReceipt> {
     ensure_smtp_auth(&account.auth_type)?;
     // smtp_password (Default). Ohne gespeichertes Passwort wird ohne Auth
-    // gesendet (Open-Relay/MailHog).
+    // gesendet (interner Relay, Mailpit im E2E-Test).
     let config = smtp_config_for(pool, account).await?;
     let info = smtp::send(&config, mail).await?;
     Ok(SendReceipt {

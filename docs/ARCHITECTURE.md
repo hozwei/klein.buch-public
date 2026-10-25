@@ -10,13 +10,16 @@ Sidecar-Bridge, Scheduler-Modell und die nicht verhandelbaren Hard-Rules.
 **Implementierungs-Stand:** Phasen 1–2D (Blöcke 0–17) + Phase 3 (Pakete/Anfahrt,
 ADR 0031) + DSGVO Auskunft/Anonymisierung (ADR 0032) + Phase 4 (Abo-Rechnungen,
 ADR 0033) + G1 Security/Backup-Härtung (ADRs 0034–0036) + Phase 7
-(E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039):
+(E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039) + **Lauf E/F** (Entscheidungen,
+Funktion und Technik vor dem UI/UX-Lauf; ADR 0040):
 Tauri, Desktop-Shell und Windows-Installer sind entfallen; ein HTTP-Server
 `klein-buch-server` (axum) liefert API und SPA aus.
 
-**Schema-Stand v31** (Migrationen 0001–0031 forward-only; 0031 = Tabelle
-`secrets` für Zugangsdaten). **ADRs 0001–0039** in `docs/adr/`; ADR 0039 löst
-ADR 0002 (Tauri) und ADR 0038 (NSIS) ab und ändert zwölf weitere per Amendment.
+**Schema-Stand v32** (Migrationen 0001–0032 forward-only; 0031 = Tabelle
+`secrets` für Zugangsdaten, 0032 = GoBD-Absicherungen aus Lauf F). **ADRs
+0001–0040** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038 (NSIS)
+ab und ändert zwölf weitere per Amendment; ADR 0040 regelt Dauerbetrieb, Start-
+und Zeitlogik (Lauf F).
 Betrieb: `docs/operations-guide.md`; Build und Release:
 `docs/architecture/build-and-release.md`.
 
@@ -657,7 +660,7 @@ den verlinkten ADRs.
   (no-update/no-delete-Trigger), Abschluss nur für abgelaufene Jahre,
   unumkehrbar; Storno als Korrektur bleibt möglich.
 - **Schema-Disziplin** (ADR 0003). STRICT-Tabellen, forward-only Migrationen
-  (0001–0031, Version v31, LF-Zeilenenden), Schema-Version-Check beim
+  (0001–0032, Version v32, LF-Zeilenenden), Schema-Version-Check beim
   Entsperren (neuere DB ⇒ kein Entsperren), Geld als Integer-Cents, UUIDv7-PKs.
   Restore nimmt Backups mit `30 ≤ schema ≤ EXPECTED` und migriert vorwärts.
 - **`inputs/` tabu.** Vom Menschen gepflegt; der Container ergänzt das Volume
@@ -696,7 +699,13 @@ den verlinkten ADRs.
   Downloads, Restore, mehrere Off-Site-Ziele (W7), Zugangsdaten in der DB (W8),
   Frontend ohne Tauri (W9), responsiv (W10), Linux-Sidecar und Image (W11),
   Lizenzen, Quellen und Release-Infrastruktur (W12), Handbuch und Betriebsdoku
-  (W13), Security-Review (W14).
+  (W13), Security-Review (W14). Veröffentlicht als v2026.10.0.
+- **Lauf E und Lauf F.** Entscheidungen (Storno im Folgejahr u. a.) und alles
+  Funktionale, Technische und GoBD-Relevante vor dem UI/UX-Lauf: Start- und
+  Zeitlogik (ADR 0040), Migration 0032, Backup-Format 3 mit Lock-Backup im
+  Hintergrund, Anmeldung und Härtung, Fachlogik, Tauri-Altcode entfernt,
+  SvelteKit 3 / Vite 8 / Node 24 / Typst 0.15, CI und Doku. Erscheint mit
+  2026.11.0 nach dem UI/UX-Lauf.
 
 **Auslieferung** ist das signierte Image `ghcr.io/hozwei/klein-buch:<CalVer>`
 aus dem öffentlichen Repository, mit SBOM und Quellarchiv je Release; betrieben
@@ -713,13 +722,13 @@ Dateien in `docs/architecture/`:
 
 | Datei | Inhalt | Stand |
 |---|---|---|
-| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | Phase W (W13) |
-| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | Phase W (W13) |
+| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | 2026-10-25 (Lauf F, inkl. §11 ASVS-Entscheidungen) |
+| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | 2026-10-25 (Lauf F2) |
 | [`architecture/build-and-release.md`](architecture/build-and-release.md) | Image-Build (`Dockerfile`), Sidecar aus geprüften Quellen, CI-Gates, Trockenlauf, Release mit Signatur/SBOM/Quellarchiv, Veröffentlichen | Phase W (W13) |
 | [`architecture/paragraph-19.md`](architecture/paragraph-19.md) | §19-Logik: UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Verzicht/5-Jahres-Bindung, §14c-Schutz | 2026-05-26 |
-| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0039) mit Querverweisen | 2026-10-23 |
-| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16) |
-| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste | 2026-10-24, Schema v31 (inkl. 0031 `secrets`) |
+| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0040) mit Querverweisen | 2026-10-25 |
+| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F |
+| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste | 2026-10-25, Schema v32 (inkl. 0032 GoBD-Absicherungen, ON DELETE) |
 | [`architecture/handbook.md`](architecture/handbook.md) | Aufbau und Konventionen des eingebauten Handbuchs | — |
 | [`architecture/conventions.md`](architecture/conventions.md) | Doku-Konventionen (Sprache, Aufbau, „Letzte Verifikation") | 2026-05-26 |
 
@@ -732,8 +741,9 @@ Betrieb `docs/operations-guide.md`. Wer ein Modul ändert, springt in den Code,
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13; Version 2026.5.1, Schema v31, ADRs
-0001–0039). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
+Stand: 2026-10-25 (Lauf F, Block F7; Version 2026.10.0, Schema v32, ADRs
+0001–0040; Zähl- und Versionsangaben nachgezogen, Inhalte von Phase W wie
+W13 geprüft). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
 `auth.rs`, `policy.rs`, `health.rs`), `src-tauri/src/{app_ctx,config,seed,uploads,downloads,secrets}.rs`,
 `src-tauri/src/scheduler/tick.rs`, `src-tauri/src/db/mod.rs`,
 `src-tauri/src/commands/{registry,backup}.rs`, `src-tauri/src/einvoice/`,

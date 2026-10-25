@@ -91,6 +91,23 @@ Zweigeteilt: **Generator** (Core, pur) baut CII-XML aus Domain-Daten,
 Stubs, aber nur in Debug-/Test-Builds (`einvoice::sidecar_mock_active`); ein
 Release-Build mit gesetztem Schalter startet nicht (`server::mod`).
 
+**Befunde, Exit-Code, Grenzen (R3-S2-SIDECAR-NITS, Lauf F7a).** Der
+KoSIT-Report wird als Text ausgewertet (`validator::parse_report`, Markierungen
+in `rep:message` und SVRL, keine XML-Bibliothek); maßgeblich ist der Report, nicht
+der Exit-Code: Bei Ablehnung (Exit ≠ 0) liefert der Report den Grund, nur ohne
+lesbaren Report wird der Exit-Code samt stderr zum Fehler. Für die Anzeige
+werden höchstens 20 Befunde gesammelt (`findings`), gezählt werden alle
+(`error_count`, `warning_count`); den vollständigen Report enthält `raw_xml`.
+Ein Timeout beendet die JVM (`kill_on_drop`). Bewusst ohne automatische
+Wiederholung und ohne vorgewärmte JVM: Ein Festschreiben ist ein seltener,
+vom Nutzer ausgelöster Vorgang; der Kaltstart (wenige Sekunden) liegt innerhalb
+der Timeouts, eine Wiederholung bei Timeout verdeckte nur eine zu knappe
+Speichergrenze. PDF/A-3 bedeutet hier: Typst erzeugt das Basis-Dokument als
+PDF/A-3b, Mustang bettet das XML ein und setzt die ZUGFeRD-Metadaten; der
+Smoke-Test des Images prüft die Kennung `pdfaid:part 3`, der Trockenlauf in
+`release-image.yml` das erzeugte Rechnungs-PDF zusätzlich mit veraPDF auf
+PDF/A-3b (R3-018).
+
 **Tests.** Generator hat einen vollständigen Golden-XML-Test (CII-Roundtrip).
 Parser hat Fixtures aus echten XRechnungen + ZUGFeRD-PDFs. Die
 Pipeline-Tests setzen den Mock selbst; `tests/sidecar_real_test.rs` läuft lokal
@@ -496,7 +513,7 @@ ADRs: 0035 (Bootstrap-Inversion), 0039 (Server-Betrieb).
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13), Schema v31, ADRs 0001–0039. Quelle:
+Stand: 2026-10-24 (Phase W, Block W13), Schema damals v31; nachgetragen in Lauf F bis 2026-10-25 (entfernte Module F6a, Sidecar-Grenzen F7a, Uhr im `AppCtx` F1; Schema v32, ADRs 0001–0040). Quelle:
 Verzeichnis-Listing von `klein-buch/src-tauri/src/**/*.rs`, die
 `mod.rs`-/Datei-Header-Kommentare und die öffentlichen Funktionsnamen der
 genannten Module; `server/` abgeglichen mit `../ARCHITECTURE.md` §2f. Die

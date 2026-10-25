@@ -422,6 +422,18 @@ FKs gibt es für Stammdaten-Beziehungen (`contact_id`, `payment_account_id`,
 am FK; gelöscht wird ohnehin selten — DSGVO-Anonymisierung ist ein **UPDATE
 auf NULL**, keine Löschung des Datensatzes.
 
+**`ON DELETE CASCADE`** steht im Schema an genau drei Stellen (R1-S2-ONDELETE,
+dokumentiert in Lauf F7):
+
+| Fremdschlüssel | Migration | Wirkung |
+|---|---|---|
+| `invoice_items.invoice_id → invoices(id)` | 0001 | tot: `trg_invoices_no_delete` (0028) verbietet jedes DELETE auf `invoices`, die Kaskade kann nie auslösen. Positionen eines Entwurfs ersetzt der Repo-Layer per DELETE auf `invoice_items` selbst; bei festgeschriebenen oder verworfenen Rechnungen sperren das `trg_invoice_items_frozen_*` (0032). |
+| `quote_items.quote_id → quotes(id)` | 0005 | tot: `trg_quotes_no_delete` (0028); Positionen festgeschriebener Angebote schützt `trg_quote_items_frozen_*` (0032). |
+| `recurring_invoice_items.recurring_invoice_id → recurring_invoices(id)` | 0024 | gewollt: Positionen einer Abo-**Vorlage** sind kein Beleg und gehören nur zu ihrer Vorlage. Derzeit löscht kein Code eine Vorlage (Pausieren bzw. Laufzeit-Ende über `active` und `end_date`); käme ein Löschen dazu, gingen die Vorlagen-Positionen mit. Die daraus erzeugten Rechnungen sind eigenständige Kopien und hängen nicht an der Vorlage. |
+
+Neue Kaskaden auf Beleg-Tabellen sind nicht zulässig (GoBD: Storno statt
+Löschung); neue Fremdschlüssel bekommen das Standardverhalten (DELETE scheitert).
+
 ---
 
 ## 6. Sensible Felder — was steht nirgends drin
@@ -445,7 +457,7 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32. Quelle:
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft). Quelle:
 `klein-buch/src-tauri/migrations/0001..0032.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
 `src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:

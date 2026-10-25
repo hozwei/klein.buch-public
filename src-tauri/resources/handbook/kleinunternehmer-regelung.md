@@ -25,6 +25,14 @@ Kleinunternehmer eine Eingangsrechnung mit ausgewiesener
 Umsatzsteuer bekommst, ist diese Umsatzsteuer für Dich ein
 normaler Bestandteil der Ausgabe. Du buchst den Brutto-Betrag.
 
+Davon getrennt ist §13b UStG zu sehen: Schuldest
+Du als Leistungsempfänger die Umsatzsteuer (zum Beispiel
+bei Werbung oder Software von Anbietern im EU-Ausland), musst Du sie
+auch als Kleinunternehmer anmelden und zahlen, ohne sie als
+Vorsteuer abziehen zu dürfen. Klein.Buch berechnet diese Steuer
+nicht; wie Du vorgehst, steht im Kapitel "Kosten erfassen" unter
+"§13b: Du schuldest die Steuer".
+
 ## Die Umsatz-Grenzen (Stand 2026)
 
 Du bist Kleinunternehmer, wenn Du beide Bedingungen erfüllst:
@@ -102,4 +110,4 @@ Steuerberater; die Ausfüllhilfe weist darauf hin.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

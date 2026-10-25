@@ -1,17 +1,18 @@
 //! End-to-End-Happy-Path für Block 5 (SMTP-Versand).
 //!
 //! Sequenz: Seller-Profile setzen → Contact anlegen → Rechnung anlegen +
-//! locken (Mock-Sidecar) → über einen Mail-Account gegen **MailHog**
-//! versenden. Anschließend wird über die MailHog-HTTP-API verifiziert, dass
+//! locken (Mock-Sidecar) → über einen Mail-Account gegen **Mailpit**
+//! versenden. Anschließend wird über die Mailpit-HTTP-API verifiziert, dass
 //! die Mail samt ZUGFeRD-PDF-Anhang angekommen ist und die DB den Versand
 //! festgehalten hat (`status='sent'`, Audit-Log-Eintrag).
 //!
 //! ## Lauf-Voraussetzung
 //!
-//! Ein MailHog auf `127.0.0.1` (SMTP 1025, HTTP 8025). In CI als Docker-
-//! Service (`mailhog/mailhog`, siehe `.github/workflows/ci.yml`). **Lokal
-//! ohne MailHog wird der Test übersprungen** (no-op, `cargo test` bleibt
-//! grün) — die Mail-Bausteine sind zusätzlich über Unit-Tests abgedeckt.
+//! Ein Mailpit auf `127.0.0.1` (SMTP 1025, HTTP 8025). In CI als Docker-
+//! Service (`axllent/mailpit`, per Digest gepinnt, siehe `.github/workflows/ci.yml`;
+//! bis Lauf F7a MailHog). **Lokal ohne Mailpit wird der Test übersprungen**
+//! (no-op, `cargo test` bleibt grün) — die Mail-Bausteine sind zusätzlich über
+//! Unit-Tests abgedeckt.
 //!
 //! Der Sidecar (KoSIT/Mustang) ist über `KLEIN_BUCH_SIDECAR_MOCK=1` gemockt;
 //! der Keychain läuft im plattform-unabhängigen Mock-Store, sodass der Test
@@ -242,13 +243,13 @@ async fn create_locked_invoice(env: &Env) -> (String, String) {
     (draft.id, number)
 }
 
-async fn create_mailhog_account(pool: &SqlitePool) -> String {
+async fn create_mailpit_account(pool: &SqlitePool) -> String {
     // auth_type smtp_password, aber KEINE Passphrase gespeichert → Versand
-    // ohne Auth (MailHog ist ein offener Relay). use_tls=false → builder_dangerous.
+    // ohne Auth (Mailpit nimmt ohne Anmeldung an). use_tls=false → builder_dangerous.
     mail_accounts::create(
         pool,
         &mail_accounts::MailAccountInput {
-            label: "MailHog (E2E)".into(),
+            label: "Mailpit (E2E)".into(),
             auth_type: "smtp_password".into(),
             smtp_host: Some("127.0.0.1".into()),
             smtp_port: Some(1025),
@@ -265,15 +266,15 @@ async fn create_mailhog_account(pool: &SqlitePool) -> String {
 }
 
 #[tokio::test]
-async fn send_invoice_happy_path_against_mailhog() {
+async fn send_invoice_happy_path_against_mailpit() {
     if !port_reachable("127.0.0.1:1025") {
-        eprintln!("MailHog (127.0.0.1:1025) nicht erreichbar — E2E-Test übersprungen.");
+        eprintln!("Mailpit (127.0.0.1:1025) nicht erreichbar — E2E-Test übersprungen.");
         return;
     }
 
     let env = setup_env().await;
     let (invoice_id, number) = create_locked_invoice(&env).await;
-    let account_id = create_mailhog_account(&env.pool).await;
+    let account_id = create_mailpit_account(&env.pool).await;
 
     let result = mail_cmd::send_invoice_core(
         &env.pool,
@@ -285,7 +286,7 @@ async fn send_invoice_happy_path_against_mailhog() {
         None,
     )
     .await
-    .expect("Versand gegen MailHog muss gelingen");
+    .expect("Versand gegen Mailpit muss gelingen");
 
     assert_eq!(result.attachment_count, 1);
     assert_eq!(result.to, "empfaenger@example.org");
@@ -305,23 +306,23 @@ async fn send_invoice_happy_path_against_mailhog() {
             .get("n");
     assert_eq!(sent_audit, 1, "Audit-Log muss invoice.sent enthalten");
 
-    // MailHog: Mail angekommen, mit ZUGFeRD-PDF-Anhang + gerendertem Betreff.
-    let messages = mailhog_messages().expect("MailHog-API muss antworten");
+    // Mailpit: Mail angekommen, mit ZUGFeRD-PDF-Anhang + gerendertem Betreff.
+    let messages = mailpit_latest_message().expect("Mailpit-API muss antworten");
     assert!(
         messages.contains("empfaenger@example.org"),
-        "Empfänger fehlt in MailHog"
+        "Empfänger fehlt in Mailpit"
     );
     assert!(
         messages.contains(&format!("{number}.pdf")),
-        "ZUGFeRD-Attachment {number}.pdf fehlt in MailHog"
+        "ZUGFeRD-Attachment {number}.pdf fehlt in Mailpit"
     );
     assert!(
         messages.contains("application/pdf"),
-        "PDF-Content-Type fehlt in MailHog"
+        "PDF-Content-Type fehlt in Mailpit"
     );
     assert!(
         messages.contains(&format!("Rechnung {number}")),
-        "Gerenderter Betreff fehlt in MailHog"
+        "Gerenderter Betreff fehlt in Mailpit"
     );
 }
 
@@ -334,20 +335,24 @@ fn port_reachable(addr: &str) -> bool {
     TcpStream::connect_timeout(&sa, Duration::from_secs(1)).is_ok()
 }
 
-/// Holt die MailHog-Message-Liste über die HTTP-API (v2). Bewusst minimaler
-/// HTTP/1.0-GET ohne extra Crate-Dependency.
-fn mailhog_messages() -> Option<String> {
+/// Holt die zuletzt angekommene Mail über die Mailpit-HTTP-API
+/// (`/api/v1/message/latest`: Kopf, Text und Anhänge mit Dateiname und
+/// Content-Type als JSON). Bewusst minimaler HTTP/1.0-GET ohne extra Crate.
+fn mailpit_latest_message() -> Option<String> {
     let sa = "127.0.0.1:8025".to_socket_addrs().ok()?.next()?;
     let mut stream = TcpStream::connect_timeout(&sa, Duration::from_secs(2)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     stream
         .write_all(
-            b"GET /api/v2/messages HTTP/1.0\r\nHost: 127.0.0.1:8025\r\nConnection: close\r\n\r\n",
+            b"GET /api/v1/message/latest HTTP/1.0\r\nHost: 127.0.0.1:8025\r\nConnection: close\r\n\r\n",
         )
         .ok()?;
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).ok()?;
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    let status = text.lines().next().unwrap_or_default();
+    assert!(status.contains(" 200 "), "Mailpit-API: {status}");
+    Some(text)
 }
 
 /// Konto auf der Test-Gegenstelle (`tests/smtp_support`), Klartext ohne Login.

@@ -47,7 +47,7 @@ async fn setup() -> (SqlitePool, tempfile::TempDir) {
 async fn mk_basics(pool: &SqlitePool) -> String {
     sqlx::query(
         "INSERT INTO seller_profile (id, name, street, postal_code, city, tax_number, email)
-         VALUES (1, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut', '123', 's@x.de')",
+         VALUES (1, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut', '123', 's@x.example.org')",
     )
     .execute(pool)
     .await
@@ -99,7 +99,7 @@ async fn mk_locked_invoice(pool: &SqlitePool, contact_id: &str, id: &str) {
             locked_at
          ) VALUES (
             ?, ?, 2026, 'issued', '2026-05-20', '2026-05-20',
-            ?, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+            ?, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
             '123', 10000, 0, 10000,
             'EUR', 1, 'default', 'issued',
             'Kunde GmbH', 'Hauptstr. 7', '80331', 'München', 'DE',
@@ -166,7 +166,7 @@ async fn delete_draft_invoice_is_also_blocked() {
             seller_tax_number, net_amount_cents, gross_amount_cents,
             status
          ) VALUES (?, 'RE-2026-DRAFT', 2026, 'issued', '2026-05-20',
-                   ?, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+                   ?, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
                    '123', 10000, 10000, 'draft')",
     )
     .bind(id)
@@ -194,7 +194,7 @@ async fn delete_quote_is_blocked() {
             seller_name, seller_street, seller_postal_code, seller_city,
             net_amount_cents, gross_amount_cents, status
          ) VALUES (?, 'AN-2026-0001', 2026, '2026-05-20', '2026-06-20', ?,
-                   'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+                   'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
                    10000, 10000, 'draft')",
     )
     .bind(id)
@@ -767,7 +767,7 @@ async fn lock_with_pair_cancel_atomically_locks_storno_and_cancels_original() {
             seller_tax_number, net_amount_cents, gross_amount_cents,
             status, is_storno_for
          ) VALUES (?, 'ST-2026-0001', 2026, 'issued', '2026-05-21',
-                   ?, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+                   ?, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
                    '123', -10000, -10000, 'draft', ?)",
     )
     .bind(storno)
@@ -847,7 +847,7 @@ async fn lock_with_pair_cancel_rolls_back_storno_lock_when_original_missing() {
             seller_tax_number, net_amount_cents, gross_amount_cents,
             status
          ) VALUES (?, 'ST-2026-0002', 2026, 'issued', '2026-05-21',
-                   ?, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+                   ?, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
                    '123', -10000, -10000, 'draft')",
     )
     .bind(storno)
@@ -906,7 +906,7 @@ async fn lock_without_pair_still_works_for_normal_invoices() {
             seller_tax_number, net_amount_cents, gross_amount_cents,
             status
          ) VALUES (?, 'RE-2026-NORMAL', 2026, 'issued', '2026-05-21',
-                   ?, 'Wildbach', 'Beispielweg 1', '84028', 'Landshut',
+                   ?, 'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
                    '123', 10000, 10000, 'draft')",
     )
     .bind(id)

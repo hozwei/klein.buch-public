@@ -18,10 +18,17 @@
 //! Eingangsrechnung eines Lieferanten DARF Umsatzsteuer enthalten — der
 //! Kleinunternehmer zahlt sie, kann aber keine Vorsteuer ziehen. Für die EÜR
 //! (Cash-Basis, Block 13) ist deshalb der **Brutto**-Betrag die
-//! Betriebsausgabe. Diese Domain erzwingt daher **keine** USt-Freiheit.
+//! Betriebsausgabe. Diese Domain erzwingt daher **keine** USt-Freiheit (Ausnahme
+//! §13b, unten).
 //!
-//! §13b (Reverse-Charge) ist nur ein **Hinweis-Flag** — keine USt-Auto-
-//! Berechnung (PRD G16: "Berechnung extern").
+//! §13b (Reverse-Charge): Der Lieferant stellt **netto** in Rechnung, die
+//! Steuer schuldet der Leistungsempfänger — auch ein Kleinunternehmer
+//! (§13b Abs. 5 Satz 1 und Abs. 8 UStG). Klein.Buch
+//! berechnet und meldet sie nicht (PRD G16: "Berechnung extern"); das Flag
+//! markiert die Kosten. Erzwungen wird nur: bei gesetztem Flag ist
+//! `tax_amount_cents == 0` (eine Lieferantenrechnung mit §13b weist keine USt
+//! aus; R1-S2-13B, Lauf F7). Die selbst geschuldete USt ist bei Zahlung an das
+//! Finanzamt eine eigene Betriebsausgabe (Abflussprinzip, §11 Abs. 2 EStG).
 //!
 //! ## Geld-Konvention
 //!
@@ -113,6 +120,11 @@ pub enum ExpenseValidationError {
         net: i64,
         tax: i64,
         gross: i64,
+    },
+    /// §13b gesetzt, aber ein USt-Betrag erfasst: bei Reverse-Charge weist der
+    /// Lieferant keine Umsatzsteuer aus (R1-S2-13B).
+    ReverseChargeWithTax {
+        tax: i64,
     },
     /// Kosten ohne jeden Betrag (alles 0) sind vermutlich ein Eingabefehler.
     AmountZero,
@@ -207,6 +219,11 @@ pub fn validate_expense(
             gross: input.gross_amount_cents,
         });
     }
+    if input.reverse_charge_13b && input.tax_amount_cents != 0 {
+        errs.push(E::ReverseChargeWithTax {
+            tax: input.tax_amount_cents,
+        });
+    }
     if input.net_amount_cents == 0 && input.tax_amount_cents == 0 && input.gross_amount_cents == 0 {
         errs.push(E::AmountZero);
     }
@@ -239,6 +256,10 @@ pub fn message(e: &ExpenseValidationError) -> String {
             eur(*net),
             eur(*tax)
         ),
+        E::ReverseChargeWithTax { tax } => format!(
+            "§13b (Reverse-Charge): Der Lieferant weist keine Umsatzsteuer aus, der USt-Betrag muss 0 sein (erfasst {}). Die Steuer meldest du selbst in der Umsatzsteuer-Voranmeldung an.",
+            eur(*tax)
+        ),
         E::AmountZero => "Der Betrag muss größer als 0 sein.".into(),
         E::AmountOutOfRange => crate::domain::money::amount_out_of_range_message(),
         E::ExpenseDateInFuture { expense_date, today } => format!(
@@ -262,6 +283,7 @@ pub fn variant_name(e: &ExpenseValidationError) -> &'static str {
         E::NetNegative { .. } => "NetNegative",
         E::TaxNegative { .. } => "TaxNegative",
         E::GrossMismatch { .. } => "GrossMismatch",
+        E::ReverseChargeWithTax { .. } => "ReverseChargeWithTax",
         E::AmountZero => "AmountZero",
         E::AmountOutOfRange => "AmountOutOfRange",
         E::ExpenseDateInFuture { .. } => "ExpenseDateInFuture",
@@ -418,15 +440,34 @@ mod tests {
     }
 
     #[test]
-    fn reverse_charge_13b_is_just_a_flag() {
-        // §13b setzt keine USt-Logik in Gang — Brutto bleibt = Netto wenn der
-        // Lieferant (Reverse-Charge) keine USt ausweist; das Flag ändert nichts
-        // an der Betrags-Validierung.
+    fn reverse_charge_13b_net_invoice_is_valid() {
+        // §13b setzt keine USt-Berechnung in Gang — der Lieferant stellt netto
+        // in Rechnung, Brutto = Netto.
         let mut e = good();
         e.reverse_charge_13b = true;
         e.net_amount_cents = 10_000;
         e.tax_amount_cents = 0;
         e.gross_amount_cents = 10_000;
+        assert!(validate_expense(&e, today()).is_ok());
+    }
+
+    /// R1-S2-13B (Lauf F7): §13b mit ausgewiesener USt ist ein Erfassungsfehler.
+    #[test]
+    fn reverse_charge_13b_rejects_tax_amount() {
+        let mut e = good();
+        e.reverse_charge_13b = true;
+        e.net_amount_cents = 10_000;
+        e.tax_amount_cents = 1_900;
+        e.gross_amount_cents = 11_900;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert_eq!(
+            err,
+            vec![ExpenseValidationError::ReverseChargeWithTax { tax: 1_900 }]
+        );
+        assert_eq!(variant_name(&err[0]), "ReverseChargeWithTax");
+        assert!(message(&err[0]).contains("19,00 €"), "{}", message(&err[0]));
+        // Ohne Flag ist dieselbe Rechnung (Vorsteuer nicht abziehbar) gültig.
+        e.reverse_charge_13b = false;
         assert!(validate_expense(&e, today()).is_ok());
     }
 

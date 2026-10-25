@@ -61,7 +61,7 @@ async fn backup_roundtrip_decrypt_and_extract() {
     let dir = TempDir::new().unwrap();
     let paths = paths_for(dir.path());
     let pool = migrated_pool(&paths.db_file).await;
-    insert_demo_contact(&pool, "c-1", "Wildbach Computerhilfe").await;
+    insert_demo_contact(&pool, "c-1", "Beispiel IT-Service").await;
 
     // Eine Archive-Datei simulieren.
     std::fs::create_dir_all(paths.archive_dir.join("2026/invoices/pdf")).unwrap();
@@ -110,7 +110,7 @@ async fn backup_roundtrip_decrypt_and_extract() {
         .fetch_one(&pool2)
         .await
         .unwrap();
-    assert_eq!(name, "Wildbach Computerhilfe");
+    assert_eq!(name, "Beispiel IT-Service");
 
     // Falsche Passphrase schlägt fehl.
     assert!(restore::decrypt_backup(&bytes, "falsch").is_err());

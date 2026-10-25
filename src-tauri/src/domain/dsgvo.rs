@@ -740,7 +740,7 @@ mod tests {
             postal_code: Some("84028".into()),
             city: Some("Landshut".into()),
             country_code: "DE".into(),
-            email: Some("erika@example.de".into()),
+            email: Some("erika@example.org".into()),
             phone: Some("0871 12345".into()),
             iban: None,
             bic: None,
@@ -763,7 +763,7 @@ mod tests {
             delivery_date: Some("2026-02-28".into()),
             due_date: Some("2026-03-15".into()),
             contact_id: "c1".into(),
-            seller_name: "Wildbach".into(),
+            seller_name: "Beispiel IT".into(),
             seller_street: "Weg 2".into(),
             seller_postal_code: "84028".into(),
             seller_city: "Landshut".into(),
@@ -800,7 +800,7 @@ mod tests {
             buyer_city: Some("Landshut".into()),
             buyer_country_code: Some("DE".into()),
             buyer_vat_id: Some("DE123456789".into()),
-            buyer_email: Some("erika@example.de".into()),
+            buyer_email: Some("erika@example.org".into()),
             derived_from_quote_id: None,
             paid_to_account_id: None,
             voided_at: None,
@@ -869,8 +869,8 @@ mod tests {
             related_kind: "invoice".into(),
             related_id: Some("i1".into()),
             related_number: Some("RE-2026-0001".into()),
-            from_email: "info@wildbach.de".into(),
-            to_email: "erika@example.de".into(),
+            from_email: "info@beispiel-it.example.org".into(),
+            to_email: "erika@example.org".into(),
             subject: "Ihre Rechnung RE-2026-0001".into(),
             attachment_count: 2,
             status: "success".into(),
@@ -896,11 +896,11 @@ mod tests {
 
     fn controller() -> ControllerInfo {
         ControllerInfo {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             address: "Weg 2, 84028 Landshut".into(),
             tax_number: Some("123/456/789".into()),
             vat_id: None,
-            email: Some("info@wildbach.de".into()),
+            email: Some("info@beispiel-it.example.org".into()),
             phone: Some("0871 99999".into()),
         }
     }

@@ -9,7 +9,9 @@ Abnahme-Ablauf (W14): Zahlung, Backup, Restore samt Neustart und Anmeldung,
 Export als Download. Der Container braucht dafür eine Restart-Policy, die auch
 nach Exit 0 neu startet. Nur Standardbibliothek.
 Aufruf: image_smoke.py <setup-token>  (SMOKE_COOKIE_FILE: Sitzungs-Cookie am
-Ende in diese Datei schreiben, z. B. für den ZAP-Scan)
+Ende in diese Datei schreiben, z. B. für den ZAP-Scan; SMOKE_PDF_OUT: das
+festgeschriebene Rechnungs-PDF in diese Datei schreiben, für die
+PDF/A-3b-Prüfung mit veraPDF im Trockenlauf, R3-018)
 """
 
 import base64
@@ -226,6 +228,10 @@ def main():
         fail(f"PDF aus dem Archiv: {s}")
     if b"pdfaid:part>3<" not in pdf and b'pdfaid:part="3"' not in pdf:
         fail("PDF ist kein PDF/A-3")
+    pdf_out = os.environ.get("SMOKE_PDF_OUT")
+    if pdf_out:
+        with open(pdf_out, "wb") as f:
+            f.write(pdf)
     s, _, xml = request("GET", f"/files/archive/{locked['xmlArchiveId']}", cookie=cookie, raw=True)
     if s != 200 or b"CrossIndustryInvoice" not in xml:
         fail(f"XML aus dem Archiv: {s}")

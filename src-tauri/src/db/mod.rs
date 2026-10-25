@@ -842,7 +842,10 @@ pub(crate) fn remove_file_if_exists(path: &Path) -> Result<()> {
     }
 }
 
-/// G1-ENC Schritt 3 — **Kern** der Bestands-Migration ohne Orchestrierung.
+/// G1-ENC Schritt 3 — Klartext-DB in eine SQLCipher-DB überführen; **nur noch
+/// für Tests** dieses Moduls. Seit W6 gibt es keinen produktiven
+/// Klartext-Übergangspfad mehr (ADR 0039 Nr. 57, E17); der gemeinsame Kern des
+/// Neuverschlüsselns ist [`reencrypt_db_file`] (auch für [`rekey_db_file`]).
 ///
 /// Exportiert die **Klartext**-DB unter `db_file` über `sqlcipher_export` in eine
 /// frische SQLCipher-Datei und legt sie per **atomarem Rename** an dieselbe Stelle
@@ -859,7 +862,8 @@ pub(crate) fn remove_file_if_exists(path: &Path) -> Result<()> {
 /// Voraussetzung: **kein offener Pool** auf `db_file` (eine offene Verbindung
 /// arbeitete nach dem Tausch mit der alten Datei weiter).
 /// Idempotent: ist die Datei bereits verschlüsselt (oder fehlt sie), passiert nichts.
-pub async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Result<()> {
+#[cfg(test)]
+pub(crate) async fn encrypt_db_file_in_place(db_file: &Path, passphrase: &str) -> Result<()> {
     if !db_file_is_plaintext(db_file) {
         // Bereits verschlüsselt (oder nicht vorhanden) → nichts zu tun.
         return Ok(());

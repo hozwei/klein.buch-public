@@ -494,6 +494,32 @@ Klein.Buch selbst antwortet ab dem fünften Fehlversuch je Client mit Wartezeite
 TOTP-Anmeldungen von unbekannten Geräten nach 100 Fehlversuchen in Folge (§12);
 bekannte Geräte und Einmal-Codes sind davon nie betroffen.
 
+**Monitoring und Alarmierung.** Klein.Buch begrenzt Lastspitzen und
+Fehlversuche selbst, alarmiert aber nicht: Es gibt einen Inhaber und keinen Kanal
+außerhalb der Instanz (ASVS 8.1.4, V11.1.7, V11.1.8 entschieden, ADR 0039
+Nr. 142). Wer benachrichtigt werden oder auf Netzebene sperren will, wertet das
+Log mit fail2ban oder einem Log-/Container-Monitoring aus. Lohnende Zeilen:
+
+| Zeile (Ziel) | Bedeutung | Vorschlag |
+|---|---|---|
+| `auth.login.failed`, `auth.setup.failed`, `auth.reauth.failed` (`klein_buch_lib::auth`, WARN) | Fehlversuch mit IP und Grund | fail2ban (Filter oben); Alarm bei Häufung |
+| `auth.login.failed … reason=rate_limited` | Client wird schon gebremst | Alarm, wenn es anhält |
+| `auth.totp_locked` (WARN) | TOTP-Anmeldung ohne Gerätecookie nach 100 Fehlversuchen gesperrt | sofort benachrichtigen |
+| Zugriffsprotokoll mit Status `429` (`klein_buch_lib::http`) | Anfrage von einem Limit abgewiesen (Anmeldung, PDF-/Java-Aufrufe je Sitzung) | Alarm bei Häufung je `ip` |
+| `Verbindung von … abgewiesen: mehr als 32 offene Verbindungen dieser Gegenstelle` (`klein_buch_lib::server::http`, WARN, höchstens einmal je Minute) | eine Gegenstelle (IPv4-Adresse bzw. IPv6-/64) hält mehr als 32 Verbindungen; die Verbindung wird ohne Antwort geschlossen und erscheint nicht im Zugriffsprotokoll. Hinter einem nicht vertrauten Proxy ist die Gegenstelle dessen IP (vertraute Proxys zählen nur gegen die globale Grenze) | Alarm bei Häufung |
+| Zugriffsprotokoll mit Status `5xx`, Zeilen auf `ERROR` | interner Fehler (`req` = angezeigte `ref`) | benachrichtigen |
+| Healthcheck `unhealthy` bzw. `state` dauerhaft `locked` | Container hängt bzw. nach einem Neustart nicht entsperrt (Jobs ruhen) | benachrichtigen |
+
+Die globale Grenze von 256 offenen Verbindungen schreibt keine Zeile: Ist sie erreicht,
+nimmt Klein.Buch keine neue Verbindung an, bis eine endet; weitere warten im Backlog des
+Kernels. Von außen zeigt sich das an langsamen oder ausbleibenden Antworten des
+Healthchecks bzw. an den Metriken des Reverse-Proxys (Upstream-Timeouts, offene
+Verbindungen).
+
+Nach jeder Anmeldung zeigt Klein.Buch zudem die Zahl der Fehlversuche seit der
+letzten erfolgreichen Anmeldung; das `audit_log` hält jede Buchung append-only
+fest (Einstellungen → Audit-Trail).
+
 **Healthcheck.** Das Image prüft sich selbst (`HEALTHCHECK`, alle 30 s, über den
 Subcommand `klein-buch-server healthcheck`). `GET /healthz` antwortet von außen
 nur 200 bzw. 503 (Herunterfahren, Neustart nach Restore) ohne Inhalt; über

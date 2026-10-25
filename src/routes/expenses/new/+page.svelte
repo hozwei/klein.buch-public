@@ -8,6 +8,7 @@
   import { EXPENSE_CATEGORIES } from "#lib/labels.ts";
   import { euro } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
+  import { REVERSE_CHARGE_13B_HINT, reverseChargeTaxError } from "#lib/tax.ts";
 
   let vendors = $state<Contact[]>([]);
   let accounts = $state<PaymentAccount[]>([]);
@@ -75,6 +76,11 @@
     }
     if (grossCents <= 0) {
       flash("Betrag muss größer als 0 sein.", "error");
+      return;
+    }
+    const rcError = reverseChargeTaxError(reverseCharge13b, Math.round(taxEuros * 100));
+    if (rcError) {
+      flash(rcError, "error");
       return;
     }
     busy = true;
@@ -170,10 +176,11 @@
     <label>
       USt-Satz
       <select bind:value={vatRate}>
-        <option value="19">19 % (Regelsatz)</option>
-        <option value="7">7 % (ermäßigt)</option>
+        <!-- §13b: nur netto (ADR 0039 Nr. 143), andere Sätze gesperrt -->
+        <option value="19" disabled={reverseCharge13b}>19 % (Regelsatz)</option>
+        <option value="7" disabled={reverseCharge13b}>7 % (ermäßigt)</option>
         <option value="0">0 % (steuerfrei / §13b / Kleinunternehmer)</option>
-        <option value="custom">individuell (Betrag vom Beleg)</option>
+        <option value="custom" disabled={reverseCharge13b}>individuell (Betrag vom Beleg)</option>
       </select>
     </label>
     <label>
@@ -213,9 +220,7 @@
     </label>
     {#if reverseCharge13b}
       <p class="hint span2">
-        §13b ist hier nur ein Hinweis-Flag — es findet <strong>keine</strong>
-        automatische USt-Berechnung statt. Trage Netto/USt so ein, wie es für
-        deine Buchung korrekt ist (im Zweifel Steuerberater fragen).
+        {REVERSE_CHARGE_13B_HINT}
       </p>
     {/if}
     <div class="span2 receipt">

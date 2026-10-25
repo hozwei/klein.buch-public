@@ -1352,7 +1352,7 @@ mod pipeline_tests {
     /// §19-Verkäuferprofil (Kleinunternehmer) — Pflicht für die Draft-Pipeline.
     async fn mk_seller(pool: &SqlitePool) {
         let input = SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Teststr. 1".into(),
             postal_code: "84028".into(),
@@ -1360,7 +1360,7 @@ mod pipeline_tests {
             country_code: "DE".into(),
             tax_number: None,
             vat_id: None,
-            email: "test@example.de".into(),
+            email: "test@example.org".into(),
             phone: None,
             iban: None,
             bic: None,
@@ -1384,7 +1384,7 @@ mod pipeline_tests {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("kunde@example.de".into()),
+            email: Some("kunde@example.org".into()),
             phone: None,
             iban: None,
             bic: None,

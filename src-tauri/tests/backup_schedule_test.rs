@@ -1164,6 +1164,29 @@ fn shutdown_budget_fits_stop_grace_period() {
         "Herunterfahren bis {} s, stop_grace_period {grace} s",
         budget.as_secs()
     );
+    // Lauf F7-fix: Betreiber-Doku nennt dieselbe Obergrenze und Frist (CHANGELOG
+    // „Hinweise für Betreiber“, Betriebshandbuch).
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let changelog = std::fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    let unreleased = changelog
+        .split("\n## [")
+        .nth(1)
+        .expect("Abschnitt [Unreleased]");
+    let total = format!("höchstens {} s", budget.as_secs());
+    let flat = unreleased.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(flat.contains(&total), "CHANGELOG nennt „{total}“");
+    assert!(
+        flat.contains(&format!("bis zu {} s", budget.as_secs())),
+        "Hinweis für Betreiber nennt die Dauer"
+    );
+    assert!(
+        flat.contains(&format!("mindestens `{grace}s`")),
+        "Hinweis für Betreiber nennt stop_grace_period {grace}s"
+    );
+    let ops = std::fs::read_to_string(root.join("docs/operations-guide.md")).unwrap();
+    let ops_flat = ops.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(ops_flat.contains(&format!("zusammen höchstens {} s", budget.as_secs())));
+    assert!(ops_flat.contains(&format!("stop_grace_period: {grace}s")));
 }
 
 /// Dummy, damit der Temp-Ordner bis zum Testende lebt (Pfadangaben).

@@ -62,3 +62,28 @@ export function documentTotals(items: AmountLine[]): { net: number; tax: number;
 export function roundHalfAwayFromZero(x: number): number {
   return Math.sign(x) * Math.round(Math.abs(x));
 }
+
+/**
+ * §13b UStG bei Kosten (ADR 0039 Nr. 143): Der Lieferant weist keine Umsatzsteuer aus,
+ * die Steuer schuldet und meldet der Empfänger selbst (auch mit §19). Hinweis am
+ * Schalter der Kosten-Formulare (Erfassen, E-Rechnung übernehmen).
+ */
+export const REVERSE_CHARGE_13B_HINT =
+  "Bei §13b kommt die Rechnung ohne Umsatzsteuer: USt-Betrag 0, Netto = Brutto. " +
+  "Die selbst geschuldete Steuer meldest du in der Umsatzsteuer-Voranmeldung " +
+  "(Handbuch „Kosten erfassen“).";
+
+/**
+ * Wie `domain::expense::validate_expense` (`ReverseChargeWithTax`): mit §13b muss der
+ * USt-Betrag 0 sein. Liefert die Meldung oder `null`; der Server prüft unabhängig davon.
+ */
+export function reverseChargeTaxError(
+  reverseCharge13b: boolean,
+  taxAmountCents: number,
+): string | null {
+  if (!reverseCharge13b || taxAmountCents === 0) return null;
+  return (
+    "§13b (Reverse-Charge): Der Lieferant weist keine Umsatzsteuer aus, der USt-Betrag " +
+    "muss 0 sein. Die Steuer meldest du selbst in der Umsatzsteuer-Voranmeldung an."
+  );
+}

@@ -5,7 +5,38 @@ Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach C
 
 ## [Unreleased]
 
-Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
+Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E) sowie Funktion und Technik vor
+dem UI/UX-Lauf (Lauf F); erscheint mit 2026.11.0.
+
+### Hinweise für Betreiber (Update von 2026.10)
+
+- **`stop_grace_period` anheben:** Im eigenen Compose auf mindestens `90s`
+  (bisheriges Beispiel 60 s). Das Herunterfahren dauert bis zu 75 s (offene
+  Verbindungen 30 s, Tick und Jobs samt einem ausstehenden Lock-Backup 40 s, Datenbank
+  5 s); bei 60 s bricht Docker ein eben ausstehendes Lock-Backup per SIGKILL ab.
+- **SFTP-Ziele selbst rotieren:** Klein.Buch löscht auf SFTP-Zielen nichts; alte
+  Backups dort entfernt der Betreiber (Platzbedarf im Handbuch „Speicherbedarf“).
+- **fail2ban-Filter ersetzen:** Der Filter im Handbuch („Fehlersuche im Container“)
+  ist jetzt an Zeilenanfang und -ende verankert; bestehende Filter bitte durch die neue
+  Fassung ersetzen.
+- **Zugriffsprotokoll:** Jede Zeile endet mit `ip=… req=… sess=…` (Client-IP,
+  Aufruf-Kennung wie die `ref` in „Interner Fehler (Ref …)“, gekürzte
+  Sitzungskennung). Eigene Auswertungen und Filter entsprechend anpassen.
+- **Klartext-Exporte** (DATEV, ELSTER, Einzelaufstellung u. a.) liegen höchstens
+  10 Minuten auf dem Server und verschwinden mit dem ersten Abruf; ein zweiter
+  Download braucht einen neuen Export.
+- **Backup-Format 3:** Neue Backups lesen nur 2026.11 und neuer; ein Rückfall auf
+  2026.10 kann sie nicht einspielen. Das Pflicht-Backup vor der Migration
+  entsteht im Format der Vorversion und bleibt mit 2026.10 einspielbar
+  (Handbuch „Updates und Rückfall“).
+- **Eigene PDF-Vorlagen (Typst 0.15):** `json.decode(…)` gibt es nicht mehr;
+  Daten lesen mit `json(bytes(sys.inputs.at("data-json")))`. Eine alte Vorlage
+  meldet Klein.Buch beim Rendern mit genau diesem Ersatz.
+- **Abgeschlossene Jahre mit aktivierten Kosten:** Der Snapshot-Abgleich meldet
+  für Jahre, in denen eine Kostenposition zu einer Anlage wurde, eine
+  Abweichung — das ist die frühere Doppelzählung (Kosten und AfA). Der
+  festgeschriebene Stand bleibt; ob die abgegebene Erklärung zu berichtigen ist,
+  klärt der Steuerpflichtige mit dem Steuerberater.
 
 ### Changed
 
@@ -51,7 +82,8 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Zustand beim Serverstart und alle 6 h; nach mehr als zwei Tagen Sperre gibt es einen
   Hinweis.
 - **Herunterfahren:** Der Scheduler hält beim Signal sofort an; Tick und Jobs
-  haben höchstens 30 s, das Herunterfahren bleibt unter 70 s.
+  haben höchstens 30 s, dazu ein ausstehendes Lock-Backup; das Herunterfahren
+  dauert höchstens 75 s.
   `stop_grace_period` im Compose-Beispiel und in der Doku auf 90 s.
 - **Aufräumen im Betrieb:** Reste in `/data/tmp` und abgebrochene
   Backup-Teildateien entfernt Klein.Buch stündlich (älter als 6 h), nicht nur
@@ -294,6 +326,32 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   sind aus dem `pnpm-lock.yaml` verschwunden; `pnpm audit` meldet nichts.
 - **Node 24 LTS** für den SPA-Build im Image und in der CI (`engines.node >=24.11.0`);
   die CI baut die SPA jetzt auch im Job `frontend` und prüft die Lizenzliste.
+- **CI und Betrieb (Lauf F7a, ADR 0039 Nr. 142):** SMTP-E2E-Test gegen Mailpit
+  (`axllent/mailpit`, per Digest) statt MailHog; `check_base_images.py` verlangt einen
+  Digest auch für Service-Images der Workflows und feste Images der CI-Skripte. Der
+  Release-Trockenlauf prüft das vom Image erzeugte Rechnungs-PDF mit veraPDF auf
+  PDF/A-3b (R3-018). `pnpm audit` blockiert ab „high“ auch bei Entwicklungsabhängigkeiten.
+  Tests nutzen nur Dokumentations-Adressen und neutrale Namen; `test_addresses_test`
+  prüft das positiv. Der Wächtertest bildet den Veröffentlichungs-Filter vollständig nach
+  (Namen und Dateimuster). Die Prüfliste der Lizenzseite im Image-Smoke wird gegen das
+  Bundle abgeglichen. Betriebshandbuch: Abschnitt „Monitoring und Alarmierung“ (ASVS
+  8.1.4, V11.1.7/8 entschieden); Sidecar-Grenzen in `modules.md` dokumentiert.
+- **§13b bei Kosten (Lauf F7b, ADR 0039 Nr. 143):** Kosten mit dem Schalter
+  „§13b-Reverse-Charge“ müssen ohne Umsatzsteuer erfasst werden (Netto = Brutto);
+  mit USt-Betrag lehnt Klein.Buch sie mit Erklärung ab. Eine E-Rechnung, die
+  §13b-Positionen neben ausgewiesener Umsatzsteuer enthält, wird ohne den
+  Schalter und mit einem Hinweis in der Notiz vorbelegt. Das Handbuch („Kosten
+  erfassen“, „Kleinunternehmer-Regelung“, Glossar, FAQ, Disclaimer) erklärt jetzt
+  richtig, dass §13b auch Kleinunternehmer trifft (Voranmeldung, Zahlung, kein
+  Vorsteuerabzug) und dass Klein.Buch die Steuer nicht berechnet.
+  Im Formular stellt der Schalter den USt-Satz auf 0 % und sperrt die übrigen Sätze;
+  der Hinweis daneben nennt USt-Betrag 0 statt freier Eingabe (F7-fix, Nr. 144).
+- **Doku nach Lauf F (F7b):** Zähl- und Versionsangaben in README, ARCHITECTURE,
+  PRD (Revision 9, Nachträge R9.4: Schema 32, Backup-Format 3, Lock-Backup im
+  Hintergrund, Re-Auth, ELSTER-Kennzahlen, DATEV-Geldkonten, Storno-Überhang,
+  Mustang-Profil XRECHNUNG, Werkzeugkette) und den CLAUDE.md-Dateien nachgezogen;
+  `data-model.md` dokumentiert die drei `ON DELETE CASCADE`; ADR 0039 Nr. 57
+  berichtigt (`encrypt_db_file_in_place` nur noch Test-Hilfe).
 
 ### Fixed
 

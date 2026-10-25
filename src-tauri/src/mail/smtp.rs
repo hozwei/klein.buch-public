@@ -12,7 +12,7 @@
 //!
 //! ## TLS-Strategie
 //!
-//! - `use_tls = false` → `builder_dangerous` (Klartext, z. B. lokaler MailHog
+//! - `use_tls = false` → `builder_dangerous` (Klartext, z. B. lokaler Mailpit
 //!   im E2E-Test oder ein interner Relay).
 //! - `use_tls = true` + Port 465 → implizites TLS (`relay`).
 //! - `use_tls = true` + sonst (typ. 587) → STARTTLS (`starttls_relay`).
@@ -281,8 +281,8 @@ mod tests {
 
     fn sample_mail() -> OutgoingMail {
         OutgoingMail {
-            from_name: "Wildbach Computerhilfe".into(),
-            from_email: "schmidm@wildbach-computerhilfe.de".into(),
+            from_name: "Beispiel IT-Service".into(),
+            from_email: "inhaber@example.org".into(),
             to: "kunde@example.com".into(),
             subject: "Rechnung RE-2026-0001".into(),
             body_text: "Anbei die Rechnung. Mit freundlichen Gruessen".into(),

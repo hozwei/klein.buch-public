@@ -101,7 +101,10 @@ curl -fsS -o "$WORK/tpl.html" "$URL/legal/third-party-licenses.html" || fail "/l
 for marker in "SIL OPEN FONT LICENSE" "GUST Font License" "Zetetic" "BY-SA 3.0"; do
   grep -qi -- "$marker" "$WORK/tpl.html" || fail "Lizenzseite ohne „$marker“"
 done
-for js in svelte @sveltejs/kit marked minisearch; do
+# Genau die JS-Pakete im SPA-Bundle (build/legal/js-licenses.json; seit Kit 3 mit
+# devalue, ohne esm-env). Der Frontend-Job in ci.yml vergleicht diese Zeile mit der
+# Liste aus dem Build (Lauf F7a).
+for js in svelte @sveltejs/kit devalue clsx marked minisearch; do
   grep -q -- "$js" "$WORK/tpl.html" || fail "Lizenzseite ohne JS-Paket $js"
 done
 if grep -q "Dev-Build-Platzhalter" "$WORK/tpl.html"; then fail "Lizenzseite ist der Dev-Build-Platzhalter"; fi

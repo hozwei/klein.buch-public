@@ -82,6 +82,16 @@ umsatzsteuerpflichtig bist (§14c UStG). Klein.Buch sperrt aus
 diesem Grund alle Umsatzsteuer-Felder, solange der
 Kleinunternehmer-Schalter angeschaltet ist.
 
+## Muss ich als Kleinunternehmer jemals Umsatzsteuer zahlen?
+
+Ja, wenn Du Leistungen beziehst, für die Du als Empfänger die
+Umsatzsteuer schuldest (§13b UStG, "Reverse-Charge"). Häufige Fälle
+sind Online-Werbung und Software von Anbietern mit Sitz im
+EU-Ausland. Du gibst dann für den betreffenden Monat eine
+Umsatzsteuer-Voranmeldung ab und zahlst die Steuer; Vorsteuer darfst
+Du nicht abziehen. Klein.Buch berechnet diese Steuer nicht. Das
+Vorgehen steht im Kapitel "Kosten erfassen".
+
 ## Kann ich Klein.Buch auf einen anderen Server umziehen?
 
 Ja, über ein Backup. Die Datei holst Du auf dem alten Server unter
