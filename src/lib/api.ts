@@ -437,10 +437,6 @@ export function quotesGet(id: string): Promise<QuoteDetail | null> {
   return invoke<QuoteDetail | null>("quotes_get", { id });
 }
 
-export function quotesAttachmentsList(quoteId: string): Promise<AttachmentView[]> {
-  return invoke<AttachmentView[]>("quotes_attachments_list", { quoteId });
-}
-
 export function quotesCreateDraft(args: QuoteCreateDraftArgs): Promise<QuoteDetail> {
   return invoke<QuoteDetail>("quotes_create_draft", { args });
 }
@@ -1192,10 +1188,6 @@ export function fiscalYearClose(year: number): Promise<FiscalYearLock> {
 
 export function fiscalYearClosedList(): Promise<FiscalYearLock[]> {
   return invoke<FiscalYearLock[]>("fiscal_year_closed_list");
-}
-
-export function fiscalYearAutoCloseGet(): Promise<boolean> {
-  return invoke<boolean>("fiscal_year_auto_close_get");
 }
 
 export function fiscalYearAutoCloseSet(enabled: boolean): Promise<void> {

@@ -5,13 +5,13 @@
     notificationsDismiss,
     notificationsDismissAll,
     notificationsRunChecks,
-  } from "$lib/api";
-  import type { AppNotification } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
+  } from "#lib/api.ts";
+  import type { AppNotification } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
 
   let items = $state<AppNotification[]>([]);
   let includeDismissed = $state(false);

@@ -49,7 +49,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0025 | Anlagenverzeichnis + AfA als Functional Core | Anlagen/AfA | `modules.md` §12 (assets/+depreciation/) |
 | 0026 | EÜR-Export: ELSTER-Ausfüllhilfe, DATEV-Buchungsstapel, Steuerberater-Paket | EÜR-Export | `modules.md` §13 + `reference/datev-format.md` + `reference/elster-euer-formular-schema.md` |
 | 0027 | Notifications, prüfungssicherer GJ-Abschluss, Integritäts-Cron | Notifications + GJ-Lock | `gobd.md` §2.4 + `modules.md` §6 + §11 |
-| 0028 | Versand via Microsoft Graph (OAuth/PKCE) + append-only E-Mail-Protokoll | OAuth / Mail | `security.md` §9 + `modules.md` §8 |
+| 0028 | Versand via Microsoft Graph (OAuth/PKCE; Code seit Lauf F6 entfernt) + append-only E-Mail-Protokoll | OAuth / Mail | `security.md` §9 + `modules.md` §8 |
 | 0029 | Design-System: zentrale Tokens, wiederverwendbare Komponenten, Toast-Default | Design-System | Frontend-`src/lib/styles/tokens.css` |
 | 0030 | Wählbare PDF-Vorlagen: eingebettete Unified-Built-ins + inputs-Override + Sentinel-Auflösung | PDF-Templates | `modules.md` §3 + `../ARCHITECTURE.md` §4.14 |
 | 0031 | Pakete (versioniert) + Anfahrt | Pakete/Anfahrt | `modules.md` §1 (domain/package, domain/travel) + `../ARCHITECTURE.md` §4.15 |
@@ -85,7 +85,7 @@ Viewer). Plus Sidecar: 0001 (Sidecar-Bundle-Block), 0008.
 **Backup + Security:** 0009 (Basis), 0034 (Tiers + Log), 0035 (At-Rest-
 Encryption), 0036 (Factory Reset), 0039 (Bedrohungsmodell Internetbetrieb).
 Plus Mail-Credentials: 0011, 0028
-(OAuth-Refresh-Token-Chunking).
+(OAuth-Refresh-Token-Chunking der Desktop-Fassung; Graph-Code seit Lauf F6 entfernt).
 
 **EÜR + Export:** 0010 (Cash-Basis), 0022 (Zufluss/Abfluss), 0026 (Export).
 Plus AfA: 0025.
@@ -127,7 +127,8 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
   Content-ZIP; Restore nimmt Format 1 und 2). Seit Lauf F3a (Amendment
   2026-10-25) Format 3 mit dem Klartext-Kopf als AAD; Restore nimmt 1–3.
 - **ADR 0011 / 0028** — Secrets in einer STRICT-Tabelle in SQLCipher statt im
-  OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP).
+  OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP), der Graph-Code ist
+  seit Lauf F6 entfernt (Amendment 2026-10-25).
 - **ADR 0013** — eingehender Listener, opt-in Versionsprüfung, keine
   Auto-Updates.
 - **ADR 0014** — Verteilung als öffentliches Image (Lizenzseite, Quellarchiv

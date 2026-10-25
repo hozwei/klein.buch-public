@@ -22,7 +22,7 @@ Repositorys (= Inhalt des Produktordners `klein-buch/` plus `.github/`).
 | Rust | Server `klein-buch-server` | `src-tauri/rust-toolchain.toml` (1.99.1); im Image `rust:1.99.1-trixie` mit Digest |
 | cargo-auditable | Abhängigkeitsliste im Binary (für Scanner) | 0.7.7 |
 | SQLCipher + OpenSSL | DB-Verschlüsselung | `libsqlite3-sys = "=0.30.1"` mit `bundled-sqlcipher-vendored-openssl`; braucht `perl`, `make` |
-| Node + pnpm | SPA (SvelteKit, `adapter-static`) | Node 22 (`node:22-trixie-slim` mit Digest), pnpm aus `packageManager` in `package.json` |
+| Node + pnpm | SPA (SvelteKit 3, Vite 8, `adapter-static`; Konfiguration in `vite.config.js`) | Node 24 LTS (`node:24-trixie-slim` mit Digest), pnpm aus `packageManager` in `package.json` |
 | Eclipse Temurin JDK + `jlink` | Java-Laufzeit für den Sidecar | `eclipse-temurin:21.0.12_8-jdk` mit Digest; Module aus `versions.json` (`jlink_modules`) |
 | cargo-about | Rust-Teil der Lizenzseite `/legal/` | 0.9.2 (`--features cli`) |
 | Debian | Laufzeit-Basis | `debian:trixie-slim` mit Digest |
@@ -104,7 +104,7 @@ Repository `hozwei/klein.buch-public`.
 | Job | Schritte |
 |---|---|
 | `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst MailHog (SMTP 1025, API 8025) für den SMTP-E2E-Test. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
-| `frontend` | pnpm + Node 22; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
+| `frontend` | pnpm + Node 24; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); `pnpm build` mit Prüfung von `build/index.html` und `build/legal/js-licenses.json` (wie die Stufe `web`); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
 | `rust-supply-chain` | `cargo deny --locked check advisories licenses` (`src-tauri/deny.toml`); `cargo audit` über das ganze `Cargo.lock` mit denselben begründeten Ausnahmen |
 | `js-audit` | `pnpm audit --prod --audit-level high` |
 | `secrets` | `gitleaks dir` über den Arbeitsbaum (Funde geschwärzt) |

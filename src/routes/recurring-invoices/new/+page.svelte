@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import PageBar from "$lib/PageBar.svelte";
+  import { page } from "$app/state";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     contactsList,
     sellerProfileGet,
     recurringInvoicesCreate,
     recurringInvoicesUpdate,
     recurringInvoicesGet,
-  } from "$lib/api";
+  } from "#lib/api.ts";
   import type {
     Contact,
     Frequency,
@@ -21,16 +21,16 @@
     MaterializedPackageItem,
     RecurringInvoiceInputDto,
     RecurringInvoiceMode,
-  } from "$lib/types";
-  import { FREQUENCIES } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { applyTaxRules, documentTotals } from "$lib/tax";
-  import Banner from "$lib/Banner.svelte";
-  import TravelLineAdder from "$lib/TravelLineAdder.svelte";
-  import PackageItemAdder from "$lib/PackageItemAdder.svelte";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
-  import Toggle from "$lib/Toggle.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/types.ts";
+  import { FREQUENCIES } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { applyTaxRules, documentTotals } from "#lib/tax.ts";
+  import Banner from "#lib/Banner.svelte";
+  import TravelLineAdder from "#lib/TravelLineAdder.svelte";
+  import PackageItemAdder from "#lib/PackageItemAdder.svelte";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
+  import Toggle from "#lib/Toggle.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   // Wie in invoices/new: Form-Position = InvoiceItemInput + Markup/Titel als
   // String (für bind:value) + transienter Paket-Name fürs Badge.
@@ -106,7 +106,7 @@
       // Layout kommt aus den Einstellungen (Standard-Layout) — kein Feld im Formular.
       pdfTemplate = seller?.defaultPdfTemplate || "default";
 
-      const id = $page.url.searchParams.get("id");
+      const id = page.url.searchParams.get("id");
       if (id) {
         editId = id;
         const d = await recurringInvoicesGet(id);

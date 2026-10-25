@@ -1,20 +1,20 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import {
     invoicesGet,
     mailAccountsList,
     mailInvoicePreview,
     mailSendInvoice,
-  } from "$lib/api";
-  import type { InvoiceDetail, MailAccount } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import type { InvoiceDetail, MailAccount } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   let detail = $state<InvoiceDetail | null>(null);
   let accounts = $state<MailAccount[]>([]);

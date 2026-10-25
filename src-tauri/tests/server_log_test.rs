@@ -124,7 +124,7 @@ async fn no_passphrase_or_session_id_in_logs() {
                 "label": "Log-Test", "authType": "smtp_password", "smtpHost": "smtp.example.org",
                 "smtpPort": 587, "smtpUser": "kb@example.org", "smtpUseTls": true,
                 "fromEmail": "rechnung@example.org", "fromName": "Beispiel IT-Service",
-                "isDefault": true, "oauthTenantId": null, "oauthClientId": null
+                "isDefault": true
             },
             "password": smtp_password
         }),
@@ -210,7 +210,7 @@ async fn no_passphrase_or_session_id_in_logs() {
                 "label": "Fälschung", "authType": "smtp_password", "smtpHost": forged,
                 "smtpPort": 587, "smtpUser": null, "smtpUseTls": true,
                 "fromEmail": "rechnung@example.org", "fromName": "Beispiel IT-Service",
-                "isDefault": false, "oauthTenantId": null, "oauthClientId": null
+                "isDefault": false
             },
             "password": null
         }),

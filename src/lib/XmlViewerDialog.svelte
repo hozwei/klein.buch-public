@@ -3,10 +3,10 @@
   // routes/+layout.svelte) — außerhalb von `<main>`, damit der Dialog nicht durch
   // `inert={modalStack.count>0}` mitgesperrt wird (AboutDialog-Pattern).
 
-  import { xmlViewerStore, closeXmlViewer } from "$lib/xmlViewerModal.svelte";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { copyText } from "$lib/browser";
+  import { xmlViewerStore, closeXmlViewer } from "#lib/xmlViewerModal.svelte.ts";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { copyText } from "#lib/browser.ts";
 
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;

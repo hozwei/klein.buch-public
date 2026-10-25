@@ -32,7 +32,6 @@ use crate::euer::detail::{
 use crate::euer::elster_csv::{self, ElsterForm, ElsterInputs};
 use crate::fiscal_year::snapshot::{self, SnapshotCheck};
 use crate::pdf::{templates, typst_render};
-use sha2::{Digest, Sha256};
 
 /// Period-aware §19-Status für ein konkretes Geschäftsjahr. Liest das
 /// aktuelle `seller_profile` und reicht das (zusammen mit dem Verzichts-
@@ -886,10 +885,7 @@ pub async fn euer_export_stb_zip(
                 let full = format!("{root}{name}");
                 zw.start_file(&full, opts)?;
                 zw.write_all(bytes)?;
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                let digest = hasher.finalize();
-                let hex_str: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+                let hex_str = crate::hash::sha256_hex(bytes);
                 manifest.push(json!({
                     "name": full,
                     "sha256": hex_str,
@@ -1136,22 +1132,6 @@ pub async fn euer_afa_pending(ctx: &Arc<AppCtx>, args: EuerAfaPendingArgs) -> Re
     })
 }
 
-/// Argumente von [`euer_reveal_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EuerRevealPathArgs {
-    pub path: String,
-}
-
-/// Zeigt eine exportierte Datei im Datei-Explorer/Finder (markiert sie im
-/// enthaltenden Ordner). Gleiches Muster wie `invoices_reveal_pdf`.
-pub async fn euer_reveal_path(ctx: &Arc<AppCtx>, args: EuerRevealPathArgs) -> Result<()> {
-    let EuerRevealPathArgs { path } = args;
-
-    ctx.reveal(&path)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1310,6 +1290,41 @@ mod tests {
         let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(flat.contains("HinweisezurAusfüllhilfe"));
         assert!(flat.contains("Regelbesteuerung:Testhinweis"));
+    }
+
+    /// Referenz-PDF des EÜR-Dokuments für Typst-Updates (siehe `pdf::snapshot`).
+    #[test]
+    #[ignore = "erzeugt Referenz-PDFs nach KB_PDF_SNAPSHOT_DIR (Typst-Update)"]
+    fn pdf_snapshot_euer() {
+        let Some(dir) = crate::pdf::snapshot::out_dir() else {
+            return;
+        };
+        let (mut form, income, storno, expenses, disposals, assets) = sample();
+        for (name, is_klein) in [("euer", true), ("euer-regel", false)] {
+            if !is_klein {
+                form.notes = vec!["Regelbesteuerung: Umsatzsteuer gesondert erklären".into()];
+            }
+            let data = euer_pdf_data(&EuerPdfParts {
+                fiscal_year: 2026,
+                today: chrono::NaiveDate::from_ymd_opt(2026, 10, 24).unwrap(),
+                snapshot_block: serde_json::Value::Null,
+                is_klein,
+                seller: None,
+                form: &form,
+                income: &income,
+                storno: &storno,
+                expenses: &expenses,
+                disposals: &disposals,
+                assets: &assets,
+            });
+            let pdf = crate::pdf::typst_render::render_euer(
+                templates::DEFAULT_EUER_TEMPLATE,
+                &serde_json::to_string(&data).unwrap(),
+                None,
+            )
+            .expect("EÜR-PDF");
+            crate::pdf::snapshot::write(&dir, name, &pdf);
+        }
     }
 
     #[test]

@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { contactsList, contactsSearch } from "$lib/api";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import type { Contact } from "$lib/types";
+  import { contactsList, contactsSearch } from "#lib/api.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import type { Contact } from "#lib/types.ts";
 
   let contacts: Contact[] = $state([]);
   let query: string = $state("");

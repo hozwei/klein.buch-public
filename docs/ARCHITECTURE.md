@@ -85,10 +85,13 @@ des Cores laufen ohne DB/Sidecar/Filesystem.
 `commands::`; die Args-Structs übernehmen die camelCase-Schlüssel des
 Frontends. `AppCtx` hält Pfade, den schließbaren Pool samt Passphrase
 (`BackupSession`), Inbox, Upload- und Download-Ablage, Scheduler-Gate und die
-Ablage eines angewendeten Restores. `commands::registry` listet alle Kerne mit
-Weg (`Cmd` = über `POST /api/cmd/{name}` erreichbar; `Replaced`, `Dropped`,
-`Blocked`), Auth-Klasse (`public`/`session`/`reauth`/`conditional`; bedingte
-Re-Auth prüft der Kern, Lauf F4a), Kostenklasse und Körperlimit.
+Ablage eines angewendeten Restores. `commands::registry` ist die Allowlist für
+`POST /api/cmd/{name}` und listet jeden Kern mit Auth-Klasse
+(`public`/`session`/`reauth`/`conditional`; bedingte Re-Auth prüft der Kern,
+Lauf F4a), Art (`Read`/`Write`/`Job`), Kostenklasse und Körperlimit. Die bis
+Lauf F6 nur gesperrt mitgeführten Desktop-Commands (Explorer, Lizenzpfad,
+MS-Graph, Vorgänger der Auth-Routen) sind samt Kern entfernt; Desktop-
+Nebenwirkungen (`DesktopActions`) kennt `AppCtx` nicht mehr (ADR 0039 Nr. 138).
 
 **Verschlüsselung at Rest** (ADR 0035). Die SQLite-Datei ist
 SQLCipher-verschlüsselt; der Schlüssel wird per PBKDF2-HMAC-SHA512 (Salt im
@@ -137,7 +140,6 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `einvoice::parser` | Core | XRechnung CII+UBL + ZUGFeRD-Extract (Empfang, ADR 0024), Profil-Whitelist (ADR 0037) |
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |
-| `mail::oauth_ms` | Core+Shell | Microsoft-Graph-Versand (ADR 0028); im Server gesperrt (E9), Code noch vorhanden |
 | `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit und einziger Kanal), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht |
 | `fiscal_year::{lock,transition,guard}` | Shell | prüfungssicherer GJ-Abschluss + `ensure_year_open`-Guard (ADR 0027) |
 | `scheduler::{tick,recurring,reminders,integrity_check_cron,depreciation_year_close,recurring_invoice,update_check}` | Shell | 5-Min-Tick, nur entsperrt, Catch-up (ADR 0023/0027, §5) |
@@ -409,12 +411,16 @@ Anlagen + Abschreibung sperren → EÜR-Snapshot ins Festschreibungsprotokoll
 `guard::ensure_year_open` in den Kernen (Storno bleibt erlaubt).
 Scheduler-Jobs siehe §5.
 
-### 4.13 Microsoft-Graph-Versand (Block 16) — im Server gesperrt
+### 4.13 Microsoft-Graph-Versand (Block 16) — entfernt
 Der Desktop-Flow nutzte eine Loopback-Weiterleitung auf dem eigenen Rechner
-(ADR 0028). Im Server sind `mail_oauth_*` gesperrt (404, E9), neue oder
-geänderte Konten mit `auth_type = oauth_microsoft` werden abgelehnt; ein
-übernommenes Konto lässt sich auf SMTP umstellen oder löschen. Microsoft 365
-läuft über SMTP. Das append-only `email_log` bleibt.
+(ADR 0028). Im Server gab es ihn nie (E9); seit Lauf F6 sind `mail::oauth_ms`,
+die Commands `mail_oauth_*` und ihr Test entfernt (ADR 0039 Nr. 138). Neue oder
+geänderte Konten mit `auth_type = oauth_microsoft` werden abgelehnt, ein
+übernommenes Konto versendet nicht (Meldung ohne Verbindungsaufbau) und lässt
+sich auf SMTP umstellen (Token und OAuth-Spalten werden dabei geleert) oder
+löschen. Die Spalten aus Migration 0014 bleiben (forward-only). Microsoft 365
+läuft über SMTP. Das append-only `email_log` bleibt; ältere Einträge mit Kanal
+`graph` werden weiter angezeigt.
 
 ### 4.14 PDF-Vorlagen-Auswahl (Block 17a)
 Globale Auswahl in `settings/pdf-templates` (`seller_default_template_set`,
@@ -546,7 +552,7 @@ einen beim Sperren noch laufenden Tick zu warten.
 2. **`scheduler::recurring_invoice`** — fällige Abo-Rechnungen materialisieren
    (Phase 4).
 3. **`scheduler::depreciation_year_close`** — Auto-AfA zur GJ-Wende, default-an
-   per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`), abschaltbar (Block 15);
+   per `app_settings.depreciation_auto_year_close` (Schalter über `fiscal_year_auto_close_set`, Stand in `fiscal_year_overview`), abschaltbar (Block 15);
    je Anlage und Jahr eine Transaktion, Fehler mit Hinweis und 6 h Backoff.
 4. **Backup** — Tages-Backup (`backup::auto_daily_if_due`): genau eines je
    Berliner Kalendertag ab `backup_daily_time` (Standard 02:30; fällig ist der

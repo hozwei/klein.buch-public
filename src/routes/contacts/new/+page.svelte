@@ -1,10 +1,10 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import { contactsCreate } from "$lib/api";
-  import ContactForm from "$lib/ContactForm.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import type { ContactInput } from "$lib/types";
+  import { contactsCreate } from "#lib/api.ts";
+  import ContactForm from "#lib/ContactForm.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import type { ContactInput } from "#lib/types.ts";
 
   async function handleSubmit(input: ContactInput) {
     const c = await contactsCreate(input);

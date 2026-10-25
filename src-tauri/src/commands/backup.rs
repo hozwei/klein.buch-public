@@ -84,45 +84,6 @@ pub fn ensure_no_pending_restore(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-/// Argumente von [`backup_needs_onboarding`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupNeedsOnboardingArgs {}
-
-/// Onboarding-Gate.
-///
-/// G1-ENC Schritt 2 (Bootstrap-Inversion): primäres Signal ist die
-/// **Datei-Existenz** — der Verifier liegt in der DB, und eine verschlüsselte DB
-/// lässt sich vor der Passphrase gar nicht öffnen (chicken-and-egg).
-///
-/// - **Keine DB** → Onboarding (legt die DB verschlüsselt an).
-/// - **DB vorhanden** → kein Onboarding (sie ist per Konstruktion
-///   verschlüsselt; der Klartext-Übergangspfad ist mit W6 entfallen, eine
-///   Klartext-DB verweigert schon den Serverstart).
-pub async fn backup_needs_onboarding(
-    ctx: &Arc<AppCtx>,
-    _args: BackupNeedsOnboardingArgs,
-) -> Result<bool> {
-    let paths = ctx.paths.clone();
-    if !paths.db_file.exists() {
-        ensure_no_pending_restore(&paths)?;
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-/// Argumente von [`backup_is_unlocked`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupIsUnlockedArgs {}
-
-/// Ist die Session aktuell entsperrt (Passphrase im Memory)?
-pub async fn backup_is_unlocked(ctx: &Arc<AppCtx>, _args: BackupIsUnlockedArgs) -> Result<bool> {
-    let session = &ctx.session;
-
-    Ok(session.is_unlocked())
-}
-
 /// Argumente von [`backup_get_settings`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -307,50 +268,6 @@ pub async fn backup_setup_passphrase(
         tracing::warn!("Hinweise vom Serverstart nicht übernommen: {e}");
     }
     outcome
-}
-
-/// Argumente von [`backup_unlock`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupUnlockArgs {
-    pub passphrase: String,
-}
-redacted_debug!(BackupUnlockArgs {} secret { passphrase });
-
-/// Entsperrt die App: öffnet den DB-Pool mit der Passphrase und hängt ihn in den
-/// State. Liefert `true` bei korrekter Passphrase, `false` bei falscher.
-///
-/// Die DB wird mit Key geöffnet; ein Probe-Read entscheidet (SQLCipher ist
-/// selbst der Verifier). Falscher Key → `false`, ohne den State zu ändern.
-/// Eine Klartext-DB wird seit W6 nicht mehr geöffnet (E17).
-///
-/// Bei Erfolg: Pool einhängen, Session entsperren, Scheduler starten, ein
-/// fälliges Auto-Daily-Backup auslösen.
-pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<bool> {
-    let BackupUnlockArgs { passphrase } = args;
-    let mut passphrase = zeroize::Zeroizing::new(passphrase);
-
-    let paths = ctx.paths.clone();
-    ensure_no_pending_restore(&paths)?;
-    if !paths.db_file.exists() {
-        return Err(Error::Backup(
-            "Keine Datenbank gefunden — bitte zuerst einrichten.".into(),
-        ));
-    }
-
-    if db::db_file_is_plaintext(&paths.db_file) {
-        // Der Klartext-Übergangspfad ist mit W6 entfallen (ADR 0039, E17).
-        return Err(Error::Backup(
-            "Unverschlüsselte Datenbank — wird nicht geöffnet (ADR 0035/0039).".into(),
-        ));
-    }
-    let Some(pool) = open_encrypted(&paths, &passphrase).await? else {
-        return Ok(false);
-    };
-    migrate_with_backup(ctx, &pool, &passphrase).await?;
-    // Ohne Kopie in die Sitzung (der leere Rest wird überschrieben).
-    activate_unlocked(ctx, pool, std::mem::take(&mut *passphrase)).await?;
-    Ok(true)
 }
 
 /// Öffnet die verschlüsselte DB mit der Passphrase und prüft sie per
@@ -629,23 +546,6 @@ pub async fn backup_create_now(
     backup::create_now(pool, &paths, &passphrase, "manual").await
 }
 
-/// Argumente von [`backup_set_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // nicht mehr freigegeben, entfällt in W11
-pub struct BackupSetTargetArgs {
-    pub path: String,
-}
-
-/// Ersetzt durch [`backup_target_add_directory`] (Plan W7, nicht mehr
-/// freigegeben; entfällt in W11).
-pub async fn backup_set_target(_ctx: &Arc<AppCtx>, args: BackupSetTargetArgs) -> Result<()> {
-    let BackupSetTargetArgs { path: _ } = args;
-    Err(Error::Domain(
-        "Ersetzt durch „Backup-Ziel hinzufügen“ (mehrere Ziele, Plan W7).".into(),
-    ))
-}
-
 /// Argumente von [`backup_target_add_directory`].
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -861,35 +761,6 @@ pub async fn backup_test_sftp_saved(
     Ok(probe)
 }
 
-/// Argumente von [`backup_set_sftp_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // nicht mehr freigegeben, entfällt in W11
-pub struct BackupSetSftpTargetArgs {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub remote_dir: String,
-    pub host_fingerprint: String,
-    pub password: String,
-}
-redacted_debug!(BackupSetSftpTargetArgs { host, port, user, remote_dir, host_fingerprint } secret { password });
-
-/// Setzt ein SFTP-Backup-Ziel (G1-BKP.3). Speichert Host/Port/User/Ordner +
-/// gepinnten Fingerprint als Ziel (Desktop-Fassung). Im Server ersetzt durch
-/// [`backup_target_add_sftp`].
-///
-/// `host_fingerprint` ist Pflicht — er stammt aus [`backup_test_sftp`] und ist
-/// der MITM-Schutz: ohne ihn lehnt der spätere Upload ab.
-pub async fn backup_set_sftp_target(
-    _ctx: &Arc<AppCtx>,
-    _args: BackupSetSftpTargetArgs,
-) -> Result<()> {
-    Err(Error::Domain(
-        "Ersetzt durch „Backup-Ziel hinzufügen“ (mehrere Ziele, Plan W7).".into(),
-    ))
-}
-
 /// Argumente von [`backup_target_add_sftp`].
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -979,50 +850,6 @@ pub async fn backup_target_add_sftp(
     }
 }
 
-/// Argumente von [`backup_open_folder`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupOpenFolderArgs {
-    pub path: String,
-}
-
-/// Öffnet einen lokalen Backup-**Ordner** im Datei-Explorer/Finder (Floor oder
-/// Off-Site-Verzeichnis). Für SFTP-Ziele nicht verfügbar (Remote-Pfad).
-pub async fn backup_open_folder(ctx: &Arc<AppCtx>, args: BackupOpenFolderArgs) -> Result<()> {
-    let BackupOpenFolderArgs { path } = args;
-
-    let p = path.trim();
-    if p.is_empty() || p.starts_with("sftp://") {
-        return Err(Error::Backup(
-            "Für SFTP-Ziele ist kein lokaler Ordner verfügbar.".into(),
-        ));
-    }
-    ctx.open_path(p)?;
-    Ok(())
-}
-
-/// Argumente von [`backup_reveal_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupRevealPathArgs {
-    pub path: String,
-}
-
-/// Zeigt eine lokale Backup-**Datei** im enthaltenden Ordner (markiert sie) — für
-/// die Verlaufs-Zeilen. Für SFTP-Backups nicht verfügbar (erst herunterladen).
-pub async fn backup_reveal_path(ctx: &Arc<AppCtx>, args: BackupRevealPathArgs) -> Result<()> {
-    let BackupRevealPathArgs { path } = args;
-
-    let p = path.trim();
-    if p.is_empty() || p.starts_with("sftp://") {
-        return Err(Error::Backup(
-            "SFTP-Backups erst herunterladen — kein lokaler Ordner verfügbar.".into(),
-        ));
-    }
-    ctx.reveal(p)?;
-    Ok(())
-}
-
 /// Argumente von [`backup_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1083,23 +910,6 @@ pub async fn backup_log_search(
     let pool = ctx.pool()?;
 
     db::repo::backup_log::search(&pool, &filter).await
-}
-
-/// Argumente von [`backup_restore_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupRestorePreviewArgs {
-    pub path: String,
-}
-
-/// Restore-Vorschau (Plain-Header, ohne Passphrase).
-pub async fn backup_restore_preview(
-    _ctx: &Arc<AppCtx>,
-    args: BackupRestorePreviewArgs,
-) -> Result<restore::RestorePreview> {
-    let BackupRestorePreviewArgs { path } = args;
-
-    restore::preview(std::path::Path::new(&path))
 }
 
 /// Argumente von [`backup_restore_apply`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -1345,12 +1155,6 @@ mod tests {
                 }
             ),
             format!(
-                "{:?}",
-                BackupUnlockArgs {
-                    passphrase: pass.clone()
-                }
-            ),
-            format!(
                 "{:#?}",
                 BackupRestoreApplyArgs {
                     upload_id: Some("u1".into()),
@@ -1365,17 +1169,6 @@ mod tests {
                     port: 22,
                     user: "kb".into(),
                     remote_dir: "kb".into(),
-                    password: pass.clone(),
-                }
-            ),
-            format!(
-                "{:?}",
-                BackupSetSftpTargetArgs {
-                    host: "backup.example.org".into(),
-                    port: 22,
-                    user: "kb".into(),
-                    remote_dir: "kb".into(),
-                    host_fingerprint: "SHA256:x".into(),
                     password: pass.clone(),
                 }
             ),
@@ -1396,7 +1189,7 @@ mod tests {
             assert!(!out.contains(&pass), "{out}");
             assert!(out.contains("***"), "{out}");
         }
-        assert!(outputs[2].contains("\"u1\""), "{}", outputs[2]);
-        assert!(outputs[3].contains("backup.example.org"), "{}", outputs[3]);
+        assert!(outputs[1].contains("\"u1\""), "{}", outputs[1]);
+        assert!(outputs[2].contains("backup.example.org"), "{}", outputs[2]);
     }
 }

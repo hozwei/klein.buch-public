@@ -50,7 +50,7 @@ use std::sync::Arc;
 use axum::routing::{any, get, post};
 use axum::{middleware, Json, Router};
 
-use crate::app_ctx::{AppCtx, NoDesktop};
+use crate::app_ctx::AppCtx;
 use crate::config::Paths;
 use crate::error::{Error, Result};
 use state::ServerState;
@@ -256,7 +256,7 @@ fn run_server() -> ExitCode {
 async fn serve_main() -> Result<()> {
     let cfg = config::ServerConfig::from_env()?;
     let paths = Paths::from_env()?;
-    let ctx = Arc::new(AppCtx::new(paths, Arc::new(NoDesktop), APP_IDENTIFIER));
+    let ctx = Arc::new(AppCtx::new(paths, APP_IDENTIFIER));
     let state = prepare(ctx, &cfg)?;
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await

@@ -3,9 +3,9 @@
   // (Rechnung, Angebot, Umwandlung). Gruppiertes Dropdown (Kategorie → Paket) →
   // materialisiert die aktive Revision als Beleg-Position.
   import { onMount } from "svelte";
-  import { packagesList, packageCategoriesList, packageMaterializeItem } from "$lib/api";
-  import type { Package, PackageCategory, MaterializedPackageItem } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
+  import { packagesList, packageCategoriesList, packageMaterializeItem } from "#lib/api.ts";
+  import type { Package, PackageCategory, MaterializedPackageItem } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
 

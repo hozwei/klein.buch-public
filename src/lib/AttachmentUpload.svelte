@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { attachmentsAdd, saveArchiveFile, uploadFile } from "$lib/api";
-  import type { AttachmentView } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
-  import Button from "$lib/Button.svelte";
+  import { attachmentsAdd, saveArchiveFile, uploadFile } from "#lib/api.ts";
+  import type { AttachmentView } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Button from "#lib/Button.svelte";
 
   let {
     parentType,

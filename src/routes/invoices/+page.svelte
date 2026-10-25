@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { invoicesList } from "$lib/api";
-  import type { InvoiceListItem, InvoiceStatus } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { invoicesList } from "#lib/api.ts";
+  import type { InvoiceListItem, InvoiceStatus } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let rows: InvoiceListItem[] = $state([]);
   let loading = $state(false);

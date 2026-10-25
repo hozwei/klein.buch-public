@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { yearBerlin } from "$lib/date";
+  import { yearBerlin } from "#lib/date.ts";
   // Block 14a — EÜR-Export (Selbst-Abgabe): Anlage EÜR + Anlageverzeichnis
   // (AVEÜR) + Einzelaufstellung. Anzeige + CSV/ZIP. (Das druckbare Typst-PDF
   // folgt in Schritt 2.)
@@ -15,15 +15,15 @@
     euerAfaPending,
     depreciationAccrueYear,
     saveDownload,
-  } from "$lib/api";
-  import type { EuerPackage } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { expenseCategoryLabel, depreciationMethodShort } from "$lib/labels";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  } from "#lib/api.ts";
+  import type { EuerPackage } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { expenseCategoryLabel, depreciationMethodShort } from "#lib/labels.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let years = $state<number[]>([]);
   let selectedYear = $state<number | null>(null);

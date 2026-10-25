@@ -1,12 +1,12 @@
 <script lang="ts">
   // Block 4 — Backup & Restore.
   import { onMount, tick } from "svelte";
-  import { waitForRestart } from "$lib/transport";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  import { waitForRestart } from "#lib/transport.ts";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
   import {
     backupGetSettings,
     backupCreateNow,
@@ -31,7 +31,7 @@
     type BackupHistoryItem,
     type TargetView,
     type SftpProbe,
-  } from "$lib/api";
+  } from "#lib/api.ts";
 
   let settings = $state<BackupSettings | null>(null);
   let history = $state<BackupHistoryItem[]>([]);

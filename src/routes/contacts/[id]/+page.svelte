@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
   import {
@@ -11,19 +11,19 @@
     contactsAnonymizeCheck,
     dsgvoExport,
     saveDownload,
-  } from "$lib/api";
-  import ContactForm from "$lib/ContactForm.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import type { Contact, ContactInput } from "$lib/types";
+  } from "#lib/api.ts";
+  import ContactForm from "#lib/ContactForm.svelte";
+  import Banner from "#lib/Banner.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import type { Contact, ContactInput } from "#lib/types.ts";
 
-  // `[id]`-Route garantiert, dass id definiert ist — `$page.params` ist
+  // `[id]`-Route garantiert, dass id definiert ist — `page.params` ist
   // generisch `Record<string, string | undefined>`.
-  let id = $derived($page.params.id as string);
+  let id = $derived(page.params.id as string);
   let contact: Contact | null = $state(null);
   let loading = $state(true);
   let error: string | null = $state(null);

@@ -3,8 +3,8 @@
   // `frame-ancestors 'self'`). Außerhalb von `<main>` gemountet, siehe
   // pdfPreviewModal.svelte.ts.
 
-  import { pdfPreviewStore, closePdfPreview } from "$lib/pdfPreviewModal.svelte";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
+  import { pdfPreviewStore, closePdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
 
   let closeBtn = $state<HTMLButtonElement | null>(null);
   let triggerEl: HTMLElement | null = null;

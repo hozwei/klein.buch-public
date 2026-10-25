@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Toggle from "#lib/Toggle.svelte";
   import {
     sellerProfileGet,
     sellerProfileUpsert,
@@ -11,13 +11,13 @@
     sellerOwnerSet,
     documentTermsGet,
     documentTermsSet,
-  } from "$lib/api";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import { flash } from "#lib/toast.svelte.ts";
   import type {
     Paragraph19Info,
     SellerProfile,
     SellerProfileInput,
-  } from "$lib/types";
+  } from "#lib/types.ts";
 
   let profile: SellerProfile | null = $state(null);
   let info: Paragraph19Info | null = $state(null);

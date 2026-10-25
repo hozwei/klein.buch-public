@@ -1,11 +1,13 @@
 //! Registry aller Command-Kerne (Plan W4, Handler generiert per `w4_codegen.py`)
 //! mit den Zugriffsregeln für den HTTP-Dispatcher (Plan W5.2, ADR 0039).
 //!
-//! Jeder Eintrag: Name (= Command-Name im Frontend), Weg ([`Route`]), `auth`,
-//! `cost`, Art ([`Kind`]), `body_limit` und ein Handler, der das JSON-Argument-
-//! Objekt in das Args-Struct des Kerns übersetzt. Über `POST /api/cmd/{name}`
-//! erreichbar ist nur, was [`Route::Cmd`] hat (verbindliche Allowlist); alles
-//! andere beantwortet der Dispatcher mit 404.
+//! Jeder Eintrag: Name (= Command-Name im Frontend), `auth`, `cost`, Art
+//! ([`Kind`]), `body_limit` und ein Handler, der das JSON-Argument-Objekt in das
+//! Args-Struct des Kerns übersetzt. Die Registry ist die verbindliche Allowlist
+//! für `POST /api/cmd/{name}`; jeden anderen Namen beantwortet der Dispatcher mit
+//! 404. Die Desktop-Commands, die der Server nur noch gesperrt mitführte
+//! (Explorer, Lizenzpfad, MS-Graph, Vorgänger der Auth-Routen), sind seit Lauf F6
+//! samt Kern entfernt (ADR 0039 Nr. 138).
 
 use crate::app_ctx::AppCtx;
 use crate::error::{Error, Result};
@@ -65,23 +67,9 @@ pub enum Kind {
     Job,
 }
 
-/// Über welchen Weg der Kern erreichbar ist (Plan W5.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Route {
-    /// `POST /api/cmd/{name}` (Allowlist)
-    Cmd,
-    /// ersetzt durch eine eigene Route (Auth, Upload, Download)
-    Replaced(&'static str),
-    /// entfällt im Server (Desktop-Funktion)
-    Dropped,
-    /// im Server-Betrieb gesperrt (E7 Factory Reset, E9 MS-Graph, E11 Drop-Folder)
-    Blocked,
-}
-
 /// Ein Registry-Eintrag.
 pub struct CommandSpec {
     pub name: &'static str,
-    pub route: Route,
     pub auth: Auth,
     pub cost: Cost,
     pub kind: Kind,
@@ -93,28 +81,6 @@ pub struct CommandSpec {
 
 /// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
 pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
-
-/// Weg im Server (Plan W5.2).
-fn route_of(name: &str) -> Route {
-    match name {
-        "backup_needs_onboarding" | "backup_is_unlocked" => Route::Replaced("GET /api/auth/status"),
-        "backup_setup_passphrase" => Route::Replaced("POST /api/auth/setup"),
-        "backup_unlock" => Route::Replaced("POST /api/auth/login"),
-        "invoices_open_pdf" | "attachments_open" => Route::Replaced("GET /files/archive/{id} (W7)"),
-        "backup_set_target" | "backup_set_sftp_target" => {
-            Route::Replaced("backup_target_add_directory / backup_target_add_sftp (W7)")
-        }
-        "backup_restore_preview"
-        | "backup_open_folder"
-        | "backup_reveal_path"
-        | "euer_reveal_path"
-        | "invoices_reveal_pdf"
-        | "attachments_reveal"
-        | "third_party_licenses_path" => Route::Dropped,
-        "mail_oauth_status" | "mail_oauth_connect" | "mail_oauth_disconnect" => Route::Blocked,
-        _ => Route::Cmd,
-    }
-}
 
 /// Re-Auth-Pflicht (Plan W6). Die Liste wird nur erweitert oder gezielt
 /// bedingt gemacht (Lauf F4a); jede Änderung steht im Registry-Test der
@@ -129,8 +95,6 @@ fn auth_of(name: &str) -> Auth {
         // Adresse des Belegs abweicht — Prüfung in der Vorprüfung und im Kern
         // (`commands::mail::require_step_up_for_recipient`).
         "mail_send_invoice" | "mail_send_quote" => Auth::Conditional,
-        "backup_set_target"
-        | "backup_set_sftp_target"
         | "backup_target_add_directory"
         | "backup_target_add_sftp"
         | "backup_target_remove"
@@ -245,7 +209,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "backup_list"
         | "backup_log_list"
         | "backup_log_search"
-        | "backup_restore_preview"
         | "contacts_anonymize_check"
         | "contacts_get"
         | "contacts_list"
@@ -262,7 +225,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "expenses_get"
         | "expenses_list"
         | "expenses_receipt_xml_text"
-        | "fiscal_year_auto_close_get"
         | "fiscal_year_closed_list"
         | "fiscal_year_overview"
         | "invoices_get"
@@ -271,7 +233,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "legal_documents_list"
         | "mail_accounts_list"
         | "mail_invoice_preview"
-        | "mail_oauth_status"
         | "mail_quote_preview"
         | "notification_rules_list"
         | "notifications_list"
@@ -291,7 +252,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "private_movements_get"
         | "private_movements_list"
         | "quote_signature_get"
-        | "quotes_attachments_list"
         | "quotes_get"
         | "quotes_legal_bindings"
         | "quotes_list"
@@ -309,31 +269,20 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "travel_compute"
         | "travel_settings_get"
         | "update_check_get" => Kind::Read,
-        // ändert Daten, legt Dateien/Hinweise an oder ist im Server gesperrt bzw.
-        // ersetzt (abgekoppelt + Idempotenz)
+        // ändert Daten oder legt Dateien/Hinweise an (abgekoppelt + Idempotenz)
         "archive_integrity_run"
         | "assets_create"
         | "assets_dispose"
         | "assets_update"
         | "attachments_add"
-        | "attachments_open"
-        | "attachments_reveal"
         | "backup_download"
         | "backup_get_settings"
-        | "backup_is_unlocked"
-        | "backup_needs_onboarding"
-        | "backup_open_folder"
-        | "backup_reveal_path"
         | "backup_set_daily_time"
-        | "backup_set_sftp_target"
-        | "backup_set_target"
-        | "backup_setup_passphrase"
         | "backup_target_add_directory"
         | "backup_target_add_sftp"
         | "backup_target_remove"
         | "backup_test_sftp"
         | "backup_test_sftp_saved"
-        | "backup_unlock"
         | "contacts_anonymize"
         | "contacts_archive"
         | "contacts_create"
@@ -346,7 +295,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "euer_export_detail_zip"
         | "euer_export_elster"
         | "euer_export_pdf"
-        | "euer_reveal_path"
         | "expenses_cancel"
         | "expenses_create"
         | "expenses_create_from_einvoice"
@@ -355,9 +303,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "fiscal_year_auto_close_set"
         | "fiscal_year_close"
         | "invoices_create_draft"
-        | "invoices_open_pdf"
         | "invoices_record_payment"
-        | "invoices_reveal_pdf"
         | "invoices_update_draft"
         | "invoices_void_draft"
         | "legal_documents_activate"
@@ -368,8 +314,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "mail_account_test_connection"
         | "mail_account_test_saved"
         | "mail_account_update"
-        | "mail_oauth_connect"
-        | "mail_oauth_disconnect"
         | "mail_send_test"
         | "notification_rules_set_enabled"
         | "notifications_dismiss"
@@ -417,7 +361,6 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "seller_profile_upsert"
         | "seller_signature_clear"
         | "seller_signature_set"
-        | "third_party_licenses_path"
         | "travel_settings_set"
         | "update_check_set" => Kind::Write,
         _ => return None,
@@ -450,7 +393,6 @@ impl CommandSpec {
     fn new(name: &'static str, handler: Handler) -> Self {
         Self {
             name,
-            route: route_of(name),
             auth: auth_of(name),
             cost: cost_of(name),
             kind: kind_of(name),
@@ -458,11 +400,6 @@ impl CommandSpec {
             handler,
             precheck: precheck_of(name),
         }
-    }
-
-    /// Über `POST /api/cmd/{name}` erreichbar?
-    pub fn exposed(&self) -> bool {
-        self.route == Route::Cmd
     }
 }
 
@@ -474,14 +411,9 @@ pub static REGISTRY: LazyLock<Vec<CommandSpec>> = LazyLock::new(|| {
         .collect()
 });
 
-/// Sucht einen Eintrag nach Name (auch nicht erreichbare).
+/// Sucht einen Eintrag nach Name (Allowlist für `POST /api/cmd/{name}`).
 pub fn find(name: &str) -> Option<&'static CommandSpec> {
     REGISTRY.iter().find(|c| c.name == name)
-}
-
-/// Sucht einen über `POST /api/cmd/{name}` erreichbaren Eintrag (Allowlist).
-pub fn find_exposed(name: &str) -> Option<&'static CommandSpec> {
-    find(name).filter(|c| c.exposed())
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
@@ -502,20 +434,12 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("assets_create", h::assets_create),
     ("assets_update", h::assets_update),
     ("assets_dispose", h::assets_dispose),
-    ("attachments_open", h::attachments_open),
-    ("attachments_reveal", h::attachments_reveal),
     ("attachments_list", h::attachments_list),
     ("attachments_add", h::attachments_add),
-    ("backup_needs_onboarding", h::backup_needs_onboarding),
-    ("backup_is_unlocked", h::backup_is_unlocked),
     ("backup_get_settings", h::backup_get_settings),
     ("backup_set_daily_time", h::backup_set_daily_time),
-    ("backup_setup_passphrase", h::backup_setup_passphrase),
-    ("backup_unlock", h::backup_unlock),
     ("backup_create_now", h::backup_create_now),
-    ("backup_set_target", h::backup_set_target),
     ("backup_test_sftp", h::backup_test_sftp),
-    ("backup_set_sftp_target", h::backup_set_sftp_target),
     (
         "backup_target_add_directory",
         h::backup_target_add_directory,
@@ -523,12 +447,9 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("backup_target_add_sftp", h::backup_target_add_sftp),
     ("backup_target_remove", h::backup_target_remove),
     ("backup_test_sftp_saved", h::backup_test_sftp_saved),
-    ("backup_open_folder", h::backup_open_folder),
-    ("backup_reveal_path", h::backup_reveal_path),
     ("backup_list", h::backup_list),
     ("backup_log_list", h::backup_log_list),
     ("backup_log_search", h::backup_log_search),
-    ("backup_restore_preview", h::backup_restore_preview),
     ("backup_restore_apply", h::backup_restore_apply),
     ("backup_download", h::backup_download),
     ("contacts_list", h::contacts_list),
@@ -553,7 +474,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("euer_export_datev", h::euer_export_datev),
     ("euer_export_stb_zip", h::euer_export_stb_zip),
     ("euer_afa_pending", h::euer_afa_pending),
-    ("euer_reveal_path", h::euer_reveal_path),
     ("expenses_list", h::expenses_list),
     ("expenses_get", h::expenses_get),
     ("expenses_create", h::expenses_create),
@@ -568,12 +488,9 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("fiscal_year_overview", h::fiscal_year_overview),
     ("fiscal_year_close", h::fiscal_year_close),
     ("fiscal_year_closed_list", h::fiscal_year_closed_list),
-    ("fiscal_year_auto_close_get", h::fiscal_year_auto_close_get),
     ("fiscal_year_auto_close_set", h::fiscal_year_auto_close_set),
     ("invoices_list", h::invoices_list),
     ("invoices_get", h::invoices_get),
-    ("invoices_open_pdf", h::invoices_open_pdf),
-    ("invoices_reveal_pdf", h::invoices_reveal_pdf),
     ("invoices_create_draft", h::invoices_create_draft),
     ("invoices_validate_draft", h::invoices_validate_draft),
     ("invoices_lock_and_issue", h::invoices_lock_and_issue),
@@ -594,9 +511,6 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::mail_account_test_connection,
     ),
     ("mail_account_test_saved", h::mail_account_test_saved),
-    ("mail_oauth_status", h::mail_oauth_status),
-    ("mail_oauth_connect", h::mail_oauth_connect),
-    ("mail_oauth_disconnect", h::mail_oauth_disconnect),
     ("email_log_list", h::email_log_list),
     ("email_log_for", h::email_log_for),
     ("email_log_search", h::email_log_search),
@@ -648,7 +562,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("private_movements_create", h::private_movements_create),
     ("quotes_list", h::quotes_list),
     ("quotes_get", h::quotes_get),
-    ("quotes_attachments_list", h::quotes_attachments_list),
     ("quotes_create_draft", h::quotes_create_draft),
     ("quotes_validate_draft", h::quotes_validate_draft),
     ("quotes_issue", h::quotes_issue),
@@ -730,7 +643,6 @@ static ENTRIES: &[(&str, Handler)] = &[
         "recurring_restore_review_list",
         h::recurring_restore_review_list,
     ),
-    ("third_party_licenses_path", h::third_party_licenses_path),
 ];
 
 mod h {
@@ -799,24 +711,6 @@ mod h {
         })
     }
 
-    pub fn attachments_open(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::attachments::AttachmentsOpenArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::attachments::attachments_open(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn attachments_reveal(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::attachments::AttachmentsRevealArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::attachments::attachments_reveal(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn attachments_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::attachments::AttachmentsListArgs = parse(v)?;
@@ -835,24 +729,6 @@ mod h {
         })
     }
 
-    pub fn backup_needs_onboarding(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupNeedsOnboardingArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_needs_onboarding(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_is_unlocked(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupIsUnlockedArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_is_unlocked(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_get_settings(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupGetSettingsArgs = parse(v)?;
@@ -862,38 +738,11 @@ mod h {
         })
     }
 
-    pub fn backup_setup_passphrase(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetupPassphraseArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_setup_passphrase(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_unlock(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupUnlockArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_unlock(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_create_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupCreateNowArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_create_now(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_set_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetTargetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_set_target(&ctx, args).await?,
             )?)
         })
     }
@@ -952,33 +801,6 @@ mod h {
         })
     }
 
-    pub fn backup_set_sftp_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetSftpTargetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_set_sftp_target(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_open_folder(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupOpenFolderArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_open_folder(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupRevealPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_reveal_path(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupListArgs = parse(v)?;
@@ -1002,15 +824,6 @@ mod h {
             let args: crate::commands::backup::BackupLogSearchArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_log_search(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_restore_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupRestorePreviewArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_restore_preview(&ctx, args).await?,
             )?)
         })
     }
@@ -1231,15 +1044,6 @@ mod h {
         })
     }
 
-    pub fn euer_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::euer::EuerRevealPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::euer::euer_reveal_path(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn expenses_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::expenses::ExpensesListArgs = parse(v)?;
@@ -1339,15 +1143,6 @@ mod h {
         })
     }
 
-    pub fn fiscal_year_auto_close_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::fiscal_year::FiscalYearAutoCloseGetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::fiscal_year::fiscal_year_auto_close_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn fiscal_year_auto_close_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::fiscal_year::FiscalYearAutoCloseSetArgs = parse(v)?;
@@ -1371,24 +1166,6 @@ mod h {
             let args: crate::commands::invoices::InvoicesGetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn invoices_open_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::invoices::InvoicesOpenPdfArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::invoices::invoices_open_pdf(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn invoices_reveal_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::invoices::InvoicesRevealPdfArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::invoices::invoices_reveal_pdf(&ctx, args).await?,
             )?)
         })
     }
@@ -1533,33 +1310,6 @@ mod h {
             let args: crate::commands::mail::MailAccountTestConnectionArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::mail::mail_account_test_connection(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_status(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthStatusArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_status(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_connect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthConnectArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_connect(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_disconnect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthDisconnectArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_disconnect(&ctx, args).await?,
             )?)
         })
     }
@@ -1938,15 +1688,6 @@ mod h {
             let args: crate::commands::quotes::QuotesGetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::quotes::quotes_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn quotes_attachments_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::quotes::QuotesAttachmentsListArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::quotes::quotes_attachments_list(&ctx, args).await?,
             )?)
         })
     }
@@ -2502,15 +2243,6 @@ mod h {
             let args: crate::commands::system::AppInfoArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::system::app_info(&ctx, args).await,
-            )?)
-        })
-    }
-
-    pub fn third_party_licenses_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::system::ThirdPartyLicensesPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::system::third_party_licenses_path(&ctx, args).await?,
             )?)
         })
     }

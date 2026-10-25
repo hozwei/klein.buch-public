@@ -161,20 +161,6 @@ pub async fn fiscal_year_closed_list(
     lock::list_closed(&pool).await
 }
 
-/// Argumente von [`fiscal_year_auto_close_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FiscalYearAutoCloseGetArgs {}
-
-pub async fn fiscal_year_auto_close_get(
-    ctx: &Arc<AppCtx>,
-    _args: FiscalYearAutoCloseGetArgs,
-) -> Result<bool> {
-    let pool = ctx.pool()?;
-
-    app_settings::get_bool(&pool, "depreciation_auto_year_close", true).await
-}
-
 /// Argumente von [`fiscal_year_auto_close_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

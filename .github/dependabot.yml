@@ -14,6 +14,12 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # tera 2 ändert die Vorlagensyntax: Mail-Vorlagen der Betreiber (inputs/mail-templates)
+      # würden brechen. Bewusst bei tera 1, solange es Sicherheitsupdates bekommt
+      # (ADR 0039 Nr. 139, Lauf F6b); Minor/Patch und Sicherheits-Updates kommen weiter.
+      - dependency-name: "tera"
+        update-types: ["version-update:semver-major"]
     groups:
       rust:
         patterns: ["*"]
@@ -27,8 +33,12 @@ updates:
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
     ignore:
-      # Typen müssen zur Laufzeit passen (Node 22 LTS im Image und in CI).
+      # Typen müssen zur Laufzeit passen (Node 24 LTS im Image und in CI, Lauf F6c).
       - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 (nativer Compiler) trägt die Werkzeugkette noch nicht:
+      # SvelteKit 3 verlangt typescript ^6, svelte-check ^5 || ^6 (ADR 0039 Nr. 140).
+      - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
     groups:
       js:
@@ -54,8 +64,8 @@ updates:
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
     ignore:
-      # Basis-Images bleiben auf LTS-Linien (Node 22, Java 21); ein Wechsel der Linie
-      # (z. B. Node 24, Java 25) ist eine bewusste Entscheidung, kein Routine-Update.
+      # Basis-Images bleiben auf LTS-Linien (Node 24, Java 21); ein Wechsel der Linie
+      # (z. B. Node 26, Java 25) ist eine bewusste Entscheidung, kein Routine-Update.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
     groups:

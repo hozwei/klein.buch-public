@@ -3,12 +3,12 @@
     auditTrailList,
     archiveIntegrityRun,
     archiveIntegrityHistory,
-  } from "$lib/api";
-  import type { AuditEntry, IntegrityCheckRow } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
+  } from "#lib/api.ts";
+  import type { AuditEntry, IntegrityCheckRow } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
 
   let entries = $state<AuditEntry[]>([]);
   let history = $state<IntegrityCheckRow[]>([]);

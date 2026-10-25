@@ -31,7 +31,7 @@ const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 // Minimal-Template für Integration-Tests. Echte Production-Template
 // liegt unter inputs/pdf-templates/default.typ.
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 Empfänger: #data.buyer.name \
 #data.invoice.gross_amount

@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { expensesList, recurringList } from "$lib/api";
-  import type { ExpenseListItem } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { expenseCategoryLabel, EXPENSE_CATEGORIES } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { expensesList, recurringList } from "#lib/api.ts";
+  import type { ExpenseListItem } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { expenseCategoryLabel, EXPENSE_CATEGORIES } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   // Anzahl aktuell fälliger Abos — als Hinweis oben in der Kosten-Übersicht.
   let dueAbos = $state(0);

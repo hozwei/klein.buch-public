@@ -8,17 +8,17 @@
     recurringRunDueCheck,
     recurringResolveBacklog,
     recurringRestoreReviewList,
-  } from "$lib/api";
-  import type { RecurringSubscription, ResumeMode } from "$lib/types";
-  import { askBacklogChoice } from "$lib/recurringChoice";
-  import { euro, date } from "$lib/format";
-  import { daysUntilBerlin } from "$lib/date";
-  import { expenseCategoryLabel, frequencyLabel } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import type { RecurringSubscription, ResumeMode } from "#lib/types.ts";
+  import { askBacklogChoice } from "#lib/recurringChoice.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { daysUntilBerlin } from "#lib/date.ts";
+  import { expenseCategoryLabel, frequencyLabel } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let subs = $state<RecurringSubscription[]>([]);
   let loading = $state(true);

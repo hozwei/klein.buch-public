@@ -284,3 +284,11 @@ Nr. 127 und ADR 0040 Nr. 50–53.
   Historienzeile (Audit `file: refused`).
 - **Snapshot-Fehler** stehen wie ein gescheiterter Floor im `backup_log` und erzeugen einen
   Hinweis.
+
+## Amendment 2026-10-25 — Krypto-Linie mit russh (Lauf F6b)
+
+Die RC-Fläche von russh ist inzwischen stabil (russh 0.64: aes-gcm 0.11, signature 3,
+ed25519-dalek 3). `sha2` teilt Klein.Buch seit Lauf F6b mit russh (0.11, dazu hmac 0.13 und
+sha1 0.11; ADR 0039 Nr. 139); die SHA-256-Hexwerte von Backup-Manifest und -Historie sind
+per Known-Answer-Test bit-genau gleich geblieben. Semver-getrennt bleibt nur `aes-gcm 0.10`
+der Backup-Hülle (ADR 0009) neben `aes-gcm 0.11` im SSH-Transport.

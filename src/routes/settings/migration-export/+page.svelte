@@ -1,9 +1,9 @@
 <script lang="ts">
   // Block 4 — Migrations-Export (offenes ZIP aller Daten); seit Plan W7 als
   // Download (einmalig abrufbar, 1 h).
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { migrationExportRun, saveDownload, type ExportReport } from "$lib/api";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { migrationExportRun, saveDownload, type ExportReport } from "#lib/api.ts";
 
   let busy = $state(false);
   let report = $state<ExportReport | null>(null);

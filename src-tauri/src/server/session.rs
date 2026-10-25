@@ -366,6 +366,17 @@ pub fn token_from_headers(headers: &HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): Sitzungs-IDs sind der SHA-256 des Tokens.
+    #[test]
+    fn hash_token_known_answer() {
+        let SessionId(h) = hash_token("beispiel-token");
+        let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "42a2c3f9b5df85389230def351f7c7ace46a0439d2641bdc462748d0bbeddb40"
+        );
+    }
     use axum::http::HeaderValue;
 
     #[test]

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { flash } from "$lib/toast.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Toggle from "#lib/Toggle.svelte";
   import type { ContactInput, ContactType } from "./types";
 
   let {

@@ -9,7 +9,7 @@
   // generierten ID vorrangig akzeptiert, falls der Aufrufer eine feste ID
   // braucht.
   import type { Snippet } from "svelte";
-  import { randomId } from "$lib/browser";
+  import { randomId } from "#lib/browser.ts";
 
   type SlotProps = {
     inputId: string;

@@ -2,18 +2,18 @@
   // Block P2b — Paket-Katalog: Liste, nach Kategorie gruppiert.
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
   import {
     packagesList,
     packageCategoriesList,
     packageCategoryCreate,
     packagesArchive,
     packagesReactivate,
-  } from "$lib/api";
-  import type { Package, PackageCategory } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { Package, PackageCategory } from "#lib/types.ts";
 
   let packages = $state<Package[]>([]);
   let categories = $state<PackageCategory[]>([]);

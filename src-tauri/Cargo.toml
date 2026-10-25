@@ -84,7 +84,10 @@ chrono-tz = "0.10"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 
 # --- Cryptography ---
-sha2 = "0.10"
+# SHA-256 (Archiv, Backup, Manifeste) und HMAC (TOTP, Gerätecookie) auf derselben
+# RustCrypto-Linie wie russh (Lauf F6b: sha2 0.11, hmac 0.13, sha1 0.11). Hex-Ausgabe
+# nur über `crate::hash::sha256_hex`; Known-Answer-Tests sichern das gespeicherte Format.
+sha2 = "0.11"
 argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
@@ -92,8 +95,8 @@ rand = "0.8"
 zeroize = "1"
 # TOTP (RFC 6238, Plan W6): HMAC-SHA1 über den Zeitschritt, konstantzeitiger
 # Vergleich, Base32-Geheimnis, QR-Code als SVG (lokal erzeugt, kein Dienst).
-hmac = "0.12"
-sha1 = "0.10"
+hmac = "0.13"
+sha1 = "0.11"
 subtle = "2"
 data-encoding = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
@@ -106,7 +109,8 @@ tera = "1"
 
 # --- Markdown (Paket-Markup, Block P2) ---
 # default-features = false → nur der Parser (kein HTML-Renderer; wir bauen Typst
-# + Klartext selbst aus dem AST, Injection-Schutz). GFM-Tabellen via Options.
+# + Klartext selbst aus dem AST, Injection-Schutz). Tabellen gehören nicht zum
+# Subset (sie erscheinen als Text).
 pulldown-cmark = { version = "0.12", default-features = false }
 
 # --- PDF rendering ---
@@ -114,14 +118,14 @@ pulldown-cmark = { version = "0.12", default-features = false }
 # führt Angebots-PDF + AGB-PDF + Datenschutz-PDF zu EINEM Druck-PDF zusammen.
 # Merge-Rezept verifiziert gegen das offizielle examples/merge.rs (lopdf 0.40).
 lopdf = "0.46"
-typst = "0.13"
-typst-pdf = "0.13"
-typst-library = "0.13"
-typst-syntax = "0.13"
-typst-utils = "0.13"
-typst-assets = { version = "0.13", features = ["fonts"] }
-ecow = "0.2"
-comemo = "0.4"
+# Typst 0.15 (Lauf F6b, ADR 0039 Nr. 139): Rechnungsbild gegen 0.13 per Text- und
+# Pixelvergleich aller Vorlagen geprüft (`pdf::snapshot`). Vor jedem Typst-Update
+# dieselben Referenz-PDFs vorher/nachher erzeugen und vergleichen.
+typst = "0.15"
+typst-pdf = "0.15"
+# PagedDocument liegt seit Typst 0.15 in typst-layout (nicht mehr über typst re-exportiert).
+typst-layout = "0.15"
+typst-assets = { version = "0.15", features = ["fonts"] }
 
 # --- Mail ---
 # default-features = false → kein native-tls (würde mit rustls kollidieren).
@@ -133,13 +137,12 @@ lettre = { version = "0.11", default-features = false, features = [
     "pool",
 ] }
 
-# --- HTTP (Block 16: Microsoft Graph OAuth + /sendMail) ---
-# default-features = false → kein native-tls; rustls bleibt der einzige TLS-Stack
-# (konsistent mit lettre/sqlx). `json` für die Token-/Graph-Responses.
-# ACHTUNG (Host-Build): reqwest 0.12 zieht rustls 0.23, dessen Default-Crypto-
-# Provider aws-lc-rs ist (braucht cmake/NASM unter Windows-MSVC). Falls
-# `cargo build` daran scheitert, auf den ring-Provider ausweichen — siehe
-# Block-16-Report.
+# --- HTTP-Client (opt-in Versionsprüfung, W12) ---
+# Seit Lauf F6 nur noch für `scheduler::update_check` (GET auf die GitHub-
+# Releases) und die Binär-Tests; der Microsoft-Graph-Versand (Block 16) ist
+# entfernt (E9, ADR 0039 Nr. 138). default-features = false → kein native-tls;
+# rustls bleibt der einzige TLS-Stack (konsistent mit lettre/sqlx). `json`
+# brauchen die Binär-Tests (`server_binary_test`).
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
@@ -158,10 +161,10 @@ url = "2"
 # russh nur optional, der Default-Backend ist RustCrypto). russh-sftp setzt das
 # SFTP-Subsystem auf einen russh-Channel (`channel.into_stream()`).
 # ACHTUNG (im Decision Log + G1-BKP.3-Report dokumentiert): russh 0.60 zieht
-# pre-release-RustCrypto-Transport-Krypto (aes-gcm 0.11-rc, sha2 0.11,
-# signature 3.0-rc, ed25519-dalek 3.0-pre). Diese koexistieren SEMVER-GETRENNT mit
-# unserem stabilen `aes-gcm 0.10`/`sha2 0.10` (Backup-Hülle) — keine Feature-
-# Unification, kein Konflikt — und werden AUSSCHLIESSLICH für die SSH-
+# RustCrypto-Transport-Krypto der neuen Linie (heute aes-gcm 0.11, signature 3,
+# ed25519-dalek 3; sha2 0.11 teilen wir seit Lauf F6b). aes-gcm 0.11 koexistiert
+# SEMVER-GETRENNT mit unserem `aes-gcm 0.10` (Backup-Hülle) — keine Feature-
+# Unification, kein Konflikt — und wird AUSSCHLIESSLICH für die SSH-
 # Transportschicht genutzt, nie für Beleg-/Backup-Krypto. MITM-Schutz über
 # Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
 # unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist

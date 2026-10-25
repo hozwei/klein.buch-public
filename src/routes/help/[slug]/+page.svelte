@@ -21,9 +21,9 @@
   //   robust.
 
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
-  import type { HandbookEntry } from "$lib/handbook";
-  import type { TocEntry } from "$lib/handbook/render";
+  import { page } from "$app/state";
+  import type { HandbookEntry } from "#lib/handbook/index.ts";
+  import type { TocEntry } from "#lib/handbook/render.ts";
 
   let {
     data,
@@ -77,8 +77,8 @@
   $effect(() => {
     // Reactive Abhängigkeiten: Slug + Hash. `data.html` triggert die
     // erste Anwendung nach DOM-Mount.
-    $page.url.pathname;
-    $page.url.hash;
+    page.url.pathname;
+    page.url.hash;
     data.html;
     queueMicrotask(applyHashFocus);
   });

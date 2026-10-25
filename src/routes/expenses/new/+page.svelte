@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import { goto } from "$app/navigation";
-  import { contactsList, paymentAccountsList, expensesCreate, uploadFile } from "$lib/api";
-  import type { Contact, PaymentAccount, ExpenseCategory, ExpenseInputDto } from "$lib/types";
-  import { EXPENSE_CATEGORIES } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
+  import { contactsList, paymentAccountsList, expensesCreate, uploadFile } from "#lib/api.ts";
+  import type { Contact, PaymentAccount, ExpenseCategory, ExpenseInputDto } from "#lib/types.ts";
+  import { EXPENSE_CATEGORIES } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let vendors = $state<Contact[]>([]);
   let accounts = $state<PaymentAccount[]>([]);

@@ -2,11 +2,11 @@
   // In-App-Design-Galerie (DS-1). Zeigt die echten Svelte-Komponenten gerendert,
   // damit das Look-and-Feel im laufenden Programm geprüft werden kann.
   // Reine Doku-Seite, nicht in der Navigation verlinkt: Aufruf via /design.
-  import Button from "$lib/Button.svelte";
-  import Card from "$lib/Card.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import FormField from "$lib/FormField.svelte";
-  import Table from "$lib/Table.svelte";
+  import Button from "#lib/Button.svelte";
+  import Card from "#lib/Card.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import FormField from "#lib/FormField.svelte";
+  import Table from "#lib/Table.svelte";
 
   let datum = $state("");
 </script>

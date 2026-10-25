@@ -1,9 +1,9 @@
 // G2-DOC.3.2 + G2-DOC.3.4 — Loader für eine einzelne Handbuch-Seite.
 //
-// Holt den Eintrag aus dem Build-Zeit-Index (`$lib/handbook`) und rendert
+// Holt den Eintrag aus dem Build-Zeit-Index (`#lib/handbook/index.ts`) und rendert
 // den Markdown-Body sofort zu HTML + TOC. Beides wird in `data`
 // hochgereicht: das `+page.svelte` setzt das HTML mit `{@html}` ein,
-// und das `+layout.svelte` liest `data.toc` (`$page.data.toc`), um die
+// und das `+layout.svelte` liest `data.toc` (`page.data.toc` aus `$app/state`), um die
 // rechte Spalte zu füllen.
 //
 // 404 statt Redirect: ein toter Anker (z. B. später aus `<HelpAnchor>`
@@ -16,8 +16,8 @@
 // einzelne Fragen aus dem Glossar/Recht-Kapitel funktionieren.
 
 import { error } from "@sveltejs/kit";
-import { getEntry } from "$lib/handbook";
-import { renderHandbookMarkdown, transformAsFaq } from "$lib/handbook/render";
+import { getEntry } from "#lib/handbook/index.ts";
+import { renderHandbookMarkdown, transformAsFaq } from "#lib/handbook/render.ts";
 
 export function load({ params }: { params: { slug: string } }) {
   const entry = getEntry(params.slug);

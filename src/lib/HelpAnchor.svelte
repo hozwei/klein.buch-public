@@ -12,7 +12,7 @@
   //             Resource-Index geprüft (siehe docs/architecture/handbook.md).
   //   heading — Optional. Tiefer Sprung auf einen H2/H3-Anker innerhalb
   //             der Seite. Wird über denselben Slugifier (`slugifyHeading`)
-  //             gejagt wie der Markdown-Renderer in `$lib/handbook/render`,
+  //             gejagt wie der Markdown-Renderer in `#lib/handbook/render.ts`,
   //             damit der Hash identisch zur Heading-ID ist.
   //   label   — Optional. Überschreibt den Tooltip-Text. Ohne Override
   //             wird der Handbuch-Titel aus dem Index gezogen, mit Fallback
@@ -27,8 +27,8 @@
   //   keine Overlay-Hilfe.
 
   import { goto } from "$app/navigation";
-  import { getEntry } from "$lib/handbook";
-  import { slugifyHeading } from "$lib/handbook/render";
+  import { getEntry } from "#lib/handbook/index.ts";
+  import { slugifyHeading } from "#lib/handbook/render.ts";
 
   let {
     slug,

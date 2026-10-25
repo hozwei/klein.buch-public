@@ -1,17 +1,17 @@
 <script lang="ts">
-  import { yearBerlin } from "$lib/date";
+  import { yearBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { assetsList, depreciationAccrueYear } from "$lib/api";
-  import type { AssetListItem } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { depreciationMethodShort } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  import { assetsList, depreciationAccrueYear } from "#lib/api.ts";
+  import type { AssetListItem } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { depreciationMethodShort } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let all = $state<AssetListItem[]>([]);
   let loading = $state(true);

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { emailLogSearch } from "$lib/api";
-  import type { EmailLogEntry, EmailLogFilter } from "$lib/types";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
+  import { emailLogSearch } from "#lib/api.ts";
+  import type { EmailLogEntry, EmailLogFilter } from "#lib/types.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
 
   let entries = $state<EmailLogEntry[]>([]);
   let loading = $state(true);

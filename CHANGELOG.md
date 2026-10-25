@@ -275,9 +275,37 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 - **Druck-PDF mit AGB:** Aktive Inhalte hochgeladener Rechtsdokumente
   (JavaScript, Programmstart, Formularversand, eingebettete Dateien) werden beim
   Zusammenführen entfernt; der Catalog ist der des Angebots.
+- **PDF-Erzeugung mit Typst 0.15 (Lauf F6b, ADR 0039 Nr. 139):** Rechnungsbild aller
+  Vorlagen gegen 0.13 per Text- und Pixelvergleich geprüft (gleicher Text, nur
+  unsichtbare Kantenabweichungen in „Minimal“). PDFs sind jetzt getaggt
+  (barrierearm) und tragen ein Erstellungsdatum. Eigene Vorlagen lesen die Daten mit
+  `json(bytes(sys.inputs.at("data-json")))`; das entfernte `json.decode` meldet
+  Klein.Buch mit dem Ersatz.
+- **Krypto-Crates:** sha2 0.11, hmac 0.13, sha1 0.11 (Hashes, TOTP und Gerätecookie
+  bit-genau wie bisher, Known-Answer-Tests); `pageant` 0.2.4 und `cmov` 0.5.4
+  (Dependabot-Meldungen). tera bleibt bei 1 (Mail-Vorlagen der Betreiber).
+- **Frontend-Werkzeugkette (Lauf F6c, ADR 0039 Nr. 140):** SvelteKit 3.1, Vite 8.3
+  (Rolldown), Vitest 5, TypeScript 6, vite-plugin-svelte 7, adapter-static 4.
+  Konfiguration in `vite.config.js` statt `svelte.config.js`; Importe über `#lib/…`
+  statt `$lib`, Seitenzustand über `$app/state` statt `$app/stores`. Die Lizenzliste
+  unter `/legal/` entsteht weiter aus dem ausgelieferten Bundle (jetzt mit `devalue`,
+  ohne `esm-env`). Nach einem Image-Update lädt die Oberfläche bei einem Ladefehler
+  neu, statt veraltete Dateien anzufordern. Alle gemeldeten Fassungen (Dependabot)
+  sind aus dem `pnpm-lock.yaml` verschwunden; `pnpm audit` meldet nichts.
+- **Node 24 LTS** für den SPA-Build im Image und in der CI (`engines.node >=24.11.0`);
+  die CI baut die SPA jetzt auch im Job `frontend` und prüft die Lizenzliste.
 
 ### Fixed
 
+- **Nachbesserung Technik (Lauf F6-fix, ADR 0039 Nr. 141):** Der ZAP-API-Scan
+  (`security.yml`) bricht nicht mehr beim Erzeugen der OpenAPI-Beschreibung ab:
+  `openapi_from_registry.py` nimmt alle Registry-Einträge (seit F6 genau die
+  Allowlist); die CI erzeugt die Beschreibung jetzt bei jedem Lauf. Die
+  App-Icon-Vorlage liegt unter `docs/assets/app-icon/` statt `docs/assets/logo/`,
+  weil das Veröffentlichen Ordner namens `logo` auslässt und der PDF-Test im
+  öffentlichen CI sonst fehlschlug. Die nur noch von Tests genutzten Desktop-Helfer
+  `backup::unlock` und `backup::needs_onboarding` sind entfernt (Entsperren nur über
+  `server::auth`).
 - **Nachbesserung Fachlogik (Lauf F5-fix, ADR 0039 Nr. 137, ADR 0040 Nr. 61):**
   - Festschreiben übernimmt die Summen des ausgestellten Belegs (USt je
     Steuergruppe wie XML und PDF); ein Entwurf mit Summen aus der älteren
@@ -539,6 +567,19 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 - Testrest `sandbox-write-test.txt`.
 - Repo-Funktion `invoices::mark_canceled` ohne Idempotenz-Prüfung (nur noch von
   Tests genutzt; das Storno-Paar läuft über `lock_with_pair_cancel`).
+- **Desktop-/Tauri-Altcode (Lauf F6, ADR 0039 Nr. 138):** die 18 im Server nur
+  gesperrt mitgeführten Commands samt Kern (Explorer/Öffnen, Restore-Vorschau per
+  Pfad, altes Einzel-Backup-Ziel, Vorgänger der Auth-Routen, Lizenzpfad,
+  `mail_oauth_*`), `Route::Replaced/Dropped/Blocked`, `DesktopActions` im
+  Anwendungskontext, der Microsoft-Graph-Versand (`mail::oauth_ms` samt Test),
+  die Lizenz-HTML der Desktop-Fassung im Handbuch-Ordner (die vollständige Liste
+  steht unter `/legal/`), die Desktop-Icons unter `src-tauri/icons/` (Logo-Vorlage
+  jetzt unter `docs/assets/app-icon/`), die Vorlagen-Logos `static/{tauri,vite,svelte}.svg`
+  und die doppelten Leser `quotes_attachments_list` und `fiscal_year_auto_close_get`.
+  Ein aus der Desktop-Fassung übernommenes Microsoft-Konto versendet nicht (Hinweis
+  auf SMTP) und verliert beim Umstellen auf SMTP Token und OAuth-Angaben.
+- `svelte.config.js` (SvelteKit 3 liest nur noch `vite.config.js`) und die
+  Build-Freigabe für esbuild in `pnpm-workspace.yaml` (nicht mehr im Baum).
 
 ## [2026.10.0] — Web-/Docker-Fassung, veröffentlicht 2026-10-24
 

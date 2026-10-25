@@ -31,9 +31,9 @@
 //! `kind` ist ein knapper, maschinenlesbarer Slug — siehe
 //! [`ArchiveKind`].
 
+use crate::hash::sha256_hex;
 use crate::{archive::audit, error::Result};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -415,12 +415,6 @@ fn build_path(root: &Path, fiscal_year: i32, kind: ArchiveKind, file_name: &str)
     p
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    format!("{:x}", h.finalize())
-}
-
 /// Schreibt `bytes` als neue, schreibgeschützte Datei an `final_path` (Plan
 /// W2.1): eindeutiger Temp-Name im selben Verzeichnis (keine Kollision mit
 /// Resten früherer Läufe oder parallelen Schreibern), `fsync`, Rücklese-Prüfung
@@ -535,6 +529,24 @@ pub(crate) fn unlock_for_test(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): Archiv-Hashes bleiben über Crate-Updates
+    /// bit-genau (FIPS 180-2, Anhang B: SHA-256 von "abc", leer, 448 Bit).
+    #[test]
+    fn sha256_hex_known_answers() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+    }
     use sqlx::sqlite::SqlitePoolOptions;
     use tempfile::TempDir;
 

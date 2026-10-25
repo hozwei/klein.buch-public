@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     mailAccountsList,
     mailAccountCreate,
@@ -10,13 +10,13 @@
     mailAccountTestConnection,
     mailAccountTestSaved,
     mailSendTest,
-  } from "$lib/api";
-  import type { MailAccount, MailAccountInput } from "$lib/types";
-  import { date } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  } from "#lib/api.ts";
+  import type { MailAccount, MailAccountInput } from "#lib/types.ts";
+  import { date } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import Toggle from "#lib/Toggle.svelte";
 
   let accounts = $state<MailAccount[]>([]);
   let loading = $state(true);
@@ -245,8 +245,6 @@
         fromEmail,
         fromName,
         isDefault,
-        oauthTenantId: null,
-        oauthClientId: null,
       };
       // Das Passwort liegt verschlüsselt in der Datenbank der Instanz (Tabelle
       // `secrets`), nie im Konto-Datensatz, in Protokollen oder Exporten.

@@ -9,18 +9,18 @@
     recurringInvoicesResolveBacklog,
     recurringRestoreReviewList,
     contactsList,
-  } from "$lib/api";
-  import { askBacklogChoice, withinTerm } from "$lib/recurringChoice";
-  import type { RecurringInvoiceRow, Contact, ResumeMode } from "$lib/types";
-  import { date } from "$lib/format";
-  import { daysUntilBerlin } from "$lib/date";
-  import { frequencyLabel } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  } from "#lib/api.ts";
+  import { askBacklogChoice, withinTerm } from "#lib/recurringChoice.ts";
+  import type { RecurringInvoiceRow, Contact, ResumeMode } from "#lib/types.ts";
+  import { date } from "#lib/format.ts";
+  import { daysUntilBerlin } from "#lib/date.ts";
+  import { frequencyLabel } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let rows = $state<RecurringInvoiceRow[]>([]);
   let contactNames = $state<Record<string, string>>({});

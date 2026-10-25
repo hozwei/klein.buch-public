@@ -552,7 +552,7 @@ Desktop-Fassung (`keyring`, `libdbus`) gibt es nicht mehr.
 | Schlüssel | Inhalt |
 |---|---|
 | `smtp:{mail_account_id}` | SMTP-Passwort |
-| `oauth:{mail_account_id}` | OAuth-Token-Bündel (nur Desktop-Bestand; im Server ohne Funktion, E9) |
+| `oauth:{mail_account_id}` | OAuth-Refresh-Token (nur Desktop-Bestand; im Server ohne Funktion, E9; entfernt beim Umstellen auf SMTP oder Löschen des Kontos) |
 | `sftp:{target_id}` | SFTP-Passwort je Ziel |
 
 **Disziplin.**
@@ -820,11 +820,12 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
   `-`, `_`, Punkt) oder IP-Adresse, ohne Leerzeichen, Steuerzeichen, Port oder
   Protokoll — geprüft beim Anlegen, Ändern, Testen und vor jeder Verbindung
   (auch für Einträge aus älteren Ständen; Lauf F4c, W14-017).
-- **OAuth/Graph** läuft über `oauth2` mit **PKCE-S256**, Loopback-Capture
-  des Redirects auf `127.0.0.1:<random>`. Refresh-Token in `secrets` (Desktop: Keychain),
-  Access-Token nur im Memory. **Im Server-Modus ausgeblendet** (E9; Commands
-  gesperrt ab W5, aus der Oberfläche entfernt und neue Microsoft-Konten
-  abgelehnt ab W8).
+- **OAuth/Graph** (Desktop-Fassung: PKCE-S256, Loopback-Capture des Redirects)
+  gibt es im Server nicht (E9): Commands gesperrt ab W5, aus der Oberfläche
+  entfernt und neue Microsoft-Konten abgelehnt ab W8, Code samt Commands seit
+  Lauf F6 entfernt (ASVS 14.2.2, ADR 0039 Nr. 138). Ein übernommenes
+  Microsoft-Konto versendet nicht (Meldung vor jedem Verbindungsaufbau); beim
+  Umstellen auf SMTP oder Löschen entfernt der Server dessen Token.
 - Jeder Versand-Versuch (erfolgreich oder nicht) landet im append-only
   `email_log`. Provider-Antwort wird kanonisiert (Header-Stripping) und
   gespeichert — kein OAuth-Token darin. Scheitert der Protokolleintrag, hält ein

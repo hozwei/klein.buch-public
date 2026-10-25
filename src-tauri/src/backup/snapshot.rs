@@ -37,7 +37,6 @@
 
 use crate::config::Paths;
 use crate::error::{Error, Result};
-use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 use std::fs;
@@ -324,15 +323,27 @@ fn collect_files(base: &Path) -> Result<(FileList, Vec<String>)> {
     Ok((out, links))
 }
 
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    format!("{:x}", h.finalize())
-}
+/// SHA-256 als Hex (gemeinsam mit Archiv und Export, Lauf F6b).
+pub use crate::hash::sha256_hex;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): Inhalts- und Datei-Hash der Backups
+    /// (Manifest `content_sha256`, `backup_history.file_hash_sha256`) bleiben
+    /// bit-genau (FIPS 180-2: "abc" und eine Million "a").
+    #[test]
+    fn sha256_hex_known_answers() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(&vec![b'a'; 1_000_000]),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+        );
+    }
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use sqlx::SqlitePool;
     use tempfile::TempDir;

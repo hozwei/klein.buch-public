@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { privateMovementsList } from "$lib/api";
-  import type { PrivateMovementListItem } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { movementTypeLabel } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { privateMovementsList } from "#lib/api.ts";
+  import type { PrivateMovementListItem } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { movementTypeLabel } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let items = $state<PrivateMovementListItem[]>([]);
   let loading = $state(true);

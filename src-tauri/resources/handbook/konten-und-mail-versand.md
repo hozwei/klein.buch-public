@@ -106,6 +106,8 @@ SMTP-Versand erlaubt ist. Das legt der Administrator dort fest.
 Taucht in der Liste ein älteres Postfach vom Typ "Microsoft 365" mit
 dem Hinweis "im Server-Betrieb nicht verfügbar" auf, kannst Du es
 über "Auf SMTP umstellen" mit SMTP-Daten weiter nutzen oder löschen.
+Bis zur Umstellung versendet es nicht; beim Umstellen entfernt
+Klein.Buch die alten Microsoft-Anmeldedaten.
 
 ## Einstellungen für Betreiber
 

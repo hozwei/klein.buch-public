@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { paymentAccountsList, privateMovementsCreate, uploadFile } from "$lib/api";
-  import type { PaymentAccount, MovementType, PrivateMovementInputDto } from "$lib/types";
-  import { MOVEMENT_TYPES } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { paymentAccountsList, privateMovementsCreate, uploadFile } from "#lib/api.ts";
+  import type { PaymentAccount, MovementType, PrivateMovementInputDto } from "#lib/types.ts";
+  import { MOVEMENT_TYPES } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import PageBar from "#lib/PageBar.svelte";
 
   let accounts = $state<PaymentAccount[]>([]);
   let busy = $state(false);

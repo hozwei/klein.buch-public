@@ -167,42 +167,6 @@ pub async fn invoices_get(
     invoices::get_detail(&pool, &id).await
 }
 
-/// Argumente von [`invoices_open_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvoicesOpenPdfArgs {
-    pub id: String,
-}
-
-/// Öffnet das archivierte ZUGFeRD-PDF einer ausgestellten Rechnung im
-/// Standard-PDF-Viewer des Betriebssystems.
-pub async fn invoices_open_pdf(ctx: &Arc<AppCtx>, args: InvoicesOpenPdfArgs) -> Result<()> {
-    let InvoicesOpenPdfArgs { id } = args;
-    let pool = ctx.pool()?;
-
-    let path = pdf_archive_path(&pool, &id).await?;
-    ctx.open_path(path)?;
-    Ok(())
-}
-
-/// Argumente von [`invoices_reveal_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InvoicesRevealPdfArgs {
-    pub id: String,
-}
-
-/// Zeigt das archivierte PDF im Datei-Explorer/Finder (zum Anhängen an
-/// eine E-Mail, solange der SMTP-Versand aus Block 5 noch nicht da ist).
-pub async fn invoices_reveal_pdf(ctx: &Arc<AppCtx>, args: InvoicesRevealPdfArgs) -> Result<()> {
-    let InvoicesRevealPdfArgs { id } = args;
-    let pool = ctx.pool()?;
-
-    let path = pdf_archive_path(&pool, &id).await?;
-    ctx.reveal(&path)?;
-    Ok(())
-}
-
 // =============================================================================
 // Commands — Draft
 // =============================================================================
@@ -1718,28 +1682,6 @@ async fn notify_storno_template_fallback(pool: &SqlitePool, template: &str, stor
     if let Err(e) = crate::notify::emit(pool, n).await {
         tracing::warn!("Hinweis zur Storno-Vorlage nicht angelegt: {e}");
     }
-}
-
-/// Löst die PDF-Archiv-Datei einer ausgestellten Rechnung auf.
-async fn pdf_archive_path(pool: &SqlitePool, invoice_id: &str) -> Result<String> {
-    let inv = invoices::get(pool, invoice_id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {invoice_id}")))?;
-    let archive_id = inv.pdf_archive_id.ok_or_else(|| {
-        Error::Domain("Diese Rechnung hat noch kein PDF — erst 'Lock & Issue' ausführen.".into())
-    })?;
-    archive_file_path(pool, &archive_id).await
-}
-
-/// Liest `archive_entries.file_path` für eine Archive-ID.
-async fn archive_file_path(pool: &SqlitePool, archive_id: &str) -> Result<String> {
-    use sqlx::Row;
-    let row = sqlx::query("SELECT file_path FROM archive_entries WHERE id = ?")
-        .bind(archive_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Archiv-Eintrag nicht gefunden: {archive_id}")))?;
-    Ok(row.try_get("file_path")?)
 }
 
 /// Effektives Leistungsdatum fürs XRechnung-XML (BT-72 / `ActualDeliverySupplyChainEvent`):

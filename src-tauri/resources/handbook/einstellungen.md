@@ -85,6 +85,12 @@ Rendern:
    erscheint ein Storno nie als Rechnung mit Zahlungsaufforderung. Die
    mitgelieferte `default.typ` zeigt, wie beides aussieht.
 
+Die Vorlagen laufen mit Typst 0.15. Die Belegdaten liest eine Vorlage
+mit `json(bytes(sys.inputs.at("data-json")))` ein. Die frühere
+Schreibweise `json.decode(…)` gibt es seit Typst 0.15 nicht mehr; eine
+ältere eigene Vorlage bricht dann mit einem Hinweis auf genau diese
+Zeile ab.
+
 ## Backups
 
 Hier richtest Du die externen Backup-Ziele ein, auch mehrere

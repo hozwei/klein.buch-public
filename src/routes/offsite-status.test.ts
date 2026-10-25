@@ -1,5 +1,5 @@
 // Lauf F3c (ADR 0040 Nr. 52/58): Jeder Off-Site-Status außer „ok“ aus dem
-// Vertrag in `$lib/api` (`offsiteStatus`) hat einen Hinweis auf der Übersicht
+// Vertrag in `#lib/api.ts` (`offsiteStatus`) hat einen Hinweis auf der Übersicht
 // und auf der Seite „Backups“, auf die die Übersicht verlinkt. Statische
 // Prüfung der Quelltexte (die Gestaltung macht der UI/UX-Lauf).
 

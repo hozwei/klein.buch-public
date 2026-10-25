@@ -36,7 +36,7 @@ use sqlx::SqlitePool;
 /// Rechnungsvorlage mit §19-Marker, aber ohne Storno-Darstellung.
 const TEMPLATE_NO_STORNO: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 #data.invoice.gross_amount
 #data.kleinunternehmer.hinweis_text
@@ -44,7 +44,7 @@ const TEMPLATE_NO_STORNO: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 
 /// Angebotsvorlage ohne §19-Marker.
 const QUOTE_TEMPLATE_NO_MARKER: &str = r#"#set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Angebot
 "#;
 

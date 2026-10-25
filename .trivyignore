@@ -13,9 +13,10 @@ GHSA-vv5m-jxxh-4627 exp:2027-04-30
 GHSA-4v9h-p7m9-rh26 exp:2027-04-30
 GHSA-4684-h2q9-2vcp exp:2027-04-30
 
-# quick-xml 0.36.2 (Rust, über typst 0.13 → hayagriva → citationberg): parst nur die
-# eingebetteten CSL-Daten und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt.
-# Der E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben). Weg mit typst ≥ 0.14.
+# quick-xml 0.38.4 (Rust, über typst 0.15 → hayagriva 0.10 → citationberg 0.7, neueste
+# Fassung mit quick-xml ^0.38; behoben erst ab 0.41): parst nur die eingebetteten CSL-Daten
+# und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt (keine eingebaute Vorlage
+# nutzt bibliography/cite). Der E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben).
 RUSTSEC-2026-0194 exp:2027-04-30
 RUSTSEC-2026-0195 exp:2027-04-30
 

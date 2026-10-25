@@ -8,10 +8,10 @@
   // Plan W12 — Versionsprüfung (opt-in, E14): Schalter für die tägliche
   // Abfrage der GitHub-Releases; Hinweise landen in der Inbox.
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
   import {
     authSecurity,
     authSessions,
@@ -24,8 +24,8 @@
     updateCheckSet,
     type AuthSession,
     type TotpOffer,
-  } from "$lib/api";
-  import type { UpdateCheckSettings } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { UpdateCheckSettings } from "#lib/types.ts";
 
   let updateCheck = $state<UpdateCheckSettings | null>(null);
   let recoveryLeft = $state<number | null>(null);

@@ -9,8 +9,8 @@
 //!   und die Quellangaben aus [`crate::build_info`] (Commit, Tag, Quell-URL,
 //!   Link auf den exakten Stand — dieselbe Quelle wie `GET /api/public/info`,
 //!   Plan W12). Read-only, kein DB-Zugriff.
-//! - `third_party_licenses_path()` ist im Server entfallen (Route::Dropped);
-//!   die Lizenzseiten liefert `GET /legal/` aus (Plan W12).
+//! - Die Lizenzseiten liefert `GET /legal/` aus (Plan W12); der Desktop-Command
+//!   `third_party_licenses_path` ist mit Lauf F6 entfallen.
 //! - `scheduler_hold_status` / `scheduler_release_hold`: Pause der automatischen
 //!   Belegerzeugung anzeigen bzw. (mit Re-Auth) aufheben (Lauf F, ADR 0040).
 
@@ -399,49 +399,6 @@ pub async fn app_info(ctx: &Arc<AppCtx>, _args: AppInfoArgs) -> AppInfo {
         build_tag: source.tag,
         source_link: source.source_link,
     }
-}
-
-/// Argumente von [`third_party_licenses_path`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ThirdPartyLicensesPathArgs {}
-
-/// Pfad der generierten Drittanbieter-Lizenz-Übersicht (Altbestand).
-///
-/// Im Server ist der Command gesperrt (`Route::Dropped`); die Lizenzseiten
-/// liefert `GET /legal/` aus (Plan W12). Gesucht wird unter
-/// `<resource_dir>/handbook/third-party-licenses.html`, ersatzweise im
-/// Ressourcen-Ordner des Quellbaums (Ausführung aus `klein-buch/`). Die
-/// Funktion samt Lizenzseite entfernt Block F6 (W13-ALTBESTAND-LICENSES,
-/// ADR 0040 Entscheidung 30).
-///
-/// Existiert die Datei nicht, gibt es einen `Error::Config` statt eines leeren
-/// Pfads.
-pub async fn third_party_licenses_path(
-    ctx: &Arc<AppCtx>,
-    _args: ThirdPartyLicensesPathArgs,
-) -> Result<String> {
-    let rel = std::path::Path::new("handbook").join("third-party-licenses.html");
-    let candidates = [
-        ctx.paths.resource_dir.join(&rel),
-        ctx.paths
-            .resource_dir
-            .join("src-tauri")
-            .join("resources")
-            .join(&rel),
-    ];
-    let path = candidates
-        .iter()
-        .find(|p| p.exists())
-        .cloned()
-        .unwrap_or_else(|| candidates[0].clone());
-    if !path.exists() {
-        return Err(Error::Config(format!(
-            "Drittanbieter-Lizenz-Datei nicht gefunden: {}",
-            path.display()
-        )));
-    }
-    Ok(path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

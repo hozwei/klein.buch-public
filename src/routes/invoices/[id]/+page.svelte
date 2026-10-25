@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import {
     invoicesGet,
@@ -11,14 +11,14 @@
     archiveUrl,
     saveArchiveFile,
     emailLogFor,
-  } from "$lib/api";
-  import type { InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "$lib/types";
-  import { euro, date, dateTime } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import { voidReasonError } from "$lib/voidDraft";
+  } from "#lib/api.ts";
+  import type { InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "#lib/types.ts";
+  import { euro, date, dateTime } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import { voidReasonError } from "#lib/voidDraft.ts";
 
   let detail = $state<InvoiceDetail | null>(null);
   let loading = $state(true);
@@ -33,7 +33,7 @@
   let voidReason = $state("");
   let voiding = $state(false);
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   async function load() {
     loading = true;

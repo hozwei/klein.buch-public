@@ -245,6 +245,15 @@ pub fn spa_service(web_dir: &Path) -> ServeDir<ServeFile> {
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): CSP-Hash eines Inline-Skripts bit-genau.
+    #[test]
+    fn csp_hash_known_answer() {
+        assert_eq!(
+            inline_script_hashes("<script>console.log(1)</script>"),
+            vec!["sha256-CihokcEcBW4atb/CW/XWsvWwbTjqwQlE9nj9ii5ww5M=".to_string()]
+        );
+    }
+
     /// ASVS 14.4.1 (Lauf F4b): Textantworten bekommen `charset=utf-8`.
     #[test]
     fn text_responses_get_utf8_charset() {

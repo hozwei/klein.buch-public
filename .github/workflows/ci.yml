@@ -95,7 +95,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: "pnpm"
           cache-dependency-path: pnpm-lock.yaml
 
@@ -107,6 +107,21 @@ jobs:
 
       - name: vitest
         run: pnpm test
+
+      # Der ZAP-API-Scan (security.yml) beschreibt die Commands mit diesem Skript;
+      # ein Bruch fiele sonst erst im Sicherheits-Gate auf (Lauf F6-fix).
+      - name: OpenAPI aus der Registry (ZAP-Scan)
+        run: |
+          python3 -I "$GITHUB_WORKSPACE/.github/scripts/openapi_from_registry.py" http://localhost:8080 > "$RUNNER_TEMP/openapi.json"
+          python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); assert len(d["paths"]) >= 100, len(d["paths"])' "$RUNNER_TEMP/openapi.json"
+
+      # Wie die Stufe „web“ im Dockerfile: SPA nach build/ und die Lizenzliste
+      # der JS-Pakete im Bundle (Vite-Plugin) für /legal/ (Lauf F6c).
+      - name: SPA-Build + Lizenzliste
+        run: |
+          pnpm build
+          test -s build/index.html
+          test -s build/legal/js-licenses.json
 
       # LICENSE muss der unveränderte AGPL-3.0-Volltext sein (gnu.org, Stand 23.10.2026).
       - name: LICENSE = AGPL-3.0-Volltext, COPYRIGHT vorhanden
@@ -191,7 +206,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
 
       - name: pnpm audit --prod --audit-level high
         run: pnpm audit --prod --audit-level high

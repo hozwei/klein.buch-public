@@ -1,22 +1,22 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
-  import { assetsGet, depreciationResetAsset } from "$lib/api";
-  import type { AssetDetail } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { depreciationMethodLabel, disposalTypeLabel } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  import { page } from "$app/state";
+  import { assetsGet, depreciationResetAsset } from "#lib/api.ts";
+  import type { AssetDetail } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { depreciationMethodLabel, disposalTypeLabel } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let detail = $state<AssetDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   // Es gibt noch nicht festgeschriebene (offenes GJ) AfA-Buchungen → korrigierbar.
   let hasUnlockedAfa = $derived(

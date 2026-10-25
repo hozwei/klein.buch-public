@@ -125,7 +125,7 @@ pub const DEFAULT_QUOTE_TEMPLATE: &str = r#"// Klein.Buch — Eingebettetes Defa
   if p.len() == 3 { p.at(2) + "." + p.at(1) + "." + p.at(0) } else { str(d) }
 }
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 
 #set page(
   paper: "a4",
@@ -308,7 +308,7 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 //     (abgeschlossenes Jahr, dessen heutige Eckwerte vom Festschreibungs-Snapshot
 //     abweichen — Lauf F2c, KB-0031)
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(120)
 
 #set page(
@@ -462,7 +462,7 @@ pub fn load_cover_source(inputs_dir: &Path) -> String {
 /// taxNumber|null, vatId|null, email}`, `data.contents[]` (Datei-Liste).
 pub const DEFAULT_COVER_TEMPLATE: &str = r##"// Klein.Buch — Deckblatt Steuerberater-Paket (Block 14c)
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 
 #set page(
@@ -528,7 +528,7 @@ pub fn load_dsgvo_source(inputs_dir: &Path) -> String {
 /// Datenschema = serialisierter [`crate::domain::dsgvo::DataSubjectReport`]
 /// (camelCase). Geld kommt als Integer-Cent; die Vorlage formatiert selbst.
 pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft nach Art. 15 (Block 18) — KEIN §14-Beleg
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 #let accent = rgb("#176b87")
 
@@ -820,7 +820,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
 /// (AST-only, escaped) und wird via `eval(mode: "markup")` eingebettet. Genau diese
 /// Mechanik nutzt später auch die Beleg-Position (P3).
 pub const PACKAGE_PREVIEW_TEMPLATE: &str = r##"// Klein.Buch — Paket-Vorschau (Block P2b)
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 
 #set page(paper: "a4", margin: 2.2cm,
@@ -860,7 +860,7 @@ pub const PACKAGE_PREVIEW_TEMPLATE: &str = r##"// Klein.Buch — Paket-Vorschau 
 
 /// Eingebaute Broschüren-Vorlage „paketübersicht". Marketing-Dokument, kein Beleg.
 pub const PACKAGE_CATALOG_TEMPLATE: &str = r##"// Klein.Buch — Paket-Katalog-Broschüre (Block P4) — KEIN §14-Beleg
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 #let accent = rgb("#176b87")
 #let format_euro(cents) = {
@@ -974,7 +974,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
 // Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
@@ -1181,7 +1181,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
 // Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
@@ -1363,7 +1363,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
 // Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).

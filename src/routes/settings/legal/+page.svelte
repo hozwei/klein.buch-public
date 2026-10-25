@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     legalDocumentsList,
     legalDocumentsUpload,
@@ -8,12 +8,12 @@
     legalDocumentsDeactivate,
     saveArchiveFile,
     uploadFile as sendUpload,
-  } from "$lib/api";
-  import type { LegalDocument } from "$lib/types";
-  import { date } from "$lib/format";
-  import { todayBerlin } from "$lib/date";
-  import Banner from "$lib/Banner.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import type { LegalDocument } from "#lib/types.ts";
+  import { date } from "#lib/format.ts";
+  import { todayBerlin } from "#lib/date.ts";
+  import Banner from "#lib/Banner.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let docs = $state<LegalDocument[]>([]);
   let loading = $state(true);

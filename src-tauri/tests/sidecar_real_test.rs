@@ -284,6 +284,53 @@ async fn sidecar_real_mustang_combine_and_extract_pdfa3() {
     assert!(extracted.contains("Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."));
 }
 
+/// Lauf F6b (LE-TYPST): Jede eingebaute Rechnungsvorlage liefert — mit Logo und
+/// Zahlungskonten — ein PDF/A-3b, das Mustang annimmt (Typst-Update-Prüfung).
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_mustang_accepts_every_builtin_template() {
+    use klein_buch_lib::pdf::templates;
+    let logo = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/assets/app-icon/logo-1024.png"),
+    )
+    .expect("Logo");
+    let accounts = serde_json::json!([
+        {"type":"bank","label":"Geschäftskonto","holder":"Erika Beispiel","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
+    ]);
+    let xml = xml();
+    for (name, tpl) in [
+        ("modern", templates::TEMPLATE_MODERN),
+        ("klassisch", templates::TEMPLATE_KLASSISCH),
+        ("minimal", templates::TEMPLATE_MINIMAL),
+    ] {
+        let pdf = typst_render::render_invoice(
+            tpl,
+            "RE-2026-0001",
+            &invoice(),
+            &seller(),
+            &buyer(),
+            None,
+            Some(("/branding/logo.png", logo.as_slice())),
+            Some("Erika Beispiel"),
+            &accounts,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let zugferd = mustang_bridge::create_zugferd(&pdf, &xml, &sidecar_dir())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: Mustang combine {e}"));
+        let text = String::from_utf8_lossy(&zugferd);
+        assert!(
+            text.contains("pdfaid:part>3<") || text.contains("pdfaid:part=\"3\""),
+            "{name}: PDF/A-3 in den XMP-Metadaten"
+        );
+        let extracted = mustang_bridge::extract_xml(&zugferd, &sidecar_dir())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: Mustang extract {e}"));
+        assert!(extracted.contains("RE-2026-0001"), "{name}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // W14: Angriffe über fremde E-Rechnungen (XXE, Dekompressionsbombe)
 // ---------------------------------------------------------------------------

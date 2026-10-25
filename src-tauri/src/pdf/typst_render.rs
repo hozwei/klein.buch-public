@@ -16,15 +16,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use chrono::Datelike;
+use chrono::{Datelike, Timelike};
 use serde_json::json;
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Dict, Str, Value};
-use typst::layout::PagedDocument;
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
-use typst::{Library, World};
+use typst::{Library, LibraryExt, World};
+use typst_layout::PagedDocument;
 
 use crate::domain::invoice::{compute_totals, BuyerView, InvoiceInput, SellerView};
 use crate::domain::kleinunternehmer::HINWEIS_TEXT;
@@ -174,7 +174,7 @@ pub fn invoice_job_with_storno(
 /// Renderiert ein **Angebot** als Standard-PDF (Block 8). Anders als die
 /// Rechnung läuft hier keine Mustang-/ZUGFeRD-Stufe (Angebote sind keine
 /// E-Rechnungen) — daher ein einfaches PDF (kein PDF/A-3b erzwungen). Das
-/// Template liest die Daten via `json.decode(sys.inputs.at("data-json"))` aus
+/// Template liest die Daten via `json(bytes(sys.inputs.at("data-json")))` aus
 /// dem `data.quote.*`-Schema (siehe Embedded-Template in
 /// [`crate::pdf::templates`]).
 #[allow(clippy::too_many_arguments)]
@@ -252,7 +252,7 @@ pub fn quote_job(
 /// Renderiert die **Anlage-EÜR-Übersicht** als Standard-PDF (Block 14a, Schritt 2).
 /// Reines Anzeige-/Archivdokument (kein PDF/A-3, keine E-Rechnung). Die Daten
 /// werden vom Caller fertig aufbereitet (Beträge als formatierte Strings) und via
-/// `json.decode(sys.inputs.at("data-json"))` ins EÜR-Template injiziert.
+/// `json(bytes(sys.inputs.at("data-json")))` ins EÜR-Template injiziert.
 pub fn render_euer(
     template_source: &str,
     data_json: &str,
@@ -262,7 +262,7 @@ pub fn render_euer(
 }
 
 /// Generisches Plain-PDF-Rendering aus einem Typst-Template + Daten-JSON
-/// (`json.decode(sys.inputs.at("data-json"))`). Für einfache Dokumente wie das
+/// (`json(bytes(sys.inputs.at("data-json")))`). Für einfache Dokumente wie das
 /// Steuerberater-Paket-Deckblatt (Block 14c).
 pub fn render_pdf(
     template_source: &str,
@@ -333,6 +333,28 @@ impl PdfJob {
         )
     }
 
+    /// Warnungen der Typst-Kompilation (Tests: veraltete Funktionen erkennen).
+    #[cfg(test)]
+    pub(crate) fn compile_warnings(&self) -> Vec<String> {
+        let embedded: Vec<(&str, &[u8])> = self
+            .embedded
+            .iter()
+            .map(|(p, b)| (p.as_str(), b.as_slice()))
+            .collect();
+        let world = TemplateWorld::new(
+            &self.template_source,
+            &self.data_json,
+            self.branding_dir.as_deref(),
+            &embedded,
+        )
+        .expect("world");
+        typst::compile::<PagedDocument>(&world)
+            .warnings
+            .iter()
+            .map(|w| w.message.to_string())
+            .collect()
+    }
+
     /// Kompiliert in `spawn_blocking` unter der Render-Semaphore.
     pub async fn compile_async(self) -> Result<Vec<u8>> {
         crate::limits::run_blocking(&crate::limits::RENDER, move || self.compile()).await
@@ -356,17 +378,27 @@ fn compile_pdf(
             .map(|d| d.message.to_string())
             .collect::<Vec<_>>()
             .join("; ");
-        PdfRenderError::Compile(msg)
+        PdfRenderError::Compile(with_upgrade_hint(msg))
     })?;
+    // Erstellungsdatum der PDF-Metadaten (UTC): PDF/A verlangt es seit Typst
+    // 0.14 („missing document date“), für die übrigen Dokumente ist es die
+    // übliche Angabe. Das Rechnungsbild bleibt unberührt (Lauf F6b).
+    let timestamp = pdf_timestamp();
     let options = if pdf_a3b {
-        let standards = typst_pdf::PdfStandards::new(&[typst_pdf::PdfStandard::A_3b])
-            .map_err(|e| PdfRenderError::Export(format!("PDF/A-3b-Standards-Setup: {e}")))?;
+        let standards =
+            typst_pdf::PdfStandards::new(&[typst_pdf::PdfStandard::A_3b]).map_err(|e| {
+                PdfRenderError::Export(format!("PDF/A-3b-Standards-Setup: {}", e.message()))
+            })?;
         typst_pdf::PdfOptions {
             standards,
+            timestamp,
             ..Default::default()
         }
     } else {
-        typst_pdf::PdfOptions::default()
+        typst_pdf::PdfOptions {
+            timestamp,
+            ..Default::default()
+        }
     };
     let pdf_bytes = typst_pdf::pdf(&document, &options).map_err(|errs| {
         let msg = errs
@@ -377,6 +409,19 @@ fn compile_pdf(
         PdfRenderError::Export(msg)
     })?;
     Ok(pdf_bytes)
+}
+
+/// Ergänzt Typst-Fehler, die auf eine mit Typst 0.15 entfernte Funktion in einer
+/// eigenen Vorlage hindeuten, um den Ersatz (Lauf F6b, ADR 0039 Nr. 139).
+fn with_upgrade_hint(msg: String) -> String {
+    if msg.contains("does not contain field `decode`") {
+        format!(
+            "{msg} — Hinweis: Die Vorlage nutzt `json.decode(…)`, das es seit Typst 0.15 \
+             nicht mehr gibt. Bitte `json(bytes(sys.inputs.at(\"data-json\")))` verwenden."
+        )
+    } else {
+        msg
+    }
 }
 
 /// Bequemer Wrapper, der das Default-Template aus dem inputs-Ordner lädt.
@@ -795,11 +840,20 @@ pub(crate) fn laid_out_text(template_source: &str, data_json: &str) -> String {
         }
     }
     let world = TemplateWorld::new(template_source, data_json, None, &[]).expect("world");
-    let document = typst::compile::<PagedDocument>(&world)
+    let warned = typst::compile::<PagedDocument>(&world);
+    // Lauf F6b: keine veralteten Typst-Funktionen in den geprüften Vorlagen.
+    let deprecated: Vec<_> = warned
+        .warnings
+        .iter()
+        .map(|w| w.message.to_string())
+        .filter(|m| m.contains("deprecated"))
+        .collect();
+    assert!(deprecated.is_empty(), "Typst-Warnungen: {deprecated:?}");
+    let document = warned
         .output
         .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
     let mut text = String::new();
-    for page in &document.pages {
+    for page in document.pages() {
         collect(&page.frame, &mut text);
     }
     text
@@ -832,20 +886,15 @@ impl TemplateWorld {
         inputs.insert(Str::from("data-json"), Value::Str(Str::from(data_json)));
         let library = Library::builder().with_inputs(inputs).build();
 
-        let main = FileId::new(None, VirtualPath::new(MAIN_VPATH));
+        let main = file_id(MAIN_VPATH)?;
         let source = Source::new(main, template_source.to_string());
 
         let today = today_de_local();
 
         let files = embedded
             .iter()
-            .map(|&(vpath, bytes)| {
-                (
-                    FileId::new(None, VirtualPath::new(vpath)),
-                    Bytes::new(bytes.to_vec()),
-                )
-            })
-            .collect();
+            .map(|&(vpath, bytes)| Ok((file_id(vpath)?, Bytes::new(bytes.to_vec()))))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             library: LazyHash::new(library),
@@ -857,6 +906,27 @@ impl TemplateWorld {
             files,
         })
     }
+}
+
+/// Datei-ID im Projekt-Wurzelverzeichnis der Vorlage (`/main.typ`, `/branding/…`).
+fn file_id(vpath: &str) -> Result<FileId> {
+    let path = VirtualPath::new(vpath)
+        .map_err(|_| PdfRenderError::Compile(format!("ungültiger Vorlagenpfad: {vpath}")))?;
+    Ok(RootedPath::new(VirtualRoot::Project, path).intern())
+}
+
+/// Erstellungszeitpunkt fürs PDF (UTC, über `crate::clock`).
+fn pdf_timestamp() -> Option<typst_pdf::Timestamp> {
+    let now = crate::clock::now_utc();
+    Datetime::from_ymd_hms(
+        now.year(),
+        now.month() as u8,
+        now.day() as u8,
+        now.hour() as u8,
+        now.minute() as u8,
+        now.second() as u8,
+    )
+    .map(typst_pdf::Timestamp::new_utc)
 }
 
 /// Typst-`datetime.today()` in Europe/Berlin (Plan W1.8).
@@ -880,7 +950,7 @@ impl World for TemplateWorld {
         if id == self.main {
             Ok(self.source.clone())
         } else {
-            Err(FileError::NotFound(id.vpath().as_rootless_path().into()))
+            Err(FileError::NotFound(id.vpath().get_without_slash().into()))
         }
     }
     fn file(&self, id: FileId) -> FileResult<Bytes> {
@@ -889,12 +959,12 @@ impl World for TemplateWorld {
                 return Ok(bytes.clone());
             }
         }
-        Err(FileError::NotFound(id.vpath().as_rootless_path().into()))
+        Err(FileError::NotFound(id.vpath().get_without_slash().into()))
     }
     fn font(&self, index: usize) -> Option<Font> {
         self.fonts.get(index).cloned()
     }
-    fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
+    fn today(&self, _offset: Option<typst::foundations::Duration>) -> Option<Datetime> {
         Some(self.today)
     }
 }
@@ -982,7 +1052,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Typst-Fehler für {src:?}: {e:?}"));
 
             let mut laid_out = String::new();
-            for page in &document.pages {
+            for page in document.pages() {
                 frame_text(&page.frame, &mut laid_out);
             }
             assert_eq!(without_whitespace(&laid_out), expected, "Satz: {src:?}");
@@ -1598,10 +1668,10 @@ mod tests {
     #[test]
     fn render_minimal_typst_produces_pdf_bytes() {
         // Minimales Template, das NICHT klausel_check bestehen muss (eigener Test).
-        // `json.decode()` für In-Memory-Strings; `json()` lädt vom Filesystem
-        // und würde den JSON-Inhalt als Pfad interpretieren.
+        // `json(bytes(..))` für In-Memory-Strings; `json("..")` allein lädt vom
+        // Filesystem und würde den JSON-Inhalt als Pfad interpretieren.
         let tpl = r#"
-            #let data = json.decode(sys.inputs.at("data-json"))
+            #let data = json(bytes(sys.inputs.at("data-json")))
             #set page(paper: "a4")
             = Test-Rechnung #data.invoice.number
             #data.invoice.is_kleinunternehmer
@@ -1802,7 +1872,7 @@ mod tests {
                 .output
                 .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
             let mut text = String::new();
-            for page in &document.pages {
+            for page in document.pages() {
                 frame_text(&page.frame, &mut text);
             }
             without_whitespace(&text)
@@ -1852,5 +1922,26 @@ mod tests {
                 "{name}: Überweisungshinweis"
             );
         }
+    }
+
+    /// Lauf F6b (LE-TYPST): Eine eigene Vorlage aus der Zeit vor Typst 0.15 mit
+    /// `json.decode` scheitert mit einem Hinweis auf den Ersatz statt nur mit der
+    /// Typst-Meldung; dieselbe Vorlage mit `json(bytes(..))` rendert.
+    #[test]
+    fn legacy_json_decode_template_fails_with_upgrade_hint() {
+        let legacy = "#let data = json.decode(sys.inputs.at(\"data-json\"))\n= #data.title";
+        let err = render_pdf(legacy, r#"{"title":"Test"}"#, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("json.decode"), "{msg}");
+        assert!(
+            msg.contains("json(bytes(sys.inputs.at(\"data-json\")))"),
+            "{msg}"
+        );
+        let current = legacy.replace(
+            "json.decode(sys.inputs.at(\"data-json\"))",
+            "json(bytes(sys.inputs.at(\"data-json\")))",
+        );
+        let pdf = render_pdf(&current, r#"{"title":"Test"}"#, None).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
     }
 }

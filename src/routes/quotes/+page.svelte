@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { quotesList } from "$lib/api";
-  import type { QuoteListItem, QuoteStatus } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { quotesList } from "#lib/api.ts";
+  import type { QuoteListItem, QuoteStatus } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let rows: QuoteListItem[] = $state([]);
   let loading = $state(false);

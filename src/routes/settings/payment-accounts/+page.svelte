@@ -1,16 +1,16 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Toggle from "#lib/Toggle.svelte";
   import {
     paymentAccountsList,
     paymentAccountsCreate,
     paymentAccountsUpdate,
     paymentAccountsSetActive,
-  } from "$lib/api";
-  import type { PaymentAccount, PaymentAccountInput, PaymentAccountType } from "$lib/types";
-  import Banner from "$lib/Banner.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import type { PaymentAccount, PaymentAccountInput, PaymentAccountType } from "#lib/types.ts";
+  import Banner from "#lib/Banner.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let accounts = $state<PaymentAccount[]>([]);
   let loading = $state(true);

@@ -33,7 +33,7 @@ use klein_buch_lib::scheduler::{self, hold, JobCtx};
 
 const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 Empfänger: #data.buyer.name \
 #data.invoice.gross_amount
@@ -856,8 +856,6 @@ async fn auto_send_failure_keeps_recipient_out_of_warn_log() {
             from_email: "rechnung@example.org".into(),
             from_name: "Beispiel IT-Service".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await

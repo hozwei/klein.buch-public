@@ -117,7 +117,7 @@ async fn handle(
     body: Body,
 ) -> Result<Response, ApiError> {
     require_request_header(headers)?;
-    let spec = registry::find_exposed(name).ok_or_else(ApiError::not_found)?;
+    let spec = registry::find(name).ok_or_else(ApiError::not_found)?;
     let session = st
         .authenticate(headers)
         .ok_or_else(ApiError::unauthenticated)?;

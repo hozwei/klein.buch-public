@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { HandbookCategory } from "$lib/handbook/categories";
+  import type { HandbookCategory } from "#lib/handbook/categories.ts";
 
   // G2-DOC.3.4 — Modul-weiter Open/Collapse-State des Sidebar-Kapitelbaums.
   //
@@ -80,17 +80,17 @@
   //   Sidebar und TOC werden ausgeblendet.
 
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import { listByCategory, getEntry } from "$lib/handbook";
+  import { page } from "$app/state";
+  import { listByCategory, getEntry } from "#lib/handbook/index.ts";
   // `HandbookCategory` ist über das `<script module>` oben bereits im Scope —
   // Svelte 5 teilt Identifier zwischen Modul- und Instanz-Skript. Erneuter
   // Import würde svelte-check mit „Duplicate identifier" abbrechen.
-  import type { TocEntry } from "$lib/handbook/render";
+  import type { TocEntry } from "#lib/handbook/render.ts";
   import {
     searchHandbook,
     SEARCH_MIN_QUERY_LENGTH,
     type HandbookHit,
-  } from "$lib/handbook/search";
+  } from "#lib/handbook/search.ts";
 
   const groups = listByCategory();
   let { children } = $props();
@@ -98,7 +98,7 @@
   // TOC ist Page-spezifisch (Slug-Loader). Defensive Lesart, damit das
   // Layout auch auf der Index-Route (`/help` → Redirect) nicht stolpert.
   let toc = $derived<TocEntry[]>(
-    ($page.data as { toc?: TocEntry[] }).toc ?? [],
+    (page.data as { toc?: TocEntry[] }).toc ?? [],
   );
 
   function isActive(pathname: string, slug: string): boolean {
@@ -116,7 +116,7 @@
   // Default-Politik bei jedem Pfadwechsel anwenden (unberührte Sektionen
   // werden zur aktiven Kategorie umgeschaltet).
   $effect(() => {
-    ensureDefaults(activeCategory($page.url.pathname));
+    ensureDefaults(activeCategory(page.url.pathname));
   });
 
   // --- Suche ---------------------------------------------------------------
@@ -212,7 +212,7 @@
                 <button
                   type="button"
                   class="result"
-                  class:active={isActive($page.url.pathname, hit.slug)}
+                  class:active={isActive(page.url.pathname, hit.slug)}
                   onclick={() => openHit(hit.slug)}
                 >
                   <span class="result-title">{hit.title}</span>
@@ -246,7 +246,7 @@
                 <ul id="cat-list-{group.category}">
                   {#each group.entries as entry (entry.slug)}
                     <li
-                      class:active={isActive($page.url.pathname, entry.slug)}
+                      class:active={isActive(page.url.pathname, entry.slug)}
                     >
                       <a href="/help/{entry.slug}">{entry.title}</a>
                     </li>

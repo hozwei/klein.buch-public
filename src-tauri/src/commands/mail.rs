@@ -1,5 +1,4 @@
-//! Commands für den Mail-Versand (Block 5, SMTP) und später OAuth
-//! (Block 16).
+//! Commands für den Mail-Versand (Block 5, SMTP).
 //!
 //! Orchestriert:
 //! - Mail-Account-Verwaltung ([`crate::db::repo::mail_accounts`])
@@ -30,7 +29,7 @@ use crate::db::repo::{
 use crate::domain::kleinunternehmer;
 use crate::error::{Error, Result};
 use crate::mail::templates::RenderedMail;
-use crate::mail::{oauth_ms, smtp, templates};
+use crate::mail::{smtp, templates};
 use crate::nettest::{self, TestKind};
 use crate::redact::redacted_debug;
 use crate::secrets;
@@ -102,17 +101,6 @@ pub struct SendQuoteResult {
     /// Audit `mail.log_failed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OauthStatus {
-    pub account_id: String,
-    /// True, wenn ein Token-Bundle in `secrets` liegt.
-    pub connected: bool,
-    pub account_email: Option<String>,
-    pub scopes: Option<String>,
-    pub token_expires_at: Option<String>,
 }
 
 // =============================================================================
@@ -382,7 +370,15 @@ pub async fn mail_account_test_saved(
 
 /// Im Server-Betrieb nur SMTP-Postfächer (E9: MS-Graph ausgeblendet).
 fn check_smtp_only(input: &mail_accounts::MailAccountInput) -> Result<()> {
-    if input.auth_type != "smtp_password" {
+    ensure_smtp_auth(&input.auth_type)
+}
+
+/// Nur Konten mit SMTP-Anmeldung versenden (E9). Ein aus der Desktop-Fassung
+/// übernommenes Microsoft-Konto (`oauth_microsoft`, Graph) lehnt der Versand mit
+/// derselben Meldung ab, bis es in den Einstellungen auf SMTP umgestellt ist
+/// (ADR 0039 Nr. 138).
+fn ensure_smtp_auth(auth_type: &str) -> Result<()> {
+    if auth_type != "smtp_password" {
         return Err(Error::Domain(
             "Die Microsoft-Anmeldung (Graph) ist im Server-Betrieb nicht verfügbar — bitte das \
              Postfach per SMTP einrichten."
@@ -465,188 +461,6 @@ async fn smtp_config_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<
         username: account.smtp_user.clone(),
         password,
     })
-}
-
-// =============================================================================
-// Commands — OAuth (Block 16, Microsoft Exchange Online)
-// =============================================================================
-
-/// Argumente von [`mail_oauth_status`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthStatusArgs {
-    pub account_id: String,
-}
-
-/// Liest den OAuth-Verbindungsstatus eines Accounts (verbunden? Postfach? Ablauf?).
-pub async fn mail_oauth_status(
-    ctx: &Arc<AppCtx>,
-    args: MailOauthStatusArgs,
-) -> Result<OauthStatus> {
-    let MailOauthStatusArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let account = mail_accounts::get(&pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    oauth_status_for(&pool, &account).await
-}
-
-/// Argumente von [`mail_oauth_connect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthConnectArgs {
-    pub account_id: String,
-}
-
-/// Startet den OAuth-Auth-Code-Flow (PKCE) für ein Microsoft-Konto: öffnet den
-/// Browser zur Microsoft-Anmeldung, fängt den Redirect über einen lokalen
-/// Loopback-Server, tauscht den Code gegen Token, legt sie in `secrets` ab und
-/// speichert die nicht-geheimen Metadaten (Postfach, Scopes, Ablauf) in der DB.
-///
-/// Blockiert bis zum Abschluss bzw. bis zur Zeitüberschreitung (5 min).
-pub async fn mail_oauth_connect(
-    ctx: &Arc<AppCtx>,
-    args: MailOauthConnectArgs,
-) -> Result<OauthStatus> {
-    let MailOauthConnectArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let pool = &pool;
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    if account.auth_type != "oauth_microsoft" {
-        return Err(Error::Mail(
-            "Dieses Postfach ist nicht als Microsoft-Konto angelegt.".into(),
-        ));
-    }
-    let client_id = account
-        .oauth_client_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            Error::Mail("Es fehlt die Client-ID (Anwendungs-ID) deiner Azure-App.".into())
-        })?;
-    let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-    let service_id = account
-        .keychain_service_id
-        .as_deref()
-        .ok_or_else(|| Error::Mail("Account ohne Keychain-Service-ID.".into()))?;
-
-    let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-    let (verifier, challenge) = oauth_ms::gen_pkce();
-    let state = oauth_ms::random_urlsafe(24);
-
-    // Loopback-Server binden → ergibt redirect_uri http://localhost:{port}.
-    let (listener, port) = oauth_ms::bind_loopback().await?;
-    let redirect_uri = oauth_ms::loopback_redirect_uri(port);
-    let auth_url = oauth_ms::build_authorize_url(
-        &endpoints.authorize,
-        client_id,
-        &redirect_uri,
-        &state,
-        &challenge,
-        oauth_ms::GRAPH_SCOPES,
-    )?;
-
-    // Browser zur Microsoft-Anmeldung öffnen.
-    ctx.open_url(&auth_url)?;
-
-    // Auf den Redirect warten (max. 5 Minuten), Query parsen, state prüfen.
-    let query = oauth_ms::capture_redirect(&listener, std::time::Duration::from_secs(300)).await?;
-    let cb = oauth_ms::parse_callback_query(&query)?;
-    if cb.state != state {
-        return Err(Error::Mail(
-            "Sicherheitsprüfung fehlgeschlagen (state stimmt nicht überein).".into(),
-        ));
-    }
-
-    // Code → Token. Bundle in `secrets`.
-    let resp = oauth_ms::exchange_code(
-        &endpoints.token,
-        client_id,
-        &redirect_uri,
-        &cb.code,
-        &verifier,
-    )
-    .await?;
-    let bundle = oauth_ms::bundle_from_response(&resp, chrono::Utc::now(), None)?;
-
-    // Postfach-Adresse best-effort (Fallback: Absender-Adresse des Accounts).
-    let email = oauth_ms::graph_me_email(&endpoints.graph, &bundle.access_token)
-        .await
-        .or_else(|| Some(account.from_email.clone()));
-
-    // Nur den (langlebigen) Refresh-Token persistieren. Der Access-Token (großes
-    // JWT) wird bei jedem Versand frisch geholt — sonst sprengt access+refresh das
-    // 2560-Zeichen-Limit des Windows Credential Managers.
-    let _ = service_id;
-    secrets::set(
-        pool,
-        &secrets::oauth_key(&account_id),
-        &bundle.refresh_token,
-    )
-    .await?;
-
-    let scopes = resp
-        .scope
-        .clone()
-        .unwrap_or_else(|| oauth_ms::GRAPH_SCOPES.to_string());
-    mail_accounts::set_oauth_session(
-        pool,
-        &account_id,
-        email.as_deref(),
-        Some(scopes.as_str()),
-        Some(bundle.expires_at.as_str()),
-    )
-    .await?;
-    mail_accounts::touch_last_used(pool, &account_id).await.ok();
-
-    audit_log::append(
-        pool,
-        "mail_account.oauth_connect",
-        "mail_account",
-        &account_id,
-        Some(serde_json::json!({ "email": email.as_deref().unwrap_or(""), "scopes": &scopes })),
-    )
-    .await?;
-
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail("Account nach Connect nicht lesbar.".into()))?;
-    oauth_status_for(pool, &account).await
-}
-
-/// Argumente von [`mail_oauth_disconnect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthDisconnectArgs {
-    pub account_id: String,
-}
-
-/// Trennt die Microsoft-Verbindung eines Accounts: löscht das Token-Bundle aus
-/// `secrets` und die Session-Metadaten aus der DB.
-pub async fn mail_oauth_disconnect(ctx: &Arc<AppCtx>, args: MailOauthDisconnectArgs) -> Result<()> {
-    let MailOauthDisconnectArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let pool = &pool;
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    secrets::delete(pool, &secrets::oauth_key(&account.id)).await?;
-    mail_accounts::clear_oauth_session(pool, &account_id).await?;
-    audit_log::append(
-        pool,
-        "mail_account.oauth_disconnect",
-        "mail_account",
-        &account_id,
-        None,
-    )
-    .await?;
-    Ok(())
 }
 
 // =============================================================================
@@ -769,8 +583,7 @@ pub struct MailSendTestArgs {
 
 /// Sendet eine kurze Test-Mail über ein **gespeichertes** Konto an `to`.
 /// Im Gegensatz zu `mail_account_test_connection` (nur Connect/Login) prüft das
-/// den vollständigen echten Pfad: Credential aus `secrets` → Versandkanal
-/// (SMTP oder Microsoft Graph) → Zustellung.
+/// den vollständigen echten Pfad: Passwort aus `secrets` → SMTP → Zustellung.
 pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result<()> {
     let MailSendTestArgs { account_id, to } = args;
     let pool = ctx.pool()?;
@@ -784,14 +597,13 @@ pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
+    ensure_smtp_auth(&account.auth_type)?;
     // Testversand wie ein Verbindungstest begrenzt (Plan W8).
-    if account.auth_type != "oauth_microsoft" {
-        let port = account
-            .smtp_port
-            .and_then(|p| u16::try_from(p).ok())
-            .unwrap_or(0);
-        ctx.net_tests.check_port(TestKind::Smtp, port)?;
-    }
+    let port = account
+        .smtp_port
+        .and_then(|p| u16::try_from(p).ok())
+        .unwrap_or(0);
+    ctx.net_tests.check_port(TestKind::Smtp, port)?;
     ctx.net_tests.admit()?;
     let now = crate::clock::now_berlin()
         .format("%d.%m.%Y %H:%M")
@@ -913,8 +725,7 @@ pub async fn send_invoice_core(
     subject_override: Option<&str>,
     body_override: Option<&str>,
 ) -> Result<SendResult> {
-    // 1. Account laden. Der Versand-Kanal (SMTP oder Microsoft Graph) wird in
-    //    dispatch_send anhand von auth_type gewählt.
+    // 1. Account laden (Versand nur per SMTP, dispatch_send).
     let account = mail_accounts::get(pool, account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -966,7 +777,7 @@ pub async fn send_invoice_core(
         bytes: pdf_bytes,
     };
 
-    // 6. Mail bauen + über den Kanal des Accounts versenden (SMTP oder Graph).
+    // 6. Mail bauen + per SMTP versenden.
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),
@@ -1039,8 +850,7 @@ pub async fn send_quote_core(
     subject_override: Option<&str>,
     body_override: Option<&str>,
 ) -> Result<SendQuoteResult> {
-    // 1. Account laden. Der Versand-Kanal (SMTP oder Microsoft Graph) wird in
-    //    dispatch_send anhand von auth_type gewählt.
+    // 1. Account laden (Versand nur per SMTP, dispatch_send).
     let account = mail_accounts::get(pool, account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -1092,7 +902,7 @@ pub async fn send_quote_core(
     }
     let attachment_count = attachments.len() as u32;
 
-    // 6. Mail bauen + über den Kanal des Accounts versenden (SMTP oder Graph).
+    // 6. Mail bauen + per SMTP versenden.
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),
@@ -1147,21 +957,8 @@ pub async fn send_quote_core(
 }
 
 // =============================================================================
-// Versand-Dispatch (SMTP vs. Microsoft Graph)
+// Versand-Dispatch (SMTP)
 // =============================================================================
-
-async fn oauth_status_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<OauthStatus> {
-    let connected = secrets::get(pool, &secrets::oauth_key(&account.id))
-        .await?
-        .is_some();
-    Ok(OauthStatus {
-        account_id: account.id.clone(),
-        connected,
-        account_email: account.oauth_account_email.clone(),
-        scopes: account.oauth_scopes.clone(),
-        token_expires_at: account.oauth_token_expires_at.clone(),
-    })
-}
 
 /// Vereinheitlichte Provider-Antwort eines Versands — Grundlage für das
 /// E-Mail-Protokoll (Block 16b).
@@ -1186,28 +983,15 @@ pub(crate) const LOG_FAILED_WARNING: &str =
     "Die E-Mail wurde versendet, der Eintrag im Versandprotokoll fehlt aber (Hinweis in der \
      Inbox; der Versand steht im Audit-Log).";
 
-/// Versendet eine fertig zusammengebaute Mail über den Kanal des Accounts:
-/// SMTP (Passwort aus `secrets`) oder Microsoft Graph (OAuth-Token aus `secrets`,
-/// bei Bedarf still erneuert). Liefert die Provider-Antwort zurück.
+/// Versendet eine fertig zusammengebaute Mail per SMTP (Passwort aus `secrets`).
+/// Liefert die Provider-Antwort zurück. Microsoft Graph gibt es im Server nicht
+/// (E9); ältere Konten dieser Art lehnt [`ensure_smtp_auth`] ab.
 async fn dispatch_send(
     pool: &SqlitePool,
     account: &MailAccountRow,
     mail: &smtp::OutgoingMail,
 ) -> Result<SendReceipt> {
-    if account.auth_type == "oauth_microsoft" {
-        let access_token = ensure_access_token(pool, account).await?;
-        let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-        let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-        let g = oauth_ms::graph_send(&endpoints.graph, &access_token, mail).await?;
-        return Ok(SendReceipt {
-            channel: "graph",
-            provider_code: Some(g.status.to_string()),
-            provider_message: Some("Accepted (Microsoft Graph)".to_string()),
-            request_id: g.request_id,
-            log_failed: false,
-        });
-    }
-
+    ensure_smtp_auth(&account.auth_type)?;
     // smtp_password (Default). Ohne gespeichertes Passwort wird ohne Auth
     // gesendet (Open-Relay/MailHog).
     let config = smtp_config_for(pool, account).await?;
@@ -1240,11 +1024,6 @@ pub(crate) async fn send_and_log(
     ctx: SendContext<'_>,
 ) -> Result<SendReceipt> {
     let result = dispatch_send(pool, account, mail).await;
-    let channel_guess = if account.auth_type == "oauth_microsoft" {
-        "graph"
-    } else {
-        "smtp"
-    };
     let entry = match &result {
         Ok(rc) => email_log::EmailLogEntry {
             account_id: Some(account.id.clone()),
@@ -1266,7 +1045,7 @@ pub(crate) async fn send_and_log(
         Err(e) => email_log::EmailLogEntry {
             account_id: Some(account.id.clone()),
             account_label: Some(account.label.clone()),
-            channel: channel_guess.to_string(),
+            channel: "smtp".to_string(),
             related_kind: ctx.related_kind.to_string(),
             related_id: ctx.related_id.map(str::to_string),
             related_number: ctx.related_number.map(str::to_string),
@@ -1353,49 +1132,6 @@ async fn report_log_failure(pool: &SqlitePool, entry: &email_log::EmailLogEntry,
     {
         tracing::error!(error = %e, "Hinweis „Versandprotokoll unvollständig“ fehlgeschlagen");
     }
-}
-
-/// Liefert einen frischen Access-Token für ein OAuth-Konto: holt ihn bei jedem
-/// Aufruf über den (in `secrets` abgelegten) Refresh-Token. Schreibt
-/// einen rotierten Refresh-Token zurück und aktualisiert den Ablauf in der DB.
-async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Result<String> {
-    // Gespeichert ist NUR der Refresh-Token (s. mail_oauth_connect). Der
-    // Access-Token wird bei jedem Versand frisch geholt — nie ein stale Token.
-    let stored_refresh = secrets::get(pool, &secrets::oauth_key(&account.id))
-        .await?
-        .ok_or_else(|| {
-        Error::Mail(
-            "Postfach ist nicht mit Microsoft verbunden. Bitte in den E-Mail-Einstellungen verbinden."
-                .into(),
-        )
-    })?;
-    let client_id = account
-        .oauth_client_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            Error::Mail("Es fehlt die Client-ID der Azure-App für die Token-Erneuerung.".into())
-        })?;
-    let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-    let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-
-    let resp = oauth_ms::refresh_tokens(&endpoints.token, client_id, &stored_refresh).await?;
-
-    // Rotierten Refresh-Token (falls Microsoft einen neuen mitschickt) persistieren.
-    if let Some(new_refresh) = resp.refresh_token.as_deref().filter(|r| !r.is_empty()) {
-        if new_refresh != stored_refresh.as_str() {
-            secrets::set(pool, &secrets::oauth_key(&account.id), new_refresh).await?;
-        }
-    }
-    // Ablauf nur für die Anzeige aktualisieren.
-    let expires_at =
-        (chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in.max(0))).to_rfc3339();
-    mail_accounts::set_oauth_token_expiry(pool, &account.id, &expires_at)
-        .await
-        .ok();
-
-    Ok(resp.access_token)
 }
 
 // =============================================================================

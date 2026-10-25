@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { backupLogSearch } from "$lib/api";
-  import type { BackupLogEntry, BackupLogFilter } from "$lib/api";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { dateTime } from "$lib/format";
+  import { backupLogSearch } from "#lib/api.ts";
+  import type { BackupLogEntry, BackupLogFilter } from "#lib/api.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { dateTime } from "#lib/format.ts";
 
   let entries = $state<BackupLogEntry[]>([]);
   let loading = $state(true);

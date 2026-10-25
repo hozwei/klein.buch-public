@@ -162,6 +162,19 @@ pub fn clear_ticket_cookie() -> String {
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): Ticket-Schlüssel ist der SHA-256 des Tickets.
+    #[test]
+    fn ticket_hash_known_answer() {
+        let hex: String = hash("beispiel-token")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "42a2c3f9b5df85389230def351f7c7ace46a0439d2641bdc462748d0bbeddb40"
+        );
+    }
+
     fn ok() -> AuthOutcome {
         Ok(AuthSuccess {
             body: serde_json::json!({"x": 1}),

@@ -31,9 +31,9 @@
   if p.len() == 3 { p.at(2) + "." + p.at(1) + "." + p.at(0) } else { str(d) }
 }
 
-// Block-3a-Hotfix: `json.decode(...)` parst In-Memory-Strings; `json(...)`
-// würde den Inhalt als Dateipfad missinterpretieren.
-#let data = json.decode(sys.inputs.at("data-json"))
+// Daten als In-Memory-JSON: `json(bytes(...))` (seit Typst 0.15 der einzige Weg;
+// `json.decode(...)` ist entfernt, `json("...")` allein läse einen Dateipfad).
+#let data = json(bytes(sys.inputs.at("data-json")))
 // Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum).
 #let storno_of = data.invoice.at("storno_of", default: none)
 

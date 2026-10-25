@@ -158,8 +158,6 @@ async fn create_unreachable_account(pool: &SqlitePool) -> String {
             from_email: "schmidm@wildbach-computerhilfe.de".into(),
             from_name: "Wildbach Computerhilfe".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await

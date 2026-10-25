@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::Router;
-use klein_buch_lib::app_ctx::{AppCtx, NoDesktop};
+use klein_buch_lib::app_ctx::AppCtx;
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::server::config::{ServerConfig, StartupOptions};
 use klein_buch_lib::server::policy::{HttpPolicy, PublicUrl};
@@ -27,7 +27,7 @@ pub const INDEX_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"
 /// Testvorlage mit §19-Marker (wie `cores_test.rs`).
 pub const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 #data.kleinunternehmer.hinweis_text
 "#;
@@ -57,7 +57,7 @@ pub fn prepare_dirs(root: &Path) -> Paths {
 }
 
 pub fn ctx_for(paths: Paths) -> Arc<AppCtx> {
-    Arc::new(AppCtx::new(paths, Arc::new(NoDesktop), "test"))
+    Arc::new(AppCtx::new(paths, "test"))
 }
 
 pub fn local_config() -> ServerConfig {

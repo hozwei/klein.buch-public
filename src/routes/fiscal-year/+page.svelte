@@ -3,15 +3,15 @@
     fiscalYearOverview,
     fiscalYearClose,
     fiscalYearAutoCloseSet,
-  } from "$lib/api";
-  import type { FiscalYearOverview, FiscalYearStatus } from "$lib/types";
-  import { euro, date, dateTime } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  } from "#lib/api.ts";
+  import type { FiscalYearOverview, FiscalYearStatus } from "#lib/types.ts";
+  import { euro, date, dateTime } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Toggle from "#lib/Toggle.svelte";
 
   let ov = $state<FiscalYearOverview | null>(null);
   let loading = $state(true);

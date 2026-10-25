@@ -1,10 +1,9 @@
 //! Plan W4/W5 — Kern-Schnitt: Registry und Tauri-Freiheit.
 //!
 //! - Die Registry (`commands::registry::REGISTRY`) enthält genau die Commands,
-//!   die das Frontend in `src/lib/api.ts` aufruft (gelesen per Regex), plus die
-//!   vier, die seit W5 über `/api/auth/*` laufen.
+//!   die das Frontend in `src/lib/api.ts` aufruft (gelesen per Regex).
 //! - Seit W5 gibt es kein Tauri mehr: weder im Code (`tauri::`, `AppHandle`)
-//!   noch in `Cargo.toml`.
+//!   noch in `Cargo.toml`, `package.json`, den Icons oder `static/` (Lauf F6).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -54,17 +53,19 @@ fn api_ts_commands() -> BTreeSet<String> {
 
 #[test]
 fn registry_matches_frontend_api() {
-    let mut api = api_ts_commands();
+    let api = api_ts_commands();
     assert_eq!(
         api.len(),
-        179,
-        "api.ts ruft 179 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
+        177,
+        "api.ts ruft 177 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
          +Pause ×2, −payment_accounts_ensure_defaults, +Tages-Backup-Uhrzeit, \
          +Nummernkreise ×2, F1d: +vorgemerkte Entwürfe ×2, +Restore-Prüfung der Abos, \
-         F2a: +Entwurf verwerfen, F3a: +Backup herunterladen, F5a: +Entwurf bearbeiten)"
+         F2a: +Entwurf verwerfen, F3a: +Backup herunterladen, F5a: +Entwurf bearbeiten, F6: −2 doppelte Leser)"
     );
-    // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
-    for name in [
+    // Lauf F6: die nur noch gesperrt mitgeführten Desktop-Commands samt Kern
+    // entfernt (Archiv über GET /files/archive/{id}, Auth über /api/auth/*,
+    // Lizenzen unter /legal/, MS-Graph E9)
+    for gone in [
         "invoices_open_pdf",
         "invoices_reveal_pdf",
         "attachments_open",
@@ -75,30 +76,22 @@ fn registry_matches_frontend_api() {
         "backup_restore_preview",
         "backup_set_target",
         "backup_set_sftp_target",
-        // seit W8 auch aus api.ts (E9, MS-Graph im Server ausgeblendet)
         "mail_oauth_status",
         "mail_oauth_connect",
         "mail_oauth_disconnect",
-        // seit W9: Lizenzliste unter /legal/ (W12)
         "third_party_licenses_path",
-    ] {
-        let spec = find(name).unwrap_or_else(|| panic!("{name} fehlt in der Registry"));
-        assert!(!spec.exposed(), "{name} ist nicht mehr freigegeben");
-        assert!(
-            api.insert(name.to_string()),
-            "{name} ruft api.ts noch per invoke auf"
-        );
-    }
-    // seit W5 über /api/auth/* (transport.ts)
-    for name in [
         "backup_needs_onboarding",
         "backup_is_unlocked",
         "backup_setup_passphrase",
         "backup_unlock",
+        // doppelt zu quotes_get (Anhänge) bzw. fiscal_year_overview (autoYearClose)
+        "quotes_attachments_list",
+        "fiscal_year_auto_close_get",
     ] {
+        assert!(find(gone).is_none(), "{gone} entfällt seit Lauf F6");
         assert!(
-            api.insert(name.to_string()),
-            "{name} ruft api.ts nicht mehr per invoke auf"
+            !api.contains(gone),
+            "{gone} ruft api.ts noch per invoke auf"
         );
     }
     let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
@@ -175,6 +168,24 @@ fn no_tauri_anywhere() {
             "{gone} entfällt (Plan W5)"
         );
     }
+    // Lauf F6: Desktop-Icons, Vorlagen-Logos, Lizenz-HTML der Desktop-Fassung
+    // und der OAuth-Kern sind entfernt; das Frontend hängt nicht an Tauri.
+    let root = manifest_dir().join("..");
+    for gone in [
+        "src-tauri/icons",
+        "src-tauri/resources/handbook/third-party-licenses.html",
+        "src-tauri/src/mail/oauth_ms.rs",
+        "static/tauri.svg",
+        "static/vite.svg",
+        "static/svelte.svg",
+    ] {
+        assert!(!root.join(gone).exists(), "{gone} entfällt (Lauf F6)");
+    }
+    let package = std::fs::read_to_string(root.join("package.json")).unwrap();
+    assert!(
+        !package.contains("@tauri-apps") && !package.contains("\"tauri"),
+        "Tauri in package.json"
+    );
 }
 
 /// Ein Registry-Handler übersetzt das camelCase-JSON in das Args-Struct und
@@ -207,4 +218,137 @@ async fn registry_handler_parses_camel_case_and_reports_locked() {
     assert!((get.handler)(ctx.clone(), serde_json::json!({}))
         .await
         .is_err());
+}
+
+/// Lauf F6-fix: `.github/scripts/openapi_from_registry.py` (ZAP-API-Scan in
+/// `security.yml`) liest die Command-Namen per Regex aus `registry.rs`
+/// (Paare `("name", h::name)` in `ENTRIES`). Dieselbe Erkennung muss genau die
+/// Namen der Registry finden — sonst scannt ZAP zu wenig oder bricht ab.
+#[test]
+fn registry_source_matches_openapi_pattern() {
+    let src = std::fs::read_to_string(
+        manifest_dir()
+            .join("src")
+            .join("commands")
+            .join("registry.rs"),
+    )
+    .expect("registry.rs lesbar");
+    fn ident(s: &str) -> usize {
+        s.find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(s.len())
+    }
+    // Nachbau von r'\(\s*"([a-z0-9_]+)",\s*h::[a-z0-9_]+,?\s*\)'
+    let mut found = BTreeSet::new();
+    for (idx, _) in src.match_indices('(') {
+        let rest = src[idx + 1..].trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        let n = ident(rest);
+        if n == 0 {
+            continue;
+        }
+        let name = &rest[..n];
+        let Some(rest) = rest[n..].strip_prefix("\",") else {
+            continue;
+        };
+        let Some(rest) = rest.trim_start().strip_prefix("h::") else {
+            continue;
+        };
+        let m = ident(rest);
+        if m == 0 {
+            continue;
+        }
+        let rest = &rest[m..];
+        let rest = rest.strip_prefix(',').unwrap_or(rest);
+        if rest.trim_start().starts_with(')') {
+            found.insert(name.to_string());
+        }
+    }
+    let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
+    assert_eq!(
+        found, registry,
+        "openapi_from_registry.py fände andere Namen als REGISTRY"
+    );
+    assert!(found.len() >= 100, "Untergrenze des Skripts (100)");
+}
+
+/// Lauf F6-fix: `tools/veroeffentlichen/Veroeffentlichen.ps1` übernimmt keinen
+/// Pfad, in dem ein Ordner einen dieser Namen trägt (`$NamenAus`; bei Änderung
+/// dort hier nachziehen). Dateien, die Tests oder der Build lesen, dürfen daher
+/// nicht unter solchen Ordnern liegen — im öffentlichen CI fehlten sie sonst
+/// (so geschehen mit der App-Icon-Vorlage unter `docs/assets/logo/`).
+const PUBLISH_EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    "memory",
+    "data",
+    "build",
+    "target",
+    "node_modules",
+    ".svelte-kit",
+    "dist",
+    "out",
+    ".cache",
+    ".idea",
+    "logo",
+];
+
+#[test]
+fn files_read_by_tests_survive_publication() {
+    let root = manifest_dir().join("..");
+    // Vom Test-Code über CARGO_MANIFEST_DIR gelesene Repo-Dateien
+    for rel in [
+        "docs/assets/app-icon/logo-1024.png",
+        "docs/assets/app-icon/logo-1024.svg",
+        "inputs/pdf-templates/default.typ",
+        "src/lib/api.ts",
+        "compose.example.yaml",
+    ] {
+        assert!(root.join(rel).is_file(), "{rel} fehlt");
+        for part in rel.split('/') {
+            assert!(
+                !PUBLISH_EXCLUDED_DIRS.contains(&part),
+                "{rel}: Pfadteil {part} wird nicht veröffentlicht"
+            );
+        }
+    }
+    assert!(
+        !root.join("docs/assets/logo").exists(),
+        "App-Icon-Vorlage liegt unter docs/assets/app-icon/ (Lauf F6-fix)"
+    );
+    // Kein Ordner mit ausgeschlossenem Namen in den veröffentlichten Quellbäumen
+    fn walk(dir: &Path, hits: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if PUBLISH_EXCLUDED_DIRS.contains(&name.as_str()) {
+                    hits.push(path.display().to_string());
+                } else {
+                    walk(&path, hits);
+                }
+            }
+        }
+    }
+    let mut hits = Vec::new();
+    for tree in [
+        "src-tauri/src",
+        "src-tauri/tests",
+        "src-tauri/resources/handbook",
+        "src-tauri/migrations",
+        "inputs",
+        "docs",
+        "static",
+        "src",
+        "legal",
+    ] {
+        walk(&root.join(tree), &mut hits);
+    }
+    assert!(
+        hits.is_empty(),
+        "Ordner, die das Veröffentlichen auslässt: {hits:?}"
+    );
 }

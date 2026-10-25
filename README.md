@@ -235,7 +235,7 @@ Architektur: **Functional Core / Imperative Shell**. Pure Funktionen in
 
 **Voraussetzungen:**
 - Rust in der Version aus `src-tauri/rust-toolchain.toml`
-- Node ≥ 22, pnpm (Version aus `packageManager` in `package.json`)
+- Node 24 LTS (≥ 24.11), pnpm (Version aus `packageManager` in `package.json`)
 - für das Image: Docker mit BuildKit
 
 ```bash

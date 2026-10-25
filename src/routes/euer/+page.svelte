@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { yearBerlin } from "$lib/date";
+  import { yearBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { euerAvailableYears, euerComputeReport } from "$lib/api";
-  import type { EuerReport } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { expenseCategoryLabel } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { euerAvailableYears, euerComputeReport } from "#lib/api.ts";
+  import type { EuerReport } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { expenseCategoryLabel } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let years = $state<number[]>([]);
   let selectedYear = $state<number | null>(null);

@@ -26,13 +26,13 @@
 # ---------------------------------------------------------------------------
 # SPA
 # ---------------------------------------------------------------------------
-FROM node:22-trixie-slim@sha256:8eb619e402eaede1748a3c8173bffab391592812e85136452f781741c7242ddf AS web
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS web
 WORKDIR /src
 ENV CI=true \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
-COPY svelte.config.js vite.config.js tsconfig.json ./
+COPY vite.config.js tsconfig.json ./
 COPY static ./static
 COPY src ./src
 # Das Handbuch bindet Vite beim Build ein (import.meta.glob).

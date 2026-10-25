@@ -565,7 +565,7 @@ async fn reauth_commands_require_fresh_reauth() {
     let cookie = setup(&srv).await;
     let reauth_cmds: Vec<&str> = REGISTRY
         .iter()
-        .filter(|c| c.exposed() && c.auth == Auth::Reauth)
+        .filter(|c| c.auth == Auth::Reauth)
         .map(|c| c.name)
         .collect();
     assert_eq!(
@@ -579,7 +579,7 @@ async fn reauth_commands_require_fresh_reauth() {
     // prüfen `seller_profile_reauth_matrix` und `mail_send_reauth_matrix`.
     let mut conditional: Vec<&str> = REGISTRY
         .iter()
-        .filter(|c| c.exposed() && c.auth == Auth::Conditional)
+        .filter(|c| c.auth == Auth::Conditional)
         .map(|c| c.name)
         .collect();
     conditional.sort_unstable();
@@ -1774,8 +1774,6 @@ async fn mail_send_reauth_matrix() {
             from_email: "rechnung@example.org".into(),
             from_name: "Beispiel IT-Service".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await

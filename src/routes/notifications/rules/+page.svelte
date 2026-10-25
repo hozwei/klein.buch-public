@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { notificationRulesList, notificationRulesSetEnabled } from "$lib/api";
-  import type { NotificationRule } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import { notificationRulesList, notificationRulesSetEnabled } from "#lib/api.ts";
+  import type { NotificationRule } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Toggle from "#lib/Toggle.svelte";
 
   let rules = $state<NotificationRule[]>([]);
   let loading = $state(true);

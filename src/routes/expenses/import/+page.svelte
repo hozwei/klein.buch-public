@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     contactsList,
     paymentAccountsList,
     expensesParseEinvoice,
     expensesCreateFromEinvoice,
     uploadFile,
-  } from "$lib/api";
+  } from "#lib/api.ts";
   import type {
     Contact,
     PaymentAccount,
@@ -17,11 +17,11 @@
     ExpenseInputDto,
     EInvoiceParseResult,
     ValidationSummary,
-  } from "$lib/types";
-  import { EXPENSE_CATEGORIES, einvoiceSourceLabel } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
+  } from "#lib/types.ts";
+  import { EXPENSE_CATEGORIES, einvoiceSourceLabel } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
 
   // Phasen: Datei wählen → Vorschau prüfen.
   let phase = $state<"select" | "review">("select");

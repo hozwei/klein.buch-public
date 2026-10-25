@@ -9,57 +9,27 @@
 //!
 //! Sidecar gemockt (`KLEIN_BUCH_SIDECAR_MOCK=1`, nur in Debug-/Test-Builds).
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use chrono::NaiveDate;
-use klein_buch_lib::app_ctx::{AppCtx, DesktopActions};
+use klein_buch_lib::app_ctx::AppCtx;
 use klein_buch_lib::commands::{expenses, invoices as inv_cmd, settings};
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::db::repo::{contacts, seller_profile};
 use klein_buch_lib::db::MIGRATOR;
 use klein_buch_lib::domain::contact::{ContactInput, ContactType};
 use klein_buch_lib::domain::invoice::{InvoiceDirection, InvoiceInput, InvoiceItemInput};
-use klein_buch_lib::error::{Error, Result};
+use klein_buch_lib::error::Error;
 
 const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 #data.kleinunternehmer.hinweis_text
 "#;
 
-/// Merkt sich Desktop-Aufrufe statt sie auszuführen.
-#[derive(Default)]
-struct RecordingDesktop(Mutex<Vec<String>>);
-
-impl DesktopActions for RecordingDesktop {
-    fn open_path(&self, path: &Path) -> Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("open:{}", path.display()));
-        Ok(())
-    }
-    fn reveal(&self, path: &Path) -> Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("reveal:{}", path.display()));
-        Ok(())
-    }
-    fn open_url(&self, url: &str) -> Result<()> {
-        self.0.lock().unwrap().push(format!("url:{url}"));
-        Ok(())
-    }
-    fn restart(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
 struct Env {
     ctx: Arc<AppCtx>,
-    desktop: Arc<RecordingDesktop>,
     _tmp: tempfile::TempDir,
 }
 
@@ -79,8 +49,7 @@ async fn setup(unlocked: bool) -> Env {
     )
     .unwrap();
 
-    let desktop = Arc::new(RecordingDesktop::default());
-    let ctx = Arc::new(AppCtx::new(paths, desktop.clone(), "test"));
+    let ctx = Arc::new(AppCtx::new(paths, "test"));
     if unlocked {
         let pool = klein_buch_lib::db::open_pool(&ctx.paths.db_file, None)
             .await
@@ -112,11 +81,7 @@ async fn setup(unlocked: bool) -> Env {
         .unwrap();
         ctx.set_pool(pool);
     }
-    Env {
-        ctx,
-        desktop,
-        _tmp: tmp,
-    }
+    Env { ctx, _tmp: tmp }
 }
 
 async fn locked_invoice(env: &Env) -> String {
@@ -613,10 +578,6 @@ async fn template_preview_enforces_paragraph_19_clause() {
     )
     .await
     .unwrap();
-    assert!(
-        env.desktop.0.lock().unwrap().is_empty(),
-        "kein Desktop-Öffner"
-    );
     assert!(ticket.file_name.ends_with(".pdf"));
     let entry = env.ctx.downloads.take(&ticket.download_id).unwrap();
     assert!(std::fs::read(&entry.path).unwrap().starts_with(b"%PDF"));

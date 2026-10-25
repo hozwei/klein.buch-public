@@ -213,7 +213,7 @@ async fn r4_004_005_export_clean_when_hash_matches() {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(body);
-    let real_hash = format!("{:x}", h.finalize());
+    let real_hash: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     sqlx::query(
         "INSERT INTO archive_entries
             (id, file_path, file_name, file_hash_sha256, file_size_bytes, mime_type, source)

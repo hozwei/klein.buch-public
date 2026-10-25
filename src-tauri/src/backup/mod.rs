@@ -139,14 +139,8 @@ pub async fn is_passphrase_set(pool: &SqlitePool) -> Result<bool> {
     Ok(get_setting(pool, SETTING_PASSPHRASE_SET).await?.as_deref() == Some("true"))
 }
 
-/// Onboarding nötig, wenn noch keine Passphrase eingerichtet wurde. Die
-/// Onboarding-UI blockiert dann das Erstellen der ersten Rechnung.
-pub async fn needs_onboarding(pool: &SqlitePool) -> Result<bool> {
-    Ok(!is_passphrase_set(pool).await?)
-}
-
 // ---------------------------------------------------------------------------
-// Passphrase-Setup + Unlock (Verifier statt Klartext/Hash)
+// Passphrase-Setup + Prüfung (Verifier statt Klartext/Hash)
 // ---------------------------------------------------------------------------
 
 /// Richtet die Backup-Passphrase erstmalig ein. Speichert einen
@@ -203,31 +197,9 @@ pub async fn store_verifier(pool: &SqlitePool, passphrase: &str) -> Result<()> {
     Ok(())
 }
 
-/// Prüft die Passphrase gegen den gespeicherten Verifier. Bei Erfolg wird die
-/// Session entsperrt. Liefert `Ok(true)` bei korrekter, `Ok(false)` bei falscher
-/// Passphrase. Schreibt die Passphrase niemals ins Audit-Log.
-pub async fn unlock(pool: &SqlitePool, session: &BackupSession, passphrase: &str) -> Result<bool> {
-    if verify_passphrase(pool, passphrase).await? {
-        session.set(passphrase.to_string());
-        crate::db::repo::audit_log::append(pool, "backup.unlock.ok", "backup", "passphrase", None)
-            .await
-            .ok();
-        Ok(true)
-    } else {
-        crate::db::repo::audit_log::append(
-            pool,
-            "backup.unlock.failed",
-            "backup",
-            "passphrase",
-            None,
-        )
-        .await
-        .ok();
-        Ok(false)
-    }
-}
-
-/// Pure-ish Verifikation gegen den gespeicherten Verifier (ohne Session-Effekt).
+/// Prüft die Passphrase gegen den gespeicherten Verifier (ohne Session-Effekt;
+/// das Entsperren der Instanz samt Audit läuft über `server::auth`, ADR 0039
+/// Nr. 141).
 pub async fn verify_passphrase(pool: &SqlitePool, passphrase: &str) -> Result<bool> {
     let salt_hex = get_setting(pool, SETTING_VERIFIER_SALT)
         .await?
@@ -1726,16 +1698,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_then_unlock_roundtrip() {
+    async fn setup_then_verify_roundtrip() {
         let pool = pool_with_settings().await;
         let session = BackupSession::default();
-        assert!(needs_onboarding(&pool).await.unwrap());
+        assert!(!is_passphrase_set(&pool).await.unwrap());
 
         // R5-005: Passphrase-Floor 16 — Test-Phrasen entsprechend lang.
         setup_passphrase(&pool, &session, "super-secret-roundtrip-1")
             .await
             .unwrap();
-        assert!(!needs_onboarding(&pool).await.unwrap());
+        assert!(is_passphrase_set(&pool).await.unwrap());
         assert!(session.is_unlocked());
 
         // Verifier darf nicht die Klartext-Passphrase enthalten.
@@ -1745,17 +1717,13 @@ mod tests {
             .unwrap();
         assert!(!ct.contains("super-secret"));
 
-        // Frische Session, korrekt entsperren.
-        let s2 = BackupSession::default();
-        assert!(unlock(&pool, &s2, "super-secret-roundtrip-1")
+        // Richtige und falsche Passphrase gegen den Verifier.
+        assert!(verify_passphrase(&pool, "super-secret-roundtrip-1")
             .await
             .unwrap());
-        assert!(s2.is_unlocked());
-
-        // Falsche Passphrase.
-        let s3 = BackupSession::default();
-        assert!(!unlock(&pool, &s3, "falsch-aber-lang-genug").await.unwrap());
-        assert!(!s3.is_unlocked());
+        assert!(!verify_passphrase(&pool, "falsch-aber-lang-genug")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

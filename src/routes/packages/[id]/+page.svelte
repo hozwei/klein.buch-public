@@ -1,17 +1,17 @@
 <script lang="ts">
   // Block P2b — Paket bearbeiten (= neue Revision) + Revisions-Panel
   // (Vergleich zweier Versionen + Rollback). Append-only: nichts wird überschrieben.
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { euro, date } from "$lib/format";
-  import { mdPreview } from "$lib/markdownPreview";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { mdPreview } from "#lib/markdownPreview.ts";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
   import {
     packagesGet,
     packageRevisionsList,
@@ -21,10 +21,10 @@
     packagePreview,
     downloadUrl,
     sellerProfileGet,
-  } from "$lib/api";
-  import type { Package, PackageRevision, PackageCategory } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { Package, PackageRevision, PackageCategory } from "#lib/types.ts";
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   let pkg = $state<Package | null>(null);
   let revisions = $state<PackageRevision[]>([]);

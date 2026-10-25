@@ -499,7 +499,8 @@ Abgeleitet aus dem UI/UX-Plan §9.2; so umgesetzt:
     bereinigt Kommentare, `.gitignore` und Meldungen. Die gesperrten
     Desktop-Commands (`Route::Dropped`), `DesktopActions`, `mail::oauth_ms`,
     die Lizenzseite `handbook/third-party-licenses.html` und die Icons entfernt
-    Block F6 (N2-DESKTOP-ALTCODE, W13-OAUTH-CODE, W13-ALTBESTAND-LICENSES).
+    Block F6 (N2-DESKTOP-ALTCODE, W13-OAUTH-CODE, W13-ALTBESTAND-LICENSES); umgesetzt in
+    Lauf F6a (ADR 0039 Nr. 138).
 31. **Historie bleibt Historie (D-18).** Migrationen (Prüfsummen), die
     Block-Notizen unter `memory/`, CHANGELOG-Abschnitte vergangener Versionen
     und ADR-Texte vor ihren Amendments werden nicht umgeschrieben; das PRD

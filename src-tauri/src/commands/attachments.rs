@@ -1,8 +1,7 @@
 //! Commands für Anhänge.
 //!
-//! - **Lesen/Öffnen** ([`attachments_open`] / [`attachments_reveal`]): zeigt
-//!   einen bereits archivierten Anhang (z. B. unterschriebener Vertrag, Beleg)
-//!   über das opener-Plugin — gleiches Muster wie `invoices_open_pdf`.
+//! - **Lesen** ([`attachments_list`]): Anhänge einer Eltern-Entität; die Datei
+//!   selbst liefert `GET /files/archive/{id}` (W7).
 //! - **Hinzufügen** ([`attachments_add`], Block 9): generischer Upload — Datei
 //!   write-once archivieren ([`crate::archive::store_bytes`],
 //!   `ArchiveKind::Attachment`) und mit einer Eltern-Entität verknüpfen
@@ -16,7 +15,6 @@
 use crate::app_ctx::AppCtx;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use std::sync::Arc;
 
 use crate::archive::{self, ArchiveKind};
@@ -42,53 +40,6 @@ pub struct AddAttachmentArgs {
     /// Aus `POST /api/upload/anhang` (Plan W7).
     pub upload_id: String,
     pub label: Option<String>,
-}
-
-/// Löst `archive_entries.file_path` zu einer Archive-ID auf.
-async fn archive_file_path(pool: &SqlitePool, archive_entry_id: &str) -> Result<String> {
-    use sqlx::Row;
-    let row = sqlx::query("SELECT file_path FROM archive_entries WHERE id = ?")
-        .bind(archive_entry_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| {
-            Error::Domain(format!("Archiv-Eintrag nicht gefunden: {archive_entry_id}"))
-        })?;
-    Ok(row.try_get("file_path")?)
-}
-
-/// Argumente von [`attachments_open`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentsOpenArgs {
-    pub archive_entry_id: String,
-}
-
-/// Öffnet den archivierten Anhang im Standard-Programm des Betriebssystems.
-pub async fn attachments_open(ctx: &Arc<AppCtx>, args: AttachmentsOpenArgs) -> Result<()> {
-    let AttachmentsOpenArgs { archive_entry_id } = args;
-    let pool = ctx.pool()?;
-
-    let path = archive_file_path(&pool, &archive_entry_id).await?;
-    ctx.open_path(path)?;
-    Ok(())
-}
-
-/// Argumente von [`attachments_reveal`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AttachmentsRevealArgs {
-    pub archive_entry_id: String,
-}
-
-/// Zeigt den archivierten Anhang im Datei-Explorer/Finder.
-pub async fn attachments_reveal(ctx: &Arc<AppCtx>, args: AttachmentsRevealArgs) -> Result<()> {
-    let AttachmentsRevealArgs { archive_entry_id } = args;
-    let pool = ctx.pool()?;
-
-    let path = archive_file_path(&pool, &archive_entry_id).await?;
-    ctx.reveal(&path)?;
-    Ok(())
 }
 
 /// Argumente von [`attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

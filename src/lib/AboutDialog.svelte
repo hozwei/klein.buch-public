@@ -12,13 +12,13 @@
   // und Hinweise liefert der Server unter `/legal/` aus.
   // Das Modal selbst hält keine Eingaben — kein Form-Submit, kein Pflicht-State.
 
-  import { aboutModalStore, closeAboutDialog } from "$lib/aboutModal.svelte";
-  import { appInfo } from "$lib/api";
-  import { publicInfo, type PublicInfo } from "$lib/transport";
-  import { formatVersionDisplay } from "$lib/version";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
-  import { DEV_SOURCE_TEXT, safeSourceLink, shortCommit, sourceLabel } from "$lib/sourceInfo";
-  import type { AppInfo } from "$lib/types";
+  import { aboutModalStore, closeAboutDialog } from "#lib/aboutModal.svelte.ts";
+  import { appInfo } from "#lib/api.ts";
+  import { publicInfo, type PublicInfo } from "#lib/transport.ts";
+  import { formatVersionDisplay } from "#lib/version.ts";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { DEV_SOURCE_TEXT, safeSourceLink, shortCommit, sourceLabel } from "#lib/sourceInfo.ts";
+  import type { AppInfo } from "#lib/types.ts";
 
   let info = $state<AppInfo | null>(null);
   let infoError = $state<string | null>(null);

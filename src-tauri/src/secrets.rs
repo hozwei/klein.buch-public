@@ -1,4 +1,4 @@
-//! Zugangsdaten (SMTP-/SFTP-Passwörter, OAuth-Refresh-Token) in der
+//! Zugangsdaten (SMTP-/SFTP-Passwörter) in der
 //! SQLCipher-Datenbank (Plan W8, Amendment ADR 0011/0028, Migration 0031).
 //!
 //! Bis W7 lagen sie im OS-Schlüsselbund (`keyring`), den es im Container nicht
@@ -15,7 +15,9 @@ pub fn smtp_key(account_id: &str) -> String {
     format!("smtp:{account_id}")
 }
 
-/// Schlüssel des OAuth-Refresh-Tokens eines Mailkontos.
+/// Schlüssel eines OAuth-Refresh-Tokens (Microsoft Graph, Desktop-Fassung).
+/// Nur noch zum Aufräumen: Ändern oder Löschen eines übernommenen Kontos
+/// entfernt einen solchen Bestandseintrag (ADR 0039 Nr. 138).
 pub fn oauth_key(account_id: &str) -> String {
     format!("oauth:{account_id}")
 }

@@ -959,6 +959,53 @@ mod tests {
         assert!(report.processing_info.retention.contains("147"));
     }
 
+    /// Referenz-PDF der DSGVO-Auskunft für Typst-Updates (siehe `pdf::snapshot`).
+    #[test]
+    #[ignore = "erzeugt Referenz-PDFs nach KB_PDF_SNAPSHOT_DIR (Typst-Update)"]
+    fn pdf_snapshot_dsgvo() {
+        let Some(dir) = crate::pdf::snapshot::out_dir() else {
+            return;
+        };
+        let c = contact();
+        let inv = invoice();
+        let items = vec![invoice_item()];
+        let invoices = vec![RawInvoice {
+            invoice: &inv,
+            items: &items,
+        }];
+        let exps = vec![expense()];
+        let docs = vec![raw_doc()];
+        let mails = vec![email()];
+        let audit = vec![RawAudit {
+            timestamp_utc: "2026-03-01 12:00:00".into(),
+            action: "invoice.lock".into(),
+            entity_type: Some("invoice".into()),
+            entity_id: Some("i1".into()),
+        }];
+        let raw = RawData {
+            contact: &c,
+            invoices: &invoices,
+            quotes: &[],
+            expenses: &exps,
+            recurring_invoices: &[],
+            subscriptions: &[],
+            assets: &[],
+            documents: &docs,
+            emails: &mails,
+            audit: &audit,
+            controller: controller(),
+            generated_at: "2026-05-24 12:00:00".into(),
+        };
+        let report = assemble(&raw);
+        let pdf = crate::pdf::typst_render::render_pdf(
+            crate::pdf::templates::DEFAULT_DSGVO_TEMPLATE,
+            &serde_json::to_string(&report).unwrap(),
+            None,
+        )
+        .expect("DSGVO-PDF");
+        crate::pdf::snapshot::write(&dir, "dsgvo-auskunft", &pdf);
+    }
+
     #[test]
     fn assemble_omits_internal_notes() {
         const {

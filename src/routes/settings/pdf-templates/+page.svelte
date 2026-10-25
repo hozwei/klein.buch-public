@@ -1,12 +1,12 @@
 <script lang="ts">
   // Block 17a — PDF-Vorlagen-Switcher (globale Standard-Vorlage).
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import Button from "$lib/Button.svelte";
-  import Toggle from "$lib/Toggle.svelte";
-  import { flash } from "$lib/toast.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import Button from "#lib/Button.svelte";
+  import Toggle from "#lib/Toggle.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
   import {
     pdfTemplatesList,
     sellerProfileGet,
@@ -22,8 +22,8 @@
     sellerSignatureData,
     quoteSignatureGet,
     quoteSignatureSet,
-  } from "$lib/api";
-  import type { PdfTemplateMeta } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { PdfTemplateMeta } from "#lib/types.ts";
 
   let templates = $state<PdfTemplateMeta[]>([]);
   let selected = $state<string>("default");

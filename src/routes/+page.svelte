@@ -7,13 +7,13 @@
     daysInYear,
     todayBerlin,
     yearBerlin,
-  } from "$lib/date";
-  import { dayClock } from "$lib/dayClock.svelte";
+  } from "#lib/date.ts";
+  import { dayClock } from "#lib/dayClock.svelte.ts";
   // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
   // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
   // Daten da sind, fängt Einzel-Fehler je Karte ab.
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     sellerProfileGet,
     paragraph19Info,
@@ -25,10 +25,10 @@
     backupGetSettings,
     notificationsList,
     recurringInvoicesList,
-  } from "$lib/api";
-  import type { BackupLogEntry } from "$lib/api";
-  import { euro, date as fmtDate } from "$lib/format";
-  import { withinTerm } from "$lib/recurringChoice";
+  } from "#lib/api.ts";
+  import type { BackupLogEntry } from "#lib/api.ts";
+  import { euro, date as fmtDate } from "#lib/format.ts";
+  import { withinTerm } from "#lib/recurringChoice.ts";
   import type {
     SellerProfile,
     Paragraph19Info,
@@ -38,7 +38,7 @@
     ExpenseListItem,
     AppNotification,
     RecurringInvoiceRow,
-  } from "$lib/types";
+  } from "#lib/types.ts";
 
   // ---- Loader-State ----------------------------------------------------------
 

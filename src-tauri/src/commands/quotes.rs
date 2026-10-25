@@ -37,8 +37,7 @@ use crate::archive::{self, ArchiveKind};
 use crate::backup;
 use crate::config::Paths;
 use crate::db::models::{
-    AttachmentView, ContactRow, InvoiceDetail, QuoteDetail, QuoteLegalDocumentView, QuoteListItem,
-    QuoteRow,
+    ContactRow, InvoiceDetail, QuoteDetail, QuoteLegalDocumentView, QuoteListItem, QuoteRow,
 };
 use crate::db::numbering;
 use crate::db::repo::audit_log;
@@ -150,23 +149,6 @@ pub async fn quotes_get(ctx: &Arc<AppCtx>, args: QuotesGetArgs) -> Result<Option
     let pool = ctx.pool()?;
 
     quotes::get_detail(&pool, &id).await
-}
-
-/// Argumente von [`quotes_attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QuotesAttachmentsListArgs {
-    pub quote_id: String,
-}
-
-pub async fn quotes_attachments_list(
-    ctx: &Arc<AppCtx>,
-    args: QuotesAttachmentsListArgs,
-) -> Result<Vec<AttachmentView>> {
-    let QuotesAttachmentsListArgs { quote_id } = args;
-    let pool = ctx.pool()?;
-
-    attachments::list_for_parent(&pool, "quote", &quote_id).await
 }
 
 // =============================================================================
@@ -1046,8 +1028,8 @@ pub struct QuotesGeneratePdfArgs {
 }
 
 /// Erzeugt (falls nötig) das Angebots-PDF und liefert das aktualisierte Angebot
-/// (mit `pdfArchiveId`). Das Frontend öffnet das PDF danach via
-/// `attachments_open(pdfArchiveId)`.
+/// (mit `pdfArchiveId`). Das Frontend lädt das PDF danach über
+/// `GET /files/archive/{pdfArchiveId}`.
 pub async fn quotes_generate_pdf(
     ctx: &Arc<AppCtx>,
     args: QuotesGeneratePdfArgs,

@@ -1,19 +1,14 @@
 {
-  "extends": "./.svelte-kit/tsconfig.json",
+  // Basis erzeugt SvelteKit 3 (`svelte-kit sync`) unter node_modules/$app/tsconfig.json:
+  // strict-fähige Bundler-Auflösung, verbatimModuleSyntax, isolatedModules, noEmit,
+  // allowImportingTsExtensions (Importe wie "#lib/api.ts", Subpath-Import aus package.json).
+  "extends": "$app/tsconfig",
   "compilerOptions": {
-    "allowJs": true,
-    "checkJs": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
+    // TypeScript 6 lädt keine @types-Pakete mehr automatisch: node für vite.config.js und Tests.
+    "types": ["$app/types", "node"],
     "sourceMap": true,
-    "strict": true,
-    "moduleResolution": "bundler"
-  }
-  // Path aliases are handled by https://svelte.dev/docs/kit/configuration#alias
-  // except $lib which is handled by https://svelte.dev/docs/kit/configuration#files
-  //
-  // If you want to overwrite includes/excludes, make sure to copy over the relevant includes/excludes
-  // from the referenced tsconfig.json - TypeScript does not merge them in
+    "strict": true
+  },
+  "include": ["src", "*"],
+  "exclude": ["src/service-worker"]
 }

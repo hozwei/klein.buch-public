@@ -43,7 +43,7 @@ use klein_buch_lib::euer::aggregate;
 /// Hinweistext, besteht also den `pdf::klausel_check` in der Lock-Pipeline.
 const TEMPLATE_TYP: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 Empfänger: #data.buyer.name \
 #data.invoice.gross_amount

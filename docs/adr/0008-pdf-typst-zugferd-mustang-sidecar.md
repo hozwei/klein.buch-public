@@ -11,7 +11,7 @@ Templates erfolgen; die ZUGFeRD-Einbettung muss robust und standardkonform sein.
 ## Entscheidung
 
 - **Typst (als Library)** erzeugt das Layout-PDF (PDF/A-3b) aus
-  `inputs/pdf-templates/*.typ`; Daten kommen als `json.decode(sys.inputs…)`.
+  `inputs/pdf-templates/*.typ`; Daten kommen als `json(bytes(sys.inputs…))`.
 - **Mustang Project** (Apache-2.0) erzeugt aus dem PDF/A + CII das ZUGFeRD-PDF/A-3.
   Mustang läuft mit dem KoSIT-Validator (ADR 0007) gemeinsam in **einem
   jlink-JRE-Sidecar** (Ein-Schritt-`combine`).
@@ -69,3 +69,27 @@ akzeptiert XRECHNUNG (ADR 0037). Test: `sidecar_real_mustang_combine_and_extract
 (XMP `XRECHNUNG`, `xrechnung.xml`, Extraktion bitgleich). Alternative „bewusst bei
 EN 16931 bleiben“ verworfen, weil sie den Widerspruch zum XML stehen ließe; ein
 Wechsel der Guideline auf reines EN 16931 schiede für B2G (XRechnung-Pflicht) aus.
+
+## Amendment 2026-10-25 — Typst 0.15 (Lauf F6b, LE-TYPST)
+
+Typst läuft ab 2026.11 in Fassung **0.15** (vorher 0.13, über 0.14 als Zwischenstufe
+geprüft; Begründung und Messwerte in ADR 0039 Nr. 139). Für Vorlagen gilt:
+
+- Daten liest eine Vorlage mit `json(bytes(sys.inputs.at("data-json")))`. `json.decode`
+  ist in Typst 0.15 entfernt; alle eingebauten Vorlagen, `inputs/pdf-templates/default.typ`
+  und die Testvorlagen sind umgestellt. Eine ältere eigene Vorlage bricht mit einer
+  Meldung ab, die den Ersatz nennt (`typst_render::with_upgrade_hint`). Neu ist ein Test,
+  der die eingebauten Vorlagen auf Typst-Warnungen prüft (`pdf::snapshot::
+  builtin_templates_compile_without_typst_warnings`): Veraltetes fällt so vor der Entfernung
+  auf.
+- `PagedDocument` kommt aus `typst-layout`; Dateien der Vorlage heißen intern
+  `RootedPath(Project, /main.typ | /branding/…)`.
+- Das PDF trägt ein Erstellungsdatum (UTC, über `crate::clock`); PDF/A-3b verlangt es seit
+  Typst 0.14. Typst schreibt seit 0.14 ein **getaggtes PDF** (Struktur für Screenreader); das
+  Rechnungs-PDF wird dadurch etwa ein Drittel größer (Beispiel 29 → 40 KB), das Bild bleibt
+  gleich. Mustang nimmt das PDF/A-3b aller vier Vorlagen an
+  (`sidecar_real_mustang_accepts_every_builtin_template`).
+- Vor jedem weiteren Typst-Update: Referenz-PDFs mit `pdf::snapshot` vorher und nachher
+  erzeugen (`KB_PDF_SNAPSHOT_DIR=… cargo test --lib -- --ignored pdf_snapshot_`) und Text
+  sowie Pixel vergleichen; übernommen wird nur bei gleichem Text und unsichtbaren
+  Pixel-Abweichungen (Schwelle in ADR 0039 Nr. 139).

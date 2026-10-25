@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import {
     expensesGet,
     expensesCancel,
@@ -9,16 +9,16 @@
     expensesReceiptXmlText,
     paymentAccountsList,
     saveArchiveFile,
-  } from "$lib/api";
-  import type { ExpenseDetail, AttachmentView, PaymentAccount } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { expenseCategoryLabel } from "$lib/labels";
-  import AttachmentUpload from "$lib/AttachmentUpload.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { openXmlViewer } from "$lib/xmlViewerModal.svelte";
+  } from "#lib/api.ts";
+  import type { ExpenseDetail, AttachmentView, PaymentAccount } from "#lib/types.ts";
+  import { euro, date } from "#lib/format.ts";
+  import { expenseCategoryLabel } from "#lib/labels.ts";
+  import AttachmentUpload from "#lib/AttachmentUpload.svelte";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { openXmlViewer } from "#lib/xmlViewerModal.svelte.ts";
 
   let detail = $state<ExpenseDetail | null>(null);
   let accounts = $state<PaymentAccount[]>([]);
@@ -36,7 +36,7 @@
   // nicht doppelt klickbar ist.
   let xmlLoading = $state(false);
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   /** Beleg ist eine empfangene E-Rechnung mit archiviertem Original — Voraussetzung
    *  für „Roh-XML anzeigen". Coarse-Check über `sourceFormat`; die feine

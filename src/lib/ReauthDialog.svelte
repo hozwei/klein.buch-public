@@ -2,10 +2,10 @@
   // Re-Auth-Dialog (Plan W6): Passphrase + TOTP-Code (oder Einmal-Code)
   // bestätigen eine kritische Aktion; gilt 5 Minuten.
   import { onMount } from "svelte";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
-  import { setReauthHandler } from "$lib/transport";
-  import { authReauth } from "$lib/api";
-  import { reauthStore, requestReauth, resolveReauth } from "$lib/reauth.svelte";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { setReauthHandler } from "#lib/transport.ts";
+  import { authReauth } from "#lib/api.ts";
+  import { reauthStore, requestReauth, resolveReauth } from "#lib/reauth.svelte.ts";
 
   let pass = $state("");
   let code = $state("");

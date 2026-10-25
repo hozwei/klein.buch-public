@@ -717,7 +717,9 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     übernommenes Microsoft-Konto lässt sich auf SMTP umstellen (der Token wird dabei gelöscht) oder
     löschen. `mail_oauth_*` sind gesperrt (404) und aus `api.ts` entfernt. Der Code (`mail/oauth_ms.rs`,
     die Commands, `tests/oauth_ms_test.rs`) ist noch vorhanden — die in W11 geplante Entfernung
-    nannte der Plan nicht als Löschliste (Stand 24.10.2026, W13; S3).
+    nannte der Plan nicht als Löschliste (Stand 24.10.2026, W13; S3). Seit Lauf F6 entfernt;
+    ein übernommenes Microsoft-Konto versendet nicht und verliert beim Umstellen auch seine
+    OAuth-Spalten (Nr. 138).
 88. **SFTP-Testserver (W8).** Für den Done-Check „SFTP-Ziel mit Fingerprint“ startet
     `tests/sftp_mock` einen russh-SFTP-Server auf `127.0.0.1` mit einem im Test erzeugten
     Ed25519-Schlüssel (keine Fixture-Datei) und Passwort-Login; er kann nur, was der Upload braucht.
@@ -945,9 +947,10 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     webpki-roots 1.0.11, quinn-proto 0.11.19, tokio 1.54.1, anyhow 1.0.104 u. a. Begründete
     Ausnahmen: rsa/Marvin (kein Fix), drei zip-Meldungen zu `extract` (nicht genutzt, Fix erst in
     zip 9), quick-xml 0.36 über typst 0.13 → hayagriva → citationberg (nur eingebettete bzw. vom
-    Betreiber geladene CSL-Daten; weg mit typst ≥ 0.14). `zip` nur noch mit `deflate` + `time`:
-    zstd, bzip2 und xz samt statisch gelinktem C-Code entfallen (sonst fehlten deren
-    BSD-Hinweise auf der Lizenzseite), fremde ZIPs mit anderen Verfahren werden abgelehnt.
+    Betreiber geladene CSL-Daten; „weg mit typst ≥ 0.14“ traf nicht zu, siehe Nr. 139).
+    `zip` nur noch mit `deflate` + `time`: zstd, bzip2 und xz samt statisch gelinktem C-Code
+    entfallen (sonst fehlten deren BSD-Hinweise auf der Lizenzseite), fremde ZIPs mit anderen
+    Verfahren werden abgelehnt.
     trivy meldet 11 HIGH-Funde im unveränderten Mustang-Uber-JAR (jackson-core/-databind 2.17.3,
     assertj-core 2.9.0, veraPDF 1.26.5). Ein Class-Load-Trace der JVM über `combine`, `extract`
     und den KoSIT-Validator lädt keine Klasse dieser Bibliotheken — begründete Ausnahmen in
@@ -2088,6 +2091,186 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `server_auth_test::wrong_passphrase_after_valid_totp_warns_once_per_streak`.
     (11) **Lieferkette:** Die Test-Abhängigkeiten aus Nr. 136 (`rcgen`, `tokio-rustls`)
     mit `cargo deny check advisories licenses` und `cargo audit` wie in CI geprüft.
+138. **Desktop-/Tauri-Altcode entfernt (Lauf F, Block F6a, 2026-10-25; keine Migration, keine
+    neue Abhängigkeit).** (1) **Registry ohne Sperr-Einträge (N2-DESKTOP-ALTCODE, ASVS 14.2.2):**
+    Die 18 nur gesperrt mitgeführten Commands sind samt Handler, Args und Kern entfernt —
+    Explorer/Öffnen (`invoices_open_pdf`, `invoices_reveal_pdf`, `attachments_open`,
+    `attachments_reveal`, `euer_reveal_path`, `backup_open_folder`, `backup_reveal_path`),
+    `backup_restore_preview` (Pfad-Argument), das alte Einzel-Backup-Ziel
+    (`backup_set_target`, `backup_set_sftp_target`), die Vorgänger der Auth-Routen
+    (`backup_needs_onboarding`, `backup_is_unlocked`, `backup_unlock`; der Kern
+    `backup_setup_passphrase` bleibt, `POST /api/auth/setup` nutzt ihn),
+    `third_party_licenses_path` und `mail_oauth_{status,connect,disconnect}`. `Route` mit
+    `Replaced`/`Dropped`/`Blocked` entfällt ganz: Der Dispatcher antwortete für alle drei ohnehin
+    mit 404, und das Frontend ruft keinen dieser Namen auf, braucht also keinen 410-Hinweis. Die
+    Registry ist damit genau die Allowlist (`registry::find`; `exposed`/`find_exposed` entfallen)
+    und deckt sich mit `api.ts` (177 Commands). `AppCtx` verliert `DesktopActions`/`NoDesktop`
+    samt `open_path`/`reveal`/`open_url`; `AppCtx::new(paths, app_identifier)`. (2) **MS-Graph
+    (W13-OAUTH-CODE):** `mail::oauth_ms`, `tests/oauth_ms_test.rs`, der Graph-Zweig im Versand,
+    `ensure_access_token` und die OAuth-Repo-Funktionen sind entfernt (Amendment ADR 0028
+    vom 2026-10-25); `oauthTenantId`/`oauthClientId` entfallen aus `MailAccountInput`.
+    Bestandskonten mit `auth_type = oauth_microsoft` lehnen Test- und Belegversand vor jedem
+    Verbindungsaufbau ab (gewählt statt sie „tolerant als SMTP“ zu lesen: ihnen fehlen Server
+    und Zugangsdaten, ein stiller Versuch endete mit einer irreführenden Meldung); das Umstellen
+    auf SMTP leert alle `oauth_*`-Spalten und löscht den Token. Neue `email_log`-Einträge tragen
+    immer `smtp`, alte `graph`-Einträge bleiben lesbar. `reqwest` bleibt für die
+    Versionsprüfung; eine Abhängigkeit `oauth2` gab es nicht mehr. (3) **Lizenzseite
+    (W13-ALTBESTAND-LICENSES):** `resources/handbook/third-party-licenses.html` (Platzhalter der
+    Desktop-Fassung, vom Handbuch nicht eingebunden — Vite liest nur `*.md`) ist entfernt; die
+    vollständige Liste erzeugt der Image-Build unter `/legal/third-party-licenses.html`
+    (`legal/build_legal.py`, geprüft von `image_smoke.sh` und `server_legal_test`).
+    (4) **Dateien:** `static/{tauri,vite,svelte}.svg` (W12-STATIC-SVG), die 52 erzeugten
+    Desktop-Icons unter `src-tauri/icons/` (nirgends referenziert, auch nicht in Dockerfile,
+    `app.html` oder den Workflows) und `tauri-dev.log`. Die Logo-Vorlage (`icon-source.svg`/
+    `.png`) bleibt als `docs/assets/app-icon/logo-1024.*` erhalten, weil Favicon und künftige
+    App-Icons der Webanwendung daraus entstehen. Der Crate-Ordner heißt weiter `src-tauri`
+    (Pfade in CI, Dockerfile und Skripten). (5) **Tote Frontend-Wrapper (R5-S2-DEADAPI):**
+    entfernt, weil doppelt: `quotes_attachments_list` (die Anhänge liefert `quotes_get`,
+    allgemein `attachments_list`) und `fiscal_year_auto_close_get` (Stand in
+    `fiscal_year_overview.autoYearClose`) samt Command; `OauthStatus` aus `types.ts`. Behalten
+    und an den UI/UX-Lauf übergeben, weil sie eine vorhandene Fähigkeit des Servers abbilden,
+    für die es noch keine Oberfläche gibt: `emailLogList`, `fiscalYearClosedList`,
+    `packageRevisionsGet`, `packageCategoryUpdate`, `packageCategoriesReorder`,
+    `depreciationListForYear`, `attachmentsListFor`, `privateMovementsGet`. `invoices_archive_paths`
+    gibt es nicht (Test). Tests: `core_cut_test::{registry_matches_frontend_api,
+    no_tauri_anywhere}`, `server_contract_test::{allowlist_is_exactly_plan_point_2,
+    other_names_are_404_and_get_is_405, every_command_has_an_explicit_kind}`,
+    `server_secrets_test::legacy_microsoft_account_is_refused_and_cleared_on_switch_to_smtp`,
+    `server_legal_test`.
+139. **Rust-Abhängigkeiten: Typst 0.15, Hash-Crates, tera, Dependabot-Funde (Lauf F, Block F6b,
+    2026-10-25; keine Migration).** (1) **Typst 0.13 → 0.15 (LE-TYPST):** Vorher und nachher
+    hat `pdf::snapshot` mit festen Daten 27 Referenz-PDFs erzeugt — vier Rechnungsvorlagen je
+    mit Logo, ohne Logo/Leistungsdatum und mit Regelbesteuerung, Storno und Angebot je Vorlage,
+    EÜR (§19 und Regel), Deckblatt, DSGVO-Auskunft, Paket-Vorschau und Broschüre (eine Mahnung
+    gibt es nicht). Verglichen wurden Seitenzahl, eingebettete Schriften (`pdffonts`), Text
+    (`pdftotext`) und jede Seite als Bild (150 dpi, Pillow). **Schwelle für „unsichtbar“:**
+    gleiche Seiten und Schriften, gleiche Zeichenfolge, und jedes abweichende Pixel liegt im
+    Hell-Dunkel-Bereich seiner 3×3-Nachbarschaft im alten Bild (Kante um weniger als 1 px =
+    0,17 mm verschoben), ausgenommen höchstens 0,1 ‰ der Seitenpixel mit höchstens 64/255
+    Abweichung (einzelne Antialiasing-Pixel). 1 px bei 150 dpi liegt unter dem, was im Druck
+    oder am Bildschirm in Originalgröße erkennbar ist; Inhalt und Lage jeder Angabe bleiben
+    gleich. **Ergebnis 0.14:** alle 27 PDFs pixelgleich. **Ergebnis 0.15:** 21 pixelgleich;
+    die Vorlage „Minimal“ (New Computer Modern, in `typst-assets` 0.15 neu gezeichnet) weicht
+    an Glyphenkanten ab (bis 1,5 % der Pixel, davon höchstens 172 Pixel = 0,08 ‰ außerhalb
+    der Nachbarschaft, höchstens 60/255), das EÜR-PDF mit Regelbesteuerung in einer Zeile um
+    weniger als 1 px (0 Pixel außerhalb). Zeichenfolge überall gleich; nur die Leerzeichen
+    in `pdftotext` unterscheiden sich, weil Typst seit 0.14 (PDF-Export über krilla) Text je
+    Tabellenzelle in eigene Läufe schreibt. Damit **übernommen**: Typst 0.15. Neu dabei:
+    `json.decode` ist entfernt (Vorlagen auf `json(bytes(..))` umgestellt, Hinweis für alte
+    eigene Vorlagen, Warnungstest; Amendment ADR 0008), PDF/A verlangt ein Erstellungsdatum
+    (UTC über `crate::clock`, nur Metadaten), das PDF ist getaggt (+⅓ Größe). Mustang nimmt
+    das PDF/A-3b aller Vorlagen an, KoSIT unverändert grün. Archivierte Belege bleiben
+    unberührt (write-once, kein Neu-Rendern); das Update wirkt nur auf neu erzeugte PDFs.
+    Direkte Abhängigkeiten: `typst`, `typst-pdf`, `typst-assets` 0.15 und neu `typst-layout`
+    (`PagedDocument`); `typst-library`, `typst-syntax`, `typst-utils`, `ecow` und `comemo`
+    entfallen als direkte Abhängigkeiten (nicht direkt genutzt). Die Lizenzseite nennt die mit
+    0.15 hinzugekommenen PDF-Standardschriften von Foxit (BSD-3-Clause, NOTICE im Wortlaut).
+    (2) **quick-xml (W12-QUICKXML):** Die Annahme „weg mit typst ≥ 0.14“ trifft nicht zu:
+    Typst 0.15 zieht über hayagriva 0.10 → citationberg 0.7 (neueste Fassung) quick-xml 0.38;
+    RUSTSEC-2026-0194/-0195 sind erst ab 0.41 behoben. Die Ausnahmen bleiben in `deny.toml`,
+    der `cargo audit`-Liste und `.trivyignore` mit neuer Begründung: citationberg liest nur die
+    eingebetteten CSL-Daten und CSL-Dateien, die eine Vorlage ausdrücklich lädt; keine
+    eingebaute Vorlage nutzt `bibliography`/`cite`. Weg, sobald citationberg quick-xml ≥ 0.41
+    nutzt. (3) **Hash-Crates (LE-HASH-CRATES):** sha2 0.11, hmac 0.13, sha1 0.11 übernommen —
+    dieselbe RustCrypto-Linie wie russh (sha2 0.10 bleibt nur noch über sqlx). Die Hex-Ausgabe
+    läuft zentral über `crate::hash::sha256_hex` (`data_encoding::HEXLOWER`; die Digest-Typen
+    von 0.11 haben kein `LowerHex` mehr); Archiv, Backup-Manifest und -Historie, Migrations-
+    Export, Steuerberater-Manifest, Startdateien und TOTP-Wiederherstellungscodes nutzen sie.
+    `hmac::KeyInit` muss für `new_from_slice` importiert sein. Known-Answer-Tests liefen vor
+    und nach dem Update identisch grün: `hash`, `archive::store`, `backup::snapshot`,
+    `migration_export::export::sha256_hex_known_answers` (FIPS 180-2),
+    `seed::sha256_file_known_answer`, `totp::rfc6238_vectors` (RFC 6238 Anhang B) und
+    `recovery_hash_known_answer`, `ratelimit::device_cookie_signature_known_answer`
+    (Gerätecookie, dazu RFC 4231 Fall 2), `idempotency::body_hash_known_answer`,
+    `session::hash_token_known_answer`, `pending::ticket_hash_known_answer`,
+    `headers::csp_hash_known_answer`. (4) **tera (LE-TERA2):** bleibt bei 1 — tera 2 ändert
+    die Vorlagensyntax, Mail-Vorlagen der Betreiber würden brechen; tera 1 bekommt
+    Sicherheitsupdates. `.github/dependabot.yml` ignoriert semver-major für `tera`.
+    (5) **Dependabot-Alerts (Fund e):** `pageant` 0.2.1 → 0.2.4 und `cmov` 0.5.3 → 0.5.4 per
+    `cargo update -p` (russh bleibt 0.64.1; `pageant` wird nur für Windows-Ziele gebaut,
+    `cmov` kommt über `ctutils` aus der russh-Krypto). `cargo deny check` und `cargo audit`
+    mit frischer Advisory-DB grün (Ausnahmen wie oben). Tests:
+    `pdf::snapshot::builtin_templates_compile_without_typst_warnings`,
+    `typst_render::tests::legacy_json_decode_template_fails_with_upgrade_hint`,
+    `sidecar_real_mustang_accepts_every_builtin_template`, die Known-Answer-Tests unter (3);
+    Referenz-PDFs: `pdf_snapshot_documents`, `pdf_snapshot_euer`, `pdf_snapshot_dsgvo`.
+140. **Frontend-Werkzeugkette und Node 24 LTS (Lauf F, Block F6c, 2026-10-25; keine Migration).**
+    (1) **Fassungen (LE-FRONTEND-TOOLCHAIN):** SvelteKit 3.1, `@sveltejs/vite-plugin-svelte`
+    7.3, `@sveltejs/adapter-static` 4.0, Vite 8.3 (Rolldown statt esbuild/Rollup), Vitest 5.0,
+    TypeScript 6.0, `@types/node` 24; Svelte 5.57 und svelte-check 4.7 bleiben. Geprüft per
+    `pnpm view` (nur stabile Fassungen, peerDependencies passend). Kein Rückfall auf Kit 2
+    nötig. **TypeScript 7** (nativer Compiler, `latest` seit Oktober 2026) bleibt außen vor:
+    SvelteKit 3 verlangt `typescript ^6`, svelte-check `^5 || ^6`; Dependabot ignoriert
+    semver-major für `typescript`. (2) **Konfiguration nach SvelteKit 3:** `svelte.config.js`
+    entfällt (SvelteKit 3 bricht ab, wenn sie existiert); Adapter, `vitePreprocess` und
+    `version` stehen als Optionen von `sveltekit({...})` in `vite.config.js`. Ausgabe weiter
+    `build/` mit `index.html`-Fallback, wie Dockerfile und `ServeDir` es erwarten.
+    `version.pollInterval: 0` hält den bisherigen Stand ohne Zeitgeber-Abfrage (Standard in
+    SvelteKit 3: stündlich); neu und gewollt fragt SvelteKit 3 `/_app/version.json` ab, wenn
+    der Tab wieder sichtbar wird oder den Fokus bekommt, und lädt nach einem Image-Update bei
+    einem Ladefehler die Seite neu statt veraltete Chunks anzufordern. (3) **`$lib` → `#lib`:**
+    SvelteKit 3 hat den Alias `$lib` entfernt (nur als veralteter, eigener Alias weiter
+    möglich). Alle 470 Importe in 73 Dateien nutzen jetzt den Subpath-Import `#lib/*`
+    (`package.json` `imports`) **mit der tatsächlichen Dateiendung** (`#lib/api.ts`,
+    `#lib/toast.svelte.ts`, `#lib/Button.svelte`): eindeutig, ohne `.js`→`.ts`-Umdeutung des
+    Bundlers, von TypeScript über `allowImportingTsExtensions` (Basis `$app/tsconfig`)
+    geprüft. (4) **`$app/stores` → `$app/state` (R5-S3-APPSTORES):** 19 Seiten lesen `page`
+    aus `$app/state` (`page.url`, `page.params`, `page.data`) statt des Stores `$page`; in
+    SvelteKit 3 ist `$app/stores` entfernt. (5) **tsconfig:** erweitert `$app/tsconfig` (von
+    `svelte-kit sync` unter `node_modules/$app/` erzeugt; strenge Bundler-Auflösung,
+    `verbatimModuleSyntax`, `isolatedModules`, `noEmit`), `include` `src` und Wurzel-Dateien;
+    `types` nennt `node` ausdrücklich, weil TypeScript 6 keine `@types`-Pakete mehr
+    automatisch lädt. (6) **Lizenzliste `/legal/` (js-licenses):** Vite 8 baut alle
+    Umgebungen in einem `buildApp`-Lauf (erst SSR, dann Client, zuletzt der Adapter, der
+    `build/` leert); das alte Plugin (Abschluss des SSR-Builds) schrieb deshalb keine Liste
+    mehr. Neu: Die Client-Umgebung (`this.environment.name`) schreibt die Liste nach
+    `.svelte-kit/`, ein `buildApp`-Schritt „post“ nach dem Adapter kopiert sie nach
+    `build/legal/`. Vorher/nachher verglichen: weiter alle Pakete mit Code im Client-Bundle;
+    `esm-env` entfällt (SvelteKit 3 nutzt es im Client nicht mehr), `devalue` kommt hinzu
+    (jetzt im Client-Bundle), sonst nur Versionen (`@sveltejs/kit` 3.1.0). Die CI baut die
+    SPA jetzt auch im Job `frontend` und prüft `build/legal/js-licenses.json`, damit ein Bruch
+    nicht erst beim Image auffällt. (7) **Node 24 LTS (N5-NODE24-LTS):** Node 22 ist seit
+    Oktober 2025 nur noch Maintenance-LTS (Ende April 2027), Node 24 Active LTS bis Oktober
+    2026 und Maintenance bis April 2028. Wechsel in der Stufe `web` des Dockerfiles
+    (`node:24-trixie-slim`, per Digest gepinnt, `versions.json` gleichgezogen), in
+    `setup-node` der CI, `engines.node >=24.11.0` (erste LTS-Fassung) und `@types/node` 24.
+    Node ist nur Build-Werkzeug; das Laufzeit-Image enthält kein Node. Temurin 21 LTS bleibt.
+    Node 26 wird erst Ende Oktober 2026 LTS; ein Wechsel dorthin ist eine eigene, bewusste
+    Entscheidung (Dependabot ignoriert semver-major der Basis-Images).
+    (8) **Dependabot-Funde (Fund e):** Im `pnpm-lock.yaml` steht keine gemeldete Fassung mehr:
+    tinypool nicht mehr im Baum, vite 8.3.5, devalue 5.9.4, source-map-js 1.2.2, postcss
+    8.5.31, `@vitest/mocker`/vitest 5.0.5, `@sveltejs/kit` 3.1.0, cookie 2.0.1 — ohne
+    `pnpm.overrides`. `pnpm audit` und `pnpm audit --prod` melden 0 Funde. esbuild ist nicht
+    mehr im Baum; `pnpm-workspace.yaml` erlaubt kein Build-Skript mehr (`allowBuilds: {}`).
+    Prüfung: svelte-check 0/0 (417 Dateien), 124 Vitest-Tests, `pnpm build`, Nachbau der
+    Docker-Stufe `web` mit frischem `pnpm install --frozen-lockfile`, Playwright-Rundgang
+    (Chromium, 127.0.0.1) über alle 54 Routen ohne Konsolenfehler und CSP-Verstöße, mit
+    Inhaltsprüfung für `page.params`/`page.url` und client-seitiger Navigation (aktiver
+    Menüpunkt, Handbuch-Kapitel, Rechnungsdetail → Zahlung).
+141. **Nachbesserung F6 (Lauf F6-fix, 2026-10-25; keine Migration, keine neue
+    Abhängigkeit).** (1) **OpenAPI für den ZAP-Scan (S1):** Seit Nr. 138 gibt es kein
+    `route_of`/`Route::Cmd` mehr; `.github/scripts/openapi_from_registry.py` suchte es
+    noch und brach im Sicherheits-Gate ab. Das Skript beschreibt jetzt jeden Eintrag von
+    `ENTRIES` (die Registry ist genau die Allowlist), Untergrenze 100 bleibt als
+    Formatprüfung. Abgesichert doppelt: `core_cut_test::registry_source_matches_openapi_pattern`
+    baut die Erkennung des Skripts nach und verlangt dieselben Namen wie `REGISTRY`; der
+    CI-Job `frontend` führt das Skript bei jedem Lauf aus (Bruch fällt nicht erst in
+    `security.yml` auf). (2) **App-Icon-Vorlage (S1):** Das Veröffentlichen
+    (`tools/veroeffentlichen/Veroeffentlichen.ps1`, `$NamenAus`) lässt jeden Ordner namens
+    `logo` aus, gedacht für Betreiber-Logos; die Regel bleibt. Die Vorlage liegt deshalb
+    unter `docs/assets/app-icon/logo-1024.{svg,png}` (Nr. 138 (4) entsprechend); der nicht
+    ignorierte Test `pdf::snapshot::builtin_templates_compile_without_typst_warnings` und
+    `sidecar_real_test` lesen sie dort. `core_cut_test::files_read_by_tests_survive_publication`
+    prüft, dass die von Tests gelesenen Repo-Dateien und die veröffentlichten Quellbäume
+    keinen ausgeschlossenen Ordnernamen tragen (Liste gespiegelt aus `$NamenAus`).
+    (3) **Desktop-Helfer (S3, N2-DESKTOP-ALTCODE):** `backup::unlock` (setzte die
+    Sitzung nach Verifier-Prüfung, eigenes Audit) und `backup::needs_onboarding` waren nach
+    dem Entfernen ihrer Kerne nur noch von eigenen Tests aufgerufen und sind entfernt; das
+    Entsperren läuft allein über `server::auth` (Verifier über `backup::verify_passphrase`,
+    Pflicht-Audit `backup.unlock.ok` in `commands::backup::activate_unlocked`). Der Test
+    `backup::tests::setup_then_verify_roundtrip` prüft den Verifier direkt. (4) `modules.md`
+    verweist nicht mehr auf `Route::Cmd` (404 für jeden Namen außerhalb der Registry,
+    `registry::find`).
 
 ## Konsequenzen
 

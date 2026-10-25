@@ -8,44 +8,8 @@ use crate::config::Paths;
 use crate::db::PendingRestoreAudit;
 use crate::error::{Error, Result};
 use sqlx::SqlitePool;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-
-/// Desktop-Nebenwirkungen (Datei öffnen, im Ordner zeigen, Browser, Neustart).
-/// Im Server gibt es sie nicht ([`NoDesktop`]); die betroffenen Commands sind
-/// nicht freigegeben (W5) oder liefern ab W7 Bytes. Tests zeichnen Aufrufe auf.
-pub trait DesktopActions: Send + Sync {
-    fn open_path(&self, path: &Path) -> Result<()>;
-    fn reveal(&self, path: &Path) -> Result<()>;
-    fn open_url(&self, url: &str) -> Result<()>;
-    fn restart(&self) -> Result<()>;
-}
-
-/// Keine Desktop-Nebenwirkungen (Server, Tests).
-#[derive(Debug, Default, Clone, Copy)]
-pub struct NoDesktop;
-
-impl NoDesktop {
-    fn unavailable() -> Error {
-        Error::Domain("Im Server-Betrieb nicht verfügbar.".into())
-    }
-}
-
-impl DesktopActions for NoDesktop {
-    fn open_path(&self, _path: &Path) -> Result<()> {
-        Err(Self::unavailable())
-    }
-    fn reveal(&self, _path: &Path) -> Result<()> {
-        Err(Self::unavailable())
-    }
-    fn open_url(&self, _url: &str) -> Result<()> {
-        Err(Self::unavailable())
-    }
-    fn restart(&self) -> Result<()> {
-        Err(Self::unavailable())
-    }
-}
 
 pub struct AppCtx {
     /// Verzeichnisse (Daten, Archiv, Backups, Inputs, Sidecar, Ressourcen, Web).
@@ -59,8 +23,6 @@ pub struct AppCtx {
     /// Verbindungstests: Kontingent und SFTP-Probe-Speicher (W8). Zugangsdaten
     /// selbst liegen in der DB (`crate::secrets`).
     pub net_tests: crate::nettest::NetTests,
-    /// Desktop-Nebenwirkungen (im Server [`NoDesktop`]).
-    pub desktop: Arc<dyn DesktopActions>,
     /// Einmal-Guard für den Scheduler (genau ein Start pro Prozess).
     scheduler_started: AtomicBool,
     /// Wird während eines Scheduler-Ticks gehalten; `scheduler::tick::stop`
@@ -94,11 +56,7 @@ pub struct AppCtx {
 }
 
 impl AppCtx {
-    pub fn new(
-        paths: Paths,
-        desktop: Arc<dyn DesktopActions>,
-        app_identifier: impl Into<String>,
-    ) -> Self {
+    pub fn new(paths: Paths, app_identifier: impl Into<String>) -> Self {
         Self {
             downloads: crate::downloads::DownloadStore::new(&paths.data_dir),
             uploads: crate::uploads::UploadStore::new(&paths.data_dir),
@@ -108,7 +66,6 @@ impl AppCtx {
             session: BackupSession::default(),
             pending_restore: PendingRestoreAudit::default(),
             net_tests: crate::nettest::NetTests::default(),
-            desktop,
             scheduler_started: AtomicBool::new(false),
             scheduler_gate: tokio::sync::Mutex::new(()),
             scheduler_paused: AtomicBool::new(false),
@@ -162,18 +119,6 @@ impl AppCtx {
         *self.clock.write().unwrap_or_else(PoisonError::into_inner) = clock;
     }
 
-    pub fn open_path(&self, path: impl AsRef<Path>) -> Result<()> {
-        self.desktop.open_path(path.as_ref())
-    }
-
-    pub fn reveal(&self, path: impl AsRef<Path>) -> Result<()> {
-        self.desktop.reveal(path.as_ref())
-    }
-
-    pub fn open_url(&self, url: &str) -> Result<()> {
-        self.desktop.open_url(url)
-    }
-
     /// Vermerkt ein Entsperren bzw. die Einrichtung (D-19).
     pub fn mark_unlocked(&self) {
         *self
@@ -210,6 +155,6 @@ impl AppCtx {
     /// Kontext für Tests: Pfade unter `dir`, Zugangsdaten nur im RAM.
     #[doc(hidden)]
     pub fn for_tests(paths: Paths) -> Arc<Self> {
-        Arc::new(Self::new(paths, Arc::new(NoDesktop), "test"))
+        Arc::new(Self::new(paths, "test"))
     }
 }

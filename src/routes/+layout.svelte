@@ -1,18 +1,18 @@
 <script lang="ts">
-  import "$lib/styles/tokens.css";
+  import "#lib/styles/tokens.css";
   import { goto, onNavigate } from "$app/navigation";
-  import { page } from "$app/stores";
-  import BackupGate from "$lib/BackupGate.svelte";
-  import ToastHost from "$lib/ToastHost.svelte";
-  import ConfirmDialog from "$lib/ConfirmDialog.svelte";
-  import AboutDialog from "$lib/AboutDialog.svelte";
-  import XmlViewerDialog from "$lib/XmlViewerDialog.svelte";
-  import PdfPreviewDialog from "$lib/PdfPreviewDialog.svelte";
-  import ReauthDialog from "$lib/ReauthDialog.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { appState } from "$lib/stores.svelte";
-  import { modalStack } from "$lib/modalStack.svelte";
+  import { page } from "$app/state";
+  import BackupGate from "#lib/BackupGate.svelte";
+  import ToastHost from "#lib/ToastHost.svelte";
+  import ConfirmDialog from "#lib/ConfirmDialog.svelte";
+  import AboutDialog from "#lib/AboutDialog.svelte";
+  import XmlViewerDialog from "#lib/XmlViewerDialog.svelte";
+  import PdfPreviewDialog from "#lib/PdfPreviewDialog.svelte";
+  import ReauthDialog from "#lib/ReauthDialog.svelte";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { appState } from "#lib/stores.svelte.ts";
+  import { modalStack } from "#lib/modalStack.svelte.ts";
   import {
     notificationsUnreadCount,
     appInfo,
@@ -20,18 +20,18 @@
     authLock,
     schedulerHoldStatus,
     schedulerReleaseHold,
-  } from "$lib/api";
-  import type { SchedulerHoldStatus } from "$lib/types";
-  import Banner from "$lib/Banner.svelte";
-  import { openAboutDialog } from "$lib/aboutModal.svelte";
-  import { formatVersionDisplay } from "$lib/version";
+  } from "#lib/api.ts";
+  import type { SchedulerHoldStatus } from "#lib/types.ts";
+  import Banner from "#lib/Banner.svelte";
+  import { openAboutDialog } from "#lib/aboutModal.svelte.ts";
+  import { formatVersionDisplay } from "#lib/version.ts";
   let { children } = $props();
 
   // Plan W10: Unter 900 px ist die Navigation ein Drawer (Menü-Knopf in der
   // oberen Leiste); er schließt sich bei jedem Seitenwechsel und mit Escape.
   let navOpen = $state(false);
   $effect(() => {
-    $page.url.pathname;
+    page.url.pathname;
     navOpen = false;
   });
 
@@ -45,7 +45,7 @@
     }
   }
   $effect(() => {
-    $page.url.pathname; // bei Navigation neu laden
+    page.url.pathname; // bei Navigation neu laden
     // Erst nach dem Entsperren (G1-ENC Schritt 2) liegt der DB-Pool im State —
     // vorher keine Command-Aufrufe absetzen.
     if (appState.ready) {
@@ -139,7 +139,7 @@
   // Sidebar-Icons (Manuel 2026-05-26): Inline-SVG-Paths im Lucide-Stil,
   // 24x24-viewBox, currentColor-stroke (greift das Sidebar-Weiß).
   // Hardcoded Konstanten, daher ist `{@html}` weiter unten unkritisch
-  // (kein User-Input). Falls die Sammlung wächst, in $lib/NavIcon.svelte
+  // (kein User-Input). Falls die Sammlung wächst, in #lib/NavIcon.svelte
   // ausziehen — für 14 Einträge ist Inline ok.
   const ICONS: Record<string, string> = {
     home: '<path d="M3 12L12 4l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
@@ -249,7 +249,7 @@
     // Modifikatoren ignorieren — Ctrl+F1 / Shift+F1 sind nicht „unser" F1.
     if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
     ev.preventDefault();
-    if (!$page.url.pathname.startsWith("/help")) {
+    if (!page.url.pathname.startsWith("/help")) {
       void goto("/help");
     }
   }
@@ -309,7 +309,7 @@
   <nav id="app-nav" class="sidebar" class:open={navOpen} inert={modalStack.count > 0 || undefined}>
     <ul>
       {#each nav as item}
-        <li class:active={isActive($page.url.pathname, item.href)}>
+        <li class:active={isActive(page.url.pathname, item.href)}>
           <a href={item.href}>
             <svg
               class="nav-icon"

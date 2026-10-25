@@ -21,11 +21,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
@@ -163,8 +162,7 @@ fn normalize_recovery(input: &str) -> String {
 }
 
 fn recovery_hash(normalized: &str) -> String {
-    let digest = Sha256::digest(normalized.as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    crate::hash::sha256_hex(normalized.as_bytes())
 }
 
 /// Ablage `/data/auth/totp.json`.
@@ -374,6 +372,16 @@ pub fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): gespeicherte Hashes der Wiederherstellungs-
+    /// codes bleiben über Crate-Updates gleich (sonst wären alle ungültig).
+    #[test]
+    fn recovery_hash_known_answer() {
+        assert_eq!(
+            recovery_hash(&normalize_recovery("abcd-2345-efgh-6789")),
+            "314d0391c297e5142ab14c76bf799f3c04a1e1a01deb862d0a3ba2b7def8f538"
+        );
+    }
 
     /// RFC 6238 Anhang B (SHA1, Geheimnis "12345678901234567890"), 6 Stellen.
     #[test]

@@ -20,7 +20,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::Result;
 
@@ -63,7 +62,7 @@ pub struct Report {
 }
 
 fn sha256_file(path: &Path) -> std::io::Result<String> {
-    Ok(format!("{:x}", Sha256::digest(std::fs::read(path)?)))
+    Ok(crate::hash::sha256_hex(&std::fs::read(path)?))
 }
 
 /// Schreibt über eine Temp-Datei im selben Ordner und benennt dann um.
@@ -217,6 +216,18 @@ pub async fn deliver_notices(pool: &sqlx::SqlitePool, target: &Path) -> Result<u
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): Vergleichs-Hash der Startdateien bit-genau.
+    #[test]
+    fn sha256_file_known_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("abc.txt");
+        std::fs::write(&p, b"abc").unwrap();
+        assert_eq!(
+            sha256_file(&p).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     fn put(dir: &Path, rel: &str, content: &str) {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -305,7 +316,7 @@ mod tests {
         assert_eq!(read(&dst, &format!("{rel}{NEW_SUFFIX}")), "v2");
         let m = read_manifest(&dst);
         assert_eq!(m.pending_notices.len(), 1);
-        let v2_hash = format!("{:x}", Sha256::digest(b"v2"));
+        let v2_hash = crate::hash::sha256_hex(b"v2");
         assert_eq!(m.offered.get(rel), Some(&v2_hash));
         assert_eq!(
             m.pending_notices[0].dedup_key.as_deref(),
@@ -329,7 +340,7 @@ mod tests {
         assert_eq!(read(&dst, &format!("{rel}{NEW_SUFFIX}")), "v3");
         let m = read_manifest(&dst);
         assert_eq!(m.pending_notices.len(), 2);
-        let v3_hash = format!("{:x}", Sha256::digest(b"v3"));
+        let v3_hash = crate::hash::sha256_hex(b"v3");
         assert_eq!(m.offered.get(rel), Some(&v3_hash));
     }
 

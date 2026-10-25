@@ -248,6 +248,17 @@ pub async fn wait_for(
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): Hash über Command und Körper bit-genau.
+    #[test]
+    fn body_hash_known_answer() {
+        let h = body_hash("invoices_create", br#"{"a":1}"#);
+        let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "eea70091699059225840d27d95597c7f22044ce62e174365b364164727e5b31b"
+        );
+    }
+
     #[tokio::test]
     async fn replay_wait_mismatch_and_abort() {
         let store = IdempotencyStore::default();

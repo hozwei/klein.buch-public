@@ -1,20 +1,20 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import PageBar from "$lib/PageBar.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import { page } from "$app/state";
+  import PageBar from "#lib/PageBar.svelte";
+  import Toggle from "#lib/Toggle.svelte";
   import {
     contactsList,
     recurringCreate,
     recurringUpdate,
     recurringGet,
-  } from "$lib/api";
-  import type { Contact, ExpenseCategory, Frequency, RecurringInputDto } from "$lib/types";
-  import { EXPENSE_CATEGORIES, FREQUENCIES } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/api.ts";
+  import type { Contact, ExpenseCategory, Frequency, RecurringInputDto } from "#lib/types.ts";
+  import { EXPENSE_CATEGORIES, FREQUENCIES } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   // Edit-Modus, wenn ?id=… gesetzt ist.
   let editId = $state<string | null>(null);
@@ -43,7 +43,7 @@
       const all = await contactsList(false);
       vendors = all.filter((c) => c.contactType === "vendor" || c.contactType === "both");
 
-      const id = $page.url.searchParams.get("id");
+      const id = page.url.searchParams.get("id");
       if (id) {
         editId = id;
         const s = await recurringGet(id);

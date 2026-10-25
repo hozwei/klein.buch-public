@@ -12,19 +12,19 @@
   // gesperrt), erscheint die Maske erneut. Solange sie offen ist, rendert das
   // Layout die App-Seiten nicht (appState.ready).
   import { onMount } from "svelte";
-  import { appState } from "$lib/stores.svelte";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import SourceNotice from "$lib/SourceNotice.svelte";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { onAuthRequired } from "$lib/transport";
+  import { appState } from "#lib/stores.svelte.ts";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import SourceNotice from "#lib/SourceNotice.svelte";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { onAuthRequired } from "#lib/transport.ts";
   import {
     authStatus,
     authSetupOffer,
     authSetupFinish,
     authLogin,
     type TotpOffer,
-  } from "$lib/api";
+  } from "#lib/api.ts";
 
   type Status = "loading" | "setup" | "totp_setup" | "login" | "ready";
   type SetupStep = "token" | "qr" | "codes";

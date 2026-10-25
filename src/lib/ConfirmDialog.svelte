@@ -1,8 +1,8 @@
 <script lang="ts">
   // Einheitlicher In-App-Bestätigungs-Dialog. Genau einmal im Root-Layout gemountet.
   // Gesteuert über confirmStore / confirmDialog() (siehe confirm.svelte.ts).
-  import { confirmStore, settleConfirm, settleChoice } from "$lib/confirm.svelte";
-  import { pushModal, popModal } from "$lib/modalStack.svelte";
+  import { confirmStore, settleConfirm, settleChoice } from "#lib/confirm.svelte.ts";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
 
   let confirmBtn = $state<HTMLButtonElement | null>(null);
   // R5-013: Trigger-Element merken, damit der Fokus nach Close zurück darauf

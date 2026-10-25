@@ -349,7 +349,7 @@ export interface RecordPaymentArgs {
 export interface MailAccount {
   id: Uuid;
   label: string;
-  authType: string;          // "smtp_password" | "oauth_microsoft" (Block 16)
+  authType: string;          // "smtp_password"; "oauth_microsoft" nur bei übernommenen Desktop-Konten
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -360,7 +360,7 @@ export interface MailAccount {
   isDefault: number;         // 0|1
   lastUsedAt: Iso8601 | null;
   createdAt: Iso8601;
-  // OAuth (Block 16) — nicht-geheime Metadaten.
+  // OAuth (Migration 0014) — Bestandsdaten der Desktop-Fassung, nur gelesen.
   oauthTenantId: string | null;
   oauthClientId: string | null;
   oauthAccountEmail: string | null;
@@ -370,7 +370,7 @@ export interface MailAccount {
 
 export interface MailAccountInput {
   label: string;
-  authType: string;          // "smtp_password" | "oauth_microsoft"
+  authType: string;          // im Server nur "smtp_password" (E9)
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -378,18 +378,6 @@ export interface MailAccountInput {
   fromEmail: string;
   fromName: string;
   isDefault: boolean;
-  // OAuth (Block 16): nutzer-eigene Azure-App. Kein Secret.
-  oauthTenantId: string | null;
-  oauthClientId: string | null;
-}
-
-/** OAuth-Verbindungsstatus eines Microsoft-Kontos (Block 16). */
-export interface OauthStatus {
-  accountId: Uuid;
-  connected: boolean;
-  accountEmail: string | null;
-  scopes: string | null;
-  tokenExpiresAt: Iso8601 | null;
 }
 
 /** Ein Eintrag im E-Mail-Versandprotokoll (Block 16b). Korrespondiert zu `EmailLogRow`. */

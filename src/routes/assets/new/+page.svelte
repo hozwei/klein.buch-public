@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import HelpAnchor from "$lib/HelpAnchor.svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import { page } from "$app/state";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import {
     contactsList,
     assetsAfaTable,
@@ -13,16 +13,16 @@
     assetsGet,
     assetsSuggestMethod,
     expensesGet,
-  } from "$lib/api";
+  } from "#lib/api.ts";
   import type {
     Contact,
     AfaTabellen,
     DepreciationMethod,
     AssetInputDto,
-  } from "$lib/types";
-  import { DEPRECIATION_METHODS } from "$lib/labels";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/types.ts";
+  import { DEPRECIATION_METHODS } from "#lib/labels.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let vendors = $state<Contact[]>([]);
   let table = $state<AfaTabellen | null>(null);
@@ -60,8 +60,8 @@
       flash("Daten konnten nicht geladen werden: " + String(e), "error");
     }
 
-    editId = $page.url.searchParams.get("id");
-    expenseId = $page.url.searchParams.get("expenseId");
+    editId = page.url.searchParams.get("id");
+    expenseId = page.url.searchParams.get("expenseId");
 
     if (editId) {
       try {

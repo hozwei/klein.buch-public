@@ -38,7 +38,7 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
 use base64::Engine as _;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore as _;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -491,6 +491,35 @@ pub async fn public_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): Signatur des Gerätecookies (HMAC-SHA256,
+    /// base64url) bleibt bit-genau — sonst verlören alle Geräte ihr Cookie.
+    /// RFC 4231 Fall 2 prüft die HMAC-Konstruktion selbst.
+    #[test]
+    fn device_cookie_signature_known_answer() {
+        let rl = RateLimiter::new([7u8; 32]);
+        assert_eq!(
+            rl.sign("geraet-1"),
+            "UxowOKKcqTMlhCU3A9IWvrIjWluhyHKGDh-GiMReu1Q"
+        );
+        assert_eq!(
+            rl.device_id("geraet-1.UxowOKKcqTMlhCU3A9IWvrIjWluhyHKGDh-GiMReu1Q")
+                .as_deref(),
+            Some("geraet-1")
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"Jefe").unwrap();
+        mac.update(b"what do ya want for nothing?");
+        let hex: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn public_window_per_key() {

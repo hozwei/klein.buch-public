@@ -23,6 +23,7 @@ pub mod einvoice;
 pub mod error;
 pub mod euer;
 pub mod fiscal_year;
+pub mod hash;
 pub mod limits;
 pub mod locks;
 pub mod mail;

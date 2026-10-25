@@ -19,8 +19,10 @@ HTTP-Server `server/` hat eine eigene Sektion (§15); die einzelnen
 `notify::os_native` mit den OS-Benachrichtigungen (W5), der Factory Reset
 (`domain::factory_reset`, `backup::factory_reset`, `commands::factory_reset`;
 E7) und der Drop-Folder (`domain::drop_folder`, `scheduler::drop_folder`; E11),
-beide entfernt in W11. Der Microsoft-Graph-Versand (`mail::oauth_ms`) ist im
-Server gesperrt, der Code ist noch vorhanden (E9).
+beide entfernt in W11. Lauf F6 entfernte den Microsoft-Graph-Versand
+(`mail::oauth_ms`, E9), die nur gesperrt mitgeführten Desktop-Commands
+(Explorer, Lizenzpfad, Vorgänger der Auth-Routen) und `DesktopActions` aus dem
+`AppCtx` (ADR 0039 Nr. 138).
 
 ---
 
@@ -106,7 +108,8 @@ ADRs: 0001 (Sidecar, Amendment: nur Linux), 0007, 0008, 0024, 0037
 | `pdf::klausel_check` | Core | Strenger §19-Marker-Check vor jedem Render (Rechnung + Angebot): `verify_for_kleinunternehmer`, `inspect`. Schlägt fehl, wenn ein Template ohne `// §19-KLAUSEL-BLOCK: REQUIRED`-Marker für eine §19-Rechnung verwendet werden soll. |
 | `pdf::bundle` | Core | `merge_pdfs` (lopdf) für das Angebots-Druck-Bundle (Angebot + AGB + Datenschutz → ein Druck-PDF, ADR 0018); entfernt aktive Inhalte der hochgeladenen Teile (Aktionen, Medien-/3D-Annotationen, Links außer http(s)/mailto; ADR 0039 Nr. 136, 137). |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver (`resolve_invoice_template`, `resolve_quote_template`) + `list_templates`. Auflösung: `/inputs/pdf-templates/{name}.typ`-Override → Built-in; Sentinel `'default'` → `seller.default_pdf_template` (ADR 0030). |
-| `pdf::typst_render` | Shell | Typst-`World`-Impl: `render_invoice` (PDF/A-3b-fähig), `render_quote` (Plain-PDF), `render_euer` (Anlage EÜR), `render_package_catalog` (Paket-Broschüre); Logo aus `/data/branding` via `World::file()`. Läuft außerhalb der Runtime (`compile_async` über `limits::RENDER`). |
+| `pdf::typst_render` | Shell | Typst-`World`-Impl: `render_invoice` (PDF/A-3b-fähig), `render_quote` (Plain-PDF), `render_euer` (Anlage EÜR), `render_package_catalog` (Paket-Broschüre); Logo aus `/data/branding` via `World::file()`. Läuft außerhalb der Runtime (`compile_async` über `limits::RENDER`). Typst 0.15; Fehler alter Vorlagen mit `json.decode` nennen den Ersatz. |
+| `pdf::snapshot` (nur Tests) | — | Feste Render-Aufträge aller Dokumentarten: Warnungstest der eingebauten Vorlagen und Referenz-PDFs für Typst-Updates (`KB_PDF_SNAPSHOT_DIR`, `--ignored pdf_snapshot_`; ADR 0039 Nr. 139). |
 
 **Wichtig.** `pdf/` macht **nicht** ZUGFeRD-Embedding. Das ist
 `einvoice::mustang_bridge`. `typst_render` liefert ein PDF/A-3b-Basis-Dokument,
@@ -194,7 +197,7 @@ ADRs: 0003, 0006, 0035 (SQLCipher), 0039 (Pflicht-Backup vor Migration, E15).
 | `scheduler::catch_up` | Shell | Nachhol-Regeln (bis 3 selbst, bestätigt bis 24), Bestätigungs-Marker, `ResumeMode` |
 | `scheduler::backoff` | Shell | Persistierter Backoff nach Fehlschlägen (`app_settings`, UTC-Zeitpunkt) |
 | `scheduler::recurring` | Shell | Fällige Kosten-Abos buchen (`process_due`, `run_now`, `apply_resume_mode`): Sperre je Abo, Beleg + Audit + Vorrücken (CAS) in einer Transaktion, Fehler je Abo |
-| `scheduler::depreciation_year_close` | Shell | Auto-AfA zur GJ-Wende, default-an per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`); Pause, Hinweis und 6 h Backoff bei Fehler |
+| `scheduler::depreciation_year_close` | Shell | Auto-AfA zur GJ-Wende, default-an per `app_settings.depreciation_auto_year_close` (Schalter `fiscal_year_auto_close_set`, Stand in `fiscal_year_overview`); Pause, Hinweis und 6 h Backoff bei Fehler |
 | `scheduler::integrity_check_cron` | Shell | Monatlicher Archiv-Hash-Verify (Monat in Europe/Berlin), gemeinsame Sperre `integrity_check::SCAN_LOCK` mit „Jetzt prüfen“, 6 h Backoff nach Fehlschlag (`integrity_last_failure_at`), Abbruch je Datei; Hinweis über `rule_archive_integrity_failed` |
 | `scheduler::reminders` | Shell | Regel-getriebene Hinweise: Monats-Doku-Check, GJ-Abschluss fällig, `backup_overdue` (Off-Site-bewusst: mit Off-Site-Ziel zählt das letzte erfolgreiche Off-Site-Backup aus `backup_log`), überfällige Rechnungen, „Abo fällig“ (Kosten-Abos im Modus Erinnerung) |
 | `scheduler::recurring_invoice` | Shell | Fällige ausgangsseitige Abo-Rechnungen über die normale draft→lock-Pipeline materialisieren (`process_due`, `run_now`, `resume_pending`, `apply_resume_mode`), Belegdatum = heute, Sperre je Vorlage und Termin, Entwurf + Vorrücken in einer Transaktion, Fortsetzen nach Abbruch |
@@ -257,7 +260,6 @@ Backups E15).
 | Datei | Schicht | Verantwortung |
 |---|---|---|
 | `mail::smtp` | Shell | `lettre`-Async-Sender (`send`, `test_connection`, `build_message`), TLS/STARTTLS, Multi-Attachment, neutrales Result-Mapping |
-| `mail::oauth_ms` | Core+Shell | PKCE-S256, Autorisierungs-URL, Token-Tausch und -Refresh, Graph-Versand (ADR 0028). **Im Server gesperrt:** `mail_oauth_*` haben in der Registry `Route::Blocked`, neue oder geänderte OAuth-Konten werden abgelehnt (E9); der Code ist noch vorhanden. |
 | `mail::templates` | Shell | Tera-Render für Betreff und Text aus `/inputs/mail-templates/{name}.txt` (erste Zeile `Subject: …`); Kontext je Beleg-Typ |
 
 **Zugangsdaten.** SMTP-Passwörter liegen seit W8 in der Tabelle `secrets`
@@ -399,17 +401,19 @@ ADRs: 0010, 0022, 0026.
 `mod.rs`. Bis W4 waren das Tauri-Commands; seit W4/W5 sind es Kerne, die der
 HTTP-Dispatcher (`server::dispatch`) aufruft (ADR 0039 Nr. 19–21).
 
-**Registry** (`commands::registry`). Jeder Eintrag nennt Name, Weg (`Route`:
-`Cmd` = über `POST /api/cmd/{name}` erreichbar; `Replaced` = eigene Route für
-Auth, Upload oder Download; `Dropped` = Desktop-Funktion, entfällt; `Blocked` =
-im Server gesperrt, z. B. `mail_oauth_*`), `Auth` (`Public`/`Session`/`Reauth`/
+**Registry** (`commands::registry`). Die Registry ist die Allowlist für
+`POST /api/cmd/{name}` (jeder andere Name → 404) und deckt sich genau mit den
+Aufrufen in `src/lib/api.ts` (Tests `core_cut_test`, `server_contract_test`);
+seit Lauf F6 gibt es keine nur gesperrt mitgeführten Einträge mehr (ADR 0039
+Nr. 138). Jeder Eintrag nennt Name, `Auth` (`Public`/`Session`/`Reauth`/
 `Conditional` — Re-Auth nur für Änderungen, die der Kern über
 `commands::reauth::require_fresh` verlangt, z. B. IBAN/BIC/§19 im Verkäuferprofil,
 Lauf F4a),
 `Cost` (`Cheap`/`Render`/`Jvm`/`Kdf`/`Backup`), `Kind` (`Read`/`Write`/`Job` —
 je Command ausdrücklich in `registry::classified_kind`, nicht aus dem Namen
 abgeleitet; ein Test lehnt nicht eingestufte Commands ab, Lauf F4b)
-und `body_limit`. Was nicht `Route::Cmd` hat, beantwortet der Dispatcher mit 404.
+und `body_limit`. Jeden Namen, der nicht in der Registry steht, beantwortet der
+Dispatcher mit 404 (`registry::find`).
 
 **Disziplin.** Jeder Kern ist dünn:
 
@@ -472,7 +476,7 @@ ADRs: 0039 (E1–E17), 0014 (AGPL §13, `/legal/`).
 |---|---|
 | `main.rs` | Binary `klein-buch-server`; ruft `server::main_entry` mit den Kommandozeilen-Argumenten |
 | `lib.rs` | Modul-Deklarationen der Bibliothek `klein_buch_lib`; Einstieg ist `server` |
-| `app_ctx.rs` | `AppCtx` — Anwendungskontext der Kerne (früher `State`/`AppHandle` der Desktop-Shell): Pfade, Pool (`None`, solange gesperrt), `BackupSession`, `PendingRestoreAudit`, Uhr (`clock::Clock`, ADR 0040), `NetTests`, `DesktopActions` (`NoDesktop`), Scheduler-Guard und -Gate, Download- und Upload-Ablage (ADR 0039 Nr. 19–23) |
+| `app_ctx.rs` | `AppCtx` — Anwendungskontext der Kerne (früher `State`/`AppHandle` der Desktop-Shell): Pfade, Pool (`None`, solange gesperrt), `BackupSession`, `PendingRestoreAudit`, Uhr (`clock::Clock`, ADR 0040), `NetTests`, Scheduler-Guard und -Gate, Download- und Upload-Ablage (ADR 0039 Nr. 19–23) |
 | `config.rs` | `Paths` (`data_dir`, `db_file` = `klein-buch.sqlite`, `archive_dir`, `backups_dir`, `inputs_dir`, `sidecar_dir`, `resource_dir`, `web_dir`, `backup_targets_dir`); `Paths::from_env` (Pflicht: `KLEIN_BUCH_DATA_DIR`, `…_INPUTS_DIR`, `…_RESOURCE_DIR`, `…_WEB_DIR`; optional `…_BACKUP_TARGETS_DIR`); `ensure_inputs_seeded` |
 | `seed.rs` | Seed von `/inputs` aus dem Image mit `.seed-manifest.json`: fehlende Dateien kopieren, unveränderte ersetzen, vom Nutzer geänderte nie anfassen (neue Fassung je Fassung einmal als `<name>.neu`, gemerkt in `offered`, Hinweis mit `dedup_key` in die Inbox; D-10) |
 | `secrets.rs` | Zugangsdaten in der Tabelle `secrets` der verschlüsselten DB (Migration 0031, E6): `get`, `set`, `delete`; Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie in Log, Audit, Migrations- oder DSGVO-Export |
@@ -480,6 +484,7 @@ ADRs: 0039 (E1–E17), 0014 (AGPL §13, `/legal/`).
 | `nettest.rs` | Verbindungstests (SMTP, SFTP): Port-Allowlist, höchstens 10 Tests je Minute, Fehler ohne Unterscheidung, SFTP-Fingerprint aus der letzten Probe (10 min), `check_host` (nur Hostname oder IP, Lauf F4c) |
 | `build_info.rs` | Version, Commit, Tag, Quell-URL (AGPL §13; `GET /api/public/info`, `app_info`) |
 | `clock.rs` | Zentrale Uhr in Europe/Berlin (E12); kein `chrono::Local` im Produktivcode; in Tests je Thread fixierbar |
+| `hash.rs` | `sha256_hex`: einzige Umwandlung von SHA-256 in Hex (Archiv, Backup-Manifest und -Historie, Exporte, Startdateien, TOTP-Wiederherstellungscodes); Known-Answer-Tests sichern das gespeicherte Format (Lauf F6b) |
 | `limits.rs` | Lastgrenzen für Typst, JVM-Starts und Passphrase-KDF außerhalb der Runtime (`run_blocking`, Semaphoren) |
 | `locks.rs` | Prozessweite Sperren je Archivpfad, Beleg und Abo-Vorlage (`tokio`-Mutexe) |
 | `branding.rs` | Logo und Unterschrift unter `/data/branding` (nie `inputs/`): Speichern, Finden, Löschen, Data-URL für die Vorschau |

@@ -39,7 +39,7 @@ use klein_buch_lib::domain::invoice::{InvoiceDirection, InvoiceInput, InvoiceIte
 
 const TEMPLATE_TYP: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 Empfänger: #data.buyer.name \
 #data.invoice.gross_amount
@@ -257,8 +257,6 @@ async fn create_mailhog_account(pool: &SqlitePool) -> String {
             from_email: "rechnung@example.org".into(),
             from_name: "Beispiel IT-Service".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await
@@ -366,8 +364,6 @@ async fn create_fake_smtp_account(pool: &SqlitePool, port: u16) -> String {
             from_email: "rechnung@example.org".into(),
             from_name: "Beispiel IT-Service".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await

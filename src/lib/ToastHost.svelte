@@ -1,12 +1,12 @@
 <script lang="ts">
   // Globaler Toast-Host. Genau einmal im Root-Layout gemountet; rendert den Stack
   // oben rechts aus dem zentralen toastStore. Aufgerufen wird ausschließlich über
-  // flash() aus $lib/toast.svelte.ts — Seiten mounten kein eigenes <Toast/> mehr.
+  // flash() aus #lib/toast.svelte.ts — Seiten mounten kein eigenes <Toast/> mehr.
   // Toasts verschwinden automatisch (siehe TTL in flash()).
   //
   // Dateiname bewusst ToastHost (nicht Toast) — sonst Casing-Kollision mit dem
   // Store-Modul toast.svelte.ts auf case-insensitiven Dateisystemen (Windows).
-  import { toastStore, dismissToast } from "$lib/toast.svelte";
+  import { toastStore, dismissToast } from "#lib/toast.svelte.ts";
 </script>
 
 <!-- R5-009: pointer-events:auto auf jedem Toast (Stack-Wrapper bleibt

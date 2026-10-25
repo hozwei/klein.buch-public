@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { todayBerlin, addDaysIso, daysFromTodayBerlin } from "$lib/date";
+  import { todayBerlin, addDaysIso, daysFromTodayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import { goto } from "$app/navigation";
-  import { contactsList, quotesCreateDraft, sellerProfileGet, documentTermsGet } from "$lib/api";
+  import { contactsList, quotesCreateDraft, sellerProfileGet, documentTermsGet } from "#lib/api.ts";
   import type {
     Contact,
     QuoteCreateDraftArgs,
@@ -12,14 +12,14 @@
     TaxCategoryCode,
     TravelLine,
     MaterializedPackageItem,
-  } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { applyTaxRules, documentTotals } from "$lib/tax";
-  import Banner from "$lib/Banner.svelte";
-  import TravelLineAdder from "$lib/TravelLineAdder.svelte";
-  import PackageItemAdder from "$lib/PackageItemAdder.svelte";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { applyTaxRules, documentTotals } from "#lib/tax.ts";
+  import Banner from "#lib/Banner.svelte";
+  import TravelLineAdder from "#lib/TravelLineAdder.svelte";
+  import PackageItemAdder from "#lib/PackageItemAdder.svelte";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge (Backend ignoriert ihn).

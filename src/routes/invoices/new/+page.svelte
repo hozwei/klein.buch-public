@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { todayBerlin, addDaysIso } from "$lib/date";
+  import { todayBerlin, addDaysIso } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import {
     contactsList,
     invoicesCreateDraft,
@@ -11,7 +11,7 @@
     invoicesUpdateDraft,
     sellerProfileGet,
     documentTermsGet,
-  } from "$lib/api";
+  } from "#lib/api.ts";
   import type {
     Contact,
     CreateDraftArgs,
@@ -20,14 +20,14 @@
     TaxCategoryCode,
     TravelLine,
     MaterializedPackageItem,
-  } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { applyTaxRules, documentTotals, REGEL_TAX_CODES } from "$lib/tax";
-  import Banner from "$lib/Banner.svelte";
-  import TravelLineAdder from "$lib/TravelLineAdder.svelte";
-  import PackageItemAdder from "$lib/PackageItemAdder.svelte";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { applyTaxRules, documentTotals, REGEL_TAX_CODES } from "#lib/tax.ts";
+  import Banner from "#lib/Banner.svelte";
+  import TravelLineAdder from "#lib/TravelLineAdder.svelte";
+  import PackageItemAdder from "#lib/PackageItemAdder.svelte";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   // Form-Position = InvoiceItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge (Backend ignoriert ihn).
@@ -57,7 +57,7 @@
   let saving = $state(false);
   // Lauf F5 (Neuer Fund F2a): `?edit=<id>` bearbeitet einen gespeicherten Entwurf
   // mit demselben Formular (Gestaltung im UI/UX-Lauf). Die Nummer bleibt.
-  const editId = $page.url.searchParams.get("edit");
+  const editId = page.url.searchParams.get("edit");
   let editNumber = $state<string | null>(null);
 
   // Heute (Europe/Berlin-nah via lokalem Datum) — Obergrenze für Rechnungs- und

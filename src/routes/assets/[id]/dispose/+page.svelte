@@ -1,22 +1,22 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
-  import { assetsGet, assetsDispose } from "$lib/api";
-  import type { AssetDetail, DisposalType } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { DISPOSAL_TYPES } from "$lib/labels";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
+  import { assetsGet, assetsDispose } from "#lib/api.ts";
+  import type { AssetDetail, DisposalType } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { DISPOSAL_TYPES } from "#lib/labels.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let detail = $state<AssetDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   let disposalDate = $state(todayBerlin());
   let disposalType = $state<DisposalType>("sale");

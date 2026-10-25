@@ -1,5 +1,5 @@
 <script lang="ts">
-  import PageBar from "$lib/PageBar.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 </script>
 
 <PageBar title="Einstellungen" />

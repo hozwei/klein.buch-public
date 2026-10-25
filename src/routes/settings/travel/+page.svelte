@@ -1,10 +1,10 @@
 <script lang="ts">
   // Block P1: Anfahrtspauschale — Kilometersatz pflegen.
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Toggle from "$lib/Toggle.svelte";
-  import { travelSettingsGet, travelSettingsSet } from "$lib/api";
-  import { flash } from "$lib/toast.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Toggle from "#lib/Toggle.svelte";
+  import { travelSettingsGet, travelSettingsSet } from "#lib/api.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let loading = $state(true);
   let saving = $state(false);

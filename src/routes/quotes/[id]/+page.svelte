@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
-  import { todayBerlin } from "$lib/date";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
+  import { todayBerlin } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import {
     quotesGet,
     quotesValidateDraft,
@@ -18,18 +18,18 @@
     saveArchiveFile,
     uploadFile,
     emailLogFor,
-  } from "$lib/api";
+  } from "#lib/api.ts";
   import type {
     QuoteDetail,
     QuoteLegalBinding,
     ValidationIssueDto,
     EmailLogEntry,
-  } from "$lib/types";
-  import { euro, date, dateTime } from "$lib/format";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
+  } from "#lib/types.ts";
+  import { euro, date, dateTime } from "#lib/format.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let detail = $state<QuoteDetail | null>(null);
   let loading = $state(true);
@@ -58,7 +58,7 @@
     showCancel = false;
   }
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   async function load() {
     loading = true;

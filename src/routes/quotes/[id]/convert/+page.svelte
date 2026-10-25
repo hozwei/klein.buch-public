@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { todayBerlin, yearOfIsoDate, addDaysIso } from "$lib/date";
+  import { todayBerlin, yearOfIsoDate, addDaysIso } from "#lib/date.ts";
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
-  import { quotesGet, sellerProfileGet, quotesConvertToInvoice, documentTermsGet } from "$lib/api";
+  import { quotesGet, sellerProfileGet, quotesConvertToInvoice, documentTermsGet } from "#lib/api.ts";
   import type {
     QuoteConvertArgs,
     QuoteDetail,
@@ -12,15 +12,15 @@
     TaxCategoryCode,
     TravelLine,
     MaterializedPackageItem,
-  } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { applyTaxRules, documentTotals } from "$lib/tax";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import TravelLineAdder from "$lib/TravelLineAdder.svelte";
-  import PackageItemAdder from "$lib/PackageItemAdder.svelte";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
-  import { flash } from "$lib/toast.svelte";
+  } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { applyTaxRules, documentTotals } from "#lib/tax.ts";
+  import Banner from "#lib/Banner.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import TravelLineAdder from "#lib/TravelLineAdder.svelte";
+  import PackageItemAdder from "#lib/PackageItemAdder.svelte";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge.
@@ -43,7 +43,7 @@
     return !isRich(it) && !it.description.trim() && it.unitPriceCents === 0;
   }
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   let detail = $state<QuoteDetail | null>(null);
   let seller = $state<SellerProfile | null>(null);

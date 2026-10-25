@@ -1,12 +1,12 @@
 <script lang="ts">
   // Block P4 — Paket-Katalog-Broschüre. KEIN §14-Beleg: Pakete auswählen →
   // PDF drucken/öffnen ODER per Kunden-Dropdown an einen Kontakt mailen.
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
   import {
     packagesList,
     packageCategoriesList,
@@ -15,8 +15,8 @@
     packageCatalogRender,
     downloadUrl,
     packageCatalogSend,
-  } from "$lib/api";
-  import type { Package, PackageCategory, Contact, MailAccount } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { Package, PackageCategory, Contact, MailAccount } from "#lib/types.ts";
 
   let packages = $state<Package[]>([]);
   let categories = $state<PackageCategory[]>([]);

@@ -2,6 +2,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import path from "node:path";
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import adapter from "@sveltejs/adapter-static";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
 // Entwicklung mit `pnpm dev` (Plan W9): Die SPA kommt vom Vite-Dev-Server,
 // API, Dateien, Healthcheck und `/legal/` gehen an den lokalen Rust-Server
@@ -18,11 +20,12 @@ const api = process.env.KLEIN_BUCH_DEV_API || "http://127.0.0.1:8080";
 // `build/legal/js-licenses.json` geschrieben; `legal/build_legal.py` setzt
 // daraus den Abschnitt der Seite zusammen.
 //
-// SvelteKit baut zuerst den Server (SSR) und darin den Client; der Adapter
-// leert `build/` erst danach. Deshalb schreibt der Client-Build die Liste
-// zuerst nach `.svelte-kit/`, und das Ende des SSR-Builds kopiert sie nach
-// dem Adapter an ihr Ziel. Der SSR-Build selbst zählt nicht: er wird nicht
-// ausgeliefert.
+// Vite 8 baut alle Umgebungen in einem Lauf (`buildApp`): SvelteKit zuerst
+// die Server-Umgebung (SSR), dann die Client-Umgebung, zuletzt (`buildApp`,
+// Reihenfolge „post“) den Adapter, der `build/` leert und neu füllt. Deshalb
+// schreibt die Client-Umgebung die Liste zuerst nach `.svelte-kit/`, und ein
+// eigener `buildApp`-Schritt nach dem Adapter kopiert sie an ihr Ziel. Die
+// SSR-Umgebung zählt nicht: sie wird nicht ausgeliefert.
 const JS_LICENSES_STAGE = ".svelte-kit/klein-buch-legal/js-licenses.json";
 const JS_LICENSES_OUT = "build/legal/js-licenses.json";
 const LICENSE_FILE = /^(licen[cs]e|copying)([-._].*)?$/i;
@@ -119,62 +122,79 @@ export function collectJsLicenses(moduleIds) {
 }
 
 /**
- * Vite/Rollup-Plugin, das `build/legal/js-licenses.json` schreibt (ohne weitere npm-Abhängigkeit).
- * @returns {import("vite").Plugin}
+ * Vite-Plugins, die `build/legal/js-licenses.json` schreiben (ohne weitere npm-Abhängigkeit).
+ * Muss in `plugins` nach `sveltekit()` stehen: Der Kopierschritt läuft als
+ * `buildApp` „post“ nach dem des Adapters.
+ * @returns {import("vite").Plugin[]}
  */
 export function jsLicenses() {
   let root = process.cwd();
-  let ssr = false;
-  /** @param {string} file @param {JsLicense[]} list */
-  const writeJson = (file, list) => {
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify(list, null, 2) + "\n");
-  };
-  return {
-    name: "klein-buch-js-licenses",
-    apply: "build",
-    configResolved(config) {
-      root = config.root;
-      ssr = Boolean(config.build.ssr);
-    },
-    buildStart() {
-      if (ssr) rmSync(path.join(root, JS_LICENSES_STAGE), { force: true });
-    },
-    generateBundle(_options, bundle) {
-      if (ssr) return;
-      /** @type {string[]} */
-      const ids = [];
-      for (const chunk of Object.values(bundle)) {
-        if (chunk.type !== "chunk") continue;
-        for (const [id, info] of Object.entries(chunk.modules)) {
-          if (info.renderedLength > 0) ids.push(id);
+  const stage = () => path.join(root, JS_LICENSES_STAGE);
+  return [
+    {
+      name: "klein-buch-js-licenses",
+      apply: "build",
+      configResolved(config) {
+        root = config.root;
+      },
+      buildApp: {
+        order: "pre",
+        async handler() {
+          rmSync(stage(), { force: true });
+        },
+      },
+      generateBundle(_options, bundle) {
+        if (this.environment.name !== "client") return;
+        /** @type {string[]} */
+        const ids = [];
+        for (const chunk of Object.values(bundle)) {
+          if (chunk.type !== "chunk") continue;
+          for (const [id, info] of Object.entries(chunk.modules)) {
+            if (info.renderedLength > 0) ids.push(id);
+          }
         }
-      }
-      const { list, problems } = collectJsLicenses(ids);
-      if (problems.length) this.error(`Lizenzangaben unvollständig:\n${problems.join("\n")}`);
-      if (!list.length) this.error("Keine npm-Pakete im Client-Bundle gefunden.");
-      writeJson(path.join(root, JS_LICENSES_STAGE), list);
-      // Ohne SvelteKit (kein SSR-Build danach) gilt diese Datei direkt.
-      writeJson(path.join(root, JS_LICENSES_OUT), list);
-    },
-    closeBundle: {
-      order: "post",
-      sequential: true,
-      handler() {
-        if (!ssr) return;
-        const stage = path.join(root, JS_LICENSES_STAGE);
-        if (!existsSync(stage)) this.error(`${JS_LICENSES_STAGE} fehlt — der Client-Build hat keine Lizenzliste geschrieben.`);
-        const out = path.join(root, JS_LICENSES_OUT);
-        mkdirSync(path.dirname(out), { recursive: true });
-        copyFileSync(stage, out);
+        const { list, problems } = collectJsLicenses(ids);
+        if (problems.length) this.error(`Lizenzangaben unvollständig:\n${problems.join("\n")}`);
+        if (!list.length) this.error("Keine npm-Pakete im Client-Bundle gefunden.");
+        mkdirSync(path.dirname(stage()), { recursive: true });
+        writeFileSync(stage(), JSON.stringify(list, null, 2) + "\n");
       },
     },
-  };
+    {
+      name: "klein-buch-js-licenses-copy",
+      apply: "build",
+      buildApp: {
+        order: "post",
+        async handler() {
+          if (!existsSync(stage())) {
+            throw new Error(`${JS_LICENSES_STAGE} fehlt — der Client-Build hat keine Lizenzliste geschrieben.`);
+          }
+          const out = path.join(root, JS_LICENSES_OUT);
+          mkdirSync(path.dirname(out), { recursive: true });
+          copyFileSync(stage(), out);
+        },
+      },
+    },
+  ];
 }
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [sveltekit(), jsLicenses()],
+  plugins: [
+    // SvelteKit-Konfiguration (seit SvelteKit 3 hier statt in svelte.config.js):
+    // Die SPA wird statisch gebaut und vom Rust-Server ausgeliefert (ADR 0039),
+    // adapter-static mit Fallback auf index.html (SPA-Modus, kein SSR), Ausgabe
+    // nach build/ wie bisher. Siehe https://svelte.dev/docs/kit/single-page-apps
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({ fallback: "index.html" }),
+      // Kein Zeitgeber für _app/version.json (Standard ab SvelteKit 3: stündlich).
+      // SvelteKit prüft weiter selbst bei Fokus/Sichtbarkeit und nach Ladefehlern
+      // (Neuladen nach einem Image-Update; ADR 0039 Nr. 140).
+      version: { pollInterval: 0 },
+    }),
+    jsLicenses(),
+  ],
   clearScreen: false,
   server: {
     host: "127.0.0.1",

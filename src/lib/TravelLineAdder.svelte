@@ -2,10 +2,10 @@
   // Block P1: wiederverwendbarer „Anfahrt"-Block für die Positions-Editoren
   // (Rechnung, Angebot, Umwandlung). km × Satz → eine normale Position.
   import { onMount } from "svelte";
-  import { travelSettingsGet, travelCompute } from "$lib/api";
-  import type { TravelLine } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
+  import { travelSettingsGet, travelCompute } from "#lib/api.ts";
+  import type { TravelLine } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
 
   let { onAdd }: { onAdd: (line: TravelLine) => void } = $props();
 

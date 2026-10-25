@@ -2,7 +2,7 @@
 // fachlichen Läufe und keine Schreib-Commands aus — manuelle Auslöser sind
 // Knöpfe. Statische Prüfung der Quelltexte: Was `onMount` (eine Ebene tief über
 // gleichnamige Funktionen der Datei) aufruft, darf kein schreibender Command
-// aus `$lib/api` sein (W14-030 Abo-Rechnungen, D-14 Zahlungskonten).
+// aus `#lib/api.ts` sein (W14-030 Abo-Rechnungen, D-14 Zahlungskonten).
 
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";

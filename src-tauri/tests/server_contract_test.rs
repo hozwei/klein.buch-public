@@ -11,23 +11,20 @@ use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get as get_route;
 use axum::Router;
-use klein_buch_lib::commands::registry::{
-    classified_kind, find_exposed, Auth, Kind, Route, REGISTRY,
-};
+use klein_buch_lib::commands::registry::{classified_kind, find, Auth, Kind, REGISTRY};
 use klein_buch_lib::server::headers::{self, ResponseClass};
 use server_support::*;
 
-/// Ersetzt durch `/api/auth/*`.
-const REPLACED_BY_AUTH: &[&str] = &[
+/// Seit Lauf F6 samt Kern entfernt (ADR 0039 Nr. 138): Vorgänger der
+/// Auth-Routen, Archiv-Öffnen/Explorer, altes Einzel-Backup-Ziel, Restore-
+/// Vorschau per Pfad, Lizenzpfad, MS-Graph (E9) und zwei doppelte Leser. Unter `/api/cmd` → 404.
+const REMOVED_IN_F6: &[&str] = &[
     "backup_needs_onboarding",
     "backup_is_unlocked",
     "backup_setup_passphrase",
     "backup_unlock",
-];
-
-/// Seit W7 nicht mehr im Frontend: Archiv-Download über `/files/archive/{id}`,
-/// Explorer-Funktionen entfallen.
-const DROPPED_FROM_FRONTEND: &[&str] = &[
+    "backup_set_target",
+    "backup_set_sftp_target",
     "invoices_open_pdf",
     "invoices_reveal_pdf",
     "attachments_open",
@@ -36,38 +33,13 @@ const DROPPED_FROM_FRONTEND: &[&str] = &[
     "backup_open_folder",
     "backup_reveal_path",
     "backup_restore_preview",
-    "backup_set_target",
-    "backup_set_sftp_target",
-    // W8: MS-Graph im Server ausgeblendet (E9)
-    "mail_oauth_status",
-    "mail_oauth_connect",
-    "mail_oauth_disconnect",
-    // W9: Lizenzliste unter /legal/ (W12)
-    "third_party_licenses_path",
-];
-
-/// Nicht über `/api/cmd` erreichbar (Plan W5.2): Auth-Routen, Archiv-Download,
-/// entfallene Desktop-Funktionen, Gesperrtes. (Die Upload-Commands nehmen seit
-/// W7 eine `uploadId` und sind wieder freigegeben.)
-const NOT_ON_CMD: &[&str] = &[
-    "backup_needs_onboarding",
-    "backup_is_unlocked",
-    "backup_setup_passphrase",
-    "backup_unlock",
-    "backup_set_target",
-    "backup_set_sftp_target",
-    "invoices_open_pdf",
-    "attachments_open",
-    "backup_restore_preview",
-    "backup_open_folder",
-    "backup_reveal_path",
-    "euer_reveal_path",
-    "invoices_reveal_pdf",
-    "attachments_reveal",
     "third_party_licenses_path",
     "mail_oauth_status",
     "mail_oauth_connect",
     "mail_oauth_disconnect",
+    // doppelt zu quotes_get (Anhänge) bzw. fiscal_year_overview (autoYearClose)
+    "quotes_attachments_list",
+    "fiscal_year_auto_close_get",
 ];
 
 /// Re-Auth-Pflicht laut Plan W6 (Prüfung der Frische folgt dort).
@@ -157,62 +129,47 @@ fn api_ts_commands() -> BTreeSet<String> {
     out
 }
 
-fn exposed_names() -> BTreeSet<String> {
-    REGISTRY
-        .iter()
-        .filter(|c| c.exposed())
-        .map(|c| c.name.to_string())
-        .collect()
+fn registry_names() -> BTreeSet<String> {
+    REGISTRY.iter().map(|c| c.name.to_string()).collect()
 }
 
+/// Die Registry ist die Allowlist und deckt sich genau mit den Commands, die
+/// `api.ts` per `invoke` aufruft.
 #[test]
 fn allowlist_is_exactly_plan_point_2() {
-    let mut frontend = api_ts_commands();
-    frontend.extend(REPLACED_BY_AUTH.iter().map(|s| s.to_string()));
-    frontend.extend(DROPPED_FROM_FRONTEND.iter().map(|s| s.to_string()));
-    let registry: BTreeSet<String> = REGISTRY.iter().map(|c| c.name.to_string()).collect();
-    assert_eq!(
-        registry, frontend,
-        "Registry = Frontend-Commands + Auth-Ersatz"
-    );
-
-    let expected: BTreeSet<String> = frontend
-        .iter()
-        .filter(|n| !NOT_ON_CMD.contains(&n.as_str()))
-        .cloned()
-        .collect();
-    assert_eq!(exposed_names(), expected);
-    assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
+    let frontend = api_ts_commands();
+    assert_eq!(registry_names(), frontend, "Registry = Frontend-Commands");
+    assert_eq!(REGISTRY.len(), frontend.len(), "keine doppelten Namen");
     assert_eq!(
         REGISTRY.len(),
-        197,
+        177,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
          - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
          + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
          + Tages-Backup-Uhrzeit + 2 Nummernkreise (Lauf F1b) \
          + 2 vorgemerkte Entwürfe + Restore-Prüfung der Abos (Lauf F1d) \
          + Entwurf verwerfen (Lauf F2a) + Backup herunterladen (Lauf F3a) \
-         + Entwurf bearbeiten (Lauf F5a)"
+         + Entwurf bearbeiten (Lauf F5a) - 18 gesperrte Desktop-Commands - 2 doppelte Leser (Lauf F6)"
     );
+    for gone in REMOVED_IN_F6 {
+        assert!(find(gone).is_none(), "{gone} entfällt seit Lauf F6");
+    }
 
     for spec in REGISTRY.iter() {
-        let reauth = REAUTH.contains(&spec.name);
-        if spec.exposed() {
-            let expected = if reauth {
-                Auth::Reauth
-            } else if CONDITIONAL.contains(&spec.name) {
-                Auth::Conditional
-            } else {
-                Auth::Session
-            };
-            assert_eq!(spec.auth, expected, "{}", spec.name);
-            assert_ne!(
-                spec.auth,
-                Auth::Public,
-                "{} darf nicht öffentlich sein",
-                spec.name
-            );
-        }
+        let expected = if REAUTH.contains(&spec.name) {
+            Auth::Reauth
+        } else if CONDITIONAL.contains(&spec.name) {
+            Auth::Conditional
+        } else {
+            Auth::Session
+        };
+        assert_eq!(spec.auth, expected, "{}", spec.name);
+        assert_ne!(
+            spec.auth,
+            Auth::Public,
+            "{} darf nicht öffentlich sein",
+            spec.name
+        );
         assert_eq!(
             spec.kind == Kind::Job,
             JOBS.contains(&spec.name),
@@ -220,22 +177,12 @@ fn allowlist_is_exactly_plan_point_2() {
             spec.name
         );
     }
-    for blocked in [
-        "mail_oauth_status",
-        "mail_oauth_connect",
-        "mail_oauth_disconnect",
-    ] {
-        assert_eq!(
-            REGISTRY.iter().find(|c| c.name == blocked).unwrap().route,
-            Route::Blocked
-        );
-    }
 }
 
 #[tokio::test]
 async fn every_allowlisted_name_without_session_is_401() {
     let srv = test_server();
-    for name in exposed_names() {
+    for name in registry_names() {
         let r = send(
             &srv.app,
             post(&format!("/api/cmd/{name}"), "{}", None, None),
@@ -259,20 +206,9 @@ async fn every_allowlisted_name_without_session_is_401() {
 async fn other_names_are_404_and_get_is_405() {
     let srv = test_server();
     let cookie = setup(&srv).await;
-    for spec in REGISTRY.iter().filter(|c| !c.exposed()) {
-        let r = send(
-            &srv.app,
-            post(
-                &format!("/api/cmd/{}", spec.name),
-                "{}",
-                Some(&cookie),
-                None,
-            ),
-        )
-        .await;
-        assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", spec.name);
-    }
-    for name in ["gibt_es_nicht", "invoices_archive_paths", "CONTACTS_LIST"] {
+    let mut unknown = vec!["gibt_es_nicht", "invoices_archive_paths", "CONTACTS_LIST"];
+    unknown.extend_from_slice(REMOVED_IN_F6);
+    for name in unknown {
         let r = send(
             &srv.app,
             post(&format!("/api/cmd/{name}"), "{}", Some(&cookie), None),
@@ -680,8 +616,11 @@ async fn header_snapshot_per_route_class() {
     let r = send(app, get("/api/auth/status", None)).await;
     assert!(r.headers.get("access-control-allow-origin").is_none());
     // die Registry-Funktion für den Dispatcher findet nur Freigegebenes
-    assert!(find_exposed("mail_oauth_connect").is_none());
-    assert!(find_exposed("factory_reset").is_none(), "seit W11 entfernt");
+    assert!(
+        find("mail_oauth_connect").is_none(),
+        "seit Lauf F6 entfernt"
+    );
+    assert!(find("factory_reset").is_none(), "seit W11 entfernt");
 }
 
 /// W14-012 (Lauf F4b): Die Art (Read/Write/Job) steht für jeden Command
@@ -718,7 +657,9 @@ fn every_command_has_an_explicit_kind() {
     let writes = REGISTRY.iter().filter(|c| c.kind == Kind::Write).count();
     assert_eq!(
         (reads, writes, JOBS.len()),
-        (75, 109, 13),
-        "Einstufung wie vor W14-012 (Lauf F4b), + invoices_update_draft (Write, Lauf F5a)"
+        (71, 93, 13),
+        "Einstufung wie vor W14-012 (Lauf F4b), + invoices_update_draft (Write, Lauf F5a), \
+         Lauf F6: − 4 Leser (Restore-Vorschau, OAuth-Status, zwei doppelte), − 16 gesperrte \
+         Schreiber"
     );
 }

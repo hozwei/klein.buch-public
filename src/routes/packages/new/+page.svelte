@@ -1,21 +1,21 @@
 <script lang="ts">
   // Block P2b — Neues Paket anlegen (= erste Revision).
-  import { openPdfPreview } from "$lib/pdfPreviewModal.svelte";
+  import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import PageBar from "$lib/PageBar.svelte";
-  import Button from "$lib/Button.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { mdPreview } from "$lib/markdownPreview";
-  import MarkdownEditor from "$lib/MarkdownEditor.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Button from "#lib/Button.svelte";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { mdPreview } from "#lib/markdownPreview.ts";
+  import MarkdownEditor from "#lib/MarkdownEditor.svelte";
   import {
     packageCategoriesList,
     packagesCreate,
     packagePreview,
     downloadUrl,
     sellerProfileGet,
-  } from "$lib/api";
-  import type { PackageCategory } from "$lib/types";
+  } from "#lib/api.ts";
+  import type { PackageCategory } from "#lib/types.ts";
 
   let categories = $state<PackageCategory[]>([]);
   let isKlein = $state(true);
