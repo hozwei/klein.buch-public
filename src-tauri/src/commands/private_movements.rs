@@ -90,7 +90,7 @@ pub async fn private_movements_create(
         );
     }
     let paths = ctx.paths.clone();
-    let row = create_core(&pool, &paths, session, args).await?;
+    let row = create_core(&pool, &paths, session, args, ctx.clock().now_utc()).await?;
     if let Some(id) = upload_id.as_deref() {
         ctx.uploads.consume(id);
     }
@@ -98,11 +98,13 @@ pub async fn private_movements_create(
 }
 
 /// Testbarer Kern von [`private_movements_create`] (ohne `AppCtx`).
+/// `now` (Backup-Vermerk) aus der Uhr des Aufrufers (D-20).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,
     session: &backup::BackupSession,
     args: PrivateMovementCreateArgs,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<PrivateMovementRow> {
     let input = args.input;
 
@@ -164,7 +166,7 @@ pub async fn create_core(
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, paths, session, "private_movement.lock")
+    backup::request_auto_backup(pool, paths, session, "private_movement.lock", now)
         .await
         .ok();
 

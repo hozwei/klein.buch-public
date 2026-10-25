@@ -143,8 +143,8 @@ pub async fn fiscal_year_close(
     let session = &ctx.session;
 
     let paths = ctx.paths.clone();
-    let today = ctx.clock().today_berlin();
-    lock::close_year(&pool, &paths, session, year, today).await
+    let now = ctx.clock().now_utc();
+    lock::close_year(&pool, &paths, session, year, now).await
 }
 
 /// Argumente von [`fiscal_year_closed_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

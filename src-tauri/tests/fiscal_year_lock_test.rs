@@ -57,6 +57,11 @@ fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
 }
 
+/// Mittag Berliner Zeit am Tag `day` (Uhr des Aufrufers, D-20).
+fn noon(day: NaiveDate) -> chrono::DateTime<chrono::Utc> {
+    klein_buch_lib::clock::berlin_to_utc(day, 12, 0)
+}
+
 async fn mk_asset(
     pool: &SqlitePool,
     acq: NaiveDate,
@@ -94,7 +99,7 @@ async fn close_year_books_locks_and_blocks_reposting() {
     let asset = mk_asset(&pool, d(2026, 1, 15), 250_000).await;
 
     // GJ 2026 abschließen (today liegt im Folgejahr).
-    let lock = fiscal_year::lock::close_year(&pool, &paths, &session, 2026, d(2027, 3, 1))
+    let lock = fiscal_year::lock::close_year(&pool, &paths, &session, 2026, noon(d(2027, 3, 1)))
         .await
         .unwrap();
     assert_eq!(lock.fiscal_year, 2026);
@@ -127,13 +132,13 @@ async fn close_year_books_locks_and_blocks_reposting() {
 
     // Doppel-Abschluss + laufendes Jahr → Fehler.
     assert!(
-        fiscal_year::lock::close_year(&pool, &paths, &session, 2026, d(2027, 3, 1))
+        fiscal_year::lock::close_year(&pool, &paths, &session, 2026, noon(d(2027, 3, 1)))
             .await
             .is_err(),
         "bereits abgeschlossen"
     );
     assert!(
-        fiscal_year::lock::close_year(&pool, &paths, &session, 2027, d(2027, 3, 1))
+        fiscal_year::lock::close_year(&pool, &paths, &session, 2027, noon(d(2027, 3, 1)))
             .await
             .is_err(),
         "laufendes Jahr nicht abschließbar"
@@ -146,7 +151,8 @@ async fn close_year_requires_unlocked_session() {
     let paths = paths_for(dir.path());
     let session = BackupSession::default(); // gesperrt
     let _a = mk_asset(&pool, d(2026, 1, 15), 120_000).await;
-    let res = fiscal_year::lock::close_year(&pool, &paths, &session, 2026, d(2027, 1, 2)).await;
+    let res =
+        fiscal_year::lock::close_year(&pool, &paths, &session, 2026, noon(d(2027, 1, 2))).await;
     assert!(res.is_err(), "ohne entsperrtes Backup kein Abschluss");
     assert!(
         !guard::is_closed(&pool, 2026).await.unwrap(),
@@ -161,7 +167,7 @@ async fn protocol_is_immutable_and_lock_for_year_idempotent() {
     let session = BackupSession::default();
     session.set("passphrase-1234".into());
     let _a = mk_asset(&pool, d(2026, 1, 15), 120_000).await;
-    fiscal_year::lock::close_year(&pool, &paths, &session, 2026, d(2027, 1, 2))
+    fiscal_year::lock::close_year(&pool, &paths, &session, 2026, noon(d(2027, 1, 2)))
         .await
         .unwrap();
 
@@ -210,7 +216,7 @@ async fn close_year_locks_disposed_assets_too() {
         .await
         .unwrap();
 
-    let lock = fiscal_year::lock::close_year(&pool, &paths, &session, 2026, d(2027, 3, 1))
+    let lock = fiscal_year::lock::close_year(&pool, &paths, &session, 2026, noon(d(2027, 3, 1)))
         .await
         .unwrap();
     assert_eq!(

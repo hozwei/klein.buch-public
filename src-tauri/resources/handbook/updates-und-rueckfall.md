@@ -46,7 +46,10 @@ zu jeder Version, was sich geändert hat.
    Versionen. Du kannst Versionen überspringen; nötige Umstellungen
    der Datenbank laufen dann nacheinander in einem Schritt.
 2. Prüfe unter "Einstellungen" und "Backups" im Backup-Protokoll, dass
-   das letzte Backup auf Deinem externen Ziel geklappt hat.
+   das letzte Backup auf Deinem externen Ziel geklappt hat. Am
+   sichersten legst Du direkt vor dem Update mit der alten Version noch
+   ein Backup an ("Jetzt sichern"): Das kann die alte Version bei einem
+   Rückfall in jedem Fall einspielen.
 3. Wenn Du willst, prüfe die Signatur des neuen Images (siehe unten).
 4. Trag die neue Nummer in der Compose-Datei ein, zum Beispiel
    `image: ghcr.io/hozwei/klein-buch:2026.11.0`.
@@ -59,7 +62,9 @@ docker compose up -d
 
 Docker ersetzt dabei den Container. Klein.Buch hält zuerst seine
 geplanten Aufgaben an; angefangene Aufgaben dürfen bis zu 30 Sekunden zu
-Ende laufen (innerhalb der `stop_grace_period` von 90 Sekunden). Danach
+Ende laufen, und ein noch ausstehendes Backup eines eben
+festgeschriebenen Belegs wird noch geschrieben (zusammen höchstens
+40 Sekunden, innerhalb der `stop_grace_period` von 90 Sekunden). Danach
 ist Klein.Buch gesperrt, bis Du Dich anmeldest.
 
 Bringt die neue Version eine Umstellung der Datenbank mit (eine
@@ -120,6 +125,9 @@ Backup, das Klein.Buch vor der Umstellung geschrieben hat:
    umbenannten Ordner unter `backups/` (Dateiname
    `klein-buch-<Zeitpunkt>-<Kennung>.kbk`, Zeitpunkt kurz vor Deiner
    ersten Anmeldung nach dem Update) und auf Deinem externen Ziel.
+   Klein.Buch schreibt es so, dass die vorherige Version es lesen kann.
+   Spätere Backups der neuen Version liest die alte unter Umständen
+   nicht (sie meldet dann "Backup-Format … wird nicht unterstützt").
 3. Leg einen neuen, leeren Ordner für `/data` an, gib ihn dem
    Klein.Buch-Benutzer und trag die alte Versionsnummer ein.
 4. Starte Klein.Buch, richte es mit dem neuen Setup-Token ein und spiel

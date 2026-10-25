@@ -251,9 +251,15 @@ async fn expense_fiscal_year_from_expense_date() {
         }))
         .unwrap()
     };
-    let detail = expenses::create_core(&env.pool, &env.paths, &env.session, args(Some(2025)))
-        .await
-        .unwrap();
+    let detail = expenses::create_core(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
     assert_eq!(detail.expense.fiscal_year, 2026);
     assert_eq!(detail.expense.expense_number, "KO-2026-0001");
 }
@@ -280,10 +286,15 @@ async fn expense_from_einvoice_fiscal_year_from_expense_date() {
         );
         a
     };
-    let detail =
-        expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(Some(2025)))
-            .await
-            .unwrap();
+    let detail = expenses::create_from_einvoice_with(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
     assert_eq!(detail.expense.fiscal_year, 2026);
     assert_eq!(detail.expense.expense_number, "KO-2026-0001");
 }
@@ -306,9 +317,15 @@ async fn private_movement_fiscal_year_from_movement_date() {
         }))
         .unwrap()
     };
-    let row = private_movements::create_core(&env.pool, &env.paths, &env.session, args(Some(2025)))
-        .await
-        .unwrap();
+    let row = private_movements::create_core(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
     assert_eq!(row.fiscal_year, 2026);
     assert_eq!(row.movement_number, "PV-2026-0001");
 }

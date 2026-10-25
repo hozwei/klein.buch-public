@@ -26,7 +26,8 @@ pub struct BackupSettings {
     pub available_dirs: Vec<String>,
     /// Konfigurierte Off-Site-Ziele (ohne Passwörter).
     pub targets: Vec<TargetView>,
-    /// `missing` | `failing` | `ok` (Plan W7).
+    /// `missing` | `failing` | `stale` | `ok` (Plan W7; `stale` = eine
+    /// Off-Site-Kopie fehlt oder ist älter als die Frist, Lauf F3a).
     pub offsite_status: String,
     /// Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F, D-04).
     pub daily_time: String,
@@ -182,7 +183,7 @@ pub async fn backup_get_settings(
         targets_root: root.to_string_lossy().to_string(),
         available_dirs: backup::target::available_dirs(root),
         targets,
-        offsite_status: backup::target::offsite_status(&pool, root)
+        offsite_status: backup::target::offsite_status(&pool, root, ctx.clock().now_utc())
             .await?
             .to_string(),
         daily_time: backup::daily_time(&pool).await?.format("%H:%M").to_string(),
@@ -284,6 +285,7 @@ pub async fn backup_setup_passphrase(
         backup::CreateOptions {
             mirror: backup::Mirror::Auto,
             now,
+            format_version: backup::manifest::FORMAT_VERSION,
         },
     )
     .await;
@@ -363,7 +365,9 @@ pub const PRE_MIGRATION_FAILED: &str = "Pflicht-Backup vor der Datenbank-Migrati
 /// Migrationen mit Pflicht-Backup (ADR 0039 E15, Plan W7): Ist die
 /// Schema-Version der geöffneten DB älter als `EXPECTED`, entsteht vorher ein
 /// Backup `manual` mit der alten Version, das vollständig gelesen und geprüft
-/// wird. Scheitert es, wird nicht migriert (Fehler, Instanz bleibt gesperrt;
+/// wird. Es hat das Format, das die Vorversion einspielt (Lauf F3c: Format 2
+/// für Schema ≤ 31, damit der Rückfall auf v2026.10 mit genau diesem Backup
+/// gelingt). Scheitert es, wird nicht migriert (Fehler, Instanz bleibt gesperrt;
 /// Log + Inbox-Hinweis). Vor der Migration Audit `backup.pre_migration`.
 /// Frische oder aktuelle Datenbanken migrieren ohne Backup. Vor dem Backup
 /// prüft [`db::precheck_before_migration`] die alte Datenbank (Lauf F2c).
@@ -403,6 +407,10 @@ pub async fn migrate_with_backup(
             backup::CreateOptions {
                 mirror,
                 now: ctx.clock().now_utc(),
+                // Lauf F3c: im Format, das die Vorversion (Schema `from`)
+                // einspielt — sonst scheitert der dokumentierte Rückfall mit
+                // genau diesem Backup (ADR 0039 Nr. 129 (1)).
+                format_version: backup::manifest::readable_format_for_schema(from),
             },
         )
         .await?;
@@ -1138,7 +1146,8 @@ pub async fn backup_restore_apply(
 }
 
 /// Pfad eines lokalen Backups aus der Historie — nur unter `backups_dir`
-/// (aufgelöst per `canonicalize`, keine Symlinks nach draußen).
+/// (aufgelöst per `canonicalize`, keine Symlinks nach draußen, Endung `.kbk`;
+/// dieselbe Prüfung wie Rotation und Download, W14-011).
 async fn history_backup_path(
     pool: &sqlx::SqlitePool,
     paths: &Paths,
@@ -1151,21 +1160,146 @@ async fn history_backup_path(
             .await?;
     let (target, created_at) =
         row.ok_or_else(|| Error::Domain(format!("Backup nicht gefunden: {id}")))?;
-    let not_local = || {
-        Error::Domain(
-            "Nur lokale Backups aus dem Backup-Ordner lassen sich direkt einspielen — \
-             andere bitte herunterladen und hochladen."
-                .into(),
-        )
-    };
-    let root = paths.backups_dir.canonicalize().map_err(|_| not_local())?;
-    let real = std::path::Path::new(&target)
-        .canonicalize()
-        .map_err(|_| not_local())?;
-    if !real.starts_with(&root) || !real.is_file() {
-        return Err(not_local());
-    }
+    let real = backup::rotation::resolve_local_backup(&target, &[&paths.backups_dir]).ok_or_else(
+        || {
+            Error::Domain(
+                "Nur lokale Backups aus dem Backup-Ordner lassen sich direkt einspielen — \
+                 andere bitte herunterladen und hochladen."
+                    .into(),
+            )
+        },
+    )?;
     Ok((real, format!("Backup vom {created_at}")))
+}
+
+/// Vorprüfung von [`backup_restore_apply`] im Dispatcher, **bevor** der Server
+/// Änderungen sperrt und den Job annimmt (W14-039, Lauf F3a): Argumente lesbar,
+/// genau eine Quelle, Upload bzw. Historien-Eintrag vorhanden und einspielbar,
+/// Passphrase nicht leer. Ein ungültiger Aufruf antwortet 400, ohne dass
+/// folgende Änderungen ein 503 bekommen oder ein Pre-Restore-Backup entsteht.
+pub async fn backup_restore_apply_precheck(
+    ctx: &Arc<AppCtx>,
+    args: &BackupRestoreApplyArgs,
+) -> Result<()> {
+    if args.passphrase.is_empty() {
+        return Err(Error::BadRequest(
+            "Bitte das Daten-Passwort des Backups eingeben.".into(),
+        ));
+    }
+    let upload_id = args.upload_id.as_deref().filter(|s| !s.is_empty());
+    let backup_id = args.backup_id.as_deref().filter(|s| !s.is_empty());
+    match (upload_id, backup_id) {
+        (Some(id), None) => ctx
+            .uploads
+            .path_of(id, &[crate::uploads::UploadKind::Restore])
+            .map(|_| ())
+            .map_err(|e| Error::BadRequest(e.to_string())),
+        (None, Some(id)) => {
+            let pool = ctx.pool()?;
+            history_backup_path(&pool, &ctx.paths, id)
+                .await
+                .map(|_| ())
+                .map_err(|e| match e {
+                    Error::Domain(m) => Error::BadRequest(m),
+                    other => other,
+                })
+        }
+        _ => Err(Error::BadRequest(
+            "Genau eine Quelle angeben: uploadId oder backupId.".into(),
+        )),
+    }
+}
+
+/// Argumente von [`backup_download`].
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupDownloadArgs {
+    /// `backup_history.id` eines Backups im lokalen Backup-Ordner oder in
+    /// einem Verzeichnis-Ziel unter `/backup-targets`.
+    pub backup_id: String,
+}
+
+/// Lädt ein Backup herunter (W13-BACKUP-DOWNLOAD, Lauf F3a; Re-Auth): die
+/// **verschlüsselte** `.kbk` aus dem lokalen Backup-Ordner oder einem
+/// Verzeichnis-Ziel, über ein einmaliges Download-Ticket wie bei den Exporten
+/// (`GET /files/download/{id}`). Für Umzug und Disaster Recovery ohne externes
+/// Ziel. SFTP-Kopien liegen nicht lokal. Geprüft wie Rotation und Restore
+/// (W14-011); die Datei wird per Hardlink in den Download-Ordner gelegt, damit
+/// das Löschen nach dem Abruf das Backup nicht trifft. Geht das nicht (Ziel auf
+/// einem anderen Dateisystem), wird sie ohne Kopie von ihrem Platz
+/// ausgeliefert und nie gelöscht (Lauf F3c). Audit `backup.downloaded`.
+pub async fn backup_download(
+    ctx: &Arc<AppCtx>,
+    args: BackupDownloadArgs,
+) -> Result<crate::downloads::DownloadTicket> {
+    let BackupDownloadArgs { backup_id } = args;
+    let pool = ctx.pool()?;
+    let target: Option<String> =
+        sqlx::query_scalar("SELECT target_path FROM backup_history WHERE id = ?")
+            .bind(&backup_id)
+            .fetch_optional(&pool)
+            .await?;
+    let target =
+        target.ok_or_else(|| Error::Domain(format!("Backup nicht gefunden: {backup_id}")))?;
+    if target.starts_with("sftp://") {
+        return Err(Error::Domain(
+            "Diese Kopie liegt auf dem SFTP-Server — bitte dort abholen.".into(),
+        ));
+    }
+    let paths = &ctx.paths;
+    let real = backup::rotation::resolve_local_backup(
+        &target,
+        &[&paths.backups_dir, &paths.backup_targets_dir],
+    )
+    .ok_or_else(|| {
+        Error::Domain(
+            "Das Backup liegt nicht (mehr) im Backup-Ordner oder unter /backup-targets.".into(),
+        )
+    })?;
+    let file_name = real
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "klein-buch.kbk".into());
+    let (download_id, dest) = ctx.downloads.prepare(&file_name)?;
+    // Hardlink im selben Dateisystem (Floor unter /data): Das Löschen nach dem
+    // Abruf trifft nur den Link, eine Rotation in der Zwischenzeit nicht das
+    // Ticket. Ein Verzeichnis-Ziel auf einem anderen Dateisystem wird ohne
+    // Kopie direkt ausgeliefert (Lauf F3c): eine Kopie nach <data>/tmp lag
+    // ohne Platzprüfung bis zu einer Stunde (mehrfach bei Neuversuchen).
+    let linked = {
+        let (src, dst) = (real.clone(), dest.clone());
+        tokio::task::spawn_blocking(move || std::fs::hard_link(&src, &dst).is_ok())
+            .await
+            .map_err(|e| Error::Backup(format!("Bereitstellen abgebrochen: {e}")))?
+    };
+    if !linked {
+        crate::downloads::DownloadStore::remove_files(&dest);
+    }
+    let served = if linked { &dest } else { &real };
+    // Audit vor der Freigabe des Tickets: ohne Eintrag kein Download.
+    let registered = async {
+        let size = std::fs::metadata(served)?.len();
+        crate::db::repo::audit_log::append(
+            &pool,
+            "backup.downloaded",
+            "backup",
+            &backup_id,
+            Some(serde_json::json!({ "file_name": file_name, "size": size, "linked": linked })),
+        )
+        .await?;
+        if linked {
+            ctx.downloads
+                .register(download_id, &dest, crate::downloads::DownloadKind::Export)
+        } else {
+            ctx.downloads
+                .register_borrowed(&real, crate::downloads::DownloadKind::Export)
+        }
+    }
+    .await;
+    if registered.is_err() && linked {
+        crate::downloads::DownloadStore::remove_files(&dest);
+    }
+    registered
 }
 
 #[cfg(test)]

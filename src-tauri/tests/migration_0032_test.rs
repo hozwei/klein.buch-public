@@ -1697,6 +1697,7 @@ async fn disposed_asset_keeps_depreciation_and_master_data() {
         &ctx.paths,
         &ctx.session,
         "as1",
+        klein_buch_lib::clock::now_utc(),
     )
     .await
     .unwrap_err();
@@ -1804,4 +1805,485 @@ async fn dispose_catches_up_missing_prior_year_depreciation() {
     .await
     .unwrap();
     assert_eq!(residual, 120000 - 30000 - 15000);
+}
+
+// ============================================================================
+// Lauf F3b: Nachzügler aus der Nachprüfung von F2
+// ============================================================================
+
+/// Anlage mit drei gebuchten, offenen AfA-Jahren (2024–2026, linear 3 Jahre,
+/// 1.200 €).
+async fn mk_asset_with_three_years(pool: &SqlitePool, id: &str, locked_2026: bool) {
+    sqlx::query(
+        "INSERT INTO assets (id, asset_number, label, acquisition_date, acquisition_cost_cents,
+                             acquisition_fiscal_year, depreciation_method, useful_life_years,
+                             book_value_cents, last_depreciation_year)
+         VALUES (?, 'AV-2024-0001', 'Laptop', '2024-01-01', 120000, 2024, 'linear', 3.0, 0, 2026)",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+    for (year, before) in [(2024, 120000), (2025, 80000), (2026, 40000)] {
+        sqlx::query(
+            "INSERT INTO depreciation_entries (id, asset_id, fiscal_year, depreciation_amount_cents,
+                    months_in_year, book_value_before_cents, book_value_after_cents, locked_at)
+             VALUES (?, ?, ?, 40000, 12, ?, ?, ?)",
+        )
+        .bind(format!("{id}-{year}"))
+        .bind(id)
+        .bind(year)
+        .bind(before)
+        .bind(before - 40000)
+        .bind((locked_2026 && year == 2026).then_some("2027-01-05 10:00:00"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+fn dispose_args(
+    id: &str,
+    date: (i32, u32, u32),
+) -> klein_buch_lib::commands::assets::AssetsDisposeArgs {
+    klein_buch_lib::commands::assets::AssetsDisposeArgs {
+        args: klein_buch_lib::commands::assets::AssetDisposeArgs {
+            asset_id: id.into(),
+            disposal_date: chrono::NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap(),
+            disposal_type: "scrap".into(),
+            proceeds_cents: 0,
+        },
+    }
+}
+
+fn ctx_at(pool: &SqlitePool, dir: &std::path::Path, day: (i32, u32, u32)) -> Arc<AppCtx> {
+    let ctx = ctx_with(pool, dir);
+    ctx.set_clock(Arc::new(klein_buch_lib::clock::FixedClock::at_berlin(
+        chrono::NaiveDate::from_ymd_opt(day.0, day.1, day.2).unwrap(),
+        12,
+        0,
+    )));
+    ctx
+}
+
+/// F3b (S2): Abgang in ein früheres Jahr, während AfA für spätere Jahre gebucht
+/// ist. Die offenen Einträge ab dem Abgangsjahr werden in der Transaktion des
+/// Abgangs entfernt (Audit mit den Werten), das Abgangsjahr bekommt die
+/// anteilige AfA (R 7.4 Abs. 8 EStR) — AfA plus Restbuchwert ergeben genau die
+/// Anschaffungskosten.
+#[tokio::test]
+async fn dispose_removes_later_depreciation_and_books_pro_rata() {
+    let (pool, dir) = setup().await;
+    let ctx = ctx_at(&pool, dir.path(), (2026, 12, 15));
+    mk_asset_with_three_years(&pool, "as1", false).await;
+
+    klein_buch_lib::commands::assets::assets_dispose(&ctx, dispose_args("as1", (2025, 10, 15)))
+        .await
+        .unwrap();
+
+    let entries: Vec<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT fiscal_year, depreciation_amount_cents, months_in_year FROM depreciation_entries
+          WHERE asset_id = 'as1' ORDER BY fiscal_year",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        entries,
+        vec![(2024, 40000, 12), (2025, 33333, 10)],
+        "2026 entfernt, 2025 anteilig (10/12)"
+    );
+    let (residual, book_value, last_year): (i64, i64, Option<i64>) = sqlx::query_as(
+        "SELECT disposal_residual_book_value_cents, book_value_cents, last_depreciation_year
+           FROM assets WHERE id = 'as1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(residual, 46667);
+    assert_eq!((book_value, last_year), (46667, Some(2025)));
+    assert_eq!(
+        40000 + 33333 + residual,
+        120000,
+        "AfA + Restbuchwert = Anschaffung"
+    );
+    let details: String = sqlx::query_scalar(
+        "SELECT details_json FROM audit_log WHERE action = 'depreciation.reset_for_disposal'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let details: serde_json::Value = serde_json::from_str(&details).unwrap();
+    let removed: Vec<i64> = details["removed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["fiscal_year"].as_i64().unwrap())
+        .collect();
+    assert_eq!(removed, vec![2025, 2026], "{details}");
+    assert_eq!(details["book_value_restored"], 80000, "{details}");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'asset.dispose'"
+        )
+        .await,
+        1
+    );
+}
+
+/// F3b (S2): Festgeschriebene AfA nach dem Abgangsjahr, ein später
+/// abgeschlossenes Jahr mit der (voll abgeschriebenen) Anlage im Bestand und ein
+/// Abgang vor der Anschaffung lehnen ab, ohne etwas zu ändern.
+#[tokio::test]
+async fn dispose_refuses_locked_later_depreciation_and_date_before_purchase() {
+    let (pool, dir) = setup().await;
+    let ctx = ctx_at(&pool, dir.path(), (2027, 3, 1));
+    mk_asset_with_three_years(&pool, "as1", true).await;
+    sqlx::query(
+        "INSERT INTO fiscal_year_locks (fiscal_year, income_total_cents, expense_total_cents,
+                afa_total_cents, surplus_cents, app_version, schema_version)
+         VALUES (2026, 0, 0, 40000, -40000, 'test', 32)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // GWG, 2024 voll abgeschrieben — ohne AfA-Eintrag 2026, aber im Bestand 2026.
+    sqlx::query(
+        "INSERT INTO assets (id, asset_number, label, acquisition_date, acquisition_cost_cents,
+                             acquisition_fiscal_year, depreciation_method, book_value_cents,
+                             last_depreciation_year)
+         VALUES ('as2', 'AV-2024-0002', 'Drucker', '2024-02-01', 50000, 2024, 'gwg_sofort', 0,
+                 2024)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let err =
+        klein_buch_lib::commands::assets::assets_dispose(&ctx, dispose_args("as2", (2025, 6, 1)))
+            .await
+            .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("2026 ist abgeschlossen") && msg.contains("2027"),
+        "{msg}"
+    );
+
+    let err =
+        klein_buch_lib::commands::assets::assets_dispose(&ctx, dispose_args("as1", (2025, 10, 15)))
+            .await
+            .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("2026") && msg.contains("festgeschrieben") && msg.contains("2027"),
+        "{msg}"
+    );
+    let err =
+        klein_buch_lib::commands::assets::assets_dispose(&ctx, dispose_args("as1", (2023, 12, 31)))
+            .await
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("vor dem Anschaffungsdatum"),
+        "{err}"
+    );
+
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM depreciation_entries WHERE asset_id = 'as1'"
+        )
+        .await,
+        3,
+        "nichts entfernt"
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT disposed FROM assets WHERE id = 'as1'").await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action LIKE 'depreciation.%' OR action = 'asset.dispose'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT disposed FROM assets WHERE id = 'as2'").await,
+        0
+    );
+    // Im ersten Jahr nach dem abgeschlossenen geht der Abgang.
+    for id in ["as1", "as2"] {
+        klein_buch_lib::commands::assets::assets_dispose(&ctx, dispose_args(id, (2027, 2, 1)))
+            .await
+            .unwrap();
+        assert_eq!(
+            scalar(
+                &pool,
+                &format!("SELECT disposed FROM assets WHERE id = '{id}'")
+            )
+            .await,
+            1
+        );
+    }
+}
+
+/// F3b (S3): Scheitert die Prüfung nach einer gespeicherten Umstellung, sagt
+/// auch jeder weitere Versuch „nach der Umstellung“ (sonst schickte die
+/// Meldung zum vorigen Image, das die neuere DB ablehnt). Erst nach einem
+/// gelungenen Entsperren gilt wieder „nicht angefasst“.
+#[tokio::test]
+async fn integrity_message_after_migration_survives_retries() {
+    let (pool, dir) = setup().await;
+    let ctx = ctx_with(&pool, dir.path());
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO notifications (id, rule_id, title, body, severity)
+             VALUES ('n1', 'rule_gibt_es_nicht', 'T', 'B', 'info')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+    }
+    // Älteres Pflicht-Backup auf ein anderes Schema zählt nicht.
+    klein_buch_lib::db::repo::audit_log::append(
+        &pool,
+        "backup.pre_migration",
+        "backup",
+        "b0",
+        Some(serde_json::json!({ "from": 30, "to": 31, "backup_id": "b0" })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        klein_buch_lib::db::unfinished_migration_from(&pool)
+            .await
+            .unwrap(),
+        None
+    );
+    klein_buch_lib::db::repo::audit_log::append(
+        &pool,
+        "backup.pre_migration",
+        "backup",
+        "b1",
+        Some(serde_json::json!({ "from": 31, "to": EXPECTED_SCHEMA_VERSION, "backup_id": "b1" })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        klein_buch_lib::db::unfinished_migration_from(&pool)
+            .await
+            .unwrap(),
+        Some(31)
+    );
+    for _ in 0..2 {
+        let msg = klein_buch_lib::db::run_migrations(&ctx, &pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains(klein_buch_lib::db::INTEGRITY_AFTER_MIGRATION)
+                && msg.contains("Schema 31")
+                && !msg.contains("nicht angefasst"),
+            "{msg}"
+        );
+    }
+    klein_buch_lib::db::repo::audit_log::append(
+        &pool,
+        "backup.unlock.ok",
+        "backup",
+        "passphrase",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        klein_buch_lib::db::unfinished_migration_from(&pool)
+            .await
+            .unwrap(),
+        None
+    );
+    let msg = klein_buch_lib::db::run_migrations(&ctx, &pool)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        msg.contains("nicht angefasst")
+            && !msg.contains(klein_buch_lib::db::INTEGRITY_AFTER_MIGRATION),
+        "{msg}"
+    );
+}
+
+async fn mk_seller(pool: &SqlitePool) {
+    sqlx::query(
+        "INSERT INTO seller_profile (id, name, street, postal_code, city, tax_number, email)
+         VALUES (1, 'Verkäufer', 'Beispielweg 1', '84028', 'Landshut', '123/456/78901',
+                 'verkaeufer@example.org')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn issue_args(id: &str) -> klein_buch_lib::commands::quotes::QuotesIssueArgs {
+    klein_buch_lib::commands::quotes::QuotesIssueArgs { id: id.into() }
+}
+
+/// F3b (S3): `quotes_issue` frischt den Empfänger in der Transaktion des
+/// Festschreibens auf und wartet auf die Sperre des Angebots. Wird der Entwurf
+/// währenddessen zurückgezogen und der Kontakt anonymisiert, bekommt das
+/// zurückgezogene Angebot die Personendaten nicht zurück; der Snapshot lässt
+/// sich auch direkt nur auf Entwürfe schreiben.
+#[tokio::test]
+async fn quote_issue_refreshes_buyer_only_on_drafts() {
+    let (pool, dir) = setup().await;
+    let ctx = ctx_with(&pool, dir.path());
+    mk_seller(&pool).await;
+    mk_quote(&pool, "q1", "AN-2026-0001").await;
+    mk_quote(&pool, "q2", "AN-2026-0002").await;
+    sqlx::query("UPDATE contacts SET name = 'Kunde Beispiel Neu', city = 'Landshut' WHERE id = ?")
+        .bind(CONTACT)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let row = klein_buch_lib::commands::quotes::quotes_issue(&ctx, issue_args("q1"))
+        .await
+        .unwrap();
+    assert_eq!(row.status, "sent");
+    assert_eq!(row.buyer_name.as_deref(), Some("Kunde Beispiel Neu"));
+    assert_eq!(row.buyer_city.as_deref(), Some("Landshut"));
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'quote.issue'"
+        )
+        .await,
+        1
+    );
+
+    // q2: Festschreiben wartet auf die Sperre; derweil zurückgezogen und
+    // Kontakt anonymisiert.
+    let guard = klein_buch_lib::locks::QUOTES.lock("q2").await;
+    let issuing = {
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            klein_buch_lib::commands::quotes::quotes_issue(&ctx, issue_args("q2")).await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    klein_buch_lib::db::repo::quotes::cancel(&pool, "q2", "Kunde hat abgesagt")
+        .await
+        .unwrap();
+    klein_buch_lib::commands::contacts::anonymize_core(&pool, CONTACT)
+        .await
+        .unwrap();
+    drop(guard);
+    let err = issuing.await.unwrap().unwrap_err();
+    assert!(err.to_string().contains("nicht im Entwurf"), "{err}");
+    let placeholder = klein_buch_lib::domain::anonymize::anonymized_name(CONTACT);
+    let (name, email, status): (Option<String>, Option<String>, String) =
+        sqlx::query_as("SELECT buyer_name, buyer_email, status FROM quotes WHERE id = 'q2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (name, email, status.as_str()),
+        (Some(placeholder), None, "canceled")
+    );
+
+    let snapshot = klein_buch_lib::db::repo::invoices::BuyerSnapshot {
+        name: "Kunde Beispiel",
+        street: Some("Hauptstr. 1"),
+        postal_code: None,
+        city: None,
+        country_code: "DE",
+        vat_id: None,
+        email: Some("kunde@example.org"),
+    };
+    let err = klein_buch_lib::db::repo::quotes::set_buyer_snapshot(&pool, "q2", &snapshot)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("nicht (mehr) im Entwurf"), "{err}");
+}
+
+/// F3b (S3): Die Anonymisierung eines Lieferanten ersetzt die Bezeichnung
+/// seiner Kosten-Abos und die Buchungsvorlage, wenn sie den Namen nennt; andere
+/// Abos bleiben unberührt. Das Audit nennt nur Zählwerte.
+#[tokio::test]
+async fn anonymize_scrubs_subscriptions_of_the_supplier() {
+    let (pool, _dir) = setup().await;
+    const VENDOR: &str = "01928300-0000-7000-8000-00000000c002";
+    mk_contact(&pool, VENDOR, "Hans Müller").await;
+    for (id, label, template, vendor) in [
+        (
+            "s1",
+            "Miete Büro – Hans Müller",
+            "Miete Büro MÜLLER",
+            Some(VENDOR),
+        ),
+        ("s2", "Heizung Hans M.", "Heizungswartung", Some(VENDOR)),
+        ("s3", "Hosting", "Hosting – Hans Müller", None),
+    ] {
+        sqlx::query(
+            "INSERT INTO recurring_subscriptions (id, label, vendor_contact_id, frequency,
+                    day_of_period, next_due_date, expected_amount_cents, category,
+                    description_template, auto_create_expense, active)
+             VALUES (?, ?, ?, 'monthly', 1, '2026-11-01', 50000, 'rent', ?, 1, 1)",
+        )
+        .bind(id)
+        .bind(label)
+        .bind(vendor)
+        .bind(template)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    klein_buch_lib::commands::contacts::anonymize_core(&pool, VENDOR)
+        .await
+        .unwrap();
+    let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT id, label, description_template, active FROM recurring_subscriptions ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let placeholder = contacts::ANONYMIZED_SUBSCRIPTION_LABEL.to_string();
+    assert_eq!(
+        rows,
+        vec![
+            ("s1".into(), placeholder.clone(), placeholder.clone(), 0),
+            (
+                "s2".into(),
+                placeholder.clone(),
+                "Heizungswartung".into(),
+                0
+            ),
+            (
+                "s3".into(),
+                "Hosting".into(),
+                "Hosting – Hans Müller".into(),
+                1
+            ),
+        ]
+    );
+    let details: String =
+        sqlx::query_scalar("SELECT details_json FROM audit_log WHERE action = 'contact.anonymize'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let details: serde_json::Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(details["scrubbedRecurringSubscriptions"], 2, "{details}");
+    assert_eq!(details["scrubbedSubscriptionTemplates"], 1, "{details}");
+    assert_eq!(details["pausedRecurringSubscriptions"], 2, "{details}");
+    assert!(!details.to_string().contains("Müller"), "{details}");
 }

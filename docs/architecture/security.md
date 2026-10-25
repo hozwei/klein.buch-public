@@ -138,7 +138,9 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Lesen eines Backups | Argon2id + AES-256-GCM (§3.2); die DB im Content-ZIP ist zusätzlich SQLCipher-verschlüsselt | umgesetzt (W2) |
 | Inkonsistenter oder überschriebener Stand | Snapshot per `VACUUM INTO`, Backups serialisiert, Dateinamen mit Millisekunden + Kurz-UUID | umgesetzt (W2) |
 | Migration ohne Rückweg | Pflicht-Backup vor jeder Migration (Entsperren mit älterem Schema, Restore eines älteren Backups) | umgesetzt (W7) |
-| Speicher | das Backup wird im RAM gebaut (etwa 3× Archivgröße), der Restore entschlüsselt im RAM (etwa 3× Backup-Größe); `mem_limit` im Compose-Beispiel | dokumentiert (W13, `../operations-guide.md` §10) |
+| Speicher | das Backup wird im RAM gebaut und in place verschlüsselt (etwa 1–2× Backup-Größe), der Restore entschlüsselt in place (etwa 1× Backup-Größe) und legt das Pre-Restore-Backup erst nach dem Entpacken an (nacheinander, Lauf F3c); `mem_limit` im Compose-Beispiel | umgesetzt (Lauf F3a/F3c, `../operations-guide.md` §10) |
+| Veränderter Klartext-Kopf | Format 3: Kopf als AAD an AES-GCM gebunden; Formate 1/2 weiter lesbar | umgesetzt (Lauf F3a) |
+| Antwort wartet auf das Backup | Lock-Backups vermerkt und im Scheduler angelegt (ADR 0040 Nr. 50) | umgesetzt (Lauf F3a) |
 
 **Off-Site-Ziele**
 
@@ -146,7 +148,8 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 |---|---|---|
 | Halbe Datei unter dem endgültigen Namen (Verzeichnis-Ziel) | Temp-Datei + `fsync` + `rename` + Verzeichnis-`fsync` | umgesetzt (W2) |
 | Halbe Datei auf SFTP | Upload unter `.<name>.part`, dann `rename` | umgesetzt (W7) |
-| Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / ok | umgesetzt (W7) |
+| Schreiben an beliebige Pfade | Verzeichnis-Ziele nur unter `/backup-targets` + `canonicalize`; mehrere Ziele; Status `offsite` = missing / failing / stale / ok | umgesetzt (W7, `stale` Lauf F3a) |
+| Löschen oder Ausliefern beliebiger Pfade aus `backup_history` | Rotation, Restore aus der Historie und Download nur für reguläre `.kbk` unter Floor bzw. `/backup-targets` (aufgelöst per `canonicalize`) | umgesetzt (Lauf F3a, W14-011) |
 | MITM zum SFTP-Server | Host-Key-Pinning (SHA-256, TOFU) | umgesetzt |
 | SSRF und Abgreifen gespeicherter Zugangsdaten über Test-Verbindungen | Zugangsdaten an (Host, Port, Benutzer) gebunden; Tests gespeicherter Ziele nur per ID; Ad-hoc-Tests nur mit eingegebenem Passwort; Port-Allowlist; ≤ 10 Tests je Minute (instanzweit); einheitliche Fehlermeldung; Re-Auth | umgesetzt (W8) |
 | Fremder Fingerprint beim Anlegen | `backup_target_add_sftp` übernimmt nur den Fingerprint der letzten Probe für (Host, Port), höchstens 10 min alt | umgesetzt (W8) |
@@ -329,7 +332,12 @@ nie.
 **Temp-Dateien** liegen unter `<data_dir>/tmp`, nie unter `/tmp` (im Container
 ein RAM-tmpfs).
 
-**Inhalt (Backup-Format 2, W1):**
+**Was nicht ins Backup kommt (Lauf F3a):** versteckte Temp-Dateien laufender
+Schreibvorgänge im Archiv (`.<name>.<uuid>.tmp`, `.<name>.<uuid>.part`) und
+symbolische Links; eine Datei, die zwischen Auflisten und Lesen verschwindet,
+wird übersprungen.
+
+**Inhalt (Backup-Format 2, W1; Format 3 mit gleichem Inhalt, Lauf F3a):**
 
 ```text
 klein-buch.sqlite        ← SQLCipher-Snapshot
@@ -338,7 +346,7 @@ branding/<...>           ← Logo + Unterschrift aus <data_dir>/branding
 ```
 
 Format 1 enthielt statt `branding/` den Ordner `inputs/branding`. Der Restore
-nimmt Format 1 und 2 an; bei Format 1 bleiben Logo und Unterschrift unverändert,
+nimmt Format 1, 2 und 3 an; bei Format 1 bleiben Logo und Unterschrift unverändert,
 und der Restore-Bericht sagt das. `inputs/` (Vorlagen, AfA-Tabellen) wird nicht
 gesichert; im Server-Betrieb ist `/inputs` ein eigenes Volume mit eigener
 Sicherung beim Betreiber.
@@ -354,32 +362,47 @@ Das Packen (Lesen + Deflate) läuft in `spawn_blocking`.
 3. `key = argon2id(passphrase, salt, m=64 MiB, t=3, p=4)` → 32 Byte. Ableitung
    und Verschlüsselung laufen außerhalb der async-Runtime unter der
    `KDF`-Semaphore.
-4. `ciphertext = aes_256_gcm(key, nonce, content_zip)` inkl. 16-Byte-Tag.
-5. Datei = Zeile 1 `KLEIN-BUCH-BACKUP-1`, Zeile 2 Manifest-JSON, danach der
-   Ciphertext.
+4. Kopf = Zeile 1 `KLEIN-BUCH-BACKUP-1`, Zeile 2 Manifest-JSON.
+5. `ciphertext = aes_256_gcm(key, nonce, content_zip, aad = kopf)` inkl.
+   16-Byte-Tag (Format 3, Lauf F3a; Format 1/2 ohne AAD). Verschlüsselt wird
+   im Puffer des Content-ZIP (Kopf davor, Tag dahinter) — keine weitere Kopie.
+6. Datei = Kopf, danach der Ciphertext. Floor und Ziele schreiben denselben
+   Puffer.
 
 Das **Manifest** ist Klartext, damit der Restore-Wizard ohne Passphrase anzeigen
-kann, was er einspielen würde: `formatVersion` (2), `schemaVersion`,
+kann, was er einspielen würde: `formatVersion` (3), `schemaVersion`,
 `appVersion`, `createdAt`, KDF-Parameter, Salt, Nonce, SHA-256 und Größe des
 entschlüsselten Content-ZIP. Der Inhalt ist verschlüsselt und über das GCM-Tag
 gegen Veränderung geschützt; nach dem Entschlüsseln wird zusätzlich der
-Content-SHA-256 verglichen. Das Manifest selbst ist **nicht** Teil der
-GCM-Authentisierung; maßgeblich für die Schema-Version ist nach dem Einspielen
-der Schema-Check der DB selbst.
+Content-SHA-256 verglichen. Seit Format 3 ist der Kopf als AAD Teil der
+GCM-Authentisierung: ein veränderter Kopf — auch das Herabsetzen auf Format 2 —
+scheitert wie eine falsche Passphrase. Vor dem Entschlüsseln bleibt er eine
+ungeprüfte Anzeige; maßgeblich für die Schema-Version ist nach dem Einspielen
+der Schema-Check der DB selbst. Entschlüsselt wird ebenfalls im Dateipuffer
+(Restore etwa einmal die Backup-Größe im Speicher; das Pre-Restore-Backup folgt
+erst nach dem Entpacken, Lauf F3c). Das Pflicht-Backup vor einer Migration
+entsteht im Format, das die Vorversion liest (für Schema ≤ 31 Format 2 ohne AAD,
+damit der Rückfall auf 2026.10 gelingt; ADR 0039 Nr. 129). Ein Format-2-Kopf
+ist damit legitim, aber nur für Dateien, die ohne AAD verschlüsselt wurden; einen
+Format-3-Kopf auf 2 herabzusetzen scheitert weiter am Tag.
 
 **Ablauf drumherum (W2):**
 
 - Backups laufen **nacheinander** (prozessweiter Mutex in `create_now`):
   Auto-Backup nach dem Festschreiben, Tages-Backup im Scheduler-Tick, manuelles
   Backup, Pre-Restore-Backup — nie zwei gleichzeitig.
+- Das **Auto-Backup nach dem Festschreiben** hält die Antwort nicht auf
+  (Lauf F3a): Der Command vermerkt es (`backup_pending_since`, Zähler
+  `backup_pending_seq`, Audit `backup.requested`) und weckt den Scheduler, der
+  es nach zwei Sekunden unter der Tick-Sperre anlegt; der Vermerk übersteht
+  Sperren und Neustart (ADR 0040 Nr. 50/51).
 - Dateiname `klein-buch-<JJJJMMTT-hhmmssmmm>-<8 Hex>.kbk` (Europe/Berlin,
   Millisekunden + Kurz-UUID): zwei Backups in derselben Sekunde ergeben zwei
   Dateien.
 - Jeder Schreibversuch auf ein Ziel landet im append-only `backup_log` (Erfolg
   und Fehlschlag, je Ziel) — nie mit Passphrase. Fehler **vor** dem Schreiben
-  (z. B. beim Snapshot) stehen derzeit nicht im `backup_log`, sondern nur als
-  Audit `backup.failed` (Auto-Backup) bzw. als Fehlermeldung (manuell); offener
-  Punkt.
+  (Snapshot, Verschlüsselung) stehen seit Lauf F3a ebenfalls dort (`local`,
+  `failed`, geplanter Dateiname) und erzeugen einen Hinweis (einmal je Tag).
 
 ### 3.3 Ziele
 
@@ -393,8 +416,15 @@ der Schema-Check der DB selbst.
   ist **nicht** fatal: `backup_log` mit `status='failed'` und Ziel-Bezeichnung,
   Audit `backup.mirror.failed`, Inbox-Hinweis; die übrigen Ziele und der Floor
   sind gesichert, ein festgeschriebener Beleg wird nie zurückgerollt. Status
-  `offsite` = missing / failing / ok (Übersicht, Einstellungen,
-  Loopback-`/healthz`); ohne Ziel wöchentlich ein Inbox-Hinweis.
+  `offsite` = missing / failing / stale / ok (Übersicht, Einstellungen,
+  Loopback-`/healthz`; `stale` = ein Ziel ohne Kopie oder mit einer älter als
+  die Frist der Regel „Backup überfällig“, Standard 7 Tage); ohne Ziel
+  wöchentlich ein Inbox-Hinweis.
+- **Download** (Lauf F3a): Backups aus Floor und Verzeichnis-Zielen lassen sich
+  mit Re-Auth als verschlüsselte `.kbk` über ein einmaliges Download-Ticket
+  herunterladen (Hardlink in den Download-Ordner; ein Ziel auf einem anderen
+  Dateisystem direkt von seinem Platz, nie gelöscht, keine Kopie unter `/data/tmp`
+  — Lauf F3c; Audit `backup.downloaded`).
 - **Schreiben ins Verzeichnis** (Floor und Off-Site, W2): Temp-Datei
   `.<name>.<uuid>.part` im Zielordner, `fsync`, `rename`, Verzeichnis-`fsync`.
   Ein Abbruch hinterlässt nie eine halbe `.kbk` unter dem endgültigen Namen.
@@ -454,8 +484,16 @@ Pause der automatischen Abläufe ruft `create_with` die Rotation nicht auf. **In
 **nie** gelöscht, auch wenn keep-Werte auf 0 stehen würden. Eine garantierte
 Mindestzahl bleibt immer erhalten.
 
+**Nur unter den Wurzeln** (Lauf F3a, W14-011): Gelöscht wird nur, was
+`rotation::resolve_local_backup` aufgelöst (`canonicalize`) als reguläre
+`.kbk` unter dem Floor oder `/backup-targets` findet. Eine Historienzeile, die
+per `..`, Symlink oder fremder Endung woandershin zeigt, verliert nur ihren
+Eintrag (Audit `backup.rotation.prune` mit `file: refused`); die Datei bleibt.
+
 Test: die Unit-Tests in `src/backup/rotation.rs` (Abschnitt G1-HARDEN.5)
-prüfen diese Invariante explizit.
+prüfen diese Invariante explizit; `tests/backup_restore_test.rs`
+(`rotation_run_deletes_files_only_under_the_roots`) prüft `run` mit DB und
+Dateien (KB-0035).
 
 ---
 
@@ -548,16 +586,17 @@ abgeschaltet und entfernt (E7).
 ### Phase A (Live)
 
 - **Restore** (`backup::restore::apply`, W7; Quelle Upload oder lokales Backup
-  aus der Historie). Format prüfen (1–2), Schema `30 ≤ s ≤ EXPECTED`, Backup
+  aus der Historie). Format prüfen (1–3), Schema `30 ≤ s ≤ EXPECTED`, Backup
   entschlüsseln + Content-Hash prüfen (unter der `KDF`-Semaphore; falsche
-  Passphrase schreibt nichts), Pflicht-Audit `backup.restore.requested`, dann
-  **Pre-Restore-Backup** mit der *aktuellen* Passphrase (enthält den Audit),
-  Platz prüfen, gehärtet ins Staging `restore-staging/` entpacken (Allowlist,
-  nur normale Pfadbestandteile, Größen- und Verhältnisgrenzen, keine Symlinks),
+  Passphrase schreibt nichts), Pflicht-Audit `backup.restore.requested`, Platz
+  prüfen, gehärtet ins Staging `restore-staging/` entpacken (Allowlist, nur
+  normale Pfadbestandteile, Größen- und Verhältnisgrenzen, keine Symlinks),
   gestagte DB mit der Backup-Passphrase öffnen (Schema, Archivpfade,
   Migrations-Prüfsummen, Fremdschlüssel, höchstens ein festgeschriebener Storno
   je Original — was das Entsperren nach dem Tausch verweigern würde, lehnt
-  schon Phase A ab, Lauf F2a), Marker per `rename`. Der Tausch beim Neustart legt
+  schon Phase A ab, Lauf F2a), dann — der entschlüsselte Inhalt ist freigegeben
+  (Lauf F3c) — **Pre-Restore-Backup** mit der *aktuellen* Passphrase (enthält den
+  Audit), Platz erneut prüfen, Marker per `rename`. Der Tausch beim Neustart legt
   `RESTORE_APPLIED.json` an; das erste Entsperren schreibt
   `backup.restore.applied` und trägt das Pre-Restore-Backup in die Historie ein.
 
@@ -578,9 +617,12 @@ bleibt der Upload für den nächsten Versuch liegen).
 `RESTORE_SWAP_STATE.json` fest (W2), jeweils atomar geschrieben (Temp-Datei,
 `fsync`, `rename`, Verzeichnis-`fsync`):
 
-1. Zustand `moving`. WAL/SHM der alten DB entfernen; die Originale per `rename`
-   beiseitelegen (`klein-buch.sqlite.rollback`, `archive.rollback`,
-   `branding.rollback`). Scheitert ein Schritt, werden die schon verschobenen
+1. Zustand `moving`. Das `-shm` der alten DB (nur Index) entfernen; die
+   Originale per `rename` beiseitelegen (`klein-buch.sqlite.rollback`,
+   `archive.rollback`, `branding.rollback`) und das WAL der alten DB mit ihnen
+   (`klein-buch.sqlite.rollback-wal`, Lauf F3a): nach einem harten Abbruch kann
+   es festgeschriebene, noch nicht übernommene Transaktionen enthalten, die ein
+   Rückfall sonst verlöre. Scheitert ein Schritt, werden die schon verschobenen
    sofort zurückgeholt.
 2. Zustand `moved`. Kopie aus dem Staging, jede Datei mit `fsync`; danach das
    Archiv wieder schreibgeschützt (`0o400`, dieselbe Funktion wie beim

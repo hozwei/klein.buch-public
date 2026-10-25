@@ -548,7 +548,7 @@ pub async fn invoices_lock_and_issue(
     // Block 4 — Auto-Critical-Backup nach erfolgreichem Lock. Best-effort:
     // ein nicht erreichbares Backup-Ziel darf die festgeschriebene Rechnung
     // nicht zurückrollen.
-    backup::auto_backup_if_unlocked(pool, &paths, session, "invoice.lock")
+    backup::request_auto_backup(pool, &paths, session, "invoice.lock", ctx.clock().now_utc())
         .await
         .ok();
     Ok(resp)
@@ -897,7 +897,7 @@ async fn run_lock_pipeline_inner(
     // 10. Auto-Backup-Marker (GoBD-Trace innerhalb der Pipeline).
     // Das eigentliche Auto-Critical-Backup wird vom Command-Wrapper
     // (`invoices_lock_and_issue` / `invoices_cancel`) via
-    // `backup::auto_backup_if_unlocked` ausgelöst — nur dort ist die
+    // `backup::request_auto_backup` angefordert — nur dort ist die
     // Session-Passphrase (`AppCtx::session`) verfügbar. `run_lock_pipeline` selbst
     // bleibt I/O-frei bzgl. Backup, damit Integration-Tests sie ohne
     // entsperrte Session ausführen können.
@@ -906,7 +906,7 @@ async fn run_lock_pipeline_inner(
         "invoice.lock.backup_pending",
         "invoice",
         invoice_id,
-        Some(serde_json::json!({"hook":"backup::auto_backup_if_unlocked(auto_critical)","module":"block-4"})),
+        Some(serde_json::json!({"hook":"backup::request_auto_backup(auto_critical)","module":"block-4"})),
     )
     .await
     .ok();
@@ -1180,9 +1180,15 @@ pub async fn invoices_cancel(
     .await?;
 
     // Block 4 — Auto-Critical-Backup nach Storno-Lock (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session, "storno.create")
-        .await
-        .ok();
+    backup::request_auto_backup(
+        pool,
+        &paths,
+        session,
+        "storno.create",
+        ctx.clock().now_utc(),
+    )
+    .await
+    .ok();
 
     let original_refreshed = invoices::get(pool, &original.invoice.id)
         .await?

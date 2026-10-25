@@ -100,6 +100,8 @@ const REAUTH: &[&str] = &[
     "numbering_restored_draft_confirm",
     // Lauf F (F2a, W14-032): nummerierten Rechnungs-Entwurf verwerfen
     "invoices_void_draft",
+    // Lauf F (F3a, W13-BACKUP-DOWNLOAD): verschlüsselte .kbk herunterladen
+    "backup_download",
 ];
 
 /// Jobs laut Plan W5.6.
@@ -169,13 +171,13 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        195,
+        196,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
          - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
          + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
          + Tages-Backup-Uhrzeit + 2 Nummernkreise (Lauf F1b) \
          + 2 vorgemerkte Entwürfe + Restore-Prüfung der Abos (Lauf F1d) \
-         + Entwurf verwerfen (Lauf F2a)"
+         + Entwurf verwerfen (Lauf F2a) + Backup herunterladen (Lauf F3a)"
     );
 
     for spec in REGISTRY.iter() {

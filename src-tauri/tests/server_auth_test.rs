@@ -570,9 +570,9 @@ async fn reauth_commands_require_fresh_reauth() {
         .collect();
     assert_eq!(
         reauth_cmds.len(),
-        25,
+        26,
         "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d) \
-         + invoices_void_draft (F2a)"
+         + invoices_void_draft (F2a) + backup_download (F3a)"
     );
     for name in &reauth_cmds {
         let r = send(

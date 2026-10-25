@@ -328,7 +328,7 @@ async fn booking_commands_refuse_dates_in_a_closed_year() {
         &env.ctx.paths,
         &env.ctx.session,
         closed as i64,
-        now,
+        klein_buch_lib::clock::berlin_to_utc(now, 12, 0),
     )
     .await
     .unwrap();
@@ -555,7 +555,14 @@ async fn close_waits_for_a_running_booking() {
         let (pool, ctx) = (env.pool.clone(), env.ctx.clone());
         tokio::spawn(async move {
             ctx.session.set(PASS.into());
-            lock::close_year(&pool, &ctx.paths, &ctx.session, closed as i64, now).await
+            lock::close_year(
+                &pool,
+                &ctx.paths,
+                &ctx.session,
+                closed as i64,
+                klein_buch_lib::clock::berlin_to_utc(now, 12, 0),
+            )
+            .await
         })
     };
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -657,7 +664,7 @@ async fn close_audit_carries_document_counts_and_open_drafts() {
         &env.ctx.paths,
         &env.ctx.session,
         closed as i64,
-        now,
+        klein_buch_lib::clock::berlin_to_utc(now, 12, 0),
     )
     .await
     .unwrap();

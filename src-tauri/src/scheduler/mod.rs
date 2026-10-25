@@ -44,12 +44,16 @@ pub struct JobCtx<'a> {
     /// Im Tick: Lock-Backups sammeln statt sofort anlegen (D-19); `run_jobs`
     /// legt am Ende genau eines an.
     deferred_backup: Option<&'a AtomicBool>,
+    /// Manueller Auslöser über einen Command (Lauf F3a, W5-AUTOBACKUP-SYNC):
+    /// Lock-Backups werden vermerkt und im Hintergrund angelegt
+    /// ([`crate::backup::request_auto_backup`]), die Antwort wartet nicht.
+    background_backup: bool,
     /// Erster Tick nach dem Entsperren (D-19: ohne Integritäts-Vollscan).
     first_after_unlock: bool,
 }
 
 impl<'a> JobCtx<'a> {
-    /// Umgebung ohne Abbruch-Anforderung.
+    /// Umgebung ohne Abbruch-Anforderung; Lock-Backups entstehen sofort.
     pub fn new(
         pool: &'a SqlitePool,
         paths: &'a Paths,
@@ -63,11 +67,14 @@ impl<'a> JobCtx<'a> {
             clock,
             stop: &NEVER_STOP,
             deferred_backup: None,
+            background_backup: false,
             first_after_unlock: false,
         }
     }
 
-    /// Umgebung aus dem Anwendungskontext (Uhr, Abbruch-Flag).
+    /// Umgebung aus dem Anwendungskontext (Uhr, Abbruch-Flag). Lock-Backups
+    /// laufen im Hintergrund (Commands); der Tick sammelt sie stattdessen
+    /// ([`Self::with_deferred_backup`]).
     pub fn from_app(
         ctx: &'a crate::app_ctx::AppCtx,
         pool: &'a SqlitePool,
@@ -80,6 +87,7 @@ impl<'a> JobCtx<'a> {
             clock,
             stop: &ctx.scheduler_stop,
             deferred_backup: None,
+            background_backup: true,
             first_after_unlock: false,
         }
     }
@@ -129,17 +137,30 @@ impl<'a> JobCtx<'a> {
 
     /// Backup nach festgeschriebenen Belegen (Backup-Hardline): im Tick
     /// gesammelt und am Ende des Ticks genau einmal angelegt (D-19), bei
-    /// manuellen Auslösern sofort. Fehler sind nie fatal (siehe
-    /// [`crate::backup::auto_backup_if_unlocked`]). Beim Sammeln steht
-    /// zusätzlich der Vermerk „Backup ausstehend“ in der Datenbank — fällt das
-    /// Backup am Ende des Ticks wegen „Datenbank sperren“ oder Herunterfahren
-    /// aus, holt es der erste Tick danach nach (F1d).
+    /// manuellen Auslösern über einen Command vermerkt und im Hintergrund
+    /// angelegt (Lauf F3a, [`crate::backup::request_auto_backup`]), sonst
+    /// (Tests) sofort. Fehler sind nie fatal. Beim Sammeln steht zusätzlich
+    /// der Vermerk „Backup ausstehend“ in der Datenbank — fällt das Backup am
+    /// Ende des Ticks wegen „Datenbank sperren“ oder Herunterfahren aus, holt
+    /// es der erste Tick danach nach (F1d).
     pub async fn lock_backup(&self, event: &str) {
         if let Some(flag) = self.deferred_backup {
             flag.store(true, Ordering::SeqCst);
             if let Err(e) = crate::backup::mark_pending(self.pool, self.now()).await {
                 tracing::warn!("Vermerk „Backup ausstehend“ nicht gesetzt ({event}): {e}");
             }
+            return;
+        }
+        if self.background_backup {
+            crate::backup::request_auto_backup(
+                self.pool,
+                self.paths,
+                self.session,
+                event,
+                self.now(),
+            )
+            .await
+            .ok();
             return;
         }
         crate::backup::auto_backup_at(self.pool, self.paths, self.session, event, self.now())

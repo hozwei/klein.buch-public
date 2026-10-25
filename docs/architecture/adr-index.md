@@ -61,7 +61,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/); Drop-Folder im Server entfallen (E11, §6 Hinweis) |
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
-| 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
+| 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
 
 ---
 
@@ -124,7 +124,8 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
 - **ADR 0001 / 0008** — Sidecar nur noch für Linux; Bezugsquellen mit SHA-256
   in `sidecar/versions.json`.
 - **ADR 0009** — Backup-`FORMAT_VERSION` 2 (Branding aus `data_dir` im
-  Content-ZIP; Restore nimmt Format 1 und 2).
+  Content-ZIP; Restore nimmt Format 1 und 2). Seit Lauf F3a (Amendment
+  2026-10-25) Format 3 mit dem Klartext-Kopf als AAD; Restore nimmt 1–3.
 - **ADR 0011 / 0028** — Secrets in einer STRICT-Tabelle in SQLCipher statt im
   OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP).
 - **ADR 0013** — eingehender Listener, opt-in Versionsprüfung, keine

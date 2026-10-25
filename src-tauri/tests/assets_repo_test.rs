@@ -56,6 +56,11 @@ fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
 }
 
+/// Mittag Berliner Zeit am Tag `day` (Uhr des Aufrufers, D-20).
+fn noon(day: NaiveDate) -> chrono::DateTime<chrono::Utc> {
+    klein_buch_lib::clock::berlin_to_utc(day, 12, 0)
+}
+
 fn input(method: &str, acq: NaiveDate, cost: i64, share: f64, life: Option<f64>) -> AssetInput {
     AssetInput {
         label: "Testanlage".into(),
@@ -215,9 +220,10 @@ async fn accrue_skips_when_session_locked() {
     let session = BackupSession::default(); // gesperrt
     mk_asset(&pool, "gwg_sofort", d(2026, 3, 1), 60_000, 100.0, None).await;
 
-    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 5, 21))
-        .await
-        .unwrap();
+    let report =
+        accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 5, 21)))
+            .await
+            .unwrap();
     assert!(report.skipped_locked);
     assert_eq!(report.booked_entries, 0);
 }
@@ -231,9 +237,10 @@ async fn accrue_gwg_full_writeoff_does_not_lock() {
 
     let a = mk_asset(&pool, "gwg_sofort", d(2026, 3, 1), 60_000, 100.0, None).await;
 
-    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 5, 21))
-        .await
-        .unwrap();
+    let report =
+        accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 5, 21)))
+            .await
+            .unwrap();
     assert_eq!(report.booked_entries, 1);
     assert_eq!(report.processed_assets, 1);
     assert_eq!(report.total_depreciation_cents, 60_000);
@@ -256,7 +263,7 @@ async fn accrue_gwg_full_writeoff_does_not_lock() {
     );
 
     // Idempotent: zweiter Lauf bucht nichts mehr.
-    let again = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 5, 21))
+    let again = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 5, 21)))
         .await
         .unwrap();
     assert_eq!(again.booked_entries, 0);
@@ -273,7 +280,7 @@ async fn accrue_linear_catches_up_and_runs_to_zero() {
     let a = mk_asset(&pool, "linear", d(2024, 7, 1), 360_000, 100.0, Some(3.0)).await;
 
     // Heute 2030 → AfA bis 2029 nachbuchen (alle Perioden auf einmal).
-    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2029, d(2030, 1, 1))
+    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2029, noon(d(2030, 1, 1)))
         .await
         .unwrap();
     assert_eq!(report.processed_assets, 1);
@@ -305,7 +312,7 @@ async fn accrue_linear_catches_up_and_runs_to_zero() {
     );
 
     // Idempotent.
-    let again = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2029, d(2030, 1, 1))
+    let again = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2029, noon(d(2030, 1, 1)))
         .await
         .unwrap();
     assert_eq!(again.booked_entries, 0);
@@ -323,9 +330,10 @@ async fn accrue_skips_disposed_assets() {
         .await
         .unwrap();
 
-    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 12, 31))
-        .await
-        .unwrap();
+    let report =
+        accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 12, 31)))
+            .await
+            .unwrap();
     assert_eq!(
         report.booked_entries, 0,
         "veräußerte Anlage bekommt keine AfA"
@@ -340,7 +348,8 @@ async fn accrue_rejects_future_fiscal_year() {
     session.set("passphrase-1234".into());
     mk_asset(&pool, "linear", d(2026, 1, 1), 100_000, 100.0, Some(5.0)).await;
 
-    let res = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2027, d(2026, 5, 21)).await;
+    let res =
+        accrue_yearly::accrue_for_year(&pool, &paths, &session, 2027, noon(d(2026, 5, 21))).await;
     assert!(res.is_err(), "AfA fürs Zukunftsjahr ist nicht buchbar");
 }
 
@@ -352,7 +361,7 @@ async fn depreciation_entry_mutable_until_locked_then_immutable() {
     session.set("passphrase-1234".into());
 
     let a = mk_asset(&pool, "gwg_sofort", d(2026, 3, 1), 60_000, 100.0, None).await;
-    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 5, 21))
+    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 5, 21)))
         .await
         .unwrap();
     let entry_id = depreciation::list_for_asset(&pool, &a.id).await.unwrap()[0]
@@ -393,7 +402,7 @@ async fn reset_restores_book_value_and_allows_rebook() {
     session.set("passphrase-1234".into());
 
     let a = mk_asset(&pool, "linear", d(2026, 1, 1), 100_000, 100.0, Some(5.0)).await;
-    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 12, 31))
+    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 12, 31)))
         .await
         .unwrap();
     assert_eq!(
@@ -405,9 +414,15 @@ async fn reset_restores_book_value_and_allows_rebook() {
     assert_eq!(after.last_depreciation_year, Some(2026));
 
     // Zurücksetzen (offenes GJ) → Buchung weg, Restbuchwert + Jahr wiederhergestellt.
-    accrue_yearly::reset_asset(&pool, &paths, &session, &a.id)
-        .await
-        .unwrap();
+    accrue_yearly::reset_asset(
+        &pool,
+        &paths,
+        &session,
+        &a.id,
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         depreciation::count_for_asset(&pool, &a.id).await.unwrap(),
         0
@@ -420,9 +435,10 @@ async fn reset_restores_book_value_and_allows_rebook() {
     assert_eq!(reset.last_depreciation_year, None);
 
     // Neu buchen ist wieder möglich.
-    let report = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 12, 31))
-        .await
-        .unwrap();
+    let report =
+        accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 12, 31)))
+            .await
+            .unwrap();
     assert_eq!(report.booked_entries, 1);
     assert_eq!(
         assets::get(&pool, &a.id)
@@ -443,12 +459,18 @@ async fn reset_refuses_when_nothing_unlocked_and_keeps_locked() {
 
     let a = mk_asset(&pool, "linear", d(2026, 1, 1), 100_000, 100.0, Some(5.0)).await;
     // Nichts gebucht → nichts zurückzusetzen.
-    assert!(accrue_yearly::reset_asset(&pool, &paths, &session, &a.id)
-        .await
-        .is_err());
+    assert!(accrue_yearly::reset_asset(
+        &pool,
+        &paths,
+        &session,
+        &a.id,
+        klein_buch_lib::clock::now_utc()
+    )
+    .await
+    .is_err());
 
     // Buchen + festschreiben (simulierter GJ-Abschluss) → kein offener Eintrag mehr.
-    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, d(2026, 12, 31))
+    accrue_yearly::accrue_for_year(&pool, &paths, &session, 2026, noon(d(2026, 12, 31)))
         .await
         .unwrap();
     sqlx::query(
@@ -459,9 +481,15 @@ async fn reset_refuses_when_nothing_unlocked_and_keeps_locked() {
     .await
     .unwrap();
     assert!(
-        accrue_yearly::reset_asset(&pool, &paths, &session, &a.id)
-            .await
-            .is_err(),
+        accrue_yearly::reset_asset(
+            &pool,
+            &paths,
+            &session,
+            &a.id,
+            klein_buch_lib::clock::now_utc()
+        )
+        .await
+        .is_err(),
         "festgeschriebene AfA ist nicht zurücksetzbar"
     );
     assert_eq!(

@@ -29,6 +29,13 @@ Startseite zeigt die Aufgabe "Kein externes Backup-Ziel eingerichtet."
 mit dem Knopf "Ziele prüfen", und einmal pro Woche erscheint unter
 "Hinweise" der Eintrag "Kein externes Backup-Ziel".
 
+Dieselbe Aufgabe zeigt die Startseite, wenn ein Ziel beim letzten Backup
+fehlschlug ("Ein externes Backup-Ziel ist beim letzten Backup
+fehlgeschlagen.") oder wenn ein Ziel noch keine Kopie hat bzw. seine
+letzte Kopie älter als sieben Tage ist ("Ein externes Backup-Ziel hat
+keine aktuelle Kopie."). Ein neu angelegtes Ziel bekommt seine erste
+Kopie mit dem nächsten Backup; mit "Jetzt sichern" geht das sofort.
+
 Es gibt zwei Arten von Zielen: einen Ordner, den der Betreiber in den
 Container einbindet, und einen SFTP-Server. Der Betreiber ist die Person,
 die den Server und den Klein.Buch-Container verwaltet. Das kannst Du
@@ -179,4 +186,4 @@ halb geschriebene Datei trägt deshalb nie den endgültigen Namen.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

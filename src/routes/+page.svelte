@@ -52,8 +52,9 @@
   let expenses = $state<ExpenseListItem[] | null>(null);
   let expensesErr = $state<string | null>(null);
   let backupLog = $state<BackupLogEntry[] | null>(null);
-  // Plan W7: Off-Site-Status (missing | failing | ok); null = nicht geladen.
-  let offsiteStatus = $state<"missing" | "failing" | "ok" | null>(null);
+  // Plan W7: Off-Site-Status (missing | failing | stale | ok; stale seit Lauf F3a);
+  // null = nicht geladen.
+  let offsiteStatus = $state<"missing" | "failing" | "stale" | "ok" | null>(null);
   let backupErr = $state<string | null>(null);
   let notifications = $state<AppNotification[] | null>(null);
   let notifErr = $state<string | null>(null);
@@ -558,14 +559,19 @@
           </li>
         {/each}
 
-        {#if offsiteStatus === "missing" || offsiteStatus === "failing"}
+        {#if offsiteStatus === "missing" || offsiteStatus === "failing" || offsiteStatus === "stale"}
           <li class="task">
             <div class="task-row">
-              <span class="task-badge tb-danger">Backup</span>
+              <!-- „stale“ (z. B. Ziel gerade hinzugefügt) als Warnung, nicht rot (Lauf F3c) -->
+              <span class="task-badge {offsiteStatus === 'stale' ? 'tb-warning' : 'tb-danger'}"
+                >Backup</span
+              >
               <span class="task-text">
                 {offsiteStatus === "missing"
                   ? "Kein externes Backup-Ziel eingerichtet."
-                  : "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen."}
+                  : offsiteStatus === "failing"
+                    ? "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen."
+                    : "Ein externes Backup-Ziel hat keine aktuelle Kopie."}
               </span>
               <a class="btn-secondary btn-sm" href="/settings/backup">Ziele prüfen</a>
             </div>

@@ -69,7 +69,8 @@ pub async fn run(job: &JobCtx<'_>) -> Result<()> {
 
     // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss während der Buchung.
     let fy = crate::fiscal_year::guard::booking_permit().await;
-    let accrued = accrue_yearly::accrue_for_year(pool, paths, session, target_year, today).await;
+    let accrued =
+        accrue_yearly::accrue_for_year(pool, paths, session, target_year, job.now()).await;
     drop(fy);
     let report = match accrued {
         Ok(r) => r,

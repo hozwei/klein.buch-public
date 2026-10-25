@@ -365,6 +365,9 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
     let pool = &pool;
     let paths = ctx.paths.clone();
 
+    // Lauf F3b: je Angebot nie parallel zu Zurückziehen, Umwandeln, Annahme
+    // oder Ablehnung — die Sperre vor dem Lesen des Status.
+    let _quote_guard = crate::locks::QUOTES.lock(&id).await;
     let detail = quotes::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
@@ -410,6 +413,22 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
     // Block 19: Empfänger-Snapshot beim Festschreiben aus dem aktuellen
     // Live-Kontakt auffrischen (maßgeblicher Stand zur Festschreibung), bevor
     // gelockt wird. Danach rendert `ensure_quote_pdf` aus dem Snapshot.
+    // Lauf F3b: Kontakt frisch lesen, Status prüfen, Snapshot, Festschreiben
+    // und Audit in **einer** Schreib-Transaktion — ein inzwischen
+    // zurückgezogener Entwurf (und mit ihm anonymisierter Kontakt) bekommt
+    // die Personendaten nicht zurück.
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let buyer_row: ContactRow = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
+        .bind(&buyer_row.id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
+    if buyer_row.anonymized_at.is_some() {
+        return Err(Error::Domain(
+            "Der Empfänger ist anonymisiert — an ihn wird kein Angebot mehr festgeschrieben."
+                .into(),
+        ));
+    }
     let buyer_snapshot = BuyerSnapshot {
         name: buyer_row.name.as_str(),
         street: buyer_row.street.as_deref(),
@@ -419,21 +438,20 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
         vat_id: buyer_row.vat_id.as_deref(),
         email: buyer_row.email.as_deref(),
     };
-    quotes::set_buyer_snapshot(pool, &id, &buyer_snapshot).await?;
-
-    quotes::issue(pool, &id).await?;
-
-    audit_log::append(
-        pool,
+    quotes::set_buyer_snapshot_in(&mut tx, &id, &buyer_snapshot).await?;
+    quotes::issue_in(&mut tx, &id).await?;
+    audit_log::append_in(
+        &mut tx,
         "quote.issue",
         "quote",
         &id,
         Some(serde_json::json!({ "number": detail.quote.quote_number })),
     )
     .await?;
+    tx.commit().await?;
 
     // Backup-Hardline: lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session, "quote.issue")
+    backup::request_auto_backup(pool, &paths, session, "quote.issue", ctx.clock().now_utc())
         .await
         .ok();
 
@@ -458,6 +476,9 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
     let pool = &pool;
     let paths = ctx.paths.clone();
 
+    // Lauf F3b: je Angebot nie parallel zu Festschreiben, Zurückziehen,
+    // Umwandeln oder Ablehnen (Sperre vor dem Lesen des Status).
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
     let quote_row = quotes::get(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {}", args.quote_id)))?;
@@ -563,6 +584,8 @@ pub async fn quotes_reject(ctx: &Arc<AppCtx>, args: QuotesRejectArgs) -> Result<
     let pool = ctx.pool()?;
 
     let pool = &pool;
+    // Lauf F3b: je Angebot nie parallel zu den übrigen Statuswechseln.
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
     quotes::reject(pool, &args.quote_id).await?;
     audit_log::append(
         pool,

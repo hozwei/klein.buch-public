@@ -589,7 +589,7 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     („Upload <Datei>“ bzw. „Backup vom <Zeit>“); aus der Historie nur Dateien im lokalen
     Backup-Ordner. Die Datei liegt beim Entschlüsseln ganz im Speicher (AES-GCM über den ganzen
     Inhalt): Speicherbedarf rund das Dreifache der Backup-Größe (Datei, Ciphertext-Kopie,
-    Klartext; Betrieb W13). Gegenprüfung: Phase A prüft zusätzlich die Archivpfade der gestagten
+    Klartext; Betrieb W13; seit Lauf F3a in place, etwa einmal, Nr. 127 (2)). Gegenprüfung: Phase A prüft zusätzlich die Archivpfade der gestagten
     DB gegen `archive_dir` und die Migrations-Prüfsummen gegen diese Version (sonst wäre die
     Instanz nach dem Tausch dauerhaft gesperrt) und verlangt das Doppelte der entpackten Größe als
     freien Platz (der Tausch kopiert das Staging). Ein zweiter Restore während des ersten wird mit
@@ -627,7 +627,7 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Unterordner der Wurzel (eingebundene Volumes). Jedes Backup geht auf jedes Ziel; Fehler je Ziel
     in `backup_log` (Label = Ziel-Bezeichnung), Audit, Inbox-Warnung (nicht abschaltbar, je Ziel und
     Tag) und `app_settings.backup_offsite_results`. Status `offsite` = `missing` (kein Ziel) |
-    `failing` (ein Ziel scheiterte zuletzt) | `ok`; im Loopback-`/healthz`, in den
+    `failing` (ein Ziel scheiterte zuletzt) | `ok` (seit Lauf F3a auch `stale`, ADR 0040 Nr. 52); im Loopback-`/healthz`, in den
     Backup-Einstellungen und als Aufgabe in der Übersicht. Ohne Ziel wöchentlich ein Inbox-Hinweis.
     Rotation je Ziel (Gruppe = enthaltender Ordner bzw. SFTP-Ordner). Neue Commands
     `backup_target_add_directory`, `backup_target_add_sftp`, `backup_target_remove` (Re-Auth);
@@ -1292,6 +1292,201 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `euer::detail::tests::unissued_numbers_csv_lists_voided_and_open_drafts`,
     `euer::elster_csv::tests::notes_are_comment_lines_after_the_title`,
     `server::auth::tests::remove_db_files_ignores_vanished_companions`.
+127. **Backup, Restore, Krypto (Lauf F, Block F3a, 2026-10-25; keine Migration; Zeitlogik in
+    ADR 0040 Nr. 50–53).** (1) **Backup-Format 3 — Klartext-Kopf als AAD (W14-020):** Der Kopf
+    (Magic-Zeile und Manifest-JSON samt Zeilenumbrüchen, alle Bytes vor dem Ciphertext) ist als
+    *Associated Data* an AES-256-GCM gebunden. Schema-Version, Zeitpunkt, KDF-Angaben, Salt,
+    Nonce und Inhalts-Hash sind damit nach dem Entschlüsseln authentisch; ein veränderter Kopf
+    scheitert wie eine falsche Passphrase (vor jedem Schreiben, kein Pre-Restore-Backup). Das
+    Herabsetzen auf Format 2 hilft nicht: Format 2 entschlüsselt ohne AAD, das Tag passt nicht.
+    Formate 1 und 2 (ohne AAD) bleiben lesbar (`MIN_SUPPORTED_FORMAT_VERSION` 1); Magic bleibt
+    `KLEIN-BUCH-BACKUP-1`, damit ältere Versionen ein Format-3-Backup mit „Format 3 wird nicht
+    unterstützt“ statt „ungültige Datei“ ablehnen. Inhalt wie Format 2. Vor dem Entschlüsseln
+    bleibt der Kopf eine ungeprüfte Anzeige (Vorschau ohne Passphrase); die Schema-Vorprüfung
+    nutzt ihn weiter, die gestagte DB wird danach ohnehin gegen das Manifest geprüft. Die KDF-
+    Parameter im Kopf bleiben Information (abgeleitet wird mit den festen Konstanten; ein
+    Kopf mit fremden Parametern kann keinen teuren KDF-Lauf erzwingen). (2) **Speicher
+    (W7-RESTORE-RAM):** Entschlüsseln in place (`restore::decrypt_backup_owned`: Kopf aus dem
+    Dateipuffer schieben, `decrypt_in_place_detached`) und Verschlüsseln in place
+    (`seal_backup_at`: Kopf vor den ZIP-Puffer, Inhalt verschlüsseln, Tag anhängen); Floor und
+    Ziele schreiben denselben Puffer (`target::write_backup_shared`, keine Kopie je Ziel).
+    Restore und Prüf-Lesen brauchen etwa einmal die Backup-Größe (bisher dreimal), das Erstellen
+    etwa ein- bis zweimal (ZIP-Aufbau); `compose.example.yaml` nennt „512 MiB + 2 × größtes
+    Backup“. Abgewogen gegen Streaming-AEAD (STREAM/chunked): neues Containerformat ohne
+    Bibliotheksstandard im Bestand, für Archive einer Einzelfirma nicht nötig. (3) **Download
+    lokaler Backups (W13-BACKUP-DOWNLOAD):** `backup_download {backupId}` (Re-Auth — die `.kbk`
+    verlässt den Server und erlaubt einen Offline-Angriff auf die Passphrase) legt die
+    verschlüsselte Datei per Hardlink (sonst Kopie) in den Download-Ordner und liefert ein
+    einmaliges Ticket wie die Exporte (eine Stunde, gelöscht beim Sperren); Audit
+    `backup.downloaded` vor der Freigabe. Erlaubt sind der lokale Backup-Ordner und
+    Verzeichnis-Ziele unter `/backup-targets`, nicht SFTP. Das Herunterladen löscht nur den Link.
+    Schaltfläche schlicht in der Backup-Liste, Gestaltung im UI/UX-Lauf. (4) **Wurzelprüfung
+    (W14-011):** `rotation::resolve_local_backup` löst `target_path` per `canonicalize` auf und
+    verlangt eine reguläre `.kbk` unter einer erlaubten (ebenfalls aufgelösten) Wurzel. Die
+    Rotation löscht nur solche Dateien (Floor, `/backup-targets`); eine Zeile mit anderem Pfad
+    (`..`, Symlink nach draußen, fremde Endung) verliert nur ihren Eintrag (Audit
+    `backup.rotation.prune` mit `file: refused`). Restore aus der Historie (nur Floor) und
+    Download nutzen dieselbe Prüfung. (5) **Restore-Vorprüfung vor der Sperre (W14-039):**
+    `CommandSpec::precheck` läuft im Dispatcher nach dem Idempotenz-Beginn und vor
+    `begin_restore`: Argumente lesbar, genau eine Quelle, Upload bzw. einspielbarer
+    Historien-Eintrag vorhanden, Passphrase nicht leer — sonst 400 (bzw. 423 gesperrt), ohne
+    Sperre der Änderungen, ohne Pre-Restore-Backup; eine Wiederholung mit demselben Schlüssel
+    bekommt dieselbe Antwort. (6) **Snapshot-Fehler im Protokoll (W2-SNAP-LOG):** Snapshot,
+    Schema-Lesen und Verschlüsselung haben in `create_with` eine gemeinsame Fehlerbehandlung —
+    Zeile `failed` im `backup_log` (Ziel `local`, geplanter Dateiname und Pfad, Detail
+    „Snapshot/Verschlüsselung: …“) und Hinweis über `rule_backup_result` (einmal je Tag), wie ein
+    gescheiterter Floor. Das Detail nennt den Fehlertext samt Pfaden: `backup_log.full_path` ist
+    laut Backup-Hardline ohnehin der volle Pfad, und das Protokoll sieht nur der Inhaber.
+    (7) **Temp-Dateien im Snapshot (W2-SNAP-TMP):** versteckte `.<name>.<uuid>.tmp`
+    (`archive::store`) und `.<name>.<uuid>.part` (Backup-Schreiben) und symbolische Links kommen
+    nicht ins Backup; verschwindet eine Datei zwischen Auflisten und Lesen, wird sie
+    übersprungen (gelesen wird vor dem ZIP-Eintrag). (8) **Mutex-Poisoning (KB-0034):**
+    `BackupSession` und der Host-Key-Speicher des SFTP-Handshakes nutzen
+    `unwrap_or_else(PoisonError::into_inner)` statt `expect`. Tests:
+    `backup::encrypt::tests::in_place_matches_classic_and_binds_aad`,
+    `backup::manifest::tests::parse_header_offset_points_to_ciphertext`,
+    `backup::restore::tests::{format3_header_is_bound_to_ciphertext,
+    restore_of_format_v2_backup_without_aad, restore_of_format_v1_backup_keeps_branding}`,
+    `tests/server_restore_test.rs` (`schema_30_backup_is_restored_and_migrated_forward` mit einem
+    Format-2-Backup, `backup_download_needs_reauth_and_serves_only_local_kbk`,
+    `restore_from_history_only_local`), `tests/backup_restore_test.rs`
+    (`rotation_run_deletes_files_only_under_the_roots`), `tests/backup_schedule_test.rs`
+    (`snapshot_failure_is_logged_and_notified`), `backup::snapshot::tests::{snapshot_skips_hidden_temp_files,
+    vanished_file_between_listing_and_reading_is_skipped}`,
+    `backup::tests::backup_session_survives_poisoned_mutex`,
+    `backup::sftp::tests::poisoned_seen_mutex_does_not_panic`. **Berichtigt in Nr. 129 (F3c):**
+    (1) das Pflicht-Backup vor einer Migration hat das Format der Vorversion (Rückfall), (2) der
+    Restore gibt den Inhalt vor dem Pre-Restore-Backup frei (Spitze nicht 1 ×, sondern das Größere
+    von Restore und Pre-Restore-Backup), (3) Download aus einem anderen Dateisystem ohne Kopie,
+    (7) übersprungene Links und verschwundene Archivdateien werden gemeldet.
+128. **Nachzügler F2 (Lauf F, Block F3b, 2026-10-25; keine Migration; Restore-Hinweise in
+    ADR 0040 Nr. 54–56).** (1) **Anlagen-Abgang (S2):** `assets_dispose` läuft jetzt in einer
+    `BEGIN IMMEDIATE`-Transaktion (Vorjahres-AfA nachholen, anteilige AfA, Abgang, Audit — zusammen
+    oder gar nicht; Uhr aus dem `AppCtx`). Ein Abgangsdatum vor der Anschaffung lehnt ab (die
+    anteilige AfA wäre ein „Datenfehler“ ohne Buchung, der ganze Restbuchwert ginge als Verlust in
+    ein Jahr vor der Anschaffung, und die Abgangsfelder sind danach fest). Ist ein Jahr nach dem
+    Abgangsjahr abgeschlossen, das die Anlage führt (Anschaffung bis dahin), oder ist eine AfA ab
+    dem Abgangsjahr festgeschrieben, lehnt der Abgang ab und nennt das erste mögliche Jahr — der
+    Abschluss hat die Anlage im Bestand und mit ihrer AfA festgeschrieben, eine frühere
+    Veräußerung ist eine Berichtigungsfrage für die Steuerberatung. Offene AfA-Buchungen ab dem
+    Abgangsjahr entfernt
+    er in derselben Transaktion (Audit `depreciation.reset_for_disposal` mit Jahr, Betrag, Monaten
+    und wiederhergestelltem Restbuchwert) und bucht das Abgangsjahr anteilig bis zum Abgangsmonat
+    neu (R 7.4 Abs. 8 EStR). Damit ersetzt eine volle Jahres-AfA im Abgangsjahr nicht mehr die
+    anteilige (bisher „regulärer Lauf vorrangig“, R2-021); nach dem Abgang wäre sie wegen F2c nicht
+    mehr korrigierbar. AfA und Restbuchwert ergeben zusammen die Anschaffungskosten. Abgewogen gegen
+    „ablehnen mit Hinweis aufs Zurücksetzen“: Das Zurücksetzen löscht alle offenen Jahre und
+    verlangt einen zweiten Schritt, ohne dass ein anderes Ergebnis möglich wäre — AfA nach dem
+    Abgang ist immer falsch. `accrue_yearly::accrue_asset_through_in` und `assets::dispose_in`
+    arbeiten in der Transaktion des Aufrufers. (2) **Meldung nach einer gespeicherten Umstellung
+    (S3, zu Nr. 126 (1)):** Scheitert die Prüfung nach der Migration, steht bei weiteren Versuchen
+    keine Migration mehr an; die Meldung sagte dann „nicht angefasst“ und schickte zum vorigen
+    Image, das Schema 32 ablehnt. `db::unfinished_migration_from` erkennt das jüngste
+    `backup.pre_migration` auf das aktuelle Schema ohne `backup.unlock.ok` danach; die Meldung
+    bleibt „nach der Umstellung von Schema N“, bis ein Entsperren gelingt (Handbuch ergänzt).
+    (3) **Angebot festschreiben (S3):** `quotes_issue` nimmt `locks::QUOTES` vor dem Lesen des
+    Status (ebenso `quotes_accept` und `quotes_reject`); Kontakt frisch lesen, Status prüfen,
+    Empfänger-Snapshot, Festschreiben und Audit `quote.issue` laufen in einer Schreib-Transaktion.
+    `quotes::set_buyer_snapshot` und `issue` verlangen `status = 'draft'` im `UPDATE` und melden
+    „nicht (mehr) im Entwurf“. Ein zurückgezogener Entwurf eines inzwischen anonymisierten Kontakts
+    bekommt so die Personendaten nicht zurück; ein anonymisierter Kontakt bekommt kein
+    festgeschriebenes Angebot. `trg_quotes_canceled_final` bleibt unverändert (Erweiterung hieße
+    Migration 0033; die App-Pfade sind dicht, die Anonymisierung ist dort die einzige erlaubte
+    Änderung). (4) **Entwurf verwerfen in der Oberfläche:** Die Detail-Ansicht eines
+    Rechnungs-Entwurfs hat eine schlichte Aktion „Verwerfen“ mit Pflicht-Grund (Re-Auth über den
+    Transport), ein verworfener Entwurf zeigt Zeitpunkt und Grund und keine Aktionen mehr; das
+    Handbuch nennt „Daten-Passwort und App-Code“ statt „Passwort“. Gestaltung im UI/UX-Lauf.
+    (5) **Anonymisierung von Kosten-Abos (S3, Amendment zu Nr. 126 (2)):** Kosten-Abos mit dem
+    Kontakt als Lieferant sind Stammdaten wie Abo-Vorlagen; Art. 17 Abs. 3 lit. b DSGVO trägt ihre
+    Bezeichnung nicht. Sie werden weiter pausiert und verlieren jetzt die Bezeichnung (Platzhalter
+    „Kosten-Abo (Lieferant anonymisiert)“); die Buchungsvorlage ersetzt der Platzhalter nur, wenn
+    sie den Namen nennt (`domain::anonymize::mentions_name`: ganzer Name oder Namensteil ab vier
+    Zeichen, ohne „GmbH“, Unicode ohne Groß-/Kleinschreibung) — sonst beschreibt sie die
+    eingekaufte Leistung wie die Positionen einer Vorlage. Gebuchte Kosten sind Belege und bleiben.
+    Audit `contact.anonymize` mit `scrubbedRecurringSubscriptions` und
+    `scrubbedSubscriptionTemplates`. Tests: `tests/migration_0032_test.rs`
+    (`dispose_removes_later_depreciation_and_books_pro_rata`,
+    `dispose_refuses_locked_later_depreciation_and_date_before_purchase`,
+    `integrity_message_after_migration_survives_retries`,
+    `quote_issue_refreshes_buyer_only_on_drafts`,
+    `anonymize_scrubs_subscriptions_of_the_supplier`),
+    `domain::anonymize::tests::mentions_name_finds_full_name_and_parts`,
+    `src/lib/voidDraft.test.ts`.
+129. **Nachbesserung F3 (Lauf F, Block F3c, 2026-10-25; keine Migration; Zeitlogik in ADR 0040
+    Nr. 57–59; berichtigt Nr. 127 (1)–(3) und (7)).** (1) **Pflicht-Backup vor einer Migration
+    im Format der Vorversion (S1):** Seit Nr. 127 (1) schrieb jedes Backup Format 3; v2026.10.0
+    liest nur Format 1–2. Beim ersten Update auf 2026.11 hätte der dokumentierte Rückweg
+    (Handbuch „Updates und Rückfall“, operations-guide §8: neues `/data`, voriges Tag, das
+    Backup von vor der Umstellung hochladen) mit „Backup-Format 3 wird nicht unterstützt“
+    geendet — übrig gewesen wäre nur das letzte Backup von 2026.10, ohne alles danach.
+    `migrate_with_backup` schreibt das Pflicht-Backup jetzt im höchsten Format, das die Version
+    mit dem Schema-Stand `from` einspielt (`manifest::readable_format_for_schema`, Tabelle
+    `READABLE_FORMAT_BY_SCHEMA`: Schema ≤ 31 → Format 2; darüber das aktuelle Format).
+    Format 2 hat denselben Inhalt, nur ohne AAD — genau die Leselogik bis v2026.10
+    (`encrypt::decrypt` über alles nach dem Kopf). `seal_backup_at`/`CreateOptions` tragen das
+    Format; geschrieben werden nur 2 bis `FORMAT_VERSION` (Format 1 hatte `inputs/branding`).
+    `verify_backup_file` bleibt unverändert und liest 1–3. Sicherheit: Die AAD-Bindung von
+    Format 3 bleibt für alle übrigen Backups; ein Format-2-Kopf ist damit wieder legitim, aber
+    nur für ohne AAD verschlüsselte Dateien — einen Format-3-Kopf auf 2 herabzusetzen scheitert
+    weiter am Tag. Das Pflicht-Backup vor der Migration kennt den Kopf ohnehin nur als Anzeige,
+    bis die gestagte DB gegen ihn geprüft wird. Wer `FORMAT_VERSION` erhöht, ergänzt die Tabelle
+    um (Schema der Vorversion, deren Format); ein Test hält das fest. Abgewogen: (a) Format 3 in
+    einem Patch-Release von 2026.10 lesbar machen — es gibt keine Zwischen-Releases, und wer
+    zurückfällt, nimmt die zuletzt laufende Version; (b) Format 2 für alle Backups bis zu einem
+    späteren Release — gibt die Kopf-Bindung ohne Not für jedes Backup auf. Zusätzlich empfehlen
+    Handbuch und operations-guide, unmittelbar vor einem Update mit der alten Version „Jetzt
+    sichern“; spätere Backups der neuen Version liest die alte unter Umständen nicht.
+    (2) **Restore: Inhalt vor dem Pre-Restore-Backup freigeben (S2/S3):** Phase A hielt den
+    entschlüsselten Inhalt (≈ 1 × eingespieltes Backup), während das Pre-Restore-Backup die
+    laufende Instanz packte und verschlüsselte (1–2 × deren Backup) — Spitze bis etwa 3 ×,
+    dokumentiert war 1 ×. Neue Reihenfolge: entschlüsseln → Audit `backup.restore.requested` (wie
+    bisher vor dem Pre-Restore-Backup, steht also in ihm) → Platz vorab prüfen → gehärtet ins
+    Staging entpacken und die gestagte DB prüfen (berührt keine Live-Daten; das Staging wird bei
+    einem Fehler entfernt; der Inhalt ist danach freigegeben) → Pre-Restore-Backup → zweite
+    Platzprüfung (Pre-Restore-Backup liegt jetzt in `/data`, der Tausch braucht die entpackte
+    Größe noch einmal) → Nummernkreise → Marker. Spitze = das Größere von beidem; die Faustregel
+    „512 MiB + 2 × größtes Backup“ deckt damit Erstellen und Restore, wie Compose, operations-guide
+    §9/§10, Handbuch „Speicherbedarf“ und „Notfall …“ jetzt sagen. Ein in der Prüfung der
+    gestagten DB abgelehntes Backup erzeugt kein Pre-Restore-Backup mehr (der Audit des Versuchs
+    bleibt). (3) **Download aus einem Verzeichnis-Ziel ohne Kopie (S3, zu Nr. 127 (3)):** Gelingt
+    kein Hardlink (Ziel auf einem anderen Dateisystem), wurde die `.kbk` ohne Platzprüfung nach
+    `<data>/tmp/downloads` kopiert und lag bis zu einer Stunde, bei Neuversuchen mehrfach. Jetzt
+    registriert `DownloadStore::register_borrowed` die aufgelöste Quelle direkt (Eintrag
+    `owned = false`): Abruf, Ablauf und „Datenbank sperren“ entfernen nur den Eintrag, nie die
+    Datei; ausgeliefert wird von ihrem Platz. Der Hardlink für Floor und Ziele im selben
+    Dateisystem bleibt (eine Rotation in der Zwischenzeit trifft das Ticket dann nicht). Audit
+    `backup.downloaded` mit `linked`. (4) **Unvollständiges Backup sichtbar (S3, zu Nr. 127 (7)):**
+    Symbolische Links im Archiv bzw. Branding werden weiter nicht verfolgt (das Archiv enthält nur
+    echte Dateien; ein Link zeigt auf Daten außerhalb der Instanz, Restore schriebe sie als Dateien
+    zurück), und eine Archivdatei, die zwischen Auflisten und Lesen verschwindet, wird
+    übersprungen — beides aber nicht mehr still: `snapshot::Content::skipped` sammelt sie, die
+    `ok`-Zeile im `backup_log` nennt sie im Detail („Unvollständig: N Einträge nicht gesichert —
+    archive/2024 (symbolischer Link) …“), die Inbox meldet „Backup unvollständig“ über
+    `rule_backup_result` (einmal je Tag), das Audit `backup.created` zählt sie (`skipped`). Nur
+    Temp-Dateien laufender Schreibvorgänge und ein ersetztes Logo fallen still weg. Abgewogen
+    gegen „Backup scheitern lassen“: ohne jedes neue Backup wären auch Datenbank und übriges
+    Archiv ungesichert; ein vollständiges Backup bis auf benannte Einträge plus täglicher Hinweis
+    ist die sicherere Wahl (GoBD: Lücke fällt auf, statt erst beim Restore). (5) **Test-Profil
+    (Ausreißer, Fund (d)):** `[profile.dev.package."*"] opt-level = 2` in `Cargo.toml`
+    (Test-Profil erbt; eigener Crate opt-level 0; Release unberührt). Argon2id (64 MiB), SHA-256,
+    AES-GCM, Deflate, der C-Teil von SQLite/SQLCipher (über `OPT_LEVEL`) und Typst liefen in
+    Tests unoptimiert; Einrichten, Anmelden und Backups überschritten unter Volllast die
+    30-s-Grenze (503 „timeout“). Kosten: einmal längeres Übersetzen der Abhängigkeiten (CI-Cache
+    `Swatinem/rust-cache` hängt an `Cargo.toml`/`Cargo.lock`, danach wiederverwendet; `clippy`
+    übersetzt ohnehin ohne Code-Erzeugung). Gemessen (Kopie, 25.10.2026): `server_auth_test` allein
+    136–143 s → 51 s, `server_restore_test` 289 s → 67 s, Test-Schritt des vollen Gates
+    1006–1182 s (mit Ausreißern) → 305–354 s ohne Ausreißer. Ein Lauf mit drei Fehlern in
+    Datei-SQLite-Unit-Tests (`PoolTimedOut`, `database is locked`; bekannt seit F2b) fiel in eine
+    I/O-Spitze des Hosts (PSI `full avg60` 36 %, `backup_log_test` 49 s statt 2 s) und ist
+    nicht Folge des Profils. Tests: `backup::manifest::tests::rollback_formats_cover_current_format`,
+    `backup::restore::tests::format2_for_rollback_decrypts_without_aad`,
+    `tests/server_restore_test.rs` (`pre_migration_backup_on_unlock` mit der Leselogik von
+    v2026.10.0, `foreign_archive_paths_are_rejected` ohne Pre-Restore-Backup,
+    `backup_download_from_other_filesystem_needs_no_copy`),
+    `downloads::tests::borrowed_file_is_never_deleted`,
+    `backup::snapshot::tests::{symlinks_are_reported_not_followed,
+    vanished_file_between_listing_and_reading_is_skipped}`,
+    `tests/backup_schedule_test.rs` (`incomplete_backup_is_logged_and_notified`).
 
 ## Konsequenzen
 

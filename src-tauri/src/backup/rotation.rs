@@ -207,9 +207,37 @@ pub fn plan_tiered_deletions(
     out
 }
 
+/// Löst den `target_path` eines lokalen Backups aus `backup_history` sicher
+/// auf (W14-011, Lauf F3a): `canonicalize` (Symlinks und `..` aufgelöst), danach
+/// muss die Datei unter einer der ebenfalls aufgelösten `roots` liegen, eine
+/// reguläre Datei sein und auf `.kbk` enden. Sonst `None` — dann wird sie
+/// weder gelöscht (Rotation) noch eingespielt oder ausgeliefert (Restore,
+/// Download). Eine manipulierte Zeile kann so keine fremde Datei treffen.
+pub fn resolve_local_backup(target_path: &str, roots: &[&Path]) -> Option<std::path::PathBuf> {
+    if target_path.starts_with("sftp://") {
+        return None;
+    }
+    let real = Path::new(target_path).canonicalize().ok()?;
+    let is_kbk = real
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.len() > ".kbk".len() && n.ends_with(".kbk"));
+    if !is_kbk || !real.is_file() {
+        return None;
+    }
+    roots
+        .iter()
+        .filter_map(|r| r.canonicalize().ok())
+        .any(|root| real.starts_with(&root) && real != root)
+        .then_some(real)
+}
+
 /// Imperative Shell: lädt `backup_history`, plant getierte Löschungen, entfernt
 /// die Backup-Dateien und die zugehörigen History-Zeilen. Liefert Anzahl
 /// gelöschter Backups. Fehlende Dateien sind kein Fehler (best-effort).
+/// Gelöscht wird nur, was [`resolve_local_backup`] unter dem Floor oder der
+/// Ziel-Wurzel findet (W14-011); eine Zeile mit anderem Pfad verliert nur ihren
+/// Eintrag (Audit `file: "refused"`), die Datei bleibt.
 ///
 /// `floor_dir` = lokaler Floor (`paths.backups_dir`). Ist ein Off-Site-Ziel
 /// zuletzt erfolgreich, gilt für den Floor die **kurze** Policy, für Off-Site
@@ -259,8 +287,27 @@ pub async fn run(
     let count = deletions.len();
 
     for d in &deletions {
-        // Lokale Datei (Floor oder Ordner-Ziel) best-effort löschen.
-        let _ = std::fs::remove_file(&d.target_path);
+        // Lokale Datei (Floor oder Ordner-Ziel) best-effort löschen — nur unter
+        // den erwarteten Wurzeln (W14-011).
+        let file = match resolve_local_backup(&d.target_path, &[floor_dir, targets_root]) {
+            Some(real) => match std::fs::remove_file(&real) {
+                Ok(()) => "removed",
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+                Err(e) => {
+                    tracing::warn!("Rotation: {} nicht gelöscht: {e}", real.display());
+                    "failed"
+                }
+            },
+            None if std::fs::symlink_metadata(&d.target_path).is_ok() => {
+                tracing::warn!(
+                    "Rotation: {} liegt nicht unter dem Backup-Ordner oder der Ziel-Wurzel \
+                     bzw. ist keine .kbk — Datei bleibt, nur der Eintrag entfällt",
+                    d.target_path
+                );
+                "refused"
+            }
+            None => "missing",
+        };
         sqlx::query("DELETE FROM backup_history WHERE id = ?")
             .bind(&d.id)
             .execute(pool)
@@ -270,7 +317,7 @@ pub async fn run(
             "backup.rotation.prune",
             "backup",
             &d.id,
-            Some(serde_json::json!({ "tag": d.retention_tag })),
+            Some(serde_json::json!({ "tag": d.retention_tag, "file": file })),
         )
         .await
         .ok();

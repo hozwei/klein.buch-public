@@ -20,10 +20,15 @@
 //!    bzw. `recurring.advanced_after_restore` mit den ausgelassenen Terminen).
 //!    Bereits abgerechnete Zeiträume werden so nicht erneut in Rechnung
 //!    gestellt oder gebucht.
+//!    Der Hinweis nennt vorgerückte Kosten-Abos getrennt: Ihre gebuchten Kosten
+//!    sind mit dem ersetzten Stand verworfen und von Hand nachzutragen (F3b).
 //! 2. **Prüfung ohne bekannten Stand.** Kennt Klein.Buch den Stand einer Reihe
 //!    nicht (Disaster Recovery in eine leere Instanz, Reihe vor dem Restore
 //!    gelöscht) und ist ein Termin bis heute offen, verlangt die Reihe die
-//!    Entscheidung „Rückstand …“ (Marker, siehe [`crate::scheduler::catch_up`]).
+//!    Entscheidung „Rückstand …“ bzw. beim Fortsetzen einer pausierten Reihe
+//!    (Marker, siehe [`crate::scheduler::catch_up`]) — nur Vorlagen innerhalb
+//!    ihrer Laufzeit und Kosten-Abos mit Auto-Buchung, für alle anderen erzeugt
+//!    kein Lauf etwas (F3b).
 //! 3. **Marker aus dem Backup verwerfen.** Fortsetzungs-Marker begonnener
 //!    Abo-Rechnungen (`recurring_invoice_pending:*`) und Bestätigungen zum
 //!    Nachholen (`recurring_catch_up_ok:*`) stammen aus dem alten Stand; sie
@@ -99,6 +104,67 @@ pub async fn snapshot_locked_numbers(pool: &SqlitePool) -> Result<Vec<String>> {
     Ok(numbers)
 }
 
+/// IDs derselben festgeschriebenen Belege wie [`snapshot_locked_numbers`]
+/// (Phase A, Lauf F3b). Damit erkennt das erste Entsperren, ob ein Beleg der
+/// eingespielten Datenbank unter einer Nummer der ersetzten ein **anderer**
+/// Datensatz ist ([`foreign_numbers`]) — dann stammt die ersetzte Datenbank
+/// von einer anderen Instanz.
+pub async fn snapshot_locked_ids(pool: &SqlitePool) -> Result<Vec<String>> {
+    let mut ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM invoices WHERE locked_at IS NOT NULL
+         UNION SELECT id FROM quotes WHERE locked_at IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    ids.sort();
+    Ok(ids)
+}
+
+/// Nummern festgeschriebener Belege der eingespielten Datenbank (`restored`:
+/// Nummer, ID), die es in der ersetzten Datenbank unter derselben Nummer, aber
+/// als anderen Datensatz gab (Lauf F3b, pure). Ein älteres Backup derselben
+/// Instanz enthält nur Belege, die auch die ersetzte DB unverändert hatte
+/// (festgeschriebene Belege ändern sich nie). Ohne IDs im Marker (Marker vor
+/// F3b) bleibt die Prüfung leer.
+pub fn foreign_numbers(
+    restored: &[(String, String)],
+    locked_numbers: &[String],
+    locked_ids: &[String],
+) -> Vec<String> {
+    if locked_ids.is_empty() {
+        return Vec::new();
+    }
+    let numbers: BTreeSet<&str> = locked_numbers.iter().map(String::as_str).collect();
+    let ids: BTreeSet<&str> = locked_ids.iter().map(String::as_str).collect();
+    let mut out: Vec<String> = restored
+        .iter()
+        .filter(|(number, id)| numbers.contains(number.as_str()) && !ids.contains(id.as_str()))
+        .map(|(number, _)| number.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// [`foreign_numbers`] gegen die eingespielte Datenbank (in der Transaktion
+/// des Restore-Abschlusses).
+pub async fn foreign_numbers_in(
+    conn: &mut SqliteConnection,
+    locked_numbers: &[String],
+    locked_ids: &[String],
+) -> Result<Vec<String>> {
+    if locked_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let restored: Vec<(String, String)> = sqlx::query_as(
+        "SELECT invoice_number, id FROM invoices WHERE locked_at IS NOT NULL
+         UNION ALL SELECT quote_number, id FROM quotes WHERE locked_at IS NOT NULL",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(foreign_numbers(&restored, locked_numbers, locked_ids))
+}
+
 /// Vorgerückte Reihe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Advanced {
@@ -116,6 +182,8 @@ pub struct Review {
     pub id: String,
     pub label: String,
     pub next_due: String,
+    /// Pausiert: Die Wahl fällt beim Fortsetzen (F3b), nicht über „Rückstand …“.
+    pub paused: bool,
 }
 
 /// Wiederhergestellter Entwurf mit vor dem Restore festgeschriebener Nummer.
@@ -155,26 +223,28 @@ pub async fn apply_in(
         .map(|s| ((s.kind.as_str(), s.id.as_str()), s.next_due_date.as_str()))
         .collect();
 
-    for (kind, table, series_kind, action) in [
+    // Je Reihe: Laufzeitende (nur Vorlagen), aktiv, und ob ein Lauf für sie
+    // überhaupt Belege erzeugt (Vorlagen immer, Kosten-Abos nur mit
+    // Auto-Buchung) — F3b, für die Prüfung ohne bekannten Stand.
+    for (kind, query, series_kind, action) in [
         (
             KIND_TEMPLATE,
-            "recurring_invoices",
+            "SELECT id, label, next_due_date, end_date, active, 1
+               FROM recurring_invoices ORDER BY id",
             Series::Template,
             "recurring_invoice",
         ),
         (
             KIND_SUBSCRIPTION,
-            "recurring_subscriptions",
+            "SELECT id, label, next_due_date, NULL, active, auto_create_expense
+               FROM recurring_subscriptions ORDER BY id",
             Series::Subscription,
             "recurring",
         ),
     ] {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
-            "SELECT id, label, next_due_date FROM {table} ORDER BY id"
-        ))
-        .fetch_all(&mut *conn)
-        .await?;
-        for (id, label, next_due) in rows {
+        let rows: Vec<(String, String, String, Option<String>, i64, i64)> =
+            sqlx::query_as(query).fetch_all(&mut *conn).await?;
+        for (id, label, next_due, end_date, active, books) in rows {
             let before: Option<String> = known.get(&(kind, id.as_str())).map(|s| s.to_string());
             match before {
                 Some(before) => {
@@ -216,7 +286,18 @@ pub async fn apply_in(
                     }
                 }
                 None => {
-                    if parse(&next_due).is_some_and(|d| d <= today) {
+                    // Nur Reihen, für die ein Lauf etwas erzeugen würde und
+                    // die Listen „Rückstand …“ bzw. das Fortsetzen eine Wahl
+                    // anbieten (F3b): Vorlagen innerhalb der Laufzeit,
+                    // Kosten-Abos mit Auto-Buchung. Für eine abgelaufene
+                    // Vorlage blieb der Marker sonst für immer stehen, für ein
+                    // Abo ohne Auto-Buchung gab es keinen Handlungsweg.
+                    let due = parse(&next_due).filter(|d| *d <= today);
+                    let within = end_date
+                        .as_deref()
+                        .and_then(parse)
+                        .is_none_or(|end| due.is_some_and(|d| d <= end));
+                    if due.is_some() && within && books == 1 {
                         catch_up::set_restore_review_in(&mut *conn, series_kind, &id, today)
                             .await?;
                         audit_log::append_in(
@@ -228,6 +309,7 @@ pub async fn apply_in(
                                 "label": label,
                                 "next_due": next_due,
                                 "restored_on": today.to_string(),
+                                "paused": active == 0,
                             })),
                         )
                         .await?;
@@ -236,6 +318,7 @@ pub async fn apply_in(
                             id,
                             label,
                             next_due,
+                            paused: active == 0,
                         });
                     }
                 }
@@ -332,61 +415,8 @@ fn de_date(iso: &str) -> String {
 /// Hinweis „Abo-Termine nach der Wiederherstellung“ (nach dem Commit; nur wenn
 /// etwas vorgerückt, zu prüfen oder verworfen wurde).
 pub async fn notice(pool: &SqlitePool, staged_at: &str, outcome: &Outcome) {
-    let mut parts = Vec::new();
-    if !outcome.advanced.is_empty() {
-        let list = outcome
-            .advanced
-            .iter()
-            .map(|a| format!("„{}“ {} → {}", a.label, de_date(&a.from), de_date(&a.to)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!(
-            "Diese Reihen standen im eingespielten Stand auf einem älteren Termin. Klein.Buch hat \
-             sie auf den Stand vor der Wiederherstellung vorgerückt, damit bereits abgerechnete \
-             Zeiträume nicht erneut in Rechnung gestellt oder gebucht werden: {list}. Die \
-             Rechnungen bzw. Kosten dieser Termine fehlen in dieser Datenbank (Lücke im \
-             Nummernkreis, siehe Audit-Log). Wurde ein Termin vor der Wiederherstellung doch \
-             nicht abgerechnet, bitte von Hand erstellen."
-        ));
-    }
-    if !outcome.review.is_empty() {
-        let list = outcome
-            .review
-            .iter()
-            .map(|r| format!("„{}“ seit {}", r.label, de_date(&r.next_due)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        parts.push(format!(
-            "Bei diesen Reihen kennt Klein.Buch den Stand vor der Wiederherstellung nicht \
-             (Wiederherstellung in eine neue Instanz oder Reihe zuvor gelöscht): {list}. Ob ihre \
-             offenen Termine schon abgerechnet wurden, prüfst Du im Mail-Ausgang bzw. auf dem \
-             Kontoauszug. Danach in der Liste „Rückstand …“ wählen: nachholen (Rechnungen nur als \
-             Entwurf) oder ab heute fortsetzen (lässt auch einen heute fälligen Termin aus). Bis \
-             dahin entsteht für sie nichts automatisch."
-        ));
-    }
-    if !outcome.pending_drafts.is_empty() {
-        parts.push(format!(
-            "Begonnene Abo-Rechnungen aus dem Backup werden nicht automatisch festgeschrieben oder \
-             versendet: {} — bitte prüfen.",
-            outcome.pending_drafts.join(", ")
-        ));
-    }
-    if outcome.confirmations_cleared > 0 {
-        parts.push(
-            "Bestätigungen zum Nachholen aus dem Backup gelten nicht mehr; größere Rückstände \
-             fragt Klein.Buch erneut nach."
-                .to_string(),
-        );
-    }
-    if parts.is_empty() {
+    let Some((body, severity)) = notice_body(outcome) else {
         return;
-    }
-    let body = parts.join("\n\n");
-    let severity = if outcome.advanced.is_empty() && outcome.review.is_empty() {
-        "warning"
-    } else {
-        "urgent"
     };
     let dedup = format!("restore_recurring:{staged_at}");
     if let Err(e) = crate::notify::store::create(
@@ -404,6 +434,106 @@ pub async fn notice(pool: &SqlitePool, staged_at: &str, outcome: &Outcome) {
     {
         tracing::warn!("Hinweis zu den Abo-Terminen nicht angelegt: {e}");
     }
+}
+
+/// Text und Schwere des Hinweises „Abo-Termine nach der Wiederherstellung“
+/// (pure); `None`, wenn nichts zu melden ist.
+///
+/// Vorgerückte Abo-Rechnungen und Kosten-Abos stehen getrennt (F3b): Eine
+/// Rechnung ging hinaus, ihr Termin darf nicht erneut abgerechnet werden.
+/// Gebuchte Kosten dagegen hatten keine Außenwirkung und sind mit dem
+/// ersetzten Stand verworfen — sie fehlen in Kosten und EÜR und sind von Hand
+/// nachzutragen. Pausierte Reihen ohne bekannten Stand entscheidet der Inhaber
+/// beim Fortsetzen, nicht über „Rückstand …“.
+pub fn notice_body(outcome: &Outcome) -> Option<(String, &'static str)> {
+    let mut parts = Vec::new();
+    let advanced = |kind: &str| {
+        outcome
+            .advanced
+            .iter()
+            .filter(|a| a.kind == kind)
+            .map(|a| format!("„{}“ {} → {}", a.label, de_date(&a.from), de_date(&a.to)))
+            .collect::<Vec<_>>()
+    };
+    let templates = advanced(KIND_TEMPLATE);
+    if !templates.is_empty() {
+        parts.push(format!(
+            "Abo-Rechnungen: Diese Vorlagen standen im eingespielten Stand auf einem älteren \
+             Termin. Klein.Buch hat sie auf den Stand vor der Wiederherstellung vorgerückt, damit \
+             bereits abgerechnete Zeiträume nicht erneut in Rechnung gestellt werden: {}. Die \
+             Rechnungen dieser Termine fehlen in dieser Datenbank (Lücke im Nummernkreis, siehe \
+             Audit-Log). Wurde ein Termin vor der Wiederherstellung doch nicht abgerechnet, bitte \
+             von Hand erstellen.",
+            templates.join(", ")
+        ));
+    }
+    let subscriptions = advanced(KIND_SUBSCRIPTION);
+    if !subscriptions.is_empty() {
+        parts.push(format!(
+            "Kosten-Abos: Diese Abos standen im eingespielten Stand auf einem älteren Termin und \
+             wurden auf den Stand vor der Wiederherstellung vorgerückt: {}. Die zu diesen \
+             Terminen gebuchten Kosten wurden mit dem ersetzten Stand verworfen und fehlen jetzt \
+             in Kosten und EÜR. Bitte anhand des Kontoauszugs unter „Kosten“ von Hand erfassen; \
+             die Abos buchen erst ab dem nächsten Termin weiter.",
+            subscriptions.join(", ")
+        ));
+    }
+    if !outcome.review.is_empty() {
+        let list = |paused: bool| {
+            outcome
+                .review
+                .iter()
+                .filter(|r| r.paused == paused)
+                .map(|r| format!("„{}“ seit {}", r.label, de_date(&r.next_due)))
+                .collect::<Vec<_>>()
+        };
+        let mut text = String::from(
+            "Bei diesen Reihen kennt Klein.Buch den Stand vor der Wiederherstellung nicht \
+             (Wiederherstellung in eine neue Instanz oder Reihe zuvor gelöscht). Ob ihre offenen \
+             Termine schon abgerechnet wurden, prüfst Du im Mail-Ausgang bzw. auf dem \
+             Kontoauszug.",
+        );
+        let active = list(false);
+        if !active.is_empty() {
+            text.push_str(&format!(
+                " Danach in der Liste „Rückstand …“ wählen: {} — nachholen (Rechnungen nur als \
+                 Entwurf) oder ab heute fortsetzen (lässt auch einen heute fälligen Termin aus).",
+                active.join(", ")
+            ));
+        }
+        let paused = list(true);
+        if !paused.is_empty() {
+            text.push_str(&format!(
+                " Pausiert, die Wahl fällt beim Fortsetzen: {}.",
+                paused.join(", ")
+            ));
+        }
+        text.push_str(" Bis dahin entsteht für sie nichts automatisch.");
+        parts.push(text);
+    }
+    if !outcome.pending_drafts.is_empty() {
+        parts.push(format!(
+            "Begonnene Abo-Rechnungen aus dem Backup werden nicht automatisch festgeschrieben oder \
+             versendet: {} — bitte prüfen.",
+            outcome.pending_drafts.join(", ")
+        ));
+    }
+    if outcome.confirmations_cleared > 0 {
+        parts.push(
+            "Bestätigungen zum Nachholen aus dem Backup gelten nicht mehr; größere Rückstände \
+             fragt Klein.Buch erneut nach."
+                .to_string(),
+        );
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let severity = if outcome.advanced.is_empty() && outcome.review.is_empty() {
+        "warning"
+    } else {
+        "urgent"
+    };
+    Some((parts.join("\n\n"), severity))
 }
 
 // ---------------------------------------------------------------------------
@@ -480,4 +610,109 @@ pub async fn confirm_conflict(pool: &SqlitePool, kind: &str, id: &str, reason: &
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(v: &str) -> String {
+        v.to_string()
+    }
+
+    /// F3b: Derselbe Beleg (gleiche ID) ist kein fremder Stand; dieselbe Nummer
+    /// mit anderer ID schon; Nummern, die die ersetzte DB nicht kannte, zählen
+    /// hier nicht (die prüft der Zählerstand). Marker ohne IDs: keine Prüfung.
+    #[test]
+    fn foreign_numbers_needs_same_number_with_other_id() {
+        let numbers = vec![s("RE-2026-0001"), s("RE-2026-0002")];
+        let ids = vec![s("id-1"), s("id-2")];
+        let same = vec![(s("RE-2026-0001"), s("id-1"))];
+        assert!(foreign_numbers(&same, &numbers, &ids).is_empty());
+        let other = vec![
+            (s("RE-2026-0001"), s("id-x")),
+            (s("RE-2026-0002"), s("id-2")),
+            (s("RE-2026-0003"), s("id-3")),
+        ];
+        assert_eq!(
+            foreign_numbers(&other, &numbers, &ids),
+            vec![s("RE-2026-0001")]
+        );
+        assert!(foreign_numbers(&other, &numbers, &[]).is_empty());
+    }
+
+    fn advanced(kind: &'static str, label: &str) -> Advanced {
+        Advanced {
+            kind,
+            id: s("a"),
+            label: s(label),
+            from: s("2026-10-01"),
+            to: s("2026-11-01"),
+        }
+    }
+
+    fn review(label: &str, paused: bool) -> Review {
+        Review {
+            kind: KIND_TEMPLATE,
+            id: s(label),
+            label: s(label),
+            next_due: s("2026-10-01"),
+            paused,
+        }
+    }
+
+    /// F3b: Vorgerückte Kosten-Abos nennen die verworfenen Kosten und das
+    /// Nachtragen von Hand, getrennt von den Abo-Rechnungen; pausierte Reihen
+    /// ohne bekannten Stand verweisen aufs Fortsetzen, nicht auf „Rückstand …“.
+    #[test]
+    fn notice_separates_costs_and_paused_series() {
+        assert!(notice_body(&Outcome::default()).is_none());
+
+        let outcome = Outcome {
+            advanced: vec![
+                advanced(KIND_TEMPLATE, "Wartung"),
+                advanced(KIND_SUBSCRIPTION, "Hosting"),
+            ],
+            ..Default::default()
+        };
+        let (body, severity) = notice_body(&outcome).unwrap();
+        assert_eq!(severity, "urgent");
+        let (inv, cost) = body.split_once("\n\n").unwrap();
+        assert!(
+            inv.starts_with("Abo-Rechnungen:") && inv.contains("„Wartung“"),
+            "{body}"
+        );
+        assert!(!inv.contains("Hosting"), "{body}");
+        assert!(
+            cost.starts_with("Kosten-Abos:") && cost.contains("„Hosting“"),
+            "{body}"
+        );
+        assert!(
+            cost.contains("verworfen") && cost.contains("von Hand erfassen"),
+            "{body}"
+        );
+        assert!(cost.contains("01.10.2026 → 01.11.2026"), "{body}");
+
+        let only_paused = Outcome {
+            review: vec![review("Pausiert", true)],
+            ..Default::default()
+        };
+        let (body, _) = notice_body(&only_paused).unwrap();
+        assert!(body.contains("beim Fortsetzen: „Pausiert“"), "{body}");
+        assert!(!body.contains("Rückstand"), "{body}");
+
+        let mixed = Outcome {
+            review: vec![review("Aktiv", false), review("Pausiert", true)],
+            ..Default::default()
+        };
+        let (body, _) = notice_body(&mixed).unwrap();
+        assert!(
+            body.contains("„Rückstand …“ wählen: „Aktiv“ seit 01.10.2026"),
+            "{body}"
+        );
+        assert!(
+            body.contains("beim Fortsetzen: „Pausiert“ seit 01.10.2026"),
+            "{body}"
+        );
+    }
 }

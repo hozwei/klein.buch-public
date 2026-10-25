@@ -18,6 +18,12 @@ use std::sync::{Arc, LazyLock};
 pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send>>;
 /// Handler: Kontext + JSON-Argumente → JSON-Ergebnis.
 pub type Handler = fn(Arc<AppCtx>, Value) -> HandlerFuture;
+/// Ergebnis einer Vorprüfung.
+pub type PrecheckFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+/// Vorprüfung im Dispatcher vor der Annahme (W14-039, Lauf F3a): läuft vor
+/// Sperren wie `begin_restore` und vor dem Start des Jobs; ein Fehler
+/// antwortet sofort (meist 400) und hinterlässt keinen Zustand.
+pub type Precheck = fn(Arc<AppCtx>, Value) -> PrecheckFuture;
 
 /// Wer darf aufrufen (Plan §3, W5/W6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +83,8 @@ pub struct CommandSpec {
     pub kind: Kind,
     pub body_limit: usize,
     pub handler: Handler,
+    /// Vorprüfung der Argumente vor der Annahme (W14-039).
+    pub precheck: Option<Precheck>,
 }
 
 /// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
@@ -142,7 +150,10 @@ fn auth_of(name: &str) -> Auth {
         | "numbering_restored_draft_confirm"
         // Lauf F (F2a, W14-032): Verwerfen eines nummerierten Rechnungs-
         // Entwurfs — unumkehrbar, die Nummer bleibt verbraucht.
-        | "invoices_void_draft" => Auth::Reauth,
+        | "invoices_void_draft"
+        // Lauf F (F3a, W13-BACKUP-DOWNLOAD): die verschlüsselte `.kbk` verlässt
+        // den Server (Offline-Angriff auf die Passphrase möglich).
+        | "backup_download" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -235,6 +246,14 @@ fn body_limit_of(_name: &str) -> usize {
     DEFAULT_BODY_LIMIT
 }
 
+/// Vorprüfung vor der Annahme (W14-039).
+fn precheck_of(name: &str) -> Option<Precheck> {
+    match name {
+        "backup_restore_apply" => Some(pre::backup_restore_apply),
+        _ => None,
+    }
+}
+
 impl CommandSpec {
     fn new(name: &'static str, handler: Handler) -> Self {
         Self {
@@ -245,6 +264,7 @@ impl CommandSpec {
             kind: kind_of(name),
             body_limit: body_limit_of(name),
             handler,
+            precheck: precheck_of(name),
         }
     }
 
@@ -318,6 +338,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("backup_log_search", h::backup_log_search),
     ("backup_restore_preview", h::backup_restore_preview),
     ("backup_restore_apply", h::backup_restore_apply),
+    ("backup_download", h::backup_download),
     ("contacts_list", h::contacts_list),
     ("contacts_get", h::contacts_get),
     ("contacts_create", h::contacts_create),
@@ -806,6 +827,15 @@ mod h {
             let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_restore_apply(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_download(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupDownloadArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_download(&ctx, args).await?,
             )?)
         })
     }
@@ -2280,6 +2310,18 @@ mod h {
             Ok(serde_json::to_value(
                 crate::commands::system::third_party_licenses_path(&ctx, args).await?,
             )?)
+        })
+    }
+}
+
+/// Vorprüfungen ([`Precheck`], W14-039).
+mod pre {
+    use super::*;
+
+    pub fn backup_restore_apply(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
+            crate::commands::backup::backup_restore_apply_precheck(&ctx, &args).await
         })
     }
 }

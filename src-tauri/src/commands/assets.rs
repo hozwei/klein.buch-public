@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::assets::afa_tabellen::{self, AfaTabellen};
 use crate::backup;
-use crate::db::models::AssetDetail;
+use crate::db::models::{AssetDetail, AssetRow, DepreciationEntryRow};
 use crate::db::numbering;
 use crate::db::repo::{assets, audit_log, depreciation as depreciation_repo, expenses};
 use crate::domain::asset::{
@@ -199,7 +199,7 @@ pub async fn assets_create(ctx: &Arc<AppCtx>, args: AssetsCreateArgs) -> Result<
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.create")
+    backup::request_auto_backup(pool, &paths, session, "asset.create", ctx.clock().now_utc())
         .await
         .ok();
 
@@ -281,7 +281,7 @@ pub async fn assets_update(ctx: &Arc<AppCtx>, args: AssetsUpdateArgs) -> Result<
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.update")
+    backup::request_auto_backup(pool, &paths, session, "asset.update", ctx.clock().now_utc())
         .await
         .ok();
 
@@ -308,11 +308,12 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
 
     let pool = &pool;
     let paths = ctx.paths.clone();
+    let clock = ctx.clock();
 
     let dtype = DisposalType::from_db(&args.disposal_type).ok_or_else(|| {
         Error::Domain(format!("Ungültige Veräußerungsart: {}", args.disposal_type))
     })?;
-    if args.disposal_date > today_berlin() {
+    if args.disposal_date > clock.today_berlin() {
         return Err(Error::Domain(
             "Das Veräußerungsdatum darf nicht in der Zukunft liegen.".into(),
         ));
@@ -336,130 +337,215 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
     if existing.disposed == 1 {
         return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
     }
+    // Lauf F3b: kein Abgang vor der Anschaffung — die anteilige AfA wäre ein
+    // „Datenfehler“ (nichts gebucht), der ganze Restbuchwert ginge als Verlust
+    // in ein Jahr vor der Anschaffung, und die Abgangsfelder sind danach fest.
+    let acquisition_date = parse_db_date(&existing.acquisition_date)?;
+    if args.disposal_date < acquisition_date {
+        return Err(Error::Domain(format!(
+            "Das Abgangsdatum {} liegt vor dem Anschaffungsdatum {} — bitte das Datum prüfen.",
+            args.disposal_date.format("%d.%m.%Y"),
+            acquisition_date.format("%d.%m.%Y")
+        )));
+    }
 
     // R2-023 (GJ-Guard): Disposal-Datum muss in einem offenen GJ liegen —
     // die Veräußerungs-Buchung kippt sonst rückwirkend Restbuchwert und
-    // Erlös ins festgeschriebene Jahr.
-    let _fy = guard::ensure_year_open(pool, args.disposal_date.year() as i64).await?;
-
-    // R2-021 (Pro-rata-AfA im Veräußerungsjahr, R 7.4 Abs. 7 EStR / §7 Abs. 1
-    // Satz 4 EStG). Wenn für (Anlage, Disposal-Jahr) noch keine AfA-Zeile
-    // existiert, wird vor dem Abgang eine partielle AfA gebucht (M/12 bis zum
-    // Veräußerungsmonat). Der gekürzte Restbuchwert wandert als Snapshot in die
-    // Disposal-Rechnung. Hat der reguläre AfA-Lauf für dieses Jahr schon
-    // gebucht (z. B. nach manuellem `depreciation_accrue_year`), bleibt sein
-    // Wert vorrangig.
+    // Erlös ins festgeschriebene Jahr. Die Erlaubnis hält bis nach dem Commit.
     let disposal_year = args.disposal_date.year() as i64;
-    // Lauf F2c (neuer Fund): Vorjahre ohne gebuchte AfA zuerst nachholen. Nach
-    // dem Abgang bucht der AfA-Lauf die Anlage nicht mehr; die AfA der
-    // Vorjahre fehlte sonst endgültig, und die anteilige AfA des Abgangsjahres
-    // rechnete vom zu hohen Restbuchwert. Abgeschlossene Jahre sind gebucht
-    // (der Abschluss bucht vorher) und bleiben unberührt.
-    let existing = if disposal_year > existing.acquisition_fiscal_year {
-        let caught_up = crate::depreciation::accrue_yearly::accrue_asset_through(
-            pool,
-            &existing,
+    let _fy = guard::ensure_year_open(pool, disposal_year).await?;
+
+    // Lauf F3b: AfA bis zum Abgang und der Abgang in **einer** Transaktion.
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let asset: AssetRow = sqlx::query_as("SELECT * FROM assets WHERE id = ?")
+        .bind(&args.asset_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {}", args.asset_id)))?;
+    if asset.disposed == 1 {
+        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+    }
+
+    // 1. AfA ab dem Abgangsjahr (Lauf F3b). Nach dem Abgang gibt es für die
+    //    Anlage keine AfA mehr, und im Abgangsjahr nur die anteilige bis zum
+    //    Abgangsmonat (R 7.4 Abs. 8 EStR, §7 Abs. 1 Satz 4 EStG). Eine schon
+    //    gebuchte AfA für spätere Jahre (oder eine volle Jahres-AfA im
+    //    Abgangsjahr) wäre danach nicht mehr zu korrigieren — das Zurücksetzen
+    //    lehnt veräußerte Anlagen ab (F2c). Festgeschriebene Einträge (Jahr
+    //    abgeschlossen) lehnen den Abgang ab; offene werden hier entfernt und
+    //    mit ihren Werten auditiert, der Restbuchwert steht danach wieder auf
+    //    dem Stand vor dem Abgangsjahr.
+    let from_disposal_year: Vec<DepreciationEntryRow> = sqlx::query_as(
+        "SELECT * FROM depreciation_entries WHERE asset_id = ? AND fiscal_year >= ?
+          ORDER BY fiscal_year",
+    )
+    .bind(&asset.id)
+    .bind(disposal_year)
+    .fetch_all(&mut *tx)
+    .await?;
+    // Auch ohne AfA-Eintrag (z. B. schon voll abgeschrieben) führt ein später
+    // abgeschlossenes Jahr die Anlage festgeschrieben im Bestand.
+    let closed_after: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(fiscal_year) FROM fiscal_year_locks WHERE fiscal_year > ? AND fiscal_year >= ?",
+    )
+    .bind(disposal_year)
+    .bind(asset.acquisition_fiscal_year)
+    .fetch_one(&mut *tx)
+    .await?;
+    let locked_after = from_disposal_year
+        .iter()
+        .filter(|e| e.locked_at.is_some())
+        .map(|e| e.fiscal_year)
+        .max();
+    if let Some(year) = closed_after.max(locked_after) {
+        return Err(Error::Domain(format!(
+            "Das Geschäftsjahr {year} ist abgeschlossen und führt die Anlage {} mit \
+             festgeschriebener AfA bzw. im Bestand. Ein Abgang im Jahr {disposal_year} \
+             widerspräche dem abgeschlossenen Jahr — erfassen lässt er sich frühestens {}. \
+             Eine frühere Veräußerung klärst Du mit Deiner Steuerberatung.",
+            asset.asset_number,
+            year + 1
+        )));
+    }
+    if !from_disposal_year.is_empty() {
+        sqlx::query(
+            "DELETE FROM depreciation_entries
+              WHERE asset_id = ? AND fiscal_year >= ? AND locked_at IS NULL",
+        )
+        .bind(&asset.id)
+        .bind(disposal_year)
+        .execute(&mut *tx)
+        .await?;
+        let before: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT book_value_after_cents, fiscal_year FROM depreciation_entries
+              WHERE asset_id = ? ORDER BY fiscal_year DESC LIMIT 1",
+        )
+        .bind(&asset.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let (book_value, last_year) = match before {
+            Some((value, year)) => (value, Some(year)),
+            None => (
+                business_book_value_start_cents(
+                    asset.acquisition_cost_cents,
+                    asset.business_share_percent,
+                ),
+                None,
+            ),
+        };
+        assets::set_book_value_in(&mut tx, &asset.id, book_value, last_year).await?;
+        let removed: Vec<serde_json::Value> = from_disposal_year
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "fiscal_year": e.fiscal_year,
+                    "amount": e.depreciation_amount_cents,
+                    "months": e.months_in_year,
+                })
+            })
+            .collect();
+        audit_log::append_in(
+            &mut tx,
+            "depreciation.reset_for_disposal",
+            "asset",
+            &asset.id,
+            Some(serde_json::json!({
+                "asset_number": &asset.asset_number,
+                "disposal_date": args.disposal_date,
+                "removed": removed,
+                "book_value_restored": book_value,
+            })),
+        )
+        .await?;
+    }
+
+    // 2. Lauf F2c: Vorjahre ohne gebuchte AfA nachholen. Nach dem Abgang bucht
+    //    der AfA-Lauf die Anlage nicht mehr; die AfA der Vorjahre fehlte sonst
+    //    endgültig, und die anteilige AfA des Abgangsjahres rechnete vom zu
+    //    hohen Restbuchwert. Abgeschlossene Jahre sind gebucht (der Abschluss
+    //    bucht vorher) und bleiben unberührt.
+    if disposal_year > asset.acquisition_fiscal_year {
+        let caught_up = crate::depreciation::accrue_yearly::accrue_asset_through_in(
+            &mut tx,
+            &asset,
             disposal_year - 1,
         )
         .await?;
         if caught_up > 0 {
             tracing::info!(
                 "Anlage {}: {caught_up} AfA-Jahr(e) vor dem Abgang nachgebucht",
-                existing.asset_number
+                asset.asset_number
             );
         }
-        assets::get(pool, &args.asset_id)
-            .await?
-            .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {}", args.asset_id)))?
-    } else {
-        existing
-    };
-    let residual = match depreciation_repo::get_for_asset_year(pool, &args.asset_id, disposal_year)
-        .await?
-    {
-        Some(entry) => {
-            // AfA-Lauf war schon: existing.book_value_cents ist bereits der
-            // gedrückte Wert; sicherheitshalber gegen den gebuchten
-            // book_value_after abgleichen (Konsistenz).
-            entry.book_value_after_cents
-        }
-        None => {
-            // Pure-FC: M/12 bis Veräußerungsmonat. Asset-Stammdaten in
-            // den Domain-Typ überführen.
-            let acquisition_date =
-                NaiveDate::parse_from_str(&existing.acquisition_date, "%Y-%m-%d").map_err(
-                    |_| {
-                        Error::Domain(format!(
-                            "Ungültiges Anschaffungs-Datum in DB: {}",
-                            existing.acquisition_date
-                        ))
-                    },
-                )?;
-            let method =
-                DepreciationMethod::from_db(&existing.depreciation_method).ok_or_else(|| {
-                    Error::Domain(format!(
-                        "Unbekannte AfA-Methode: {}",
-                        existing.depreciation_method
-                    ))
-                })?;
-            let dep_asset = DepreciationAsset {
-                depreciation_method: method,
-                acquisition_date,
-                acquisition_cost_cents: existing.acquisition_cost_cents,
-                business_share_percent: existing.business_share_percent,
-                useful_life_years: existing.useful_life_years,
-            };
-            let calc = compute_disposal_year_partial(
-                &dep_asset,
-                existing.book_value_cents,
-                args.disposal_date,
-            );
-            if !calc.is_noop() {
-                depreciation_repo::book_entry(pool, &args.asset_id, disposal_year, &calc).await?;
-                assets::set_book_value(
-                    pool,
-                    &args.asset_id,
-                    calc.book_value_after_cents,
-                    Some(disposal_year),
-                )
-                .await?;
-                audit_log::append(
-                    pool,
-                    "depreciation.disposal_partial",
-                    "asset",
-                    &args.asset_id,
-                    Some(serde_json::json!({ "fiscal_year": disposal_year, "months": calc.months_in_year, "amount": calc.depreciation_amount_cents, "book_value_after": calc.book_value_after_cents })),
-                )
-                .await?;
-            }
-            calc.book_value_after_cents
-        }
-    };
+    }
 
-    let row = assets::dispose(
-        pool,
-        &args.asset_id,
+    // 3. R2-021: anteilige AfA im Abgangsjahr (M/12 bis einschließlich
+    //    Abgangsmonat) vom Restbuchwert davor; der gekürzte Restbuchwert
+    //    wandert als Snapshot in den Abgang.
+    let running: i64 = sqlx::query_scalar("SELECT book_value_cents FROM assets WHERE id = ?")
+        .bind(&asset.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let method = DepreciationMethod::from_db(&asset.depreciation_method).ok_or_else(|| {
+        Error::Domain(format!(
+            "Unbekannte AfA-Methode: {}",
+            asset.depreciation_method
+        ))
+    })?;
+    let dep_asset = DepreciationAsset {
+        depreciation_method: method,
+        acquisition_date,
+        acquisition_cost_cents: asset.acquisition_cost_cents,
+        business_share_percent: asset.business_share_percent,
+        useful_life_years: asset.useful_life_years,
+    };
+    let calc = compute_disposal_year_partial(&dep_asset, running, args.disposal_date);
+    if !calc.is_noop() {
+        depreciation_repo::book_entry_in(&mut tx, &asset.id, disposal_year, &calc).await?;
+        assets::set_book_value_in(
+            &mut tx,
+            &asset.id,
+            calc.book_value_after_cents,
+            Some(disposal_year),
+        )
+        .await?;
+        audit_log::append_in(
+            &mut tx,
+            "depreciation.disposal_partial",
+            "asset",
+            &asset.id,
+            Some(serde_json::json!({ "fiscal_year": disposal_year, "months": calc.months_in_year, "amount": calc.depreciation_amount_cents, "book_value_after": calc.book_value_after_cents })),
+        )
+        .await?;
+    }
+    let residual = calc.book_value_after_cents;
+
+    // 4. Abgang (Status-Bedingung im UPDATE; danach hält
+    //    `trg_assets_disposal_final` alles fest).
+    assets::dispose_in(
+        &mut tx,
+        &asset.id,
         &args.disposal_date.to_string(),
         dtype.as_db(),
         proceeds,
         residual,
     )
     .await?;
-
-    audit_log::append(
-        pool,
+    audit_log::append_in(
+        &mut tx,
         "asset.dispose",
         "asset",
-        &row.id,
-        Some(serde_json::json!({ "number": &row.asset_number, "type": dtype.as_db(), "date": args.disposal_date, "proceeds": proceeds, "residual_book_value": residual })),
+        &asset.id,
+        Some(serde_json::json!({ "number": &asset.asset_number, "type": dtype.as_db(), "date": args.disposal_date, "proceeds": proceeds, "residual_book_value": residual })),
     )
     .await?;
+    tx.commit().await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session, "asset.dispose")
+    backup::request_auto_backup(pool, &paths, session, "asset.dispose", clock.now_utc())
         .await
         .ok();
 
-    assets::get_detail(pool, &row.id)
+    assets::get_detail(pool, &asset.id)
         .await?
         .ok_or_else(|| Error::Domain("dispose: detail-load leer".into()))
 }
@@ -486,6 +572,12 @@ fn resolve_method(input: &AssetInput) -> Result<(String, Option<f64>)> {
 /// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
+}
+
+/// Datum aus der DB (`YYYY-MM-DD`).
+fn parse_db_date(s: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| Error::Domain(format!("Ungültiges Anschaffungs-Datum in DB: {s}")))
 }
 
 #[cfg(test)]

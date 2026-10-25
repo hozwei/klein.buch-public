@@ -259,6 +259,15 @@ pub async fn run_migrations_prechecked(
     schema_version::check_compatible(pool).await?;
     let violations = foreign_key_violations(pool).await?;
     if !violations.is_empty() {
+        // F3b: Ein früherer Versuch kann die Umstellung schon gespeichert haben
+        // (Pflicht-Backup, Migration, dann diese Prüfung gescheitert). Dann
+        // steht hier keine Migration mehr an, die Meldung muss aber weiter
+        // „nach der Umstellung“ sagen — sonst schickte sie zum vorigen Image,
+        // das die neuere Datenbank ablehnt.
+        let pending = match pending {
+            Some(from) => Some(from),
+            None => unfinished_migration_from(pool).await.ok().flatten(),
+        };
         let msg = integrity_message_after(pending, &violations);
         log_foreign_key_violations("Entsperren", &violations);
         tracing::error!("{msg}");
@@ -426,6 +435,35 @@ pub fn integrity_message_after(pending: Option<i32>, violations: &[ForeignKeyVio
     }
 }
 
+/// Schema vor einer Umstellung, nach der noch kein Entsperren gelungen ist
+/// (Lauf F3b): das jüngste Audit `backup.pre_migration` auf das aktuelle
+/// Schema, ohne `backup.unlock.ok` danach. `None`, wenn es keines gibt.
+/// Grundlage für die ehrliche Meldung „nach der Umstellung“ bei jedem
+/// weiteren Versuch, nicht nur beim ersten.
+pub async fn unfinished_migration_from(pool: &SqlitePool) -> Result<Option<i32>> {
+    let details: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT details_json FROM audit_log
+          WHERE action = 'backup.pre_migration'
+            AND id > COALESCE(
+                (SELECT MAX(id) FROM audit_log WHERE action = 'backup.unlock.ok'), 0)
+          ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some(json) = details.flatten() else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+    let to = value.get("to").and_then(serde_json::Value::as_i64);
+    let from = value.get("from").and_then(serde_json::Value::as_i64);
+    Ok(match (from, to) {
+        (Some(from), Some(to)) if to == i64::from(schema_version::EXPECTED_SCHEMA_VERSION) => {
+            i32::try_from(from).ok()
+        }
+        _ => None,
+    })
+}
+
 /// Zahl der Rechnungen mit mehr als einem festgeschriebenen Storno-Beleg —
 /// dieselbe Bedingung wie die Vorab-Prüfung der Migration 0032 (dort in SQL).
 /// Phase A eines Restores lehnt solche Backups ab, statt die Instanz nach dem
@@ -464,6 +502,19 @@ async fn finish_restore(
     let now = ctx.clock().now_utc();
     let today = ctx.clock().today_berlin();
     let mut tx = begin_immediate(pool).await?;
+    // F3b: Passt die eingespielte DB zur ersetzten? Höhere oder dort fehlende
+    // Zählerstände bzw. dieselbe Belegnummer als anderer Datensatz heißen:
+    // Die ersetzte DB war eine andere oder neu eingerichtete Instanz — Nummern
+    // nach dem Backup können anderswo vergeben worden sein (vor dem Anheben
+    // lesen, sonst sähe jeder angehobene Kreis gleich aus).
+    let restored_counters = numbering::snapshot_in(&mut tx).await?;
+    let ahead = numbering::counters_ahead(&info.counters, &restored_counters);
+    let foreign_docs = crate::backup::after_restore::foreign_numbers_in(
+        &mut tx,
+        &info.locked_numbers,
+        &info.locked_ids,
+    )
+    .await?;
     // Reihenfolge im Audit: Restore angewendet → je angehobenem Kreis →
     // Pause gesetzt.
     let mut raised = Vec::new();
@@ -487,6 +538,8 @@ async fn finish_restore(
             "schema": info.schema_version,
             "backup_created_at": info.backup_created_at,
             "counters_raised": raised.len(),
+            "counters_ahead": ahead.len(),
+            "foreign_documents": foreign_docs,
         })),
     )
     .await?;
@@ -520,7 +573,17 @@ async fn finish_restore(
     );
 
     crate::scheduler::hold::notice(pool, &hold).await;
-    numbering_notice(pool, info, &raised, &followup.conflicts).await;
+    numbering_notice(
+        pool,
+        info,
+        &NumberingState {
+            raised: &raised,
+            ahead: &ahead,
+            foreign_docs: &foreign_docs,
+        },
+        &followup.conflicts,
+    )
+    .await;
     crate::backup::after_restore::notice(pool, &info.staged_at, &followup).await;
     // Das Pre-Restore-Backup stand nur in der verworfenen DB — hier in die
     // Historie übernehmen (Restore aus der Liste möglich).
@@ -547,6 +610,26 @@ async fn finish_restore(
     Ok(())
 }
 
+/// Nummernkreise im Restore-Abschluss: angehobene Kreise und die Befunde, dass
+/// die ersetzte Datenbank nicht zum eingespielten Backup passt (F3b).
+struct NumberingState<'a> {
+    raised: &'a [numbering::Raised],
+    /// Kreise der eingespielten DB über dem Stand der ersetzten (oder dort
+    /// fehlend), siehe [`numbering::counters_ahead`].
+    ahead: &'a [numbering::CounterState],
+    /// Belegnummern, die in beiden Datenbanken verschiedene Datensätze tragen,
+    /// siehe [`crate::backup::after_restore::foreign_numbers`].
+    foreign_docs: &'a [String],
+}
+
+/// Gemeinsamer Teil der Texte „Nummern könnten anderswo vergeben sein“.
+const NUMBERING_RAISE_ADVICE: &str = "Wurden danach außerhalb dieser Instanz weitere \
+     Rechnungen, Stornos, Kosten oder andere Belege nummeriert (etwa auf einem ausgefallenen \
+     Server), vergibt Klein.Buch diese Nummern sonst erneut. Prüfe den Mail-Ausgang bzw. die \
+     Korrespondenz und hebe die betroffenen Nummernkreise unter Einstellungen → Backup → \
+     Nummernkreise auf die zuletzt vergebene Nummer an (die Lücke ist dokumentiert, eine \
+     Doppelvergabe wäre unzulässig).";
+
 /// Hinweis zu den Nummernkreisen nach einem Restore (D-24). Angehobene Kreise
 /// werden genannt; ohne Stände der ersetzten DB (Disaster Recovery in eine
 /// frische Instanz) erklärt er, wie nachträglich vergebene Nummern zu
@@ -556,7 +639,7 @@ async fn finish_restore(
 async fn numbering_notice(
     pool: &SqlitePool,
     info: &AppliedInfo,
-    raised: &[numbering::Raised],
+    state: &NumberingState<'_>,
     conflicts: &[crate::backup::after_restore::Conflict],
 ) {
     let backup_date = info
@@ -565,25 +648,49 @@ async fn numbering_notice(
         .and_then(crate::clock::db_utc_to_berlin)
         .map(|b| b.format("%d.%m.%Y %H:%M").to_string())
         .unwrap_or_else(|| "unbekannt".into());
-    let mut severity = "urgent";
-    let mut body = if raised.is_empty() && !info.counters.is_empty() {
-        severity = "info";
-        format!(
-            "Das eingespielte Backup hat den Stand vom {backup_date}. Die Nummernkreise standen \
-             dort schon auf denselben Ständen wie vor der Wiederherstellung — es fehlen keine \
-             Nummern, und keine wird doppelt vergeben."
-        )
-    } else if raised.is_empty() {
-        format!(
-            "Das eingespielte Backup hat den Stand vom {backup_date}. Wurden danach außerhalb \
-             dieser Instanz weitere Rechnungen, Stornos, Kosten oder andere Belege nummeriert \
-             (etwa auf einem ausgefallenen Server), vergibt Klein.Buch diese Nummern sonst \
-             erneut. Prüfe den Mail-Ausgang bzw. die Korrespondenz und hebe die betroffenen \
-             Nummernkreise unter Einstellungen → Backup → Nummernkreise auf die zuletzt \
-             vergebene Nummer an (die Lücke ist dokumentiert, eine Doppelvergabe wäre unzulässig)."
-        )
-    } else {
-        let list = raised
+    let (body, severity) =
+        numbering_notice_body(&backup_date, !info.counters.is_empty(), state, conflicts);
+    let dedup = format!("restore_numbering:{}", info.staged_at);
+    if let Err(e) = crate::notify::store::create(
+        pool,
+        crate::notify::NewNotification {
+            title: "Nummernkreise nach der Wiederherstellung",
+            body: &body,
+            severity,
+            action_url: Some("/settings/backup"),
+            dedup_key: Some(&dedup),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::warn!("Hinweis zu den Nummernkreisen nicht angelegt: {e}");
+    }
+}
+
+/// Text und Schwere des Nummernkreis-Hinweises (pure, F1d/F3b). Fälle:
+///
+/// - keine Stände der ersetzten DB (leere Instanz, Marker vor D-24) →
+///   Anleitung zum Anheben (dringend);
+/// - eingespielte Stände über denen der ersetzten DB oder dort fehlend, bzw.
+///   dieselbe Belegnummer als anderer Datensatz → fremder Stand: dieselbe
+///   Anleitung mit Begründung, angehobene Kreise zusätzlich genannt
+///   (dringend) — „keine Lücke“ wäre hier falsch, der ausgefallene Server
+///   kann nach dem Backup weiter nummeriert haben;
+/// - Stände gleich (nichts angehoben, nichts voraus) → „keine Lücke, keine
+///   Doppelvergabe“ (Info);
+/// - sonst Liste der angehobenen Kreise (dringend).
+///
+/// Vorgemerkte Entwürfe machen jeden Fall dringend.
+fn numbering_notice_body(
+    backup_date: &str,
+    has_snapshot: bool,
+    state: &NumberingState<'_>,
+    conflicts: &[crate::backup::after_restore::Conflict],
+) -> (String, &'static str) {
+    let raised_list = || {
+        state
+            .raised
             .iter()
             .map(|r| {
                 format!(
@@ -595,12 +702,65 @@ async fn numbering_notice(
                 )
             })
             .collect::<Vec<_>>()
-            .join(", ");
+            .join(", ")
+    };
+    let foreign = !state.ahead.is_empty() || !state.foreign_docs.is_empty();
+    let mut severity = "urgent";
+    let mut body = if !has_snapshot {
+        format!("Das eingespielte Backup hat den Stand vom {backup_date}. {NUMBERING_RAISE_ADVICE}")
+    } else if foreign {
+        let mut reasons = Vec::new();
+        if !state.ahead.is_empty() {
+            let list = state
+                .ahead
+                .iter()
+                .take(10)
+                .map(|c| format!("{} {}: {}", label(&c.doc_type), c.fiscal_year, c.last_value))
+                .collect::<Vec<_>>()
+                .join(", ");
+            reasons.push(format!(
+                "Im Backup stehen Nummernkreise höher als in der ersetzten Datenbank ({list})"
+            ));
+        }
+        if !state.foreign_docs.is_empty() {
+            let list = state
+                .foreign_docs
+                .iter()
+                .take(10)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            reasons.push(format!(
+                "Belege mit denselben Nummern sind dort andere Datensätze ({list})"
+            ));
+        }
+        let mut text = format!(
+            "Das eingespielte Backup hat den Stand vom {backup_date}. Es stammt nicht aus dieser \
+             Instanz oder ist neuer als die ersetzte Datenbank: {}. Klein.Buch kennt deshalb die \
+             Nummern nicht, die nach dem Backup vergeben wurden. {NUMBERING_RAISE_ADVICE}",
+            reasons.join("; ")
+        );
+        if !state.raised.is_empty() {
+            text.push_str(&format!(
+                " Auf die Stände der ersetzten Datenbank angehoben wurden: {}.",
+                raised_list()
+            ));
+        }
+        text
+    } else if state.raised.is_empty() {
+        severity = "info";
+        format!(
+            "Das eingespielte Backup hat den Stand vom {backup_date}. Die Nummernkreise standen \
+             dort schon auf denselben Ständen wie vor der Wiederherstellung — es fehlen keine \
+             Nummern, und keine wird doppelt vergeben."
+        )
+    } else {
         format!(
             "Das eingespielte Backup hat den Stand vom {backup_date}. Danach vergebene Nummern \
              werden nicht erneut vergeben: Die Nummernkreise wurden auf die Stände vor der \
-             Wiederherstellung angehoben ({list}). Die dazwischen liegenden Belege fehlen in \
-             dieser Datenbank — die Lücke ist im Audit-Log dokumentiert."
+             Wiederherstellung angehoben ({}). Die dazwischen liegenden Belege fehlen in \
+             dieser Datenbank — die Lücke ist im Audit-Log dokumentiert.",
+            raised_list()
         )
     };
     if !conflicts.is_empty() {
@@ -618,22 +778,7 @@ async fn numbering_notice(
              (sonst gäbe es zwei verschiedene Belege mit derselben Nummer)."
         ));
     }
-    let dedup = format!("restore_numbering:{}", info.staged_at);
-    if let Err(e) = crate::notify::store::create(
-        pool,
-        crate::notify::NewNotification {
-            title: "Nummernkreise nach der Wiederherstellung",
-            body: &body,
-            severity,
-            action_url: Some("/settings/backup"),
-            dedup_key: Some(&dedup),
-            ..Default::default()
-        },
-    )
-    .await
-    {
-        tracing::warn!("Hinweis zu den Nummernkreisen nicht angelegt: {e}");
-    }
+    (body, severity)
 }
 
 /// Anzeigename eines Nummernkreises.
@@ -843,6 +988,64 @@ async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn counter(doc_type: &str, fiscal_year: i64, last_value: i64) -> numbering::CounterState {
+        numbering::CounterState {
+            doc_type: doc_type.into(),
+            fiscal_year,
+            last_value,
+        }
+    }
+
+    /// Lauf F3b: „keine Lücke“ nur bei gleichen Ständen; ein fremder Stand
+    /// (höherer Zähler im Backup oder dieselbe Nummer als anderer Datensatz)
+    /// bekommt die dringende Anleitung zum Anheben, auch neben angehobenen
+    /// Kreisen.
+    #[test]
+    fn numbering_notice_info_only_for_identical_states() {
+        let none = NumberingState {
+            raised: &[],
+            ahead: &[],
+            foreign_docs: &[],
+        };
+        let (body, severity) = numbering_notice_body("30.09.2026 10:00", true, &none, &[]);
+        assert_eq!(severity, "info");
+        assert!(body.contains("keine wird doppelt vergeben"), "{body}");
+
+        let (body, severity) = numbering_notice_body("30.09.2026 10:00", false, &none, &[]);
+        assert_eq!(severity, "urgent");
+        assert!(body.contains("Nummernkreise unter Einstellungen"), "{body}");
+
+        let ahead = [counter("invoice", 2026, 10)];
+        let foreign = NumberingState {
+            raised: &[],
+            ahead: &ahead,
+            foreign_docs: &[],
+        };
+        let (body, severity) = numbering_notice_body("30.09.2026 10:00", true, &foreign, &[]);
+        assert_eq!(severity, "urgent");
+        assert!(!body.contains("keine wird doppelt vergeben"), "{body}");
+        assert!(body.contains("Rechnungen (RE) 2026: 10"), "{body}");
+        assert!(body.contains("Nummernkreise unter Einstellungen"), "{body}");
+
+        let raised = [numbering::Raised {
+            doc_type: "expense".into(),
+            fiscal_year: 2026,
+            from: 3,
+            to: 5,
+        }];
+        let docs = ["RE-2026-0001".to_string()];
+        let mixed = NumberingState {
+            raised: &raised,
+            ahead: &[],
+            foreign_docs: &docs,
+        };
+        let (body, severity) = numbering_notice_body("30.09.2026 10:00", true, &mixed, &[]);
+        assert_eq!(severity, "urgent");
+        assert!(body.contains("andere Datensätze (RE-2026-0001)"), "{body}");
+        assert!(body.contains("Kosten (KO) 2026 von 3 auf 5"), "{body}");
+        assert!(body.contains("Nummernkreise unter Einstellungen"), "{body}");
+    }
 
     /// Lauf F (LE-CI-FLAKE): fehlende Datei ist kein Fehler; eine Datei, die
     /// ein paralleler Schreiber anlegt und wieder entfernt, auch nicht.

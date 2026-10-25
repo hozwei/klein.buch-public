@@ -64,6 +64,15 @@ Behebe die Ursache und klick auf der Seite "Backups" auf "Jetzt sichern".
 Klein.Buch protokolliert das Ergebnis erneut. Wenn der Fehler bleibt,
 schau ins Kapitel "[Backup-Fehler](/help/troubleshooting-backup)".
 
+Steht bei einem gesicherten Eintrag "Unvollständig: … nicht gesichert",
+fehlt im Backup etwas aus dem Beleg-Archiv. Klein.Buch sichert nur echte
+Dateien. Hat jemand auf dem Server einen Ordner im Archiv durch eine
+Verknüpfung (einen symbolischen Link) ersetzt, etwa um alte Jahrgänge
+auszulagern, steht er hier und fehlt im Backup. Der Betreiber holt den
+Ordner dann zurück oder bindet ihn als Volume ein. Fehlt eine
+Archivdatei, klärt die Integritätsprüfung, welche es ist. Klein.Buch
+meldet das zusätzlich unter "Hinweise" ("Backup unvollständig").
+
 Eine Sache kann das Protokoll nicht sehen: Lädt ein Sync-Programm auf
 dem Server die Dateien aus einem Ordner-Ziel in einen Cloud-Speicher
 hoch, meldet Klein.Buch "gesichert", sobald die Datei im Ordner liegt.

@@ -10,6 +10,10 @@
 //!   weiter, wenn der Client den Request abbricht.
 //! - `Job`: `202 {"jobId"}`, Ergebnis über `GET /api/jobs/{id}`.
 //!
+//! Bei `Write`/`Job` läuft eine registrierte Vorprüfung
+//! ([`CommandSpec::precheck`], W14-039) vor der Annahme — beim Restore also vor
+//! der Sperre aller Änderungen.
+//!
 //! DB-Commands im Zustand `locked` liefern über die Fehlerabbildung 423.
 
 use std::sync::Arc;
@@ -125,6 +129,19 @@ async fn handle(
                     }
                 }
             };
+            // W14-039: Vorprüfung vor der Annahme (z. B. Restore: Quelle und
+            // Passphrase), also vor `begin_restore` — ein ungültiger Aufruf
+            // sperrt keine Änderungen. Eine Wiederholung mit demselben
+            // Idempotenz-Schlüssel bekommt dieselbe Antwort.
+            if let Some(precheck) = spec.precheck {
+                if let Err(err) = precheck(st.ctx.clone(), args.clone()).await {
+                    let api = ApiError::from_error(&err);
+                    if let Some(c) = completer {
+                        c.complete(StoredResponse::json(api.status, &api.body()));
+                    }
+                    return Err(api);
+                }
+            }
             if spec.kind == Kind::Job {
                 start_job(st, spec, args, completer)
             } else {

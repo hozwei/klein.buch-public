@@ -48,8 +48,9 @@ impl InstanceState {
 pub const RESTART_GRACE: Duration = Duration::from_secs(10);
 /// Höchstens so lange wartet das Herunterfahren auf laufende Commands und Jobs
 /// (W5-STOP-GRACE, W14-025b). Zusammen mit dem Abwarten offener Verbindungen
-/// (`http::CONNECTION_DRAIN_TIMEOUT`, 30 s) und dem Schließen des Pools
-/// ([`POOL_CLOSE_WAIT`]) bleibt das Herunterfahren unter 70 s — deutlich unter
+/// (`http::CONNECTION_DRAIN_TIMEOUT`, 30 s), dem Nachholen eines ausstehenden
+/// Lock-Backups (innerhalb von [`SHUTDOWN_WORK_BUDGET`]) und dem Schließen des
+/// Pools ([`POOL_CLOSE_WAIT`]) bleibt das Herunterfahren bei 75 s — unter
 /// `stop_grace_period: 90s` im Compose-Beispiel. Ein abgebrochenes Backup ist
 /// unkritisch (Temp-Datei + rename, Reste räumt der Sweeper).
 pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -57,6 +58,15 @@ pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// (gleichzeitig mit [`JOB_DRAIN_TIMEOUT`]); die Abbruch-Anforderung steht
 /// schon seit dem Signal.
 pub const SCHEDULER_SHUTDOWN_WAIT: Duration = Duration::from_secs(25);
+/// Gesamtfrist des Herunterfahrens für Tick, Tasks und das Nachholen eines
+/// ausstehenden Lock-Backups (Lauf F3c, ADR 0040 Nr. 57): Das Nachholen bekommt
+/// den Rest nach dem Abwarten von Tick und Tasks, mindestens
+/// [`SHUTDOWN_BACKUP_MIN`].
+pub const SHUTDOWN_WORK_BUDGET: Duration = Duration::from_secs(40);
+/// Mindestfrist für das Nachholen eines ausstehenden Lock-Backups beim
+/// Herunterfahren (Tick und Tasks dürfen zusammen höchstens
+/// `SHUTDOWN_WORK_BUDGET − SHUTDOWN_BACKUP_MIN` brauchen).
+pub const SHUTDOWN_BACKUP_MIN: Duration = Duration::from_secs(10);
 /// Höchstens so lange wartet das Herunterfahren auf das Schließen des Pools
 /// (WAL-Checkpoint, ausgeliehene Verbindungen).
 pub const POOL_CLOSE_WAIT: Duration = Duration::from_secs(5);
@@ -306,10 +316,12 @@ impl ServerState {
     /// zuerst den Scheduler anhalten (Abbruch-Anforderung — laufende Abo-Läufe
     /// beenden ihren Termin, der Vollscan die Datei), dann gleichzeitig den
     /// Tick ([`SCHEDULER_SHUTDOWN_WAIT`]) und abgekoppelte Tasks und Jobs
-    /// ([`JOB_DRAIN_TIMEOUT`]) abwarten, zuletzt den Pool schließen
-    /// (WAL-Checkpoint, [`POOL_CLOSE_WAIT`]). Alle Fristen zusammen liegen unter
-    /// der `stop_grace_period` des Compose-Beispiels.
+    /// ([`JOB_DRAIN_TIMEOUT`]) abwarten, dann ein ausstehendes Lock-Backup
+    /// schreiben (Lauf F3c, Rest von [`SHUTDOWN_WORK_BUDGET`]), zuletzt den
+    /// Pool schließen (WAL-Checkpoint, [`POOL_CLOSE_WAIT`]). Alle Fristen
+    /// zusammen liegen unter der `stop_grace_period` des Compose-Beispiels.
     pub async fn finish_shutdown(&self) {
+        let started = std::time::Instant::now();
         crate::scheduler::tick::request_stop(&self.ctx);
         self.tasks.close();
         let (scheduler_stopped, tasks_done) = tokio::join!(
@@ -330,6 +342,13 @@ impl ServerState {
                 JOB_DRAIN_TIMEOUT.as_secs()
             );
         }
+        // Lauf F3c: ein ausstehendes Lock-Backup (auch eines, das ein eben
+        // beendeter Command angefordert hat) vor dem Schließen des Pools —
+        // im Rest von SHUTDOWN_WORK_BUDGET, mindestens SHUTDOWN_BACKUP_MIN.
+        let budget = SHUTDOWN_WORK_BUDGET
+            .saturating_sub(started.elapsed())
+            .max(SHUTDOWN_BACKUP_MIN);
+        crate::scheduler::tick::flush_pending_backup(&self.ctx, budget).await;
         if let Some(pool) = self.ctx.take_pool() {
             if tokio::time::timeout(POOL_CLOSE_WAIT, pool.close())
                 .await

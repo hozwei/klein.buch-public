@@ -295,11 +295,41 @@ pub async fn dispose(
     proceeds_cents: i64,
     residual_book_value_cents: i64,
 ) -> Result<AssetRow> {
-    let existing = get(pool, id)
+    let mut conn = pool.acquire().await?;
+    dispose_in(
+        &mut conn,
+        id,
+        disposal_date,
+        disposal_type_db,
+        proceeds_cents,
+        residual_book_value_cents,
+    )
+    .await?;
+    drop(conn);
+    get(pool, id)
         .await?
-        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {id}")))?;
-    if existing.disposed == 1 {
-        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+        .ok_or_else(|| Error::Domain("dispose: post-UPDATE SELECT leer".into()))
+}
+
+/// [`dispose`] auf einer Verbindung in einer laufenden Schreib-Transaktion
+/// (Lauf F3b: `assets_dispose` bucht die AfA bis zum Abgang und den Abgang
+/// zusammen oder gar nicht).
+pub async fn dispose_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    disposal_date: &str,
+    disposal_type_db: &str,
+    proceeds_cents: i64,
+    residual_book_value_cents: i64,
+) -> Result<()> {
+    let disposed: Option<i64> = sqlx::query_scalar("SELECT disposed FROM assets WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    match disposed {
+        None => return Err(Error::Domain(format!("Anlage nicht gefunden: {id}"))),
+        Some(1) => return Err(Error::Domain("Anlage ist bereits veräußert.".into())),
+        Some(_) => {}
     }
 
     let res = sqlx::query(
@@ -314,15 +344,12 @@ pub async fn dispose(
     .bind(proceeds_cents)
     .bind(residual_book_value_cents)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
     }
-
-    get(pool, id)
-        .await?
-        .ok_or_else(|| Error::Domain("dispose: post-UPDATE SELECT leer".into()))
+    Ok(())
 }
 
 #[cfg(test)]

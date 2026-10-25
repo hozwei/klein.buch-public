@@ -27,7 +27,7 @@ use crate::db::repo::{audit_log, euer as euer_repo};
 use crate::error::{Error, Result};
 use crate::euer::aggregate::aggregate;
 use crate::fiscal_year::guard;
-use chrono::{Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, Utc};
 use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -125,14 +125,17 @@ async fn document_counts_in(conn: &mut SqliteConnection, year: i64) -> Result<se
     }))
 }
 
-/// Schließt das Geschäftsjahr `year` ab. `today` wird injiziert (Testbarkeit).
+/// Schließt das Geschäftsjahr `year` ab. `now` kommt aus der Uhr des
+/// Aufrufers (`AppCtx`, D-20): das Berliner Datum für die Plausibilität, der
+/// Zeitpunkt für AfA und Backup-Vermerk.
 pub async fn close_year(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
     year: i64,
-    today: NaiveDate,
+    now: DateTime<Utc>,
 ) -> Result<FiscalYearLock> {
+    let today = crate::clock::berlin_date(now);
     let current = today.year() as i64;
 
     // 1. Plausibilität — nur abgelaufene Geschäftsjahre schließen.
@@ -160,7 +163,7 @@ pub async fn close_year(
     let closing = guard::closing().await;
 
     // 4. AfA des Jahres sicher buchen (idempotent; bereits gebuchte bleiben).
-    crate::depreciation::accrue_yearly::accrue_for_year(pool, paths, session, year, today).await?;
+    crate::depreciation::accrue_yearly::accrue_for_year(pool, paths, session, year, now).await?;
 
     // 5.–8. Festschreiben, Snapshot, Protokoll und Audit in einer Transaktion.
     let mut tx = crate::db::begin_immediate(pool).await?;
@@ -240,7 +243,7 @@ pub async fn close_year(
     drop(closing);
 
     // 9. Auto-Critical-Backup (§6.15: nach fiscal_year.close).
-    backup::auto_backup_if_unlocked(pool, paths, session, "fiscal_year.close")
+    backup::request_auto_backup(pool, paths, session, "fiscal_year.close", now)
         .await
         .ok();
 

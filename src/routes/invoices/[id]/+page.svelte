@@ -7,6 +7,7 @@
     invoicesGet,
     invoicesValidateDraft,
     invoicesLockAndIssue,
+    invoicesVoidDraft,
     archiveUrl,
     saveArchiveFile,
     emailLogFor,
@@ -17,6 +18,7 @@
   import PageBar from "$lib/PageBar.svelte";
   import { flash } from "$lib/toast.svelte";
   import { confirmDialog } from "$lib/confirm.svelte";
+  import { voidReasonError } from "$lib/voidDraft";
 
   let detail = $state<InvoiceDetail | null>(null);
   let loading = $state(true);
@@ -26,6 +28,10 @@
   let issuing = $state(false);
   let buyerReference = $state("N/A");
   let sendLog = $state<EmailLogEntry[]>([]);
+  // Lauf F3b: Entwurf verwerfen (schlicht; Gestaltung im UI/UX-Lauf).
+  let showVoid = $state(false);
+  let voidReason = $state("");
+  let voiding = $state(false);
 
   let id = $derived($page.params.id ?? "");
 
@@ -101,6 +107,30 @@
     }
   }
 
+  // Verwerfen eines nummerierten Entwurfs (W14-032): kein Löschen, die Nummer
+  // bleibt verbraucht; der Server verlangt Daten-Passwort und App-Code
+  // (Re-Auth-Dialog über transport.ts).
+  async function voidDraft() {
+    if (!detail) return;
+    const problem = voidReasonError(voidReason);
+    if (problem) {
+      flash(problem, "error");
+      return;
+    }
+    voiding = true;
+    try {
+      await invoicesVoidDraft({ id: detail.invoice.id, reason: voidReason.trim() });
+      flash("Entwurf verworfen — die Nummer bleibt vergeben.");
+      showVoid = false;
+      voidReason = "";
+      await load();
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      voiding = false;
+    }
+  }
+
   function statusLabel(s: string): string {
     switch (s) {
       case "draft":           return "Entwurf";
@@ -126,13 +156,18 @@
 <PageBar back="/invoices" backLabel="Liste" title={detail?.invoice.invoiceNumber}>
   {#snippet actions()}
     {#if detail}
-      {#if !detail.invoice.lockedAt}
+      {#if detail.invoice.voidedAt}
+        <!-- Verworfener Entwurf: endgültig, keine Aktionen (W14-032). -->
+      {:else if !detail.invoice.lockedAt}
         <button class="btn-secondary" onclick={runValidation} disabled={validating}>
           {validating ? "Prüfe …" : "Prüfen"}
         </button>
         <input type="text" bind:value={buyerReference} placeholder="Referenz (nur Behörden)" class="ref-inline" />
         <button class="btn-primary" onclick={lockAndIssue} disabled={issuing}>
           {issuing ? "Stelle aus …" : "Rechnung ausstellen"}
+        </button>
+        <button class="btn-ghost-danger" onclick={() => (showVoid = true)} disabled={voiding || issuing}>
+          Verwerfen
         </button>
       {:else}
         {#if detail.invoice.status !== "canceled" && !detail.invoice.isStornoFor}
@@ -168,7 +203,40 @@
     {#if inv.canceledByStornoId}
       <span class="badge badge-canceled">durch Storno aufgehoben</span>
     {/if}
+    {#if inv.voidedAt}
+      <span class="badge badge-canceled">verworfen</span>
+    {/if}
   </p>
+
+  {#if inv.voidedAt}
+    <section class="card">
+      <h2>Verworfen</h2>
+      <p>
+        Am {dateTime(inv.voidedAt)} verworfen. Der Entwurf wurde nie ausgestellt; die Nummer
+        {inv.invoiceNumber} bleibt vergeben und wird nicht erneut benutzt.
+      </p>
+      {#if inv.voidReason}<p><strong>Grund:</strong> {inv.voidReason}</p>{/if}
+    </section>
+  {:else if showVoid && !inv.lockedAt}
+    <section class="card">
+      <h2>Entwurf verwerfen</h2>
+      <p class="muted">
+        Der Entwurf wird nicht gelöscht: Zeitpunkt und Grund stehen daran und im Protokoll, die
+        Nummer {inv.invoiceNumber} bleibt vergeben. Danach lässt er sich weder ändern noch
+        ausstellen. Klein.Buch fragt zur Bestätigung Daten-Passwort und App-Code ab.
+      </p>
+      <label class="void-reason">
+        Grund *
+        <textarea rows="2" bind:value={voidReason} placeholder="Pflichtangabe, mindestens 10 Zeichen, keine Namen"></textarea>
+      </label>
+      <div class="void-actions">
+        <button class="btn-secondary" onclick={() => (showVoid = false)} disabled={voiding}>Abbrechen</button>
+        <button class="btn-danger" onclick={voidDraft} disabled={voiding}>
+          {voiding ? "…" : "Verwerfen"}
+        </button>
+      </div>
+    </section>
+  {/if}
 
   {#if issues !== null}
     <section class="card">
@@ -375,6 +443,9 @@
   .muted { color: #6b7280; }
   .err { color: #b91c1c; }
   .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
+  .void-reason { display: flex; flex-direction: column; gap: 0.25rem; }
+  .void-reason textarea { font: inherit; width: 100%; }
+  .void-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; flex-wrap: wrap; }
   /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
      Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
   @media (max-width: 820px) {

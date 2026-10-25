@@ -331,11 +331,18 @@ pub struct Anonymized {
     pub scrubbed_withdrawn_quotes: Vec<String>,
     /// Abo-Vorlagen, deren Bezeichnung und Notiz ersetzt wurden.
     pub scrubbed_templates: u64,
+    /// Kosten-Abos (Kontakt als Lieferant), deren Bezeichnung ersetzt wurde
+    /// (Lauf F3b).
+    pub scrubbed_subscriptions: u64,
 }
 
 /// Bezeichnung einer Abo-Vorlage nach der Anonymisierung ihres Kontakts (die
 /// Bezeichnung nennt oft den Kunden, z. B. „Wartung – Müller“).
 pub const ANONYMIZED_TEMPLATE_LABEL: &str = "Abo-Vorlage (Kontakt anonymisiert)";
+
+/// Bezeichnung (und ggf. Buchungsvorlage) eines Kosten-Abos nach der
+/// Anonymisierung seines Lieferanten (Lauf F3b).
+pub const ANONYMIZED_SUBSCRIPTION_LABEL: &str = "Kosten-Abo (Lieferant anonymisiert)";
 
 /// Wie [`anonymize`], alles in **einer** Transaktion samt Audit
 /// `contact.anonymize`:
@@ -344,7 +351,8 @@ pub const ANONYMIZED_TEMPLATE_LABEL: &str = "Abo-Vorlage (Kontakt anonymisiert)"
 ///   Kosten-Abos dieses Lieferanten (Lauf F, W14-031: an einen anonymisierten
 ///   Kontakt entstehen keine Belege mehr) und ersetzt Bezeichnung und Notiz
 ///   seiner Vorlagen (Lauf F2c; Positionen beschreiben die Leistung und
-///   bleiben);
+///   bleiben) sowie die Bezeichnung seiner Kosten-Abos, deren Buchungsvorlage
+///   nur, wenn sie den Namen nennt (Lauf F3b);
 /// * entfernt den Empfänger-Snapshot (Name → Platzhalter, Anschrift, USt-IdNr.,
 ///   E-Mail, interne Notiz → leer) aus seinen **verworfenen Rechnungs-Entwürfen**
 ///   und **zurückgezogenen, nie festgeschriebenen Angeboten** (Lauf F2c, ADR 0039
@@ -431,6 +439,38 @@ pub async fn anonymize_with_pauses(pool: &SqlitePool, id: &str) -> Result<Anonym
     .execute(&mut *tx)
     .await?
     .rows_affected();
+    // Lauf F3b: Kosten-Abos dieses Lieferanten sind Stammdaten wie Abo-Vorlagen
+    // (kein Beleg, Art. 17 Abs. 3 lit. b DSGVO trägt sie nicht): Bezeichnung
+    // ersetzt (sie nennt oft die Person, z. B. „Miete Büro – Hans Müller“), die
+    // Buchungsvorlage nur, wenn sie den Namen nennt — sonst beschreibt sie die
+    // eingekaufte Leistung und bleibt wie die Positionen einer Vorlage. Bereits
+    // gebuchte Kosten sind Belege und bleiben unverändert.
+    let subscriptions: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, description_template FROM recurring_subscriptions
+          WHERE vendor_contact_id = ? ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut scrubbed_subscriptions: u64 = 0;
+    let mut scrubbed_subscription_templates: u64 = 0;
+    for (sub_id, template) in &subscriptions {
+        let new_template = if anonymize_domain::mentions_name(template, &existing.name) {
+            scrubbed_subscription_templates += 1;
+            ANONYMIZED_SUBSCRIPTION_LABEL
+        } else {
+            template.as_str()
+        };
+        scrubbed_subscriptions += sqlx::query(
+            "UPDATE recurring_subscriptions SET label = ?, description_template = ? WHERE id = ?",
+        )
+        .bind(ANONYMIZED_SUBSCRIPTION_LABEL)
+        .bind(new_template)
+        .bind(sub_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
     // Verworfene Entwürfe: nur die Empfänger-Felder (Land bleibt) und die
     // interne Notiz, `updated_at` unverändert — genau die Änderung, die
     // `trg_invoices_voided_final` zulässt.
@@ -479,6 +519,8 @@ pub async fn anonymize_with_pauses(pool: &SqlitePool, id: &str) -> Result<Anonym
             "pausedRecurringInvoices": paused_templates,
             "pausedRecurringSubscriptions": paused_subscriptions,
             "scrubbedRecurringInvoices": scrubbed_templates,
+            "scrubbedRecurringSubscriptions": scrubbed_subscriptions,
+            "scrubbedSubscriptionTemplates": scrubbed_subscription_templates,
             "scrubbedVoidedInvoices": scrubbed_voided_invoices,
             "scrubbedWithdrawnQuotes": scrubbed_withdrawn_quotes,
         })),
@@ -498,6 +540,7 @@ pub async fn anonymize_with_pauses(pool: &SqlitePool, id: &str) -> Result<Anonym
         scrubbed_voided_invoices,
         scrubbed_withdrawn_quotes,
         scrubbed_templates,
+        scrubbed_subscriptions,
     })
 }
 

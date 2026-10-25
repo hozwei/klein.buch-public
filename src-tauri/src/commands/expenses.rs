@@ -17,7 +17,7 @@
 //! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
 
 use crate::app_ctx::AppCtx;
-use chrono::{Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -169,7 +169,7 @@ pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Res
         args.receipt = Some(ctx.uploads.read(id, &[UploadKind::Receipt])?);
     }
     let paths = ctx.paths.clone();
-    let detail = create_core(&pool, &paths, session, args).await?;
+    let detail = create_core(&pool, &paths, session, args, ctx.clock().now_utc()).await?;
     if let Some(id) = upload_id.as_deref() {
         ctx.uploads.consume(id);
     }
@@ -177,11 +177,13 @@ pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Res
 }
 
 /// Testbarer Kern von [`expenses_create`] (ohne `AppCtx`).
+/// `now` (Backup-Vermerk) aus der Uhr des Aufrufers (D-20).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,
     session: &backup::BackupSession,
     args: ExpenseCreateArgs,
+    now: DateTime<Utc>,
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
@@ -264,7 +266,7 @@ pub async fn create_core(
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
+    backup::request_auto_backup(pool, paths, session, "expense.lock", now)
         .await
         .ok();
 
@@ -319,9 +321,15 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session, "expense.cancel")
-        .await
-        .ok();
+    backup::request_auto_backup(
+        pool,
+        &paths,
+        session,
+        "expense.cancel",
+        ctx.clock().now_utc(),
+    )
+    .await
+    .ok();
 
     expenses::get(pool, &args.expense_id)
         .await?
@@ -525,7 +533,8 @@ pub async fn expenses_create_from_einvoice(
     let upload_id = std::mem::take(&mut args.upload_id);
     args.original = Some(ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?);
     let paths = ctx.paths.clone();
-    let detail = create_from_einvoice_with(pool, &paths, session, args).await?;
+    let detail =
+        create_from_einvoice_with(pool, &paths, session, args, ctx.clock().now_utc()).await?;
     ctx.uploads.consume(&upload_id);
     Ok(detail)
 }
@@ -539,6 +548,7 @@ pub async fn create_from_einvoice_with(
     paths: &Paths,
     session: &backup::BackupSession,
     args: EInvoiceCreateArgs,
+    now: DateTime<Utc>,
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
@@ -633,7 +643,7 @@ pub async fn create_from_einvoice_with(
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
+    backup::request_auto_backup(pool, paths, session, "expense.lock", now)
         .await
         .ok();
 

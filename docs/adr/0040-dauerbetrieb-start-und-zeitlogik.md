@@ -241,7 +241,9 @@ Abgeleitet aus dem UI/UX-Plan §9.2; so umgesetzt:
     `stop_grace_period` im Compose-Beispiel ist 90 s. Ein abgebrochenes Backup
     hinterlässt nur eine `.part`-Datei (Temp + rename), die der Start bzw. der
     stündliche Sweeper entfernt; Reste in `data/tmp` älter als 6 h räumt der
-    Sweeper im Betrieb (D-13).
+    Sweeper im Betrieb (D-13). Ergänzt in Nr. 57: vor dem Schließen des Pools
+    ein ausstehendes Lock-Backup (Gesamtfrist für Tick, Tasks und Nachholen
+    40 s).
 
 20. **Anzeige in Europe/Berlin (D-15, D-25).** `src/lib/date.ts` liest
     Zeitstempel der API zentral (`parseTimestamp`: DB-Format
@@ -308,7 +310,8 @@ Abgeleitet aus dem UI/UX-Plan §9.2; so umgesetzt:
   Entwurf mit vergebener Nummer wird nur nach ausdrücklicher Bestätigung
   festgeschrieben.
 - Nach dem Entsperren keine Lastspitze mehr (ein Backup, kein Vollscan im ersten
-  Tick); das Herunterfahren bleibt unter 70 s.
+  Tick); das Herunterfahren dauert höchstens 75 s (bis F3c 65 s; dazu kam das
+  Nachholen eines ausstehenden Lock-Backups, Nr. 57).
 - Tests laufen mit `FixedClock`: Zeitumstellung, Jahres- und Monatswechsel,
   parallele Auslöser, Abbruch, Uhrsprung, Tages-Backup über beide
   Zeitumstellungen, Restore eines älteren Backups (Nummern, Pause, Spiegelung,
@@ -662,6 +665,196 @@ Nr. 125):
     und andere vom Inhaber ausgelöste Läufe schreiben `owner`, weil sie über
     den Dispatcher laufen (ADR 0039 Nr. 125 (2)).
 
+Teil F3a — Backup, Restore, Krypto (25.10.2026; Krypto und Format in ADR 0039
+Nr. 127):
+
+50. **Lock-Backup außerhalb der Antwort (W5-AUTOBACKUP-SYNC).** Bisher legte
+    jeder festschreibende Command (Kosten, Privatbewegung, Anlage, AfA,
+    Jahresabschluss; als Job Rechnung, Storno, Angebot) das Backup selbst an —
+    Snapshot, Argon2id und alle Off-Site-Ziele lagen in der Antwortzeit, bei
+    großem Archiv oder langsamem SFTP über der 30-s-Grenze (503, Wiederholung
+    per Idempotenz-Schlüssel), und die Buchungserlaubnis (Nr. 48) blieb so
+    lange gehalten. Jetzt vermerkt `backup::request_auto_backup` das Ereignis
+    dauerhaft (`backup_pending_since`, Audit `backup.requested` mit dem
+    Ereignis) und weckt die Scheduler-Schleife; sie wartet
+    `tick::BACKUP_COALESCE` (2 s, Serien und Storno-Paare fallen in ein Backup)
+    und legt es unter der Tick-Sperre an (Akteur `scheduler`), auch während
+    der Wartezeit nach dem Entsperren (D-19 gilt für fällige Jobs, nicht für
+    die Arbeit des Inhabers). „Datenbank sperren“, Passphrase-Wechsel, Restore
+    und Herunterfahren warten darauf wie auf einen Tick; bei Pause bleibt der
+    Vermerk, der erste Tick danach holt nach (Nr. 40). Der geweckte Lauf hat
+    keinen Backoff (jedes Ereignis verdient einen Versuch, wie früher das
+    synchrone Backup), setzt bei Fehlschlag aber den des Nachholens. Lässt sich
+    der Vermerk nicht schreiben, läuft das Backup sofort wie bisher.
+    Abgewogen: eigener Hintergrund-Task je Command (keine Abstimmung mit
+    Sperren und Pausen) und Kostenklasse `Backup` für alle festschreibenden
+    Commands (nur ein Platz, Antwort weiter langsam). Die Backup-Hardline
+    „Backup bei jedem Lock-Event“ bleibt erfüllt: kein Ereignis ohne Vermerk,
+    kein Vermerk ohne folgendes Backup. Manuelle Abo-Läufe über einen Command
+    (`JobCtx::from_app`) verhalten sich ebenso; der Tick sammelt weiter (D-19).
+    Tests: `backup_schedule_test::lock_event_requests_backup_and_wake_creates_one`,
+    `server_restore_test::lock_event_backup_runs_after_the_answer`. **Berichtigt in
+    Nr. 57 (F3c):** „warten darauf wie auf einen Tick“ galt nicht für die 2 s des
+    Zusammenfassens — der geweckte Lauf verwarf sein Backup bei der
+    Abbruch-Anforderung; Sperren und Herunterfahren holen es jetzt nach.
+51. **Vermerk über einen Zähler statt Zeitstempel (zu Nr. 40).** Ein Backup
+    löschte den Vermerk, wenn dessen Zeitpunkt vor dem eigenen lag. Mit
+    Nr. 50 liegen Ereignis und Backup in verschiedenen Abläufen: ein während
+    des Backups festgeschriebener Beleg (nach dem Snapshot) durfte den älteren
+    Vermerk nicht mitlöschen, und nach einem Rückwärts-Sprung der Uhr hätte
+    kein Backup einen „zukünftigen“ Vermerk mehr gedeckt (Backup alle fünf
+    Minuten). Jetzt zählt `backup_pending_seq` die Ereignisse (eine
+    Upsert-Anweisung mit dem Vermerk); `create_with` liest den Zähler vor dem
+    Snapshot und löscht Vermerk und Zähler nur, wenn er unverändert ist.
+    `backup_pending_since` bleibt der Zeitpunkt des ältesten Ereignisses.
+    Bestand ohne Zähler (Vermerk aus F1) gilt als Zählerstand „leer“. Test:
+    `backup::tests::pending_marker_survives_events_during_backup`.
+52. **Off-Site „veraltet“ (W7-OFFSITE-STALE).** Der Status `offsite` kannte nur
+    `missing`/`failing`/`ok`; ein Ziel, das seit Wochen keine Kopie mehr bekam
+    (keine Backups, Pause nach einem Restore, neu angelegt und noch nie
+    beschrieben), blieb `ok`. Neu `stale`: kein Ziel scheiterte, aber eines hat
+    noch keine erfolgreiche Kopie oder seine letzte ist älter als
+    `max_age_days` der Regel „Backup überfällig“ (Standard 7, Berliner
+    Kalendertage wie die Regel; Zeit aus der Uhr des `AppCtx`). Übersicht,
+    Einstellungen und Loopback-`/healthz` zeigen ihn; die Gestaltung („vor
+    N Tagen“) bleibt dem UI/UX-Lauf. Test:
+    `backup::target::tests::targets_roundtrip_and_status`. **Ergänzt in Nr. 58
+    (F3c):** Die Einstellungen zeigten `stale` noch nicht.
+52.
+53. **WAL beim Restore-Tausch mitsichern (W7-WAL-SHM).** Phase B löschte
+    `-wal`/`-shm` der laufenden DB vor dem Beiseitelegen. Nach einem harten
+    Abbruch (Kill nach der Stop-Frist, Stromausfall) kann das WAL
+    festgeschriebene, noch nicht übernommene Transaktionen enthalten — auch
+    solche vor dem Pre-Restore-Backup; ein Rückfall auf die Originale hätte
+    dann eine ältere DB zurückgebracht. Jetzt wandert das WAL als eigenes Paar
+    mit (`klein-buch.sqlite.rollback-wal`, so findet SQLite es auch neben der
+    `.rollback`-DB), kommt bei einem Rückfall und in der Recovery mit zurück
+    und wird nach dem Tausch gelöscht; `-shm` (nur Index) wird weiter gelöscht.
+    Ohne Zustandsdatei (Altbestand, liegengebliebene Reste) kommt ein
+    `.rollback-wal` nur zusammen mit der `.rollback`-DB zurück, sonst wird es
+    beiseitegelegt — nie liegt ein fremdes WAL neben der eingespielten DB
+    (SQLite übernähme seine Seiten). Ein Checkpoint vor dem Tausch ist in
+    Phase B nicht möglich (ohne Passphrase kein Öffnen der DB, E3). Tests:
+    `backup::restore::tests::swap_moves_wal_with_db_and_drops_shm`,
+    `backup::restore::tests::committed_wal_transactions_survive_swap_rollback`,
+    `backup::restore::tests::leftover_rollback_wal_follows_only_its_db`.
+
+Teil F3b — Nachzügler aus der Nachprüfung von F1 (25.10.2026):
+
+54. **Nummernkreis-Hinweis bei fremdem Stand (zu Nr. 45, S2).** „Keine Lücke,
+    keine Doppelvergabe“ stimmte nur unter der stillen Annahme, dass die
+    ersetzte Datenbank derselbe Bestand in neuerem Stand ist. Nach einem
+    Totalausfall in eine neue Instanz mit Testdaten (Zähler 1, Backup 10)
+    hob nichts an, und der Info-Text verdrängte die nötige Anleitung — der
+    ausgefallene Server kann nach dem Backup weiter nummeriert haben. Jetzt
+    liest `finish_restore` vor dem Anheben die Zähler der eingespielten DB
+    (`numbering::counters_ahead`): liegt ein Kreis über dem Stand der
+    ersetzten DB oder fehlt er dort, gilt der Stand als fremd. Zusätzlich hält
+    Phase A die IDs der festgeschriebenen Rechnungen, Stornos und Angebote im
+    Marker (`locked_ids`, additiv; ältere Marker ohne IDs überspringen die
+    Prüfung); trägt ein festgeschriebener Beleg der eingespielten DB eine
+    Nummer der ersetzten, aber eine andere ID
+    (`after_restore::foreign_numbers`), ist der Stand ebenfalls fremd — das
+    deckt gleiche Zähler zweier Instanzen ab. Ein älteres Backup derselben
+    Instanz löst beides nie aus (Zähler steigen nur, festgeschriebene Belege
+    ändern sich nie). Fremder Stand → dringende Anleitung zum Anheben mit
+    Begründung, angehobene Kreise zusätzlich genannt; „keine Lücke“ (Info) nur
+    bei genau gleichen Ständen. Audit `backup.restore.applied` mit
+    `counters_ahead` und `foreign_documents`. Abgewogen gegen eine Instanz-ID
+    in der DB: bräuchte für Bestands-Backups ohne ID doch wieder diese
+    Prüfungen. Tests: `numbering::tests::counters_ahead_finds_higher_and_missing_circles`,
+    `after_restore::tests::foreign_numbers_needs_same_number_with_other_id`,
+    `db::tests::numbering_notice_info_only_for_identical_states`,
+    `server_restore_test::restore_over_other_instance_with_lower_counters_asks_to_raise`.
+55. **Vorgerückte Kosten-Abos: Kosten nachtragen (zu Nr. 32, S3).** Die
+    Begründung von Nr. 32 („sonst doppelt abgerechnet“) trägt nur für
+    Abo-Rechnungen: die Rechnung ging hinaus. Gebuchte Kosten hatten keine
+    Außenwirkung und sind mit der ersetzten DB verworfen; sie fehlen danach in
+    Kosten und EÜR, und „Buchen“ hilft nicht mehr, weil der Termin vorgerückt
+    ist. Der Hinweis „Abo-Termine nach der Wiederherstellung“ nennt
+    vorgerückte Kosten-Abos jetzt getrennt („Kosten-Abos: … verworfen und
+    fehlen jetzt in Kosten und EÜR … anhand des Kontoauszugs von Hand
+    erfassen“), das Handbuch ebenso. Erwogen: Kosten-Abos statt Vorrücken in
+    die Prüfung „Rückstand …“ zu schicken, damit „nachholen“ neu bucht. Nicht
+    gewählt: Der Marker kennt nur den nächsten Termin der ersetzten DB, nicht,
+    ob die Termine dazwischen gebucht oder per „ab heute fortsetzen“ bewusst
+    ausgelassen wurden — ein Klick auf „nachholen“ buchte dann Kosten, die es
+    nie gab (zu niedriger Gewinn). Der Kontoauszug ist die Quelle, das
+    Nachtragen bleibt eine bewusste Einzelbuchung. Test:
+    `after_restore::tests::notice_separates_costs_and_paused_series`,
+    `server_restore_test::older_backup_restore_bills_no_period_twice_and_guards_used_draft_numbers`.
+56. **Prüf-Marker nur mit Handlungsweg (zu Nr. 33, S3).** Der Marker
+    `recurring_restore_review:*` entsteht nur noch für Reihen, für die ein Lauf
+    etwas erzeugen würde: Vorlagen innerhalb ihrer Laufzeit (`end_date` leer
+    oder nächster Termin ≤ Ende) und Kosten-Abos mit Auto-Buchung. Für eine
+    abgelaufene Vorlage blieb er sonst für immer stehen (der Termin rückt nie
+    über den Restore-Tag), für ein Abo ohne Auto-Buchung gab es keinen Knopf
+    „Rückstand …“. Pausierte Reihen behalten den Marker — die Wahl verlangt
+    dann das Fortsetzen (`has_backlog` prüft ihn) —, der Hinweis nennt sie
+    getrennt („Pausiert, die Wahl fällt beim Fortsetzen“), das Audit
+    `*.restore_review` trägt `paused`. Tests:
+    `after_restore::tests::notice_separates_costs_and_paused_series`,
+    `server_restore_test::restore_without_series_state_requires_decision_and_never_auto_issues`
+    (abgelaufene Vorlage und Abo ohne Auto-Buchung ohne Marker und Hinweis).
+
+Teil F3c — Nachbesserung F3 nach der Prüfung (25.10.2026):
+
+57. **Ausstehendes Lock-Backup vor dem Sperren und Herunterfahren schreiben
+    (zu Nr. 50 und 19, S2).** Der geweckte Lauf schläft `BACKUP_COALESCE`
+    ohne die Tick-Sperre; kam in dieser Zeit „Datenbank sperren“ oder das
+    Herunterfahren (z. B. `docker compose up -d`), bekam `stop_within` die
+    Sperre sofort, und der Lauf verwarf das Backup wegen der
+    Abbruch-Anforderung. Lief das Backup schon, wartete Sperren nur 10 s
+    (`SCHEDULER_STOP_WAIT`) und schloss dann den Pool darunter. Bis zum
+    nächsten Entsperren (E3, unter Umständen Tage) stand der eben
+    festgeschriebene Beleg nur in der Live-DB. Jetzt holen `lock_database`
+    und `finish_shutdown` vor dem Schließen des Pools ein ausstehendes
+    Lock-Backup nach (`tick::flush_pending_backup`): Steht der Vermerk und ist
+    die Sitzung entsperrt, warten sie auf die Tick-Sperre (ein laufendes
+    Backup endet zuerst und löscht den Vermerk), pausieren den Scheduler und
+    legen das Backup unter der Sperre an — Sperren höchstens `DB_GATE_WAIT`
+    (60 s; laufende Commands gibt es dann nicht mehr), Herunterfahren im Rest
+    von `SHUTDOWN_WORK_BUDGET` (40 s für Tick, Tasks und Nachholen, mindestens
+    10 s für das Nachholen; danach, damit auch ein eben endender Command
+    erfasst ist). Gesamtes Herunterfahren damit höchstens 30 + 40 + 5 = 75 s
+    unter `stop_grace_period` 90 s. Ohne Vermerk kostet das nichts. Reicht die
+    Frist nicht, bleibt der Vermerk, und der erste Tick nach dem Entsperren
+    holt nach (Nr. 40). Der geweckte Lauf selbst bleibt bei der
+    Abbruch-Anforderung untätig: Ein Passphrase-Wechsel soll nicht 10 s auf
+    ein Backup warten und mit 503 enden; danach folgt ohnehin ein volles Backup
+    mit der neuen Passphrase. Abgewogen: Backup im geweckten Lauf trotz
+    Anforderung — verschöbe das Problem nur (das Sperren wartete weiterhin
+    höchstens 10 s auf den laufenden Lauf). Tests:
+    `server_restore_test::lock_and_shutdown_write_pending_lock_backup` (der
+    geweckte Lauf stellt sich hinter einen simulierten Tick und verwirft;
+    Sperren bzw. Herunterfahren schreibt das Backup),
+    `backup_schedule_test::shutdown_budget_fits_stop_grace_period`.
+58. **Off-Site „veraltet“ auch in den Einstellungen (zu Nr. 52, S3).** Die
+    Übersicht verlinkte für `stale` auf „Backups“, dort fehlte jeder Hinweis.
+    Die Seite zeigt jetzt einen Hinweis (keine aktuelle Kopie: noch keine oder
+    älter als die Frist der Regel; nach einem Restore ruht die Spiegelung bis
+    zur Freigabe; sonst schreibt das nächste Backup oder „Jetzt sichern“ eine
+    Kopie); den Stand je Ziel zeigt die Liste darunter. Auf der Übersicht ist
+    `stale` eine Warnung statt eines roten Eintrags — ein gerade
+    hinzugefügtes Ziel ohne Kopie ist kein Ausfall (`missing`/`failing`
+    bleiben rot). Eine sofortige Erstkopie beim Hinzufügen bleibt aus (das
+    Hinzufügen löste sonst ein volles Backup aus); die Gestaltung macht der
+    UI/UX-Lauf. Test: `src/routes/offsite-status.test.ts` (jeder Status außer
+    `ok` aus dem Vertrag in `api.ts` hat einen Hinweis auf Übersicht und
+    Seite „Backups“).
+59. **Uhr der Lock-Ereignisse aus dem Aufrufer (D-20, S3).** Zwölf Aufrufer von
+    `request_auto_backup` übergaben `crate::clock::now_utc()` (Vermerk
+    `backup_pending_since`, im Rückfall ohne Vermerk Manifest, Dateiname und
+    Klasse) — auch der Auto-AfA-Lauf aus dem Tick. Jetzt kommt die Zeit aus
+    dem `AppCtx` (`ctx.clock()`) bzw. dem `JobCtx`: `accrue_for_year` und
+    `fiscal_year::lock::close_year` nehmen `now` statt `today` (das Berliner
+    Datum leiten sie selbst ab), `reset_asset`, `expenses::create_core`,
+    `create_from_einvoice_with` und `private_movements::create_core` nehmen
+    `now`; die Commands (Rechnung, Storno, Angebot, Kosten, Anlagen,
+    Privatbewegung, AfA, Jahresabschluss) reichen `ctx.clock().now_utc()`.
+    Test: `backup_schedule_test::lock_events_use_the_injected_clock`
+    (statisch: kein Aufruf übergibt die Systemuhr).
+
 ## Referenzen
 
 `clock`, `app_ctx`, `scheduler::{mod, tick, hold, catch_up, backoff, recurring,
@@ -670,7 +863,7 @@ recurring_invoice, reminders, depreciation_year_close, integrity_check_cron}`,
 notifications}`, `db::{mod (run_migrations, finish_restore), numbering}`,
 `db::repo::{recurring, recurring_invoice, payment_accounts, contacts}`,
 `backup::{mod (create_with, auto_daily_if_due, pending_backup_if_due,
-rescan_floor), rotation, restore, after_restore}`, `archive::integrity_check`, `server::{auth::{lock_database, rekey},
+rescan_floor, request_auto_backup, requested_backup_now), target (offsite_status), rotation, restore, after_restore}`, `archive::integrity_check`, `server::{auth::{lock_database, rekey},
 state::finish_shutdown, startup::{sweep_tmp, sweep_partial_backups}, mod}`;
 Tests `tests/recurring_scheduler_test.rs`, `tests/backup_schedule_test.rs`,
 `tests/server_restore_test.rs` (`older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_release`,

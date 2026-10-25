@@ -16,6 +16,8 @@
     backupTargetAddSftp,
     backupTargetRemove,
     backupList,
+    backupDownload,
+    saveDownload,
     backupRestoreApply,
     backupSetDailyTime,
     numberingCountersList,
@@ -346,6 +348,19 @@
     }
   }
 
+  // Lauf F3a: verschlüsselte .kbk herunterladen (Umzug, Disaster Recovery ohne
+  // externes Ziel). Re-Auth fragt der Transport selbst ab.
+  async function downloadBackup(item: BackupHistoryItem) {
+    busy = true;
+    try {
+      saveDownload(await backupDownload(item.id));
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
   async function pickForRestore(item: BackupHistoryItem) {
     restoreFromList = item;
     restoreFile = null;
@@ -453,6 +468,14 @@
       <p class="warn-box">
         Mindestens ein Ziel ist beim letzten Backup fehlgeschlagen — Einzelheiten unten
         und im Backup-Protokoll.
+      </p>
+    {:else if settings.offsiteStatus === "stale"}
+      <p class="warn-box">
+        Mindestens ein Ziel hat keine aktuelle Kopie: noch keine (z. B. gerade
+        hinzugefügt) oder die letzte ist älter als die Frist der Regel „Backup
+        überfällig“. Nach einer Wiederherstellung ruht die Spiegelung bis zur Freigabe;
+        sonst schreibt das nächste Backup oder „Jetzt sichern“ eine neue Kopie. Den
+        Stand je Ziel zeigt die Liste unten.
       </p>
     {/if}
     <p class="muted">
@@ -649,8 +672,11 @@
               <td class="actions">
                 {#if isLocalPath(item.targetPath)}
                   <button class="link" onclick={() => pickForRestore(item)}>Auswählen ↓</button>
-                {:else}
-                  <span class="hint" title="Externe Kopie erst herunterladen, dann unten als Datei hochladen.">erst laden</span>
+                {:else if item.targetPath.startsWith("sftp://")}
+                  <span class="hint" title="Die Kopie liegt auf dem SFTP-Server: dort holen, dann unten als Datei hochladen.">auf dem SFTP-Server</span>
+                {/if}
+                {#if !item.targetPath.startsWith("sftp://")}
+                  <button class="link" onclick={() => downloadBackup(item)} disabled={busy}>Herunterladen</button>
                 {/if}
               </td>
             </tr>

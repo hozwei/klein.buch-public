@@ -15,7 +15,8 @@
 //! - Passphrase-Setup/Unlock via verschlüsseltem Verifier (kein Klartext, kein
 //!   Hash in der DB nötig).
 //! - [`create_now`] — die Backup-Erstellungs-Pipeline.
-//! - [`auto_backup_if_unlocked`] — best-effort Auto-Hook für `lock`-Events.
+//! - [`request_auto_backup`] — Lock-Events: Vermerk + Backup im Hintergrund
+//!   (Scheduler, Lauf F3a); [`auto_backup_at`] — sofort (Tick, Nachholen).
 
 pub mod after_restore;
 pub mod encrypt;
@@ -54,15 +55,28 @@ pub const SETTING_VERIFIER_CT: &str = "backup_verifier_ct_hex";
 /// laufenden Session (im `AppCtx`). Niemals serialisiert, niemals in
 /// DB/Logs/audit_log. Beim Ersetzen und Löschen wird der alte Wert per
 /// `zeroize` überschrieben (Plan W6: „Datenbank sperren“, Passphrase ändern).
+///
+/// Trägt außerdem das Wecksignal für ausstehende Lock-Backups (Lauf F3a,
+/// W5-AUTOBACKUP-SYNC): [`request_auto_backup`] vermerkt das Backup und weckt
+/// den Scheduler, der es außerhalb der Antwort des Commands anlegt.
 #[derive(Default)]
 pub struct BackupSession {
     inner: Mutex<Option<String>>,
+    backup_wake: tokio::sync::Notify,
 }
 
 impl BackupSession {
+    /// Sperre ohne Panik bei Poisoning (KB-0034): der Inhalt (`Option<String>`)
+    /// ist nach einer Panik eines anderen Halters weiter gültig.
+    fn guard(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn set(&self, passphrase: String) {
         use zeroize::Zeroize as _;
-        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = self.guard();
         if let Some(old) = guard.as_mut() {
             old.zeroize();
         }
@@ -71,25 +85,30 @@ impl BackupSession {
 
     pub fn clear(&self) {
         use zeroize::Zeroize as _;
-        let mut guard = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = self.guard();
         if let Some(mut old) = guard.take() {
             old.zeroize();
         }
     }
 
     pub fn is_unlocked(&self) -> bool {
-        self.inner
-            .lock()
-            .expect("BackupSession mutex poisoned")
-            .is_some()
+        self.guard().is_some()
     }
 
     /// Liefert eine Kopie der Passphrase, falls die Session entsperrt ist.
     pub fn get(&self) -> Option<String> {
-        self.inner
-            .lock()
-            .expect("BackupSession mutex poisoned")
-            .clone()
+        self.guard().clone()
+    }
+
+    /// Weckt den Scheduler für ein ausstehendes Lock-Backup. Mehrere Signale
+    /// vor dem Aufwachen zählen als eines (zusammengefasst).
+    pub fn wake_backup(&self) {
+        self.backup_wake.notify_one();
+    }
+
+    /// Wartet auf [`Self::wake_backup`] (Scheduler-Schleife).
+    pub async fn backup_wake_requested(&self) {
+        self.backup_wake.notified().await;
     }
 }
 
@@ -341,9 +360,44 @@ async fn notify_backup_result(
     .ok();
 }
 
+/// Protokolliert einen gescheiterten Lauf vor bzw. beim Schreiben des Floors
+/// (G1-LOG, W2-SNAP-LOG): Zeile `failed` im append-only `backup_log` (Ziel
+/// `local`, geplanter Dateiname und Pfad) und Inbox-Hinweis über die Regel
+/// `rule_backup_result` (Dedup über `dedup_key`). Best-effort.
+#[allow(clippy::too_many_arguments)]
+async fn record_local_failure(
+    pool: &SqlitePool,
+    trigger_reason: &str,
+    file_name: &str,
+    full_path: &str,
+    size_bytes: i64,
+    detail: String,
+    body: &str,
+    dedup_key: &str,
+) {
+    crate::db::repo::backup_log::insert(
+        pool,
+        &crate::db::repo::backup_log::BackupLogEntry {
+            trigger: trigger_reason.to_string(),
+            target_kind: "local".to_string(),
+            target_label: None,
+            file_name: file_name.to_string(),
+            full_path: full_path.to_string(),
+            size_bytes,
+            status: "failed".to_string(),
+            detail: Some(detail),
+        },
+    )
+    .await
+    .ok();
+    notify_backup_result(pool, "warning", "Backup fehlgeschlagen", body, dedup_key).await;
+}
+
 /// Verschlüsselt einen Content-ZIP zu einer `.kbk`-Datei (Manifest-Frame +
-/// AES-256-GCM, Schlüssel per Argon2id mit frischem Salt/Nonce). Blockierend
-/// (KDF) — aus async-Code über `limits::run_blocking` aufrufen.
+/// AES-256-GCM, Schlüssel per Argon2id mit frischem Salt/Nonce; Format 3 mit
+/// dem Kopf als AAD). Blockierend (KDF) — aus async-Code über
+/// `limits::run_blocking` aufrufen. Kopiert den Inhalt einmal; intern nutzt
+/// [`create_with`] die Variante ohne Kopie ([`seal_backup_at`]).
 pub fn seal_backup(
     zip_bytes: &[u8],
     content_sha256: &str,
@@ -351,30 +405,40 @@ pub fn seal_backup(
     schema_version: i32,
 ) -> Result<(manifest::Manifest, Vec<u8>)> {
     seal_backup_at(
-        zip_bytes,
+        zip_bytes.to_vec(),
         content_sha256,
         passphrase,
         schema_version,
         crate::clock::now_utc(),
+        manifest::FORMAT_VERSION,
     )
 }
 
 /// Wie [`seal_backup`], mit vorgegebenem Erstellungszeitpunkt im Manifest
-/// (injizierte Uhr, Lauf F).
+/// (injizierte Uhr, Lauf F) und **in place** (Lauf F3a): Der Puffer des
+/// Content-ZIP wird zur fertigen Datei — Kopf davor, Inhalt verschlüsselt,
+/// Tag dahinter. Speicherbedarf etwa einmal die Backup-Größe statt dreimal
+/// (ZIP, Ciphertext, Frame).
+///
+/// `format_version` (Lauf F3c): Format 3 bindet den Kopf als AAD; Format 2
+/// (gleicher Inhalt, leere AAD wie bis v2026.10) nur für das Pflicht-Backup
+/// vor einer Migration, solange die Vorversion Format 3 nicht liest
+/// ([`manifest::readable_format_for_schema`]).
 pub fn seal_backup_at(
-    zip_bytes: &[u8],
+    zip_bytes: Vec<u8>,
     content_sha256: &str,
     passphrase: &str,
     schema_version: i32,
     created_at: DateTime<Utc>,
+    format_version: u32,
 ) -> Result<(manifest::Manifest, Vec<u8>)> {
+    manifest::ensure_writable_format(format_version)?;
     let salt = encrypt::random_bytes(encrypt::SALT_LEN);
     let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
-    let ciphertext = encrypt::encrypt(&key, &encrypt::nonce_array(&nonce)?, zip_bytes)?;
+    let key = zeroize::Zeroizing::new(encrypt::derive_key(passphrase.as_bytes(), &salt)?);
     let man = manifest::Manifest {
         magic: manifest::MAGIC.to_string(),
-        format_version: manifest::FORMAT_VERSION,
+        format_version,
         schema_version,
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         created_at: created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -389,8 +453,25 @@ pub fn seal_backup_at(
         content_sha256: content_sha256.to_string(),
         content_size_bytes: zip_bytes.len() as u64,
     };
-    let file_bytes = manifest::frame(&man, &ciphertext)?;
-    Ok((man, file_bytes))
+    // Kopf (= AAD ab Format 3, W14-020) vor den Inhalt schieben: Platz für Kopf
+    // und Tag reservieren, dann im selben Puffer verschieben (keine Kopie).
+    let header = manifest::header_bytes(&man)?;
+    let mut buf = zip_bytes;
+    let content_len = buf.len();
+    buf.reserve_exact(header.len() + encrypt::TAG_LEN);
+    buf.resize(content_len + header.len(), 0);
+    buf.copy_within(0..content_len, header.len());
+    buf[..header.len()].copy_from_slice(&header);
+    let (head, body) = buf.split_at_mut(header.len());
+    // Format 2: ohne AAD wie `encrypt::encrypt` bis v2026.10 (Tag am Ende).
+    let aad: &[u8] = if manifest::binds_header(format_version) {
+        head
+    } else {
+        &[]
+    };
+    let tag = encrypt::encrypt_in_place_detached(&key, &encrypt::nonce_array(&nonce)?, aad, body)?;
+    buf.extend_from_slice(&tag);
+    Ok((man, buf))
 }
 
 /// Trägt eine vorhandene `.kbk` im lokalen Backup-Ordner in `backup_history`
@@ -501,7 +582,7 @@ pub async fn verify_backup_file(path: &std::path::Path, passphrase: &str) -> Res
     let bytes = tokio::fs::read(path).await?;
     let pass = zeroize::Zeroizing::new(passphrase.to_string());
     crate::limits::run_blocking(&crate::limits::KDF, move || {
-        restore::decrypt_backup(&bytes, &pass).map(|_| ())
+        restore::decrypt_backup_owned(bytes, &pass).map(|_| ())
     })
     .await
 }
@@ -524,6 +605,10 @@ pub struct CreateOptions {
     /// Erstellungszeitpunkt (Manifest, Dateiname, Historie, Klasse) — aus der
     /// injizierten Uhr des Aufrufers (Lauf F, D-04/D-20).
     pub now: DateTime<Utc>,
+    /// Backup-Format, in der Regel [`manifest::FORMAT_VERSION`]. Das
+    /// Pflicht-Backup vor einer Migration nutzt das Format, das die Vorversion
+    /// liest (Lauf F3c, [`manifest::readable_format_for_schema`]).
+    pub format_version: u32,
 }
 
 /// Fehltext der ausgesetzten Spiegelung (Ergebnis je Ziel).
@@ -546,6 +631,7 @@ pub async fn create_now(
         CreateOptions {
             mirror: Mirror::Auto,
             now: crate::clock::now_utc(),
+            format_version: manifest::FORMAT_VERSION,
         },
     )
     .await
@@ -572,41 +658,80 @@ pub async fn create_with(
     // im Tick, manuell, Pre-Restore) — nie zwei gleichzeitig.
     let _serial = BACKUP_LOCK.lock().await;
     let now_berlin = opts.now.with_timezone(&chrono_tz::Europe::Berlin);
+    let day = now_berlin.format("%Y-%m-%d").to_string();
+    // Dateiname vorab — auch die Fehlerzeile eines gescheiterten Snapshots nennt
+    // ihn (W2-SNAP-LOG). Millisekunden + Kurz-UUID: zwei Backups in derselben
+    // Sekunde ergeben zwei Dateien (Plan W2.3).
+    let stamp = now_berlin.format("%Y%m%d-%H%M%S%3f").to_string();
+    let short = uuid::Uuid::now_v7().simple().to_string();
+    let file_name = format!("klein-buch-{stamp}-{}.kbk", &short[short.len() - 8..]);
+    let floor_file = paths
+        .backups_dir
+        .join(&file_name)
+        .to_string_lossy()
+        .to_string();
+    // Vor dem Snapshot: Stand der vermerkten Lock-Ereignisse (alles bis hier
+    // Festgeschriebene steht im Snapshot).
+    let seq_at_start = pending_seq(pool).await;
 
-    // 1. Konsistenter Content-Snapshot. Die DB ist mit derselben Passphrase
-    //    verschlüsselt (eine Passphrase-Kette, ADR 0035); Klartext nur in Tests.
-    let db_key = (!crate::db::db_file_is_plaintext(&paths.db_file)).then_some(passphrase);
-    let content = snapshot::build_content_zip(paths, db_key).await?;
-    // Schema-Version der gesicherten DB — vor einer Migration älter als
-    // `EXPECTED` (Pflicht-Backup vor Migration, Plan W7).
-    let schema_version = crate::db::schema_version::read(pool)
-        .await?
-        .unwrap_or(EXPECTED_SCHEMA_VERSION);
-
-    // 2./3. Verschlüsseln (Argon2id + AES außerhalb der Runtime, KDF begrenzt,
-    //       Plan W2.6) und Manifest-Frame.
-    let (man, file_bytes) = {
+    // 1.–3. Snapshot, Schema-Version, Verschlüsselung — mit gemeinsamer
+    //       Fehlerbehandlung (W2-SNAP-LOG, Lauf F3a): ein Fehlschlag steht wie
+    //       ein gescheiterter Floor im Backup-Protokoll und erzeugt einen
+    //       Hinweis (Dedup je Tag), nicht nur Log und Audit.
+    #[allow(clippy::type_complexity)]
+    let sealed: Result<(manifest::Manifest, Vec<u8>, i32, Vec<snapshot::Skipped>)> = async {
+        // Konsistenter Content-Snapshot. Die DB ist mit derselben Passphrase
+        // verschlüsselt (eine Passphrase-Kette, ADR 0035); Klartext nur in Tests.
+        let db_key = (!crate::db::db_file_is_plaintext(&paths.db_file)).then_some(passphrase);
+        let content = snapshot::build_content_zip(paths, db_key).await?;
+        // Schema-Version der gesicherten DB — vor einer Migration älter als
+        // `EXPECTED` (Pflicht-Backup vor Migration, Plan W7).
+        let schema_version = crate::db::schema_version::read(pool)
+            .await?
+            .unwrap_or(EXPECTED_SCHEMA_VERSION);
+        // Verschlüsseln in place (Argon2id + AES außerhalb der Runtime, KDF
+        // begrenzt, Plan W2.6) mit dem Kopf als AAD (Format 3; Format 2 nur
+        // vor einer Migration, Lauf F3c).
         let pass = zeroize::Zeroizing::new(passphrase.to_string());
         let snapshot::Content {
             zip_bytes,
             sha256_hex,
+            skipped,
         } = content;
-        let now = opts.now;
-        crate::limits::run_blocking(&crate::limits::KDF, move || {
-            seal_backup_at(&zip_bytes, &sha256_hex, &pass, schema_version, now)
+        let (now, format) = (opts.now, opts.format_version);
+        let (man, bytes) = crate::limits::run_blocking(&crate::limits::KDF, move || {
+            seal_backup_at(zip_bytes, &sha256_hex, &pass, schema_version, now, format)
         })
-        .await?
+        .await?;
+        Ok((man, bytes, schema_version, skipped))
+    }
+    .await;
+    let (man, file_bytes, schema_version, skipped) = match sealed {
+        Ok(sealed) => sealed,
+        Err(e) => {
+            tracing::error!("Backup ({trigger_reason}) nicht erstellt: {e}");
+            record_local_failure(
+                pool,
+                trigger_reason,
+                &file_name,
+                &floor_file,
+                0,
+                format!("Snapshot/Verschlüsselung: {e}"),
+                "Die Sicherung konnte nicht erstellt werden (Snapshot der Datenbank, \
+                 Lesen des Archivs oder Verschlüsselung). Details im Backup-Protokoll.",
+                &format!("backup_result_failed_create:{day}"),
+            )
+            .await;
+            return Err(e);
+        }
     };
     let app_version = man.app_version.clone();
     let created_at = man.created_at.clone();
     let history_created_at = crate::clock::to_db_utc(opts.now);
     let file_hash = snapshot::sha256_hex(&file_bytes);
     let size_bytes = file_bytes.len() as i64;
-    // Millisekunden + Kurz-UUID: zwei Backups in derselben Sekunde ergeben zwei
-    // Dateien (Plan W2.3).
-    let stamp = now_berlin.format("%Y%m%d-%H%M%S%3f").to_string();
-    let short = uuid::Uuid::now_v7().simple().to_string();
-    let file_name = format!("klein-buch-{stamp}-{}.kbk", &short[short.len() - 8..]);
+    // Eine Datei für alle Ziele, ohne Kopie je Ziel (Lauf F3a).
+    let file_bytes = std::sync::Arc::new(file_bytes);
     let retention_tag =
         rotation::classify_retention(now_berlin.date_naive(), trigger_reason).to_string();
     // Pause der automatischen Belegerzeugung (Lauf F): Grund `restore` setzt
@@ -622,42 +747,29 @@ pub async fn create_with(
     let floor_target = target::BackupTarget::Directory {
         path: paths.backups_dir.to_string_lossy().to_string(),
     };
-    let floor_path = match target::write_backup(&floor_target, None, &file_name, &file_bytes).await
+    let floor_path = match target::write_backup_shared(
+        &floor_target,
+        None,
+        &file_name,
+        file_bytes.clone(),
+    )
+    .await
     {
         Ok(p) => p,
         Err(e) => {
             // Floor-Fehlschlag protokollieren (best-effort), dann hart melden:
             // ohne Floor gibt es keine Sicherheits-Kopie (G1-LOG: jeder Lauf wird
             // protokolliert, Erfolg UND Fehlschlag).
-            crate::db::repo::backup_log::insert(
+            record_local_failure(
                 pool,
-                &crate::db::repo::backup_log::BackupLogEntry {
-                    trigger: trigger_reason.to_string(),
-                    target_kind: "local".to_string(),
-                    target_label: None,
-                    file_name: file_name.clone(),
-                    full_path: paths
-                        .backups_dir
-                        .join(&file_name)
-                        .to_string_lossy()
-                        .to_string(),
-                    size_bytes,
-                    status: "failed".to_string(),
-                    detail: Some(e.to_string()),
-                },
-            )
-            .await
-            .ok();
-            notify_backup_result(
-                pool,
-                "warning",
-                "Backup fehlgeschlagen",
+                trigger_reason,
+                &file_name,
+                &floor_file,
+                size_bytes,
+                e.to_string(),
                 "Die lokale Pflicht-Sicherung konnte nicht geschrieben werden. \
                  Prüfe Speicherplatz und Schreibrechte. Details im Backup-Protokoll.",
-                &format!(
-                    "backup_result_failed_floor:{}",
-                    now_berlin.format("%Y-%m-%d")
-                ),
+                &format!("backup_result_failed_floor:{day}"),
             )
             .await;
             return Err(e);
@@ -683,19 +795,33 @@ pub async fn create_with(
         "backup.created",
         "backup",
         &history_id,
-        Some(serde_json::json!({ "trigger": trigger_reason, "tag": retention_tag, "size": size_bytes })),
+        Some(serde_json::json!({
+            "trigger": trigger_reason,
+            "tag": retention_tag,
+            "size": size_bytes,
+            "skipped": skipped.len(),
+        })),
     )
     .await
     .ok();
-    // Ein ausstehendes Lock-Backup ist damit erledigt, sofern es vor diesem
-    // Backup vermerkt wurde (F1d; jüngere Vermerke bleiben stehen).
-    sqlx::query("DELETE FROM app_settings WHERE key = ? AND value <= ?")
-        .bind(PENDING_KEY)
-        .bind(&history_created_at)
-        .execute(pool)
-        .await
-        .ok();
+    // Ein ausstehendes Lock-Backup ist damit erledigt, sofern seit dem Beginn
+    // dieses Backups kein weiteres Ereignis vermerkt wurde (F1d, Lauf F3a:
+    // Zähler statt Zeitstempel). Ein während des Backups festgeschriebener
+    // Beleg hält den Vermerk stehen.
+    sqlx::query(
+        "DELETE FROM app_settings WHERE key IN (?1, ?2)
+           AND COALESCE((SELECT value FROM app_settings WHERE key = ?2), '') = ?3",
+    )
+    .bind(PENDING_KEY)
+    .bind(PENDING_SEQ_KEY)
+    .bind(&seq_at_start)
+    .execute(pool)
+    .await
+    .ok();
     // Floor-Erfolg ins Backup-Protokoll (G1-LOG, append-only; nie fatal).
+    // Lauf F3c: nicht gesicherte Einträge (Links, verschwundene Archivdateien)
+    // stehen im Detail und als Hinweis — ein Backup wird nie still gekürzt.
+    let incomplete = incomplete_detail(&skipped);
     crate::db::repo::backup_log::insert(
         pool,
         &crate::db::repo::backup_log::BackupLogEntry {
@@ -706,11 +832,28 @@ pub async fn create_with(
             full_path: floor_path.clone(),
             size_bytes,
             status: "ok".to_string(),
-            detail: None,
+            detail: incomplete.clone(),
         },
     )
     .await
     .ok();
+    if let Some(detail) = &incomplete {
+        tracing::warn!("Backup {file_name} unvollständig: {detail}");
+        notify_backup_result(
+            pool,
+            "warning",
+            "Backup unvollständig",
+            &format!(
+                "Die Sicherung {file_name} enthält nicht alles: {detail}. Klein.Buch \
+                 sichert nur echte Dateien im Archiv; einen ausgelagerten Ordner bitte \
+                 als Ordner zurückholen oder als Volume einbinden, eine fehlende \
+                 Archivdatei über die Integritätsprüfung klären. Details im \
+                 Backup-Protokoll."
+            ),
+            &format!("backup_result_incomplete:{day}"),
+        )
+        .await;
+    }
 
     // 5. Off-Site-Spiegelung auf jedes Ziel (Plan W7, best-effort). Fehlschlag
     //    ist NICHT fatal: der Floor ist gesichert, und ein nicht erreichbares
@@ -790,7 +933,12 @@ pub async fn create_with(
             let written = match target::resolve(entry, &paths.backup_targets_dir) {
                 Ok(resolved) => match tokio::time::timeout(
                     limit,
-                    target::write_backup(&resolved, password.as_deref(), &file_name, &file_bytes),
+                    target::write_backup_shared(
+                        &resolved,
+                        password.as_deref(),
+                        &file_name,
+                        file_bytes.clone(),
+                    ),
                 )
                 .await
                 {
@@ -975,6 +1123,36 @@ pub async fn create_with(
     })
 }
 
+/// Höchstens so viele nicht gesicherte Einträge nennt das Detail einzeln.
+const INCOMPLETE_LISTED: usize = 5;
+
+/// Detail für das Backup-Protokoll, wenn der Snapshot Einträge nicht sichern
+/// konnte (Lauf F3c); `None` = vollständig.
+fn incomplete_detail(skipped: &[snapshot::Skipped]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let listed: Vec<String> = skipped
+        .iter()
+        .take(INCOMPLETE_LISTED)
+        .map(ToString::to_string)
+        .collect();
+    let more = skipped.len().saturating_sub(INCOMPLETE_LISTED);
+    let tail = if more > 0 {
+        format!(" und {more} weitere")
+    } else {
+        String::new()
+    };
+    let count = match skipped.len() {
+        1 => "1 Eintrag".to_string(),
+        n => format!("{n} Einträge"),
+    };
+    Some(format!(
+        "Unvollständig: {count} nicht gesichert — {}{tail}",
+        listed.join(", ")
+    ))
+}
+
 /// Bildet ein auslösendes Event auf eine für `backups.trigger_reason` **gültige**
 /// Kategorie ab. Der CHECK erlaubt nur auto_daily/auto_critical/manual/pre_restore;
 /// bereits gültige Reasons bleiben, alle Lock-Event-Labels werden `auto_critical`.
@@ -985,25 +1163,73 @@ fn db_trigger_reason(event: &str) -> &str {
     }
 }
 
-/// Best-effort Auto-Backup für `lock`-Events (Invoice/Storno/Expense/…).
+/// Lock-Ereignis (Backup-Hardline; Lauf F3a W5-AUTOBACKUP-SYNC, ADR 0040
+/// Nr. 50): Das Festschreiben (Rechnung, Storno, Kosten, Privatbewegung,
+/// Anlage, AfA, Jahresabschluss, Angebot) wartet nicht mehr auf das Backup.
 ///
-/// - Session nicht entsperrt → kein Backup, nur Audit-Marker, `Ok(None)`.
-/// - Session entsperrt → `create_now`. Schlägt das Backup fehl (z. B. Ziel
-///   offline), wird das **nicht** zum harten Fehler des auslösenden Vorgangs
-///   (eine GoBD-festgeschriebene Rechnung darf nicht zurückrollen, weil ein
-///   Backup-Ziel nicht erreichbar war) — der Fehler wird geloggt + auditiert
-///   und `Ok(None)` zurückgegeben.
-pub async fn auto_backup_if_unlocked(
+/// - Session entsperrt → Vermerk „Backup ausstehend“ dauerhaft in der DB
+///   ([`mark_pending`]), Audit `backup.requested` mit dem Ereignis, dann wird
+///   der Scheduler geweckt ([`BackupSession::wake_backup`]). Er legt das Backup
+///   kurz darauf außerhalb der Antwort an; mehrere Ereignisse in kurzer Folge
+///   ergeben ein Backup, und „Datenbank sperren“, Passphrase-Wechsel, Restore
+///   und Herunterfahren warten wie beim Tick auf ein laufendes Backup. Fällt es
+///   aus (Sperren, Neustart), holt es der erste Tick danach nach
+///   ([`pending_backup_if_due`]).
+/// - Lässt sich der Vermerk nicht schreiben, läuft das Backup sofort (wie
+///   bisher) — ohne Vermerk wäre es sonst nicht gesichert.
+/// - Session gesperrt → kein Backup, Audit `backup.skipped_locked`, Vermerk.
+///
+/// Ein Fehler wird nie zum Fehler des auslösenden Vorgangs (eine
+/// festgeschriebene Rechnung darf nicht zurückrollen, weil ein Backup-Ziel
+/// nicht erreichbar war).
+pub async fn request_auto_backup(
     pool: &SqlitePool,
     paths: &Paths,
     session: &BackupSession,
     event: &str,
-) -> Result<Option<BackupOutcome>> {
-    auto_backup_at(pool, paths, session, event, crate::clock::now_utc()).await
+    now: DateTime<Utc>,
+) -> Result<()> {
+    if !session.is_unlocked() {
+        // Wie bisher: Audit `backup.skipped_locked`, Vermerk, kein Backup.
+        return auto_backup_at(pool, paths, session, event, now)
+            .await
+            .map(|_| ());
+    }
+    match mark_pending(pool, now).await {
+        Ok(()) => {
+            crate::db::repo::audit_log::append(
+                pool,
+                "backup.requested",
+                "backup",
+                "auto",
+                Some(serde_json::json!({ "event": event })),
+            )
+            .await
+            .ok();
+            session.wake_backup();
+            Ok(())
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Vermerk „Backup ausstehend“ nicht gesetzt ({event}): {e} — Backup sofort"
+            );
+            auto_backup_at(pool, paths, session, event, now)
+                .await
+                .map(|_| ())
+        }
+    }
 }
 
-/// Wie [`auto_backup_if_unlocked`], mit dem Zeitpunkt der injizierten Uhr des
-/// Aufrufers (Scheduler-Tick, Lauf F).
+/// Auto-Backup **sofort** für ein Lock-Ereignis (Scheduler: gesammeltes
+/// Backup am Ende des Ticks, geweckter Lauf nach [`request_auto_backup`],
+/// Nachholen; Rückfall ohne Vermerk), mit dem Zeitpunkt der injizierten Uhr
+/// des Aufrufers.
+///
+/// - Session nicht entsperrt → kein Backup, Audit-Marker und Vermerk,
+///   `Ok(None)`.
+/// - Session entsperrt → [`create_with`]. Schlägt das Backup fehl (z. B. Ziel
+///   offline), wird das **nicht** zum harten Fehler — der Fehler wird geloggt,
+///   auditiert und steht im Backup-Protokoll; `Ok(None)`.
 pub async fn auto_backup_at(
     pool: &SqlitePool,
     paths: &Paths,
@@ -1034,6 +1260,7 @@ pub async fn auto_backup_at(
     let opts = CreateOptions {
         mirror: Mirror::Auto,
         now,
+        format_version: manifest::FORMAT_VERSION,
     };
     match create_with(pool, paths, &passphrase, db_trigger_reason(event), opts).await {
         Ok(outcome) => Ok(Some(outcome)),
@@ -1058,22 +1285,81 @@ pub async fn auto_backup_at(
 // ---------------------------------------------------------------------------
 
 /// `app_settings`: Zeitpunkt (UTC) des ältesten noch nicht gesicherten
-/// Festschreibens. Gesetzt, wenn der Tick ein Lock-Backup sammelt oder ein
-/// Lock-Backup mangels Passphrase ausfällt; entfernt von jedem erfolgreichen
-/// Backup, das danach entstand. Übersteht „Datenbank sperren“ und das
-/// Herunterfahren mitten im Tick.
+/// Festschreibens. Gesetzt bei jedem Lock-Ereignis ([`request_auto_backup`]),
+/// wenn der Tick ein Lock-Backup sammelt oder ein Lock-Backup mangels
+/// Passphrase ausfällt; entfernt von einem erfolgreichen Backup, während
+/// dessen kein weiteres Ereignis vermerkt wurde ([`PENDING_SEQ_KEY`]).
+/// Übersteht „Datenbank sperren“ und das Herunterfahren.
 pub const PENDING_KEY: &str = "backup_pending_since";
+/// `app_settings`: Zähler der vermerkten Lock-Ereignisse (Lauf F3a). Ein
+/// Backup liest ihn vor dem Snapshot und löscht den Vermerk danach nur, wenn
+/// er unverändert ist — ein während des Backups festgeschriebener Beleg bleibt
+/// vermerkt. Unabhängig von der Uhr (Uhrsprung, injizierte Testuhr).
+pub const PENDING_SEQ_KEY: &str = "backup_pending_seq";
 /// `app_settings`: letzter Fehlschlag beim Nachholen (Backoff, UTC).
 pub const PENDING_BACKOFF_KEY: &str = "backup_pending_last_failure_at";
 
-/// Vermerkt ein ausstehendes Lock-Backup (der älteste Vermerk bleibt).
+/// Vermerkt ein ausstehendes Lock-Backup: der älteste Zeitpunkt bleibt
+/// ([`PENDING_KEY`]), der Zähler ([`PENDING_SEQ_KEY`]) steigt; eine
+/// Anweisung, also atomar.
 pub async fn mark_pending(pool: &SqlitePool, now: DateTime<Utc>) -> Result<()> {
-    sqlx::query("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
-        .bind(PENDING_KEY)
-        .bind(crate::clock::to_db_utc(now))
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES (?1, ?3), (?2, '1')
+         ON CONFLICT(key) DO UPDATE
+            SET value = CAST(CAST(app_settings.value AS INTEGER) + 1 AS TEXT),
+                updated_at = datetime('now','utc')
+          WHERE app_settings.key = ?2",
+    )
+    .bind(PENDING_KEY)
+    .bind(PENDING_SEQ_KEY)
+    .bind(crate::clock::to_db_utc(now))
+    .execute(pool)
+    .await?;
     Ok(())
+}
+
+/// Steht ein Lock-Backup aus ([`PENDING_KEY`])? Für das Nachholen vor dem
+/// Sperren und Herunterfahren (Lauf F3c).
+pub async fn is_backup_pending(pool: &SqlitePool) -> Result<bool> {
+    Ok(crate::db::repo::app_settings::get(pool, PENDING_KEY)
+        .await?
+        .is_some())
+}
+
+/// Stand des Zählers vor dem Snapshot (leer = kein Zähler, z. B. Vermerk aus
+/// F1 oder keiner).
+async fn pending_seq(pool: &SqlitePool) -> String {
+    crate::db::repo::app_settings::get(pool, PENDING_SEQ_KEY)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Vom Scheduler geweckter Lauf nach [`request_auto_backup`] (Lauf F3a):
+/// legt das ausstehende Backup an, sofern der Vermerk noch steht (ein Tick
+/// kann es schon erledigt haben). Ohne Backoff — jedes Lock-Ereignis
+/// verdient einen Versuch, wie früher das synchrone Backup; ein Fehlschlag
+/// setzt aber den Backoff des Nachholens im Tick. `Ok(Some)` = erstellt.
+pub async fn requested_backup_now(
+    pool: &SqlitePool,
+    paths: &Paths,
+    session: &BackupSession,
+    now: DateTime<Utc>,
+) -> Result<Option<BackupOutcome>> {
+    if !session.is_unlocked()
+        || crate::db::repo::app_settings::get(pool, PENDING_KEY)
+            .await?
+            .is_none()
+    {
+        return Ok(None);
+    }
+    let outcome = auto_backup_at(pool, paths, session, "backup.requested", now).await?;
+    match &outcome {
+        Some(_) => crate::scheduler::backoff::clear(pool, PENDING_BACKOFF_KEY).await?,
+        None => crate::scheduler::backoff::record_failure(pool, PENDING_BACKOFF_KEY, now).await?,
+    }
+    Ok(outcome)
 }
 
 /// Holt ein ausstehendes Lock-Backup nach (erster Tick nach Entsperren oder
@@ -1263,7 +1549,7 @@ mod tests {
     /// G1-HARDEN.2: **alle** im Code real ausgelösten Lock-Events ergeben einen
     /// gültigen `backups.trigger_reason` UND einen gültigen `backup_history
     /// .retention_tag` — sonst CHECK-Constraint-Verletzung beim Auto-Backup.
-    /// Die Liste spiegelt jeden `auto_backup_if_unlocked(..)`-Aufrufer wider
+    /// Die Liste spiegelt jeden `request_auto_backup(..)`-Aufrufer wider
     /// (Stand G1-HARDEN). Der Catch-all in `db_trigger_reason` macht das
     /// bruchsicher; dieser Test friert das Versprechen ein.
     #[test]
@@ -1272,8 +1558,8 @@ mod tests {
         const VALID_TRIGGER: &[&str] = &["auto_daily", "auto_critical", "manual", "pre_restore"];
         const VALID_RETENTION: &[&str] = &["daily", "monthly", "yearly", "manual"];
 
-        // Jedes Event-Label, das im Code an `auto_backup_if_unlocked`/`create_now`
-        // übergeben wird (grep `auto_backup_if_unlocked`, Stand 2026-05-25).
+        // Jedes Event-Label, das im Code an `request_auto_backup`/`create_now`
+        // übergeben wird (grep `request_auto_backup`, Stand 2026-10-25).
         let events = [
             "auto_daily",
             "manual",
@@ -1292,6 +1578,9 @@ mod tests {
             "depreciation.lock",
             "depreciation.reset",
             "fiscal_year.close",
+            // Nachholen und geweckter Lauf (F1d, Lauf F3a).
+            "backup.pending",
+            "backup.requested",
             // Auch ein unbekanntes/neues Label darf nie den CHECK brechen.
             "some.future.lock",
         ];
@@ -1342,6 +1631,95 @@ mod tests {
         .await
         .unwrap();
         pool
+    }
+
+    /// KB-0034: Nach der Panik eines Halters der Sitzungs-Sperre liefern
+    /// `is_unlocked`/`get`/`set`/`clear` weiter Werte statt zu paniken.
+    #[test]
+    fn backup_session_survives_poisoned_mutex() {
+        let session = std::sync::Arc::new(BackupSession::default());
+        session.set("passphrase-1234567890".into());
+        let s = session.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = s.inner.lock().unwrap();
+            panic!("Halter stirbt mit Sperre");
+        })
+        .join();
+        assert!(session.inner.is_poisoned());
+        assert!(session.is_unlocked());
+        assert_eq!(session.get().as_deref(), Some("passphrase-1234567890"));
+        session.clear();
+        assert!(!session.is_unlocked());
+        session.set("andere-passphrase-123".into());
+        assert_eq!(session.get().as_deref(), Some("andere-passphrase-123"));
+    }
+
+    /// Lauf F3a: Der Vermerk „Backup ausstehend“ wird nur von einem Backup
+    /// gelöscht, während dessen kein weiteres Lock-Ereignis vermerkt wurde
+    /// (Zähler, unabhängig von der Uhr).
+    #[tokio::test]
+    async fn pending_marker_survives_events_during_backup() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let data = dir.path().join("data");
+        let paths = Paths {
+            data_dir: data.clone(),
+            db_file: data.join("klein-buch.sqlite"),
+            archive_dir: data.join("archive"),
+            backups_dir: data.join("backups"),
+            inputs_dir: dir.path().join("inputs"),
+            sidecar_dir: dir.path().join("sidecar"),
+            resource_dir: std::path::PathBuf::from("/non/existent/resources"),
+            web_dir: std::path::PathBuf::from("/non/existent/web"),
+            backup_targets_dir: std::path::PathBuf::from("/backup-targets"),
+        };
+        std::fs::create_dir_all(&paths.backups_dir).unwrap();
+        let pool = crate::db::open_pool(&paths.db_file, None).await.unwrap();
+        crate::db::MIGRATOR.run(&pool).await.unwrap();
+        let get = |k: &'static str| {
+            let pool = pool.clone();
+            async move { crate::db::repo::app_settings::get(&pool, k).await.unwrap() }
+        };
+        // Uhr läuft rückwärts: der Zeitpunkt spielt für die Deckung keine Rolle.
+        let later = chrono::TimeZone::with_ymd_and_hms(&Utc, 2027, 1, 1, 0, 0, 0).unwrap();
+        let earlier = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 1, 1, 0, 0, 0).unwrap();
+        mark_pending(&pool, later).await.unwrap();
+        mark_pending(&pool, earlier).await.unwrap();
+        assert_eq!(get(PENDING_SEQ_KEY).await.as_deref(), Some("2"));
+        assert_eq!(
+            get(PENDING_KEY).await,
+            Some(crate::clock::to_db_utc(later)),
+            "der älteste Vermerk bleibt"
+        );
+        // Ereignis „während“ des Backups: Zähler ändert sich nach dem Lesen.
+        let seq_before = pending_seq(&pool).await;
+        mark_pending(&pool, earlier).await.unwrap();
+        sqlx::query(
+            "DELETE FROM app_settings WHERE key IN (?1, ?2)
+               AND COALESCE((SELECT value FROM app_settings WHERE key = ?2), '') = ?3",
+        )
+        .bind(PENDING_KEY)
+        .bind(PENDING_SEQ_KEY)
+        .bind(&seq_before)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(get(PENDING_KEY).await.is_some(), "Vermerk bleibt stehen");
+        // Ein Backup mit der injizierten (früheren) Uhr deckt alles ab.
+        create_with(
+            &pool,
+            &paths,
+            "passphrase-1234567890",
+            "auto_critical",
+            CreateOptions {
+                mirror: Mirror::Auto,
+                now: earlier,
+                format_version: manifest::FORMAT_VERSION,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(get(PENDING_KEY).await.is_none());
+        assert!(get(PENDING_SEQ_KEY).await.is_none());
     }
 
     #[tokio::test]

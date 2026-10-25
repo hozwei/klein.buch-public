@@ -141,6 +141,14 @@ verbietet das Löschen ihrer AfA-Buchungen (Reset und Bearbeiten lehnt schon
 die App ab), `assets_dispose` holt fehlende Vorjahres-AfA vor der anteiligen
 AfA des Abgangsjahres nach, und der Jahresabschluss schreibt alle bis zum Jahr
 angeschafften Anlagen fest, auch veräußerte (vorher nur `disposed = 0`).
+Seit Lauf F3b läuft der Abgang in einer Transaktion: Abgangsdatum vor der
+Anschaffung, festgeschriebene AfA ab dem Abgangsjahr und ein später
+abgeschlossenes Jahr, das die Anlage im Bestand führt, lehnen ab; offene
+AfA-Buchungen ab dem Abgangsjahr (spätere Jahre, volle Jahres-AfA des
+Abgangsjahres) entfernt er mit ihren Werten im Audit
+(`depreciation.reset_for_disposal`) und bucht die anteilige AfA bis zum
+Abgangsmonat — AfA und Restbuchwert ergeben zusammen die Anschaffungskosten
+(ADR 0039 Nr. 128).
 
 ### 2.5 `trg_depreciation_immutable` + `trg_depreciation_entries_no_delete_locked`
 
@@ -443,6 +451,12 @@ sonst erneut frei. Deshalb:
   Mail-Ausgang bzw. Korrespondenz zu ermitteln und den Kreis unter
   Einstellungen → Backups → Nummernkreise anzuheben (`numbering_raise`,
   Re-Auth, Begründung Pflicht, Audit `numbering.raised`).
+- **Fremder Stand (F3b).** Liegen Zähler der eingespielten DB über denen der
+  ersetzten (oder fehlen dort), oder trägt ein festgeschriebener Beleg eine
+  Nummer der ersetzten DB mit anderer ID (Marker `locked_ids`), stammt die
+  ersetzte DB von einer anderen Instanz (z. B. neue Instanz mit Testdaten): Der
+  Hinweis verlangt wie bei der leeren Instanz das Anheben. „Keine Lücke, keine
+  Doppelvergabe“ meldet er nur bei genau gleichen Ständen (ADR 0040 Nr. 54).
 - **Nur aufwärts.** `db::numbering::raise_in` senkt nie ab; `numbering_raise`
   lehnt gleiche oder kleinere Werte ab. Belege werden nicht verändert.
 - Bis zur Freigabe der Pause nach dem Restore entstehen keine automatischen
@@ -461,9 +475,13 @@ sonst erneut frei. Deshalb:
 - **Abo-Termine (F1d).** Die nächsten Termine der Abo-Vorlagen und
   Kosten-Abos der ersetzten DB werden wie die Zähler nur vorwärts übernommen
   (Audit `…advanced_after_restore`); ein bereits abgerechneter Zeitraum wird
-  nicht erneut in Rechnung gestellt oder gebucht. Ohne bekannten Stand
-  verlangt jede Reihe mit offenem Termin die Entscheidung des Inhabers;
-  nachgeholte Rechnungen entstehen dann nur als Entwurf.
+  nicht erneut in Rechnung gestellt oder gebucht. Die Kosten vorgerückter
+  Kosten-Abos sind mit der ersetzten DB verworfen; der Hinweis nennt sie
+  getrennt und verlangt das Nachtragen anhand des Kontoauszugs (Vollständigkeit,
+  ADR 0040 Nr. 55). Ohne bekannten Stand verlangt jede Reihe mit offenem Termin,
+  für die ein Lauf etwas erzeugen würde (Vorlage in der Laufzeit, Kosten-Abo mit
+  Auto-Buchung), die Entscheidung des Inhabers — pausierte beim Fortsetzen;
+  nachgeholte Rechnungen entstehen dann nur als Entwurf (ADR 0040 Nr. 56).
 
 ## 6. Aufbewahrung und kein Löschen-UI
 

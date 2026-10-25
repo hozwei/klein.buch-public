@@ -97,9 +97,16 @@ Verkaufs-Erlös als Einnahme an.
 
 Fehlt für ein Vorjahr noch die AfA-Buchung, holt Klein.Buch sie vor dem
 Abgang nach; danach bucht es für das Abgangsjahr die anteilige AfA bis
-zum Monat des Abgangs. Eine veräußerte Anlage ist abgeschlossen: Ihre
-Daten, ihre AfA-Buchungen und ihr Rest-Buchwert lassen sich nicht mehr
-ändern oder zurücksetzen, auch solange das Geschäftsjahr noch offen ist.
+zum Monat des Abgangs. Hast Du für das Abgangsjahr schon die volle
+Jahres-AfA oder für spätere Jahre bereits AfA gebucht, ersetzt Klein.Buch
+diese Buchungen dabei durch die anteilige AfA; das Protokoll hält die
+alten Werte fest. Liegt das Datum vor der Anschaffung oder ist ein
+späteres Geschäftsjahr schon abgeschlossen, in dem die Anlage noch im
+Bestand steht, lehnt Klein.Buch den Abgang ab; eine solche Korrektur
+klärst Du mit Deiner Steuerberatung. Eine veräußerte Anlage
+ist abgeschlossen: Ihre Daten, ihre AfA-Buchungen und ihr Rest-Buchwert
+lassen sich nicht mehr ändern oder zurücksetzen, auch solange das
+Geschäftsjahr noch offen ist.
 Prüf die Angaben deshalb vor dem Bestätigen.
 
 Bei einem Verkauf an einen anderen Unternehmer brauchst Du

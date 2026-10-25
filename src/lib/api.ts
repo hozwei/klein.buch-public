@@ -960,8 +960,9 @@ export interface BackupSettings {
   /** Eingebundene Unterordner der Wurzel. */
   availableDirs: string[];
   targets: TargetView[];
-  /** `missing` | `failing` | `ok`. */
-  offsiteStatus: "missing" | "failing" | "ok";
+  /** `missing` | `failing` | `stale` (Kopie fehlt oder ist älter als die
+   *  Frist der Regel „Backup überfällig“, Lauf F3a) | `ok`. */
+  offsiteStatus: "missing" | "failing" | "stale" | "ok";
   /** Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F). */
   dailyTime: string;
 }
@@ -1112,6 +1113,12 @@ export function backupLogSearch(filter: BackupLogFilter): Promise<BackupLogEntry
 /** Quelle eines Restores (Plan W7): hochgeladene `.kbk` oder lokales Backup
  *  aus der Historie. */
 export type RestoreSource = { uploadId: string } | { backupId: string };
+
+/** Lädt ein Backup (verschlüsselte `.kbk`) aus dem lokalen Backup-Ordner oder
+ *  einem Verzeichnis-Ziel herunter (Re-Auth, einmaliges Ticket; Lauf F3a). */
+export function backupDownload(backupId: string): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("backup_download", { backupId });
+}
 
 /** Restore Phase A (Job, Re-Auth); danach startet der Server neu. */
 export function backupRestoreApply(

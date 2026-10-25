@@ -20,7 +20,8 @@ Disaster Recovery (Wiederherstellung nach einem Totalausfall).
 1. Eine aktuelle Backup-Datei (Endung `.kbk`) von einem Deiner externen
    Ziele, also vom NAS, aus dem Cloud-Speicher oder vom SFTP-Server. Ist
    nur der Server kaputt, der Daten-Ordner aber noch lesbar, findest Du
-   die Backups auch dort im Unterordner `backups`.
+   die Backups auch dort im Unterordner `backups`. Eine früher mit
+   "Herunterladen" geholte Datei taugt ebenso.
 2. Die Passphrase, die galt, als dieses Backup erstellt wurde. Sie ist
    der einzige Schlüssel zu Deinem Backup. Ohne sie ist die Datei
    wertlos, und niemand kann sie öffnen, auch nicht der Hersteller von
@@ -135,11 +136,12 @@ Danach prüfst Du:
 2. Unter "Einstellungen" und "Backups": Sind die externen Ziele wieder
    da? Bis zur Freigabe (Punkt 5) gehen Backups nur in den lokalen
    Ordner. Unter "Wiederkehrende Rechnungen" und "Wiederkehrende Abos":
-   Reihen mit einem offenen Termin bis heute zeigen "Rückstand …".
-   Prüfe im Mail-Ausgang bzw. auf dem Kontoauszug, ob der Termin auf dem
-   alten Server schon abgerechnet wurde. "Ab heute fortsetzen" lässt die
-   offenen Termine aus, auch einen heute fälligen; "Nachholen" legt
-   Rechnungen nur als Entwurf an.
+   Reihen mit einem offenen Termin bis heute zeigen "Rückstand …"
+   (pausierte Reihen fragen beim Fortsetzen). Prüfe im Mail-Ausgang bzw.
+   auf dem Kontoauszug, ob der Termin auf dem alten Server schon
+   abgerechnet wurde. "Ab heute fortsetzen" lässt die offenen Termine aus,
+   auch einen heute fälligen; "Nachholen" legt Rechnungen nur als Entwurf
+   an.
 3. Unter "Hinweise": Meldet Klein.Buch "PDF-Vorlagen nach dem Restore
    fehlen", fehlt in `/inputs` eine Vorlage, die Deine Daten benutzen.
    Dann muss der Betreiber seine Kopie von `/inputs` zurücklegen.
@@ -163,13 +165,17 @@ Rechnungsnummern doppelt.
 ## Was eine Wiederherstellung braucht
 
 Arbeitsspeicher: Klein.Buch hält die Backup-Datei beim Entschlüsseln
-vollständig im Arbeitsspeicher, dazu eine verschlüsselte Kopie und den
-entschlüsselten Inhalt. Rechne mit etwa dem Dreifachen der
-Backup-Größe, zusätzlich zum Grundbedarf. Für ein Backup von 1 GiB sind
-das rund 3 GiB. Ist die Speichergrenze des Containers (`mem_limit` in der
-Compose-Datei) kleiner, bricht die Wiederherstellung ab. Der Betreiber
-kann die Grenze für die Wiederherstellung anheben und danach wieder
-senken.
+vollständig im Arbeitsspeicher und entschlüsselt sie an derselben Stelle.
+Rechne mit etwa der Backup-Größe, zusätzlich zum Grundbedarf. Für ein
+Backup von 1 GiB ist das rund 1 GiB. Erst nach dem Auspacken, wenn
+dieser Speicher wieder frei ist, legt Klein.Buch das Sicherheits-Backup
+des bisherigen Stands an; das braucht bis zum Doppelten von dessen
+Größe. In einer frisch eingerichteten Instanz ist es winzig, über einen
+gewachsenen Bestand gilt die Faustregel aus dem Kapitel
+"Speicherbedarf". Ist die Speichergrenze des
+Containers (`mem_limit` in der Compose-Datei) kleiner, bricht die
+Wiederherstellung ab. Der Betreiber kann die Grenze für die
+Wiederherstellung anheben und danach wieder senken.
 
 Platz im Daten-Ordner: Die hochgeladene Datei selbst, das
 Sicherheits-Backup und das Doppelte des entpackten Inhalts, weil
@@ -208,4 +214,4 @@ neu ein. `/inputs` sichert der Betreiber selbst.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

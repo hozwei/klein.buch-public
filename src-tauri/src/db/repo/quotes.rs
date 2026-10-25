@@ -151,10 +151,23 @@ pub async fn create_draft(
 }
 
 /// Schreibt/aktualisiert den Buyer-Snapshot eines Angebots (Block 19, Refresh
-/// beim Festschreiben). Nur auf nicht-festgeschriebenen Angeboten erlaubt
-/// (`locked_at IS NULL`) — gelockte Angebote sind unveränderlich (GoBD).
+/// beim Festschreiben). Nur auf **Entwürfen** erlaubt (`locked_at IS NULL`
+/// und `status = 'draft'`) — gelockte Angebote sind unveränderlich (GoBD), und
+/// ein zurückgezogener Entwurf bekäme sonst die Daten eines inzwischen
+/// anonymisierten Kontakts zurück (Lauf F3b).
 pub async fn set_buyer_snapshot(
     pool: &SqlitePool,
+    id: &str,
+    buyer: &BuyerSnapshot<'_>,
+) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    set_buyer_snapshot_in(&mut conn, id, buyer).await
+}
+
+/// [`set_buyer_snapshot`] in einer laufenden Schreib-Transaktion (Lauf F3b:
+/// `quotes_issue` frischt den Snapshot und schreibt fest in einem Schritt).
+pub async fn set_buyer_snapshot_in(
+    conn: &mut sqlx::SqliteConnection,
     id: &str,
     buyer: &BuyerSnapshot<'_>,
 ) -> Result<()> {
@@ -163,7 +176,7 @@ pub async fn set_buyer_snapshot(
             buyer_name = ?, buyer_street = ?, buyer_postal_code = ?, buyer_city = ?,
             buyer_country_code = ?, buyer_vat_id = ?, buyer_email = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND status = 'draft'",
     )
     .bind(buyer.name)
     .bind(buyer.street)
@@ -173,11 +186,11 @@ pub async fn set_buyer_snapshot(
     .bind(buyer.vat_id)
     .bind(buyer.email)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
-            "set_buyer_snapshot: Angebot nicht gefunden oder bereits festgeschrieben: {id}"
+            "Angebot {id} ist nicht (mehr) im Entwurf — der Empfänger wird nicht übernommen."
         )));
     }
     Ok(())
@@ -270,9 +283,17 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<QuoteLis
 /// Nur aus `draft` erlaubt (Doppel-Lock-Schutz). Macht das Angebot GoBD-
 /// unveränderlich. PDF + tatsächlicher Mail-Versand: Block 8.
 pub async fn issue(pool: &SqlitePool, id: &str) -> Result<()> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    issue_in(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`issue`] in einer laufenden Schreib-Transaktion (Lauf F3b).
+pub async fn issue_in(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
     let row = sqlx::query("SELECT status, locked_at FROM quotes WHERE id = ?")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
     let status: String = row.try_get("status")?;
@@ -289,13 +310,15 @@ pub async fn issue(pool: &SqlitePool, id: &str) -> Result<()> {
             sent_at = datetime('now','utc'),
             status = 'sent',
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND status = 'draft'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!("issue: Angebot {id} nicht gefunden")));
+        return Err(Error::Domain(format!(
+            "Angebot {id} ist nicht (mehr) im Entwurf — Festschreiben nicht möglich"
+        )));
     }
     Ok(())
 }

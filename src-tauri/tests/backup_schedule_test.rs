@@ -387,6 +387,260 @@ async fn deferred_lock_backup_survives_lock_and_is_caught_up() {
     );
 }
 
+// ---- Lock-Backup im Hintergrund (Lauf F3a, W5-AUTOBACKUP-SYNC) -------------
+
+/// Ein Lock-Ereignis legt kein Backup an, sondern vermerkt es (Audit mit
+/// Ereignis) und weckt den Scheduler; der geweckte Lauf legt genau eines für
+/// alle bis dahin vermerkten Ereignisse an. Gesperrt: kein Backup, Vermerk.
+/// Der Tick holt ein ausgefallenes nach, ohne Doppel.
+#[tokio::test]
+async fn lock_event_requests_backup_and_wake_creates_one() {
+    let env = setup().await;
+    let clock = FixedClock::at_berlin(d(2026, 6, 10), 12, 0);
+    backup::mark_daily_done(&env.pool, d(2026, 6, 10))
+        .await
+        .unwrap();
+    let all = "SELECT COUNT(*) FROM backup_history";
+    for event in ["expense.lock", "invoice.lock"] {
+        backup::request_auto_backup(&env.pool, &env.paths, &env.session, event, clock.now_utc())
+            .await
+            .unwrap();
+    }
+    assert_eq!(count(&env.pool, all).await, 0, "kein Backup in der Antwort");
+    assert!(app_settings::get(&env.pool, backup::PENDING_KEY)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.requested'"
+        )
+        .await,
+        2
+    );
+    // Das Wecksignal liegt bereit (ein Signal für beide).
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        env.session.backup_wake_requested(),
+    )
+    .await
+    .expect("Scheduler geweckt");
+
+    let made = backup::requested_backup_now(&env.pool, &env.paths, &env.session, clock.now_utc())
+        .await
+        .unwrap();
+    assert!(made.is_some());
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_critical'"
+        )
+        .await,
+        1
+    );
+    assert!(app_settings::get(&env.pool, backup::PENDING_KEY)
+        .await
+        .unwrap()
+        .is_none());
+    // Zweiter geweckter Lauf ohne neues Ereignis: nichts zu tun.
+    assert!(
+        backup::requested_backup_now(&env.pool, &env.paths, &env.session, clock.now_utc())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Gesperrt: Vermerk, kein Backup; der erste Tick nach dem Entsperren holt
+    // genau eines nach.
+    env.session.clear();
+    backup::request_auto_backup(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        "storno.create",
+        clock.now_utc(),
+    )
+    .await
+    .unwrap();
+    // Gezählt über das append-only Audit: die Rotation behält je Tag nur das
+    // jüngste Backup in der Historie.
+    let created = "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.created'";
+    assert_eq!(count(&env.pool, created).await, 1);
+    env.session.set(PASS.into());
+    clock.advance(Duration::minutes(10));
+    let job = klein_buch_lib::scheduler::JobCtx::new(&env.pool, &env.paths, &env.session, &clock);
+    klein_buch_lib::scheduler::tick::run_jobs(&job)
+        .await
+        .unwrap();
+    assert_eq!(count(&env.pool, created).await, 2);
+    assert!(app_settings::get(&env.pool, backup::PENDING_KEY)
+        .await
+        .unwrap()
+        .is_none());
+    klein_buch_lib::scheduler::tick::run_jobs(&job)
+        .await
+        .unwrap();
+    assert_eq!(count(&env.pool, created).await, 2, "kein weiteres Backup");
+}
+
+/// W2-SNAP-LOG (Lauf F3a): Scheitert schon der Snapshot (hier: DB-Datei
+/// fehlt), steht der Lauf im Backup-Protokoll (`failed`, geplanter Name) und
+/// in der Inbox (einmal je Tag), nicht nur im Log.
+#[tokio::test]
+async fn snapshot_failure_is_logged_and_notified() {
+    let env = setup().await;
+    let mut broken = env.paths.clone();
+    broken.db_file = env.tmp.path().join("fehlt.sqlite");
+    let clock = FixedClock::at_berlin(d(2026, 6, 10), 12, 0);
+    for _ in 0..2 {
+        let err = backup::create_with(
+            &env.pool,
+            &broken,
+            PASS,
+            "auto_critical",
+            backup::CreateOptions {
+                mirror: backup::Mirror::Auto,
+                now: clock.now_utc(),
+                format_version: backup::manifest::FORMAT_VERSION,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("fehlt"), "{err}");
+    }
+    let (name, detail, status, kind): (String, String, String, String) = sqlx::query_as(
+        "SELECT file_name, detail, status, target_kind FROM backup_log ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert!(
+        name.starts_with("klein-buch-") && name.ends_with(".kbk"),
+        "{name}"
+    );
+    assert_eq!(status, "failed");
+    assert_eq!(kind, "local");
+    assert!(detail.starts_with("Snapshot/Verschlüsselung"), "{detail}");
+    assert_eq!(
+        count(&env.pool, "SELECT COUNT(*) FROM backup_log").await,
+        2,
+        "jeder Lauf protokolliert"
+    );
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM notifications WHERE title = 'Backup fehlgeschlagen'"
+        )
+        .await,
+        1,
+        "ein Hinweis je Tag"
+    );
+    assert_eq!(
+        count(&env.pool, "SELECT COUNT(*) FROM backup_history").await,
+        0
+    );
+}
+
+/// Lauf F3c (S3): Ein Backup, das Einträge nicht sichern konnte (hier ein
+/// ausgelagerter Jahrgang als symbolischer Link), ist kein still gekürztes
+/// „ok“: Das Protokoll nennt sie im Detail, die Inbox meldet „Backup
+/// unvollständig“ (einmal je Tag), das Audit zählt sie.
+#[tokio::test]
+async fn incomplete_backup_is_logged_and_notified() {
+    let env = setup().await;
+    let outside = env.tmp.path().join("ausgelagert").join("2024");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("RE-2024-0001.pdf"), b"pdf").unwrap();
+    std::os::unix::fs::symlink(&outside, env.paths.archive_dir.join("2024")).unwrap();
+    let clock = FixedClock::at_berlin(d(2026, 6, 10), 12, 0);
+    for _ in 0..2 {
+        backup::create_with(
+            &env.pool,
+            &env.paths,
+            PASS,
+            "auto_critical",
+            backup::CreateOptions {
+                mirror: backup::Mirror::Auto,
+                now: clock.now_utc(),
+                format_version: backup::manifest::FORMAT_VERSION,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let (status, detail): (String, String) = sqlx::query_as(
+        "SELECT status, detail FROM backup_log WHERE target_kind = 'local' ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "ok", "das Backup selbst entstand");
+    assert!(
+        detail.starts_with("Unvollständig: 1 Eintrag nicht gesichert")
+            && detail.contains("archive/2024 (symbolischer Link)"),
+        "{detail}"
+    );
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM notifications WHERE title = 'Backup unvollständig'"
+        )
+        .await,
+        1,
+        "ein Hinweis je Tag"
+    );
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.created'
+               AND json_extract(details_json, '$.skipped') = 1"
+        )
+        .await,
+        2
+    );
+}
+
+/// Lauf F3c (D-20): Kein Aufrufer von `request_auto_backup` nimmt die
+/// Systemuhr — der Zeitpunkt kommt aus der Uhr des `AppCtx` bzw. `JobCtx`
+/// (statische Prüfung der Quelltexte: die Argumente des Aufrufs).
+#[test]
+fn lock_events_use_the_injected_clock() {
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                rs_files(&p, out);
+            } else if p.extension().is_some_and(|e| e == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    rs_files(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let mut calls = 0;
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        for (i, _) in text.match_indices("request_auto_backup(") {
+            let head = &text[..i];
+            if head.ends_with("fn ") || head.ends_with('`') || head.ends_with('[') {
+                continue; // Definition bzw. Doku
+            }
+            let args: String = text[i..].chars().take_while(|c| *c != ';').collect();
+            calls += 1;
+            assert!(
+                !args.contains("clock::now_utc()") && !args.contains("Utc::now()"),
+                "{}: Systemuhr im Aufruf {args}",
+                file.display()
+            );
+        }
+    }
+    assert!(calls >= 13, "Aufrufe gefunden: {calls}");
+}
+
 // ---- Rotation (D-05, D-06) -------------------------------------------------
 
 async fn history_row(pool: &SqlitePool, id: &str, created: &str, tag: &str, path: &str) {
@@ -881,13 +1135,20 @@ async fn unlock_after_long_lock_creates_gap_notice() {
 // ---- Herunterfahren (W5-STOP-GRACE, W13-GRACE-BACKUP) -----------------------
 
 /// Die Fristen des Herunterfahrens passen in die `stop_grace_period` des
-/// Compose-Beispiels (mit Reserve).
+/// Compose-Beispiels (mit Reserve) — samt Nachholen eines ausstehenden
+/// Lock-Backups (Lauf F3c).
 #[test]
 fn shutdown_budget_fits_stop_grace_period() {
     use klein_buch_lib::server::http::CONNECTION_DRAIN_TIMEOUT;
     use klein_buch_lib::server::state::{
-        JOB_DRAIN_TIMEOUT, POOL_CLOSE_WAIT, SCHEDULER_SHUTDOWN_WAIT,
+        JOB_DRAIN_TIMEOUT, POOL_CLOSE_WAIT, SCHEDULER_SHUTDOWN_WAIT, SHUTDOWN_BACKUP_MIN,
+        SHUTDOWN_WORK_BUDGET,
     };
+    assert!(
+        JOB_DRAIN_TIMEOUT.max(SCHEDULER_SHUTDOWN_WAIT) + SHUTDOWN_BACKUP_MIN
+            <= SHUTDOWN_WORK_BUDGET,
+        "Tick/Tasks und Nachholen passen in die Gesamtfrist"
+    );
     let compose = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../compose.example.yaml"),
     )
@@ -897,8 +1158,7 @@ fn shutdown_budget_fits_stop_grace_period() {
         .find_map(|l| l.trim().strip_prefix("stop_grace_period:"))
         .map(|v| v.trim().trim_end_matches('s').parse().unwrap())
         .expect("stop_grace_period im Compose-Beispiel");
-    let budget =
-        CONNECTION_DRAIN_TIMEOUT + JOB_DRAIN_TIMEOUT.max(SCHEDULER_SHUTDOWN_WAIT) + POOL_CLOSE_WAIT;
+    let budget = CONNECTION_DRAIN_TIMEOUT + SHUTDOWN_WORK_BUDGET + POOL_CLOSE_WAIT;
     assert!(
         budget.as_secs() + 15 <= grace,
         "Herunterfahren bis {} s, stop_grace_period {grace} s",

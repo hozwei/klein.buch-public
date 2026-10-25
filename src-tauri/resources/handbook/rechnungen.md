@@ -40,8 +40,10 @@ Detail-Ansicht prüft Klein.Buch die Pflichtangaben; solange Du nicht
 gespeicherten Entwurf änderst Du nicht nachträglich: Stimmt etwas nicht,
 verwirf ihn und leg einen neuen an.
 
-**Verwerfen** braucht eine Bestätigung mit Deinem Passwort und einen
-Grund (mindestens zehn Zeichen). Klein.Buch löscht den Entwurf nicht,
+**Verwerfen** findest Du in der Detail-Ansicht des Entwurfs neben
+"Rechnung ausstellen". Es braucht einen Grund (mindestens zehn Zeichen,
+schreib keine Namen hinein) und eine Bestätigung mit Daten-Passwort und
+App-Code. Klein.Buch löscht den Entwurf nicht,
 sondern vermerkt Zeitpunkt und Grund daran und im Protokoll. Die Nummer
 bleibt vergeben und wird nie ein zweites Mal benutzt. So ist die Lücke
 im Nummernkreis erklärt, wie es die GoBD verlangen. Ein verworfener

@@ -163,7 +163,7 @@ async fn exports_are_audited_and_flag_snapshot_mismatch() {
         &env.ctx.paths,
         &env.ctx.session,
         closed as i64,
-        now,
+        klein_buch_lib::clock::berlin_to_utc(now, 12, 0),
     )
     .await
     .unwrap();

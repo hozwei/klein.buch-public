@@ -86,9 +86,12 @@
 {:else if detail}
   {@const a = detail.asset}
   <p class="caveat">
-    Die Anlage wird nicht gelöscht, sondern als veräußert markiert (GoBD). Der
-    aktuelle Restbuchwert (<strong>{euro(residual)}</strong>) wird als Schlussstand
-    festgehalten.
+    Die Anlage wird nicht gelöscht, sondern als veräußert markiert (GoBD). Beim
+    Bestätigen bucht Klein.Buch die AfA bis zum Monat des Abgangs (schon gebuchte
+    AfA ab dem Abgangsjahr wird dabei ersetzt) und hält den Restbuchwert danach als
+    Schlussstand fest. Der aktuelle Restbuchwert vor dieser Buchung beträgt
+    <strong>{euro(residual)}</strong>; Gewinn bzw. Verlust unten sind deshalb ein
+    Näherungswert.
   </p>
 
   <section class="card">

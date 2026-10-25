@@ -49,6 +49,10 @@ pub struct DownloadEntry {
     pub file_name: String,
     pub mime: &'static str,
     pub kind: DownloadKind,
+    /// `false`: Die Datei liegt außerhalb des Download-Ordners und gehört ihm
+    /// nicht (Backup in einem Verzeichnis-Ziel, [`DownloadStore::register_borrowed`],
+    /// Lauf F3c) — Abruf, Ablauf und Sperren entfernen nur den Eintrag.
+    pub owned: bool,
     expires: Instant,
 }
 
@@ -114,6 +118,25 @@ impl DownloadStore {
 
     /// Registriert die geschriebene Datei.
     pub fn register(&self, id: Uuid, path: &Path, kind: DownloadKind) -> Result<DownloadTicket> {
+        self.insert(id, path, kind, true)
+    }
+
+    /// Registriert eine vorhandene Datei außerhalb des Download-Ordners, ohne
+    /// sie zu kopieren (Backup in einem Verzeichnis-Ziel auf einem anderen
+    /// Dateisystem, Lauf F3c): kein zusätzlicher Platz unter `<data>/tmp`.
+    /// Abruf, Ablauf und Sperren entfernen nur den Eintrag, nie die Datei.
+    pub fn register_borrowed(&self, path: &Path, kind: DownloadKind) -> Result<DownloadTicket> {
+        self.sweep();
+        self.insert(Uuid::new_v4(), path, kind, false)
+    }
+
+    fn insert(
+        &self,
+        id: Uuid,
+        path: &Path,
+        kind: DownloadKind,
+        owned: bool,
+    ) -> Result<DownloadTicket> {
         let meta = std::fs::metadata(path)?;
         let file_name = path
             .file_name()
@@ -128,6 +151,7 @@ impl DownloadStore {
             mime: mime_for(&file_name),
             file_name: file_name.clone(),
             kind,
+            owned,
             expires: Instant::now() + ttl,
         };
         self.lock().insert(id, entry);
@@ -181,9 +205,10 @@ impl DownloadStore {
                 .filter(|(_, e)| e.expires <= now)
                 .map(|(id, _)| *id)
                 .collect();
+            // Nur eigene Dateien löschen (nie ein geliehenes Backup, Lauf F3c).
             let expired = gone
                 .iter()
-                .filter_map(|id| map.remove(id).map(|e| e.path))
+                .filter_map(|id| map.remove(id).filter(|e| e.owned).map(|e| e.path))
                 .collect();
             (
                 expired,
@@ -210,7 +235,8 @@ impl DownloadStore {
         }
     }
 
-    /// Alle Einträge und Dateien löschen (beim Sperren der Datenbank).
+    /// Alle Einträge und die Dateien im Download-Ordner löschen (beim Sperren
+    /// der Datenbank); geliehene Dateien bleiben.
     pub fn clear(&self) {
         self.lock().clear();
         if let Ok(entries) = std::fs::read_dir(&self.root) {
@@ -257,6 +283,59 @@ mod tests {
         assert!(store.take(&preview.download_id).is_some());
         assert!(store.take(&preview.download_id).is_some(), "mehrfach");
         assert!(store.take("kein-uuid").is_none());
+    }
+
+    /// Lauf F3c: Ein geliehenes Backup (Verzeichnis-Ziel auf einem anderen
+    /// Dateisystem) wird ohne Kopie registriert; Abruf, Ablauf und Sperren
+    /// entfernen nur den Eintrag, nie die Datei oder ihren Ordner.
+    #[test]
+    fn borrowed_file_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DownloadStore::new(dir.path());
+        let target = dir.path().join("ziel");
+        std::fs::create_dir_all(&target).unwrap();
+        let file = target.join("klein-buch-20261025-120000000-abcd1234.kbk");
+        std::fs::write(&file, b"KBK").unwrap();
+
+        let ticket = store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        assert_eq!(ticket.size_bytes, 3);
+        assert_eq!(
+            ticket.file_name,
+            "klein-buch-20261025-120000000-abcd1234.kbk"
+        );
+        let entry = store.take(&ticket.download_id).unwrap();
+        assert!(!entry.owned);
+        assert_eq!(entry.path, file);
+        assert!(store.take(&ticket.download_id).is_none(), "einmalig");
+        let root = dir.path().join("tmp").join("downloads");
+        assert!(
+            !root.exists() || std::fs::read_dir(&root).unwrap().next().is_none(),
+            "keine Kopie im Download-Ordner"
+        );
+
+        // Ablauf: Eintrag weg, Datei bleibt.
+        let again = store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        {
+            let id = Uuid::parse_str(&again.download_id).unwrap();
+            let mut map = store.lock();
+            map.get_mut(&id).unwrap().expires =
+                Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        }
+        store.sweep();
+        assert!(store.is_empty());
+        assert!(file.is_file(), "Ablauf löscht das Backup nicht");
+
+        // Sperren der Datenbank: ebenso.
+        store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        store.clear();
+        assert!(store.is_empty());
+        assert!(file.is_file(), "Sperren löscht das Backup nicht");
     }
 
     #[test]

@@ -83,7 +83,11 @@ Buchungsbeleg noch Geschäftsbrief und müssen deshalb nicht aufbewahrt
 werden. Nummer, Datum, Betrag, Positionen und der Grund des Verwerfens
 bleiben: Sie erklären die Lücke im Nummernkreis. Schreib deshalb keine
 Namen in den Grund. Seine Abo-Vorlagen werden angehalten und verlieren
-Bezeichnung und Notiz.
+Bezeichnung und Notiz. Kosten-Abos, bei denen die Person Lieferant ist
+(etwa die Miete bei einem privaten Vermieter), werden ebenfalls
+angehalten und verlieren ihre Bezeichnung; ihre Buchungsvorlage ersetzt
+Klein.Buch nur, wenn sie den Namen nennt. Bereits gebuchte Kosten sind
+Belege und bleiben unverändert.
 
 Bereits ausgestellte Rechnungen, Stornos und Angebote, die zum
 Zeitpunkt der Festschreibung die Kunden-Adresse als Kopie in den Beleg

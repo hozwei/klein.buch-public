@@ -201,6 +201,9 @@
               <span class="path">{e.fullPath}</span>
               {#if e.status === "failed" && e.detail}
                 <span class="errtext">{e.detail}</span>
+              {:else if e.detail}
+                <!-- Lauf F3c: „Unvollständig: …“ an einer ok-Zeile (Snapshot-Auslassungen). -->
+                <span class="warntext">{e.detail}</span>
               {/if}
             </td>
             <td class="size" data-label="Größe">{fmtSize(e.sizeBytes)}</td>
@@ -234,4 +237,5 @@
   .file .fname { display: block; font-family: ui-monospace, monospace; font-size: 0.8rem; overflow-wrap: anywhere; }
   .file .path { display: block; color: #9ca3af; font-size: 0.72rem; word-break: break-all; }
   .file .errtext { display: block; color: #b91c1c; font-size: 0.8rem; margin-top: 0.15rem; }
+  .file .warntext { display: block; color: var(--c-warning-700); font-size: 0.8rem; margin-top: 0.15rem; }
 </style>

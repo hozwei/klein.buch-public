@@ -190,9 +190,25 @@ pub async fn store_results(
     set_setting(pool, RESULTS_KEY, &serde_json::to_string(&all)?).await
 }
 
-/// Status der Off-Site-Sicherung (Plan W7): `missing` (kein Ziel), `failing`
-/// (ein Ziel scheiterte beim letzten Lauf) oder `ok`.
-pub async fn offsite_status(pool: &SqlitePool, root: &Path) -> Result<&'static str> {
+/// Höchstalter einer Off-Site-Kopie in Tagen, bevor der Status `stale` lautet
+/// (Standard; die Regel `backup_overdue` kann es über `max_age_days` ändern).
+pub const OFFSITE_MAX_AGE_DAYS: i64 = 7;
+
+/// Status der Off-Site-Sicherung (Plan W7, Lauf F3a W7-OFFSITE-STALE):
+///
+/// - `missing`: kein Ziel eingerichtet;
+/// - `failing`: ein Ziel scheiterte beim letzten Lauf;
+/// - `stale`: kein Ziel scheiterte, aber mindestens eines hat noch keine
+///   erfolgreiche Kopie oder seine letzte ist älter als `max_age_days` der
+///   Regel `backup_overdue` (Standard [`OFFSITE_MAX_AGE_DAYS`], Berliner
+///   Kalendertage wie die Regel) — etwa während einer Pause nach einem
+///   Restore (Spiegelung ausgesetzt) oder wenn keine Backups mehr laufen;
+/// - `ok`.
+pub async fn offsite_status(
+    pool: &SqlitePool,
+    root: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<&'static str> {
     let targets = list_targets(pool, root).await?;
     if targets.is_empty() {
         return Ok("missing");
@@ -201,7 +217,28 @@ pub async fn offsite_status(pool: &SqlitePool, root: &Path) -> Result<&'static s
     let failing = targets
         .iter()
         .any(|t| results.get(&t.id).is_some_and(|r| !r.ok));
-    Ok(if failing { "failing" } else { "ok" })
+    if failing {
+        return Ok("failing");
+    }
+    let max_age = crate::notify::rules::get(pool, "rule_backup_overdue")
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.config_i64("max_age_days", OFFSITE_MAX_AGE_DAYS))
+        .unwrap_or(OFFSITE_MAX_AGE_DAYS);
+    let today = crate::clock::berlin_date(now);
+    let stale = targets.iter().any(|t| match results.get(&t.id) {
+        None => true,
+        Some(r) => match chrono::DateTime::parse_from_rfc3339(&r.at) {
+            Ok(at) => {
+                let day = at.with_timezone(&chrono_tz::Europe::Berlin).date_naive();
+                (today - day).num_days() > max_age
+            }
+            // Unlesbarer Zeitpunkt: keine Aussage über das Alter.
+            Err(_) => false,
+        },
+    });
+    Ok(if stale { "stale" } else { "ok" })
 }
 
 pub fn kind_of(target: &BackupTarget) -> &'static str {
@@ -349,12 +386,29 @@ pub async fn write_backup(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<String> {
+    write_backup_shared(
+        target,
+        password,
+        file_name,
+        std::sync::Arc::new(bytes.to_vec()),
+    )
+    .await
+}
+
+/// Wie [`write_backup`], mit geteiltem Puffer (Lauf F3a): Floor und jedes
+/// Ziel schreiben dieselbe Datei, ohne sie je Ziel zu kopieren.
+pub async fn write_backup_shared(
+    target: &BackupTarget,
+    password: Option<&str>,
+    file_name: &str,
+    bytes: std::sync::Arc<Vec<u8>>,
+) -> Result<String> {
     match target {
         BackupTarget::Directory { path } => {
             // blockierende Datei-I/O außerhalb der Runtime (hängende Mounts)
             let dir = PathBuf::from(path);
             let full = dir.join(file_name);
-            let data = bytes.to_vec();
+            let data = bytes;
             let target = full.clone();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 std::fs::create_dir_all(&dir)?;
@@ -379,7 +433,7 @@ pub async fn write_backup(
                 remote_dir,
                 host_fingerprint.as_deref(),
                 file_name,
-                bytes,
+                &bytes,
             )
             .await
         }
@@ -467,8 +521,14 @@ mod tests {
     async fn targets_roundtrip_and_status() {
         let pool = settings_pool().await;
         let root = Path::new("/backup-targets");
+        let now = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 20, 10, 0, 0).unwrap();
+        let status = |pool: SqlitePool| async move {
+            offsite_status(&pool, Path::new("/backup-targets"), now)
+                .await
+                .unwrap()
+        };
         assert!(list_targets(&pool, root).await.unwrap().is_empty());
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "missing");
+        assert_eq!(status(pool.clone()).await, "missing");
         let targets = vec![
             TargetEntry {
                 id: "a".into(),
@@ -488,24 +548,44 @@ mod tests {
         let json = get_setting(&pool, TARGETS_KEY).await.unwrap().unwrap();
         assert!(json.contains(r#""kind":"directory""#) && json.contains(r#""id":"a""#));
         assert!(!json.contains("password"));
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "ok");
-        let r = |ok| TargetResult {
+        // W7-OFFSITE-STALE: Ziele ohne erfolgreiche Kopie sind „veraltet“.
+        assert_eq!(status(pool.clone()).await, "stale");
+        let r = |ok, at: &str| TargetResult {
             ok,
-            at: "t".into(),
+            at: at.into(),
             error: (!ok).then(|| "weg".into()),
         };
+        let recent = "2026-10-19T02:30:00+02:00";
         store_results(
             &pool,
             &targets,
-            &[("a".into(), r(true)), ("b".into(), r(false))],
+            &[
+                ("a".into(), r(true, recent)),
+                ("b".into(), r(false, recent)),
+            ],
         )
         .await
         .unwrap();
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "failing");
+        assert_eq!(status(pool.clone()).await, "failing");
         // Ziel b entfernt → sein Ergebnis fällt heraus
         save_targets(&pool, &targets[..1]).await.unwrap();
         store_results(&pool, &targets[..1], &[]).await.unwrap();
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "ok");
+        assert_eq!(status(pool.clone()).await, "ok");
+        // Letzte Kopie vor 7 Kalendertagen: noch ok; vor 8: veraltet.
+        let at_days = |s: &str| [("a".to_string(), r(true, s))];
+        store_results(&pool, &targets[..1], &at_days("2026-10-13T23:59:00+02:00"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "ok");
+        store_results(&pool, &targets[..1], &at_days("2026-10-12T23:59:00+02:00"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "stale");
+        // Unlesbarer Zeitpunkt: keine Aussage über das Alter.
+        store_results(&pool, &targets[..1], &at_days("t"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "ok");
         assert!(
             save_targets(&pool, &vec![targets[0].clone(); MAX_TARGETS + 1])
                 .await

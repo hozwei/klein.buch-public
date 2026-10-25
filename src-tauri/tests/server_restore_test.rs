@@ -81,6 +81,20 @@ fn with_header_schema(kbk: &[u8], schema: i32) -> Vec<u8> {
     out
 }
 
+/// Schreibt ein Backup als Format 2 um (Hülle ohne AAD, wie bis Lauf F3a).
+fn as_format_2(kbk: &[u8], pass: &str) -> Vec<u8> {
+    use klein_buch_lib::backup::{encrypt, manifest};
+    let (mut m, content) = klein_buch_lib::backup::restore::decrypt_backup(kbk, pass).unwrap();
+    let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+    let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+    let key = encrypt::derive_key(pass.as_bytes(), &salt).unwrap();
+    let ct = encrypt::encrypt(&key, &encrypt::nonce_array(&nonce).unwrap(), &content).unwrap();
+    m.format_version = 2;
+    m.salt_hex = manifest::to_hex(&salt);
+    m.nonce_hex = manifest::to_hex(&nonce);
+    manifest::frame(&m, &ct).unwrap()
+}
+
 /// Verschlüsseltes Backup aus beliebigen ZIP-Einträgen (Angriffsfälle).
 fn sealed(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
@@ -420,6 +434,8 @@ async fn restore_from_history_only_local() {
     .execute(&pool)
     .await
     .unwrap();
+    // W14-039 (Lauf F3a): ungültige Aufrufe scheitern schon vor der Annahme
+    // mit 400 — ohne Sperre der Änderungen und ohne Pre-Restore-Backup.
     let r = call(
         &srv.app,
         &cookie,
@@ -427,17 +443,53 @@ async fn restore_from_history_only_local() {
         serde_json::json!({ "backupId": "fremd", "passphrase": PASS }),
     )
     .await;
-    assert_eq!(r.json()["state"], "failed", "{}", r.text());
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text());
     assert!(r.text().contains("Nur lokale Backups"), "{}", r.text());
-    // beide oder keine Quelle
-    let r = call(
-        &srv.app,
-        &cookie,
-        "backup_restore_apply",
+    for args in [
+        serde_json::json!({}),
         serde_json::json!({ "passphrase": PASS }),
-    )
-    .await;
-    assert_eq!(r.json()["state"], "failed", "{}", r.text());
+        serde_json::json!({ "backupId": "fremd", "uploadId": "x", "passphrase": PASS }),
+        serde_json::json!({ "backupId": "gibt-es-nicht", "passphrase": PASS }),
+        serde_json::json!({ "uploadId": uuid::Uuid::new_v4().to_string(), "passphrase": PASS }),
+        serde_json::json!({ "backupId": "fremd", "passphrase": "" }),
+    ] {
+        let r = call(&srv.app, &cookie, "backup_restore_apply", args.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{args}: {}", r.text());
+        let w = call(
+            &srv.app,
+            &cookie,
+            "package_category_create",
+            serde_json::json!({ "name": format!("nach {args}") }),
+        )
+        .await;
+        assert_eq!(
+            w.status,
+            StatusCode::OK,
+            "keine Sperre nach {args}: {}",
+            w.text()
+        );
+    }
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'pre_restore'"
+        )
+        .await,
+        0
+    );
+    // Wiederholung mit demselben Idempotenz-Schlüssel: dieselbe Antwort.
+    let req = || {
+        post(
+            "/api/cmd/backup_restore_apply",
+            &serde_json::json!({ "passphrase": PASS }).to_string(),
+            Some(&cookie),
+            Some("restore-ungueltig"),
+        )
+    };
+    let first = send(&srv.app, req()).await;
+    let again = send(&srv.app, req()).await;
+    assert_eq!(first.status, StatusCode::BAD_REQUEST);
+    assert_eq!(again.status, StatusCode::BAD_REQUEST, "{}", again.text());
 
     let id: String = sqlx::query_scalar(
         "SELECT id FROM backup_history WHERE trigger_reason = 'manual' AND id != 'fremd' LIMIT 1",
@@ -461,6 +513,322 @@ async fn restore_from_history_only_local() {
         .unwrap()
         .starts_with("Backup vom "));
     assert!(marker_exists(&srv));
+}
+
+fn expense_args(description: &str) -> serde_json::Value {
+    let year = klein_buch_lib::clock::today_berlin().to_string();
+    serde_json::json!({ "args": {
+        "input": {
+            "expenseDate": year, "paidDate": null, "paidFromAccountId": null,
+            "vendorContactId": null, "vendorName": "Bürobedarf Beispiel",
+            "vendorInvoiceNumber": null, "category": "office",
+            "description": description, "netAmountCents": 1000,
+            "taxAmountCents": 0, "grossAmountCents": 1000, "currencyCode": "EUR",
+            "reverseCharge13b": false, "notes": null
+        },
+        "fiscalYear": null,
+        "receiptUploadId": null
+    }})
+}
+
+/// W5-AUTOBACKUP-SYNC (Lauf F3a): Ein festschreibender Command antwortet,
+/// ohne auf das Backup zu warten — auch wenn der Scheduler gerade blockiert
+/// ist. Der Vermerk steht sofort in der DB; danach legt der Scheduler genau
+/// ein Backup für beide Ereignisse an (Akteur `scheduler`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_event_backup_runs_after_the_answer() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let _ = draft_invoice(&srv).await; // Verkäuferprofil
+    let auto = "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_critical'";
+    let pending = "SELECT COUNT(*) FROM app_settings WHERE key = 'backup_pending_since'";
+    {
+        // Scheduler blockieren: ein synchrones Backup im Command hinge hier.
+        let _gate = srv.state.ctx.scheduler_gate.lock().await;
+        for d in ["Papier", "Toner"] {
+            let r = tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                call(&srv.app, &cookie, "expenses_create", expense_args(d)),
+            )
+            .await
+            .expect("Antwort ohne Warten auf das Backup");
+            assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+        }
+        assert_eq!(scalar_i64(&srv, auto).await, 0);
+        assert_eq!(scalar_i64(&srv, pending).await, 1, "Vermerk sofort");
+        assert_eq!(
+            scalar_i64(
+                &srv,
+                "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.requested'
+                   AND json_extract(details_json, '$.event') = 'expense.lock'"
+            )
+            .await,
+            2
+        );
+    }
+    let mut done = false;
+    for _ in 0..1200 {
+        if scalar_i64(&srv, pending).await == 0 {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(done, "Scheduler legt das Backup an");
+    assert_eq!(
+        scalar_i64(&srv, auto).await,
+        1,
+        "beide Ereignisse, ein Backup"
+    );
+    assert_eq!(
+        scalar_text(
+            &srv,
+            "SELECT actor FROM audit_log WHERE action = 'backup.created'
+              AND json_extract(details_json, '$.trigger') = 'auto_critical'"
+        )
+        .await
+        .as_deref(),
+        Some("scheduler")
+    );
+}
+
+/// Lauf F3c (S2, ADR 0040 Nr. 57): Ein Lock-Backup, das beim Sperren bzw.
+/// Herunterfahren noch aussteht, entsteht vor dem Schließen des Pools. Der
+/// geweckte Lauf stellt sich hinter einem (simulierten) Tick an und verwirft
+/// sein Backup wegen der Abbruch-Anforderung; ohne Nachholen fehlte es bis zum
+/// nächsten Entsperren.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lock_and_shutdown_write_pending_lock_backup() {
+    use std::time::Duration;
+    for shutdown in [false, true] {
+        let srv = test_server();
+        let cookie = setup(&srv).await;
+        let _ = draft_invoice(&srv).await; // Verkäuferprofil
+        let tick = srv.state.ctx.scheduler_gate.lock().await;
+        let r = call(&srv.app, &cookie, "expenses_create", expense_args("Papier")).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+        // Der geweckte Lauf wartet BACKUP_COALESCE und stellt sich dann an.
+        tokio::time::sleep(
+            klein_buch_lib::scheduler::tick::BACKUP_COALESCE + Duration::from_millis(700),
+        )
+        .await;
+        let _serial = kdf_serial().await; // Argon2id des nachgeholten Backups
+        let state = srv.state.clone();
+        let stop = tokio::spawn(async move {
+            if shutdown {
+                state.finish_shutdown().await;
+                Ok(())
+            } else {
+                klein_buch_lib::server::auth::lock_database(&state).await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(tick);
+        assert!(stop.await.unwrap().is_ok(), "shutdown={shutdown}");
+        assert!(!srv.state.ctx.is_unlocked(), "Pool geschlossen");
+        let pool = klein_buch_lib::db::open_pool(&srv.state.ctx.paths.db_file, Some(PASS))
+            .await
+            .unwrap();
+        let backups: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'auto_critical'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM app_settings WHERE key = 'backup_pending_since'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+        assert_eq!(backups, 1, "Lock-Backup geschrieben (shutdown={shutdown})");
+        assert_eq!(pending, 0, "nichts steht mehr aus (shutdown={shutdown})");
+    }
+}
+
+/// W13-BACKUP-DOWNLOAD (Lauf F3a): Download der verschlüsselten `.kbk` nur
+/// mit Re-Auth, einmalig, unverändert; nur aus dem Backup-Ordner bzw. unter
+/// `/backup-targets` (W14-011), nicht von SFTP. Das Backup selbst bleibt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backup_download_needs_reauth_and_serves_only_local_kbk() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let pool = srv.state.ctx.pool().unwrap();
+    let (id, path): (String, String) = sqlx::query_as(
+        "SELECT id, target_path FROM backup_history WHERE trigger_reason = 'manual' LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let r = call(
+        &srv.app,
+        &cookie,
+        "backup_download",
+        serde_json::json!({ "backupId": id }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
+    assert_eq!(r.json()["code"], "reauth_required");
+
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "backup_download",
+        serde_json::json!({ "backupId": id }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let ticket = r.json();
+    let original = std::fs::read(&path).unwrap();
+    assert_eq!(ticket["sizeBytes"].as_u64(), Some(original.len() as u64));
+    assert!(ticket["fileName"].as_str().unwrap().ends_with(".kbk"));
+    let url = format!("/files/download/{}", ticket["downloadId"].as_str().unwrap());
+    let got = send(&srv.app, get(&url, Some(&cookie))).await;
+    assert_eq!(got.status, StatusCode::OK);
+    assert_eq!(
+        got.body.as_ref(),
+        original.as_slice(),
+        "unverändert (verschlüsselt)"
+    );
+    assert!(got.headers[axum::http::header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment"));
+    let again = send(&srv.app, get(&url, Some(&cookie))).await;
+    assert_eq!(again.status, StatusCode::NOT_FOUND, "einmalig");
+    assert_eq!(std::fs::read(&path).unwrap(), original, "Backup bleibt");
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.downloaded'"
+        )
+        .await,
+        1
+    );
+
+    // Manipulierte Einträge: außerhalb der Wurzeln, keine .kbk, SFTP.
+    let outside = srv.dir.path().join("fremd.kbk");
+    std::fs::write(&outside, b"x").unwrap();
+    let not_kbk = srv.state.ctx.paths.backups_dir.join("notiz.txt");
+    std::fs::write(&not_kbk, b"x").unwrap();
+    for (row, target) in [
+        ("fremd", outside.to_string_lossy().to_string()),
+        ("txt", not_kbk.to_string_lossy().to_string()),
+        (
+            "sftp",
+            "sftp://kb@backup.example.org:22/kb/klein-buch-x.kbk".to_string(),
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO backup_history (id, target_path, file_hash_sha256, file_size_bytes,
+             retention_tag, trigger_reason, db_schema_version, app_version)
+             VALUES (?, ?, 'x', 1, 'manual', 'manual', 32, 'x')",
+        )
+        .bind(row)
+        .bind(&target)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let r = call(
+            &srv.app,
+            &cookie,
+            "backup_download",
+            serde_json::json!({ "backupId": row }),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{row}: {}",
+            r.text()
+        );
+    }
+    assert_eq!(srv.state.ctx.downloads.len(), 0);
+}
+
+/// Lauf F3c (S3): Ein Backup in einem Verzeichnis-Ziel auf einem anderen
+/// Dateisystem (hier `/dev/shm`) wird ohne Kopie nach `<data>/tmp` ausgeliefert
+/// (vorher: volle Kopie ohne Platzprüfung, bis zu einer Stunde liegend) und
+/// bleibt nach dem Abruf liegen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backup_download_from_other_filesystem_needs_no_copy() {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(shm) = tempfile::Builder::new()
+        .prefix("kb-ziele-")
+        .tempdir_in("/dev/shm")
+    else {
+        eprintln!("/dev/shm fehlt — Test übersprungen");
+        return;
+    };
+    let root = shm.path().to_path_buf();
+    let srv = test_server_with_paths(|p| p.backup_targets_dir = root.clone(), |_| {});
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let pool = srv.state.ctx.pool().unwrap();
+    let floor: String = sqlx::query_scalar(
+        "SELECT target_path FROM backup_history WHERE trigger_reason = 'manual' LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let dir = root.join("nas").join("kb");
+    std::fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join(std::path::Path::new(&floor).file_name().unwrap());
+    std::fs::copy(&floor, &copy).unwrap();
+    let original = std::fs::read(&copy).unwrap();
+    sqlx::query(
+        "INSERT INTO backup_history (id, target_path, file_hash_sha256, file_size_bytes,
+         retention_tag, trigger_reason, db_schema_version, app_version)
+         VALUES ('ziel', ?, 'x', ?, 'manual', 'manual', 32, 'x')",
+    )
+    .bind(copy.to_string_lossy().to_string())
+    .bind(original.len() as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let other_fs = std::fs::metadata(&copy).unwrap().dev()
+        != std::fs::metadata(&srv.state.ctx.paths.data_dir)
+            .unwrap()
+            .dev();
+
+    let r = call(
+        &srv.app,
+        &cookie,
+        "backup_download",
+        serde_json::json!({ "backupId": "ziel" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let ticket = r.json();
+    assert_eq!(ticket["sizeBytes"].as_u64(), Some(original.len() as u64));
+    let downloads = srv.state.ctx.paths.data_dir.join("tmp").join("downloads");
+    let copies = || {
+        std::fs::read_dir(&downloads)
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+    if other_fs {
+        assert_eq!(copies(), 0, "keine Kopie unter <data>/tmp");
+    }
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT json_extract(details_json, '$.linked') FROM audit_log
+              WHERE action = 'backup.downloaded'"
+        )
+        .await,
+        i64::from(!other_fs)
+    );
+    let url = format!("/files/download/{}", ticket["downloadId"].as_str().unwrap());
+    let got = send(&srv.app, get(&url, Some(&cookie))).await;
+    assert_eq!(got.status, StatusCode::OK);
+    assert_eq!(got.body.as_ref(), original.as_slice());
+    let again = send(&srv.app, get(&url, Some(&cookie))).await;
+    assert_eq!(again.status, StatusCode::NOT_FOUND, "einmalig");
+    assert_eq!(std::fs::read(&copy).unwrap(), original, "Backup bleibt");
+    assert_eq!(copies(), 0);
 }
 
 /// Migrator mit allen Migrationen außer der letzten (DB eine Version älter).
@@ -577,9 +945,69 @@ async fn pre_migration_backup_on_unlock() {
         .await
         .unwrap()
     };
-    let m = klein_buch_lib::backup::manifest::read_manifest_only(&std::fs::read(name).unwrap())
-        .unwrap();
+    let bytes = std::fs::read(&name).unwrap();
+    let m = klein_buch_lib::backup::manifest::read_manifest_only(&bytes).unwrap();
     assert_eq!(m.schema_version, old);
+    // Lauf F3c (S1): im Format der Vorversion — v2026.10.0 (Schema 31) liest
+    // Format 1–2 ohne AAD. Mit genau deren Leselogik entschlüsseln und die
+    // Datenbank im Inhalt mit der Passphrase öffnen: Schema `old`.
+    assert_eq!(
+        m.format_version,
+        klein_buch_lib::backup::manifest::readable_format_for_schema(old)
+    );
+    if old <= 31 {
+        assert_eq!(m.format_version, 2, "Rückfall auf v2026.10.0");
+    }
+    let content = decrypt_like_v2026_10(&bytes, PASS);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(content)).unwrap();
+    let mut db_bytes = Vec::new();
+    std::io::Read::read_to_end(
+        &mut zip.by_name("klein-buch.sqlite").unwrap(),
+        &mut db_bytes,
+    )
+    .unwrap();
+    let probe = srv
+        .state
+        .ctx
+        .paths
+        .data_dir
+        .join("tmp")
+        .join("probe-v2026-10.sqlite");
+    std::fs::create_dir_all(probe.parent().unwrap()).unwrap();
+    std::fs::write(&probe, &db_bytes).unwrap();
+    let pool = klein_buch_lib::db::open_pool(&probe, Some(PASS))
+        .await
+        .unwrap();
+    let v: String =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'schema_version'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    pool.close().await;
+    assert_eq!(v, old.to_string());
+    // Die laufende Version liest es weiterhin (Format 1–3).
+    klein_buch_lib::backup::verify_backup_file(std::path::Path::new(&name), PASS)
+        .await
+        .unwrap();
+}
+
+/// Leselogik von v2026.10.0 (`backup::restore::decrypt_backup` dort): Format
+/// 1–2, AES-256-GCM ohne AAD über alles nach dem Kopf, danach Content-Hash
+/// (Lauf F3c, Rückfall).
+fn decrypt_like_v2026_10(bytes: &[u8], pass: &str) -> Vec<u8> {
+    use klein_buch_lib::backup::{encrypt, manifest, snapshot};
+    let (m, ct) = manifest::unframe(bytes).unwrap();
+    assert!(
+        (1..=2).contains(&m.format_version),
+        "v2026.10.0 liest Format 1–2, nicht {}",
+        m.format_version
+    );
+    let salt = manifest::from_hex(&m.salt_hex).unwrap();
+    let nonce = encrypt::nonce_array(&manifest::from_hex(&m.nonce_hex).unwrap()).unwrap();
+    let key = encrypt::derive_key(pass.as_bytes(), &salt).unwrap();
+    let content = encrypt::decrypt(&key, &nonce, &ct).unwrap();
+    assert_eq!(snapshot::sha256_hex(&content), m.content_sha256);
+    content
 }
 
 /// Lauf F2c (S1): Ein Altfehler (verwaister Verweis) in einer älteren
@@ -813,9 +1241,12 @@ async fn schema_30_backup_is_restored_and_migrated_forward() {
         .await
         .unwrap();
     }
-    let kbk = backup_bytes(&a, &cookie_a).await;
+    // Lauf F3a: als Format 2 (ohne AAD) — so sehen alle bis dahin
+    // geschriebenen Backups aus.
+    let kbk = as_format_2(&backup_bytes(&a, &cookie_a).await, PASS);
     let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
     assert_eq!(m.schema_version, 30, "Backup trägt Schema 30");
+    assert_eq!(m.format_version, 2);
 
     // Instanz B stellt es wieder her
     let b = test_server();
@@ -1030,14 +1461,26 @@ async fn foreign_archive_paths_are_rejected() {
     let cookie_b = setup(&b).await;
     let cookie_b = reauth_cookie(&b, &cookie_b).await;
     assert_rejected(&b, &cookie_b, &kbk, "Archivpfade").await;
+    // Lauf F3c: Die Prüfung der gestagten DB läuft vor dem Pre-Restore-Backup
+    // (der entschlüsselte Inhalt ist dann schon freigegeben) — abgelehnt
+    // heißt: kein Pre-Restore-Backup, aber der Audit des Versuchs.
     assert_eq!(
         scalar_i64(
             &b,
             "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'pre_restore'"
         )
         .await,
+        0,
+        "kein Pre-Restore-Backup (Prüfung vor ihm)"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.restore.requested'"
+        )
+        .await,
         1,
-        "Pre-Restore-Backup entstand (Prüfung erst nach dem Entpacken)"
+        "Versuch auditiert"
     );
 }
 
@@ -1202,7 +1645,7 @@ async fn older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_releas
         scalar_i64(
             &srv,
             "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
-             AND body LIKE '%von 1 auf 3%'"
+             AND body LIKE '%von 1 auf 3%' AND body NOT LIKE '%nicht aus dieser Instanz%'"
         )
         .await,
         1
@@ -1502,6 +1945,19 @@ async fn older_backup_restore_bills_no_period_twice_and_guards_used_draft_number
         .await,
         1
     );
+    // F3b: Das vorgerückte Kosten-Abo steht getrennt — seine gebuchten Kosten
+    // sind mit dem ersetzten Stand verworfen und von Hand nachzutragen.
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_recurring:%'
+             AND body LIKE '%Kosten-Abos: %„Hosting“%'
+             AND body LIKE '%fehlen jetzt in Kosten und EÜR%von Hand erfassen%'
+             AND body LIKE '%Abo-Rechnungen: %„Wartung“%'"
+        )
+        .await,
+        1
+    );
     // S2: D ist vorgemerkt, der Hinweis nennt die Nummer.
     assert_eq!(
         scalar_i64(
@@ -1636,6 +2092,27 @@ async fn restore_without_series_state_requires_decision_and_never_auto_issues() 
         let s = klein_buch_lib::db::repo::recurring::create(&pool, &sub_today("Hosting"))
             .await
             .unwrap();
+        // F3b: Reihen, für die kein Lauf etwas erzeugt, bekommen keinen
+        // Prüf-Marker — eine abgelaufene Vorlage und ein Abo ohne Auto-Buchung.
+        let expired = klein_buch_lib::db::repo::recurring_invoice::create(
+            &pool,
+            &tmpl_today(&contact, "Abgelaufen", "issue"),
+        )
+        .await
+        .unwrap();
+        let yesterday =
+            (klein_buch_lib::clock::today_berlin() - chrono::Duration::days(1)).to_string();
+        sqlx::query("UPDATE recurring_invoices SET end_date = ? WHERE id = ?")
+            .bind(&yesterday)
+            .bind(&expired.template.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut manual_input = sub_today("Manuell");
+        manual_input.auto_create_expense = false;
+        klein_buch_lib::db::repo::recurring::create(&pool, &manual_input)
+            .await
+            .unwrap();
         // Marker, die nicht aus dem Backup weiterwirken dürfen.
         klein_buch_lib::db::repo::app_settings::set(
             &pool,
@@ -1685,6 +2162,25 @@ async fn restore_without_series_state_requires_decision_and_never_auto_issues() 
         scalar_i64(
             &srv,
             "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'recurring|_catch|_up|_ok:%' ESCAPE '|'"
+        )
+        .await,
+        0
+    );
+    // F3b: nur die drei Reihen mit Handlungsweg; die abgelaufene Vorlage und
+    // das Abo ohne Auto-Buchung stehen weder als Marker noch im Hinweis.
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'recurring|_restore|_review:%' ESCAPE '|'"
+        )
+        .await,
+        3
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_recurring:%'
+             AND (body LIKE '%Abgelaufen%' OR body LIKE '%Manuell%')"
         )
         .await,
         0
@@ -1872,5 +2368,77 @@ async fn numbering_raise_only_upwards_with_reason() {
         .await
         .unwrap(),
         format!("RE-{year}-0042")
+    );
+}
+
+/// Lauf F3b (Nummernkreis-Hinweis bei fremdem Stand): Wiederherstellung nach
+/// einem Totalausfall in eine neue Instanz, in der vorher ein Test-Entwurf
+/// angelegt wurde (Zähler 1). Das Backup des ausgefallenen Servers hat einen
+/// höheren Zähler (2) — kein Kreis wird angehoben, der Hinweis ist trotzdem
+/// die dringende Anleitung zum Anheben und nicht „keine Lücke“: Der alte
+/// Server kann nach dem Backup weiter nummeriert haben.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restore_over_other_instance_with_lower_counters_asks_to_raise() {
+    let a = test_server();
+    let cookie_a = setup(&a).await;
+    let _ = draft_invoice(&a).await;
+    let _ = draft_invoice(&a).await;
+    let kbk = backup_bytes(&a, &cookie_a).await;
+
+    let b = destroy_and_recreate(a).await;
+    let cookie_b = setup(&b).await;
+    let _ = draft_invoice(&b).await;
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT last_value FROM doc_number_counters WHERE doc_type = 'invoice'"
+        )
+        .await,
+        1
+    );
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
+    let r = restore_upload(&b, &cookie_b, &kbk, PASS).await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    let b = restart(b).await;
+    let r = login(&b, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT last_value FROM doc_number_counters WHERE doc_type = 'invoice'"
+        )
+        .await,
+        2,
+        "Stand des Backups, nichts angehoben"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+             AND severity = 'urgent'
+             AND body LIKE '%höher als in der ersetzten Datenbank (Rechnungen (RE) %: 2)%'
+             AND body LIKE '%Nummernkreise unter Einstellungen%'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_numbering:%'
+             AND (severity = 'info' OR body LIKE '%keine wird doppelt vergeben%')"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.restore.applied'
+             AND details_json LIKE '%\"counters_ahead\":1%'"
+        )
+        .await,
+        1
     );
 }

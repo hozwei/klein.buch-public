@@ -199,3 +199,13 @@ strip = true
 # Kein `panic = "abort"` im Server (Plan W5, ADR 0039): eine Panik beendet nur
 # die betroffene Anfrage bzw. den Job (tokio fängt sie am Task-Ende), nicht den
 # ganzen Prozess samt entsperrter Datenbank.
+
+# Lauf F3c: Abhängigkeiten im Dev-/Test-Profil optimiert übersetzen (das Test-
+# Profil erbt von dev). Argon2id (64 MiB), SHA-256, AES-GCM, Deflate, SQLite
+# (C-Teil von libsqlite3-sys über OPT_LEVEL) und Typst liefen sonst ohne
+# Optimierung — Einrichten, Anmelden und Backups brauchten in den Server-Tests
+# unter Volllast mehr als die 30-s-Grenze der Anfragen (503 „timeout“). Der
+# eigene Crate bleibt bei opt-level 0 (schnelles Neuübersetzen); das
+# Release-Profil ist unberührt.
+[profile.dev.package."*"]
+opt-level = 2

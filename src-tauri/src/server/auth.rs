@@ -748,8 +748,8 @@ pub async fn logout(State(st): State<Arc<ServerState>>, req: Request) -> Respons
 /// `POST /api/auth/lock` — „Datenbank sperren“: beendet sofort alle Sitzungen,
 /// bittet den Scheduler um Abbruch nach dem laufenden Termin, wartet auf
 /// laufende Aktionen (höchstens [`DB_GATE_WAIT`]) und den Tick (höchstens
-/// [`SCHEDULER_STOP_WAIT`]), schließt den Pool und überschreibt die Passphrase
-/// im RAM (W14-027).
+/// [`SCHEDULER_STOP_WAIT`]), schreibt ein ausstehendes Lock-Backup (Lauf F3c),
+/// schließt den Pool und überschreibt die Passphrase im RAM (W14-027).
 pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response {
     let request = match read_request(req).await {
         Ok(r) => r,
@@ -774,7 +774,9 @@ pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response 
 /// Abbruch-Anforderung an den Scheduler, dann die Schreibsperre. Läuft der
 /// Tick nach [`SCHEDULER_STOP_WAIT`] noch (hängender Sidecar, SMTP-Timeout),
 /// wird trotzdem gesperrt: Pool und Passphrase sind weg, der Tick scheitert am
-/// nächsten Datenbankzugriff und weitere Ticks laufen leer.
+/// nächsten Datenbankzugriff und weitere Ticks laufen leer. Ein ausstehendes
+/// Lock-Backup wird vorher noch geschrieben (höchstens [`DB_GATE_WAIT`],
+/// Lauf F3c, ADR 0040 Nr. 57).
 pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     let _transition = st.transition.lock().await;
     st.sessions.clear();
@@ -800,6 +802,9 @@ pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
             SCHEDULER_STOP_WAIT.as_secs()
         );
     }
+    // Lauf F3c: ein ausstehendes Lock-Backup (eben festgeschriebener Beleg)
+    // vor dem Schließen des Pools schreiben, höchstens DB_GATE_WAIT.
+    crate::scheduler::tick::flush_pending_backup(&st.ctx, DB_GATE_WAIT).await;
     if let Some(pool) = st.ctx.take_pool() {
         // Neue Zugriffe scheitern ab sofort; auf ausgeliehene Verbindungen
         // höchstens DB_GATE_WAIT warten.

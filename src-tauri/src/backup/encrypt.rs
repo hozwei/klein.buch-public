@@ -5,6 +5,10 @@
 //! - **AEAD:** AES-256-GCM, 96-Bit-Nonce zufällig pro Backup. Das GCM-Tag
 //!   (16 Byte, an den Ciphertext angehängt) liefert Integritätsschutz —
 //!   eine Byte-Manipulation am Cipher schlägt beim Decrypt als Auth-Fehler an.
+//! - **AAD (Backup-Format 3, Lauf F3a):** Der Klartext-Kopf der `.kbk` ist als
+//!   Associated Data gebunden ([`encrypt_in_place_detached`],
+//!   [`decrypt_in_place`]); beide arbeiten im Puffer des Aufrufers, ohne Kopie
+//!   des Inhalts. Formate 1/2 nutzen eine leere AAD (bitgleich zu [`encrypt`]).
 //!
 //! Die **Passphrase wird nie persistiert** (nicht in DB, Logs, audit_log).
 //! Sie lebt nur im Prozess-Memory der laufenden Session (siehe
@@ -88,6 +92,58 @@ pub fn decrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], ciphertext: &[u8]) 
         })
 }
 
+/// Länge des GCM-Tags (an den Ciphertext angehängt).
+pub const TAG_LEN: usize = 16;
+
+/// AES-256-GCM **in place** mit zusätzlichen authentifizierten Daten (`aad`,
+/// Backup-Format 3: der Klartext-Kopf, Lauf F3a W14-020). `buffer` wird zum
+/// Ciphertext; zurück kommt das 16-Byte-Tag, das der Aufrufer anhängt. Ohne
+/// Kopie des Inhalts (W7-RESTORE-RAM).
+pub fn encrypt_in_place_detached(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    buffer: &mut [u8],
+) -> Result<[u8; TAG_LEN]> {
+    use aes_gcm::aead::AeadInPlace;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let tag = cipher
+        .encrypt_in_place_detached(Nonce::from_slice(nonce), aad, buffer)
+        .map_err(|e| Error::Crypto(format!("AES-GCM-Encrypt: {e}")))?;
+    let mut out = [0u8; TAG_LEN];
+    out.copy_from_slice(&tag);
+    Ok(out)
+}
+
+/// AES-256-GCM-Entschlüsselung **in place**: `buffer` enthält Ciphertext mit
+/// angehängtem Tag und danach den Klartext (das Tag wird abgeschnitten).
+/// `aad` muss exakt den beim Verschlüsseln gebundenen Daten entsprechen
+/// (Format 1/2: leer). Ein manipuliertes Byte im Ciphertext oder in `aad`
+/// (oder ein falscher Schlüssel) führt zu `Err(Crypto)`; der Puffer ist dann
+/// unbrauchbar.
+pub fn decrypt_in_place(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    aad: &[u8],
+    buffer: &mut Vec<u8>,
+) -> Result<()> {
+    use aes_gcm::aead::AeadInPlace;
+    let failed = || {
+        Error::Crypto(
+            "Authentifizierung fehlgeschlagen (falsche Passphrase oder beschädigtes Backup)".into(),
+        )
+    };
+    let Some(tag_at) = buffer.len().checked_sub(TAG_LEN) else {
+        return Err(failed());
+    };
+    let tag = aes_gcm::Tag::clone_from_slice(&buffer[tag_at..]);
+    buffer.truncate(tag_at);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    cipher
+        .decrypt_in_place_detached(Nonce::from_slice(nonce), aad, buffer, &tag)
+        .map_err(|_| failed())
+}
+
 /// Hilfsfunktion: Salt-Slice → fixes Array.
 pub fn salt_array(salt: &[u8]) -> Result<[u8; SALT_LEN]> {
     salt.try_into()
@@ -137,6 +193,39 @@ mod tests {
         let mut ct = encrypt(&key, &nonce, b"important data").unwrap();
         ct[0] ^= 0x01; // ein Byte kippen
         assert!(decrypt(&key, &nonce, &ct).is_err());
+    }
+
+    /// Lauf F3a: In-place-Variante ist bitgleich zur bisherigen Hülle (leere
+    /// AAD, Format 1/2) und bindet bei Format 3 die AAD — eine andere AAD
+    /// scheitert an der Authentifizierung.
+    #[test]
+    fn in_place_matches_classic_and_binds_aad() {
+        let salt = random_bytes(SALT_LEN);
+        let key = derive_key(b"pw-in-place", &salt).unwrap();
+        let nonce: [u8; NONCE_LEN] = random_bytes(NONCE_LEN).try_into().unwrap();
+        let pt = b"Inhalt des Backups".to_vec();
+
+        let classic = encrypt(&key, &nonce, &pt).unwrap();
+        let mut buf = pt.clone();
+        let tag = encrypt_in_place_detached(&key, &nonce, b"", &mut buf).unwrap();
+        buf.extend_from_slice(&tag);
+        assert_eq!(buf, classic, "ohne AAD identisch zur bisherigen Hülle");
+        let mut back = classic.clone();
+        decrypt_in_place(&key, &nonce, b"", &mut back).unwrap();
+        assert_eq!(back, pt);
+
+        let mut bound = pt.clone();
+        let tag = encrypt_in_place_detached(&key, &nonce, b"kopf", &mut bound).unwrap();
+        bound.extend_from_slice(&tag);
+        let mut ok = bound.clone();
+        decrypt_in_place(&key, &nonce, b"kopf", &mut ok).unwrap();
+        assert_eq!(ok, pt);
+        let mut other = bound.clone();
+        assert!(decrypt_in_place(&key, &nonce, b"Kopf", &mut other).is_err());
+        let mut none = bound.clone();
+        assert!(decrypt_in_place(&key, &nonce, b"", &mut none).is_err());
+        let mut short = vec![0u8; TAG_LEN - 1];
+        assert!(decrypt_in_place(&key, &nonce, b"", &mut short).is_err());
     }
 
     #[test]

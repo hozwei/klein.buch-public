@@ -141,9 +141,10 @@ Schlägt die Prüfung erst nach der Umstellung an, sagt die Meldung im
 Browser "Nach der Umstellung der Datenbank hat die Prüfung
 Unstimmigkeiten gefunden", und im Log steht "nach der Umstellung von
 Schema …". Das ist ein Fehler der Umstellung selbst und sollte nicht
-vorkommen. Die Umstellung ist dann schon gespeichert, das vorige Image
-öffnet die Datenbank nicht mehr, und ohne Anmeldung lässt sich in dieser
-Instanz kein Backup einspielen. Der Rückweg führt über eine neue Instanz:
+vorkommen. Klein.Buch meldet das bei jedem weiteren Anmeldeversuch
+wieder so, bis ein Entsperren gelingt. Die Umstellung ist dann schon
+gespeichert, das vorige Image öffnet die Datenbank nicht mehr, und ohne
+Anmeldung lässt sich in dieser Instanz kein Backup einspielen. Der Rückweg führt über eine neue Instanz:
 
 1. Kopiere das Backup, das Klein.Buch unmittelbar vor der Umstellung
    angelegt hat (die neueste `.kbk`-Datei im Backup-Ordner

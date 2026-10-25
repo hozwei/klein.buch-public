@@ -84,7 +84,9 @@ Kleinunternehmer-Schalter angeschaltet ist.
 
 ## Kann ich Klein.Buch auf einen anderen Server umziehen?
 
-Ja, über ein Backup. Du richtest auf dem neuen Server eine neue
+Ja, über ein Backup. Die Datei holst Du auf dem alten Server unter
+"Einstellungen → Backups" mit "Herunterladen" im Backup-Verlauf (oder
+von einem externen Ziel). Dann richtest Du auf dem neuen Server eine neue
 Instanz ein und spielst dort unter "Einstellungen → Backups" im
 Abschnitt "Wiederherstellen" die Backup-Datei (Endung `.kbk`) ein.
 Dafür brauchst Du die Passphrase, mit der das Backup verschlüsselt
@@ -283,4 +285,4 @@ Steuerberater ab.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

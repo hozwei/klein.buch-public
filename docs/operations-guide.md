@@ -72,7 +72,7 @@ Einstellungen darin und ihr Zweck:
 | `read_only: true`, `tmpfs: /tmp` | Root-Dateisystem schreibgeschützt; Temp-Dateien der Anwendung liegen unter `/data/tmp` (`TMPDIR`), `/tmp` ist `HOME` |
 | `cap_drop: [ALL]`, `no-new-privileges`, `ulimits.core: 0` | keine Capabilities, keine Rechteausweitung, keine Core-Dumps (der Server setzt zusätzlich `PR_SET_DUMPABLE` 0) |
 | `pids_limit: 256`, `mem_limit: 2g` | Grenzen gegen Ausreißer; Speicher siehe §10 |
-| `stop_grace_period: 90s` | Herunterfahren (ADR 0040): Scheduler sofort anhalten (Abo-Lauf beendet den Termin), offene Verbindungen höchstens 30 s, laufende Jobs und Tick höchstens 30 s, Pool schließen höchstens 5 s — zusammen unter 70 s. Ein abgebrochenes Backup ist unkritisch (Temp-Datei + rename, Reste räumt der Start). Der Docker-Standard von 10 s ist zu kurz. |
+| `stop_grace_period: 90s` | Herunterfahren (ADR 0040): Scheduler sofort anhalten (Abo-Lauf beendet den Termin), offene Verbindungen höchstens 30 s, laufende Jobs und Tick höchstens 30 s, danach ein noch ausstehendes Lock-Backup (eben festgeschriebener Beleg) — beides zusammen höchstens 40 s —, Pool schließen höchstens 5 s: zusammen höchstens 75 s. Ein abgebrochenes Backup ist unkritisch (Temp-Datei + rename, Reste räumt der Start). Der Docker-Standard von 10 s ist zu kurz. |
 | `logging: json-file`, `max-size`/`max-file` | Log-Rotation |
 
 Erster Start: `docker compose up -d`, dann den Setup-Token aus dem Log lesen
@@ -225,7 +225,11 @@ und dem Daten-Passwort zum Zeitpunkt des Backups. **Nicht** enthalten:
 der Betreiber selbst.
 
 **Wann.** Bei jedem Festschreiben (Rechnung, Storno, Kosten, Privatbewegung;
-Abo-Läufe eines Ticks ergeben zusammen genau ein Backup), einmal je
+Abo-Läufe eines Ticks ergeben zusammen genau ein Backup) — seit Lauf F3a
+kurz nach der Antwort im Hintergrund: Das Festschreiben vermerkt das Backup in
+der Datenbank, der Scheduler legt es nach etwa zwei Sekunden an (mehrere
+Festschreibungen kurz hintereinander ergeben ein Backup; fällt es durch Sperren
+oder Neustart aus, holt es der erste Tick danach nach) —, einmal je
 Kalendertag (Europe/Berlin) ab der eingestellten Uhrzeit (Standard 02:30,
 Einstellungen → Backups; beim ersten Tick danach, nach einer Sperre genau
 eines; nach einem Fehlschlag frühestens nach 1 h erneut, persistiert; nur
@@ -254,11 +258,35 @@ der Einrichtung zählt als Tages-Backup dieses Tages.
 - Während einer Pause der automatischen Abläufe (nach einem Restore oder einem
   Uhrsprung, ADR 0040) ruht die Rotation; nach einem Restore gehen Backups bis
   zur Freigabe nur in den Floor.
+- Die Rotation löscht nur `.kbk`-Dateien, die (aufgelöst) im Floor oder unter
+  `/backup-targets` liegen; Historienzeilen, die woandershin zeigen, verlieren
+  nur ihren Eintrag.
+
+**Herunterladen** (seit Lauf F3a): Einstellungen → Backups → Backup-Verlauf →
+„Herunterladen“ (Re-Auth) liefert die verschlüsselte `.kbk` aus dem Floor oder
+einem Ordner-Ziel — etwa für einen Umzug oder als zusätzliche Kopie ohne
+externes Ziel. Der Link gilt einmal und eine Stunde; Audit `backup.downloaded`.
+Der Floor wird per Hardlink bereitgestellt, ein Ordner-Ziel auf einem anderen
+Dateisystem direkt von seinem Platz (keine Kopie unter `/data/tmp`, seit
+Lauf F3c). Kopien auf SFTP-Zielen holt der Betreiber auf dem Server.
+
+**Format.** Seit Lauf F3a schreibt Klein.Buch Backup-Format 3: Der lesbare
+Kopf (Versionen, Zeitpunkt, Prüfsumme) ist an die Verschlüsselung gebunden und
+lässt sich nicht unbemerkt ändern. Ältere Backups (Format 1 und 2) bleiben
+einspielbar; ein Format-3-Backup lässt sich mit einer älteren Version nicht
+einspielen. Ausnahme: Das Pflicht-Backup vor einer Datenbank-Umstellung hat das
+Format der vorherigen Version (für den Rückfall, §8; seit Lauf F3c).
 
 **Überwachung.** Ein gescheitertes Ziel steht im append-only Backup-Protokoll
 und als Hinweis in der Inbox; ohne Ziel kommt wöchentlich ein Hinweis, die
 Übersicht zeigt eine Aufgabe. Das Festschreiben blockiert das nie. Den Status
-`offsite` (`missing` | `failing` | `ok`) liefert auch der Healthcheck (§11).
+`offsite` (`missing` | `failing` | `stale` | `ok`; `stale` = ein Ziel hat noch keine
+Kopie oder seine letzte ist älter als die Frist der Regel „Backup überfällig“,
+Standard 7 Tage) liefert auch der Healthcheck (§11). Konnte ein Backup Einträge
+nicht sichern (symbolischer Link im Archiv, Archivdatei beim Lesen verschwunden),
+steht das im Detail der `ok`-Zeile des Protokolls und als Hinweis „Backup
+unvollständig“ (seit Lauf F3c); das Archiv enthält nur echte Dateien, ein
+ausgelagerter Ordner gehört als Volume eingebunden, nicht verlinkt.
 
 Off-Site ist Pflicht: Die lokalen Backups liegen auf demselben Volume wie die
 Daten. Kapitel: `backup-ziel-einrichten`, `backup-und-wiederherstellen`,
@@ -275,14 +303,17 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
 
 1. `CHANGELOG.md` bzw. Release-Notizen lesen; Signatur prüfen (`SECURITY.md`).
 2. Sicherstellen, dass ein aktuelles Off-Site-Backup und eine Sicherung von
-   `/inputs` existieren.
+   `/inputs` existieren. Empfohlen: mit der **alten** Version unmittelbar vor
+   dem Update „Jetzt sichern“ — dieses Backup liest die alte Version in jedem
+   Fall.
 3. In der Compose-Datei das Tag ändern, dann
    `docker compose pull && docker compose up -d`.
 4. Im Browser anmelden. Bringt die neue Version eine Datenbank-Umstellung mit,
    legt Klein.Buch **vor** der Migration ein Backup an, liest es vollständig
-   zurück und migriert erst danach (Audit `backup.pre_migration`). Scheitert
-   das Backup, wird nicht migriert und die Instanz bleibt gesperrt (Meldung im Log
-   und in der Inbox).
+   zurück und migriert erst danach (Audit `backup.pre_migration`). Dieses
+   Backup hat das Format, das die vorherige Version einspielt (für ein Update
+   von 2026.10 Format 2, ADR 0039 Nr. 129). Scheitert es, wird nicht migriert
+   und die Instanz bleibt gesperrt (Meldung im Log und in der Inbox).
 5. Neue Fassungen der mitgelieferten Vorlagen landen in `/inputs` (§5).
 
 **Rückfall** nach einem gescheiterten Update: vorheriges Tag starten und das
@@ -291,7 +322,10 @@ das ältere Image nicht (Schema-Check, keine Down-Migration). Dann: Container
 stoppen, das bisherige `/data` beiseitelegen (nicht löschen), mit leerem `/data`
 und dem vorherigen Tag neu einrichten und das Backup per Upload wiederherstellen
 (§9). Die Backup-Datei liegt im beiseitegelegten `/data/backups` und auf den
-Off-Site-Zielen.
+Off-Site-Zielen. Spätere Backups der neuen Version kann die ältere unter
+Umständen nicht lesen (neues Backup-Format, z. B. Format 3 ab 2026.11 — die
+ältere meldet dann „Backup-Format 3 wird nicht unterstützt“); für den Rückfall
+zählen das Backup von vor der Migration und das manuelle Backup aus Schritt 2.
 
 Kapitel: `updates-und-rueckfall`.
 
@@ -299,10 +333,15 @@ Kapitel: `updates-und-rueckfall`.
 
 **Restore** (Einstellungen → Backups → Wiederherstellen; Re-Auth): Backup-Datei
 hochladen oder ein lokales Backup aus der Liste wählen und das Daten-Passwort
-**dieses Backups** eingeben. Ablauf: Manifest und Format prüfen → Schema
+**dieses Backups** eingeben. Ein ungültiger Aufruf (keine oder zwei Quellen,
+unbekannter Upload, leere Passphrase) wird mit 400 abgelehnt, bevor der Server
+Änderungen sperrt. Ablauf: Manifest und Format (1–3) prüfen → Schema
 `30 ≤ Version ≤ aktuelle Version` (neuere Backups werden abgelehnt) →
-entschlüsseln (eine falsche Passphrase verändert nichts) → Pre-Restore-Backup des
-aktuellen Stands → Platzprüfung → gehärtet entpacken → gestagte Datenbank prüfen.
+entschlüsseln (eine falsche Passphrase verändert nichts) → Audit
+`backup.restore.requested` → Platzprüfung → gehärtet entpacken und gestagte
+Datenbank prüfen → Pre-Restore-Backup des aktuellen Stands → zweite Platzprüfung →
+Marker. Ein Backup, das schon bei der Prüfung der gestagten Datenbank scheitert,
+erzeugt kein Pre-Restore-Backup (Lauf F3c, ADR 0039 Nr. 129 (2)).
 Danach lehnt der Server Änderungen ab, beendet sich geordnet (Exit 0), und die
 Container-Verwaltung startet ihn neu; der Tausch läuft vor dem Port-Bind. Danach
 gilt das Daten-Passwort des Backups; der zweite Faktor (TOTP) bleibt der der
@@ -315,8 +354,9 @@ Browser freigibt (Re-Auth, Frage „produktive Instanz?“). Eine Probe-Instanz
 wird nie freigegeben. Die **Nummernkreise** der ersetzten Datenbank werden
 übernommen, wo sie höher waren (keine Doppelvergabe, Audit
 `numbering.raised_after_restore`); bei Disaster Recovery in eine leere Instanz
-hebt der Inhaber sie unter Einstellungen → Backups → Nummernkreise an (Re-Auth,
-Begründung, nur aufwärts). Backups im Floor, die nach dem eingespielten Stand
+— oder in eine Instanz mit Testdaten bzw. aus dem Backup eines anderen Servers,
+was der Hinweis erkennt — hebt der Inhaber sie unter Einstellungen → Backups →
+Nummernkreise an (Re-Auth, Begründung, nur aufwärts). Backups im Floor, die nach dem eingespielten Stand
 entstanden, stehen wieder in der Historie (als manuell).
 
 Voraussetzungen und Grenzen:
@@ -324,7 +364,9 @@ Voraussetzungen und Grenzen:
 - Restart-Policy, die auch nach Exit 0 neu startet (`unless-stopped`, §3).
 - Freier Platz auf `/data`: das Doppelte der entpackten Größe plus
   `KLEIN_BUCH_MIN_FREE_BYTES`.
-- RAM: etwa das Dreifache der Backup-Größe (§10).
+- RAM: etwa die Größe des eingespielten Backups beim Entschlüsseln, danach
+  (nicht gleichzeitig) so viel wie ein Backup der laufenden Instanz für das
+  Pre-Restore-Backup (§10).
 - Backups der Desktop-Fassung mit festgeschriebenen Belegen werden abgelehnt
   (Windows-Archivpfade; kein Datenumzug, E17). Backups ab Schema 30 einer
   Server-Instanz sind einspielbar.
@@ -343,18 +385,25 @@ Kapitel: `backup-und-wiederherstellen`, `disaster-recovery`.
 
 **Arbeitsspeicher** — größte Posten:
 
-- **Backup erstellen:** Das Backup entsteht im Speicher (Inhalts-ZIP,
-  verschlüsselte Kopie, fertige Datei): etwa das **Dreifache der Archivgröße**.
-- **Restore:** Die Backup-Datei wird zum Entschlüsseln ganz gelesen (Datei,
-  Ciphertext-Kopie, Klartext): etwa das **Dreifache der Backup-Größe**.
+- **Backup erstellen:** Das Inhalts-ZIP entsteht im Speicher und wird im selben
+  Puffer verschlüsselt; Floor und Ziele schreiben ihn ohne weitere Kopie (seit
+  Lauf F3a): etwa das **Ein- bis Zweifache der Backup-Größe** (der Puffer wächst
+  beim Packen).
+- **Restore:** Die Backup-Datei wird ganz gelesen und im selben Puffer
+  entschlüsselt (seit Lauf F3a): etwa **einmal die Backup-Größe**. Der Inhalt
+  wird dann entpackt und freigegeben, erst danach entsteht das
+  Pre-Restore-Backup der laufenden Instanz (wie „Backup erstellen“; seit
+  Lauf F3c nacheinander, vorher gleichzeitig: etwa dreimal). Die Spitze liegt
+  damit beim Größeren von beidem.
 - **Java-Sidecar** (Validierung, ZUGFeRD): je Lauf höchstens 512 MiB Heap
   (`-Xmx512m`), höchstens zwei Läufe gleichzeitig.
 - **Passphrase-Ableitung** (Argon2id): 64 MiB je Ableitung, höchstens eine
   gleichzeitig.
 
 `compose.example.yaml` setzt `mem_limit: 2g` mit der Faustregel „512 MiB
-Grundbedarf + 3 × größtes Backup“. Mit wachsendem Archiv `mem_limit` mitziehen,
-sonst beendet der Kernel den Prozess mitten im Backup.
+Grundbedarf + 2 × größtes Backup“ (seit Lauf F3a; vorher 3 ×); sie deckt auch
+den Restore (seit Lauf F3c). Mit wachsendem Archiv `mem_limit` mitziehen, sonst
+beendet der Kernel den Prozess mitten im Backup oder Restore.
 
 **Plattenplatz** auf `/data`: Datenbank + Archiv + lokale Backups (Floor, plus
 nie rotierte manuelle und Pre-Restore-Backups) + Reserve
@@ -401,7 +450,7 @@ docker compose exec klein-buch klein-buch-server healthcheck
 
 `state` ist `setup`, `locked` oder `unlocked`; `locked` gilt als gesund (sonst
 entstünde nach jedem Neustart eine Neustartschleife). `offsite` (`missing` |
-`failing` | `ok`) ist nur entsperrt lesbar, sonst `null`. Wer überwachen will, ob
+`failing` | `stale` | `ok`) ist nur entsperrt lesbar, sonst `null`. Wer überwachen will, ob
 nach einem Neustart jemand entsperrt hat, wertet `state` aus.
 
 **Subcommands** des Binaries: `serve` (Standard), `healthcheck`, `totp-reset`,

@@ -16,6 +16,15 @@
 //! Lock-Backups der Abo-Läufe eines Ticks werden zu genau einem Backup
 //! zusammengefasst — ein fälliges Tages-Backup deckt sie mit ab.
 //!
+//! **Lock-Backups außerhalb der Antwort (Lauf F3a, W5-AUTOBACKUP-SYNC):**
+//! Festschreibende Commands vermerken das Backup und wecken die Schleife
+//! ([`crate::backup::request_auto_backup`]); nach [`BACKUP_COALESCE`] legt sie
+//! unter derselben Sperre wie der Tick genau ein Backup an. Pausen und
+//! Abbruch-Anforderung gelten auch hier; „Datenbank sperren“ und das
+//! Herunterfahren holen ein so ausgefallenes Backup vor dem Schließen des Pools
+//! nach ([`flush_pending_backup`], Lauf F3c), sonst der nächste Tick über den
+//! Vermerk.
+//!
 //! **Anhalten (W14-027, W14-025b, ADR 0040):** [`request_stop`] setzt die
 //! kooperative Abbruch-Anforderung (`AppCtx::scheduler_stop`); laufende
 //! Abo-Läufe beenden den gerade bearbeiteten Termin, der Vollscan die gerade
@@ -73,6 +82,47 @@ pub async fn stop_within(ctx: &AppCtx, wait: Duration) -> bool {
     }
 }
 
+/// Holt ein ausstehendes Lock-Backup nach, bevor „Datenbank sperren“ oder das
+/// Herunterfahren den Pool schließt (Lauf F3c, ADR 0040 Nr. 57): Steht der
+/// Vermerk ([`crate::backup::PENDING_KEY`]) und ist die Sitzung entsperrt,
+/// wartet es auf die Tick-Sperre (ein laufendes Backup endet zuerst),
+/// pausiert den Scheduler und legt das Backup unter der Sperre an — alles
+/// zusammen höchstens `wait`. Ohne Vermerk kehrt es sofort zurück. Der
+/// geweckte Lauf verwirft das Backup bei einer Abbruch-Anforderung; ohne
+/// dieses Nachholen läge ein eben festgeschriebener Beleg bis zum nächsten
+/// Entsperren nur in der Live-DB. `true` = nichts steht mehr aus.
+pub async fn flush_pending_backup(ctx: &Arc<AppCtx>, wait: Duration) -> bool {
+    let Ok(pool) = ctx.pool() else {
+        return true;
+    };
+    if !ctx.session.is_unlocked() {
+        return true;
+    }
+    match crate::backup::is_backup_pending(&pool).await {
+        Ok(false) => return true,
+        Ok(true) => {}
+        Err(e) => {
+            tracing::warn!("Vermerk „Backup ausstehend“ nicht lesbar: {e}");
+            return false;
+        }
+    }
+    let run = async {
+        let _gate = ctx.scheduler_gate.lock().await;
+        ctx.scheduler_paused.store(true, Ordering::SeqCst);
+        run_requested_backup(ctx).await;
+    };
+    if tokio::time::timeout(wait, run).await.is_err() {
+        tracing::warn!(
+            "Ausstehendes Lock-Backup nach {} s nicht fertig — das erste Entsperren holt es nach",
+            wait.as_secs()
+        );
+        return false;
+    }
+    !crate::backup::is_backup_pending(&pool)
+        .await
+        .unwrap_or(true)
+}
+
 /// Hebt eine Pause wieder auf (Entsperren, gescheiterter Restore, Ende des
 /// Passphrase-Wechsels). Wartet nicht auf die Tick-Sperre (F1d): Läuft beim
 /// Entsperren noch ein alter Tick (hängender Sidecar oder SMTP nach „Datenbank
@@ -103,11 +153,27 @@ pub fn start(ctx: Arc<AppCtx>) {
         // Tick deckt den Rückstand ab (Fälligkeit aus persistierten Werten).
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            interval.tick().await; // erster Tick: sofort; danach alle 5 min
-                                   // D-19: frühestens UNLOCK_SETTLE nach dem Entsperren — ohne die
-                                   // Sperre zu halten (Sperren und Herunterfahren warten nicht darauf).
-            if let Some(wait) = ctx.unlock_settle_remaining(UNLOCK_SETTLE) {
-                tokio::time::sleep(wait).await;
+            // Erster Tick sofort, danach alle 5 min; dazwischen weckt ein
+            // Lock-Ereignis den Lauf für sein Backup (Lauf F3a).
+            let wake = tokio::select! {
+                _ = interval.tick() => Wake::Tick,
+                _ = ctx.session.backup_wake_requested() => Wake::Backup,
+            };
+            if wake == Wake::Backup {
+                requested_backup_cycle(&ctx).await;
+                continue;
+            }
+            // D-19: frühestens UNLOCK_SETTLE nach dem Entsperren — ohne die
+            // Sperre zu halten (Sperren und Herunterfahren warten nicht darauf).
+            // Ein Lock-Ereignis in dieser Zeit bekommt sein Backup trotzdem
+            // gleich (der Inhaber arbeitet schon, Lauf F3a).
+            while let Some(wait) = ctx.unlock_settle_remaining(UNLOCK_SETTLE) {
+                tokio::select! {
+                    _ = tokio::time::sleep(wait) => {}
+                    _ = ctx.session.backup_wake_requested() => {
+                        requested_backup_cycle(&ctx).await;
+                    }
+                }
             }
             let gate = ctx.scheduler_gate.lock().await;
             if ctx.scheduler_paused.load(Ordering::SeqCst)
@@ -122,6 +188,54 @@ pub fn start(ctx: Arc<AppCtx>) {
             drop(gate);
         }
     });
+}
+
+/// Anlass eines Schleifendurchlaufs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wake {
+    /// Regulärer Tick (Intervall).
+    Tick,
+    /// Lock-Ereignis mit Backup-Anforderung ([`crate::backup::request_auto_backup`]).
+    Backup,
+}
+
+/// Wartezeit nach dem Wecken, bevor das angeforderte Backup beginnt: weitere
+/// Festschreibungen in dieser Zeit (Serie, Storno-Paar) fallen in dasselbe
+/// Backup.
+pub const BACKUP_COALESCE: Duration = Duration::from_secs(2);
+
+/// Ein geweckter Durchlauf: [`BACKUP_COALESCE`] warten (Serien zusammenfassen),
+/// dann unter der Tick-Sperre das angeforderte Backup — außer der Scheduler
+/// ist pausiert oder soll anhalten (dann bleibt der Vermerk: Sperren und
+/// Herunterfahren holen es über [`flush_pending_backup`] nach, sonst der erste
+/// Tick nach `resume`).
+async fn requested_backup_cycle(ctx: &Arc<AppCtx>) {
+    tokio::time::sleep(BACKUP_COALESCE).await;
+    let _gate = ctx.scheduler_gate.lock().await;
+    if ctx.scheduler_paused.load(Ordering::SeqCst) || ctx.scheduler_stop.load(Ordering::SeqCst) {
+        tracing::debug!("Scheduler pausiert — angefordertes Backup wartet");
+        return;
+    }
+    run_requested_backup(ctx).await;
+}
+
+/// Angefordertes Backup nach einem Lock-Ereignis (Lauf F3a, W5-AUTOBACKUP-SYNC)
+/// unter der Tick-Sperre: Passphrase-Wechsel und Restore warten darauf wie auf
+/// einen Tick, „Datenbank sperren“ und Herunterfahren bis zu ihrer Frist für
+/// das Nachholen ([`flush_pending_backup`]). Akteur `scheduler`.
+async fn run_requested_backup(ctx: &Arc<AppCtx>) {
+    let Ok(pool) = ctx.pool() else {
+        return;
+    };
+    let now = ctx.clock().now_utc();
+    let outcome = crate::db::repo::audit_log::with_actor(
+        crate::db::repo::audit_log::ACTOR_SCHEDULER,
+        crate::backup::requested_backup_now(&pool, &ctx.paths, &ctx.session, now),
+    )
+    .await;
+    if let Err(e) = outcome {
+        tracing::warn!("Angefordertes Backup fehlgeschlagen: {e}");
+    }
 }
 
 /// Ein Durchlauf mit der Uhr des Kontexts. Gesperrte Instanz → nichts zu tun.

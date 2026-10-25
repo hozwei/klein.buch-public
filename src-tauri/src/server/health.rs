@@ -31,14 +31,16 @@ pub async fn healthz(State(st): State<Arc<ServerState>>, req: Request) -> Respon
         .get::<ConnectInfo<SocketAddr>>()
         .is_some_and(|c| c.0.ip().to_canonical().is_loopback());
     if loopback {
-        // Plan W7: Off-Site-Status (missing | failing | ok), nur entsperrt
-        // lesbar (sonst null).
+        // Plan W7: Off-Site-Status (missing | failing | stale | ok; `stale`
+        // seit Lauf F3a), nur entsperrt lesbar (sonst null).
         let offsite = match st.ctx.pool() {
-            Ok(pool) => {
-                crate::backup::target::offsite_status(&pool, &st.ctx.paths.backup_targets_dir)
-                    .await
-                    .ok()
-            }
+            Ok(pool) => crate::backup::target::offsite_status(
+                &pool,
+                &st.ctx.paths.backup_targets_dir,
+                st.ctx.clock().now_utc(),
+            )
+            .await
+            .ok(),
             Err(_) => None,
         };
         (

@@ -136,8 +136,9 @@ und `mem_limit` begrenzen Prozesse und Arbeitsspeicher.
 Sekunden Zeit. Klein.Buch hält zuerst seine geplanten Aufgaben an (ein
 Abo-Lauf beendet den gerade bearbeiteten Termin), wartet höchstens 30
 Sekunden auf offene Verbindungen und weitere 30 Sekunden auf angefangene
-Aufgaben wie ein Festschreiben oder ein Backup und schließt dann die
-Datenbank. Docker wartet sonst nur 10 Sekunden und beendet den Prozess
+Aufgaben wie ein Festschreiben oder ein Backup, schreibt ein noch
+ausstehendes Backup eines eben festgeschriebenen Belegs (alles zusammen
+höchstens 40 Sekunden) und schließt dann die Datenbank. Docker wartet sonst nur 10 Sekunden und beendet den Prozess
 dann hart. Verkürze diesen Wert nicht. Ein abgebrochenes Backup ist
 unkritisch: Es wird erst unter einem Zwischennamen geschrieben und erst
 am Ende umbenannt; Reste räumt Klein.Buch beim nächsten Start auf.

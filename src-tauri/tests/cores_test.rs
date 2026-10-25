@@ -276,7 +276,7 @@ async fn storno_date_must_be_in_an_open_year_after_the_invoice() {
         &env.ctx.paths,
         &session,
         last_year as i64,
-        today,
+        klein_buch_lib::clock::berlin_to_utc(today, 12, 0),
     )
     .await
     .unwrap();
@@ -526,7 +526,7 @@ async fn no_invoice_draft_or_number_in_a_closed_year() {
         &env.ctx.paths,
         &session,
         last_year as i64,
-        today,
+        klein_buch_lib::clock::berlin_to_utc(today, 12, 0),
     )
     .await
     .unwrap();

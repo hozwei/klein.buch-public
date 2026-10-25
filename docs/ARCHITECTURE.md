@@ -278,7 +278,8 @@ Belegdatum) → *Festschreiben* läuft als Job (`202`, `GET /api/jobs/{id}`) →
 `run_lock_pipeline`: Domain-Validate → CII-XML generieren → KoSIT validate
 (Sidecar) → §19-Klausel-Check → Typst-PDF/A-3b → Mustang ZUGFeRD → Archive write
 (PDF + XML, SHA-256, `0o400`) → DB-Lock (`status='issued'`, `locked_at`) →
-Audit-Log → Auto-Critical-Backup (Floor + Off-Site, §4.5). Sperre je Rechnung
+Audit-Log → Auto-Critical-Backup angefordert (Vermerk, im Scheduler kurz nach
+der Antwort; Floor + Off-Site, §4.5). Sperre je Rechnung
 und je Archivpfad; ein abgebrochener Request läuft als Task zu Ende, die
 Wiederholung mit demselben Idempotenz-Schlüssel liefert dasselbe Ergebnis.
 
@@ -298,18 +299,20 @@ Lock-Pipeline, markiert das Original `canceled`. Keine Löschung (ADR 0006).
 ### 4.4 Restore (Block 4, W2, W7)
 Zweiphasig: Die DB-Datei wird nie unter einem offenen Pool getauscht.
 
-**Phase A (Job, Re-Auth):** Backup per Upload (`POST /api/upload/restore`) oder
-aus der lokalen Historie → Manifest, Format (1–2), Schema
-`30 ≤ s ≤ EXPECTED` → Entschlüsseln (falsche Passphrase schreibt nichts) → Audit
-`backup.restore.requested` → Pre-Restore-Backup → Platzprüfung → gehärtet ins
-Staging entpacken → gestagte DB prüfen (Schema, Archivpfade,
-Migrations-Prüfsummen) → Nummernkreise der laufenden DB festhalten (D-24) →
-Marker. Ab der Annahme lehnt der Server Änderungen mit 503 ab und pausiert den
+**Phase A (Job, Re-Auth):** Vorprüfung im Dispatcher vor der Annahme (Quelle,
+Passphrase; ungültig → 400 ohne Sperre, W14-039) → Backup per Upload (`POST /api/upload/restore`) oder
+aus der lokalen Historie → Manifest, Format (1–3), Schema
+`30 ≤ s ≤ EXPECTED` → Entschlüsseln in place (falsche Passphrase oder
+veränderter Kopf schreibt nichts) → Audit
+`backup.restore.requested` → Platzprüfung → gehärtet ins Staging entpacken →
+gestagte DB prüfen (Schema, Archivpfade, Migrations-Prüfsummen) → Inhalt
+freigegeben, dann Pre-Restore-Backup (Lauf F3c) → zweite Platzprüfung →
+Nummernkreise der laufenden DB festhalten (D-24) → Marker. Ab der Annahme lehnt der Server Änderungen mit 503 ab und pausiert den
 Scheduler; nach Erfolg fährt er geordnet herunter
 (Exit 0), die Container-Verwaltung startet ihn neu.
 
 **Phase B (nächster Start, `db::prepare_filesystem`, vor dem Port-Bind):**
-`restore::apply_pending` tauscht DB, `archive/` und `branding/` in drei Stufen
+`restore::apply_pending` tauscht DB (samt WAL), `archive/` und `branding/` in drei Stufen
 mit Zustandsdatei und Rückabwicklung; die Angaben landen in
 `RESTORE_APPLIED.json`. Das erste Entsperren schreibt in **einer** Transaktion
 `backup.restore.applied`, die Pause `scheduler_hold = restore` (W14-023) und das
@@ -319,17 +322,24 @@ das Pre-Restore-Backup und die nach dem eingespielten Stand entstandenen
 Floor-Backups in die Historie (D-22). `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
 §6.
 
-### 4.5 Backup erstellen (G1, W2, W7)
+### 4.5 Backup erstellen (G1, W2, W7, Lauf F3a)
 `backup::create_now` (prozessweit serialisiert) → Snapshot per `VACUUM INTO`
 über eine eigene Verbindung (verschlüsselt wie das Original) + `archive/` +
-`branding/` → Content-ZIP → Argon2id-Schlüssel + AES-256-GCM (außerhalb der
-Runtime, KDF-Semaphore) → `.kbk` mit Klartext-Manifest → Floor
-`/data/backups` (Temp-Datei, `fsync`, `rename`) und jedes Off-Site-Ziel (Ordner
-unter `/backup-targets`, SFTP) mit Zeitlimit je Ziel → `backup_log` je Ziel
-(**niemals** Passphrase) → Rotation je Ablage (Kalender-Eimer; SFTP nie; ruht
-während einer Pause) → Hinweis über `rule_backup_result`. Ein gescheitertes
-Ziel ist nicht fatal (Status `offsite = failing`, Inbox). Nach einem Restore
-geht bis zur Freigabe nichts auf die Off-Site-Ziele (D-23).
+`branding/` (ohne versteckte Temp-Dateien) → Content-ZIP → Argon2id-Schlüssel +
+AES-256-GCM in place mit dem Klartext-Kopf als AAD (Format 3; außerhalb der
+Runtime, KDF-Semaphore) → `.kbk` → Floor `/data/backups` (Temp-Datei, `fsync`,
+`rename`) und jedes Off-Site-Ziel (Ordner unter `/backup-targets`, SFTP) mit
+Zeitlimit je Ziel, ein Puffer für alle → `backup_log` je Ziel, auch ein
+gescheiterter Snapshot (**niemals** Passphrase) → Rotation je Ablage
+(Kalender-Eimer; nur `.kbk` unter den Wurzeln; SFTP nie; ruht während einer
+Pause) → Hinweis über `rule_backup_result`. Ein gescheitertes Ziel ist nicht
+fatal (Status `offsite = failing`, Inbox; `stale` bei fehlender oder zu alter
+Kopie). Nach einem Restore geht bis zur Freigabe nichts auf die Off-Site-Ziele
+(D-23). **Lock-Backups** fordern die festschreibenden Commands nur an
+(`backup::request_auto_backup`: Vermerk, Audit `backup.requested`, Wecksignal);
+die Scheduler-Schleife legt sie nach zwei Sekunden unter der Tick-Sperre an
+(ADR 0040 Nr. 50). **Download** einer `.kbk` aus Floor oder Ordner-Ziel mit
+Re-Auth über ein einmaliges Ticket (`backup_download`).
 
 ### 4.6 Im Server entfallene Abläufe
 - **Factory Reset** (ADR 0036): im Server abgeschaltet (E7), Code entfernt
@@ -501,7 +511,9 @@ nach der aktuellen Datei aufhört. „Datenbank sperren“ wartet darauf höchst
 10 s und sperrt dann trotzdem; „Passphrase ändern“ antwortet nach dieser Frist
 mit 503. Das Herunterfahren setzt die Abbruch-Anforderung schon beim Signal und
 wartet dann gleichzeitig höchstens 25 s auf den Tick und 30 s auf abgekoppelte
-Tasks (`stop_grace_period` 90 s, ADR 0040). Nach einem Neustart läuft nichts,
+Tasks (`stop_grace_period` 90 s, ADR 0040). Ein noch ausstehendes Lock-Backup
+schreiben beide vor dem Schließen des Pools (`tick::flush_pending_backup`,
+Sperren höchstens 60 s, Herunterfahren im Rest von 40 s; ADR 0040 Nr. 57). Nach einem Neustart läuft nichts,
 bis jemand entsperrt (E3); der erste Tick nach dem Entsperren wartet 60 s
 (`tick::UNLOCK_SETTLE`), lässt den Vollscan aus und holt Fälliges nach —
 Abo-Läufe mit Grenze (bis drei Termine selbst, mehr nach Bestätigung), genau
@@ -516,7 +528,8 @@ Restore (in der Transaktion des Restore-Audits). Backups, Integritätsprüfung u
 Hinweise laufen weiter; die Backup-Rotation ruht, und nach einem Restore gehen
 Backups bis zur Freigabe nur in den Floor. In derselben Transaktion rückt
 `backup::after_restore` die Abo-Reihen nur vorwärts auf ihre Termine vor dem
-Restore, merkt Reihen ohne bekannten Stand zur Entscheidung vor, verwirft
+Restore, merkt Reihen ohne bekannten Stand zur Entscheidung vor (nur solche,
+für die ein Lauf etwas erzeugen würde; F3b), verwirft
 Fortsetzungs- und Nachhol-Marker aus dem Backup und merkt Entwürfe vor, deren
 Nummer vor dem Restore schon festgeschrieben war (ADR 0040, F1d). Die Pause des
 Schedulers selbst (`AppCtx::scheduler_paused`) hebt das Entsperren auf, ohne auf
@@ -538,7 +551,9 @@ einen beim Sperren noch laufenden Tick zu warten.
    Schritte 1 und 2 mit ab; sonst legt der Tick genau ein Lock-Backup an
    (D-19, Backup-Hardline). Ein ausgefallenes Lock-Backup (Vermerk
    `backup_pending_since`) holt der erste Tick danach nach
-   (`backup::pending_backup_if_due`).
+   (`backup::pending_backup_if_due`). Zwischen den Ticks weckt ein
+   Lock-Ereignis der Commands die Schleife für sein Backup (Lauf F3a,
+   `tick::BACKUP_COALESCE`), auch während der Wartezeit nach dem Entsperren.
 5. **`scheduler::integrity_check_cron`** — monatlicher Archiv-Hash-Verify
    (nicht im ersten Tick nach dem Entsperren); gemeinsame Sperre mit „Jetzt
    prüfen“, 6 h Backoff nach Fehlschlag; manipuliert, fehlt und nicht lesbar
@@ -612,7 +627,8 @@ den verlinkten ADRs.
   USt-Felder im UI gesperrt, BT-22-Klausel Pflicht im XML + sichtbar im PDF,
   §14c-Schutz im Backend, Verzicht-Toggle mit 5-Jahres-Bindungs-Warn-Dialog.
 - **Backup** (ADR 0009 + 0034 + 0035 + 0039). Passphrase bei der Einrichtung
-  erzwungen; Auto-Backup bei jedem Lock + täglich im Scheduler; Pflicht-Backup
+  erzwungen; Auto-Backup bei jedem Lock (vermerkt, kurz danach im Scheduler)
+  + täglich im Scheduler; Pflicht-Backup
   vor jeder Migration und vor jedem Restore; Floor + mehrere Off-Site-Ziele
   (Off-Site Pflicht, Warnung statt Blockade); `backup_log` append-only;
   Passphrase **niemals** in DB, Logs, Audit oder Backup-Log.

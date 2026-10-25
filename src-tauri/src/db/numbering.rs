@@ -143,6 +143,46 @@ pub async fn snapshot(pool: &SqlitePool) -> Result<Vec<CounterState>> {
         .collect())
 }
 
+/// Nummernkreise der eingespielten Datenbank (`restored`), die **über** dem
+/// Stand der ersetzten (`replaced`) liegen oder dort fehlen (Lauf F3b, pure).
+/// Ein älteres Backup derselben Instanz hat nie höhere Stände als die DB, die
+/// es ersetzt; ein Treffer heißt: Die ersetzte Datenbank war eine andere oder
+/// neu eingerichtete Instanz (Wiederherstellung nach einem Totalausfall), und
+/// Nummern nach dem Backup können anderswo vergeben worden sein. Kreise mit
+/// Stand 0 zählen nicht.
+pub fn counters_ahead(replaced: &[CounterState], restored: &[CounterState]) -> Vec<CounterState> {
+    restored
+        .iter()
+        .filter(|r| {
+            let before = replaced
+                .iter()
+                .find(|c| c.doc_type == r.doc_type && c.fiscal_year == r.fiscal_year)
+                .map_or(0, |c| c.last_value);
+            r.last_value > before
+        })
+        .cloned()
+        .collect()
+}
+
+/// Alle Nummernkreise innerhalb einer laufenden Transaktion (für
+/// [`counters_ahead`] im Restore-Abschluss), sortiert wie [`snapshot`].
+pub async fn snapshot_in(conn: &mut SqliteConnection) -> Result<Vec<CounterState>> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT doc_type, fiscal_year, last_value FROM doc_number_counters
+         ORDER BY fiscal_year DESC, doc_type",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(doc_type, fiscal_year, last_value)| CounterState {
+            doc_type,
+            fiscal_year,
+            last_value,
+        })
+        .collect())
+}
+
 /// Ergebnis einer Anhebung: Nummernkreis mit altem und neuem Stand.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -403,5 +443,33 @@ mod tests {
         ] {
             assert_eq!(next_seq(&pool, dt, 2026).await.unwrap(), 1);
         }
+    }
+
+    fn cs(doc_type: &str, fiscal_year: i64, last_value: i64) -> CounterState {
+        CounterState {
+            doc_type: doc_type.into(),
+            fiscal_year,
+            last_value,
+        }
+    }
+
+    /// Lauf F3b: höhere oder in der ersetzten DB fehlende Kreise gelten als
+    /// fremder Stand; gleiche und niedrigere nicht, Stand 0 nie.
+    #[test]
+    fn counters_ahead_finds_higher_and_missing_circles() {
+        let replaced = vec![cs("invoice", 2026, 1), cs("expense", 2026, 5)];
+        let same_or_lower = vec![cs("invoice", 2026, 1), cs("expense", 2026, 3)];
+        assert!(counters_ahead(&replaced, &same_or_lower).is_empty());
+        let restored = vec![
+            cs("invoice", 2026, 10),
+            cs("expense", 2026, 5),
+            cs("quote", 2026, 2),
+            cs("asset", 2025, 0),
+        ];
+        assert_eq!(
+            counters_ahead(&replaced, &restored),
+            vec![cs("invoice", 2026, 10), cs("quote", 2026, 2)]
+        );
+        assert_eq!(counters_ahead(&[], &restored).len(), 3);
     }
 }

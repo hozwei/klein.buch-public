@@ -143,6 +143,25 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Überweisungshinweis mehr — in allen vier Rechnungsvorlagen. Eigene Vorlagen
   können das neue Feld `data.invoice.storno_of` nutzen und rendern ohne es
   unverändert.
+- **Backup nach dem Festschreiben im Hintergrund (Lauf F3a, ADR 0040 Nr. 50):**
+  Festschreiben, Stornieren, Kosten, Anlagen, AfA und Jahresabschluss warten
+  nicht mehr auf das Backup; es entsteht wenige Sekunden später im Scheduler
+  (mehrere Festschreibungen kurz hintereinander ergeben ein Backup). Ein
+  Vermerk in der Datenbank sorgt dafür, dass es nach Sperren oder Neustart
+  nachgeholt wird.
+- **Backup-Format 3 (Lauf F3a, ADR 0039 Nr. 127):** Der lesbare Kopf der
+  `.kbk` (Versionen, Zeitpunkt, Prüfsumme) ist an die Verschlüsselung gebunden;
+  ein veränderter Kopf fällt beim Einspielen auf. Backups im Format 1 und 2
+  bleiben einspielbar. Erstellen und Einspielen brauchen deutlich weniger
+  Arbeitsspeicher (Entschlüsseln etwa einmal statt dreimal die Backup-Größe,
+  das Sicherheits-Backup danach; Faustregel im Compose-Beispiel jetzt
+  512 MiB + 2 × größtes Backup).
+- **Backups herunterladen (Lauf F3a):** Im Backup-Verlauf lädt „Herunterladen“
+  (Re-Auth) die verschlüsselte `.kbk` aus dem lokalen Ordner oder einem
+  Ordner-Ziel — für Umzug und Notfall ohne externes Ziel.
+- **Off-Site-Status „veraltet“ (Lauf F3a):** Hat ein externes Ziel noch keine
+  Kopie oder ist seine letzte älter als sieben Tage, zeigt die Übersicht eine
+  Aufgabe; Healthcheck und Einstellungen melden `stale`.
 
 - **Beiträge Dritter:** `CONTRIBUTING.md` formuliert „vorerst keine
   Code-Beiträge“ als Entscheidung (Fehlerberichte, Wünsche, Sicherheitsmeldungen
@@ -160,6 +179,66 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 
 ### Fixed
 
+- **Nachbesserung Backup (Lauf F3c, ADR 0039 Nr. 129, ADR 0040 Nr. 57–59):**
+  - Das Backup vor einer Datenbank-Umstellung entsteht im Format, das die
+    vorherige Version liest (beim Update von 2026.10 Format 2) — der
+    dokumentierte Rückfall auf die alte Version mit genau diesem Backup
+    funktioniert. Handbuch: vor einem Update mit der alten Version sichern.
+  - „Datenbank sperren“ und das Herunterfahren schreiben ein noch ausstehendes
+    Backup eines eben festgeschriebenen Belegs, bevor die Datenbank schließt
+    (bisher fiel es dann bis zum nächsten Entsperren aus).
+  - Wiederherstellung: Der entschlüsselte Inhalt wird vor dem
+    Sicherheits-Backup ausgepackt und freigegeben; beides braucht den
+    Arbeitsspeicher nacheinander statt gleichzeitig (bis etwa dreimal die
+    Backup-Größe). Ein in der Prüfung abgelehntes Backup erzeugt kein
+    Sicherheits-Backup mehr.
+  - Herunterladen eines Backups aus einem Ordner-Ziel auf einem anderen
+    Dateisystem ohne Kopie nach `/data/tmp`.
+  - Ein Backup, das symbolische Links oder verschwundene Archivdateien nicht
+    sichern konnte, meldet das im Backup-Protokoll und als Hinweis „Backup
+    unvollständig“ statt still „ok“.
+  - Off-Site-Status „veraltet“ auch auf der Seite „Backups“; auf der Übersicht
+    als Warnung (ein gerade hinzugefügtes Ziel ist kein Ausfall).
+  - Lock-Backups nehmen die Zeit aus der Uhr der Anwendung statt der
+    Systemuhr (Tests mit fester Uhr).
+  - Tests: Abhängigkeiten im Dev-/Test-Profil optimiert übersetzt (Argon2id,
+    SQLite, Typst) — keine 30-s-Zeitüberschreitungen mehr unter Volllast.
+- **Nachzügler F1/F2 (Lauf F3b):**
+  - Nummernkreis-Hinweis nach einem Restore: „es fehlen keine Nummern“ nur noch
+    bei genau gleichen Ständen. Stehen im Backup höhere Zähler als in der
+    ersetzten Datenbank (etwa eine neue Instanz mit Testdaten) oder trägt ein
+    festgeschriebener Beleg dieselbe Nummer wie ein anderer, kommt die
+    dringende Anleitung zum Anheben.
+  - Hinweis „Abo-Termine nach der Wiederherstellung“: vorgerückte Kosten-Abos
+    stehen getrennt — ihre gebuchten Kosten sind verworfen und von Hand
+    nachzutragen. Abgelaufene Vorlagen und Abos ohne Auto-Buchung bekommen
+    keine Prüfung „Rückstand …“ mehr (blieb sonst für immer stehen), pausierte
+    Reihen entscheidet man beim Fortsetzen.
+  - Anlagen-Abgang in einer Transaktion: Datum vor der Anschaffung und ein
+    später abgeschlossenes Jahr mit der Anlage im Bestand lehnen ab; offene
+    AfA ab dem Abgangsjahr wird (mit Audit) durch die anteilige AfA bis zum
+    Abgangsmonat ersetzt, statt nach dem Abgang dauerhaft doppelt zu zählen.
+  - Nach einer gescheiterten Prüfung „nach der Umstellung“ sagen auch spätere
+    Anmeldeversuche das, statt „Daten wurden nicht verändert“.
+  - Angebot festschreiben, annehmen und ablehnen nie parallel zu anderen
+    Statuswechseln desselben Angebots; der Empfänger wird nur in Entwürfe
+    übernommen (ein zurückgezogenes Angebot eines anonymisierten Kontakts bekommt
+    keine Personendaten zurück).
+  - Anonymisierung: Kosten-Abos mit der Person als Lieferant verlieren ihre
+    Bezeichnung und eine Buchungsvorlage, die den Namen nennt.
+  - Rechnungs-Entwurf verwerfen: schlichte Aktion „Verwerfen“ in der
+    Detail-Ansicht (Grund, Daten-Passwort und App-Code), verworfene Entwürfe
+    zeigen Zeitpunkt und Grund statt „Rechnung ausstellen“; Handbuch korrigiert.
+- **Backup und Restore (Lauf F3a):** Ein Backup, das schon beim Snapshot oder
+  der Verschlüsselung scheitert, steht im Backup-Protokoll und erzeugt einen
+  Hinweis. Versteckte Temp-Dateien gleichzeitiger Archiv-Schreibvorgänge lassen
+  das Backup nicht mehr scheitern. Die Rotation löscht nur `.kbk`-Dateien im
+  Backup-Ordner bzw. unter `/backup-targets`. Ein ungültiger Restore-Aufruf
+  (ohne Quelle, ohne Passphrase) antwortet mit 400, ohne kurz alle Änderungen
+  zu sperren. Beim Tausch nach einem Restore wird das WAL der bisherigen
+  Datenbank mitgesichert statt gelöscht (ein Rückfall verliert keine
+  festgeschriebenen Transaktionen). Kein Absturz mehr bei einem vergifteten
+  Mutex in Backup-Sitzung und SFTP-Handshake.
 - **Halbes Storno-Paar aus der Desktop-Zeit (Lauf F2c):** Gibt es zu einer
   offenen Rechnung schon einen festgeschriebenen Storno, vervollständigt
   „Stornieren“ das Paar mit Audit, statt einen zweiten Storno anzulegen und mit

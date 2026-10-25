@@ -267,3 +267,20 @@ Begründung in ADR 0040 Nr. 13–16 und den Umsetzungs-Entscheidungen 16–19.
   Floor, keine Spiegelung (`backup.mirror.skipped`); Floor-Backups, die nach
   dem eingespielten Stand entstanden, kommen als `manual` in die Historie.
   Während jeder Pause ruht die Rotation.
+
+## Amendment 2026-10-25 — Status „veraltet“, Download, Wurzelprüfung (Lauf F3a)
+
+**Status:** Akzeptiert · Lauf F (Block F3a). Keine Migration. Einzelheiten in ADR 0039
+Nr. 127 und ADR 0040 Nr. 50–53.
+
+- **Status `offsite` = `missing` | `failing` | `stale` | `ok`:** `stale`, wenn ein Ziel noch
+  keine erfolgreiche Kopie hat oder seine letzte älter ist als `max_age_days` der Regel
+  „Backup überfällig“ (Standard 7 Tage).
+- **Download lokaler Backups:** Backups aus dem Floor und aus Verzeichnis-Zielen lassen sich
+  mit Re-Auth als verschlüsselte `.kbk` herunterladen (Umzug, Disaster Recovery ohne externes
+  Ziel); SFTP-Kopien holt der Betreiber auf dem Server.
+- **Rotation nur unter den Wurzeln:** Gelöscht wird nur eine reguläre `.kbk`, die aufgelöst
+  unter dem Floor oder `/backup-targets` liegt; andere Einträge verlieren nur ihre
+  Historienzeile (Audit `file: refused`).
+- **Snapshot-Fehler** stehen wie ein gescheiterter Floor im `backup_log` und erzeugen einen
+  Hinweis.

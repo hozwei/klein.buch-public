@@ -115,6 +115,15 @@ Debug-Builds wirksam). Die echten Validator-Tests (`tests/sidecar_real_test.rs`,
 `#[ignore]`) laufen lokal gegen eine jlink-JRE; im Image decken die
 HTTP-Schritte des Smoke-Tests dieselben Wege ab.
 
+Abhängigkeiten übersetzt Cargo im Dev-/Test-Profil mit `opt-level = 2`
+(`[profile.dev.package."*"]` in `Cargo.toml`, Lauf F3c; der eigene Crate bleibt
+bei 0, Debug-Prüfungen bleiben an, das Release-Profil ist unberührt). Ohne das
+liefen Argon2id, SQLite/SQLCipher, Deflate und Typst in den Tests so langsam, dass
+Server-Tests unter Volllast die 30-s-Grenze der Anfragen rissen. Der Cache von
+`Swatinem/rust-cache` hängt an `Cargo.toml` und `Cargo.lock`; nach einer Änderung
+übersetzt der erste Lauf die Abhängigkeiten einmal neu (lokal etwa 2–3 Minuten
+mehr), `cargo clippy` erzeugt keinen Code und ist davon kaum betroffen.
+
 ---
 
 ## 5. Image-Workflows

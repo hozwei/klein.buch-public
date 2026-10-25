@@ -27,6 +27,12 @@
 //! Temp-Dateien liegen unter `<data_dir>/tmp`, nie unter `/tmp` (im Container
 //! ein RAM-tmpfs).
 //!
+//! Nicht ins Backup (Lauf F3a, W2-SNAP-TMP): versteckte Temp-Dateien laufender
+//! Schreibvorgänge (`.<name>.<uuid>.tmp`/`.part`) und symbolische Links; eine
+//! Datei, die zwischen Auflisten und Lesen verschwindet, wird übersprungen.
+//! Links und verschwundene Archivdateien stehen in [`Content::skipped`] und
+//! werden gemeldet (Lauf F3c) — nur Temp-Dateien fallen still weg.
+//!
 //! Schicht: **Imperative Shell** (I/O). Reine Zip-Bytes raus, plus SHA-256.
 
 use crate::config::Paths;
@@ -43,6 +49,31 @@ use std::str::FromStr;
 pub struct Content {
     pub zip_bytes: Vec<u8>,
     pub sha256_hex: String,
+    /// Nicht gesicherte Einträge, die keine Temp-Dateien sind (Lauf F3c):
+    /// symbolische Links und Archivdateien, die zwischen Auflisten und Lesen
+    /// verschwanden. Leer = vollständig. `create_with` meldet sie im
+    /// Backup-Protokoll und als Hinweis — ein Backup wird nie still gekürzt.
+    pub skipped: Vec<Skipped>,
+}
+
+/// Ein nicht gesicherter Eintrag (relativer Pfad mit `archive/` bzw.
+/// `branding/`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Skipped {
+    /// Symbolischer Link (nicht verfolgt: das Archiv enthält nur echte
+    /// Dateien; ein Link zeigt auf Daten außerhalb der Instanz).
+    Link(String),
+    /// Archivdatei, die zwischen Auflisten und Lesen verschwand.
+    Vanished(String),
+}
+
+impl std::fmt::Display for Skipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Link(p) => write!(f, "{p} (symbolischer Link)"),
+            Self::Vanished(p) => write!(f, "{p} (beim Lesen verschwunden)"),
+        }
+    }
 }
 
 /// Erzeugt den Content-ZIP. Reihenfolge der Einträge ist deterministisch
@@ -61,34 +92,85 @@ pub async fn build_content_zip(paths: &Paths, key: Option<&str>) -> Result<Conte
 }
 
 fn zip_content(db_bytes: Vec<u8>, archive_dir: &Path, branding_dir: &Path) -> Result<Content> {
-    let archive_files = collect_files(archive_dir)?;
-    let branding_files = collect_files(branding_dir)?;
+    let (archive_files, archive_links) = collect_files(archive_dir)?;
+    let (branding_files, branding_links) = collect_files(branding_dir)?;
+    let mut content = zip_files(db_bytes, &archive_files, &branding_files)?;
+    let mut skipped: Vec<Skipped> = archive_links
+        .into_iter()
+        .map(|rel| Skipped::Link(format!("archive/{rel}")))
+        .chain(
+            branding_links
+                .into_iter()
+                .map(|rel| Skipped::Link(format!("branding/{rel}"))),
+        )
+        .collect();
+    skipped.append(&mut content.skipped);
+    content.skipped = skipped;
+    Ok(content)
+}
 
+/// Packt DB-Snapshot und die gesammelten Dateien. Verschwindet eine Datei
+/// zwischen Auflisten und Lesen (`NotFound`), wird sie übersprungen
+/// (W2-SNAP-TMP); eine Archivdatei steht dann in [`Content::skipped`]
+/// (Archivdateien werden nie gelöscht, Lauf F3c), ein ersetztes Logo nicht.
+/// Jeder andere Lesefehler bricht ab. Gelesen wird vor dem Anlegen des
+/// ZIP-Eintrags, damit kein leerer Eintrag entsteht.
+fn zip_files(
+    db_bytes: Vec<u8>,
+    archive_files: &[(String, PathBuf)],
+    branding_files: &[(String, PathBuf)],
+) -> Result<Content> {
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
     zw.start_file("klein-buch.sqlite", opts)?;
     zw.write_all(&db_bytes)?;
+    drop(db_bytes);
 
-    for (rel, abs) in &archive_files {
-        zw.start_file(format!("archive/{rel}"), opts)?;
-        let bytes = fs::read(abs)?;
-        zw.write_all(&bytes)?;
-    }
-    for (rel, abs) in &branding_files {
-        zw.start_file(format!("branding/{rel}"), opts)?;
-        let bytes = fs::read(abs)?;
-        zw.write_all(&bytes)?;
+    let mut skipped = Vec::new();
+    for (prefix, files) in [("archive", archive_files), ("branding", branding_files)] {
+        for (rel, abs) in files {
+            let bytes = match fs::read(abs) {
+                Ok(b) => b,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if prefix == "archive" {
+                        tracing::warn!(
+                            "Snapshot: {prefix}/{rel} verschwand vor dem Lesen — nicht gesichert"
+                        );
+                        skipped.push(Skipped::Vanished(format!("{prefix}/{rel}")));
+                    } else {
+                        tracing::debug!(
+                            "Snapshot: {prefix}/{rel} verschwand vor dem Lesen — übersprungen"
+                        );
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            zw.start_file(format!("{prefix}/{rel}"), opts)?;
+            zw.write_all(&bytes)?;
+        }
     }
 
     let cursor = zw.finish()?;
-    let zip_bytes = cursor.into_inner();
+    let mut zip_bytes = cursor.into_inner();
+    // Überhang des wachsenden Puffers abgeben (die Hülle legt Kopf und Tag in
+    // denselben Puffer, Lauf F3a).
+    zip_bytes.shrink_to_fit();
     let sha256_hex = sha256_hex(&zip_bytes);
     Ok(Content {
         zip_bytes,
         sha256_hex,
+        skipped,
     })
+}
+
+/// Versteckte Temp-Dateien laufender Schreibvorgänge (`.<name>.<uuid>.tmp` aus
+/// `archive::store`, `.<name>.<uuid>.part` aus dem Schreiben von Backups)
+/// gehören nicht ins Backup (W2-SNAP-TMP).
+fn is_transient(name: &str) -> bool {
+    name.starts_with('.') && (name.ends_with(".tmp") || name.ends_with(".part"))
 }
 
 /// Verzeichnis für Temp-Dateien unterhalb von `data_dir` (nie `/tmp`).
@@ -184,32 +266,65 @@ async fn snapshot_into(db_file: &Path, snap: &Path, key: Option<&str>) -> Result
     Ok(())
 }
 
+/// Gesammelte Dateien: (relativer Pfad mit `/`-Trenner, absoluter Pfad).
+type FileList = Vec<(String, PathBuf)>;
+
 /// Sammelt alle Dateien unter `base` rekursiv. Rückgabe: (relativer Pfad mit
-/// `/`-Trenner, absoluter Pfad), sortiert. Existiert `base` nicht → leer.
-fn collect_files(base: &Path) -> Result<Vec<(String, PathBuf)>> {
+/// `/`-Trenner, absoluter Pfad), sortiert, und die relativen Pfade
+/// übersprungener symbolischer Links. Existiert `base` nicht → leer.
+/// Übersprungen werden versteckte Temp-Dateien ([`is_transient`], still),
+/// symbolische Links (das Archiv enthält nur echte Dateien; ein Link nach
+/// draußen gehört nicht ins Backup — gemeldet, Lauf F3c) und Unterordner, die
+/// beim Lesen schon wieder fehlen.
+fn collect_files(base: &Path) -> Result<(FileList, Vec<String>)> {
     let mut out = Vec::new();
+    let mut links = Vec::new();
     if !base.is_dir() {
-        return Ok(out);
+        return Ok((out, links));
     }
     let mut stack = vec![base.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir)? {
+        let entries = match fs::read_dir(&dir) {
+            Ok(it) => it,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && dir != base => continue,
+            Err(e) => return Err(e.into()),
+        };
+        for entry in entries {
             let entry = entry?;
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.is_file() {
-                let rel = path
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            let rel = || -> Result<String> {
+                Ok(path
                     .strip_prefix(base)
                     .map_err(|_| Error::Backup("strip_prefix beim Snapshot".into()))?
                     .to_string_lossy()
-                    .replace('\\', "/");
-                out.push((rel, path));
+                    .replace('\\', "/"))
+            };
+            if file_type.is_symlink() {
+                tracing::warn!(
+                    "Snapshot: symbolischer Link {} nicht gesichert",
+                    path.display()
+                );
+                links.push(rel()?);
+                continue;
+            }
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                if is_transient(&entry.file_name().to_string_lossy()) {
+                    continue;
+                }
+                out.push((rel()?, path));
             }
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
+    links.sort();
+    Ok((out, links))
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -394,6 +509,115 @@ mod tests {
             .unwrap();
         assert_eq!(n, 3, "nur die committeten Zeilen");
         check.close().await;
+    }
+
+    fn zip_names(zip_bytes: &[u8]) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes.to_vec())).unwrap();
+        (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
+    /// W2-SNAP-TMP (Lauf F3a): versteckte Temp-Dateien laufender Schreibvorgänge
+    /// (`archive::store`, Backup-Schreiben) kommen nicht ins Backup; sichtbare
+    /// Dateien mit derselben Endung schon.
+    #[tokio::test]
+    async fn snapshot_skips_hidden_temp_files() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        let pool = file_pool(&paths.db_file).await;
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY) STRICT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let pdf_dir = paths.archive_dir.join("2026/invoices/pdf");
+        fs::create_dir_all(&pdf_dir).unwrap();
+        fs::write(pdf_dir.join("RE-2026-0001.pdf"), b"pdf").unwrap();
+        fs::write(
+            pdf_dir.join(".RE-2026-0002.pdf.0192aa.tmp"),
+            b"halb geschrieben",
+        )
+        .unwrap();
+        fs::write(pdf_dir.join(".beleg.0192ab.part"), b"halb").unwrap();
+        fs::write(pdf_dir.join("notiz.tmp"), b"sichtbar").unwrap();
+
+        let content = build_content_zip(&paths, None).await.unwrap();
+        let names = zip_names(&content.zip_bytes);
+        assert!(names.contains(&"archive/2026/invoices/pdf/RE-2026-0001.pdf".to_string()));
+        assert!(names.contains(&"archive/2026/invoices/pdf/notiz.tmp".to_string()));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.ends_with(".0192aa.tmp") || n.ends_with(".part")),
+            "{names:?}"
+        );
+    }
+
+    /// W2-SNAP-TMP: verschwindet eine Datei zwischen Auflisten und Lesen, klappt
+    /// das Backup trotzdem (ohne leeren Eintrag); andere Dateien bleiben drin.
+    #[test]
+    fn vanished_file_between_listing_and_reading_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let keep = dir.path().join("bleibt.pdf");
+        fs::write(&keep, b"bleibt").unwrap();
+        let gone = dir.path().join("weg.pdf");
+        let files = vec![
+            ("2026/bleibt.pdf".to_string(), keep),
+            ("2026/weg.pdf".to_string(), gone),
+        ];
+        let content = zip_files(b"db".to_vec(), &files, &[]).unwrap();
+        let names = zip_names(&content.zip_bytes);
+        assert_eq!(
+            names,
+            vec![
+                "klein-buch.sqlite".to_string(),
+                "archive/2026/bleibt.pdf".to_string()
+            ]
+        );
+        assert_eq!(content.sha256_hex, sha256_hex(&content.zip_bytes));
+        // Lauf F3c: eine verschwundene Archivdatei wird gemeldet.
+        assert_eq!(
+            content.skipped,
+            vec![Skipped::Vanished("archive/2026/weg.pdf".to_string())]
+        );
+        // Ein ersetztes Logo (Branding) nicht.
+        let logo = vec![("logo.png".to_string(), dir.path().join("logo-weg.png"))];
+        let content = zip_files(b"db".to_vec(), &[], &logo).unwrap();
+        assert!(content.skipped.is_empty());
+    }
+
+    /// Lauf F3c: Ein symbolischer Link im Archiv (z. B. ausgelagerter
+    /// Jahrgang) wird nicht verfolgt, aber gemeldet — kein still gekürztes
+    /// Backup. Temp-Dateien bleiben still.
+    #[tokio::test]
+    async fn symlinks_are_reported_not_followed() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        let pool = file_pool(&paths.db_file).await;
+        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY) STRICT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let outside = dir.path().join("ausgelagert").join("2024");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("RE-2024-0001.pdf"), b"pdf").unwrap();
+        fs::create_dir_all(paths.archive_dir.join("2026")).unwrap();
+        fs::write(paths.archive_dir.join("2026/RE-2026-0001.pdf"), b"pdf").unwrap();
+        fs::write(paths.archive_dir.join("2026/.x.0192aa.tmp"), b"halb").unwrap();
+        std::os::unix::fs::symlink(&outside, paths.archive_dir.join("2024")).unwrap();
+
+        let content = build_content_zip(&paths, None).await.unwrap();
+        let names = zip_names(&content.zip_bytes);
+        assert!(names.contains(&"archive/2026/RE-2026-0001.pdf".to_string()));
+        assert!(!names.iter().any(|n| n.contains("2024")), "{names:?}");
+        assert_eq!(
+            content.skipped,
+            vec![Skipped::Link("archive/2024".to_string())]
+        );
+        assert_eq!(
+            content.skipped[0].to_string(),
+            "archive/2024 (symbolischer Link)"
+        );
     }
 
     #[tokio::test]

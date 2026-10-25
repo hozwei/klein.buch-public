@@ -12,6 +12,13 @@
 //! Der Body (DB-Snapshot + Archive + Branding) ist verschlüsselt und über das
 //! GCM-Tag integritätsgeschützt.
 //!
+//! **Format 3 (Lauf F3a, W14-020):** Der Klartext-Kopf (beide Zeilen samt
+//! Zeilenumbrüchen, also alle Bytes vor dem Ciphertext) ist als *Associated
+//! Data* an AES-GCM gebunden. Ein veränderter Kopf (Schema-Version, Zeitpunkt,
+//! KDF-Angaben, auch das Herabsetzen der Format-Version auf 2) lässt die
+//! Entschlüsselung scheitern. Formate 1 und 2 (ohne AAD) bleiben lesbar; vor
+//! dem Entschlüsseln bleibt der Kopf wie bisher eine ungeprüfte Anzeige.
+//!
 //! Es werden ausschließlich Hex-Strings verwendet (kein base64-Crate in den
 //! Dependencies) — selbst-enthalten und reversibel.
 
@@ -25,10 +32,63 @@ pub const MAGIC: &str = "KLEIN-BUCH-BACKUP-1";
 ///
 /// - 1: DB + `archive/` + `inputs/branding/`
 /// - 2 (Plan W1.5): DB + `archive/` + `branding/` aus `data_dir` (Logo, Unterschrift)
-pub const FORMAT_VERSION: u32 = 2;
+/// - 3 (Lauf F3a, W14-020): Inhalt wie 2; der Klartext-Kopf ist als AAD an
+///   AES-GCM gebunden ([`AAD_MIN_FORMAT_VERSION`])
+pub const FORMAT_VERSION: u32 = 3;
+
+/// Ab dieser Format-Version ist der Klartext-Kopf als AAD gebunden.
+pub const AAD_MIN_FORMAT_VERSION: u32 = 3;
+
+/// Bindet diese Format-Version den Kopf als AAD?
+pub fn binds_header(format_version: u32) -> bool {
+    format_version >= AAD_MIN_FORMAT_VERSION
+}
 
 /// Älteste Format-Version, die der Restore noch einspielt.
 pub const MIN_SUPPORTED_FORMAT_VERSION: u32 = 1;
+
+/// Älteste Format-Version, die noch geschrieben wird. Format 1 sicherte
+/// `inputs/branding` statt `data/branding` und entsteht nicht mehr.
+pub const MIN_WRITE_FORMAT_VERSION: u32 = 2;
+
+/// Höchstes Backup-Format, das die Klein.Buch-Version lesen kann, deren
+/// Datenbank-Schema höchstens den angegebenen Stand hat (Lauf F3c, ADR 0039
+/// Nr. 129 (1)). Je Eintrag: (Schema bis einschließlich, höchstes lesbares
+/// Format), aufsteigend; über dem letzten Eintrag gilt [`FORMAT_VERSION`].
+///
+/// - Schema ≤ 31: v2026.10.0 (Schema 31, liest Format 1–2). Auch ein Schema-30-
+///   Stand (eingespieltes Desktop-Backup) fällt darunter: Rückfall-Ziel ist
+///   v2026.10.0, die Schema 30 einspielt.
+///
+/// **Bei jeder Erhöhung von [`FORMAT_VERSION`]** einen Eintrag
+/// (`EXPECTED_SCHEMA_VERSION` der Vorversion, deren `FORMAT_VERSION`) ergänzen,
+/// sonst schreibt das Pflicht-Backup vor der nächsten Migration ein Format, das
+/// die Vorversion nicht liest (Test `rollback_formats_cover_current_format`).
+pub const READABLE_FORMAT_BY_SCHEMA: &[(i32, u32)] = &[(31, 2)];
+
+/// Format für ein Backup, das die Version mit dem Schema-Stand `schema` noch
+/// einspielen können muss — das Pflicht-Backup vor einer Migration von
+/// `schema` aus, damit der dokumentierte Rückfall auf die Vorversion
+/// funktioniert (Handbuch „Updates und Rückfall“).
+pub fn readable_format_for_schema(schema: i32) -> u32 {
+    READABLE_FORMAT_BY_SCHEMA
+        .iter()
+        .find(|(max_schema, _)| schema <= *max_schema)
+        .map_or(FORMAT_VERSION, |(_, format)| *format)
+}
+
+/// Prüft, ob ein Backup in diesem Format geschrieben werden darf
+/// ([`MIN_WRITE_FORMAT_VERSION`] bis [`FORMAT_VERSION`]).
+pub fn ensure_writable_format(format_version: u32) -> Result<()> {
+    if (MIN_WRITE_FORMAT_VERSION..=FORMAT_VERSION).contains(&format_version) {
+        Ok(())
+    } else {
+        Err(Error::Backup(format!(
+            "Backup-Format {format_version} kann nicht geschrieben werden (möglich \
+             {MIN_WRITE_FORMAT_VERSION}–{FORMAT_VERSION})."
+        )))
+    }
+}
 
 /// Prüft, ob der Restore ein Backup dieses Formats einspielen kann.
 pub fn ensure_supported_format(format_version: u32) -> Result<()> {
@@ -99,20 +159,37 @@ impl Manifest {
     }
 }
 
-/// Serialisiert ein vollständiges Backup-File: `MAGIC\n + manifest-json\n + ciphertext`.
-pub fn frame(manifest: &Manifest, ciphertext: &[u8]) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(ciphertext.len() + 512);
+/// Klartext-Kopf eines Backup-Files: `MAGIC\n + manifest-json\n`. Ab Format 3
+/// sind genau diese Bytes die AAD der Verschlüsselung.
+pub fn header_bytes(manifest: &Manifest) -> Result<Vec<u8>> {
+    let json = manifest.to_json_line()?;
+    let mut out = Vec::with_capacity(MAGIC.len() + json.len() + 2);
     out.extend_from_slice(MAGIC.as_bytes());
     out.push(b'\n');
-    out.extend_from_slice(manifest.to_json_line()?.as_bytes());
+    out.extend_from_slice(json.as_bytes());
     out.push(b'\n');
+    Ok(out)
+}
+
+/// Serialisiert ein vollständiges Backup-File: `MAGIC\n + manifest-json\n + ciphertext`.
+pub fn frame(manifest: &Manifest, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    let mut out = header_bytes(manifest)?;
+    out.reserve_exact(ciphertext.len());
     out.extend_from_slice(ciphertext);
     Ok(out)
 }
 
 /// Zerlegt ein Backup-File in (Manifest, Ciphertext). Liest nur den Plain-Header,
-/// ohne Passphrase.
+/// ohne Passphrase. Kopiert den Ciphertext — für große Dateien
+/// [`parse_header`] mit dem Offset nutzen.
 pub fn unframe(bytes: &[u8]) -> Result<(Manifest, Vec<u8>)> {
+    let (manifest, offset) = parse_header(bytes)?;
+    Ok((manifest, bytes[offset..].to_vec()))
+}
+
+/// Liest den Klartext-Kopf: (Manifest, Offset des Ciphertexts). `bytes[..offset]`
+/// ist der Kopf (ab Format 3 die AAD), ohne Passphrase lesbar.
+pub fn parse_header(bytes: &[u8]) -> Result<(Manifest, usize)> {
     // Erste Newline = Ende MAGIC.
     let nl1 = bytes
         .iter()
@@ -134,25 +211,14 @@ pub fn unframe(bytes: &[u8]) -> Result<(Manifest, Vec<u8>)> {
     let manifest_line = std::str::from_utf8(&rest[..nl2])
         .map_err(|_| Error::Backup("Backup-Datei: Manifest nicht UTF-8".into()))?;
     let manifest = Manifest::from_json_line(manifest_line)?;
-    let ciphertext = rest[nl2 + 1..].to_vec();
-    Ok((manifest, ciphertext))
+    Ok((manifest, nl1 + 1 + nl2 + 1))
 }
 
 /// Liest nur den Manifest-Header eines Backup-Files (für die Restore-Anzeige),
-/// ohne den (potentiell großen) Ciphertext zu kopieren.
+/// ohne den (potentiell großen) Ciphertext zu kopieren. Ungeprüft — erst die
+/// Entschlüsselung authentifiziert ihn (ab Format 3).
 pub fn read_manifest_only(bytes: &[u8]) -> Result<Manifest> {
-    let nl1 = bytes
-        .iter()
-        .position(|&b| b == b'\n')
-        .ok_or_else(|| Error::Backup("Backup-Datei: kein MAGIC-Header".into()))?;
-    let rest = &bytes[nl1 + 1..];
-    let nl2 = rest
-        .iter()
-        .position(|&b| b == b'\n')
-        .ok_or_else(|| Error::Backup("Backup-Datei: kein Manifest-Header".into()))?;
-    let manifest_line = std::str::from_utf8(&rest[..nl2])
-        .map_err(|_| Error::Backup("Backup-Datei: Manifest nicht UTF-8".into()))?;
-    Manifest::from_json_line(manifest_line)
+    parse_header(bytes).map(|(m, _)| m)
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +311,52 @@ mod tests {
         let m2 = read_manifest_only(&framed).unwrap();
         assert_eq!(m2.created_at, m.created_at);
         assert_eq!(m2.app_version, m.app_version);
+    }
+
+    #[test]
+    fn parse_header_offset_points_to_ciphertext() {
+        let m = sample_manifest();
+        let ct = [7u8, 8, 9];
+        let framed = frame(&m, &ct).unwrap();
+        let (m2, offset) = parse_header(&framed).unwrap();
+        assert_eq!(&framed[offset..], &ct);
+        assert_eq!(&framed[..offset], header_bytes(&m).unwrap().as_slice());
+        assert_eq!(m2.nonce_hex, m.nonce_hex);
+        assert!(binds_header(FORMAT_VERSION));
+        assert!(!binds_header(2) && !binds_header(1));
+    }
+
+    /// Lauf F3c (S1): Das Pflicht-Backup vor einer Migration von Schema 31
+    /// (v2026.10.0) entsteht im Format 2, das v2026.10.0 liest; ab dem
+    /// aktuellen Schema gilt das aktuelle Format.
+    #[test]
+    fn rollback_formats_cover_current_format() {
+        use crate::db::schema_version::{EXPECTED_SCHEMA_VERSION, MIN_RESTORE_SCHEMA_VERSION};
+        assert_eq!(readable_format_for_schema(31), 2, "v2026.10.0 liest 1–2");
+        assert_eq!(readable_format_for_schema(MIN_RESTORE_SCHEMA_VERSION), 2);
+        assert_eq!(
+            readable_format_for_schema(EXPECTED_SCHEMA_VERSION),
+            FORMAT_VERSION
+        );
+        // Wer FORMAT_VERSION erhöht, ergänzt READABLE_FORMAT_BY_SCHEMA um
+        // (EXPECTED_SCHEMA_VERSION der Vorversion, deren Format) und passt
+        // diese Erwartung an.
+        assert_eq!(
+            FORMAT_VERSION, 3,
+            "Format erhöht: READABLE_FORMAT_BY_SCHEMA ergänzen"
+        );
+        let mut last = (i32::MIN, 0);
+        for &(schema, format) in READABLE_FORMAT_BY_SCHEMA {
+            assert!(schema > last.0 && format >= last.1, "aufsteigend");
+            assert!(schema < EXPECTED_SCHEMA_VERSION && format < FORMAT_VERSION);
+            assert!(ensure_writable_format(format).is_ok());
+            last = (schema, format);
+        }
+        assert!(
+            ensure_writable_format(1).is_err(),
+            "Format 1 entsteht nicht mehr"
+        );
+        assert!(ensure_writable_format(FORMAT_VERSION + 1).is_err());
     }
 
     #[test]

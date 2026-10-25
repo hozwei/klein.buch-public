@@ -418,9 +418,19 @@ export async function authLogout(): Promise<void> {
   await jsonOrThrow(await postAuth("/api/auth/logout", {}));
 }
 
-/** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. */
+/** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. Ein ausstehendes
+ *  Lock-Backup kann das Sperren über die 30-s-Grenze ziehen (Lauf F3c); der
+ *  Server sperrt dann im Hintergrund zu Ende, die Sitzungen sind bereits beendet. */
 export async function authLock(): Promise<void> {
-  await jsonOrThrow(await postAuth("/api/auth/lock", {}));
+  const res = await postAuth("/api/auth/lock", {});
+  if (res.status === 503) {
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    if (body?.code === "timeout") return;
+  }
+  await jsonOrThrow(res);
 }
 
 export async function authSecurity(): Promise<{ recoveryLeft: number; insecureHttp: boolean }> {

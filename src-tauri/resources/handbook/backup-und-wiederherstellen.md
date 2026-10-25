@@ -18,6 +18,13 @@ Du brauchst Dich im Alltag nicht darum zu kümmern. Wenn doch einmal ein
 älterer Stand zurück muss, gibt es die Wiederherstellung (auf Englisch
 "Restore").
 
+Das Backup nach einer Festschreibung entsteht wenige Sekunden später im
+Hintergrund. Du musst nicht darauf warten: Die Rechnung oder Ausgabe ist
+sofort gespeichert, und Klein.Buch merkt sich, dass noch ein Backup
+aussteht. Schreibst Du mehrere Belege kurz hintereinander fest, deckt ein
+Backup alle ab. Sperrst Du Klein.Buch vorher oder startet der Server neu,
+holt Klein.Buch das Backup kurz nach der nächsten Anmeldung nach.
+
 Das tägliche Backup läuft nur, solange Klein.Buch entsperrt ist. Nach
 einem Neustart des Servers ist Klein.Buch gesperrt, bis Du Dich wieder
 anmeldest. Kurz nach der Anmeldung holt es das fällige Backup nach, und
@@ -51,8 +58,23 @@ Größe.
 
 Der Verlauf zeigt nur Sicherungen, die geklappt haben. Fehlgeschlagene
 Versuche, etwa eine externe Kopie, die nicht geschrieben werden konnte,
-stehen im "Backup-Protokoll". Wie Du es liest, erklärt das Kapitel
+oder ein Backup, das schon beim Zusammenstellen scheiterte, stehen im
+"Backup-Protokoll". Wie Du es liest, erklärt das Kapitel
 "[Backup prüfen](/help/backup-pruefen)".
+
+Mit "Herunterladen" neben einem Backup holst Du die Datei auf Dein Gerät,
+zum Beispiel für einen Umzug auf einen neuen Server oder als zusätzliche
+Kopie. Das geht für Backups im lokalen Ordner und auf Ordner-Zielen, nicht
+für Kopien auf einem SFTP-Server (die holst Du dort). Klein.Buch fragt
+vorher noch einmal nach Daten-Passwort und App-Code. Die Datei bleibt
+verschlüsselt; ohne die Passphrase dieses Backups kann niemand sie lesen.
+Bewahre sie trotzdem sorgfältig auf.
+
+Seit Version 2026.11 schreibt Klein.Buch Backups im Format 3. Der lesbare
+Kopf der Datei (Version, Zeitpunkt) ist darin an die Verschlüsselung
+gebunden; eine nachträglich veränderte Datei erkennt Klein.Buch beim
+Einspielen. Ältere Backups lassen sich weiter einspielen, ein Backup im
+Format 3 aber nicht mit einer älteren Klein.Buch-Version.
 
 ## Aufbewahrung
 
@@ -115,9 +137,10 @@ automatisch ein Sicherheits-Backup des aktuellen Stands an.
 Als Quelle gibt es zwei Wege. Entweder wählst Du ein Backup aus dem
 lokalen Backup-Ordner direkt in der Liste. Oder Du lädst eine
 Backup-Datei hoch. Klein.Buch-Backups haben die Endung `.kbk`. Backups,
-die auf einem externen Ziel liegen, sind in der Liste mit "erst laden"
-markiert: Kopiere die Datei zuerst vom NAS, aus dem Sync-Ordner oder vom
-SFTP-Server auf Dein Gerät und lade sie dann hoch.
+die auf einem externen Ziel liegen, lassen sich nicht direkt auswählen:
+Hol die Datei zuerst auf Dein Gerät — bei einem Ordner-Ziel mit
+"Herunterladen" in der Liste, bei einem SFTP-Ziel (in der Liste "auf dem
+SFTP-Server") direkt vom Server — und lade sie dann hoch.
 
 So läuft es ab:
 
@@ -199,7 +222,12 @@ Bei einer Wiederherstellung in eine neue, leere Instanz (der alte Server
 ist weg) kennt Klein.Buch die späteren Nummern nicht. Dann hebst Du die
 betroffenen Kreise unter "Einstellungen" → "Backups" → "Nummernkreise"
 selbst auf die zuletzt vergebene Nummer an (siehe "[Wiederherstellung
-nach einem Totalausfall](/help/disaster-recovery)").
+nach einem Totalausfall](/help/disaster-recovery)"). Dasselbe gilt, wenn
+die neue Instanz vorher schon Testdaten hatte oder das Backup von einem
+anderen Server stammt: Stehen im Backup höhere Zähler als in der
+ersetzten Datenbank oder tragen Belege mit derselben Nummer andere
+Inhalte, sagt der Hinweis das und bittet ebenfalls ums Anheben. Nur wenn
+die Stände genau übereinstimmen, meldet er "es fehlen keine Nummern".
 
 **Entwürfe mit bereits vergebener Nummer:** Ein Rechnungs-Entwurf bekommt
 seine Nummer schon beim Anlegen. Liegt im eingespielten Backup ein Entwurf,
@@ -218,11 +246,21 @@ Klein.Buch ihren nächsten Termin auf den Stand vor der Wiederherstellung vor.
 So stellt es denselben Zeitraum nach der Freigabe nicht noch einmal in
 Rechnung. Der Hinweis "Abo-Termine nach der Wiederherstellung" nennt die
 vorgerückten Reihen; die Rechnungen dieser Termine fehlen in der
-eingespielten Datenbank (Lücke im Nummernkreis). Kennt Klein.Buch den Stand
-einer Reihe nicht (etwa nach einer Wiederherstellung in eine neue Instanz),
-entsteht für sie nichts automatisch: In der Liste steht dann "Rückstand …".
-"Nachholen" legt die offenen Rechnungen nur als Entwurf an, "Ab heute
-fortsetzen" lässt die offenen Termine aus, auch einen heute fälligen.
+eingespielten Datenbank (Lücke im Nummernkreis). Bei Abo-Kosten ist mehr
+zu tun: Die Kosten, die das Abo nach dem Stand des Backups gebucht hatte,
+sind mit der ersetzten Datenbank verworfen und fehlen jetzt in den Kosten
+und in der EÜR. Der Hinweis nennt diese Abos unter "Kosten-Abos" mit den
+Terminen; trag die Kosten anhand des Kontoauszugs unter "Kosten" von Hand
+nach. Das Abo selbst bucht erst ab dem nächsten Termin weiter.
+
+Kennt Klein.Buch den Stand einer Reihe nicht (etwa nach einer
+Wiederherstellung in eine neue Instanz), entsteht für sie nichts
+automatisch: In der Liste steht dann "Rückstand …". "Nachholen" legt die
+offenen Rechnungen nur als Entwurf an, "Ab heute fortsetzen" lässt die
+offenen Termine aus, auch einen heute fälligen. Ist die Reihe pausiert,
+fällt dieselbe Wahl beim Fortsetzen. Abgelaufene Vorlagen und Abo-Kosten
+ohne automatische Buchung betrifft das nicht; für sie entsteht ohnehin
+nichts automatisch.
 Bestätigungen zum Nachholen und begonnene Abo-Rechnungen aus dem Backup
 gelten nach der Wiederherstellung nicht mehr.
 
@@ -256,4 +294,4 @@ Anmeldung.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
