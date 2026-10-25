@@ -80,10 +80,12 @@ pub async fn recurring_invoices_create(
     ctx: &Arc<AppCtx>,
     args: RecurringInvoicesCreateArgs,
 ) -> Result<RecurringInvoiceDetail> {
-    let RecurringInvoicesCreateArgs { input } = args;
+    let RecurringInvoicesCreateArgs { mut input } = args;
     let pool = ctx.pool()?;
 
     validate(&input)?;
+    // KB-0046 (F5-fix): Paket-Provenienz auch an Abo-Vorlagen erzwingen.
+    crate::commands::packages::enforce_package_provenance(&pool, &mut input.items).await?;
     // R1-S2-NEXTDUE: Eine neue Vorlage beginnt nicht in der Vergangenheit —
     // sonst holte der nächste Lauf ohne Rückfrage Rechnungen für vergangene
     // Zeiträume nach.
@@ -120,10 +122,11 @@ pub async fn recurring_invoices_update(
     ctx: &Arc<AppCtx>,
     args: RecurringInvoicesUpdateArgs,
 ) -> Result<RecurringInvoiceDetail> {
-    let RecurringInvoicesUpdateArgs { id, input } = args;
+    let RecurringInvoicesUpdateArgs { id, mut input } = args;
     let pool = ctx.pool()?;
 
     validate(&input)?;
+    crate::commands::packages::enforce_package_provenance(&pool, &mut input.items).await?;
     check_items_no_vat(&pool, &input.items).await?;
     // W14-031: nie gleichzeitig mit einem Lauf auf derselben Vorlage.
     let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
@@ -330,6 +333,12 @@ fn validate(input: &RecurringInvoiceInput) -> Result<()> {
 /// in der Lock-Pipeline) scheitern. Nutzt denselben Domain-Check wie der
 /// Rechnungsweg (`kleinunternehmer::assert_no_vat`) mit dem aktuellen
 /// §19-Status.
+///
+/// Umgekehrt (KB-0014, F5-fix): Bei Regelbesteuerung darf keine Position die
+/// Steuerart E (§19) tragen — eine unter §19 gespeicherte Vorlage erzeugte nach
+/// dem Verzicht sonst je Termin einen nummerierten Entwurf, der beim
+/// Festschreiben scheitert. Der Scheduler meldet die Vorlage dann als
+/// übersprungen (Hinweis, keine Nummer), bis sie umgestellt ist.
 pub(crate) async fn check_items_no_vat(
     pool: &SqlitePool,
     items: &[InvoiceItemInput],
@@ -339,6 +348,27 @@ pub(crate) async fn check_items_no_vat(
     let Some(seller) = seller_profile::get(pool).await? else {
         return Ok(());
     };
+    if seller.is_kleinunternehmer == 0 {
+        let mut exempt: Vec<u32> = items
+            .iter()
+            .filter(|it| it.tax_category_code == kleinunternehmer::EXEMPT_CATEGORY)
+            .map(|it| it.position)
+            .collect();
+        if !exempt.is_empty() {
+            exempt.sort_unstable();
+            exempt.dedup();
+            let list = exempt
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::Domain(format!(
+                "Bei Regelbesteuerung gibt es die Steuerart E (§19) nicht. Betroffene \
+                 Position(en): {list}. Bitte die Vorlage auf Steuerart S und den Steuersatz \
+                 (z. B. 19 %) umstellen."
+            )));
+        }
+    }
     let status = KleinunternehmerStatus {
         is_kleinunternehmer: seller.is_kleinunternehmer != 0,
         waived_since: seller

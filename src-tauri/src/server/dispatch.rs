@@ -174,7 +174,11 @@ async fn handle(
             // sperrt keine Änderungen. Eine Wiederholung mit demselben
             // Idempotenz-Schlüssel bekommt dieselbe Antwort.
             if let Some(precheck) = spec.precheck {
-                if let Err(err) = precheck(st.ctx.clone(), args.clone()).await {
+                // Vorprüfungen sehen dieselbe Frische wie der Kern (bedingte
+                // Re-Auth vor der Annahme, W14-009).
+                if let Err(err) =
+                    reauth::with_reauth(fresh, precheck(st.ctx.clone(), args.clone())).await
+                {
                     let api = ApiError::from_error(&err);
                     if let Some(c) = completer {
                         c.complete(StoredResponse::json(api.status, &api.body()));

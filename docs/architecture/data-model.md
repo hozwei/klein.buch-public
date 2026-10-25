@@ -17,6 +17,16 @@ lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 - **`PRAGMA foreign_keys = ON`** für jeden Pool.
 - **UUIDv7-PKs** als `TEXT` (kanonische 36-Zeichen-Form, zeitlich sortierbar).
 - **Geld als Integer-Cents** (`INTEGER NOT NULL`). Niemals `REAL` für Beträge.
+  Gerechnet wird in `i64` (`domain::money`). Einzige dokumentierte Ausnahme:
+  `Menge × Einzelpreis` und `Netto × Satz` laufen über `f64` mit einmaliger
+  kaufmännischer Rundung je Position bzw. Steuergruppe — die Menge ist kein
+  Geldbetrag (höchstens 4 Nachkommastellen, wie CII sie überträgt), bis 2^53
+  Cent ist das Produkt exakt. AfA, betrieblicher Anteil und Fehlertexte sind
+  ganzzahlig (ADR 0039 Nr. 134, R1-S2-FLOAT). Die USt eines Belegs entsteht je
+  (Steuerart, Satz) aus der Nettosumme (EN 16931 BR-CO-17). Grenzen: Menge
+  ≤ 1 000 000, Einzelpreis (Betrag) ≤ 1 Mrd. €, Satz ≤ 100 %, Summen geprüft;
+  jeder einzeln erfasste Betrag (Kosten, Zahlung, Anschaffung, Abgangserlös,
+  Privatbewegung, Kosten-Abo) ≤ 1 Mrd. € (ADR 0039 Nr. 137).
 - **Datum/Zeit als ISO-8601-`TEXT`** (`YYYY-MM-DD` bzw. `YYYY-MM-DDTHH:MM:SS`).
 - **Booleans als `INTEGER NOT NULL CHECK (… IN (0,1))`**.
 - **Forward-only-Migrationen** mit aufsteigender Nummer; Down-Migrations

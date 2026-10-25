@@ -211,6 +211,8 @@ export interface Invoice {
   buyerCountryCode: string | null;
   buyerVatId: string | null;
   buyerEmail: string | null;
+  /** Bezahlt-/Zahlungshinweis (reiner PDF-Text, Migration 0018). */
+  paymentNote: string | null;
   // Ursprungsangebot bei Konvertierung (Block 7, Migration 0005).
   derivedFromQuoteId: Uuid | null;
   // Zahlungs-Eingangs-Konto (Migration 0007, Block 9). Additiv.
@@ -337,6 +339,8 @@ export interface RecordPaymentArgs {
   amountCents: Cents;
   paidDate: string;
   note: string | null;
+  /** Zahlungskonto des Eingangs (DATEV-Geldkonto, R2-011). */
+  accountId?: Uuid | null;
 }
 
 // ---- Mail (Block 5) --------------------------------------------------------
@@ -442,6 +446,8 @@ export interface SendResult {
   to: string;
   subject: string;
   attachmentCount: number;
+  /** Versandprotokoll unvollständig (R4-S2-EMAILLOG). */
+  warning?: string | null;
 }
 
 export interface RenderedMail {
@@ -703,6 +709,7 @@ export interface SendPackageCatalogResult {
   subject: string;
   packageCount: number;
   attachmentCount: number;
+  warning?: string | null;
 }
 
 // ---- Rechtsdokumente / Legal Documents (Block 8) ---------------------------
@@ -751,6 +758,7 @@ export interface SendQuoteResult {
   to: string;
   subject: string;
   attachmentCount: number;
+  warning?: string | null;
 }
 
 // ---- Payment Accounts (Block 9) --------------------------------------------
@@ -1341,8 +1349,10 @@ export interface EuerReport {
 
 /** Eine Zeile der ELSTER-Ausfüllhilfe (`euer::elster_csv::ElsterLine`). */
 export interface ElsterLine {
-  /** Offizielle Zeilennummer der Anlage EÜR; 0 = reine Kontrollsumme. */
+  /** Zeilennummer im amtlichen Vordruck des Jahres (siehe `formYear`). */
   zeile: number;
+  /** Amtliche Kennzahl (Kz), über die Jahre gleich. */
+  kennzahl: number | null;
   bezeichnung: string;
   amountCents: Cents;
   /** true = im ELSTER-Formular einzutragen; false = ELSTER berechnet selbst. */
@@ -1353,10 +1363,16 @@ export interface ElsterLine {
 export interface ElsterForm {
   fiscalYear: number;
   isKleinunternehmer: boolean;
+  /** Jahr des Vordrucks, dem die Zeilennummern folgen. */
+  formYear: number;
+  /** true = Zeilennummern am Vordruck genau dieses Jahres geprüft. */
+  layoutVerified: boolean;
   lines: ElsterLine[];
   incomeTotalCents: Cents;
   expenseTotalCents: Cents;
   surplusCents: Cents;
+  /** Hinweise der Ausfüllhilfe (Vordruck, Regelbesteuerung, Storno-Überhang). */
+  notes: string[];
 }
 
 /** Download-Ticket (Plan W7, `downloads::DownloadTicket`): die Datei liegt kurz

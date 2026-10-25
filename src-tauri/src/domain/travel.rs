@@ -34,7 +34,7 @@ pub struct TravelLine {
 /// `round_trip` wird verdoppelt.
 pub fn compute_travel(km: f64, cost_per_km_cents: i64, round_trip: bool) -> TravelLine {
     let effective_km = if round_trip { km * 2.0 } else { km };
-    let net = (effective_km * cost_per_km_cents as f64).round() as i64;
+    let net = crate::domain::money::line_net_cents(effective_km, cost_per_km_cents);
     let rate = format_eur_cents(cost_per_km_cents);
     let km_str = format_km(effective_km);
     let description = if round_trip {

@@ -46,6 +46,19 @@ pub fn verify_for_kleinunternehmer(template_source: &str) -> Result<(), KlauselC
     Ok(())
 }
 
+/// Datenfeld, über das eine Rechnungsvorlage einen Storno-Beleg erkennt
+/// (`data.invoice.storno_of = {number, date}`; Titel „Stornorechnung“,
+/// Bezug auf die stornierte Rechnung, kein Überweisungshinweis).
+pub const STORNO_FIELD_REFERENCE: &str = "storno_of";
+
+/// Stellt die Vorlage Stornos dar (LE-CUSTOM-TEMPLATE-STORNO)? Alle
+/// mitgelieferten Vorlagen tun es; eine eigene Vorlage ohne `storno_of` zeigte
+/// einen Storno als gewöhnliche Rechnung mit Zahlungsaufforderung. Die
+/// Rechnungs-Pipeline nimmt dann für Stornos die eingebaute Vorlage.
+pub fn supports_storno(template_source: &str) -> bool {
+    template_source.contains(STORNO_FIELD_REFERENCE)
+}
+
 /// Toleranter Check für Settings-UI / Template-Browser. Gibt sowohl
 /// Marker- als auch Feld-Status getrennt zurück, damit das UI sagen
 /// kann: "Marker da, aber Feld fehlt — Template-Autor hat vergessen
@@ -89,6 +102,14 @@ mod tests {
         // §19-KLAUSEL-BLOCK: REQUIRED
         // Aber das Feld wird nicht genutzt
     "#;
+
+    #[test]
+    fn storno_support_follows_storno_of_field() {
+        assert!(!supports_storno(GOOD_TEMPLATE));
+        assert!(supports_storno(
+            "#let storno_of = data.invoice.at(\"storno_of\", default: none)"
+        ));
+    }
 
     #[test]
     fn good_template_passes_strict_check() {

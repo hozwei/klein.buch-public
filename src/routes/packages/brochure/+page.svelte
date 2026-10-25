@@ -123,6 +123,7 @@
         body: body.trim() || null,
       });
       flash(`Broschüre an ${res.to} gesendet (${res.packageCount} Pakete).`);
+      if (res.warning) flash(res.warning, "error");
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {

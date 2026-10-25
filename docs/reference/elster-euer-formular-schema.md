@@ -1,119 +1,145 @@
-# ELSTER — Anlage EÜR: Zeilen-Zuordnung (Block 14a)
+# ELSTER — Anlage EÜR: Zeilen- und Kennzahl-Zuordnung
 
 Referenz für die **ELSTER-Ausfüllhilfe** (`euer::elster_csv`). Zielgruppe ist der
 **selbst steuernde §19-Kleinunternehmer**, der seine EÜR in *Mein ELSTER*
-abgibt.
+abgibt. Stand: Lauf F5b, 25.10.2026 (ADR 0039 Nr. 135).
 
 > **Wichtig:** ELSTER bietet **keinen CSV-Import** für die Anlage EÜR. Eine
 > direkte elektronische Übermittlung ginge nur über die zertifizierte
-> **ERiC-Schnittstelle** (eigener, späterer Block). Dieses Modul erzeugt deshalb
-> eine **Ausfüllhilfe** zum Abtippen ins Online-Formular plus eine CSV fürs
-> Archiv/Excel — keine Einreichung ans Finanzamt.
+> **ERiC-Schnittstelle**. Dieses Modul erzeugt deshalb eine **Ausfüllhilfe** zum
+> Abtippen ins Online-Formular plus eine CSV fürs Archiv/Excel — keine
+> Einreichung ans Finanzamt.
 
 > **Steuerberater-Caveat:** Die Zuordnung ist ein **Vorschlag**. Sie ist vor der
-> Abgabe gegenzuprüfen — insbesondere AfA (Zeile 33/36), Kfz (Zeile 68) und
-> Raumkosten (Zeile 39). Klein.Buch ist ein Werkzeug, kein Steuerberater.
+> Abgabe gegenzuprüfen — insbesondere AfA, Kfz und Raumkosten. Klein.Buch ist ein
+> Werkzeug, kein Steuerberater.
 
 ## Rechtsgrundlage / Quellen
 
 - Anlage EÜR (Gewinnermittlung nach **§ 4 Abs. 3 EStG**); elektronische Abgabe
-  nach **§ 60 Abs. 4 EStDV**.
-- Zeilennummern nach der **Anleitung zur Anlage EÜR 2025** (ELSTER/BMF).
-  Stand der Recherche: 2026-05-21. Das Formular 2026 erscheint erst später im
-  Jahr; bei Wechsel die Zeilen erneut prüfen.
-- Quellen:
-  - ELSTER, „Anleitung zur Anlage EÜR 2025":
-    <https://www.elster.de/eportal/helpGlobal?themaGlobal=help_euer_ufa_77_2025>
-  - BMF, Anlage EÜR 2025 (Formular):
-    <https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.pdf>
+  nach **§ 60 Abs. 4 EStDV**; amtliche Vordrucke per BMF-Schreiben.
+- Am Vordruck geprüft (Text der BMF-PDFs, 25.10.2026):
+  - **Anlage EÜR 2024** — BMF-Schreiben vom 02.09.2024.
+  - **Anlage EÜR 2025** — BMF-Schreiben vom 29.08.2025
+    (<https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2025-08-29-anlage-EUER-2025.pdf>).
+  - **Anlage EÜR 2026** — BMF-Schreiben vom 01.09.2026, GZ IV C 6 - S 2142/00024/010/001
+    (<https://www.bundesfinanzministerium.de/Content/DE/Downloads/BMF_Schreiben/Steuerarten/Einkommensteuer/2026-09-01-anlage-EUER-2026.pdf>).
+- Anleitung zur Anlage EÜR (in denselben Schreiben): Zeile 12 (Kleinunternehmer
+  brutto, vor dem Übergang ausgeführte Umsätze bleiben regelbesteuert), Zeilen
+  15–17 (netto, Umsatzsteuer gesondert), „Betriebsausgaben“ (netto mit Vorsteuer
+  in Zeile 57; Kleinunternehmer brutto), Zeile 60 (Auffang „soweit nicht in den
+  Zeilen 24 bis 59 berücksichtigt“).
+
+**Kennzahlen (Kz) sind über die Jahre gleich**, die Zeilennummern nicht. Die
+Ausfüllhilfe führt beides. Für Jahre ohne geprüften Vordruck (vor 2024, nach
+2026) gilt der nächstgelegene Vordruck mit einem Hinweis „Kennzahlen maßgeblich“.
+Erscheint ein neuer Vordruck, wird `Layout` in `euer::elster_csv` ergänzt.
 
 ## Leitlinie: Default = gesetzliches Minimum
 
 Es werden **nur Positionen mit Betrag ≠ 0** ausgegeben. Die Anleitung verlangt
 ausdrücklich, nicht betroffene Zeilen *nicht* auszufüllen (auch nicht mit 0,00).
-Summen-Zeilen (23, Betriebsausgaben-Summe, Gewinn) sind nur **Kontrollsummen**
-zum Abgleich — in *Mein ELSTER* berechnet das Formular sie selbst.
+Summen-Zeilen (Summe Betriebseinnahmen, Summe Betriebsausgaben, Gewinn/Verlust)
+sind **Kontrollsummen** — in *Mein ELSTER* berechnet das Formular sie selbst.
 
-## Betriebseinnahmen
+## Betriebseinnahmen (Zeilen in allen Jahren gleich)
 
-| Zeile | Position | Klein.Buch-Quelle |
-|------:|----------|-------------------|
-| **12** | Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer (§ 19 Abs. 1 UStG) | `invoice_income − storno_refunds` (Brutto, cash-basis) |
-| 15 | Umsatzsteuerpflichtige Betriebseinnahmen (netto) | nur bei Regelbesteuerung (`is_kleinunternehmer = false`) — USt-Aufteilung manuell prüfen |
-| **19** | Veräußerung oder Entnahme von Anlagevermögen | `disposal_proceeds` (Verkaufserlös) |
-| 23 | *Summe der Betriebseinnahmen* (Kontrollsumme) | `total_income` |
+| Zeile | Kz | Position | Klein.Buch-Quelle |
+|------:|---:|----------|-------------------|
+| 12 | 111 | Betriebseinnahmen als umsatzsteuerlicher Kleinunternehmer | Zahlungen auf §19-Rechnungen − deren Storno-Erstattungen (brutto) |
+| 15 | 112 | Umsatzsteuerpflichtige Betriebseinnahmen (netto) | Rechnungen ohne §19, Steuerart S mit Satz > 0, Nettoanteil der Zahlung |
+| 16 | 103 | Umsatzsteuerfreie / nicht steuerbare Einnahmen, 0 %, § 13b UStG | Rechnungen ohne §19, Steuerart Z/AE/K/G/O |
+| 17 | 140 | Vereinnahmte Umsatzsteuer | Steueranteil der Zahlungen auf Rechnungen ohne §19 |
+| 19 | 102 | Veräußerung oder Entnahme von Anlagevermögen | `disposal_proceeds` |
+| 23 | 159 | *Summe Betriebseinnahmen* (Kontrollsumme) | Summe der eingetragenen Zeilen |
 
-Storno-Erstattungen mindern Zeile 12 im Jahr des Storno-Belegs (Cash-Basis,
-keine Rückwirkung — siehe ADR 0022).
+Maßgeblich für Zeile 12 bzw. 15–17 ist der beim Festschreiben **eingefrorene
+§19-Status der Rechnung**, nicht der Status des Zahlungsjahres. Eine Zahlung wird
+im Verhältnis der Brutto-Gruppensummen auf die Steuergruppen der Rechnung
+verteilt (`euer::detail::split_payment`). Storno-Erstattungen mindern die Zeile
+des Originals im Jahr des Storno-Belegs (Cash-Basis, ADR 0022). Übersteigen sie
+die Einnahmen des Jahres, wird die Zeile nicht negativ: der Überhang ist als
+Rückzahlung von Betriebseinnahmen eine Betriebsausgabe (§ 11 Abs. 2 EStG) und
+steht in Kz 183.
 
-## Betriebsausgaben — Kategorie → Zeile
+## Betriebsausgaben — Kategorie → Kennzahl
 
-Kategorien ohne eindeutige amtliche Zeile landen bewusst im **Auffangposten
-Zeile 60** („Übrige unbeschränkt abziehbare Betriebsausgaben, soweit nicht in den
-Zeilen 24 bis 59 berücksichtigt") — das ist immer zulässig.
+| Klein.Buch-Kategorie | Kz | Zeile 2024/2025 | Zeile 2026 | Position |
+|----------------------|---:|----:|----:|----------|
+| `goods` | 100 | 27 | 29 | Waren, Rohstoffe und Hilfsstoffe |
+| `services` | 110 | 29 | 30 | Bezogene Fremdleistungen |
+| `rent` | 150 | 39 | 40 | Miete/Pacht für Geschäftsräume |
+| `communications` | 280 | 43 | 44 | Aufwendungen für Telekommunikation |
+| `travel` | 221 | 44 | 45 | Übernachtungs- und Reisenebenkosten |
+| `training` | 281 | 45 | 46 | Fortbildungskosten |
+| `insurance` | 223 | 49 | 50 | Beiträge, Gebühren, Abgaben und Versicherungen |
+| `software` | 228 | 50 | 51 | Laufende EDV-Kosten |
+| `office` | 229 | 51 | 52 | Arbeitsmittel (Bürobedarf, Porto, Fachliteratur) |
+| `marketing` | 224 | 54 | 55 | Werbekosten |
+| `vehicle` | 146 | 70 | 71 | Kfz: sonstige tatsächliche Fahrtkosten |
+| `hardware`, `fees`, `other` | 183 | 60 | 61 | Übrige unbeschränkt abziehbare Betriebsausgaben |
+| (Vorsteuer, nur Regelbesteuerung) | 185 | 57 | 58 | Gezahlte abziehbare Vorsteuer |
 
-| Klein.Buch-Kategorie | Zeile | Position |
-|----------------------|------:|----------|
-| `goods` (Wareneinkauf) | 27 | Waren, Rohstoffe und Hilfsstoffe einschl. Nebenkosten |
-| `services` (Fremdleistungen) | 29 | Bezogene Leistungen |
-| `rent` (Miete / Raumkosten) | 39 | Raumkosten und sonstige Grundstücksaufwendungen |
-| `travel` (Reisekosten) | 44 | Übernachtungs- und Reisenebenkosten bei Geschäftsreisen |
-| `vehicle` (Kfz / Fahrzeug) | 68 | Kraftfahrzeugkosten und andere Fahrtkosten |
-| `office`, `software`, `hardware`, `communications`, `insurance`, `training`, `fees`, `marketing`, `other` | 60 | Übrige unbeschränkt abziehbare Betriebsausgaben |
+Hinweise für die Steuerberater-Prüfung: `travel` bündelt Übernachtung und Fahrt
+(amtlich getrennt: Zeile 44 bzw. 45 und Kfz-/Fahrtkosten), `vehicle` ist
+Kfz-Sammelposten (amtlich Leasing, Steuern/Versicherungen, sonstige Kosten),
+`fees` mischt Bankspesen und Gebühren. Aktivierte Kosten (Anlage aus einer
+Kostenposition) sind keine Betriebsausgabe; sie wirken über die AfA.
 
-Hinweise für die STB-Prüfung: `travel` bündelt Übernachtung/Verpflegung/Fahrt
-(amtlich getrennt: Zeile 44/64/68–73); `vehicle` ist Kfz-Sammelposten (amtlich
-Zeile 68–73); `software`/`hardware` als laufende Kosten → 60, als Anschaffung →
-Anlage/AfA.
+Bei **Regelbesteuerung** (Status des Geschäftsjahres) stehen die Ausgaben netto
+in ihrer Zeile und die Belegsteuer als Vorsteuer in Kz 185, bei §19 brutto.
 
 ## AfA & Anlagenabgang
 
-Die Jahres-AfA wird über die `depreciation_method` der Anlage aufgeteilt
-(`db::repo::euer::depreciation_split_for_year`):
+| Quelle | Kz | Zeile 2024/2025 | Zeile 2026 |
+|--------|---:|----:|----:|
+| `linear`, `computer_special_2021` — AfA auf bewegliche Wirtschaftsgüter | 130 | 33 | 34 |
+| `gwg_sofort` — geringwertige Wirtschaftsgüter (§ 6 Abs. 2 EStG) | 132 | 36 | 37 |
+| Restbuchwert ausgeschiedener Anlagegüter (`disposal_book_value`) | 135 | 38 | 39 |
 
-| Methode | Zeile | Position |
-|---------|------:|----------|
-| `linear`, `computer_special_2021` | 33 | AfA auf bewegliche Wirtschaftsgüter |
-| `gwg_sofort` | 36 | Geringwertige Wirtschaftsgüter (§ 6 Abs. 2 EStG) |
-| (Restbuchwert verkaufter/entsorgter Anlagen) | 38 | Restbuchwert der ausgeschiedenen Anlagegüter (`disposal_book_value`) |
+Vereinfachung (STB prüfen): Software-AfA gehört amtlich zu den immateriellen
+Wirtschaftsgütern (Kz 131), Gebäude zu Kz 136 — beides wird mangels
+Unterscheidung bei Kz 130 geführt.
 
-Vereinfachung (STB prüfen): Software-AfA gehört amtlich auf Zeile 32 (immaterielle
-Wirtschaftsgüter), Gebäude auf Zeile 31 — beides wird hier mangels Unterscheidung
-auf Zeile 33 geführt.
+## Kontrollsummen
+
+| Position | Kz | Zeile 2024/2025 | Zeile 2026 |
+|----------|---:|----:|----:|
+| Summe Betriebseinnahmen | 159 | 23 | 23 |
+| Summe Betriebsausgaben | 199 | 75 | 76 |
+| Steuerpflichtiger Gewinn/Verlust | 219 | 97 | 98 |
+
+Verluste stehen mit Minus in der Kontrollsumme Gewinn/Verlust.
+
+## Grenzen bei Regelbesteuerung
+
+Nicht abgebildet (Hinweis in CSV, PDF, Export-Seite und LIESMICH): an das
+Finanzamt gezahlte bzw. erstattete Umsatzsteuer (Kz 186/141), Umsatzsteuer auf
+Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer, Vorsteuer aus
+Anlagenkäufen, die Umsatzsteuer-Voranmeldung.
 
 ## Vollständiges EÜR-Paket (gesetzlicher Anspruch)
 
-Die Selbst-Abgabe-Ausgabe bildet das komplette EÜR-Paket ab, nicht nur die
-Formularzeilen-Summen:
-
-1. **Anlage EÜR** — die Formularzeilen-Summen (oben, `euer::elster_csv`).
-2. **Anlage AVEÜR (Anlageverzeichnis)** — gesetzl. Pflicht bei Anlagevermögen
+1. **Anlage EÜR** — die Formularzeilen (oben, `euer::elster_csv`).
+2. **Anlage AVEÜR (Anlageverzeichnis)** — Pflicht bei Anlagevermögen
    (§ 4 Abs. 3 Satz 5 EStG): je Anlage AK/HK, Methode, Nutzungsdauer,
    betrieblicher Anteil, **AfA des Jahres**, Restwert Jahresanfang/-ende, Abgang.
-   Quelle: `db::repo::euer::aveeur_items` (LEFT JOIN `depreciation_entries` auf das
-   Jahr; ohne gebuchte AfA fällt der Restwert auf den aktuellen Buchwert zurück).
-3. **Einzelaufstellung** (GoBD-Einzelaufzeichnung, prüfungssicher):
-   - Einnahmen — jeder Zahlungseingang mit Datum, Rechnungsnr., Kunde,
-     **Beschreibung** (aus den Rechnungspositionen zusammengefasst), Betrag
-     (`income_detail`; Teilzahlungen je eigene Zeile, dem Zuflussjahr zugeordnet).
-   - Storno-Erstattungen (`storno_detail`).
-   - Ausgaben — jede bezahlte Kostenposition mit Datum, Beleg-Nr., Lieferant,
-     Kategorie, **Beschreibung**, Brutto (`expense_detail`).
-   - Veräußerungen (`disposal_detail`).
-
-Die Einzelposten-Loader werden von **Block 14b (DATEV-Buchungsstapel)** mitgenutzt.
+   Quelle: `db::repo::euer::aveeur_items`.
+3. **Einzelaufstellung** (GoBD-Einzelaufzeichnung): Einnahmen (Teilzahlungen je
+   Zeile, dem Zuflussjahr zugeordnet), Storno-Erstattungen, Ausgaben (ohne
+   aktivierte Kosten), Veräußerungen.
 
 ## Export-Formate
 
-- **ELSTER-Summen-CSV** (`euer_export_elster`): `Zeile;Position;Betrag;Art`
-  (`Art` ∈ {Eingabe, Kontrollsumme}), UTF-8 **mit BOM**, Semikolon, Dezimalkomma,
-  vorangestellte `#`-Kommentarzeile mit Geschäftsjahr + Quelle.
+- **ELSTER-CSV** (`euer_export_elster`): `Zeile;Kennzahl;Position;Betrag;Art`
+  (`Art` ∈ {Eingabe, Kontrollsumme}), UTF-8 **mit BOM** (deutsches Excel),
+  Semikolon, Dezimalkomma, vorangestellte `#`-Kommentarzeilen (Geschäftsjahr,
+  Vordruck, Hinweise). Abtipp- und Archivdatei, kein Importformat.
 - **Einzelaufstellung-ZIP** (`euer_export_detail_zip`): `einnahmen.csv`,
-  `ausgaben.csv`, `anlageverzeichnis.csv` (jeweils BOM/Semikolon/Dezimalkomma,
-  mit Summenzeile).
-- **PDF „Anlage EÜR {Jahr}"** (Schritt 2, Typst) — eigenständiges Dokument ohne
-  App-Chrome, enthält Anlage EÜR + AVEÜR + Einzelaufstellung; wiederverwendbar im
-  Steuerberater-Paket (14c).
+  `ausgaben.csv`, `anlageverzeichnis.csv` — bewusst ohne Manifest (Arbeitsliste
+  ohne Original-Belege; die Übergabe ist das Steuerberater-Paket).
+- **PDF „Anlage EÜR {Jahr}"** (Typst) mit Zeile, Kz, Hinweisen, AVEÜR und
+  Einzelaufstellung; Datumsangaben TT.MM.JJJJ.
 
 Grenze: die **elektronische Übermittlung** ans Finanzamt (amtlicher Datensatz
-nach § 60 Abs. 4 EStDV via ERiC) ist nicht enthalten — eigener späterer Block.
+nach § 60 Abs. 4 EStDV via ERiC) ist nicht enthalten.

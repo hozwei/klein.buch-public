@@ -205,6 +205,79 @@ mod tests {
         assert_eq!(storno_totals.tax_amount_cents, 0);
     }
 
+    // R1-S2-TESTS: Storno einer regelbesteuerten Rechnung (19 % und 7 %,
+    // Bruchteil-Mengen mit Halbcent-Rundung) ergibt exakt die negierten Netto-,
+    // Steuer- und Bruttowerte.
+    #[test]
+    fn storno_with_vat_mirrors_original_exactly() {
+        let items = vec![
+            OriginalItemView {
+                position: 1,
+                description: "Beratung",
+                quantity: 2.5,
+                unit_code: "HUR",
+                unit_price_cents: 1_999,
+                tax_rate_percent: 19.0,
+                tax_category_code: "S",
+            },
+            OriginalItemView {
+                position: 2,
+                description: "Material",
+                quantity: 0.333,
+                unit_code: "C62",
+                unit_price_cents: 333,
+                tax_rate_percent: 19.0,
+                tax_category_code: "S",
+            },
+            OriginalItemView {
+                position: 3,
+                description: "Buch",
+                quantity: 1.0,
+                unit_code: "C62",
+                unit_price_cents: 50,
+                tax_rate_percent: 7.0,
+                tax_category_code: "S",
+            },
+        ];
+        let original = OriginalInvoiceView {
+            invoice_number: "RE-2026-0002",
+            currency_code: "EUR",
+            pdf_template: "default",
+            items,
+        };
+        let original_items: Vec<InvoiceItemInput> = original
+            .items
+            .iter()
+            .map(|it| InvoiceItemInput {
+                position: it.position,
+                description: it.description.into(),
+                quantity: it.quantity,
+                unit_code: it.unit_code.into(),
+                unit_price_cents: it.unit_price_cents,
+                tax_rate_percent: it.tax_rate_percent,
+                tax_category_code: it.tax_category_code.into(),
+                description_title: None,
+                description_markup: None,
+                source_package_id: None,
+                source_package_revision: None,
+            })
+            .collect();
+        let o = compute_totals(&original_items);
+        let storno = build_storno_input(
+            &original,
+            "uuid".into(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
+            None,
+        );
+        let s = compute_totals(&storno.items);
+        assert!(o.tax_amount_cents > 0);
+        assert_eq!(s.net_amount_cents, -o.net_amount_cents);
+        assert_eq!(s.tax_amount_cents, -o.tax_amount_cents);
+        assert_eq!(s.gross_amount_cents, -o.gross_amount_cents);
+        assert_eq!(storno.items[0].tax_category_code, "S");
+        assert_eq!(storno.items[2].tax_rate_percent, 7.0);
+    }
+
     #[test]
     fn storno_description_carries_original_reference() {
         let storno = build_storno_input(

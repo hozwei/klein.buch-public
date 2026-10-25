@@ -854,6 +854,33 @@ Teil F3c — Nachbesserung F3 nach der Prüfung (25.10.2026):
     Privatbewegung, AfA, Jahresabschluss) reichen `ctx.clock().now_utc()`.
     Test: `backup_schedule_test::lock_events_use_the_injected_clock`
     (statisch: kein Aufruf übergibt die Systemuhr).
+60. **„Heute“ in einem über Mitternacht offenen Tab (D-27, Lauf F5a, S3).** Die
+    Übersicht las `new Date()` einmal beim Laden; Hero-Datum, Tag im Jahr, das
+    laufende Jahr und die Fälligkeits-Ableitungen blieben in einem über
+    Mitternacht offenen Tab auf dem Vortag. Zentral in `src/lib/dayClock.svelte.ts`:
+    `dayClock.now` ist ein Svelte-State, der genau an der nächsten Berliner
+    Mitternacht (plus 1 s; `msUntilNextBerlinMidnight` in `src/lib/date.ts`,
+    Sommer-/Winterzeit eingerechnet) und beim Zurückkehren in einen
+    ausgeblendeten Tab (`visibilitychange`, gedrosselte Timer) neu gesetzt wird;
+    die Übersicht leitet alle Datumswerte per `$derived` daraus ab. Kein
+    Minutentakt — zwischen zwei Tagen ändert sich an Datum und Jahr nichts.
+    Formulare setzen ihr Vorgabedatum weiter beim Öffnen (der Server prüft
+    „nicht in der Zukunft“ ohnehin mit seiner Uhr). Test: `src/lib/date.test.ts`
+    (`msUntilNextBerlinMidnight`: Sommer-, Winterzeit, 25-Stunden-Tag,
+    Mitternacht). „Tage bis Fälligkeit“ (SL-FRONTEND-DAYS) rechnet seit F1c
+    über `daysUntilBerlin` (Test mit `TZ=America/New_York` in derselben Datei).
+61. **Tageswechsel nach einem Ruhezustand (zu Nr. 60, Lauf F5-fix, S3).** Ein
+    Mitternachts-Timer läuft nach dem Aufwachen des Geräts je nach Browser und
+    Betriebssystem auf monotoner Zeit weiter (ohne die Schlafzeit), und bei
+    sichtbarem Tab feuert kein `visibilitychange` — die Übersicht zeigte dann bis
+    zu Stunden den Vortag (bei einem Jahreswechsel das Vorjahr). `dayClock`
+    prüft deshalb zusätzlich jede Minute (`DAY_CHECK_INTERVAL_MS`) sowie bei
+    `focus` und `pageshow` das Berliner Datum; der State ändert sich nur beim
+    Tageswechsel, der Vergleich ist billig und unabhängig von gedrosselten oder
+    pausierten Timern. Der Satz „Kein Minutentakt“ in Nr. 60 gilt damit nicht
+    mehr. Test `src/lib/dayClock.test.ts` (Fokus nach Ruhezustand mit
+    Jahreswechsel, `pageshow`, Minutentakt, Mitternachts-Timer am
+    25-Stunden-Tag).
 
 ## Referenzen
 
@@ -873,7 +900,7 @@ Tests `tests/recurring_scheduler_test.rs`, `tests/backup_schedule_test.rs`,
 `tests/server_auth_test.rs` (`unlock_does_not_wait_for_tick_still_running_from_lock`), `tests/server_auth_test.rs`
 (`shutdown_does_not_wait_forever_for_running_tick`),
 `scheduler::recurring_invoice::pipeline_tests`, `backup::rotation::tests`,
-`src/routes/no-side-effects-on-open.test.ts`, `src/lib/date.test.ts`,
+`src/routes/no-side-effects-on-open.test.ts`, `src/lib/date.test.ts`, `src/lib/dayClock.test.ts`,
 `src/lib/format.test.ts`, `seed::tests` (`deleted_neu_file_is_not_offered_again`),
 `tests/inputs_seed_test.rs` (`neu_file_is_offered_and_notified_once`),
 `db::tests::newer_database_is_rejected_on_unlock`. Frontend `src/lib/date.ts`,

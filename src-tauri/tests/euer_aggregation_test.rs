@@ -92,6 +92,36 @@ async fn mk_issued_invoice(
     unit_price_cents: i64,
     is_storno_for: Option<String>,
 ) -> String {
+    let id = mk_draft_invoice(
+        pool,
+        contact_id,
+        number,
+        invoice_date,
+        unit_price_cents,
+        is_storno_for,
+    )
+    .await;
+    // Lock per Direkt-UPDATE: OLD.locked_at IS NULL ⇒ trg_invoices_immutable
+    // feuert nicht. Danach erlaubt record_payment Zahlungen.
+    sqlx::query(
+        "UPDATE invoices SET locked_at = datetime('now','utc'), status = 'issued' WHERE id = ?",
+    )
+    .bind(&id)
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+/// Legt einen Entwurf an (nicht festgeschrieben).
+async fn mk_draft_invoice(
+    pool: &SqlitePool,
+    contact_id: &str,
+    number: &str,
+    invoice_date: NaiveDate,
+    unit_price_cents: i64,
+    is_storno_for: Option<String>,
+) -> String {
     let input = InvoiceInput {
         direction: InvoiceDirection::Issued,
         invoice_date,
@@ -133,15 +163,6 @@ async fn mk_issued_invoice(
     let row = invoices::create_draft(pool, &payload, number, &seller, &buyer, &totals)
         .await
         .unwrap();
-    // Lock per Direkt-UPDATE: OLD.locked_at IS NULL ⇒ trg_invoices_immutable
-    // feuert nicht. Danach erlaubt record_payment Zahlungen.
-    sqlx::query(
-        "UPDATE invoices SET locked_at = datetime('now','utc'), status = 'issued' WHERE id = ?",
-    )
-    .bind(&row.id)
-    .execute(pool)
-    .await
-    .unwrap();
     row.id
 }
 
@@ -462,4 +483,57 @@ async fn available_years_reports_data_years_descending() {
     assert!(years.contains(&2026));
     // absteigend sortiert
     assert!(years.windows(2).all(|w| w[0] >= w[1]));
+}
+
+/// R2-007 / R2-008: Nur festgeschriebene Belege zählen. Ein Entwurf mit
+/// gezahltem Betrag ist keine Einnahme, ein nicht festgeschriebener
+/// Storno-Entwurf keine Erstattung (sonst doppelte Rückbuchung im
+/// Crash-Fenster zwischen Entwurf und Festschreiben).
+#[tokio::test]
+async fn drafts_never_count_as_income_or_storno_refund() {
+    let (pool, _dir) = setup_pool().await;
+    let cust = mk_customer(&pool).await;
+
+    let orig = mk_issued_invoice(&pool, &cust, "RE-2026-0001", d(2026, 3, 1), 100_000, None).await;
+    invoices::record_payment(&pool, &orig, 100_000, "2026-03-01", None)
+        .await
+        .unwrap();
+    // Storno-Entwurf zum bezahlten Original, nicht festgeschrieben.
+    mk_draft_invoice(
+        &pool,
+        &cust,
+        "ST-2026-0001",
+        d(2026, 4, 1),
+        -100_000,
+        Some(orig.clone()),
+    )
+    .await;
+    // Entwurf mit eingetragener Zahlung (nur per Direkt-UPDATE möglich).
+    let draft = mk_draft_invoice(&pool, &cust, "RE-2026-0002", d(2026, 5, 1), 50_000, None).await;
+    sqlx::query(
+        "UPDATE invoices SET paid_amount_cents = 50000, paid_at = '2026-05-02' WHERE id = ?",
+    )
+    .bind(&draft)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let inputs = euer_repo::load_inputs(&pool).await.unwrap();
+    let r = aggregate::aggregate(2026, &inputs);
+    assert_eq!(
+        r.invoice_income_cents, 100_000,
+        "Entwurf ist keine Einnahme"
+    );
+    assert_eq!(
+        r.storno_refunds_cents, 0,
+        "Storno-Entwurf ist keine Erstattung"
+    );
+    assert_eq!(inputs.storno_reversals.len(), 0);
+    assert!(euer_repo::storno_detail(&pool, 2026)
+        .await
+        .unwrap()
+        .is_empty());
+    let income = euer_repo::income_detail(&pool, 2026).await.unwrap();
+    assert_eq!(income.len(), 1);
+    assert_eq!(income[0].invoice_number, "RE-2026-0001");
 }

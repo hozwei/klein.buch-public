@@ -131,12 +131,17 @@ pub struct AssetInput {
 
 /// Start-Restbuchwert: betrieblicher Anteil der Netto-Anschaffungskosten,
 /// kaufmännisch auf Cent gerundet. Der private Anteil wird nicht aktiviert.
+/// Ganzzahlig (R1-S2-FLOAT): der Anteil geht auf 0,01 % genau ein
+/// (`Kosten × Basispunkte / 10 000` in `i128`, Half-up).
 pub fn business_book_value_start_cents(
     acquisition_cost_cents: i64,
     business_share_percent: f64,
 ) -> i64 {
     let share = business_share_percent.clamp(0.0, 100.0);
-    ((acquisition_cost_cents as f64) * share / 100.0).round() as i64
+    // NaN bleibt nach clamp NaN; der Cast macht daraus 0 (die Validierung
+    // lehnt NaN vorher ab).
+    let basis_points = (share * 100.0).round() as i64;
+    crate::domain::money::mul_div_round(acquisition_cost_cents, basis_points, 10_000)
 }
 
 // ---- Validation ------------------------------------------------------------
@@ -147,6 +152,8 @@ pub enum AssetValidationError {
     AcquisitionCostNotPositive {
         cost: i64,
     },
+    /// Anschaffungskosten über der Domänengrenze (F5-fix).
+    AcquisitionCostOutOfRange,
     MethodInvalid {
         value: String,
     },
@@ -181,6 +188,9 @@ pub fn validate_asset(
         errs.push(E::AcquisitionCostNotPositive {
             cost: input.acquisition_cost_cents,
         });
+    }
+    if !crate::domain::money::amount_in_range(input.acquisition_cost_cents) {
+        errs.push(E::AcquisitionCostOutOfRange);
     }
     if input.acquisition_date > today {
         errs.push(E::AcquisitionDateInFuture {
@@ -223,10 +233,8 @@ pub fn validate_asset(
 
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI).
 pub fn message(e: &AssetValidationError) -> String {
+    use crate::domain::money::eur;
     use AssetValidationError as E;
-    fn eur(c: i64) -> String {
-        format!("{:.2} €", c as f64 / 100.0).replace('.', ",")
-    }
     match e {
         E::LabelMissing => "Bezeichnung ist erforderlich.".into(),
         E::AcquisitionCostNotPositive { cost } => {
@@ -235,6 +243,7 @@ pub fn message(e: &AssetValidationError) -> String {
                 eur(*cost)
             )
         }
+        E::AcquisitionCostOutOfRange => crate::domain::money::amount_out_of_range_message(),
         E::MethodInvalid { value } => format!("Ungültige AfA-Methode: {value}."),
         E::BusinessShareOutOfRange { value } => {
             format!("Betrieblicher Anteil muss zwischen 0 und 100 % liegen (war {value}).")
@@ -257,6 +266,7 @@ pub fn variant_name(e: &AssetValidationError) -> &'static str {
     match e {
         E::LabelMissing => "LabelMissing",
         E::AcquisitionCostNotPositive { .. } => "AcquisitionCostNotPositive",
+        E::AcquisitionCostOutOfRange => "AcquisitionCostOutOfRange",
         E::MethodInvalid { .. } => "MethodInvalid",
         E::BusinessShareOutOfRange { .. } => "BusinessShareOutOfRange",
         E::UsefulLifeMissingForLinear => "UsefulLifeMissingForLinear",
@@ -318,9 +328,9 @@ pub fn suggest_method(
                 useful_life_years: None,
                 afa_category: None,
                 reason: format!(
-                    "Geringwertiges Wirtschaftsgut (≤ {:.0} € netto): \
+                    "Geringwertiges Wirtschaftsgut (≤ {} netto): \
                      Sofortabschreibung im Anschaffungsjahr.",
-                    gwg_threshold_cents as f64 / 100.0
+                    crate::domain::money::eur_whole(gwg_threshold_cents)
                 ),
             }
         }
@@ -335,9 +345,125 @@ pub fn suggest_method(
     }
 }
 
+// ---- Veräußerung (R1-020) ---------------------------------------------------
+
+/// Fehler beim Prüfen eines Anlagen-Abgangs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisposalValidationError {
+    /// Abgangsdatum liegt nach heute (Europe/Berlin).
+    DateInFuture { disposal_date: NaiveDate },
+    /// Abgangsdatum liegt vor der Anschaffung.
+    DateBeforeAcquisition {
+        disposal_date: NaiveDate,
+        acquisition_date: NaiveDate,
+    },
+    /// Negativer Verkaufserlös.
+    ProceedsNegative { proceeds_cents: i64 },
+    /// Verkaufserlös über der Domänengrenze (F5-fix).
+    ProceedsOutOfRange,
+}
+
+/// Prüft einen Abgang im Functional Core (R1-020) und liefert den zu buchenden
+/// Erlös: beim Verkauf den angegebenen (nicht negativ), sonst 0. Das Datum muss
+/// zwischen Anschaffung und heute liegen — ein Abgang vor der Anschaffung hätte
+/// keine anteilige AfA und schöbe den Restbuchwert in ein Jahr vor dem Zugang.
+pub fn validate_disposal(
+    disposal_type: DisposalType,
+    proceeds_cents: i64,
+    disposal_date: NaiveDate,
+    acquisition_date: NaiveDate,
+    today: NaiveDate,
+) -> Result<i64, DisposalValidationError> {
+    if disposal_date > today {
+        return Err(DisposalValidationError::DateInFuture { disposal_date });
+    }
+    if disposal_date < acquisition_date {
+        return Err(DisposalValidationError::DateBeforeAcquisition {
+            disposal_date,
+            acquisition_date,
+        });
+    }
+    match disposal_type {
+        DisposalType::Sale if proceeds_cents < 0 => {
+            Err(DisposalValidationError::ProceedsNegative { proceeds_cents })
+        }
+        DisposalType::Sale if !crate::domain::money::amount_in_range(proceeds_cents) => {
+            Err(DisposalValidationError::ProceedsOutOfRange)
+        }
+        DisposalType::Sale => Ok(proceeds_cents),
+        DisposalType::Scrap | DisposalType::GivenAway => Ok(0),
+    }
+}
+
+/// Deutsche Meldung zu [`DisposalValidationError`].
+pub fn disposal_message(e: &DisposalValidationError) -> String {
+    match e {
+        DisposalValidationError::DateInFuture { .. } => {
+            "Das Veräußerungsdatum darf nicht in der Zukunft liegen.".into()
+        }
+        DisposalValidationError::DateBeforeAcquisition {
+            disposal_date,
+            acquisition_date,
+        } => format!(
+            "Das Abgangsdatum {} liegt vor dem Anschaffungsdatum {} — bitte das Datum prüfen.",
+            disposal_date.format("%d.%m.%Y"),
+            acquisition_date.format("%d.%m.%Y")
+        ),
+        DisposalValidationError::ProceedsNegative { .. } => {
+            "Der Verkaufserlös darf nicht negativ sein.".into()
+        }
+        DisposalValidationError::ProceedsOutOfRange => {
+            crate::domain::money::amount_out_of_range_message()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // R1-020: Abgang im Core geprüft — Datum zwischen Anschaffung und heute,
+    // Erlös nur beim Verkauf und nie negativ.
+    #[test]
+    fn validate_disposal_dates_and_proceeds() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let (acq, today) = (d(2025, 3, 10), d(2026, 5, 20));
+        assert_eq!(
+            validate_disposal(DisposalType::Sale, 12_000, d(2026, 1, 5), acq, today),
+            Ok(12_000)
+        );
+        assert_eq!(
+            validate_disposal(DisposalType::Scrap, 12_000, acq, acq, today),
+            Ok(0)
+        );
+        assert_eq!(
+            validate_disposal(DisposalType::GivenAway, 5, today, acq, today),
+            Ok(0)
+        );
+        assert!(matches!(
+            validate_disposal(DisposalType::Sale, 1, d(2026, 5, 21), acq, today),
+            Err(DisposalValidationError::DateInFuture { .. })
+        ));
+        let before = validate_disposal(DisposalType::Sale, 1, d(2025, 3, 9), acq, today);
+        assert!(matches!(
+            before,
+            Err(DisposalValidationError::DateBeforeAcquisition { .. })
+        ));
+        assert!(disposal_message(&before.unwrap_err()).contains("09.03.2025"));
+        assert_eq!(
+            validate_disposal(DisposalType::Sale, -1, today, acq, today),
+            Err(DisposalValidationError::ProceedsNegative { proceeds_cents: -1 })
+        );
+    }
+
+    // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
+    #[test]
+    fn message_formats_amounts_without_float() {
+        let m = message(&AssetValidationError::AcquisitionCostNotPositive { cost: -1_005 });
+        assert!(m.contains("(-10,05 €)"), "{m}");
+        let m = message(&AssetValidationError::AcquisitionCostNotPositive { cost: 0 });
+        assert!(m.contains("(0,00 €)"), "{m}");
+    }
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 5, 21).unwrap()
@@ -483,5 +609,33 @@ mod tests {
         // Genau 800,00 € netto → noch GWG (≤-Grenze).
         let s = suggest_method(Some("office"), 80_000, 80_000);
         assert_eq!(s.method, "gwg_sofort");
+        assert!(s.reason.contains("(≤ 800 € netto)"), "{}", s.reason);
+    }
+
+    /// F5-fix: Anschaffungskosten und Abgangserlös über 1 Mrd. € werden
+    /// abgelehnt (Überlaufschutz der Jahressummen).
+    #[test]
+    fn amounts_above_limit_are_rejected() {
+        use crate::domain::money::MAX_AMOUNT_CENTS;
+        let mut a = good();
+        a.acquisition_cost_cents = MAX_AMOUNT_CENTS + 1;
+        let err = validate_asset(&a, today()).unwrap_err();
+        assert!(err.contains(&AssetValidationError::AcquisitionCostOutOfRange));
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let (acq, now) = (d(2025, 3, 10), d(2026, 5, 20));
+        assert_eq!(
+            validate_disposal(
+                DisposalType::Sale,
+                MAX_AMOUNT_CENTS,
+                d(2026, 1, 5),
+                acq,
+                now
+            ),
+            Ok(MAX_AMOUNT_CENTS)
+        );
+        assert_eq!(
+            validate_disposal(DisposalType::Sale, i64::MAX, d(2026, 1, 5), acq, now),
+            Err(DisposalValidationError::ProceedsOutOfRange)
+        );
     }
 }

@@ -12,6 +12,7 @@ import {
   todayBerlin,
   yearBerlin,
   yearOfIsoDate,
+  msUntilNextBerlinMidnight,
 } from "./date";
 
 // Läuft mit TZ=UTC (package.json "test"), damit die Prozess-Zeitzone nicht hilft.
@@ -139,5 +140,24 @@ describe("Gerät in einer anderen Zeitzone (D-15)", () => {
     const now = new Date("2026-10-25T10:00:00Z");
     expect(daysUntilBerlin("2026-10-26", now)).toBe(1);
     expect(daysUntilBerlin("2026-10-24", now)).toBe(-1);
+  });
+});
+
+describe("msUntilNextBerlinMidnight (D-27)", () => {
+  it("Sommerzeit: 23:59 Berlin → eine Minute", () => {
+    expect(msUntilNextBerlinMidnight(new Date("2026-07-14T21:59:00Z"))).toBe(60_000);
+  });
+
+  it("Winterzeit: 23:30 Berlin am Silvesterabend → 30 Minuten", () => {
+    expect(msUntilNextBerlinMidnight(new Date("2026-12-31T22:30:00Z"))).toBe(30 * 60_000);
+  });
+
+  it("Tag der Zeitumstellung (25 Stunden) zählt bis Mitternacht Winterzeit", () => {
+    // 25.10.2026 00:30 Berlin (Sommerzeit) → 26.10.2026 00:00 Berlin (Winterzeit)
+    expect(msUntilNextBerlinMidnight(new Date("2026-10-24T22:30:00Z"))).toBe(24.5 * 3_600_000);
+  });
+
+  it("genau Mitternacht → volle 24 Stunden", () => {
+    expect(msUntilNextBerlinMidnight(new Date("2026-07-14T22:00:00Z"))).toBe(24 * 3_600_000);
   });
 });

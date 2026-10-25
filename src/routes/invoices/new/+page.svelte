@@ -3,9 +3,12 @@
   import { onMount } from "svelte";
   import PageBar from "$lib/PageBar.svelte";
   import { goto } from "$app/navigation";
+  import { page } from "$app/stores";
   import {
     contactsList,
     invoicesCreateDraft,
+    invoicesGet,
+    invoicesUpdateDraft,
     sellerProfileGet,
     documentTermsGet,
   } from "$lib/api";
@@ -19,6 +22,7 @@
     MaterializedPackageItem,
   } from "$lib/types";
   import { euro } from "$lib/format";
+  import { applyTaxRules, documentTotals, REGEL_TAX_CODES } from "$lib/tax";
   import Banner from "$lib/Banner.svelte";
   import TravelLineAdder from "$lib/TravelLineAdder.svelte";
   import PackageItemAdder from "$lib/PackageItemAdder.svelte";
@@ -51,6 +55,10 @@
   let contacts = $state<Contact[]>([]);
   let loading = $state(true);
   let saving = $state(false);
+  // Lauf F5 (Neuer Fund F2a): `?edit=<id>` bearbeitet einen gespeicherten Entwurf
+  // mit demselben Formular (Gestaltung im UI/UX-Lauf). Die Nummer bleibt.
+  const editId = $page.url.searchParams.get("edit");
+  let editNumber = $state<string | null>(null);
 
   // Heute (Europe/Berlin-nah via lokalem Datum) — Obergrenze für Rechnungs- und
   // Leistungsdatum: beide dürfen nicht in der Zukunft liegen.
@@ -96,28 +104,14 @@
 
   // ---- §19-Hardline: bei is_kleinunternehmer USt-Felder sperren ----
   let isKlein = $derived(seller?.isKleinunternehmer === 1);
-  // WICHTIG: in-place Mutation pro Property, nicht `items = items.map(...)` —
-  // letzteres erzeugt neue Array-Identität und triggert den Effect endlos,
-  // was den Main-Thread blockt und die "Lade …"-Anzeige hängen lässt.
+  // §19: E/0 erzwingen; Regelbesteuerung: E wird S 19 % (KB-0014). In place
+  // (lib/tax.ts) — eine neue Array-Identität triggerte den Effect endlos.
   $effect(() => {
-    if (!isKlein) return;
-    for (const it of items) {
-      if (it.taxRatePercent !== 0) it.taxRatePercent = 0;
-      if (it.taxCategoryCode !== "E") it.taxCategoryCode = "E" as TaxCategoryCode;
-    }
+    applyTaxRules(items, seller ? isKlein : null);
   });
 
-  // ---- Totals (live) ----
-  let totals = $derived.by(() => {
-    let net = 0, tax = 0;
-    for (const it of items) {
-      const itNet = Math.round(it.quantity * it.unitPriceCents);
-      const itTax = Math.round((itNet * it.taxRatePercent) / 100);
-      net += itNet;
-      tax += itTax;
-    }
-    return { net, tax, gross: net + tax };
-  });
+  // ---- Totals (live, wie der Server: USt je Steuergruppe) ----
+  let totals = $derived(documentTotals(items));
 
   onMount(async () => {
     loading = true;
@@ -126,14 +120,57 @@
         sellerProfileGet(),
         contactsList(false),
       ]);
-      const terms = await documentTermsGet();
-      dueDate = addDays(invoiceDate, terms.invoiceDueDays);
+      if (editId) {
+        await loadDraft(editId);
+      } else {
+        const terms = await documentTermsGet();
+        dueDate = addDays(invoiceDate, terms.invoiceDueDays);
+      }
     } catch (e) {
       flash(String(e), "error");
     } finally {
       loading = false;
     }
   });
+
+  // Übernimmt einen gespeicherten Entwurf ins Formular. Nur offene Entwürfe
+  // (keine Stornos, nicht festgeschrieben, nicht verworfen) — sonst zurück zur
+  // Detailseite; der Server prüft dasselbe noch einmal.
+  async function loadDraft(id: string) {
+    const d = await invoicesGet(id);
+    if (!d) throw new Error("Rechnung nicht gefunden.");
+    const inv = d.invoice;
+    if (inv.lockedAt || inv.voidedAt || inv.isStornoFor || inv.status !== "draft") {
+      flash("Nur offene Rechnungs-Entwürfe lassen sich bearbeiten.", "error");
+      goto(`/invoices/${id}`);
+      return;
+    }
+    editNumber = inv.invoiceNumber;
+    contactId = inv.contactId;
+    if (!contacts.some((c) => c.id === inv.contactId) && d.buyer) contacts = [...contacts, d.buyer];
+    invoiceDate = inv.invoiceDate.slice(0, 10);
+    deliveryDate = inv.deliveryDate?.slice(0, 10) ?? "";
+    dueDate = inv.dueDate?.slice(0, 10) ?? "";
+    currency = inv.currencyCode;
+    pdfTemplate = inv.pdfTemplate;
+    notes = inv.notes ?? "";
+    alreadyPaid = !!inv.paymentNote;
+    paymentNote = inv.paymentNote ?? "";
+    items = d.items.map((it) => ({
+      position: it.position,
+      description: it.description,
+      quantity: it.quantity,
+      unitCode: it.unitCode,
+      unitPriceCents: it.unitPriceCents,
+      taxRatePercent: it.taxRatePercent,
+      taxCategoryCode: it.taxCategoryCode,
+      descriptionTitle: it.descriptionTitle ?? "",
+      descriptionMarkup: it.descriptionMarkup ?? "",
+      sourcePackageId: it.sourcePackageId,
+      sourcePackageRevision: it.sourcePackageRevision,
+    }));
+    if (items.length === 0) items = [emptyItem(1)];
+  }
 
   function addItem() {
     items = [...items, emptyItem(items.length + 1)];
@@ -232,8 +269,8 @@
           cancelReason: null,
         },
       };
-      const detail = await invoicesCreateDraft(args);
-      flash("Entwurf gespeichert.");
+      const detail = editId ? await invoicesUpdateDraft(editId, args) : await invoicesCreateDraft(args);
+      flash(editId ? "Entwurf geändert." : "Entwurf gespeichert.");
       goto(`/invoices/${detail.invoice.id}`);
     } catch (e) {
       flash(String(e), "error");
@@ -251,11 +288,15 @@
   }
 </script>
 
-<PageBar back="/invoices" backLabel="Liste" title="Neue Rechnung">
+<PageBar
+  back={editId ? `/invoices/${editId}` : "/invoices"}
+  backLabel={editId ? "Entwurf" : "Liste"}
+  title={editId ? `Entwurf ${editNumber ?? ""} bearbeiten` : "Neue Rechnung"}
+>
   {#snippet actions()}
-    <a href="/invoices" class="btn-secondary btn-sm">Abbrechen</a>
+    <a href={editId ? `/invoices/${editId}` : "/invoices"} class="btn-secondary btn-sm">Abbrechen</a>
     <button type="submit" form="invoice-form" class="btn-primary btn-sm" disabled={saving}>
-      {saving ? "Speichere …" : "Als Entwurf speichern"}
+      {saving ? "Speichere …" : editId ? "Änderungen speichern" : "Als Entwurf speichern"}
     </button>
   {/snippet}
 </PageBar>
@@ -362,8 +403,16 @@
                   </td>
                 {/if}
                 {#if !isKlein}
-                  <td class="right" data-label="USt-Satz %">{it.taxRatePercent}</td>
-                  <td data-label="USt-Art">{it.taxCategoryCode}</td>
+                  <!-- Regelbesteuerung: Satz und Steuerart je Position (KB-0047); sie gehören
+                       nicht zum Paket-Inhalt, die Provenienz bleibt. -->
+                  <td data-label="USt-Satz %">
+                    <input type="number" step="0.01" bind:value={it.taxRatePercent} />
+                  </td>
+                  <td data-label="USt-Art">
+                    <select bind:value={it.taxCategoryCode}>
+                      {#each REGEL_TAX_CODES as code (code)}<option value={code}>{code}</option>{/each}
+                    </select>
+                  </td>
                 {/if}
                 <td class="right" data-label="Netto">{euro(Math.round(it.quantity * it.unitPriceCents))}</td>
                 <td>
@@ -413,15 +462,7 @@
                   </td>
                   <td data-label="USt-Art">
                     <select bind:value={it.taxCategoryCode}>
-                      <option value="S">S</option>
-                      <option value="Z">Z</option>
-                      <option value="E">E</option>
-                      <option value="AE">AE</option>
-                      <option value="K">K</option>
-                      <option value="G">G</option>
-                      <option value="O">O</option>
-                      <option value="L">L</option>
-                      <option value="M">M</option>
+                      {#each REGEL_TAX_CODES as code (code)}<option value={code}>{code}</option>{/each}
                     </select>
                   </td>
                 {/if}

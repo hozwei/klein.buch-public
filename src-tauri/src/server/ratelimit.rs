@@ -105,8 +105,11 @@ pub struct RateLimiter {
     streak_file: Option<std::path::PathBuf>,
     /// Falsche Passphrase nach gültigem zweitem Faktor in Folge (Lauf F4d;
     /// nur im Speicher, eine erfolgreiche Anmeldung bzw. Re-Auth setzt ihn
-    /// zurück): (Anzahl, Kennung der Folge = Zeitpunkt des ersten Versuchs).
-    factor_suspect: Mutex<(u32, i64)>,
+    /// zurück): (Anzahl, Kennung der Folge). Die Kennung ist eine UUIDv7 je
+    /// Folge (F5-fix): ein Zeitstempel in Sekunden kollidierte, wenn zwei
+    /// Folgen — etwa vor und nach einem Neustart — in derselben Sekunde
+    /// begannen, und der zweite Hinweis fiel dem `dedup_key` zum Opfer.
+    factor_suspect: Mutex<(u32, String)>,
 }
 
 /// Schlüssel für das Rate-Limit (IPv6 zusammengefasst je /64).
@@ -129,7 +132,7 @@ impl RateLimiter {
             device_key,
             streak: Mutex::new(0),
             streak_file: None,
-            factor_suspect: Mutex::new((0, 0)),
+            factor_suspect: Mutex::new((0, String::new())),
         }
     }
 
@@ -263,23 +266,23 @@ impl RateLimiter {
     }
 
     /// Zählt eine falsche Passphrase nach gültigem zweitem Faktor (Lauf F4d);
-    /// liefert den neuen Stand und die Kennung der Folge (`now_ts` des ersten
-    /// Versuchs, für einen Hinweis genau einmal je Folge).
-    pub fn factor_suspect_failure(&self, now_ts: i64) -> (u32, i64) {
+    /// liefert den neuen Stand und die Kennung der Folge (eindeutig je Folge,
+    /// für einen Hinweis genau einmal je Folge).
+    pub fn factor_suspect_failure(&self) -> (u32, String) {
         let mut g = self
             .factor_suspect
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if g.0 == 0 {
-            g.1 = now_ts;
+            g.1 = uuid::Uuid::now_v7().to_string();
         }
         g.0 = g.0.saturating_add(1);
-        *g
+        g.clone()
     }
 
     /// Erfolgreiche Anmeldung bzw. Re-Auth: beendet die Folge der falschen
     /// Passphrasen nach gültigem zweitem Faktor; liefert den vorigen Stand.
-    pub fn factor_suspect_clear(&self) -> (u32, i64) {
+    pub fn factor_suspect_clear(&self) -> (u32, String) {
         std::mem::take(
             &mut *self
                 .factor_suspect
@@ -642,5 +645,25 @@ mod tests {
             b.device_id(&cookie).is_some(),
             "Neustart behält den Schlüssel"
         );
+    }
+
+    /// F5-fix (CI 40184691919): Jede Folge falscher Passphrasen nach gültigem
+    /// zweitem Faktor hat eine eigene Kennung — auch zwei Folgen im selben
+    /// Augenblick und über einen Neustart (neuer Limiter) hinweg. Innerhalb
+    /// einer Folge bleibt sie gleich (ein Hinweis je Folge).
+    #[test]
+    fn factor_suspect_streak_ids_are_unique_per_streak() {
+        let rl = RateLimiter::new([7u8; 32]);
+        let (n1, first) = rl.factor_suspect_failure();
+        let (n2, same) = rl.factor_suspect_failure();
+        assert_eq!((n1, n2), (1, 2));
+        assert_eq!(first, same);
+        assert_eq!(rl.factor_suspect_clear(), (2, first.clone()));
+        let (_, second) = rl.factor_suspect_failure();
+        assert_ne!(second, first);
+        let restarted = RateLimiter::new([7u8; 32]);
+        let (_, third) = restarted.factor_suspect_failure();
+        assert_ne!(third, first);
+        assert_ne!(third, second);
     }
 }

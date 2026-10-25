@@ -634,3 +634,75 @@ async fn sftp_target_with_probed_fingerprint() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(secret(&srv, &format!("sftp:{id}")).await, None);
 }
+
+/// ASVS V5.2.6/V12.6.1 (Lauf F5c): Gespeicherte SMTP-Ports unterliegen derselben
+/// Allowlist wie die Verbindungstests; private und Loopback-Adressen bleiben
+/// erlaubt (Relay im LAN bzw. auf dem Docker-Host). Ein unveränderter
+/// Bestandsport bleibt nutzbar, ein neuer muss freigegeben sein.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_smtp_port_follows_allowlist() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let with_port = |host: &str, port: u16| {
+        let mut input = account_input(host, None, true);
+        input["smtpPort"] = serde_json::json!(port);
+        input
+    };
+
+    // Nicht freigegebener Port (z. B. ein interner Dienst) → abgelehnt.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_create",
+        serde_json::json!({ "input": with_port("smtp.example.org", 6379), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert!(r.text().contains("nicht freigegeben"), "{}", r.text());
+
+    // Loopback und Standardport → erlaubt (kein Verbindungsaufbau beim Speichern).
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_create",
+        serde_json::json!({ "input": with_port("127.0.0.1", 25), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let id = r.json()["id"].as_str().unwrap().to_string();
+
+    // Wechsel auf einen nicht freigegebenen Port → abgelehnt.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": with_port("127.0.0.1", 6379), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+
+    // Betreiber gibt den Port frei (`KLEIN_BUCH_ALLOWED_TEST_PORTS`) → erlaubt.
+    srv.state.ctx.net_tests.set_allowed_ports(Some(vec![1025]));
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": with_port("127.0.0.1", 1025), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    // Bestandsport nach Änderung der Freigabe: nur Umbenennen bleibt möglich.
+    srv.state.ctx.net_tests.set_allowed_ports(None);
+    let mut renamed = with_port("127.0.0.1", 1025);
+    renamed["label"] = serde_json::json!("Relay im LAN");
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": renamed, "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+}

@@ -14,6 +14,7 @@
     MaterializedPackageItem,
   } from "$lib/types";
   import { euro } from "$lib/format";
+  import { applyTaxRules, documentTotals } from "$lib/tax";
   import Banner from "$lib/Banner.svelte";
   import TravelLineAdder from "$lib/TravelLineAdder.svelte";
   import PackageItemAdder from "$lib/PackageItemAdder.svelte";
@@ -77,25 +78,14 @@
   let isKlein = $derived(seller?.isKleinunternehmer === 1);
   // In-place Mutation pro Property (NICHT items = items.map(...)), siehe
   // invoices/new — sonst Endlos-Effect.
+  // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    if (!isKlein) return;
-    for (const it of items) {
-      if (it.taxRatePercent !== 0) it.taxRatePercent = 0;
-      if (it.taxCategoryCode !== "E") it.taxCategoryCode = "E" as TaxCategoryCode;
-    }
+    applyTaxRules(items, seller ? isKlein : null);
   });
 
   // ---- Totals (live) ----
-  let totals = $derived.by(() => {
-    let net = 0, tax = 0;
-    for (const it of items) {
-      const itNet = Math.round(it.quantity * it.unitPriceCents);
-      const itTax = Math.round((itNet * it.taxRatePercent) / 100);
-      net += itNet;
-      tax += itTax;
-    }
-    return { net, tax, gross: net + tax };
-  });
+  // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
+  let totals = $derived(documentTotals(items));
 
   onMount(async () => {
     loading = true;

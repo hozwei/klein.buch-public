@@ -198,6 +198,9 @@ pub async fn create_draft_core(
     // P3: Positionen mit Markdown-Body → `description` aus dem Markup als Klartext
     // neu berechnen (konsistente Beschreibung, auch nach Body-Edits).
     recompute_markup_descriptions(&mut args.input.items);
+    // KB-0046 (F5-fix): bearbeitete Paket-Positionen verlieren die Provenienz
+    // auch am Angebot, nicht erst bei der Umwandlung in eine Rechnung.
+    crate::commands::packages::enforce_package_provenance(pool, &mut args.input.items).await?;
 
     let buyer_row = contacts::get(pool, &args.contact_id)
         .await?
@@ -439,7 +442,9 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
         email: buyer_row.email.as_deref(),
     };
     quotes::set_buyer_snapshot_in(&mut tx, &id, &buyer_snapshot).await?;
-    quotes::issue_in(&mut tx, &id).await?;
+    // KB-0010: §19-Status zum Festschreiben einfrieren (Render und Gate nutzen
+    // danach genau diesen Wert).
+    quotes::issue_in(&mut tx, &id, Some(seller_view.is_kleinunternehmer)).await?;
     audit_log::append_in(
         &mut tx,
         "quote.issue",
@@ -503,6 +508,12 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
             quote_row.status
         )));
     }
+    // R5-S2-QUOTEDATE: Annahmedatum zwischen Angebotsdatum und heute
+    // (Europe/Berlin, Uhr des Servers) — vor dem Archivieren eines Vertrags.
+    let today = ctx.clock().today_berlin();
+    let accepted_date = args.accepted_date.unwrap_or(today);
+    quote::validate_accepted_date(parse_date(&quote_row.quote_date)?, accepted_date, today)
+        .map_err(Error::Domain)?;
     if let Some(contract) = contract.as_ref() {
         // R2-024 (GJ-Guard): Beilagen werden mit `quote_row.fiscal_year` ins
         // write-once-Archiv abgelegt. Liegt das Angebot in einem festgeschrieben
@@ -552,7 +563,7 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
     }
 
     // 2. Status-Übergang sent → accepted.
-    let accepted_iso = args.accepted_date.unwrap_or_else(today_berlin).to_string();
+    let accepted_iso = accepted_date.to_string();
     quotes::accept(pool, &args.quote_id, &accepted_iso).await?;
 
     audit_log::append(
@@ -827,7 +838,12 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         .buyer
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
-    let seller_view = make_seller_view(&seller_row);
+    let mut seller_view = make_seller_view(&seller_row);
+    // KB-0009/KB-0010: Gerendert wird mit dem beim Festschreiben eingefrorenen
+    // §19-Status des Angebots, nicht mit dem heutigen Profil — und genau dieser
+    // Status steuert auch den Klausel-Check unten (Hardline „verifiziert vor
+    // jedem Render“).
+    seller_view.is_kleinunternehmer = quote.is_kleinunternehmer == 1;
     // Block 19: festgeschriebenes Angebot → Empfänger aus dem eingefrorenen
     // Snapshot rendern (robust gegen spätere DSGVO-Anonymisierung des Kontakts);
     // Fallback auf den Live-Kontakt nur für Alt-Angebote ohne Snapshot.
@@ -868,7 +884,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         quote.pdf_template.as_str()
     };
     let source = templates::resolve_quote_template(&paths.inputs_dir, template_name);
-    if quote.is_kleinunternehmer == 1 {
+    if seller_view.is_kleinunternehmer {
         klausel_check::verify_for_kleinunternehmer(&source)
             .map_err(|e| Error::Domain(format!("§19-Klausel-Check: {e}")))?;
     }
@@ -1225,7 +1241,7 @@ fn detail_to_input(detail: &QuoteDetail) -> Result<QuoteInput> {
 }
 
 fn parse_date(s: &str) -> Result<NaiveDate> {
-    let s = &s[..s.len().min(10)];
+    let s = s.get(..10).unwrap_or(s);
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|e| Error::Domain(format!("ungültiges Datum '{s}': {e}")))
 }

@@ -98,9 +98,9 @@ zurück.
 | `KLEIN_BUCH_BACKUP_TARGETS_DIR` | `/backup-targets` | Wurzel der Ordner-Ziele; nicht `/`, nicht in oder über `/data` bzw. `/inputs`. |
 | `KLEIN_BUCH_MIN_FREE_BYTES` | `2147483648` (2 GiB) | Mindest-Platzreserve auf `/data` für Uploads und Restore (ganze Byte-Zahl, keine Einheiten). |
 | `KLEIN_BUCH_MAX_RESTORE_BYTES` | `4294967296` (4 GiB) | Höchstgröße einer hochgeladenen Backup-Datei und ihres entpackten Inhalts. |
-| `KLEIN_BUCH_ALLOWED_TEST_PORTS` | SMTP 25, 465, 587, 2525; SFTP 22, 2222 | Ports für Verbindungstests (Komma-Liste); ersetzt die Standardlisten beider Arten. |
+| `KLEIN_BUCH_ALLOWED_TEST_PORTS` | SMTP 25, 465, 587, 2525; SFTP 22, 2222 | Freigegebene Ports (Komma-Liste) für Verbindungstests **und** für gespeicherte Postfächer und SFTP-Ziele (neue Konten, Wechsel von Server oder Port; ein unveränderter Bestandsport bleibt nutzbar); ersetzt die Standardlisten beider Arten. Private und Loopback-Adressen sind erlaubt. |
 | `KLEIN_BUCH_SMTP_HELO_NAME` | Hostname des Containers | EHLO-Name beim SMTP-Versand. |
-| `KLEIN_BUCH_SMTP_CA_FILE` | – | eigene CA als PEM-Datei (in einem Volume), ergänzt die eingebauten Wurzeln. Eine Option „Zertifikat ignorieren“ gibt es nicht. |
+| `KLEIN_BUCH_SMTP_CA_FILE` | – | eigene CA als PEM-Datei (in einem Volume, mindestens ein Block `-----BEGIN CERTIFICATE-----`), ergänzt die eingebauten Wurzeln; eine Datei ohne Zertifikat wird beim Versand mit Meldung abgelehnt. Eine Option „Zertifikat ignorieren“ gibt es nicht. |
 | `KLEIN_BUCH_SOURCE_URL` | Build-Wert, sonst `https://github.com/hozwei/klein.buch-public` | Quell-URL für den §13-Hinweis (Forks); nur `http(s)` ohne Benutzerangaben, Query oder Fragment, sonst Warnung und ignoriert. |
 | `KLEIN_BUCH_UPDATE_URL` | aus der Quell-URL abgeleitet (`…/releases/latest` der GitHub-API) | Abfrage-URL der opt-in Versionsprüfung. |
 | `RUST_LOG` | `info` | Log-Filter (`tracing`-Syntax); `sqlx::query=off` wird immer angehängt. |

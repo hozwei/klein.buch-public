@@ -42,6 +42,82 @@ async fn prepare_revision(
     Ok(input)
 }
 
+// ---- Provenienz eingefügter Paket-Positionen ---------------------------------
+
+/// Felder einer Beleg-Position, die über die Paket-Provenienz entscheiden
+/// (Rechnung, Angebot, Abo-Vorlage).
+pub(crate) trait PackageProvenance {
+    fn source(&self) -> (Option<&str>, Option<i64>);
+    /// `true`, wenn die Position die unveränderte Kopie der Revision ist.
+    fn matches_revision(&self, rev: &PackageRevisionRow) -> bool;
+    fn clear_source(&mut self);
+}
+
+impl PackageProvenance for crate::domain::invoice::InvoiceItemInput {
+    fn source(&self) -> (Option<&str>, Option<i64>) {
+        (
+            self.source_package_id.as_deref(),
+            self.source_package_revision,
+        )
+    }
+    fn matches_revision(&self, r: &PackageRevisionRow) -> bool {
+        self.description_title.as_deref() == Some(r.title.as_str())
+            && self.description_markup.as_deref() == Some(r.body_markup.as_str())
+            && self.unit_price_cents == r.default_unit_price_cents
+            && self.unit_code == r.unit_code
+    }
+    fn clear_source(&mut self) {
+        self.source_package_id = None;
+        self.source_package_revision = None;
+    }
+}
+
+impl PackageProvenance for crate::domain::quote::QuoteItemInput {
+    fn source(&self) -> (Option<&str>, Option<i64>) {
+        (
+            self.source_package_id.as_deref(),
+            self.source_package_revision,
+        )
+    }
+    fn matches_revision(&self, r: &PackageRevisionRow) -> bool {
+        self.description_title.as_deref() == Some(r.title.as_str())
+            && self.description_markup.as_deref() == Some(r.body_markup.as_str())
+            && self.unit_price_cents == r.default_unit_price_cents
+            && self.unit_code == r.unit_code
+    }
+    fn clear_source(&mut self) {
+        self.source_package_id = None;
+        self.source_package_revision = None;
+    }
+}
+
+/// Paket-Provenienz (Hardline Phase 3): Eine Position behält
+/// `source_package_*` nur, solange sie die unveränderte Kopie der genannten
+/// Revision ist (Titel, Markup, Einzelpreis, Einheit). Wurde sie bearbeitet —
+/// oder gibt es die Revision nicht —, wird sie zur reinen Custom-Position
+/// („Paket anpassen = sauberer Bruch“, kein Rest-Hinweis). Revisionen sind
+/// unveränderlich, eine spätere neue Revision ändert am Vergleich also nichts.
+/// Gilt für Rechnungs-Entwürfe, Angebote und Abo-Vorlagen (KB-0046, F5-fix).
+pub(crate) async fn enforce_package_provenance<T: PackageProvenance>(
+    pool: &SqlitePool,
+    items: &mut [T],
+) -> Result<()> {
+    for it in items.iter_mut() {
+        let keep = match it.source() {
+            (None, _) => continue,
+            (Some(pid), Some(rev)) => match packages::revision_get(pool, pid, rev).await? {
+                Some(r) => it.matches_revision(&r),
+                None => false,
+            },
+            (Some(_), None) => false,
+        };
+        if !keep {
+            it.clear_source();
+        }
+    }
+    Ok(())
+}
+
 // ---- Kategorien ------------------------------------------------------------
 
 /// Argumente von [`package_categories_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -487,17 +563,18 @@ pub async fn package_materialize_item(
     };
     let description_markup = rev.body_markup.clone();
 
-    // §19-Hardline: Kleinunternehmer → Category 'E'. Rate immer 0 (Pakete sind
-    // Netto-Katalogpreise; Revisionen führen keinen USt-Satz).
+    // §19-Hardline: Kleinunternehmer → Category 'E', Rate 0. Regelbesteuerung
+    // (KB-0047): Pakete sind Netto-Katalogpreise ohne eigenen Satz; die
+    // Steuerart der Revision gilt, 'E' gibt es ohne §19 nicht (KB-0014) und wird
+    // zu 'S'. Bei 'S' gilt der Regelsatz 19 % (§12 Abs. 1 UStG) — ein anderer
+    // Satz (z. B. 7 %) wird an der Position gesetzt; Satz und Steuerart gehören
+    // nicht zum Paket-Inhalt, die Provenienz bleibt.
     let is_klein = seller_profile::get(pool)
         .await?
         .map(|s| s.is_kleinunternehmer == 1)
         .unwrap_or(true);
-    let tax_category_code = if is_klein {
-        "E".to_string()
-    } else {
-        rev.tax_category_code.clone()
-    };
+    let (tax_category_code, tax_rate_percent) =
+        package_tax_defaults(is_klein, &rev.tax_category_code);
 
     Ok(MaterializedPackageItem {
         description,
@@ -506,12 +583,30 @@ pub async fn package_materialize_item(
         quantity: 1.0,
         unit_code: rev.unit_code.clone(),
         unit_price_cents: rev.default_unit_price_cents,
-        tax_rate_percent: 0.0,
+        tax_rate_percent,
         tax_category_code,
         source_package_id: package_id,
         source_package_revision: rev.revision,
         package_name: pkg.name,
     })
+}
+
+/// Steuerart und Satz einer aus einem Paket eingefügten Position (KB-0047).
+pub fn package_tax_defaults(is_kleinunternehmer: bool, revision_code: &str) -> (String, f64) {
+    if is_kleinunternehmer {
+        return ("E".into(), 0.0);
+    }
+    let code = if revision_code == crate::domain::kleinunternehmer::EXEMPT_CATEGORY {
+        "S"
+    } else {
+        revision_code
+    };
+    let rate = if code == "S" {
+        crate::domain::money::STANDARD_VAT_RATE_PERCENT
+    } else {
+        0.0
+    };
+    (code.to_string(), rate)
 }
 
 // ---- Paket-Katalog-Broschüre (Block P4) ------------------------------------
@@ -541,6 +636,9 @@ pub struct SendPackageCatalogResult {
     pub subject: String,
     pub package_count: u32,
     pub attachment_count: u32,
+    /// Versandprotokoll unvollständig (R4-S2-EMAILLOG, Lauf F5c).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 /// Baut einen `SellerView` aus dem Stammdaten-Row (geliehen) — wie
@@ -774,7 +872,7 @@ pub async fn send_catalog_core(
     // Versand + append-only Protokoll-Eintrag. Kein Beleg-Bezug; `related_id`
     // ist der Kontakt (Lauf F, KB-0049: die DSGVO-Auskunft findet den Versand
     // auch, wenn sich die Adresse später ändert).
-    crate::commands::mail::send_and_log(
+    let receipt = crate::commands::mail::send_and_log(
         pool,
         &account,
         &mail,
@@ -804,6 +902,7 @@ pub async fn send_catalog_core(
         subject,
         package_count,
         attachment_count: 1,
+        warning: receipt.warning(),
     })
 }
 
@@ -816,6 +915,15 @@ fn fmt_eur(cents: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::package_tax_defaults;
+
+    // KB-0047: §19 → E/0; Regelbesteuerung → Steuerart der Revision, E wird S,
+    // S mit 19 %.
     #[test]
-    fn it_compiles() {}
+    fn package_tax_defaults_follow_status() {
+        assert_eq!(package_tax_defaults(true, "S"), ("E".into(), 0.0));
+        assert_eq!(package_tax_defaults(false, "E"), ("S".into(), 19.0));
+        assert_eq!(package_tax_defaults(false, "S"), ("S".into(), 19.0));
+        assert_eq!(package_tax_defaults(false, "Z"), ("Z".into(), 0.0));
+    }
 }

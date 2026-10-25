@@ -24,6 +24,7 @@
   } from "$lib/types";
   import { FREQUENCIES } from "$lib/labels";
   import { euro } from "$lib/format";
+  import { applyTaxRules, documentTotals } from "$lib/tax";
   import Banner from "$lib/Banner.svelte";
   import TravelLineAdder from "$lib/TravelLineAdder.svelte";
   import PackageItemAdder from "$lib/PackageItemAdder.svelte";
@@ -86,23 +87,13 @@
 
   // §19-Hardline: bei Kleinunternehmer USt-Felder sperren + auf E/0 zwingen.
   let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    if (!isKlein) return;
-    for (const it of items) {
-      if (it.taxRatePercent !== 0) it.taxRatePercent = 0;
-      if (it.taxCategoryCode !== "E") it.taxCategoryCode = "E" as TaxCategoryCode;
-    }
+    applyTaxRules(items, seller ? isKlein : null);
   });
 
-  let totals = $derived.by(() => {
-    let net = 0, tax = 0;
-    for (const it of items) {
-      const itNet = Math.round(it.quantity * it.unitPriceCents);
-      net += itNet;
-      tax += Math.round((itNet * it.taxRatePercent) / 100);
-    }
-    return { net, tax, gross: net + tax };
-  });
+  // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
+  let totals = $derived(documentTotals(items));
 
   onMount(async () => {
     try {

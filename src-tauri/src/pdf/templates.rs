@@ -295,8 +295,9 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 // Erwartet `data` (Beträge bereits als formatierte Strings):
 //   data.{year, generatedAt, isKleinunternehmer, kleinunternehmerHinweis}
 //   data.seller.{name, street, postalCode, city, taxNumber|null, vatId|null, email}
-//   data.form.lines[].{zeile, bezeichnung, betrag, isEntry}
-//   data.form.{incomeTotal, expenseTotal, surplus}
+//   data.form.lines[].{zeile, kennzahl, bezeichnung, betrag, isEntry}
+//   data.form.{incomeTotal, expenseTotal, surplus, formYear, notes[]}
+//   Datumsangaben kommen als TT.MM.JJJJ (KB-0018).
 //   data.assets[].{assetNumber, label, acquisitionDate, acquisitionCost, method, afaYear, bookValueEnd, disposalNote}
 //   data.income[].{paidDate, invoiceNumber, customer, description, amount}
 //   data.storno[].{stornoDate, stornoNumber, originalNumber, amount}
@@ -361,17 +362,24 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 ]
 
 == 1. Anlage EÜR — Übertrag ins ELSTER-Formular
-#text(size: 8pt, fill: muted)[Positionen mit Zeilennummer in „Mein ELSTER" eintragen; die Summen berechnet ELSTER selbst.]
+#text(size: 8pt, fill: muted)[Positionen mit Zeile und Kennzahl (Kz) in „Mein ELSTER" eintragen#if data.form.at("formYear", default: none) != none [ (Zeilen nach Vordruck #str(data.form.formYear))]; grau gesetzte Summen berechnet ELSTER selbst.]
 #v(1mm)
 #table(
-  columns: (auto, 1fr, auto),
-  align: (center + horizon, left, right),
-  [*Zeile*], [*Position*], [*Betrag*],
+  columns: (auto, auto, 1fr, auto),
+  align: (center + horizon, center + horizon, left, right),
+  [*Zeile*], [*Kz*], [*Position*], [*Betrag*],
   ..data.form.lines.map(l => {
     let c = if l.isEntry { black } else { muted }
-    ([#text(fill: c)[#l.zeile]], [#text(fill: c)[#l.bezeichnung]], [#text(fill: c)[#l.betrag]])
+    ([#text(fill: c)[#l.zeile]], [#text(fill: c)[#l.at("kennzahl", default: "")]], [#text(fill: c)[#l.bezeichnung]], [#text(fill: c)[#l.betrag]])
   }).flatten()
 )
+#if data.form.at("notes", default: ()).len() > 0 [
+  #v(1mm)
+  #block(width: 100%, inset: 6pt, radius: 3pt, stroke: 0.6pt + rgb("#b45309"), fill: rgb("#fffbeb"))[
+    #text(weight: "bold", size: 8.5pt)[Hinweise zur Ausfüllhilfe]
+    #list(..data.form.notes.map(n => text(size: 8pt)[#n]))
+  ]
+]
 
 == 2. Anlageverzeichnis (AVEÜR)
 #if data.assets.len() == 0 [
@@ -403,7 +411,7 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
       ([#text(fill: r)[#s.stornoDate]], [#text(fill: r)[#s.stornoNumber]], [#text(fill: r)[Storno zu #s.originalNumber]], [#text(fill: r)[—]], [#text(fill: r)[−#s.amount]])
     }).flatten()
   )
-  #align(right)[#text(weight: "bold")[Summe Zahlungseingänge: #data.incomeSum]]
+  #align(right)[#text(weight: "bold")[Summe Zahlungseingänge abzüglich Storno-Erstattungen: #data.incomeSum]]
 ]
 
 == 4. Einzelaufstellung — Betriebsausgaben
@@ -1546,6 +1554,15 @@ pub fn builtin_unified(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Vorlage für einen Storno, wenn die gewählte Rechnungsvorlage keine Stornos
+/// darstellt (LE-CUSTOM-TEMPLATE-STORNO): die eingebaute Vorlage gleichen
+/// Namens (falls eine eigene Datei eine eingebaute überschreibt), sonst
+/// „klassisch“. Alle eingebauten Vorlagen tragen den §19-Marker und
+/// `storno_of`.
+pub fn storno_fallback_template(name: &str) -> &'static str {
+    builtin_unified(name).unwrap_or(TEMPLATE_KLASSISCH)
+}
+
 /// Löst die **Rechnungs**-Vorlage auf. Reihenfolge: `inputs/pdf-templates/
 /// {name}.typ`-Override (gewinnt immer, deckt auch `default` → `default.typ` ab)
 /// → eingebettete Unified-Built-in → sonst [`load_source`] (Fehler, wenn weder
@@ -1647,6 +1664,19 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // LE-CUSTOM-TEMPLATE-STORNO: Der Rückfall für Stornos stellt Stornos dar und
+    // besteht den §19-Klausel-Check.
+    #[test]
+    fn storno_fallback_supports_storno_and_klausel() {
+        for name in ["eigene", "modern", "klassisch", "minimal"] {
+            let src = storno_fallback_template(name);
+            assert!(crate::pdf::klausel_check::supports_storno(src), "{name}");
+            assert!(crate::pdf::klausel_check::verify_for_kleinunternehmer(src).is_ok());
+        }
+        assert_eq!(storno_fallback_template("modern"), TEMPLATE_MODERN);
+        assert_eq!(storno_fallback_template("eigene"), TEMPLATE_KLASSISCH);
+    }
 
     #[test]
     fn list_templates_merges_builtins_and_inputs_and_classifies() {

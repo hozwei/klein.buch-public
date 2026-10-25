@@ -47,3 +47,16 @@ Version, und die Instanz bleibt gesperrt (Down-Migration-Schutz; Test
 Ist sie älter, entsteht zuerst das Pflicht-Backup, dann wird vorwärts migriert
 (ADR 0039 E15, D-R8-19). PRD-Revision 9 löst die PRD-Stellen (G13, D-49, §6.1) entsprechend
 ab.
+
+## Amendment 2026-10-25 — Rechenregeln für Cent-Beträge (Lauf F, Block F5a)
+
+Gerechnet wird in `i64` (`domain::money`); `Menge × Einzelpreis` und
+`Netto × Satz` bleiben als dokumentierte Ausnahme `f64` mit einmaliger
+kaufmännischer Rundung (die Menge ist kein Geld, höchstens 4 Nachkommastellen).
+Die USt eines Belegs entsteht je (Steuerart, Satz) aus der Nettosumme (EN 16931
+BR-CO-17), AfA und betrieblicher Anteil sind ganzzahlig (i128, half-up).
+Domänengrenzen (Menge, Einzelpreis, Satz, Summen) und `overflow-checks` im
+Release-Profil des eigenen Crates schließen stille Überläufe aus. Einzelheiten:
+ADR 0039 Nr. 134. Nachtrag (Lauf F5-fix): Dieselbe Obergrenze von 1 Mrd. € gilt
+für jeden einzeln erfassten Betrag (Kosten, Zahlung, Anschaffung, Abgangserlös,
+Privatbewegung, Kosten-Abo; `money::MAX_AMOUNT_CENTS`, ADR 0039 Nr. 137).

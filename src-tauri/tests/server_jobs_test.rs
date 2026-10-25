@@ -107,7 +107,9 @@ async fn aborted_lock_request_finishes_and_replays() {
         .to_string();
     assert!(!msg.contains("anderem Hash"), "{msg}");
 
-    // Trigger-Fehler (Update einer festgeschriebenen Rechnung) → 409 mit Text.
+    // Trigger-Fehler (Update einer festgeschriebenen Rechnung) → 409 mit
+    // deutscher Meldung und `ref`; der englische Trigger-Text steht nur im Log
+    // (R1-S3-TRIGGERTEXT).
     let err =
         sqlx::query("UPDATE invoices SET net_amount_cents = net_amount_cents + 1 WHERE id = ?")
             .bind(&id)
@@ -117,7 +119,17 @@ async fn aborted_lock_request_finishes_and_replays() {
     let api = ApiError::from_error(&Error::Db(err));
     assert_eq!(api.status, StatusCode::CONFLICT);
     assert_eq!(api.code, "constraint");
-    assert!(api.message.contains("invoice is locked"), "{}", api.message);
+    assert!(
+        api.message.starts_with("Die Rechnung ist festgeschrieben"),
+        "{}",
+        api.message
+    );
+    assert!(
+        !api.message.contains("invoice is locked"),
+        "{}",
+        api.message
+    );
+    assert!(api.reference.is_some());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

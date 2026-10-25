@@ -66,12 +66,16 @@ Benutzer und Passwort.
   den eingetragenen Server, Port und Benutzer; wer eins davon ändert, gibt das
   Passwort neu ein.
 - Verbindungstest und Testmail prüfen den Versandweg (nur auf üblichen
-  Mail-Ports, höchstens zehn Tests je Minute).
+  Mail-Ports, höchstens zehn Tests je Minute). Gespeichert werden nur diese Ports;
+  einen anderen (etwa 1025 eines internen Relays) gibt der Betreiber über
+  `KLEIN_BUCH_ALLOWED_TEST_PORTS` frei.
 - **Microsoft 365** wird über SMTP angebunden (z. B. `smtp.office365.com`, Port
   587, sofern der Anbieter SMTP-Versand erlaubt). Die frühere Microsoft-Anmeldung
   über OAuth gibt es im Server nicht.
 - Jeder Versand steht im **Versandprotokoll** (gleiche Seite), auch
-  Fehlschläge.
+  Fehlschläge. Kann ein Eintrag dort ausnahmsweise nicht geschrieben werden,
+  meldet Klein.Buch das nach dem Senden und in der Inbox („Versandprotokoll
+  unvollständig“); der Versand steht dann im Audit-Log.
 
 > Hinweis zur Zustellung: Dass eine Mail vom Provider angenommen wird, heißt
 > nicht, dass sie beim Empfänger im Posteingang landet. Für zuverlässige
@@ -87,14 +91,18 @@ Benutzer und Passwort.
   Gespeichert wird ein **Entwurf** mit bereits vergebener Nummer
   (`RE-{Jahr}-{Nummer}`); das Geschäftsjahr ergibt sich aus dem Rechnungsdatum.
 - **Prüfen** und **Rechnung ausstellen**: Klein.Buch erzeugt die XRechnung, lässt
-  sie vom KoSIT-Validator prüfen, erzeugt das ZUGFeRD-PDF/A-3, archiviert beides
+  sie vom KoSIT-Validator prüfen, erzeugt das ZUGFeRD-PDF/A-3 (Profil XRECHNUNG,
+  passend zur eingebetteten XRechnung 3.0), archiviert beides
   unveränderbar und legt ein Backup an. Ab jetzt ist die Rechnung
   **festgeschrieben**; Korrekturen laufen nur über **Stornieren**
   (Storno-Beleg `ST-{Jahr}-{Nummer}`), nie über Löschen.
 - **PDF öffnen** zeigt das PDF im Browser (auf dem Telefon in der PDF-Ansicht des
   Browsers), **PDF herunterladen** speichert es.
 - **Senden** verschickt das ZUGFeRD-PDF über dein Postfach; Empfänger, Betreff
-  und Text sind vorbelegt und änderbar.
+  und Text sind vorbelegt und änderbar. Gehst du an eine andere als die beim
+  Beleg hinterlegte Adresse, fragt Klein.Buch einmal Passphrase und App-Code ab
+  (Schutz, falls jemand deine Sitzung übernommen hat); Betreff und Text änderst
+  du ohne Rückfrage. Das gilt auch beim Angebotsversand.
 - **+ Zahlung** erfasst Zahlungseingänge mit Datum; für die EÜR zählt das
   Zahlungsdatum (Cash-Basis), Teilzahlungen auch über Jahresgrenzen.
 - **Wiederkehrende Rechnungen** (Button auf der Rechnungen-Seite): Abo-Vorlagen
@@ -128,7 +136,9 @@ bleiben als Nachweis erhalten und werden nie gelöscht.
   KoSIT-Validator (Hinweis, kein Hindernis), archiviert das Original und legt
   eine Kostenposition an. Angenommen werden die ZUGFeRD-Profile `EN16931`,
   `EXTENDED` und `XRECHNUNG`; `MINIMUM` und `BASIC-WL` sind keine gültigen
-  E-Rechnungen und werden abgelehnt. Die Roh-XML einer empfangenen Rechnung
+  E-Rechnungen und werden abgelehnt. Gutschriften (z. B. Typ 381) importiert
+  Klein.Buch nicht automatisch — sie erfasst du als Korrektur; abgeschnittene oder
+  nicht UTF-8-codierte Dateien werden mit Meldung abgelehnt. Die Roh-XML einer empfangenen Rechnung
   zeigt die Detailseite.
 - **Wiederkehrende Abos** für regelmäßige Kosten (Miete, Software): automatisch
   buchen oder nur am Stichtag erinnern (Hinweis „Abo fällig“); verpasste Termine

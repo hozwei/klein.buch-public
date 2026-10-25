@@ -30,9 +30,10 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::invoice::{
-    InvoiceDirection, InvoiceInput, InvoiceItemInput, ItemTotals, SellerView, Totals,
+    InvoiceDirection, InvoiceInput, InvoiceItemInput, SellerView, Totals,
 };
 use crate::domain::kleinunternehmer::{self, ItemVatCheck, NoVatViolation};
+use crate::domain::money;
 
 // ---- Input-Typen -----------------------------------------------------------
 
@@ -93,30 +94,24 @@ pub struct QuoteBuyerView<'a> {
 
 /// Pure Item- und Aggregats-Berechnung. Keine Validierung — Caller prüft.
 ///
-/// Spiegelt [`crate::domain::invoice::compute_totals`] exakt; eigene Funktion,
-/// damit die Angebots-Schicht nicht an Rechnungs-Eingabetypen koppelt.
+/// Dieselbe Rechnung wie [`crate::domain::invoice::compute_totals`] (gemeinsamer
+/// Kern, USt je Kategorie und Satz); eigene Funktion, damit die Angebots-Schicht
+/// nicht an Rechnungs-Eingabetypen koppelt.
 pub fn compute_totals(items: &[QuoteItemInput]) -> Totals {
-    let mut out = Vec::with_capacity(items.len());
-    let mut net_total: i64 = 0;
-    let mut tax_total: i64 = 0;
-    for it in items {
-        let net = (it.quantity * it.unit_price_cents as f64).round() as i64;
-        let tax = (net as f64 * it.tax_rate_percent / 100.0).round() as i64;
-        let gross = net + tax;
-        out.push(ItemTotals {
-            net_amount_cents: net,
-            tax_amount_cents: tax,
-            gross_amount_cents: gross,
-        });
-        net_total += net;
-        tax_total += tax;
-    }
-    Totals {
-        items: out,
-        net_amount_cents: net_total,
-        tax_amount_cents: tax_total,
-        gross_amount_cents: net_total + tax_total,
-    }
+    crate::domain::invoice::totals_from_lines(
+        items
+            .iter()
+            .map(|it| {
+                (
+                    it.tax_category_code.as_str(),
+                    it.quantity,
+                    it.unit_price_cents,
+                    it.tax_rate_percent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .as_slice(),
+    )
 }
 
 // ---- Validation ------------------------------------------------------------
@@ -152,6 +147,11 @@ pub enum QuoteValidationError {
         position: u32,
         rate: f64,
     },
+    /// Wie bei der Rechnung (ASVS V5.4.3).
+    ItemAmountOutOfRange(u32),
+    TotalOutOfRange,
+    /// Kategorie 'E' ohne §19 (KB-0014).
+    ItemExemptWithoutKleinunternehmer(u32),
 
     // --- §19 — siehe kleinunternehmer::assert_no_vat ---
     Paragraph19VatViolation(Vec<NoVatViolation>),
@@ -218,6 +218,36 @@ pub fn validate_quote(
         if !seen_positions.insert(it.position) {
             errs.push(E::ItemDuplicatePosition(it.position));
         }
+        if crate::domain::invoice::item_out_of_range(
+            it.quantity,
+            it.unit_price_cents,
+            it.tax_rate_percent,
+        ) {
+            errs.push(E::ItemAmountOutOfRange(it.position));
+        }
+        if !seller.is_kleinunternehmer && it.tax_category_code == kleinunternehmer::EXEMPT_CATEGORY
+        {
+            errs.push(E::ItemExemptWithoutKleinunternehmer(it.position));
+        }
+    }
+    let items_in_range = !errs.iter().any(|e| {
+        matches!(
+            e,
+            E::ItemAmountOutOfRange(_)
+                | E::ItemQuantityNotPositive(_)
+                | E::ItemTaxRateNegative { .. }
+        )
+    });
+    if items_in_range
+        && money::checked_document_totals(
+            input
+                .items
+                .iter()
+                .map(|it| (it.quantity, it.unit_price_cents, it.tax_rate_percent)),
+        )
+        .is_none()
+    {
+        errs.push(E::TotalOutOfRange);
     }
 
     // --- §19 (§14c-Schutz, auch im Angebot) ---
@@ -256,6 +286,30 @@ pub fn validate_quote(
     }
 }
 
+/// Prüft das fachliche Annahmedatum eines Angebots (R5-S2-QUOTEDATE): nicht vor
+/// dem Angebotsdatum und nicht in der Zukunft (`today` = Europe/Berlin). Das
+/// Datum steht im Audit `quote.accepted` und begründet die spätere Rechnung.
+pub fn validate_accepted_date(
+    quote_date: NaiveDate,
+    accepted: NaiveDate,
+    today: NaiveDate,
+) -> Result<(), String> {
+    if accepted < quote_date {
+        return Err(format!(
+            "Das Annahmedatum ({}) liegt vor dem Angebotsdatum ({}).",
+            accepted.format("%d.%m.%Y"),
+            quote_date.format("%d.%m.%Y")
+        ));
+    }
+    if accepted > today {
+        return Err(format!(
+            "Das Annahmedatum ({}) liegt in der Zukunft.",
+            accepted.format("%d.%m.%Y")
+        ));
+    }
+    Ok(())
+}
+
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI).
 pub fn message(e: &QuoteValidationError) -> String {
     use QuoteValidationError as E;
@@ -284,6 +338,11 @@ pub fn message(e: &QuoteValidationError) -> String {
         E::ItemTaxRateNegative { position, rate } => {
             format!("Position {position}: Steuersatz darf nicht negativ sein ({rate} %).")
         }
+        E::ItemAmountOutOfRange(p) => crate::domain::invoice::item_amount_out_of_range_message(*p),
+        E::TotalOutOfRange => crate::domain::invoice::TOTAL_OUT_OF_RANGE_MESSAGE.into(),
+        E::ItemExemptWithoutKleinunternehmer(p) => {
+            crate::domain::invoice::exempt_without_klein_message(*p)
+        }
         E::Paragraph19VatViolation(_) => {
             "§19-Verstoß: Bei Kleinunternehmer darf keine Umsatzsteuer ausgewiesen werden.".into()
         }
@@ -307,6 +366,9 @@ pub fn variant_name(e: &QuoteValidationError) -> &'static str {
         E::ItemDuplicatePosition(_) => "ItemDuplicatePosition",
         E::ItemInvalidTaxCategoryCode { .. } => "ItemInvalidTaxCategoryCode",
         E::ItemTaxRateNegative { .. } => "ItemTaxRateNegative",
+        E::ItemAmountOutOfRange(_) => "ItemAmountOutOfRange",
+        E::TotalOutOfRange => "TotalOutOfRange",
+        E::ItemExemptWithoutKleinunternehmer(_) => "ItemExemptWithoutKleinunternehmer",
         E::Paragraph19VatViolation(_) => "Paragraph19VatViolation",
     }
 }
@@ -380,6 +442,39 @@ pub fn convert_to_invoice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepted_date_between_quote_date_and_today() {
+        let qd = NaiveDate::from_ymd_opt(2026, 5, 19).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 5, 25).unwrap();
+        assert!(validate_accepted_date(qd, qd, today).is_ok());
+        assert!(validate_accepted_date(qd, today, today).is_ok());
+        let before =
+            validate_accepted_date(qd, NaiveDate::from_ymd_opt(2026, 5, 18).unwrap(), today);
+        assert!(before.unwrap_err().contains("vor dem Angebotsdatum"));
+        let future =
+            validate_accepted_date(qd, NaiveDate::from_ymd_opt(2026, 5, 26).unwrap(), today);
+        assert!(future.unwrap_err().contains("Zukunft"));
+    }
+
+    #[test]
+    fn validate_quote_rejects_amounts_out_of_range_and_exempt_without_p19() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
+        let mut q = good_quote();
+        q.items[0].quantity = 1e300;
+        let err = validate_quote(&q, &seller_klein(), &buyer(), today).unwrap_err();
+        assert!(
+            err.contains(&QuoteValidationError::ItemAmountOutOfRange(1)),
+            "{err:?}"
+        );
+        let q = good_quote();
+        let regel = SellerView {
+            is_kleinunternehmer: false,
+            ..seller_klein()
+        };
+        let err = validate_quote(&q, &regel, &buyer(), today).unwrap_err();
+        assert!(err.contains(&QuoteValidationError::ItemExemptWithoutKleinunternehmer(1)));
+    }
 
     fn seller_klein() -> SellerView<'static> {
         SellerView {

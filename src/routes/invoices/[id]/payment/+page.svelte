@@ -3,8 +3,8 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { invoicesGet, invoicesRecordPayment } from "$lib/api";
-  import type { InvoiceDetail } from "$lib/types";
+  import { invoicesGet, invoicesRecordPayment, paymentAccountsList } from "$lib/api";
+  import type { InvoiceDetail, PaymentAccount } from "$lib/types";
   import { euro, date } from "$lib/format";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
@@ -24,6 +24,9 @@
   let paidDate = $state(today);
   let note = $state("");
   let payInFull = $state(true);
+  // R2-011: Konto des Zahlungseingangs (DATEV-Geldkonto); Standardkonto vorbelegt.
+  let accounts = $state<PaymentAccount[]>([]);
+  let accountId = $state("");
 
   let id = $derived($page.params.id ?? "");
   let outstanding = $derived(detail
@@ -42,6 +45,9 @@
       detail = await invoicesGet(id);
       if (!detail) error = "Rechnung nicht gefunden.";
       else amountEuros = outstanding / 100;
+      accounts = await paymentAccountsList(false);
+      const def = accounts.find((a) => a.isDefault === 1);
+      if (def) accountId = def.id;
     } catch (e) {
       error = String(e);
     } finally {
@@ -83,6 +89,7 @@
         amountCents: cents,
         paidDate,
         note: note.trim() || null,
+        accountId: accountId || null,
       });
       flash("Zahlung gebucht.");
       goto(`/invoices/${detail.invoice.id}`);
@@ -147,6 +154,13 @@
         <label>
           Zahlungsdatum *
           <input type="date" bind:value={paidDate} max={today} required />
+        </label>
+        <label>
+          Zahlungs-Konto
+          <select bind:value={accountId}>
+            <option value="">— keines —</option>
+            {#each accounts as a (a.id)}<option value={a.id}>{a.label}</option>{/each}
+          </select>
         </label>
         <label>
           Notiz (optional)

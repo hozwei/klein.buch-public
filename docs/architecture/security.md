@@ -75,7 +75,7 @@ nicht (E1).
 | Überlast durch langsame Körper | Körper kleiner Anfragen höchstens 10 s, höchstens 16 gleichzeitige POSTs je Client-Adresse | umgesetzt (W14) |
 | Fremde Inhaltstypen (Formular-Posts, Parser-Verwechslung) | nicht leerer Körper auf `/api/cmd/*` und `/api/auth/*` nur als `application/json` (Parameter wie `charset` erlaubt), sonst 415; leere Körper (Abmelden, Sperren) ohne Inhaltstyp | umgesetzt (Lauf F4b, ASVS V13.1.5/V13.2.5) |
 | | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
-| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte (Steuerberater-, Detail-, DATEV-, ELSTER-, PDF-, Migrations-Export, DSGVO-Auskunft), Backup-Download, Passphrase-Wechsel, Zahlungskonten (Anlegen, Ändern, Aktivieren/Deaktivieren), Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040), Anheben von Nummernkreisen, Freigabe vorgemerkter Entwürfe, Verwerfen von Rechnungs-Entwürfen (Lauf F); Verkäuferprofil nur bei Änderung von IBAN, BIC oder §19-Status, dort zählt auch eine Anmeldung der letzten 5 min (bedingte Re-Auth im Kern); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung und Passphrase-Wechsel beenden andere Sitzungen; Sitzungsübersicht und „andere abmelden“ (Re-Auth, Audit `auth.sessions_revoked`); Idempotenz-Schlüssel gelten nur innerhalb einer Anmeldung | umgesetzt (W6; W14 Rotation und erweiterte Liste; Lauf F4a: W14-005, W14-028, W14-033, W14-038) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte (Steuerberater-, Detail-, DATEV-, ELSTER-, PDF-, Migrations-Export, DSGVO-Auskunft), Backup-Download, Passphrase-Wechsel, Zahlungskonten (Anlegen, Ändern, Aktivieren/Deaktivieren), Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040), Anheben von Nummernkreisen, Freigabe vorgemerkter Entwürfe, Verwerfen von Rechnungs-Entwürfen (Lauf F); Verkäuferprofil nur bei Änderung von IBAN, BIC oder §19-Status sowie Rechnungs- und Angebotsversand an einen Empfänger, der von der hinterlegten Adresse abweicht (Lauf F5c, W14-009), dort zählt auch eine Anmeldung der letzten 5 min (bedingte Re-Auth im Kern); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung und Passphrase-Wechsel beenden andere Sitzungen; Sitzungsübersicht und „andere abmelden“ (Re-Auth, Audit `auth.sessions_revoked`); Idempotenz-Schlüssel gelten nur innerhalb einer Anmeldung | umgesetzt (W6; W14 Rotation und erweiterte Liste; Lauf F4a: W14-005, W14-028, W14-033, W14-038) |
 | CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | umgesetzt (W5/W6) |
 | Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | umgesetzt (W6) |
 | Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
@@ -118,7 +118,8 @@ nicht (E1).
 | Manipulierte Java-Komponenten, zu viel Speicher | Linux-Sidecar mit SHA-256 der Original-JARs in `sidecar/versions.json` (CI vergleicht mit den Quellen), `-Xmx512m`, Temp unter `/data/tmp` | umgesetzt (W11) |
 
 Fehler in den Parsern der Drittkomponenten bleiben ein Restrisiko; begrenzt wird
-es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
+es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container. Typst, `lopdf`
+und `quick-xml` laufen im Server-Prozess (Entscheidung ASVS 14.2.6 in §11).
 
 **Logs**
 
@@ -218,6 +219,14 @@ Seit Lauf F4a (W14-015, R4-S2-ZEROIZE):
   Adresse des Proxys; die Wartezeit je IP wirkt dann global.
 - Wer Passphrase **und** zweiten Faktor hat, ist der Inhaber. Es gibt kein
   Rollenmodell.
+- Betreff und Text einer Rechnungs- oder Angebotsmail sind ohne Re-Auth frei
+  (W14-009): Wer eine Sitzung übernimmt, kann an die **hinterlegte** Adresse eines
+  Kunden einen geänderten Text schicken (etwa eine falsche Bankverbindung) bzw.
+  eine Kontaktadresse ändern und dann versenden. Das angehängte PDF trägt die
+  echte Bankverbindung (Änderung nur mit Re-Auth), jeder Versand steht mit
+  Empfänger und Betreff im `email_log` und im Audit; Sitzungen enden nach 30 min
+  Leerlauf. Ein Re-Auth für jeden geänderten Text kostete im Alltag mehr, als er
+  gegen dieses Szenario brächte (ADR 0039 Nr. 136).
 
 ---
 
@@ -794,6 +803,19 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
 - **Verbindungstests** (Verbindung testen, Testmail): nur freigegebene Ports
   (SMTP 25/465/587/2525), höchstens 10 je Minute, einheitliche Fehlermeldung,
   Re-Auth; gespeicherte Konten nur per ID (`mail_account_test_saved`).
+- **Gespeicherte Ports** (Lauf F5c, ASVS V12.6.1): Anlegen eines Kontos und jeder
+  Wechsel von Server oder Port verlangen einen freigegebenen Port wie die Tests
+  (`KLEIN_BUCH_ALLOWED_TEST_PORTS`); ein unveränderter Bestandsport bleibt
+  nutzbar. Private und Loopback-Adressen sind erlaubt (Relay im LAN oder auf dem
+  Docker-Host). Eine CA-Datei ohne PEM-Zertifikat wird mit klarer Meldung
+  abgelehnt; der STARTTLS-Handshake mit eigener CA ist getestet
+  (`smtp_tls_ca_test`).
+- **Empfänger** (Lauf F5c, W14-009): Rechnungs- und Angebotsversand an eine
+  andere als die hinterlegte Adresse (Rechnung: Käufer-Snapshot, sonst Kontakt;
+  Angebot: Kontakt; Groß-/Kleinschreibung egal) verlangt eine frische Bestätigung
+  — Vorprüfung vor der Annahme des Jobs (403 `reauth_required`) und erneut im
+  Kern. Standardversand, geänderter Betreff und Text bleiben frei (Restrisiken
+  oben); der Abo-Versand nutzt immer die hinterlegte Adresse.
 - **Hosts** von SMTP-Konten und SFTP-Zielen: nur Hostname (Buchstaben, Ziffern,
   `-`, `_`, Punkt) oder IP-Adresse, ohne Leerzeichen, Steuerzeichen, Port oder
   Protokoll — geprüft beim Anlegen, Ändern, Testen und vor jeder Verbindung
@@ -805,7 +827,10 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
   abgelehnt ab W8).
 - Jeder Versand-Versuch (erfolgreich oder nicht) landet im append-only
   `email_log`. Provider-Antwort wird kanonisiert (Header-Stripping) und
-  gespeichert — kein OAuth-Token darin.
+  gespeichert — kein OAuth-Token darin. Scheitert der Protokolleintrag, hält ein
+  Audit-Eintrag `mail.log_failed` den Versuch fest (Empfänger, Betreff, Beleg),
+  die Inbox bekommt den Hinweis „Versandprotokoll unvollständig“ und der Aufrufer
+  eine Warnung (Lauf F5c, R4-S2-EMAILLOG).
 
 ---
 
@@ -835,7 +860,7 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
 Die vollständige Checkliste des Security-Reviews W14 liegt im nicht
 veröffentlichten Projektordner (`docs/REVIEW-PHASE-W.md`). Hier stehen die dort
 als „offen“ oder „teilweise“ geführten Punkte mit ihrer Erledigung bzw.
-begründeten Entscheidung (ADR 0039 Nr. 130 ff.; Lauf F4b: Nr. 131; Lauf F4c: Nr. 132). **Erfüllt** = umgesetzt mit
+begründeten Entscheidung (ADR 0039 Nr. 130 ff.; Lauf F4b: Nr. 131; Lauf F4c: Nr. 132; Lauf F5c: Nr. 136). **Erfüllt** = umgesetzt mit
 Test; **entschieden** = bewusst so belassen, mit Begründung.
 
 | ASVS | Status | Umsetzung bzw. Begründung |
@@ -867,6 +892,8 @@ Test; **entschieden** = bewusst so belassen, mit Begründung.
 | 7.1.3 / 7.2.1 / 7.2.2 (sicherheitsrelevante Ereignisse, Erfolg und Fehlschlag der Anmeldung, Zugriffsfehler) | erfüllt (Lauf F4c, W14-018) | `auth.{login,setup,reauth}.failed` und `auth.{login,setup,reauth}.ok` mit IP (`auth.reauth.ok` neu); Zugriffs- und Validierungsfehler (401/403/404/415/422/423) stehen im Zugriffsprotokoll mit `ip=`, `req=` und `sess=`. Ein eigenes Ereignis je abgelehnter Prüfung entfällt: Status, Pfad, IP und Sitzung reichen zur Auswertung, die fachliche Meldung geht an den Client. |
 | 7.1.4 (Angaben für die Untersuchung eines Vorfalls) | erfüllt (Lauf F4c, W14-018) | UTC-Zeitstempel, Ziel, Level; Zugriffsprotokoll mit Client-IP (nach der Proxy-Regel), Kennung der Anfrage (gleich der `ref` interner Fehler, auch aus abgekoppelten Kernen und Jobs) und gekürzter Sitzungskennung (wie in der Sitzungsübersicht, kein Rückschluss auf das Cookie). Datenschutz: IP im Log aus berechtigtem Interesse (Art. 6 Abs. 1 lit. f DSGVO), Aufbewahrung über die Log-Rotation des Containers. Test `server_log_test::no_passphrase_or_session_id_in_logs`. |
 | 7.3.1 (Log-Injektion) | erfüllt (Lauf F4c, W14-017) | Der Log-Writer `logging::OneLine` schreibt jedes Ereignis als eine Zeile (Zeilenumbrüche und Steuerzeichen innerhalb escaped; tracing-subscriber escaped selbst nur ANSI); SMTP-/SFTP-Hosts nur als Hostname oder IP (`nettest::check_host`, beim Anlegen, Ändern, Testen und vor jeder Verbindung); Host-Felder per Debug-Escaping; fail2ban-Filter auf Zeilenanfang, Ziel und Zeilenende verankert (Handbuch „Fehlersuche im Container“). Tests `logging::tests::one_line_per_event`, `nettest::tests::host_validation`, Ablehnung im Log-Test. |
+| V5.2.6 / V12.6.1 (SSRF über frei wählbare Hosts und Ports) | erfüllt bzw. entschieden (Lauf F5c) | SMTP- und SFTP-Ziele gibt nur der Inhaber unter Re-Auth ein; Hosts nur als Hostname oder IP (W14-017). Ports: gespeicherte SMTP-Ports jetzt wie die Tests nur aus der Allowlist (25/465/587/2525 bzw. `KLEIN_BUCH_ALLOWED_TEST_PORTS`), SFTP-Ziele schon seit W8 (Allowlist und Pflicht-Probe). Private, Link-Local- und Loopback-Adressen bleiben bewusst erlaubt: der Mail-Relay im LAN, der SFTP-Server auf dem NAS oder ein Dienst auf dem Docker-Host sind der Regelfall im Selbstbetrieb, und wer eine Re-Auth besteht, ist der Inhaber. Tests `server_secrets_test::saved_smtp_port_follows_allowlist`, `connection_tests_are_guarded`. |
+| 14.2.6 (Parser in einer Sandbox) | entschieden (Lauf F5c) | KoSIT und Mustang laufen als eigener Java-Prozess (Timeout 120 s, `-Xmx512m`, `ulimit -f` 64 MiB, höchstens 2 gleichzeitig). Im Server-Prozess bleiben: Typst (rendert nur Vorlagen des Betreibers aus `/inputs` bzw. eingebaute, Daten als JSON; in `spawn_blocking` unter der Render-Semaphore), `lopdf` (nur Rechtsdokumente des Inhabers, höchstens 64 MiB je entpacktem Stream, aktive Inhalte werden beim Bundle entfernt) und `quick-xml` (Eingangsrechnungen: Upload höchstens 10 MiB, extrahiertes XML höchstens 10 MiB, keine DTD, keine externen oder unbekannten Entitäten, unvollständiges XML abgelehnt). Ein eigener Render- bzw. Parser-Prozess wäre ein großer Umbau ohne passendes Bedrohungsszenario: die fremde Eingabe (E-Rechnung) erreicht nur den Pull-Parser ohne Entitäten. Tests `einvoice::parser::tests::external_entities_and_entity_bombs_are_never_resolved`, `malformed_xml_errors`, `sidecar_real_mustang_extract_survives_decompression_bomb`. |
 
 ---
 

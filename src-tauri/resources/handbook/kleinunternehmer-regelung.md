@@ -80,6 +80,26 @@ am besten mit einem Steuerberater. Klein.Buch unterstützt die
 Regelbesteuerung in Version 1.0 nur eingeschränkt; die volle
 Workflow-Tiefe kommt in einer späteren Version.
 
+Bei Regelbesteuerung gilt in den Formularen: Neue Positionen bekommen
+die Steuerart S mit 19 % (§12 Abs. 1 UStG); einen anderen Satz, etwa
+7 %, setzt Du an der Position. Die Steuerart E (steuerbefreit) gibt es
+nur als Kleinunternehmer — Steuerbefreiungen nach §4 UStG kennt
+Klein.Buch nicht, und eine Rechnung mit E lehnt es ohne §19 ab. Die
+Umsatzsteuer rechnet Klein.Buch je Steuersatz aus der Summe der
+Nettobeträge, wie es die E-Rechnung (EN 16931) verlangt. Ein Storno
+übernimmt immer die Steuerbehandlung der stornierten Rechnung, auch
+wenn Du inzwischen gewechselt hast.
+
+In der EÜR-Ausfüllhilfe stehen Einnahmen aus Rechnungen mit
+Regelbesteuerung netto in Zeile 15, die eingenommene Umsatzsteuer in
+Zeile 17; Ausgaben stehen netto, die Vorsteuer in einer eigenen Zeile.
+Maßgeblich ist der Status, mit dem die Rechnung ausgestellt wurde, nicht
+der des Zahlungsjahres. Nicht abgebildet sind die Umsatzsteuer-
+Voranmeldung, die an das Finanzamt gezahlte und die vom Finanzamt
+erstattete Umsatzsteuer, die Umsatzsteuer auf Anlagenverkäufe und
+Entnahmen sowie die Vorsteuer aus Anlagenkäufen. Diese Werte ergänzt Dein
+Steuerberater; die Ausfüllhilfe weist darauf hin.
+
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

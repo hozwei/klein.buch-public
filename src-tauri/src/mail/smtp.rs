@@ -144,6 +144,14 @@ fn tls_parameters(host: &str) -> Result<Option<lettre::transport::smtp::client::
         );
         Error::Mail(format!("{ENV_CA_FILE} nicht lesbar: {e}"))
     })?;
+    // W8-SMTP-CA (Lauf F5c): lettre nimmt eine Datei ohne Zertifikat stillschweigend
+    // als leere Liste an; dann scheiterte erst der Handshake mit „UnknownIssuer“.
+    const PEM_CERT: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    if !pem.windows(PEM_CERT.len()).any(|w| w == PEM_CERT) {
+        return Err(Error::Mail(format!(
+            "{ENV_CA_FILE}: kein PEM-Zertifikat gefunden (erwartet „-----BEGIN CERTIFICATE-----“)."
+        )));
+    }
     let cert = Certificate::from_pem(&pem)
         .map_err(|e| Error::Mail(format!("{ENV_CA_FILE}: kein gültiges PEM-Zertifikat: {e}")))?;
     let params = TlsParameters::builder(host.to_string())

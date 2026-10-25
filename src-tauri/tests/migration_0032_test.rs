@@ -472,6 +472,8 @@ async fn storno_pair_is_final_and_idempotent() {
         validation_report: None,
         pdf_archive_id: "",
         xml_archive_id: "",
+        is_kleinunternehmer: None,
+        totals: None,
     };
     // Archiv-IDs sind FKs — echte Einträge anlegen
     for (id, p) in [("ap", "/a/p.pdf"), ("ax", "/a/x.xml")] {

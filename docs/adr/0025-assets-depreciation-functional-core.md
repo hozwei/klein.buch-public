@@ -53,3 +53,10 @@ AfA-Sätze/Nutzungsdauern ändern sich per BMF-Tabelle und müssen pflegbar sein
 `db::repo::{assets, depreciation}`, Migrationen `0010_assets`/`0011_depreciation`,
 `inputs/afa-tabellen.json`; ADR 0027 (Auto-AfA + GJ-Festschreibung), ADR 0022
 (AfA in der EÜR). Commit `block-12` (`39e2ddee`).
+
+## Amendment 2026-10-25 — Lauf F5b
+
+Eine als Anlage aktivierte Kostenposition ist keine Betriebsausgabe mehr (sie zählte bisher
+zusätzlich zur AfA); die Anschaffungskosten wirken nur über die AfA (§ 4 Abs. 3 Satz 3
+EStG). Der Erinnerungswert von 1 Cent bleibt als Buchführungspraxis (keine Pflicht für die
+EÜR, steuerneutral über den Restbuchwert beim Abgang). Einzelheiten: ADR 0039 Nr. 135.

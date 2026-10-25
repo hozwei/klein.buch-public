@@ -116,6 +116,9 @@ pub enum ExpenseValidationError {
     },
     /// Kosten ohne jeden Betrag (alles 0) sind vermutlich ein Eingabefehler.
     AmountZero,
+    /// Ein Betrag liegt über der Domänengrenze
+    /// ([`crate::domain::money::MAX_AMOUNT_CENTS`]); F5-fix.
+    AmountOutOfRange,
     /// Beleg-Datum liegt in der Zukunft (ein erfasster Beleg kann nicht aus der
     /// Zukunft stammen).
     ExpenseDateInFuture {
@@ -185,7 +188,19 @@ pub fn validate_expense(
             tax: input.tax_amount_cents,
         });
     }
-    if input.gross_amount_cents != input.net_amount_cents + input.tax_amount_cents {
+    let amounts = [
+        input.net_amount_cents,
+        input.tax_amount_cents,
+        input.gross_amount_cents,
+    ];
+    if !amounts
+        .iter()
+        .all(|a| crate::domain::money::amount_in_range(*a))
+    {
+        errs.push(E::AmountOutOfRange);
+    }
+    if input.net_amount_cents.checked_add(input.tax_amount_cents) != Some(input.gross_amount_cents)
+    {
         errs.push(E::GrossMismatch {
             net: input.net_amount_cents,
             tax: input.tax_amount_cents,
@@ -206,10 +221,8 @@ pub fn validate_expense(
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI). `variant_name`
 /// bleibt der maschinenlesbare Code.
 pub fn message(e: &ExpenseValidationError) -> String {
+    use crate::domain::money::eur;
     use ExpenseValidationError as E;
-    fn eur(c: i64) -> String {
-        format!("{:.2} €", c as f64 / 100.0).replace('.', ",")
-    }
     match e {
         E::VendorNameMissing => "Lieferant (Name) ist erforderlich.".into(),
         E::DescriptionMissing => "Beschreibung ist erforderlich.".into(),
@@ -227,6 +240,7 @@ pub fn message(e: &ExpenseValidationError) -> String {
             eur(*tax)
         ),
         E::AmountZero => "Der Betrag muss größer als 0 sein.".into(),
+        E::AmountOutOfRange => crate::domain::money::amount_out_of_range_message(),
         E::ExpenseDateInFuture { expense_date, today } => format!(
             "Beleg-Datum ({expense_date}) liegt in der Zukunft (heute {today})."
         ),
@@ -249,6 +263,7 @@ pub fn variant_name(e: &ExpenseValidationError) -> &'static str {
         E::TaxNegative { .. } => "TaxNegative",
         E::GrossMismatch { .. } => "GrossMismatch",
         E::AmountZero => "AmountZero",
+        E::AmountOutOfRange => "AmountOutOfRange",
         E::ExpenseDateInFuture { .. } => "ExpenseDateInFuture",
         E::PaidDateInFuture { .. } => "PaidDateInFuture",
     }
@@ -257,6 +272,22 @@ pub fn variant_name(e: &ExpenseValidationError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
+    #[test]
+    fn message_formats_amounts_without_float() {
+        let m = message(&ExpenseValidationError::NetNegative { net: -1 });
+        assert!(m.contains("(-0,01 €)"), "{m}");
+        let m = message(&ExpenseValidationError::GrossMismatch {
+            net: 10_000,
+            tax: 1_900,
+            gross: 11_901,
+        });
+        assert!(
+            m.contains("Brutto (119,01 €)") && m.contains("USt (19,00 €)"),
+            "{m}"
+        );
+    }
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 5, 20).unwrap()
@@ -432,5 +463,30 @@ mod tests {
         assert!(validate_expense(&e, today()).is_ok());
         e.currency_code = "eur".into(); // case-sensitive Whitelist
         assert!(validate_expense(&e, today()).is_err());
+    }
+
+    /// F5-fix: Beträge über 1 Mrd. € sind ein Validierungsfehler; `net + tax`
+    /// läuft auch an der i64-Grenze nicht über (keine Panik).
+    #[test]
+    fn amounts_above_limit_are_rejected_without_overflow() {
+        use crate::domain::money::MAX_AMOUNT_CENTS;
+        let mut e = good();
+        e.net_amount_cents = MAX_AMOUNT_CENTS;
+        e.tax_amount_cents = 0;
+        e.gross_amount_cents = MAX_AMOUNT_CENTS;
+        assert!(validate_expense(&e, today()).is_ok());
+        e.net_amount_cents = MAX_AMOUNT_CENTS + 1;
+        e.gross_amount_cents = MAX_AMOUNT_CENTS + 1;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert!(err.contains(&ExpenseValidationError::AmountOutOfRange));
+        e.net_amount_cents = i64::MAX;
+        e.tax_amount_cents = 1;
+        e.gross_amount_cents = i64::MIN;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert!(err.contains(&ExpenseValidationError::AmountOutOfRange));
+        assert!(err
+            .iter()
+            .any(|x| matches!(x, ExpenseValidationError::GrossMismatch { .. })));
+        assert!(message(&ExpenseValidationError::AmountOutOfRange).contains("1000000000 €"));
     }
 }

@@ -990,7 +990,7 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     gestohlenes Cookie endet mit der Bestätigung des Inhabers. TOTP- und Einmal-Code-Erneuerung beenden
     alle anderen Sitzungen. Re-Auth-pflichtig zusätzlich: `seller_profile_upsert` (IBAN/BIC, §19-Status),
     `payment_accounts_create`/`_update`, `contacts_anonymize`, `fiscal_year_close` (21 Commands); eine
-    Anmeldung zählt bewusst nicht als Re-Auth. Versand bleibt ohne Re-Auth (täglicher Gebrauch,
+    Anmeldung zählt bewusst nicht als Re-Auth. Versand bleibt ohne Re-Auth (seit Nr. 136 bedingt bei abweichendem Empfänger; täglicher Gebrauch,
     Mail-Protokoll).
 121. **Weitere Härtung (W14).** Vorlagennamen sind einzelne Dateinamen (kein Pfadtrenner, kein
     führender Punkt) — sonst lief eine hochgeladene Datei als Typst-Vorlage. `Cache-Control: immutable`
@@ -1757,6 +1757,337 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `settle_lock_backups`), `redact::tests::secret_fields_never_appear_in_debug_output`,
     `commands::backup::tests::debug_output_of_secret_args_is_redacted`,
     `commands::mail::tests::debug_output_of_password_args_is_redacted`.
+134. **Belege, Geld, §19, Pakete, Entwürfe (Lauf F, Block F5a, 2026-10-25; keine Migration,
+    keine neue Abhängigkeit).** (1) **Entwürfe bearbeiten (Neuer Fund F2a):** Command
+    `invoices_update_draft` (Kind Write, Sitzung). Erlaubt nur für einen offenen Entwurf
+    (Status `draft`, nicht festgeschrieben, nicht verworfen), nie für Storno-Entwürfe (sie
+    spiegeln das Original) und nie für einen Entwurf, den ein Abo-Lauf gerade festschreibt
+    (offener Fortsetzungs-Vermerk). Die Nummer bleibt, deshalb muss das Rechnungsdatum im
+    Geschäftsjahr der Nummer bleiben (Nummernkreis je Geschäftsjahr, GoBD Rz. 51 zur
+    Vollständigkeit der Nummernfolge); das Jahr muss offen sein (Erlaubnis bis zum Commit).
+    Beim Entwurf aus einem Angebot bleibt der Empfänger. Kopf, Verkäufer- und
+    Empfänger-Snapshot und Summen werden überschrieben, die Positionen ersetzt (die Trigger
+    aus Migration 0032 lassen das nur für offene Entwürfe zu); Audit
+    `invoice.draft_updated` (Nummer, Brutto vorher/nachher, Positionen, Empfängerwechsel) in
+    derselben Transaktion, unter der Belegsperre gegen Festschreiben, Storno und Verwerfen.
+    Gleiche Prüfungen wie das Anlegen (`check_draft_blockers`): Strukturfehler, Beträge
+    außerhalb der Grenzen (6) und — neu für Anlegen und Bearbeiten — der §14c-Schutz
+    (`Paragraph19VatViolation` blockt schon das Speichern, nicht erst das Festschreiben);
+    ein anonymisierter Empfänger bekommt keinen neuen oder geänderten Entwurf mehr.
+    **Paket-Provenienz** (Hardline Phase 3) erzwingt jetzt der Server beim Anlegen und
+    Bearbeiten: `source_package_*` bleibt nur, solange Titel, Markup, Einzelpreis und
+    Einheit der genannten (unveränderlichen) Revision entsprechen; sonst wird die Position
+    zur Custom-Position (sauberer Bruch, kein Rest-Hinweis). Steuerart und Satz gehören
+    nicht zum Paket-Inhalt. Oberfläche schlicht: „Bearbeiten“ auf der Detailseite öffnet das
+    Anlege-Formular mit `?edit=<id>`; die Gestaltung macht der UI/UX-Lauf. (2) **§19-Status
+    eingefroren (KB-0009/KB-0010):** Rechnung und Angebot schreiben `is_kleinunternehmer`
+    im selben UPDATE wie `locked_at` (danach sperrt ihn `trg_*_immutable`). Maßgeblich ist
+    bei einer Rechnung das Profil zum Festschreiben, bei einem **Storno das Original**: Er
+    hebt genau dessen Steuerausweis auf (§14c UStG; §17 UStG berichtigt den ursprünglichen
+    Umsatz) — auch wenn der Inhaber inzwischen gewechselt hat. Dieser Status steuert Prüfung,
+    XML, Klausel-Check und PDF. Das Angebots-PDF (erst nach dem Festschreiben erzeugt)
+    rendert und prüft mit dem eingefrorenen Status, nicht mit dem heutigen Profil
+    (Hardline „verifiziert vor jedem Render“). (3) **Kategorie E nur mit §19 (KB-0014):**
+    Klein.Buch kennt keine Steuerbefreiungen nach §4 UStG; der Befreiungsgrund (BT-120,
+    Pflicht nach BR-E-10) wäre sonst der §19-Text. Rechnung und Angebot ohne §19 mit einer
+    Position E scheitern beim Festschreiben mit einer klaren Meldung
+    (`ItemExemptWithoutKleinunternehmer`); der Generator bleibt unverändert. Die Formulare
+    (Rechnung, Angebot, Umwandlung, Abo-Vorlage; `src/lib/tax.ts`) setzen bei
+    Regelbesteuerung E auf S mit 19 % (§12 Abs. 1 UStG), Paket-Positionen ebenso
+    (**KB-0047**, `package_tax_defaults`; Steuerart der Revision, E wird S, S mit 19 %);
+    ein anderer Satz (z. B. 7 %) wird an der Position gesetzt, bei Paket-Positionen ohne
+    Bruch der Provenienz. Volle Regelbesteuerungs-Tiefe (Befreiungen, Sätze je Paket)
+    bleibt nach 2026.11. (4) **USt je Steuergruppe (R1-S2-TESTS):** Die Umsatzsteuer eines
+    Belegs entsteht je (Steuerart, Satz) aus der Summe der Nettobeträge, auf Cent gerundet,
+    und wird über die Gruppen addiert (EN 16931 BR-CO-17: BT-117 = BT-116 × BT-119 / 100;
+    §14 Abs. 4 Nr. 8 UStG verlangt den auf das Entgelt entfallenden Steuerbetrag je Satz). Bisher wurden gerundete
+    Positionssteuern addiert — bei Regelbesteuerung mit vielen Kleinpositionen wich das um
+    Cents von der Steueraufschlüsselung ab. Rechnung, Angebot, XML-Aufschlüsselung
+    (`domain::invoice::tax_groups`) und Formulare rechnen gleich; der Storno ist exakt
+    symmetrisch (Halbe weg von 0). Bei §19 ändert sich nichts (Steuer 0); festgeschriebene
+    Belege behalten ihre gespeicherten Beträge. Geprüft mit dem echten KoSIT
+    (`sidecar_real_kosit_accepts_regelbesteuerung_with_small_items`). (5) **Geld über f64
+    (R1-S2-FLOAT, KB-0006/0007):** `Menge × Einzelpreis` und `Netto × Satz` bleiben f64 mit
+    einmaliger kaufmännischer Rundung je Position bzw. Gruppe — die Menge ist kein Geld und
+    hat höchstens 4 Nachkommastellen (CII), bis 2^53 Cent ist das Produkt exakt;
+    dokumentierte Ausnahme in `docs/architecture/conventions.md`. Ganzzahlig sind jetzt:
+    AfA (`annual × Monate / 12`, Nutzungsdauer auf 1/100 Jahr, i128, half-up), betrieblicher
+    Anteil (Basispunkte), Fehlertexte (`domain::money::eur`). (6) **Grenzen und Überlauf
+    (ASVS V5.4.3 / 14.1.2):** Menge endlich, `0 < q ≤ 1 000 000`, höchstens 4
+    Nachkommastellen; `|Einzelpreis| ≤ 1 Mrd. €`; Steuersatz `0…100 %`; Belegsummen
+    geprüft (`ItemAmountOutOfRange`, `TotalOutOfRange`, beim Speichern eines Entwurfs und
+    beim Festschreiben). Die Rechenfunktionen sättigen statt überzulaufen. Zusätzlich
+    `overflow-checks = true` im Release-Profil für den eigenen Crate (Panik → 500,
+    Transaktion zurückgerollt, statt still falsch zu buchen; Abhängigkeiten unverändert,
+    Kosten vernachlässigbar). (7) **Zahlungshistorie (R1-S2-PAYHIST):** kaputtes
+    `payment_history_json` ist ein Fehler (`parse_payment_history`) — in der EÜR, der
+    Einzelaufstellung und beim Erfassen einer Zahlung — statt eines stillen Neuanfangs, der
+    Einnahmen aus der EÜR fallen ließ bzw. die Historie überschrieb. Vor jeder neuen Zahlung
+    muss die Summe der Historie `paid_amount_cents` ergeben; ein Altbestand ohne Historie
+    (bezahlt mit `paid_at`) wird als erster Eintrag übernommen, sonst fiele die alte Zahlung
+    aus der EÜR. Datumsköpfe per `str::get` statt Byte-Slice. (8) **Trigger-Meldungen
+    (R1-S3-TRIGGERTEXT):** Ein RAISE der Trigger kommt als 409 `constraint` mit deutscher
+    Meldung und `ref`; der englische Text steht nur im Log (WARN, gleiche `ref`). Jeder
+    RAISE-Text der Migrationen hat eine eigene Meldung (Test liest die Migrationen).
+    (9) **E-Mail (R1-S3-EMAIL):** Top-Level-Domain mit mindestens zwei Buchstaben oder als
+    IDN-A-Label `xn--…` (RFC 1123 §2.1, Root-Zone der IANA). (10) **Eigene Vorlage ohne
+    Storno-Darstellung (LE-CUSTOM-TEMPLATE-STORNO):** Nutzt die gewählte Rechnungsvorlage
+    `storno_of` nicht, rendert ein Storno mit der eingebauten Vorlage gleichen Namens bzw.
+    „Klassisch“ (beide mit §19-Marker und Storno-Darstellung) und legt einmal je Vorlage
+    einen Inbox-Hinweis an. Abgewogen gegen Ablehnen: ein Storno ist die einzige Korrektur
+    einer festgeschriebenen Rechnung und darf nicht an einer Vorlage scheitern; gegen
+    Weiterrendern: ein Storno als „Rechnung“ mit Zahlungsaufforderung ist ein falsches
+    Belegbild (§14 Abs. 4, Storno als Rechnungskorrektur nach §31 Abs. 5 UStDV). Handbuch
+    „Einstellungen → Eigene Vorlagen“. (11) **Annahmedatum (R5-S2-QUOTEDATE):**
+    `Angebotsdatum ≤ Annahmedatum ≤ heute` (Europe/Berlin, Uhr des `AppCtx`), geprüft vor
+    dem Archivieren eines Vertrags. (12) **Abgang im Core (R1-020):** Datum nicht in der
+    Zukunft und nicht vor der Anschaffung, Erlös nur beim Verkauf und nie negativ prüft
+    `domain::asset::validate_disposal`; AfA bis zum Abgang und Abgang laufen seit F3b in
+    einer Transaktion. (13) **Bewusst geschlossen:** R1-S3-NITS (Stil ohne Wirkung);
+    R1-019 (Zahldatum vor Belegdatum bei Kosten ist legitim — Vorauszahlung, Abfluss nach
+    §11 Abs. 2 EStG; ein Hinweis im Formular geht an den UI/UX-Lauf).
+    Tests: `tests/beleg_fachlogik_test.rs` (Entwurf bearbeiten und Ablehnungen, Freeze,
+    Storno nach Wechsel, E ohne §19, Storno-Vorlage, Zahlungshistorie, Paket-Hardline,
+    Angebots-Klausel, Annahmedatum), `tests/sidecar_real_test.rs`
+    (`sidecar_real_kosit_accepts_regelbesteuerung_with_small_items`),
+    `tests/server_jobs_test.rs` (deutsche Trigger-Meldung), Unit-Tests in
+    `domain::money`, `domain::invoice` (Bruchteil-Mengen, 100 Kleinpositionen, Grenzen,
+    E ohne §19), `domain::storno` (Symmetrie bei 19 %/7 %), `domain::quote`,
+    `domain::depreciation`, `domain::asset`, `domain::contact`, `server::errors`,
+    `pdf::templates`, `pdf::klausel_check`, `commands::packages`, `src/lib/tax.test.ts`.
+135. **EÜR, AfA, DATEV, ELSTER, Steuerberater-Paket (Lauf F, Block F5b, 2026-10-25; keine
+    Migration, keine neue Abhängigkeit).** (1) **Anlage EÜR je Jahr (R2-S2-ELSTER):** Die
+    Ausfüllhilfe ordnet jede Position einer **Kennzahl** zu und leitet die Zeile aus dem
+    amtlichen Vordruck des Jahres ab (`euer::elster_csv::{Pos, Layout}`). Am Vordruck
+    geprüft: Anlage EÜR 2024 (BMF vom 02.09.2024) und 2025 (BMF vom 29.08.2025) haben
+    dieselben Zeilen; 2026 (BMF vom 01.09.2026, GZ IV C 6 - S 2142/00024/010/001) fügt
+    Zeile 27 (Anlage LuF) ein, „Waren“ (Kz 100) steht in Zeile 29, jede weitere
+    Betriebsausgaben-Zeile eins tiefer (Summe Betriebsausgaben 76, Gewinn 98). Die
+    Kennzahlen sind gleich geblieben; die CSV hat deshalb die Spalte `Kennzahl`, PDF und
+    Export-Seite eine Spalte „Kz“. Für Jahre ohne geprüften Vordruck (vor 2024, nach 2026)
+    gilt der nächstgelegene Vordruck mit Hinweis „Kennzahlen maßgeblich“. Kategorien mit
+    eigener Zeile gehen dorthin (Telekommunikation Kz 280, Fortbildung 281, Beiträge und
+    Versicherungen 223, laufende EDV-Kosten 228 für Software, Arbeitsmittel 229 für
+    Bürobedarf, Werbung 224, Kfz sonstige Fahrtkosten 146); „übrige Betriebsausgaben“
+    (Kz 183) ist nach der Anleitung nur Auffang „soweit nicht in den Zeilen 24 bis 59
+    berücksichtigt“ (hardware, fees, other). Bisher standen Kfz in Zeile 68 (das ist
+    Kfz-Leasing) und Telefon, Bürobedarf, Werbung, Fortbildung pauschal in Zeile 60.
+    **Storno-Überhang:** Die Einnahmen-Zeilen kennen keinen negativen Wert; übersteigen die
+    Erstattungen eines Jahres dessen Einnahmen (großer Vorjahres-Storno), ist der Überhang
+    als Rückzahlung von Betriebseinnahmen eine Betriebsausgabe im Abflussjahr (§ 11 Abs. 2
+    EStG) und steht in Kz 183 — bisher stand er als „Zeile 18“ ohne Eingabe in der Hilfe
+    (Zeile 18 ist die vom Finanzamt erstattete Umsatzsteuer) und fehlte damit in der
+    Erklärung. Summen der Hilfe = Summe der eingetragenen Zeilen; Gewinn wie im Report.
+    BOM und `#`-Kommentarzeilen bleiben: die CSV ist eine Abtipp- und Archivdatei (ELSTER
+    hat für die Anlage EÜR keinen CSV-Import), deutsches Excel braucht die BOM für Umlaute;
+    Verluste stehen mit Minus in der Kontrollsumme Gewinn/Verlust. (2) **Regelbesteuerung
+    (KB-0021):** statt nur eines Hinweises jetzt die Aufteilung: Einnahmen aus Rechnungen,
+    die ohne §19 festgeschrieben wurden, netto in Zeile 15 (Kz 112), die vereinnahmte
+    Umsatzsteuer in Zeile 17 (Kz 140), Einnahmen ohne Umsatzsteuer (Steuerart Z/AE/K/G/O)
+    in Zeile 16 (Kz 103). Maßgeblich ist der eingefrorene Status der Rechnung (Nr. 134),
+    nicht der des Zahlungsjahres (Anleitung zu Zeile 12: vor dem Übergang ausgeführte
+    Umsätze bleiben in ihrer Besteuerung). Eine Zahlung wird im Verhältnis der
+    Brutto-Gruppensummen auf die Steuergruppen der Rechnung verteilt
+    (`euer::detail::split_payment`, Ist-Prinzip). Ausgaben im Jahr mit Regelbesteuerung
+    netto, Vorsteuer in Zeile 57/58 (Kz 185; Anleitung „Betriebsausgaben“: netto,
+    Kleinunternehmer brutto). Gewinn unverändert. Die Hilfe, das EÜR-PDF, die Export-Seite,
+    die LIESMICH, der Verzicht-Dialog und das Handbuch nennen die Grenze: Umsatzsteuer-
+    Voranmeldung, an das Finanzamt gezahlte und erstattete Umsatzsteuer (Kz 186/141),
+    Umsatzsteuer auf Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer und
+    Vorsteuer aus Anlagenkäufen bildet Klein.Buch nicht ab. (3) **Aktivierte Kosten (Neuer
+    Fund F5b):** Eine Kostenposition, aus der eine Anlage angelegt wurde
+    (`capitalized_as_asset_id`), zählte bisher zusätzlich zur AfA als Betriebsausgabe —
+    die Anschaffungskosten standen doppelt in der EÜR. Sie ist jetzt keine Betriebsausgabe
+    mehr (Aggregation, Einzelaufstellung, ELSTER; § 4 Abs. 3 Satz 3 EStG: Anschaffungskosten
+    abnutzbarer Wirtschaftsgüter nur über die AfA) und erscheint im DATEV-Stapel als Zugang
+    auf dem Anlagekonto. Für bereits abgeschlossene Jahre mit solchen Posten meldet der
+    Snapshot-Abgleich (Nr. 124 ff., KB-0031) die Abweichung; der festgeschriebene Stand
+    bleibt unverändert (GoBD), die Korrektur der abgegebenen Erklärung ist Sache des
+    Steuerpflichtigen. (4) **DATEV-Konten (R2-S2-DATEV-MAPPING):** v1 bleibt bei einer
+    festen, dokumentierten Zuordnung SKR03/SKR04 (keine konfigurierbare Tabelle: der
+    Steuerberater ordnet beim Import ohnehin um, eine Oberfläche dafür wäre Aufwand ohne
+    Gewinn für die §19-Zielgruppe). Am DATEV-Kontenrahmen geprüft und korrigiert:
+    Auffang „Sonstige betriebliche Aufwendungen“ 4900/6300 (bisher SKR04 6800 = Porto),
+    Software 4806/6495, Hardware 4980/6850; Anlagenverkauf ohne Umsatzsteuer 8829/4849
+    (Buchgewinn) bzw. 8800/6889 (Buchverlust) — 8820/4845 sind 19-%-Automatikkonten und
+    hätten beim Import Umsatzsteuer erzeugt; neu der Restbuchwert beim Abgang (2315/4855
+    bzw. 2310/6895 an das Anlagekonto). Regelbesteuerung: Erlöse je Steuergruppe auf
+    8400/4400 (19 %), 8300/4300 (7 %), 8125/4125 (§ 4 Nr. 1b), 8120/4120 (§ 4 Nr. 1a),
+    sonst 8200/4200; Sätze ohne Automatik netto plus Umsatzsteuer 1770/3800; Kosten mit
+    BU-Schlüssel 9 bzw. 8 (19 %/7 % Vorsteuer), sonst Vorsteuer 1570/1400. (5) **Geldkonten
+    (R2-011):** Bank 1200/1800, Kasse 1000/1600, PayPal/Stripe/sonstige 1360/1460
+    (Geldtransit) je Zahlungskonto der Kosten, Privatbewegungen und Zahlungseingänge; ohne
+    Konto Bank. Weil `paid_to_account_id` nach dem Festschreiben gesperrt ist (Trigger nie
+    lockern), steht das Konto eines Zahlungseingangs im Eintrag der Zahlungshistorie
+    (`PaymentEntry.account_id`, `record_payment_to_account`, Feld „Zahlungs-Konto“ auf der
+    Zahlungsseite, Standardkonto vorbelegt; ein unbekanntes oder deaktiviertes Konto wird
+    abgelehnt); die Storno-Erstattung nimmt das Konto des letzten Eingangs. (6) **DATEV-Kopf
+    (R2-S2-DATEV-HEADER):** Feld 27 trägt den Sachkontenrahmen (`"03"`/`"04"`). Berater-
+    und Mandantennummer (Felder 11/12) bleiben standardmäßig leer — der Import über die
+    Stapelverarbeitung in den geöffneten Mandanten ist vom Steuerberater bestätigt; die
+    Export-Commands nehmen sie optional an (`consultantNumber` 1001–9999999,
+    `clientNumber` 1–99999, sonst abgelehnt). Formatversion bleibt 12 (vom Steuerberater
+    importiert). (7) **CP1252 (R2-S2-CP1252):** vollständige Tabelle der 27 belegten
+    Zeichen in 0x80–0x9F (WHATWG „windows-1252“), C1-Steuerzeichen und nicht darstellbare
+    Zeichen werden `?`; Steuerzeichen in Textfeldern (Zeilenumbrüche aus
+    Positionsbeschreibungen) werden Leerzeichen, damit keine Buchungszeile umbricht.
+    Eigene Tabelle statt `encoding_rs` (keine neue Abhängigkeit für 27 Einträge).
+    (8) **EÜR-PDF (KB-0018, KB-0023):** Datumsangaben in EÜR-PDF und Deckblatt als
+    TT.MM.JJJJ (`detail::de_date`); die Summe der Einnahmen-Tabelle zieht die dort rot
+    aufgeführten Storno-Erstattungen ab („Summe Zahlungseingänge abzüglich
+    Storno-Erstattungen“). (9) **Steuerberater-Paket (R2-S2-STB):** Integrationstest über
+    den Command (Wurzel `EUER-{Jahr}/`, LIESMICH mit §19-Hinweis, Manifest-Hashes,
+    bitgleiche Belege aus dem Archiv, DATEV-Kopf, genau ein Audit). Die einzeln exportierte
+    Einzelaufstellung bleibt ohne Manifest (Arbeitsliste ohne Original-Belege; die
+    Übergabe ist das Paket). Die LIESMICH nennt Geldkonten, Berater-/Mandantennummer und
+    die Hinweise der Ausfüllhilfe. Der tote Stub `euer::stb_package` ist entfernt
+    (KB-0024). (10) **Erinnerungswert (KB-0027):** 1 Cent bleibt — Buchführungspraxis für
+    das Anlageverzeichnis (§ 4 Abs. 3 Satz 5 EStG), keine Pflicht aus EStG/EStR für die
+    EÜR, steuerneutral, weil er beim Abgang mit dem Restbuchwert (Kz 135) Betriebsausgabe
+    wird; Kommentar und Handbuch richtiggestellt. (11) **Bewusst geschlossen:**
+    review-v2026:R2-S3 (Einzelliste nicht verfügbar, Reste über die übrigen Punkte
+    abgedeckt). Tests: `tests/euer_elster_export_test.rs`
+    (`afa_totals_agree_across_report_split_aveeur_and_datev`,
+    `storno_in_following_year_reaches_datev_and_elster`,
+    `regelbesteuerung_is_split_in_elster_and_datev`,
+    `datev_money_accounts_follow_payment_accounts`,
+    `capitalized_expense_is_not_deducted_twice`), `tests/stb_package_test.rs`,
+    `tests/euer_aggregation_test.rs` (`drafts_never_count_as_income_or_storno_refund`,
+    R2-007), `tests/assets_repo_test.rs`
+    (`disposed_asset_never_gets_entry_after_disposal_year`, KB-0028), Unit-Tests in
+    `euer::elster_csv`, `euer::datev_csv`, `euer::detail`, `commands::euer`.
+136. **E-Rechnung, Versand, Mail, Seeds (Lauf F, Block F5c, 2026-10-25; keine Migration;
+    neue Abhängigkeiten nur für Tests: `rcgen`, `tokio-rustls` mit ring).** (1) **Versand an
+    einen frei gewählten Empfänger (W14-009):** `mail_send_invoice` und `mail_send_quote`
+    sind bedingt Re-Auth-pflichtig (`Auth::Conditional`): weicht der Empfänger von der
+    hinterlegten Adresse ab (Rechnung: Käufer-Snapshot, sonst Kontakt; Angebot: Kontakt;
+    Groß-/Kleinschreibung egal; ohne hinterlegte Adresse ist jeder Empfänger abweichend),
+    verlangt die Vorprüfung vor der Annahme des Jobs eine frische Bestätigung (403
+    `reauth_required`, Dialog, dieselbe Anfrage noch einmal) und der Kern prüft erneut
+    (`commands::mail::require_step_up_for_recipient`, vor dem Binden der Rechtsdokumente).
+    Als frisch gilt wie beim Verkäuferprofil auch eine Anmeldung der letzten 5 min; die
+    Vorprüfungen laufen dafür jetzt unter derselben Frische wie der Kern. Abwägung: Ein
+    fremder Empfänger ist der Weg, Rechnungen und Angebote mit Kundendaten abzuziehen oder
+    an einen Dritten zu schicken (BEC, Datenabfluss) — dort eine Rückfrage. Betreff und
+    Text bleiben frei: sie werden im Alltag oft angepasst (Anrede, Hinweis), und gegen den
+    BEC-Fall „geänderter Text an die echte Kundenadresse“ stehen die echte Bankverbindung
+    im PDF (Änderung nur mit Re-Auth), `email_log` und Audit mit Empfänger und Betreff und
+    die Sitzungsgrenzen; ein Re-Auth je Textänderung brächte dagegen ständige Rückfragen.
+    Restrisiko in security.md (Kontaktadresse ändern, dann senden; Broschürenversand an
+    die Kontaktadresse mit freiem Text). Der Abo-Versand nutzt immer die hinterlegte
+    Adresse. Tests: `server_auth_test::mail_send_reauth_matrix` (Matrix), `e2e_test::
+    deviating_recipient_requires_fresh_confirmation_in_core`, Registry-Listen in
+    `server_auth_test`/`server_contract_test`. (2) **Versandprotokoll (R4-S2-EMAILLOG):**
+    Scheitert der Eintrag im append-only `email_log`, schreibt `send_and_log` den Versuch
+    als Audit `mail.log_failed` (Beleg, Empfänger, Betreff, Status, Fehler), legt den
+    Inbox-Hinweis „Versandprotokoll unvollständig“ an (Ziel `/settings/mail-log`) und gibt
+    dem Aufrufer `warning` mit (Rechnung, Angebot, Broschüre; Toast im Frontend). Der
+    Versand selbst ist nicht rückholbar und bleibt gültig (Rechnung „versendet“). Test
+    `e2e_test::failed_email_log_entry_is_reported_not_swallowed` (Test-Trigger lehnt
+    jeden Eintrag ab). (3) **SMTP-/SFTP-Ziele (ASVS V5.2.6/V12.6.1):** Gespeicherte
+    SMTP-Ports folgen derselben Allowlist wie die Tests (neue Konten, Wechsel von Server
+    oder Port; ein unveränderter Bestandsport bleibt, damit ein Update keine laufende
+    Instanz bricht); SFTP-Ziele hatten das schon (W8). Private, Link-Local- und
+    Loopback-Adressen bleiben erlaubt — Relay im LAN, NAS, Dienst auf dem Docker-Host sind
+    der Normalfall im Selbstbetrieb, und Ziele legt nur der Inhaber unter Re-Auth an.
+    Test `server_secrets_test::saved_smtp_port_follows_allowlist`. (4) **Eigene SMTP-CA
+    (W8-SMTP-CA):** Handshake jetzt getestet: Test-CA und Server-Zertifikat (127.0.0.1)
+    erzeugt der Test, eine STARTTLS-Gegenstelle (`tests/smtp_support`) nimmt die Mail an;
+    ohne CA-Datei bzw. mit fremder CA scheitert der Handshake (`smtp_tls_ca_test`).
+    Dabei gefunden: lettre nimmt eine Datei ohne Zertifikat stillschweigend als leere
+    Liste an; `tls_parameters` verlangt jetzt einen PEM-Block und meldet sonst klar.
+    (5) **ZUGFeRD-Profil (R3-017):** XRECHNUNG statt EN 16931, Amendment ADR 0008.
+    (6) **Empfang (KB-0015, KB-0016, R3-S2-PARSER, neuer Fund):** unvollständiges XML
+    abgelehnt, UBL-Gutschriften erkannt, alle Gutschrift-Codes abgelehnt, Rundung
+    dokumentiert, Fixtures für UBL und defekte Eingaben; R3-010 (BT-34) und R3-013 (nur
+    AE) bewusst geschlossen — Amendment ADR 0024. (7) **Druck-PDF mit AGB
+    (W7-BUNDLE-ACTIVE-PDF):** Statt nur zu schließen: `pdf::bundle` entfernt aus den
+    hochgeladenen Teilen `/OpenAction`, `/AA`, JavaScript-/Launch-/SubmitForm-/
+    ImportData-/Rendition-/GoToE-Aktionen (Aktions-Objekte werden `null`, keine
+    hängende Referenz) sowie die Namensbäume `/JavaScript` und `/EmbeddedFiles`; Links
+    bleiben. Der Catalog ist der des ersten Teils (eigenes Angebots-PDF) — bisher gewann
+    der des letzten Uploads samt `OpenAction`. Der Mail-Versand hängt die archivierten
+    Originale unverändert an (Nachweis der versandten Fassung, ADR 0018); Uploads
+    stammen vom Inhaber. Test `pdf::bundle::tests::merge_strips_active_content_of_uploaded_parts`.
+    (8) **Parser im Server-Prozess (ASVS 14.2.6):** bewusst ohne eigenen Prozess;
+    Grenzen in security.md §11 (KoSIT/Mustang als Java-Prozess mit Timeout, Speicher-
+    und Dateigrenze; Typst nur mit Vorlagen des Betreibers in `spawn_blocking` unter der
+    Render-Semaphore; `lopdf` mit 64 MiB je Stream; quick-xml ohne DTD/Entitäten mit
+    10 MiB). (9) **Bewusst geschlossen:** W6-CONSOLE-403 (403 `reauth_required` ist die
+    richtige Semantik; ein 200 mit Fehlerkörper verschlechterte Monitoring und
+    Auswertung; die Konsolenzeile des Browsers ist kein Fehler), R3-S2-GENERATOR
+    (Schlüssel der Steuergruppen ist seit Nr. 134 `domain::invoice::tax_groups` mit
+    `{code}|{rate:.4}`, robust für die zulässigen Sätze; BR-27-Pfad getestet,
+    PaymentMeans-Rückfall kommentiert), R3-S3 (Kosmetik: `fmt_quantity` mit vier
+    Nachkommastellen ist die CII-Obergrenze, keine Detail-Liste im Repo).
+    W13-SEED-NEU war mit D-10 (ADR 0040) schon erledigt (`seed::tests::
+    deleted_neu_file_is_not_offered_again`). Außerdem: Zeitstempel `sent_at` beim
+    Versand über `crate::clock`.
+137. **Nachbesserung F5 (Lauf F5-fix, 2026-10-25; keine Migration, keine neue
+    Abhängigkeit).** (1) **Summen beim Festschreiben (S2, GoBD):** Die Lock-Pipeline
+    rechnet die Summen aus den Positionen (`invoice::compute_totals`, USt je Steuergruppe
+    nach BR-CO-17 wie Generator BT-109/110/112 und PDF) und setzt sie im selben UPDATE wie
+    `locked_at` (`invoices::LockUpdate::totals`; der Trigger erlaubt das, solange
+    `OLD.locked_at IS NULL`, und sperrt danach wie bisher). Ein Entwurf mit Summen aus der
+    älteren Rundung (USt je Position) bzw. aus einem älteren Backup widerspricht damit nicht
+    mehr dem archivierten Beleg; Zahlungsprüfung, Status, EÜR und ELSTER folgen dem
+    ausgestellten Betrag. Gewählt statt Ablehnen („Entwurf neu speichern“): Die Positionen
+    sind dieselben, nur die Summe folgt der ab Nr. 134 geltenden Regel; ein Abo-Lauf im
+    Modus „ausstellen“ bliebe sonst hängen. Ein vor Nr. 134 festgeschriebenes Original
+    behält seine Summen (unveränderlich); dessen Storno trägt die Summen seines eigenen
+    Belegs. Test `beleg_fachlogik_test::lock_takes_totals_from_items_like_the_issued_document`.
+    (2) **Abo-Vorlagen mit Steuerart E nach dem Verzicht auf §19 (S2, KB-0014):**
+    `check_items_no_vat` prüft jetzt beide Richtungen: bei Regelbesteuerung keine Position
+    mit E. Wirkung beim Speichern (Ablehnung mit Hinweis auf S/19 %) und vor jeder
+    Materialisierung im Scheduler (Termin übersprungen, Hinweis „Abo-Rechnung
+    übersprungen“ je Termin, keine Nummer, Vorlage bleibt stehen, bis sie umgestellt ist).
+    Kein stilles Umschreiben auf S/19 % wie bei Paketen (KB-0047): Eine Vorlage wiederholt
+    sich ohne Rückfrage, und der richtige Satz (19 %, 7 %, steuerfrei) ist eine fachliche
+    Entscheidung des Inhabers (§ 12 UStG). Rechnungs-Entwürfe mit E bleiben speicherbar
+    (Alt-Entwürfe nach dem Wechsel bearbeitbar), das Festschreiben lehnt sie ab. Test
+    `recurring_scheduler_test::exempt_template_after_switch_to_regular_taxation_is_blocked`.
+    (3) **DATEV-Buchungsrichtung (S2):** Bei jeder Geldbewegung ist „Konto“ das
+    Geldkonto und „Gegenkonto“ das Sachkonto; der BU-Schlüssel gehört zum Gegenkonto
+    (DATEV-Formatbeschreibung Buchungsstapel, Feld „Gegenkonto (ohne BU-Schlüssel)“; der
+    Schlüssel wurde früher dem Gegenkonto vorangestellt). Kosten und aktivierte Kosten:
+    Geldkonto H an Aufwands- bzw. Anlagekonto (BU 9/8 am Gegenkonto); Storno-Erstattung:
+    Geldkonto H an Erlöskonto; Privatentnahme: Geldkonto H an Privatkonto. So steht kein
+    Steuerschlüssel an einem Geldkonto. Ein Importtest beim Steuerberater steht aus (Doku
+    `docs/reference/datev-format.md`). (4) **Negative Steuergruppen-Anteile im DATEV-Stapel
+    (S3):** werden als Gegenbuchung mit umgekehrtem Soll/Haben ausgegeben statt verworfen;
+    die Summe der Geldkonto-Bewegungen einer Zahlung ist gleich dem Zahlungsbetrag. Tests
+    `euer::datev_csv::tests::negative_tax_group_share_is_booked_as_counter_entry` und die
+    angepassten Feldtests (`regular_taxation_uses_automatic_accounts_and_tax_keys`,
+    `euer_elster_export_test`). (5) **Paket-Provenienz an Angeboten und Abo-Vorlagen
+    (S3, KB-0046):** `commands::packages::enforce_package_provenance` (generisch über
+    `PackageProvenance`, Rechnung und Angebot) läuft beim Anlegen von Angeboten und beim
+    Anlegen und Bearbeiten von Abo-Vorlagen. Test
+    `beleg_fachlogik_test::package_provenance_is_enforced_on_quotes_and_templates`.
+    (6) **Storno-Vorlagen-Hinweis (S3):** erst nach `lock_with_pair_cancel`; ein
+    gescheiterter Storno hinterlässt keinen Hinweis und verbraucht die Dedup der Vorlage
+    nicht. Test `beleg_fachlogik_test::storno_template_notice_only_after_successful_lock`.
+    (7) **Aktive PDF-Inhalte (S3, W7-BUNDLE-ACTIVE-PDF):** zusätzlich GoToR, Thread,
+    Movie, Sound, RichMediaExecute, SetOCGState, GoTo3DView; Annotationen RichMedia,
+    Screen, Movie, Sound, 3D entfallen (aus `/Annots`, auch indirekte Arrays, Objekt
+    `null`); `/URI` nur mit http(s) oder mailto (sonst verliert der Link seine Aktion).
+    Test `pdf::bundle::tests::merge_strips_active_content_of_uploaded_parts` (je ein Fall).
+    (8) **Betragsgrenzen (S3, ASVS V5.4.3):** `money::MAX_AMOUNT_CENTS` (1 Mrd. €, wie der
+    Einzelpreis) für Kosten (netto, USt, brutto; Summe mit `checked_add`),
+    Anschaffungskosten, Abgangserlös, Privatbewegungen, Kosten-Abos und Zahlungen. Bei
+    höchstens 1 Mrd. € je Betrag laufen Jahressummen in EÜR, ELSTER und DATEV erst nach
+    über 90 Mio. Belegen über. Tests `domain::{money, expense, asset, recurring,
+    private_movement}::tests` (Grenzwert + 1, `i64::MIN/MAX`),
+    `beleg_fachlogik_test::payment_above_limit_is_a_domain_error`. (9) **Doku
+    `domain::money`:** Verweis auf data-model.md und ADR 0003 (Amendment), Rundung „Netto
+    je Position, USt je (Steuerart, Satz)“. (10) **Hinweis „Gültiger App-Code mit falschem
+    Daten-Passwort“ (CI-Fund zu F4d):** Die Kennung einer Folge war der Zeitstempel des
+    ersten Versuchs in Sekunden; begannen zwei Folgen in derselben Sekunde (im Test vor und
+    nach einem Neustart auf einem schnellen Runner), fiel der zweite Hinweis dem
+    `dedup_key` zum Opfer. Jetzt eine UUIDv7 je Folge. Tests
+    `server::ratelimit::tests::factor_suspect_streak_ids_are_unique_per_streak`,
+    `server_auth_test::wrong_passphrase_after_valid_totp_warns_once_per_streak`.
+    (11) **Lieferkette:** Die Test-Abhängigkeiten aus Nr. 136 (`rcgen`, `tokio-rustls`)
+    mit `cargo deny check advisories licenses` und `cargo audit` wie in CI geprüft.
 
 ## Konsequenzen
 

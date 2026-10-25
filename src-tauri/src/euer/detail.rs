@@ -16,8 +16,92 @@ use serde::{Deserialize, Serialize};
 // Detail-Positionen
 // ============================================================================
 
+/// Anteil eines Zahlungsbetrags an einer Steuergruppe (Steuerart + Satz) der
+/// zugrunde liegenden Rechnung (Lauf F5b, KB-0021). Eine Zahlung wird im
+/// Verhältnis der Brutto-Gruppensummen auf die Gruppen verteilt, die Steuer je
+/// Gruppe im Verhältnis Steuer/Brutto der Gruppe (Ist-Prinzip: vereinnahmte
+/// Umsatzsteuer, § 11 Abs. 1 EStG, Anleitung zur Anlage EÜR Zeile 17).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaxShare {
+    /// Steuerart nach EN 16931 (UNTDID 5305): `S`, `Z`, `E`, `AE`, `K`, `G`, `O`, …
+    pub category_code: String,
+    /// Steuersatz in Basispunkten (19 % = 1900).
+    pub rate_basis_points: i64,
+    pub gross_cents: i64,
+    pub net_cents: i64,
+    pub tax_cents: i64,
+}
+
+/// Eine Steuergruppe einer Rechnung (Summe je Steuerart und Satz), Eingabe für
+/// [`split_payment`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvoiceTaxGroup {
+    pub category_code: String,
+    pub rate_basis_points: i64,
+    pub net_cents: i64,
+    pub tax_cents: i64,
+}
+
+/// Verteilt einen Zahlungsbetrag auf die Steuergruppen einer Rechnung
+/// (größte Restbeträge an die letzte Gruppe, damit die Summe exakt stimmt).
+/// Ohne Gruppen oder ohne Bruttosumme entsteht ein Anteil ohne Steuer
+/// (Steuerart `E`).
+pub fn split_payment(groups: &[InvoiceTaxGroup], amount_cents: i64) -> Vec<TaxShare> {
+    let total_gross: i128 = groups
+        .iter()
+        .map(|g| g.net_cents as i128 + g.tax_cents as i128)
+        .sum();
+    if groups.is_empty() || total_gross == 0 {
+        return vec![TaxShare {
+            category_code: "E".into(),
+            rate_basis_points: 0,
+            gross_cents: amount_cents,
+            net_cents: amount_cents,
+            tax_cents: 0,
+        }];
+    }
+    let mut out = Vec::with_capacity(groups.len());
+    let mut allocated: i64 = 0;
+    for (i, g) in groups.iter().enumerate() {
+        let group_gross = g.net_cents as i128 + g.tax_cents as i128;
+        let share = if i + 1 == groups.len() {
+            amount_cents - allocated
+        } else {
+            div_round(amount_cents as i128 * group_gross, total_gross) as i64
+        };
+        allocated += share;
+        let tax = if group_gross == 0 {
+            0
+        } else {
+            div_round(share as i128 * g.tax_cents as i128, group_gross) as i64
+        };
+        out.push(TaxShare {
+            category_code: g.category_code.clone(),
+            rate_basis_points: g.rate_basis_points,
+            gross_cents: share,
+            net_cents: share - tax,
+            tax_cents: tax,
+        });
+    }
+    out
+}
+
+/// Ganzzahlige Division mit kaufmännischer Rundung (halbe Cent weg von 0).
+fn div_round(num: i128, den: i128) -> i128 {
+    if den == 0 {
+        return 0;
+    }
+    let (num, den) = if den < 0 { (-num, -den) } else { (num, den) };
+    if num >= 0 {
+        (num + den / 2) / den
+    } else {
+        -((-num + den / 2) / den)
+    }
+}
+
 /// Ein Zahlungseingang (Betriebseinnahme) — Teilzahlungen je eigener Eintrag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IncomeItem {
     pub paid_date: String,
@@ -26,20 +110,36 @@ pub struct IncomeItem {
     /// Leistungsbeschreibung (aus den Rechnungspositionen zusammengefasst).
     pub description: String,
     pub amount_cents: i64,
+    /// Beim Festschreiben eingefrorener §19-Status der Rechnung (F5a). Er
+    /// entscheidet über die Zeile der Anlage EÜR (12 bzw. 15–17) und das
+    /// DATEV-Erlöskonto — unabhängig vom Status des Zahlungsjahres
+    /// (Anleitung zur Anlage EÜR, Zeile 12).
+    pub is_kleinunternehmer: bool,
+    /// Aufteilung des Zahlungsbetrags auf die Steuergruppen der Rechnung.
+    pub shares: Vec<TaxShare>,
+    /// Typ des Zahlungskontos (`bank`, `cash`, `paypal`, `stripe`, `other`);
+    /// `None` = kein Konto hinterlegt (DATEV: Bank, R2-011).
+    pub account_type: Option<String>,
 }
 
 /// Eine Storno-Erstattung (negative Betriebseinnahme im Storno-Jahr).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StornoItem {
     pub storno_date: String,
     pub storno_number: String,
     pub original_number: String,
     pub refunded_cents: i64,
+    /// §19-Status des Originals (ein Storno übernimmt ihn, F5a).
+    pub is_kleinunternehmer: bool,
+    /// Aufteilung der Erstattung auf die Steuergruppen des Originals.
+    pub shares: Vec<TaxShare>,
+    /// Typ des Zahlungskontos des Originals (R2-011).
+    pub account_type: Option<String>,
 }
 
 /// Eine bezahlte Kostenposition (Betriebsausgabe, brutto).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpenseItem {
     pub paid_date: String,
@@ -50,12 +150,24 @@ pub struct ExpenseItem {
     /// Beschreibung des Geschäftsvorfalls.
     pub description: String,
     pub gross_cents: i64,
+    /// Netto laut Beleg (bei Regelbesteuerung Zeilenwert, Anleitung zur
+    /// Anlage EÜR „Betriebsausgaben“: netto, Vorsteuer in Zeile 57).
+    pub net_cents: i64,
+    /// Umsatzsteuer laut Beleg (bei Regelbesteuerung abziehbare Vorsteuer).
+    pub tax_cents: i64,
+    /// Typ des Zahlungskontos (R2-011); `None` = Bank.
+    pub account_type: Option<String>,
+    /// Nur für aktivierte Kosten (Anlage aus dieser Position): AfA-Methode
+    /// der Anlage. Aktivierte Kosten sind keine Betriebsausgabe (die
+    /// Anschaffungskosten wirken über die AfA, § 4 Abs. 3 Satz 3 EStG) und
+    /// erscheinen nur im DATEV-Stapel auf dem Anlagekonto.
+    pub capitalized_asset_method: Option<String>,
 }
 
 /// Eine Privatbewegung (Entnahme/Einlage) — EÜR-neutral, aber für den DATEV-
 /// Buchungsstapel relevant, damit der Bank-Saldo beim Steuerberater stimmt
 /// (SKR03 1800/1890, SKR04 2100/2180). R2-009.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivateMovementItem {
     pub movement_date: String,
@@ -65,10 +177,12 @@ pub struct PrivateMovementItem {
     pub movement_type: String,
     pub description: String,
     pub amount_cents: i64,
+    /// Typ des Zahlungskontos (R2-011); `None` = Bank.
+    pub account_type: Option<String>,
 }
 
 /// Eine Anlagen-Veräußerung/-Verschrottung.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisposalItem {
     pub disposal_date: String,
@@ -77,6 +191,17 @@ pub struct DisposalItem {
     pub proceeds_cents: i64,
     pub residual_book_value_cents: i64,
     pub gain_loss_cents: i64,
+    /// AfA-Methode der Anlage (DATEV: GWG- oder allgemeines Anlagekonto).
+    pub depreciation_method: String,
+}
+
+/// ISO-Datum (`YYYY-MM-DD`, ggf. mit Zeitanteil) als `TT.MM.JJJJ` für PDF und
+/// Anzeige (KB-0018). Nicht parsbare Werte bleiben unverändert.
+pub fn de_date(iso: &str) -> String {
+    let head = iso.get(..10).unwrap_or(iso);
+    chrono::NaiveDate::parse_from_str(head, "%Y-%m-%d")
+        .map(|d| d.format("%d.%m.%Y").to_string())
+        .unwrap_or_else(|_| iso.to_string())
 }
 
 /// Eine Zeile des Anlageverzeichnisses (AVEÜR) für ein Geschäftsjahr.
@@ -333,6 +458,55 @@ mod tests {
         );
     }
 
+    fn group(code: &str, bp: i64, net: i64, tax: i64) -> InvoiceTaxGroup {
+        InvoiceTaxGroup {
+            category_code: code.into(),
+            rate_basis_points: bp,
+            net_cents: net,
+            tax_cents: tax,
+        }
+    }
+
+    /// KB-0021: Vollzahlung ergibt exakt die Gruppenwerte, Teilzahlungen
+    /// verteilen proportional, die Summe der Anteile ist immer der Betrag.
+    #[test]
+    fn split_payment_is_exact_and_proportional() {
+        let groups = vec![
+            group("S", 1900, 10_000, 1_900),
+            group("S", 700, 10_000, 700),
+        ];
+        let full = split_payment(&groups, 22_600);
+        assert_eq!(full[0].gross_cents, 11_900);
+        assert_eq!((full[0].net_cents, full[0].tax_cents), (10_000, 1_900));
+        assert_eq!((full[1].net_cents, full[1].tax_cents), (10_000, 700));
+
+        for amount in [1, 333, 10_001, 22_599] {
+            let parts = split_payment(&groups, amount);
+            assert_eq!(parts.iter().map(|p| p.gross_cents).sum::<i64>(), amount);
+            for p in &parts {
+                assert_eq!(p.net_cents + p.tax_cents, p.gross_cents);
+            }
+        }
+        let half = split_payment(&groups, 11_300);
+        assert_eq!(half[0].gross_cents, 5_950);
+        assert_eq!(half[0].tax_cents, 950);
+        assert_eq!(half[1].gross_cents, 5_350);
+        assert_eq!(half[1].tax_cents, 350);
+
+        // §19-Rechnung bzw. ohne Gruppen: ein Anteil ohne Steuer.
+        let none = split_payment(&[], 5_000);
+        assert_eq!(none.len(), 1);
+        assert_eq!((none[0].net_cents, none[0].tax_cents), (5_000, 0));
+    }
+
+    #[test]
+    fn de_date_formats_iso_dates() {
+        assert_eq!(de_date("2026-03-01"), "01.03.2026");
+        assert_eq!(de_date("2026-12-31 10:00:00"), "31.12.2026");
+        assert_eq!(de_date("kaputt"), "kaputt");
+        assert_eq!(de_date(""), "");
+    }
+
     #[test]
     fn eur_de_german_decimals() {
         assert_eq!(eur_de(0), "0,00");
@@ -378,6 +552,7 @@ mod tests {
                 customer: "ACME GmbH".into(),
                 description: "Beratung".into(),
                 amount_cents: 100_000,
+                ..Default::default()
             },
             IncomeItem {
                 paid_date: "2026-06-01".into(),
@@ -385,6 +560,7 @@ mod tests {
                 customer: "Beispiel AG".into(),
                 description: "Wartung".into(),
                 amount_cents: 50_000,
+                ..Default::default()
             },
         ];
         let csv = income_csv(&items);
@@ -405,6 +581,7 @@ mod tests {
             category: "software".into(),
             description: "Lizenz".into(),
             gross_cents: 30_000,
+            ..Default::default()
         }];
         let csv = expenses_csv(&items);
         assert!(csv.contains("Datum;Beleg-Nr.;Lieferant;Kategorie;Beschreibung;Betrag"));

@@ -36,8 +36,14 @@ pub struct PrivateMovementInput {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PrivateMovementValidationError {
-    MovementTypeInvalid { value: String },
-    AmountNotPositive { amount: i64 },
+    MovementTypeInvalid {
+        value: String,
+    },
+    AmountNotPositive {
+        amount: i64,
+    },
+    /// Betrag über der Domänengrenze (F5-fix).
+    AmountOutOfRange,
     DescriptionMissing,
 }
 
@@ -58,6 +64,9 @@ pub fn validate_private_movement(
             amount: input.amount_cents,
         });
     }
+    if !crate::domain::money::amount_in_range(input.amount_cents) {
+        errs.push(E::AmountOutOfRange);
+    }
     if input.description.trim().is_empty() {
         errs.push(E::DescriptionMissing);
     }
@@ -77,6 +86,7 @@ pub fn message(e: &PrivateMovementValidationError) -> String {
             format!("Ungültige Bewegungs-Art: {value} (erlaubt: entnahme, einlage).")
         }
         E::AmountNotPositive { .. } => "Der Betrag muss größer als 0 sein.".into(),
+        E::AmountOutOfRange => crate::domain::money::amount_out_of_range_message(),
         E::DescriptionMissing => "Beschreibung ist erforderlich.".into(),
     }
 }
@@ -87,6 +97,7 @@ pub fn variant_name(e: &PrivateMovementValidationError) -> &'static str {
     match e {
         E::MovementTypeInvalid { .. } => "MovementTypeInvalid",
         E::AmountNotPositive { .. } => "AmountNotPositive",
+        E::AmountOutOfRange => "AmountOutOfRange",
         E::DescriptionMissing => "DescriptionMissing",
     }
 }
@@ -151,5 +162,16 @@ mod tests {
         m.description = "  ".into();
         let err = validate_private_movement(&m).unwrap_err();
         assert!(err.contains(&PrivateMovementValidationError::DescriptionMissing));
+    }
+
+    /// F5-fix: Betrag über 1 Mrd. € wird abgelehnt.
+    #[test]
+    fn amount_above_limit_is_rejected() {
+        let mut m = good();
+        m.amount_cents = crate::domain::money::MAX_AMOUNT_CENTS;
+        assert!(validate_private_movement(&m).is_ok());
+        m.amount_cents = i64::MAX;
+        let err = validate_private_movement(&m).unwrap_err();
+        assert!(err.contains(&PrivateMovementValidationError::AmountOutOfRange));
     }
 }

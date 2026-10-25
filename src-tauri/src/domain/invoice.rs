@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::kleinbetragsrechnung;
 use crate::domain::kleinunternehmer::{self, ItemVatCheck, KleinunternehmerStatus, NoVatViolation};
+use crate::domain::money;
 
 /// v0.1 ist single-currency EUR (Kleinunternehmer-Fokus, DE-Domäne). Multi-
 /// Currency würde FX-Umrechnung + Snapshot-Kurs + zusätzliche §14-Pflichten
@@ -164,30 +165,103 @@ pub struct Totals {
 
 /// Pure Item- und Aggregats-Berechnung. Keine Validierung — Caller prüft.
 ///
-/// Pro Item: `net = round(quantity * unit_price)`, `tax = round(net * rate/100)`,
-/// `gross = net + tax`. Kaufmännische Rundung (`.round()`).
+/// Pro Item: `net = round(quantity * unit_price)` (kaufmännisch). Die USt der
+/// Rechnung entsteht **je (Kategorie, Satz)-Gruppe** aus der Summe der
+/// Nettobeträge: `round(Σ net × rate / 100)` (EN 16931 BR-CO-17: BT-117 =
+/// BT-116 × BT-119 / 100, auf zwei Stellen gerundet; R1-S2-TESTS). So weicht die
+/// Steuer einer Rechnung mit vielen Kleinpositionen nicht von der
+/// Steueraufschlüsselung im XML ab. `ItemTotals::tax_amount_cents` bleibt die
+/// gerundete Steuer der einzelnen Position (nur informativ, nicht summiert).
+/// Summen sättigen statt überzulaufen; Eingaben außerhalb der Domänengrenzen
+/// ([`money`]) lehnt [`validate_for_issue`] ab (`ItemAmountOutOfRange`,
+/// `TotalOutOfRange`), bevor ein Betrag gespeichert wird (ASVS V5.4.3).
 pub fn compute_totals(items: &[InvoiceItemInput]) -> Totals {
-    let mut out = Vec::with_capacity(items.len());
+    totals_from_lines(
+        items
+            .iter()
+            .map(|it| {
+                (
+                    it.tax_category_code.as_str(),
+                    it.quantity,
+                    it.unit_price_cents,
+                    it.tax_rate_percent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .as_slice(),
+    )
+}
+
+/// Gemeinsamer Kern von [`compute_totals`] (Rechnung) und
+/// [`crate::domain::quote::compute_totals`] (Angebot): Zeilen als
+/// `(Kategorie, Menge, Einzelpreis, Satz)`.
+pub(crate) fn totals_from_lines(lines: &[(&str, f64, i64, f64)]) -> Totals {
+    let mut out = Vec::with_capacity(lines.len());
     let mut net_total: i64 = 0;
-    let mut tax_total: i64 = 0;
-    for it in items {
-        let net = (it.quantity * it.unit_price_cents as f64).round() as i64;
-        let tax = (net as f64 * it.tax_rate_percent / 100.0).round() as i64;
-        let gross = net + tax;
+    for &(_, quantity, unit_price_cents, rate) in lines {
+        let net = money::line_net_cents(quantity, unit_price_cents);
+        let tax = money::line_tax_cents(net, rate);
         out.push(ItemTotals {
             net_amount_cents: net,
             tax_amount_cents: tax,
-            gross_amount_cents: gross,
+            gross_amount_cents: net.saturating_add(tax),
         });
-        net_total += net;
-        tax_total += tax;
+        net_total = net_total.saturating_add(net);
     }
+    let tax_total = tax_groups(
+        lines
+            .iter()
+            .zip(out.iter())
+            .map(|(&(code, _, _, rate), t)| (code, rate, t.net_amount_cents)),
+    )
+    .iter()
+    .fold(0i64, |acc, g| acc.saturating_add(g.tax_amount_cents));
     Totals {
         items: out,
         net_amount_cents: net_total,
         tax_amount_cents: tax_total,
-        gross_amount_cents: net_total + tax_total,
+        gross_amount_cents: net_total.saturating_add(tax_total),
     }
+}
+
+/// Eine Zeile der Steueraufschlüsselung (BG-23): Kategorie, Satz, Summe der
+/// Nettobeträge (BT-116) und daraus gerundete Steuer (BT-117).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaxGroupTotal {
+    pub category_code: String,
+    pub rate: f64,
+    pub taxable_amount_cents: i64,
+    pub tax_amount_cents: i64,
+}
+
+/// Gruppiert `(Kategorie, Satz, Netto)` je (Kategorie, Satz) und rechnet die
+/// Steuer je Gruppe aus der Gruppensumme (BR-CO-17). Reihenfolge stabil nach
+/// Kategorie und Satz.
+pub fn tax_groups<'a, I>(lines: I) -> Vec<TaxGroupTotal>
+where
+    I: IntoIterator<Item = (&'a str, f64, i64)>,
+{
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, TaxGroupTotal> = BTreeMap::new();
+    for (code, rate, net) in lines {
+        let key = format!("{code}|{rate:.4}");
+        groups
+            .entry(key)
+            .and_modify(|g| g.taxable_amount_cents = g.taxable_amount_cents.saturating_add(net))
+            .or_insert(TaxGroupTotal {
+                category_code: code.to_string(),
+                rate,
+                taxable_amount_cents: net,
+                tax_amount_cents: 0,
+            });
+    }
+    groups
+        .into_values()
+        .map(|mut g| {
+            g.tax_amount_cents = money::line_tax_cents(g.taxable_amount_cents, g.rate);
+            g
+        })
+        .collect()
 }
 
 // ---- Validation -------------------------------------------------------------
@@ -258,6 +332,16 @@ pub enum InvoiceValidationError {
         position: u32,
         rate: f64,
     },
+    /// Menge, Einzelpreis oder Steuersatz außerhalb der Domänengrenzen
+    /// ([`money`]: Menge endlich, ≤ 1 000 000, höchstens 4 Nachkommastellen;
+    /// |Einzelpreis| ≤ 1 Mrd. €; Steuersatz ≤ 100 %). ASVS V5.4.3.
+    ItemAmountOutOfRange(u32),
+    /// Die Summe der Positionen verließe den darstellbaren Bereich.
+    TotalOutOfRange,
+    /// Kategorie 'E' (steuerbefreit) ohne §19: Klein.Buch kennt keine
+    /// Steuerbefreiungen nach §4 UStG; der Befreiungsgrund (BT-120, BR-E-10)
+    /// wäre sonst der §19-Text (KB-0014).
+    ItemExemptWithoutKleinunternehmer(u32),
 
     // --- §19 — siehe kleinunternehmer::assert_no_vat ---
     Paragraph19VatViolation(Vec<NoVatViolation>),
@@ -327,10 +411,42 @@ pub fn message(e: &InvoiceValidationError) -> String {
         E::ItemTaxRateNegative { position, rate } => {
             format!("Position {position}: Steuersatz darf nicht negativ sein ({rate} %).")
         }
+        E::ItemAmountOutOfRange(p) => item_amount_out_of_range_message(*p),
+        E::TotalOutOfRange => TOTAL_OUT_OF_RANGE_MESSAGE.into(),
+        E::ItemExemptWithoutKleinunternehmer(p) => exempt_without_klein_message(*p),
         E::Paragraph19VatViolation(_) => {
             "§19-Verstoß: Bei Kleinunternehmer darf keine Umsatzsteuer ausgewiesen werden.".into()
         }
     }
+}
+
+/// Text zu `ItemAmountOutOfRange` (Rechnung und Angebot).
+pub fn item_amount_out_of_range_message(position: u32) -> String {
+    format!(
+        "Position {position}: Menge (höchstens 1.000.000, bis zu 4 Nachkommastellen), \
+         Einzelpreis (höchstens 1 Mrd. €) oder Steuersatz (höchstens 100 %) liegt außerhalb \
+         des zulässigen Bereichs."
+    )
+}
+
+/// Text zu `TotalOutOfRange` (Rechnung und Angebot).
+pub const TOTAL_OUT_OF_RANGE_MESSAGE: &str =
+    "Die Summe der Positionen ist zu groß und lässt sich nicht verbuchen.";
+
+/// Text zu `ItemExemptWithoutKleinunternehmer` (Rechnung und Angebot).
+pub fn exempt_without_klein_message(position: u32) -> String {
+    format!(
+        "Position {position}: Steuerart E (steuerbefreit) gibt es nur als Kleinunternehmer (§19). \
+         Bei Regelbesteuerung bitte Steuerart und Steuersatz der Position setzen (z. B. S, 19 %)."
+    )
+}
+
+/// Domänengrenzen einer Position, ohne die Fälle, die schon eigene Fehler
+/// haben (Menge ≤ 0/NaN, negativer Steuersatz).
+pub(crate) fn item_out_of_range(quantity: f64, unit_price_cents: i64, rate: f64) -> bool {
+    let quantity_bad = quantity > 0.0 && !money::quantity_in_range(quantity);
+    let rate_bad = (rate.is_nan() || rate >= 0.0) && !money::tax_rate_in_range(rate);
+    quantity_bad || rate_bad || !money::unit_price_in_range(unit_price_cents)
 }
 
 /// Validiert eine [`InvoiceInput`] gegen §14 UStG + §19 + §33 UStDV.
@@ -427,6 +543,35 @@ pub fn validate_for_issue(
         if !seen_positions.insert(it.position) {
             errs.push(E::ItemDuplicatePosition(it.position));
         }
+        if item_out_of_range(it.quantity, it.unit_price_cents, it.tax_rate_percent) {
+            errs.push(E::ItemAmountOutOfRange(it.position));
+        }
+        // KB-0014: 'E' nur mit §19 (sonst trüge BT-120 den §19-Text).
+        if !seller.is_kleinunternehmer && it.tax_category_code == kleinunternehmer::EXEMPT_CATEGORY
+        {
+            errs.push(E::ItemExemptWithoutKleinunternehmer(it.position));
+        }
+    }
+    // Summen ohne Überlauf (ASVS V5.4.3) — nur sinnvoll, wenn jede Position in
+    // den Grenzen liegt (sonst steht schon ItemAmountOutOfRange da).
+    let items_in_range = !errs.iter().any(|e| {
+        matches!(
+            e,
+            E::ItemAmountOutOfRange(_)
+                | E::ItemQuantityNotPositive(_)
+                | E::ItemTaxRateNegative { .. }
+        )
+    });
+    if items_in_range
+        && money::checked_document_totals(
+            input
+                .items
+                .iter()
+                .map(|it| (it.quantity, it.unit_price_cents, it.tax_rate_percent)),
+        )
+        .is_none()
+    {
+        errs.push(E::TotalOutOfRange);
     }
 
     // --- §19 (§14c-Schutz) ---
@@ -914,5 +1059,130 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
         );
         assert!(r.is_ok(), "echter Storno-ID darf nicht blocken, got {r:?}");
+    }
+
+    fn vat_item(position: u32, qty: f64, price: i64, rate: f64) -> InvoiceItemInput {
+        let mut it = item(position, qty, price);
+        it.tax_rate_percent = rate;
+        it.tax_category_code = if rate > 0.0 { "S".into() } else { "Z".into() };
+        it
+    }
+
+    fn seller_regel() -> SellerView<'static> {
+        SellerView {
+            is_kleinunternehmer: false,
+            waived_since: NaiveDate::from_ymd_opt(2026, 1, 1),
+            ..seller_klein()
+        }
+    }
+
+    // KB-0008: Bruchteil-Mengen und USt-Rundung (kaufmännisch, je Position bzw.
+    // je Steuergruppe).
+    #[test]
+    fn compute_totals_fractional_quantity_rounds_half_away_from_zero() {
+        // 0,333 × 3,33 € = 1,10889 € → 1,11 €; USt 19 % auf 1,11 € = 0,2109 → 0,21 €.
+        let t = compute_totals(&[vat_item(1, 0.333, 333, 19.0)]);
+        assert_eq!(t.net_amount_cents, 111);
+        assert_eq!(t.tax_amount_cents, 21);
+        assert_eq!(t.gross_amount_cents, 132);
+        // 0,5 × 1 ct = 0,5 ct → 1 ct (half away from zero), USt 19 % → 0 ct.
+        let t = compute_totals(&[vat_item(1, 0.5, 1, 19.0)]);
+        assert_eq!(t.net_amount_cents, 1);
+        // 3 × 3,33 € = 9,99 €; USt 1,8981 € → 1,90 €.
+        let t = compute_totals(&[vat_item(1, 3.0, 333, 19.0)]);
+        assert_eq!((t.net_amount_cents, t.tax_amount_cents), (999, 190));
+        // 7 % auf 0,50 € = 0,035 € → 0,04 € (Halbcent rundet auf).
+        let t = compute_totals(&[vat_item(1, 1.0, 50, 7.0)]);
+        assert_eq!(t.tax_amount_cents, 4);
+    }
+
+    // R1-S2-TESTS: 100 Kleinpositionen — die USt entsteht je Steuergruppe aus
+    // der Nettosumme (BR-CO-17), nicht als Summe gerundeter Positionssteuern.
+    #[test]
+    fn compute_totals_hundred_small_items_do_not_drift() {
+        let items: Vec<_> = (1..=100).map(|p| vat_item(p, 1.0, 1, 19.0)).collect();
+        let t = compute_totals(&items);
+        assert_eq!(t.net_amount_cents, 100);
+        // 1,00 € × 19 % = 0,19 € (je Position wären es 100 × 0 ct).
+        assert_eq!(t.tax_amount_cents, 19);
+        assert_eq!(t.gross_amount_cents, 119);
+        assert!(t.items.iter().all(|i| i.tax_amount_cents == 0));
+        // Gemischte Sätze: je Gruppe gerundet, dann addiert.
+        let mut mixed: Vec<_> = (1..=3).map(|p| vat_item(p, 1.0, 333, 19.0)).collect();
+        mixed.extend((4..=6).map(|p| vat_item(p, 1.0, 333, 7.0)));
+        let t = compute_totals(&mixed);
+        assert_eq!(t.net_amount_cents, 1_998);
+        // 9,99 € × 19 % = 1,8981 → 1,90; 9,99 € × 7 % = 0,6993 → 0,70.
+        assert_eq!(t.tax_amount_cents, 260);
+        let groups = tax_groups(mixed.iter().zip(t.items.iter()).map(|(it, l)| {
+            (
+                it.tax_category_code.as_str(),
+                it.tax_rate_percent,
+                l.net_amount_cents,
+            )
+        }));
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups.iter().map(|g| g.tax_amount_cents).sum::<i64>(),
+            t.tax_amount_cents
+        );
+    }
+
+    // ASVS V5.4.3 / 14.1.2: Mengen ohne Obergrenze und Summen nahe i64::MAX
+    // werden abgelehnt statt still überzulaufen.
+    #[test]
+    fn validate_rejects_amounts_out_of_range() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
+        let mut inv = good_invoice();
+        inv.items = vec![item(1, 1e300, 50_000)];
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(
+            err.contains(&InvoiceValidationError::ItemAmountOutOfRange(1)),
+            "{err:?}"
+        );
+        // Zu viele Nachkommastellen in der Menge (CII überträgt 4).
+        inv.items = vec![item(1, 1.0 / 3.0, 50_000)];
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(err.contains(&InvoiceValidationError::ItemAmountOutOfRange(1)));
+        // Einzelpreis über 1 Mrd. €.
+        inv.items = vec![item(1, 1.0, money::MAX_UNIT_PRICE_CENTS + 1)];
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(err.contains(&InvoiceValidationError::ItemAmountOutOfRange(1)));
+        // Unendliche Menge.
+        inv.items = vec![item(1, f64::INFINITY, 100)];
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(err.contains(&InvoiceValidationError::ItemAmountOutOfRange(1)));
+        // Jede Position in den Grenzen, die Summe nicht.
+        inv.items = (1..=100)
+            .map(|p| item(p, money::MAX_QUANTITY, money::MAX_UNIT_PRICE_CENTS))
+            .collect();
+        let err = validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).unwrap_err();
+        assert!(
+            err.contains(&InvoiceValidationError::TotalOutOfRange),
+            "{err:?}"
+        );
+        // Die Summe läuft nicht über (sättigt), wird also nie negativ.
+        assert!(compute_totals(&inv.items).gross_amount_cents > 0);
+    }
+
+    // KB-0014: Kategorie E nur mit §19 — sonst stünde der §19-Text als
+    // Befreiungsgrund (BT-120) im XML.
+    #[test]
+    fn validate_rejects_exempt_category_without_paragraph_19() {
+        let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
+        let inv = good_invoice(); // Positionen mit 'E'
+        let err = validate_for_issue(&inv, &seller_regel(), &buyer_full(), today).unwrap_err();
+        assert!(
+            err.contains(&InvoiceValidationError::ItemExemptWithoutKleinunternehmer(
+                1
+            ))
+        );
+        // Mit §19 ist 'E' Pflicht und zulässig.
+        assert!(validate_for_issue(&inv, &seller_klein(), &buyer_full(), today).is_ok());
+        // Regelbesteuerung mit 'S' 19 % ist zulässig.
+        let mut regel = good_invoice();
+        regel.items = vec![vat_item(1, 1.0, 50_000, 19.0)];
+        let r = validate_for_issue(&regel, &seller_regel(), &buyer_full(), today);
+        assert!(r.is_ok(), "{r:?}");
     }
 }

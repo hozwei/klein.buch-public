@@ -28,9 +28,18 @@ herunterladen"**. Wie bei allen Exporten fragt Klein.Buch vorher noch
 einmal Daten-Passwort und App-Code ab (gilt fünf Minuten).
 
 Klein.Buch erzeugt eine CSV-Datei mit Deinen EÜR-Werten,
-aufgeschlüsselt nach den Zeilen der ELSTER-Anlage EÜR. Du öffnest
-dann ELSTER im Browser und tippst die Werte aus der CSV in die
-entsprechenden Formularfelder ab.
+aufgeschlüsselt nach Zeile und Kennzahl (Kz) der amtlichen Anlage EÜR
+des jeweiligen Jahres. Die Zeilennummern ändern sich gelegentlich
+(2026 zum Beispiel ab „Waren“ um eine bis zwei Zeilen), die Kennzahlen
+bleiben gleich — im Zweifel gilt die Kennzahl. Du öffnest dann ELSTER
+im Browser und tippst die Werte aus der CSV in die entsprechenden
+Formularfelder ab. Kategorien mit eigener Zeile (z. B. Telefon/Internet,
+Fortbildung, Bürobedarf als Arbeitsmittel, Werbung) stehen dort,
+Hardware, Gebühren und Sonstiges unter „übrige Betriebsausgaben“.
+Kommentarzeilen am Anfang der Datei (`# …`) nennen Besonderheiten, etwa
+wenn Storno-Erstattungen die Einnahmen des Jahres übersteigen (der
+Überhang steht dann als Betriebsausgabe in der Ausfüllhilfe) oder bei
+Regelbesteuerung, was Du noch ergänzen musst.
 
 Zusätzlich kannst Du die vollständige EÜR als PDF herunterladen
 ("PDF herunterladen" bei "Vollständige EÜR (PDF)"), als Beleg für
@@ -50,7 +59,12 @@ ist Default, SKR04 verfügbar). Klick auf **"DATEV herunterladen"**.
 Klein.Buch erzeugt eine CSV-Datei im DATEV-Format mit allen
 Buchungen des Geschäftsjahres. Die Konto-Zuordnung ist ein
 Vorschlag, den Dein Steuerberater vor dem Import in sein System
-prüfen sollte. Sende die CSV per E-Mail oder Daten-Übergabe-Dienst.
+prüfen sollte. Als Geldkonto nimmt Klein.Buch das Zahlungskonto, das Du
+bei der Zahlung angegeben hast: Bank, Kasse oder für PayPal, Stripe und
+Sonstiges das Geldtransit-Konto. Ohne Angabe bucht es auf die Bank.
+Berater- und Mandantennummer bleiben leer; Dein Steuerberater importiert
+den Stapel in den geöffneten Mandanten. Sende die CSV per E-Mail oder
+Daten-Übergabe-Dienst.
 
 ## Steuerberater-Paket (ZIP)
 
@@ -81,7 +95,9 @@ Bestätigung gilt fünf Minuten. Klein.Buch packt:
 
 Der Steuerberater kann das Manifest gegen die ausgelieferten
 Dateien prüfen, um sicherzustellen, dass nichts unterwegs verändert
-wurde. Klein.Buch importiert das Paket nicht zurück — es ist ein
+wurde. Die einzeln exportierte Einzelaufstellung (ZIP) hat bewusst kein
+Manifest: Sie ist eine Arbeitsliste ohne Original-Belege; für die
+Übergabe ist das Steuerberater-Paket gedacht. Klein.Buch importiert das Paket nicht zurück — es ist ein
 Einbahn-Export.
 
 ## Protokoll und abgeschlossene Jahre

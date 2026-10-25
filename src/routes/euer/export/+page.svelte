@@ -315,24 +315,36 @@
   <!-- 1. Anlage EÜR (Formularzeilen) -->
   <section class="card">
     <h2>Anlage EÜR — zum Übertragen ins ELSTER-Formular</h2>
+    {#if form}
+      <p class="muted">Zeilen nach dem Vordruck {form.formYear}; die Kennzahl (Kz) gilt in jedem Jahr.</p>
+      {#if form.notes.length > 0}
+        <Banner kind="warning">
+          <ul>
+            {#each form.notes as n (n)}<li>{n}</li>{/each}
+          </ul>
+        </Banner>
+      {/if}
+    {/if}
     <table class="cards">
-      <thead><tr><th class="z">Zeile</th><th>Position</th><th class="num">Betrag</th></tr></thead>
+      <thead><tr><th class="z">Zeile</th><th class="z">Kz</th><th>Position</th><th class="num">Betrag</th></tr></thead>
       <tbody>
         {#each entryLines as l (l.zeile + l.bezeichnung)}
           <tr>
-            <td class="z" data-label="Zeile">{l.zeile === 0 ? "—" : l.zeile}</td>
+            <td class="z" data-label="Zeile">{l.zeile}</td>
+            <td class="z" data-label="Kz">{l.kennzahl ?? ""}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
             <td class="num" data-label="Betrag">{euro(l.amountCents)}</td>
           </tr>
         {/each}
         {#if entryLines.length === 0}
-          <tr><td colspan="3" class="muted">Keine einzutragenden Positionen.</td></tr>
+          <tr><td colspan="4" class="muted">Keine einzutragenden Positionen.</td></tr>
         {/if}
       </tbody>
       <tfoot>
         {#each sumLines as l (l.bezeichnung)}
           <tr class="sum">
-            <td class="z" data-label="Zeile">{l.zeile === 0 ? "—" : l.zeile}</td>
+            <td class="z" data-label="Zeile">{l.zeile}</td>
+            <td class="z" data-label="Kz">{l.kennzahl ?? ""}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
             <td class="num" data-label="Summe">{euro(l.amountCents)}</td>
           </tr>

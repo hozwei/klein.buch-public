@@ -575,14 +575,22 @@ async fn reauth_commands_require_fresh_reauth() {
          + invoices_void_draft (F2a) + backup_download (F3a) + euer_export_datev/_elster/_pdf \
          + payment_accounts_set_active (F4a) - seller_profile_upsert (F4a: bedingt)"
     );
-    // W14-038 (Lauf F4a): genau ein Command mit bedingter Re-Auth; die Matrix
-    // prüft `seller_profile_reauth_matrix`.
-    let conditional: Vec<&str> = REGISTRY
+    // W14-038 (Lauf F4a) und W14-009 (Lauf F5c): bedingte Re-Auth; die Matrizen
+    // prüfen `seller_profile_reauth_matrix` und `mail_send_reauth_matrix`.
+    let mut conditional: Vec<&str> = REGISTRY
         .iter()
         .filter(|c| c.exposed() && c.auth == Auth::Conditional)
         .map(|c| c.name)
         .collect();
-    assert_eq!(conditional, vec!["seller_profile_upsert"]);
+    conditional.sort_unstable();
+    assert_eq!(
+        conditional,
+        vec![
+            "mail_send_invoice",
+            "mail_send_quote",
+            "seller_profile_upsert"
+        ]
+    );
     for name in [
         "euer_export_datev",
         "euer_export_elster",
@@ -1715,4 +1723,190 @@ async fn slow_login_answers_202_and_poll_delivers_session_once() {
     }
     let r = send(&srv.app, poll(None)).await;
     assert_eq!(r.status, StatusCode::GONE);
+}
+
+/// W14-009 (Lauf F5c): Re-Auth-Matrix für den Versand mit frei gewähltem
+/// Empfänger. Außerhalb der 5-Minuten-Frische gilt: hinterlegte Adresse (auch in
+/// anderer Schreibweise) und geänderter Text ohne Re-Auth; ein abweichender
+/// Empfänger ergibt 403 `reauth_required` vor der Annahme des Jobs — ohne
+/// Versandversuch. Nach der Re-Auth geht derselbe Aufruf durch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mail_send_reauth_matrix() {
+    use klein_buch_lib::db::repo::mail_accounts;
+    use klein_buch_lib::server::session::REAUTH_WINDOW;
+    let later = REAUTH_WINDOW + std::time::Duration::from_secs(1);
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let invoice_id = draft_invoice(&srv).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "invoices_lock_and_issue",
+        serde_json::json!({ "id": invoice_id }),
+    )
+    .await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    settle_lock_backups(&srv).await;
+    let pool = srv.state.ctx.pool().unwrap();
+    let mail_templates = srv.state.ctx.paths.inputs_dir.join("mail-templates");
+    std::fs::create_dir_all(&mail_templates).unwrap();
+    std::fs::write(
+        mail_templates.join("invoice-de.txt"),
+        "Subject: Rechnung {{ invoice.number }}\n\nAnbei die Rechnung {{ invoice.number }}.\n",
+    )
+    .unwrap();
+
+    // Postfach auf einem Port ohne Gegenstelle: ein zugelassener Versand
+    // scheitert erst beim Verbinden (Protokoll-Eintrag „failed“).
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let account = mail_accounts::create(
+        &pool,
+        &mail_accounts::MailAccountInput {
+            label: "W14-009".into(),
+            auth_type: "smtp_password".into(),
+            smtp_host: Some("127.0.0.1".into()),
+            smtp_port: Some(i64::from(port)),
+            smtp_user: None,
+            smtp_use_tls: false,
+            from_email: "rechnung@example.org".into(),
+            from_name: "Beispiel IT-Service".into(),
+            is_default: true,
+            oauth_tenant_id: None,
+            oauth_client_id: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id;
+    // Angebots-Entwurf an denselben Kontakt (für die Vorprüfung genügt er).
+    let contact_id: String = sqlx::query_scalar("SELECT contact_id FROM invoices WHERE id = ?")
+        .bind(&invoice_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let today = klein_buch_lib::clock::today_berlin();
+    let quote_id = klein_buch_lib::commands::quotes::create_draft_core(
+        &pool,
+        klein_buch_lib::commands::quotes::CreateDraftArgs {
+            contact_id,
+            input: klein_buch_lib::domain::quote::QuoteInput {
+                quote_date: today,
+                valid_until: today + chrono::Days::new(30),
+                currency_code: "EUR".into(),
+                items: vec![klein_buch_lib::domain::quote::QuoteItemInput {
+                    position: 1,
+                    description: "Beratung".into(),
+                    quantity: 1.0,
+                    unit_code: "HUR".into(),
+                    unit_price_cents: 10_000,
+                    tax_rate_percent: 0.0,
+                    tax_category_code: "E".into(),
+                    description_title: None,
+                    description_markup: None,
+                    source_package_id: None,
+                    source_package_revision: None,
+                }],
+                notes: None,
+                pdf_template: "default".into(),
+            },
+        },
+    )
+    .await
+    .unwrap()
+    .quote
+    .id;
+
+    let log_rows = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let invoice_args = |to: Option<&str>, body: Option<&str>| {
+        serde_json::json!({ "args": {
+            "accountId": account, "invoiceId": invoice_id,
+            "to": to, "subject": null, "body": body
+        }})
+    };
+    let quote_args = |to: Option<&str>| {
+        serde_json::json!({ "args": {
+            "accountId": account, "quoteId": quote_id,
+            "to": to, "subject": null, "body": null
+        }})
+    };
+    // Zugelassen: Job läuft und scheitert am Verbinden bzw. am Angebotsstatus.
+    let admitted = |r: &Reply, what: &str| {
+        assert_ne!(r.status, StatusCode::FORBIDDEN, "{what}: {}", r.text());
+        assert_eq!(r.json()["state"], "failed", "{what}: {}", r.text());
+        assert_ne!(r.json()["error"]["code"], "reauth_required", "{what}");
+    };
+
+    // 1. Weder Re-Auth noch Anmeldung frisch.
+    srv.state.sessions.age_for_tests(later);
+    for (to, body, what) in [
+        (None, None, "hinterlegter Empfänger"),
+        (Some("KUNDE@Example.org"), None, "andere Schreibweise"),
+        (
+            Some("kunde@example.org"),
+            Some("Geänderter Text"),
+            "geänderter Text",
+        ),
+    ] {
+        let r = call(
+            &srv.app,
+            &cookie,
+            "mail_send_invoice",
+            invoice_args(to, body),
+        )
+        .await;
+        admitted(&r, what);
+    }
+    assert_eq!(log_rows().await, 3, "drei Versandversuche protokolliert");
+    let r = call(&srv.app, &cookie, "mail_send_quote", quote_args(None)).await;
+    admitted(&r, "Angebot an den Kontakt");
+
+    for (name, args) in [
+        (
+            "mail_send_invoice",
+            invoice_args(Some("fremd@example.net"), None),
+        ),
+        ("mail_send_quote", quote_args(Some("fremd@example.net"))),
+    ] {
+        let r = call(&srv.app, &cookie, name, args).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{name}: {}", r.text());
+        assert_eq!(r.json()["code"], "reauth_required", "{name}");
+    }
+    assert_eq!(log_rows().await, 3, "kein Versandversuch ohne Re-Auth");
+    let bound: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM quote_legal_documents")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bound, 0, "abgelehnter Versand bindet keine Rechtsdokumente");
+
+    // 2. Nach der Re-Auth: derselbe Empfänger geht durch.
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_send_invoice",
+        invoice_args(Some("fremd@example.net"), None),
+    )
+    .await;
+    admitted(&r, "nach Re-Auth");
+    let to: String = sqlx::query_scalar("SELECT to_email FROM email_log ORDER BY id DESC LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(to, "fremd@example.net");
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_send_quote",
+        quote_args(Some("fremd@example.net")),
+    )
+    .await;
+    admitted(&r, "Angebot nach Re-Auth");
 }

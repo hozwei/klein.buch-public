@@ -17,6 +17,8 @@
 //! der Keychain läuft im plattform-unabhängigen Mock-Store, sodass der Test
 //! ohne Java/Secret-Service-Daemon läuft.
 
+mod smtp_support;
+
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -93,7 +95,7 @@ async fn setup_env() -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -101,7 +103,7 @@ async fn setup_env() -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "rechnung@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -147,7 +149,7 @@ async fn create_locked_invoice(env: &Env) -> (String, String) {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("empfaenger@kunde-test.de".into()),
+            email: Some("empfaenger@example.org".into()),
             phone: None,
             iban: None,
             bic: None,
@@ -252,8 +254,8 @@ async fn create_mailhog_account(pool: &SqlitePool) -> String {
             smtp_port: Some(1025),
             smtp_user: None,
             smtp_use_tls: false,
-            from_email: "schmidm@wildbach-computerhilfe.de".into(),
-            from_name: "Wildbach Computerhilfe".into(),
+            from_email: "rechnung@example.org".into(),
+            from_name: "Beispiel IT-Service".into(),
             is_default: true,
             oauth_tenant_id: None,
             oauth_client_id: None,
@@ -288,7 +290,7 @@ async fn send_invoice_happy_path_against_mailhog() {
     .expect("Versand gegen MailHog muss gelingen");
 
     assert_eq!(result.attachment_count, 1);
-    assert_eq!(result.to, "empfaenger@kunde-test.de");
+    assert_eq!(result.to, "empfaenger@example.org");
 
     // DB: Status auf 'sent', sent_at gesetzt, Audit-Eintrag vorhanden.
     let inv = invoices::get(&env.pool, &invoice_id)
@@ -308,7 +310,7 @@ async fn send_invoice_happy_path_against_mailhog() {
     // MailHog: Mail angekommen, mit ZUGFeRD-PDF-Anhang + gerendertem Betreff.
     let messages = mailhog_messages().expect("MailHog-API muss antworten");
     assert!(
-        messages.contains("empfaenger@kunde-test.de"),
+        messages.contains("empfaenger@example.org"),
         "Empfänger fehlt in MailHog"
     );
     assert!(
@@ -348,4 +350,168 @@ fn mailhog_messages() -> Option<String> {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Konto auf der Test-Gegenstelle (`tests/smtp_support`), Klartext ohne Login.
+async fn create_fake_smtp_account(pool: &SqlitePool, port: u16) -> String {
+    mail_accounts::create(
+        pool,
+        &mail_accounts::MailAccountInput {
+            label: "Test-SMTP".into(),
+            auth_type: "smtp_password".into(),
+            smtp_host: Some("127.0.0.1".into()),
+            smtp_port: Some(i64::from(port)),
+            smtp_user: None,
+            smtp_use_tls: false,
+            from_email: "rechnung@example.org".into(),
+            from_name: "Beispiel IT-Service".into(),
+            is_default: true,
+            oauth_tenant_id: None,
+            oauth_client_id: None,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+async fn count(pool: &SqlitePool, sql: &str) -> i64 {
+    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+}
+
+/// R4-S2-EMAILLOG (Lauf F5c): Kann der Eintrag im append-only `email_log` nach
+/// einem gelungenen Versand nicht geschrieben werden, bleibt der Versand gültig
+/// (Rechnung „versendet“), aber Klein.Buch verschweigt es nicht: Audit
+/// `mail.log_failed` mit Empfänger und Beleg, Hinweis in der Inbox, Warnung im
+/// Ergebnis. Ohne Fehler gibt es keine Warnung.
+#[tokio::test]
+async fn failed_email_log_entry_is_reported_not_swallowed() {
+    let server = smtp_support::start(None).await;
+    let env = setup_env().await;
+    let (invoice_id, number) = create_locked_invoice(&env).await;
+    let account_id = create_fake_smtp_account(&env.pool, server.port).await;
+
+    // Nur im Test: das Protokoll nimmt nichts an.
+    sqlx::query(
+        "CREATE TRIGGER test_email_log_fail BEFORE INSERT ON email_log
+         BEGIN SELECT RAISE(ABORT, 'Testfehler: Protokoll nicht schreibbar'); END",
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+
+    let result = mail_cmd::send_invoice_core(
+        &env.pool,
+        &env.paths,
+        &account_id,
+        &invoice_id,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("der Versand selbst gelingt");
+    let warning = result.warning.expect("Warnung an den Aufrufer");
+    assert!(warning.contains("Versandprotokoll"), "{warning}");
+    assert_eq!(server.messages().len(), 1, "Mail ist hinausgegangen");
+    let inv = invoices::get(&env.pool, &invoice_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(inv.status, "sent");
+    assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM email_log").await, 0);
+
+    let details: String =
+        sqlx::query_scalar("SELECT details_json FROM audit_log WHERE action = 'mail.log_failed'")
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    let details: serde_json::Value = serde_json::from_str(&details).unwrap();
+    assert_eq!(details["related_kind"], "invoice");
+    assert_eq!(details["related_number"], number.as_str());
+    assert_eq!(details["status"], "success");
+    assert_eq!(details["to"], "empfaenger@example.org");
+    assert!(details["error"]
+        .as_str()
+        .unwrap()
+        .contains("Protokoll nicht schreibbar"));
+    let notice: (String, String) = sqlx::query_as(
+        "SELECT severity, body FROM notifications WHERE title = 'Versandprotokoll unvollständig'",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(notice.0, "warning");
+    assert!(notice.1.contains(&number), "{}", notice.1);
+    assert!(notice.1.contains("wurde versendet"), "{}", notice.1);
+
+    // Protokoll wieder schreibbar: kein Hinweis, keine Warnung.
+    sqlx::query("DROP TRIGGER test_email_log_fail")
+        .execute(&env.pool)
+        .await
+        .unwrap();
+    let result = mail_cmd::send_invoice_core(
+        &env.pool,
+        &env.paths,
+        &account_id,
+        &invoice_id,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(result.warning.is_none());
+    assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM email_log").await, 1);
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'mail.log_failed'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(server.messages().len(), 2);
+}
+
+/// W14-009 (Lauf F5c): Im Kern verlangt ein abweichender Empfänger eine frische
+/// Bestätigung — vor jedem Versandversuch; ohne Override (Abo-Lauf) nie.
+#[tokio::test]
+async fn deviating_recipient_requires_fresh_confirmation_in_core() {
+    use klein_buch_lib::commands::reauth::with_reauth;
+    use klein_buch_lib::error::Error;
+    let server = smtp_support::start(None).await;
+    let env = setup_env().await;
+    let (invoice_id, _) = create_locked_invoice(&env).await;
+    let account_id = create_fake_smtp_account(&env.pool, server.port).await;
+    let send = |to: Option<&'static str>| {
+        mail_cmd::send_invoice_core(
+            &env.pool,
+            &env.paths,
+            &account_id,
+            &invoice_id,
+            to,
+            None,
+            Some("Eigener Text"),
+        )
+    };
+
+    // Ohne Bestätigung (wie ein interner Aufruf): abweichend → abgelehnt.
+    let err = send(Some("fremd@example.net")).await.unwrap_err();
+    assert!(matches!(err, Error::ReauthRequired), "{err:?}");
+    let err = with_reauth(false, send(Some("fremd@example.net")))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ReauthRequired), "{err:?}");
+    assert!(server.messages().is_empty(), "kein Versandversuch");
+    // Hinterlegter Empfänger (andere Schreibweise) und kein Override: frei.
+    send(None).await.expect("hinterlegter Empfänger");
+    send(Some(" Empfaenger@Example.org "))
+        .await
+        .expect("Schreibweise");
+    // Mit frischer Bestätigung: abweichender Empfänger erlaubt.
+    with_reauth(true, send(Some("fremd@example.net")))
+        .await
+        .expect("nach Re-Auth");
+    assert_eq!(server.messages().len(), 3);
 }

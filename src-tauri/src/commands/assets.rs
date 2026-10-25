@@ -313,41 +313,25 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
     let dtype = DisposalType::from_db(&args.disposal_type).ok_or_else(|| {
         Error::Domain(format!("Ungültige Veräußerungsart: {}", args.disposal_type))
     })?;
-    if args.disposal_date > clock.today_berlin() {
-        return Err(Error::Domain(
-            "Das Veräußerungsdatum darf nicht in der Zukunft liegen.".into(),
-        ));
-    }
-    // Erlös nur bei Verkauf; sonst hart auf 0.
-    let proceeds = match dtype {
-        DisposalType::Sale => {
-            if args.proceeds_cents < 0 {
-                return Err(Error::Domain(
-                    "Der Verkaufserlös darf nicht negativ sein.".into(),
-                ));
-            }
-            args.proceeds_cents
-        }
-        _ => 0,
-    };
-
     let existing = assets::get(pool, &args.asset_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {}", args.asset_id)))?;
     if existing.disposed == 1 {
         return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
     }
-    // Lauf F3b: kein Abgang vor der Anschaffung — die anteilige AfA wäre ein
-    // „Datenfehler“ (nichts gebucht), der ganze Restbuchwert ginge als Verlust
-    // in ein Jahr vor der Anschaffung, und die Abgangsfelder sind danach fest.
+    // R1-020 / Lauf F3b: Datum (nicht in der Zukunft, nicht vor der Anschaffung —
+    // sonst fehlte die anteilige AfA und der Restbuchwert ginge als Verlust in ein
+    // Jahr vor dem Zugang) und Erlös (nur beim Verkauf, nie negativ) prüft der
+    // Functional Core.
     let acquisition_date = parse_db_date(&existing.acquisition_date)?;
-    if args.disposal_date < acquisition_date {
-        return Err(Error::Domain(format!(
-            "Das Abgangsdatum {} liegt vor dem Anschaffungsdatum {} — bitte das Datum prüfen.",
-            args.disposal_date.format("%d.%m.%Y"),
-            acquisition_date.format("%d.%m.%Y")
-        )));
-    }
+    let proceeds = crate::domain::asset::validate_disposal(
+        dtype,
+        args.proceeds_cents,
+        args.disposal_date,
+        acquisition_date,
+        clock.today_berlin(),
+    )
+    .map_err(|e| Error::Domain(crate::domain::asset::disposal_message(&e)))?;
 
     // R2-023 (GJ-Guard): Disposal-Datum muss in einem offenen GJ liegen —
     // die Veräußerungs-Buchung kippt sonst rückwirkend Restbuchwert und

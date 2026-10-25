@@ -110,9 +110,13 @@ const REAUTH: &[&str] = &[
     "backup_download",
 ];
 
-/// Bedingte Re-Auth (W14-038, Lauf F4a): der Kern entscheidet (IBAN, BIC,
-/// §19-Status), frisch gilt auch eine Anmeldung der letzten 5 min.
-const CONDITIONAL: &[&str] = &["seller_profile_upsert"];
+/// Bedingte Re-Auth: Zahlungsdaten/§19 (W14-038), Versand an einen abweichenden
+/// Empfänger (W14-009, Lauf F5c).
+const CONDITIONAL: &[&str] = &[
+    "seller_profile_upsert",
+    "mail_send_invoice",
+    "mail_send_quote",
+];
 
 /// Jobs laut Plan W5.6.
 const JOBS: &[&str] = &[
@@ -181,13 +185,14 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(expected.len(), REGISTRY.len() - NOT_ON_CMD.len());
     assert_eq!(
         REGISTRY.len(),
-        196,
+        197,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
          - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
          + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
          + Tages-Backup-Uhrzeit + 2 Nummernkreise (Lauf F1b) \
          + 2 vorgemerkte Entwürfe + Restore-Prüfung der Abos (Lauf F1d) \
-         + Entwurf verwerfen (Lauf F2a) + Backup herunterladen (Lauf F3a)"
+         + Entwurf verwerfen (Lauf F2a) + Backup herunterladen (Lauf F3a) \
+         + Entwurf bearbeiten (Lauf F5a)"
     );
 
     for spec in REGISTRY.iter() {
@@ -713,7 +718,7 @@ fn every_command_has_an_explicit_kind() {
     let writes = REGISTRY.iter().filter(|c| c.kind == Kind::Write).count();
     assert_eq!(
         (reads, writes, JOBS.len()),
-        (75, 108, 13),
-        "Einstufung wie vor W14-012 (Lauf F4b)"
+        (75, 109, 13),
+        "Einstufung wie vor W14-012 (Lauf F4b), + invoices_update_draft (Write, Lauf F5a)"
     );
 }

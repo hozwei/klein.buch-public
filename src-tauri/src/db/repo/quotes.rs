@@ -284,13 +284,19 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<QuoteLis
 /// unveränderlich. PDF + tatsächlicher Mail-Versand: Block 8.
 pub async fn issue(pool: &SqlitePool, id: &str) -> Result<()> {
     let mut tx = crate::db::begin_immediate(pool).await?;
-    issue_in(&mut tx, id).await?;
+    issue_in(&mut tx, id, None).await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// [`issue`] in einer laufenden Schreib-Transaktion (Lauf F3b).
-pub async fn issue_in(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
+/// [`issue`] in einer laufenden Schreib-Transaktion (Lauf F3b). `is_kleinunternehmer`
+/// friert den §19-Status zum Festschreiben ein (KB-0010; danach sperrt ihn
+/// `trg_quotes_immutable`); `None` behält den gespeicherten Wert.
+pub async fn issue_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    is_kleinunternehmer: Option<bool>,
+) -> Result<()> {
     let row = sqlx::query("SELECT status, locked_at FROM quotes WHERE id = ?")
         .bind(id)
         .fetch_optional(&mut *conn)
@@ -309,9 +315,11 @@ pub async fn issue_in(conn: &mut sqlx::SqliteConnection, id: &str) -> Result<()>
             locked_at = datetime('now','utc'),
             sent_at = datetime('now','utc'),
             status = 'sent',
+            is_kleinunternehmer = COALESCE(?, is_kleinunternehmer),
             updated_at = datetime('now','utc')
          WHERE id = ? AND locked_at IS NULL AND status = 'draft'",
     )
+    .bind(is_kleinunternehmer.map(i64::from))
     .bind(id)
     .execute(&mut *conn)
     .await?;

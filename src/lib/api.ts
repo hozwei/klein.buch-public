@@ -333,6 +333,11 @@ export function invoicesCreateDraft(args: CreateDraftArgs): Promise<InvoiceDetai
   return invoke<InvoiceDetail>("invoices_create_draft", { args });
 }
 
+/** Bearbeitet einen offenen Rechnungs-Entwurf (Lauf F5); die Nummer bleibt. */
+export function invoicesUpdateDraft(id: string, args: CreateDraftArgs): Promise<InvoiceDetail> {
+  return invoke<InvoiceDetail>("invoices_update_draft", { id, args });
+}
+
 export function invoicesValidateDraft(id: string): Promise<ValidationIssueDto[]> {
   return invoke<ValidationIssueDto[]>("invoices_validate_draft", { id });
 }

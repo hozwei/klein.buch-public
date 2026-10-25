@@ -66,6 +66,25 @@ Pflichtangaben und die §19-Klausel; sie unterscheiden sich nur in
 Stil und Layout. Eine Vorschau zeigt das gewählte Template mit
 Beispiel-Daten.
 
+### Eigene Vorlagen
+
+Eigene Vorlagen legt der Betreiber als `.typ`-Datei in
+`/inputs/pdf-templates/` ab. Zwei Dinge prüft Klein.Buch vor jedem
+Rendern:
+
+1. **§19-Klausel.** Als Kleinunternehmer braucht die Vorlage den
+   Kommentar `// §19-KLAUSEL-BLOCK: REQUIRED` und muss das Feld
+   `kleinunternehmer.hinweis_text` ausgeben. Fehlt eines, lehnt
+   Klein.Buch das Ausstellen ab.
+2. **Storno-Darstellung.** Eine Storno-Rechnung erkennt die Vorlage am
+   Feld `storno_of` (Nummer und Datum der stornierten Rechnung): Titel
+   "Stornorechnung", Bezug auf die stornierte Rechnung, kein
+   Überweisungshinweis. Nutzt Deine Vorlage `storno_of` nicht, erzeugt
+   Klein.Buch Stornos mit der eingebauten Vorlage "Klassisch" (bzw. der
+   eingebauten gleichen Namens) und legt einen Hinweis in die Inbox. So
+   erscheint ein Storno nie als Rechnung mit Zahlungsaufforderung. Die
+   mitgelieferte `default.typ` zeigt, wie beides aussieht.
+
 ## Backups
 
 Hier richtest Du die externen Backup-Ziele ein, auch mehrere

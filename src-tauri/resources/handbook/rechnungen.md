@@ -32,13 +32,23 @@ und Status. Die Status-Werte sind:
 Über der Tabelle filterst Du nach Geschäftsjahr und Status und
 blendest mit der Checkbox "Stornos anzeigen" die Storno-Belege ein.
 
-## Entwurf prüfen und verwerfen
+## Entwurf prüfen, bearbeiten und verwerfen
 
 Ein Entwurf bekommt seine Rechnungsnummer schon beim Anlegen. In der
 Detail-Ansicht prüft Klein.Buch die Pflichtangaben; solange Du nicht
-"Rechnung ausstellen" klickst, bleibt die Rechnung Entwurf. Einen
-gespeicherten Entwurf änderst Du nicht nachträglich: Stimmt etwas nicht,
-verwirf ihn und leg einen neuen an.
+"Rechnung ausstellen" klickst, bleibt die Rechnung Entwurf.
+
+Mit **Bearbeiten** in der Detail-Ansicht öffnest Du den Entwurf im
+bekannten Formular und änderst Empfänger, Daten, Positionen, Notiz und
+Bezahlt-Hinweis. Die Rechnungsnummer bleibt, deshalb bleibt auch das
+Rechnungsdatum im Geschäftsjahr der Nummer; für ein anderes Jahr
+verwirfst Du den Entwurf und legst einen neuen an. Eine aus einem Paket
+eingefügte Position, die Du änderst, verliert ihren Paket-Bezug und gilt
+danach als eigene Position. Stammt der Entwurf aus einem Angebot, bleibt
+der Empfänger der des Angebots. Nicht bearbeiten lassen sich
+ausgestellte Rechnungen, verworfene Entwürfe, Storno-Entwürfe und
+Entwürfe, die ein Abo-Lauf gerade festschreibt. Jede Änderung steht im
+Protokoll.
 
 **Verwerfen** findest Du in der Detail-Ansicht des Entwurfs neben
 "Rechnung ausstellen". Es braucht einen Grund (mindestens zehn Zeichen,

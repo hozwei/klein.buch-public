@@ -223,9 +223,128 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Node 24 (checkout 7, setup-node 7, upload-artifact 7, build-push 7, setup-buildx
   4, pnpm/action-setup 6). Basis-Images bleiben auf den LTS-Linien Node 22 und
   Java 21; Dependabot schlägt dort keine Major-Sprünge mehr vor.
+- **Rechnungs-Entwürfe bearbeiten (Lauf F5a, ADR 0039 Nr. 134):** „Bearbeiten“
+  auf der Detailseite öffnet einen offenen Entwurf im bekannten Formular; die
+  Nummer bleibt, das Datum bleibt im Geschäftsjahr der Nummer. Nicht für
+  ausgestellte, verworfene, Storno- und laufende Abo-Entwürfe. Audit
+  `invoice.draft_updated`. Geänderte Paket-Positionen verlieren ihren Paket-Bezug
+  (der Server prüft das jetzt auch beim Anlegen).
+- **§19-Status beim Festschreiben eingefroren:** Rechnung und Angebot halten den
+  Status fest, unter dem sie geprüft und gerendert wurden; das Angebots-PDF und
+  sein Klausel-Check nutzen ihn. Ein Storno übernimmt den Status der stornierten
+  Rechnung, auch nach einem Wechsel.
+- **Umsatzsteuer je Steuersatz aus der Nettosumme** (EN 16931 BR-CO-17) statt als
+  Summe gerundeter Positionssteuern — bei Regelbesteuerung mit vielen
+  Kleinpositionen stimmen Beleg und E-Rechnung jetzt auf den Cent; bei §19
+  ändert sich nichts.
+- **Regelbesteuerung:** Steuerart E gibt es nur als Kleinunternehmer; Formulare
+  und Paket-Positionen setzen E auf S mit 19 %, der Satz ist an jeder Position
+  (auch aus Paketen) einstellbar.
+- **Eigene Rechnungsvorlage ohne Storno-Darstellung:** Stornos entstehen dann
+  mit der eingebauten Vorlage, ein Hinweis in der Inbox erklärt es.
+- **Fehlermeldungen der Datenbank-Schutzregeln** erscheinen deutsch und
+  verständlich (mit Referenz), der technische Text steht nur im Log.
+- **Übersicht über Mitternacht:** Datum, Jahr und Fälligkeiten springen in einem
+  offenen Tab um Mitternacht (Europe/Berlin) auf den neuen Tag.
+- **ELSTER-Ausfüllhilfe nach dem Vordruck des Jahres (Lauf F5b, ADR 0039
+  Nr. 135):** Zeile und Kennzahl (Kz) der amtlichen Anlage EÜR 2024/2025 bzw.
+  2026 (dort „Waren“ in Zeile 29 und alle weiteren Ausgaben-Zeilen eins tiefer);
+  CSV mit Spalte `Kennzahl`, PDF und Export-Seite mit Spalte „Kz“. Kategorien mit
+  eigener Zeile (Telefon/Internet, Fortbildung, Versicherungen, Software,
+  Bürobedarf, Werbung, Kfz) stehen dort statt in „übrige Betriebsausgaben“.
+- **Regelbesteuerung in der EÜR:** Einnahmen netto in Zeile 15, Umsatzsteuer in
+  Zeile 17, steuerfreie in Zeile 16, Ausgaben netto mit Vorsteuer — nach dem
+  Status, mit dem die Rechnung ausgestellt wurde. Was fehlt (Voranmeldung,
+  Zahlungen an das Finanzamt, USt auf Anlagenverkäufe), nennen Ausfüllhilfe,
+  PDF, LIESMICH und der Verzicht-Dialog.
+- **DATEV-Stapel:** Geldkonto je Zahlungskonto (Bank, Kasse, Geldtransit für
+  PayPal/Stripe); beim Erfassen einer Zahlung wählst Du das Konto. Erlöse bei
+  Regelbesteuerung je Steuersatz auf die Automatikkonten, Kosten mit
+  BU-Schlüssel; Sachkontenrahmen im Kopf, Berater-/Mandantennummer optional.
+- **Versand an einen anderen Empfänger (Lauf F5c, ADR 0039 Nr. 136, W14-009):**
+  Rechnungs- und Angebotsversand an eine andere als die hinterlegte Adresse
+  verlangt eine Bestätigung mit Passphrase und App-Code (eine Anmeldung der
+  letzten 5 min genügt); Betreff und Text bleiben frei.
+- **ZUGFeRD-Profil XRECHNUNG (R3-017):** Das Rechnungs-PDF trägt das Profil, das
+  zur eingebetteten XRechnung 3.0 passt (XMP `XRECHNUNG`, Anhang
+  `xrechnung.xml`); bisher stand „EN 16931“ im Container. Mit KoSIT und Mustang
+  geprüft.
+- **Gespeicherte SMTP-Ports** folgen derselben Allowlist wie die
+  Verbindungstests (`KLEIN_BUCH_ALLOWED_TEST_PORTS`); private und
+  Loopback-Adressen bleiben erlaubt.
+- **Druck-PDF mit AGB:** Aktive Inhalte hochgeladener Rechtsdokumente
+  (JavaScript, Programmstart, Formularversand, eingebettete Dateien) werden beim
+  Zusammenführen entfernt; der Catalog ist der des Angebots.
 
 ### Fixed
 
+- **Nachbesserung Fachlogik (Lauf F5-fix, ADR 0039 Nr. 137, ADR 0040 Nr. 61):**
+  - Festschreiben übernimmt die Summen des ausgestellten Belegs (USt je
+    Steuergruppe wie XML und PDF); ein Entwurf mit Summen aus der älteren
+    Rundung bzw. aus einem älteren Backup weicht nicht mehr vom Beleg ab.
+  - Abo-Vorlagen mit Steuerart E (§19) erzeugen nach dem Wechsel zur
+    Regelbesteuerung keinen nummerierten Entwurf mehr, der beim Festschreiben
+    scheitert: Hinweis „übersprungen“, keine Nummer; Speichern mit E bei
+    Regelbesteuerung lehnt der Server ab.
+  - DATEV-Stapel: Bei Geldbewegungen ist „Konto“ das Geldkonto und
+    „Gegenkonto“ das Sachkonto mit BU-Schlüssel (Kosten, aktivierte Kosten,
+    Storno-Erstattung und Privatentnahme im Haben); negative Anteile einer
+    Steuergruppe werden gegengebucht statt weggelassen.
+  - Paket-Provenienz auch an Angeboten und Abo-Vorlagen: eine bearbeitete
+    Position verliert `source_package_*` schon beim Speichern.
+  - Der Inbox-Hinweis zur eingebauten Storno-Vorlage entsteht erst nach dem
+    erfolgreichen Festschreiben.
+  - Druck-PDF mit AGB: auch GoToR-, Thread-, Movie-, Sound-, RichMediaExecute-,
+    SetOCGState- und GoTo3DView-Aktionen, Medien-/3D-Annotationen und Links
+    außer http(s)/mailto werden entfernt.
+  - Beträge über 1 Mrd. € bei Kosten, Zahlungen, Anschaffungen, Abgangserlösen,
+    Privatbewegungen und Kosten-Abos sind ein Validierungsfehler statt eines
+    Überlaufs.
+  - Die Übersicht wechselt nach einem Ruhezustand des Geräts sofort auf den
+    neuen Tag (Fokus, `pageshow`, Minutentakt).
+  - Hinweis „Gültiger App-Code mit falschem Daten-Passwort“: Jede Folge hat
+    eine eigene Kennung; zwei Folgen in derselben Sekunde (etwa um einen
+    Neustart) verschluckten bisher den zweiten Hinweis.
+- **Aktivierte Kosten doppelt in der EÜR (Lauf F5b):** Eine Kostenposition, aus
+  der eine Anlage angelegt wurde, zählte zusätzlich zur AfA als Ausgabe. Jetzt
+  wirkt sie nur über die AfA; der DATEV-Stapel bucht sie als Zugang aufs
+  Anlagekonto. Abgeschlossene Jahre mit solchen Posten meldet der
+  Snapshot-Abgleich.
+- **Storno-Überhang in der Ausfüllhilfe:** Übersteigen Storno-Erstattungen die
+  Einnahmen eines Jahres, steht der Überhang als Betriebsausgabe in der Hilfe
+  (bisher als nicht einzutragende „Zeile 18“, die ELSTER für erstattete
+  Umsatzsteuer nutzt).
+- **DATEV-Konten:** Auffang „Sonstige betriebliche Aufwendungen“ 4900/6300
+  (bisher SKR04 6800 = Porto); Anlagenverkauf ohne Umsatzsteuer (bisher
+  19-%-Automatikkonto) mit Restbuchwert-Buchung; vollständige Windows-1252-
+  Tabelle, Zeilenumbrüche in Texten brechen keine Buchungszeile mehr um.
+- **EÜR-PDF und Deckblatt:** Datum als TT.MM.JJJJ; die Summe der Einnahmen-Tabelle
+  zieht die aufgeführten Stornos ab.
+- **E-Rechnungs-Empfang (Lauf F5c):** Abgeschnittenes oder unbalanciertes XML
+  wird abgelehnt (KB-0015); UBL liest den Rechnungstyp (BT-3), Gutschriften
+  werden in CII und UBL mit jedem Gutschrift-Code abgelehnt (bisher lief eine
+  UBL-Gutschrift als Kosten durch).
+- **Versandprotokoll (R4-S2-EMAILLOG):** Scheitert der Eintrag im
+  `email_log` nach einem Versand, gibt es einen Audit-Eintrag
+  `mail.log_failed`, einen Inbox-Hinweis und eine Warnung nach dem Senden statt
+  nur einer Log-Zeile.
+- **Eigene SMTP-CA:** Eine CA-Datei ohne PEM-Zertifikat wird mit klarer Meldung
+  abgelehnt (bisher scheiterte erst der Handshake mit „UnknownIssuer“).
+
+- **Beträge und Mengen (Lauf F5a, ASVS V5.4.3):** Mengen bis 1 000 000 mit
+  höchstens 4 Nachkommastellen, Einzelpreise bis 1 Mrd. €, Steuersätze bis
+  100 %; Summen laufen nicht mehr still über (Release mit Überlaufprüfung).
+  AfA und betrieblicher Anteil rechnen ganzzahlig, Fehlertexte ohne
+  Gleitkomma.
+- **Zahlungshistorie:** Eine beschädigte Historie führt zu einer Meldung statt
+  zu fehlenden Einnahmen in der EÜR; eine Zahlung auf einen Altbestand ohne
+  Historie übernimmt die frühere Zahlung.
+- **Prüfungen:** Annahmedatum eines Angebots zwischen Angebotsdatum und heute;
+  E-Mail-Adressen brauchen eine Top-Level-Domain mit mindestens zwei
+  Buchstaben; der Abgang einer Anlage wird im fachlichen Kern geprüft.
+- **§14c-Schutz schon beim Speichern:** Ein Entwurf mit Umsatzsteuer bei §19
+  wird nicht mehr gespeichert; ein anonymisierter Kontakt bekommt keinen neuen
+  Entwurf.
 - **Restore-Tausch (Lauf F4d, ADR 0039 Nr. 133):** Verschwindet das WAL der
   Datenbank zwischen Prüfung und Verschieben (SQLite löscht es beim Schließen
   der letzten Verbindung nachlaufend), bricht der Tausch nicht mehr mit „nicht

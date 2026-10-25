@@ -66,6 +66,12 @@ Klein.Buch unterstützt drei AfA-Methoden:
 durch Nutzungsdauer, jedes Jahr derselbe Betrag. Beispiel: ein
 Werkzeug für 3.000 € auf 5 Jahre = 600 € pro Jahr.
 
+Im letzten Jahr der linearen AfA bleibt **1 Cent** als Erinnerungswert
+stehen, solange Du die Anlage noch nutzt. So bleibt sie im
+Anlageverzeichnis sichtbar. Vorgeschrieben ist das für die EÜR nicht,
+es ist übliche Buchführungspraxis. Steuerlich geht nichts verloren:
+Beim Ausbuchen wirkt der Cent mit dem Restbuchwert als Ausgabe.
+
 **Sofortabschreibung (geringwertig, ≤ 800 € netto)**. Der volle
 Betrag landet im Kaufjahr als Ausgabe in der EÜR. Wahlrecht für
 GWG nach §6 Abs. 2 EStG.
@@ -102,6 +108,12 @@ schmälert den Gewinn. Da kein Geld fließt, ist das ein reiner
 Buchungs-Vorgang. Das schreibt §4 Abs. 3 Satz 3 EStG ausdrücklich
 als Ausnahme von der Cash-Basis vor.
 
+Hast Du eine Anlage aus einer Kostenposition angelegt („als Anlage
+aktivieren“), zählt diese Kostenposition in der EÜR nicht mehr als
+Ausgabe. Die Anschaffungskosten wirken dann nur über die AfA, sonst
+stünden sie doppelt in der EÜR. Im DATEV-Buchungsstapel erscheint die
+Zahlung als Zugang auf dem Anlagekonto.
+
 ## Wann Du den Steuerberater fragen solltest
 
 Bei jeder größeren Anschaffung, die einen klaren AfA-Charakter hat
@@ -112,4 +124,4 @@ hilft Dir dann, die Anlage korrekt zu erfassen.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

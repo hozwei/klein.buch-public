@@ -95,6 +95,7 @@
         body: body || null,
       });
       flash(`Gesendet an ${res.to} (${res.attachmentCount} Anhänge).`, "ok");
+      if (res.warning) flash(res.warning, "error");
       setTimeout(() => goto(`/quotes/${id}`), 900);
     } catch (e) {
       flash("Versand fehlgeschlagen: " + String(e), "error");

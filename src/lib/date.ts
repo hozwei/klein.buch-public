@@ -157,3 +157,19 @@ export function daysBetweenIso(fromIso: string, toIso: string): number {
 export function daysUntilBerlin(iso: string, now: Date = new Date()): number {
   return daysBetweenIso(todayBerlin(now), berlinDateOf(iso) ?? "");
 }
+
+/**
+ * Millisekunden bis zur nächsten Mitternacht in Europe/Berlin (mindestens 1).
+ * Mitternacht liegt nie in einer Umstellungslücke (die Zeit springt um 2 bzw.
+ * 3 Uhr), der Berliner Versatz ist +1 oder +2 Stunden (Lauf F5, D-27).
+ */
+export function msUntilNextBerlinMidnight(now: Date = new Date()): number {
+  const tomorrow = addDaysIso(todayBerlin(now), 1);
+  const m = ISO_DATE.exec(tomorrow);
+  if (!m) return 60_000;
+  const utcMidnight = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  // 00:00 Berlin = 22:00 UTC (Sommerzeit) oder 23:00 UTC (Winterzeit) des Vortags.
+  let t = utcMidnight - 2 * 3_600_000;
+  if (todayBerlin(new Date(t)) !== tomorrow) t += 3_600_000;
+  return Math.max(1, t - now.getTime());
+}

@@ -73,7 +73,7 @@ Zweigeteilt: **Generator** (Core, pur) baut CII-XML aus Domain-Daten,
 | `einvoice::generator` | Core | `to_xrechnung`: UN/CEFACT-CII (ADR 0007), §19-Klausel als BT-22-Note, BT-120-Tax-Category `E` |
 | `einvoice::parser` | Core | CII + UBL (Empfang, ADR 0024), ZUGFeRD-PDF-Extract (XML aus PDF/A-3-Embedded-File), ZUGFeRD-Profile-Whitelist `check_profile_whitelist` (akzeptiert `en16931`/`extended`/`xrechnung`, lehnt `minimum`/`basic-wl` mit `ParseError::UnsupportedProfile` ab — ADR 0037 D-73) |
 | `einvoice::validator` | Shell | `validate(xml, sidecar_dir)`: KoSIT-Sidecar-Aufruf, Rückgabe als strukturierter `ValidationReport` |
-| `einvoice::mustang_bridge` | Shell | `create_zugferd` (PDF + XML → PDF/A-3 mit eingebettetem XML), `extract_xml` (Empfang, Roh-XML-Viewer) |
+| `einvoice::mustang_bridge` | Shell | `create_zugferd` (PDF + XML → PDF/A-3 mit eingebettetem XML, ZUGFeRD-Profil XRECHNUNG `ZUGFERD_PROFILE`, ADR 0008 Amendment 2026-10-25), `extract_xml` (Empfang, Roh-XML-Viewer) |
 | `einvoice::sidecar_health` | Shell | Health-Check beim Serverstart (Lauf F4b, R3-014): Launcher, JARs, XRechnung-Konfiguration, `java -version` wie im Launcher; Ergebnis ins Log und als zurückgestellter Inbox-Hinweis (`notify::deferred`) |
 
 **Pipeline** (Festschreiben, `../ARCHITECTURE.md` §4.1):
@@ -104,7 +104,7 @@ ADRs: 0001 (Sidecar, Amendment: nur Linux), 0007, 0008, 0024, 0037
 | Datei | Schicht | Verantwortung |
 |---|---|---|
 | `pdf::klausel_check` | Core | Strenger §19-Marker-Check vor jedem Render (Rechnung + Angebot): `verify_for_kleinunternehmer`, `inspect`. Schlägt fehl, wenn ein Template ohne `// §19-KLAUSEL-BLOCK: REQUIRED`-Marker für eine §19-Rechnung verwendet werden soll. |
-| `pdf::bundle` | Core | `merge_pdfs` (lopdf) für das Angebots-Druck-Bundle (Angebot + AGB + Datenschutz → ein Druck-PDF, ADR 0018). |
+| `pdf::bundle` | Core | `merge_pdfs` (lopdf) für das Angebots-Druck-Bundle (Angebot + AGB + Datenschutz → ein Druck-PDF, ADR 0018); entfernt aktive Inhalte der hochgeladenen Teile (Aktionen, Medien-/3D-Annotationen, Links außer http(s)/mailto; ADR 0039 Nr. 136, 137). |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver (`resolve_invoice_template`, `resolve_quote_template`) + `list_templates`. Auflösung: `/inputs/pdf-templates/{name}.typ`-Override → Built-in; Sentinel `'default'` → `seller.default_pdf_template` (ADR 0030). |
 | `pdf::typst_render` | Shell | Typst-`World`-Impl: `render_invoice` (PDF/A-3b-fähig), `render_quote` (Plain-PDF), `render_euer` (Anlage EÜR), `render_package_catalog` (Paket-Broschüre); Logo aus `/data/branding` via `World::file()`. Läuft außerhalb der Runtime (`compile_async` über `limits::RENDER`). |
 
@@ -371,10 +371,13 @@ ADRs: 0025.
 | Datei | Schicht | Verantwortung |
 |---|---|---|
 | `euer::aggregate` | Core | `aggregate(fiscal_year, inputs)`: EÜR-Aggregation Cash-Basis §11 EStG (ADR 0022); Storno als negative Einnahme zum Storno-Datum (kein paid_amount-Netting möglich). Die Eingaben lädt `db::repo::euer::load_inputs`. |
-| `euer::elster_csv` | Core | `build_form`, `to_csv`: Zeilen-Mapping für die ELSTER-Ausfüllhilfe |
-| `euer::datev_csv` | Core | `build_bookings`, `to_datev`: DATEV-EXTF-Buchungsstapel (SKR03-Default, SKR04 wählbar), CP1252 |
-| `euer::detail` | Core | Einzelaufstellungen als CSV (`income_csv`, `expenses_csv`, `aveeur_csv`) |
-| `euer::stb_package` | — | Nur Doc-Stub. Das Steuerberater-ZIP (Anlage-EÜR-PDF + DATEV-CSV + Einzelaufstellungen + Belege) baut `commands::euer::euer_export_stb_zip` in der Download-Ablage. |
+| `euer::elster_csv` | Core | `build_form`, `to_csv`: Ausfüllhilfe nach Kennzahl und Zeile des amtlichen Vordrucks je Jahr (`Pos`, `Layout`; 2024/2025, 2026), §19 brutto bzw. Regelbesteuerung netto/USt, Storno-Überhang als Betriebsausgabe (ADR 0039 Nr. 135) |
+| `euer::datev_csv` | Core | `build_bookings`, `to_datev`: DATEV-EXTF-Buchungsstapel (SKR03-Default, SKR04 wählbar), Geldkonto je Zahlungskonto, Erlöse je Steuergruppe, BU-Schlüssel, vollständiges CP1252 |
+| `euer::detail` | Core | Einzelposten mit Steuergruppen (`split_payment`), Zahlungskonto und Aktivierung; Einzelaufstellungen als CSV (`income_csv`, `expenses_csv`, `aveeur_csv`), `de_date` |
+
+Das Steuerberater-ZIP (Deckblatt, Anlage-EÜR-PDF, DATEV-CSV, ELSTER-CSV,
+Einzelaufstellungen, Belege, Manifest) baut `commands::euer::euer_export_stb_zip`
+in der Download-Ablage.
 
 **Cash-Basis.** Einnahmen am `paid_at`, Ausgaben am `paid_date`, Privatbewegungen
 EÜR-neutral. Teilzahlung pro Zahlungsjahr separat.

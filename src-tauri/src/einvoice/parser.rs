@@ -55,7 +55,7 @@ pub enum ParseError {
     /// Import unterstützt. Der Nutzer muss Gutschriften manuell als
     /// Korrektur-Buchung erfassen, damit Cash-Basis-EÜR konsistent bleibt.
     /// Fix R3-007.
-    #[error("Storno-/Gutschrift-Beleg (DocumentTypeCode 381) wird nicht automatisch importiert. Bitte den Beleg manuell als Korrektur erfassen, damit die EÜR-Cash-Basis konsistent bleibt.")]
+    #[error("Storno-/Gutschrift-Beleg (Gutschrift-Typ-Code, z. B. 381) wird nicht automatisch importiert. Bitte den Beleg manuell als Korrektur erfassen, damit die EÜR-Cash-Basis konsistent bleibt.")]
     CreditNoteNotSupported,
     /// ZUGFeRD-/Factur-X-/XRechnung-Profil-Whitelist (PV1-A2). Seit der
     /// E-Rechnungs-Pflicht 01.01.2025 sind nur noch EN-16931-konforme Profile
@@ -172,11 +172,16 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
     let mut scheme: Option<String> = None;
     // Textinhalt des aktuell offenen Elements.
     let mut text = String::new();
+    // Lokaler Name des Wurzelelements (UBL: `Invoice` oder `CreditNote`).
+    let mut root: Option<String> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 stack.push(local_name(e.name().as_ref()));
+                if root.is_none() {
+                    root = stack.first().cloned();
+                }
                 scheme = scheme_id(&e);
                 text.clear();
             }
@@ -201,11 +206,24 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
                 stack.pop();
                 scheme = None;
             }
+            // KB-0015: quick-xml meldet am Dateiende keine offenen Elemente;
+            // eine abgeschnittene oder unbalancierte Datei ist kein Beleg.
+            Ok(Event::Eof) if !stack.is_empty() => {
+                return Err(ParseError::Malformed(
+                    "unvollständiges XML (Datei abgeschnitten oder Elemente nicht geschlossen)"
+                        .into(),
+                ))
+            }
             Ok(Event::Eof) => break,
             Err(e) => return Err(ParseError::Malformed(e.to_string())),
             _ => {}
         }
         buf.clear();
+    }
+
+    // UBL-`CreditNote` ohne Typ-Code ist eine Gutschrift (Lauf F5c).
+    if syntax == Syntax::Ubl && p.type_code.is_none() && root.as_deref() == Some("CreditNote") {
+        p.type_code = Some("381".to_string());
     }
 
     // R3-008: EN-16931-Pflichtfeld-Härtung. Die Domain-Validierung würde diese
@@ -257,12 +275,23 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
     // `build_expense_input` hätte sonst eine 0-EUR-Geister-Kosten erzeugt.
     // Storno-Belege müssen manuell als Korrektur erfasst werden, damit die
     // EÜR-Cash-Basis konsistent bleibt (§11 EStG).
-    if matches!(p.type_code.as_deref(), Some("381")) {
+    // Lauf F5c: alle Gutschrift-Codes der EN 16931 (UNTDID 1001), nicht nur 381.
+    if p.type_code
+        .as_deref()
+        .is_some_and(|c| CREDIT_NOTE_TYPE_CODES.contains(&c.trim()))
+    {
         return Err(ParseError::CreditNoteNotSupported);
     }
 
     Ok(p)
 }
+
+/// Gutschrift-Typ-Codes (BT-3) nach EN 16931 / UNTDID 1001 (Lauf F5c): 81, 83,
+/// 261, 262, 296, 308, 381, 396, 420, 458, 532. Eine UBL-`CreditNote` ohne Code
+/// gilt als 381.
+pub const CREDIT_NOTE_TYPE_CODES: &[&str] = &[
+    "81", "83", "261", "262", "296", "308", "381", "396", "420", "458", "532",
+];
 
 // =============================================================================
 // Profile-Whitelist (PV1-A2)
@@ -402,6 +431,10 @@ fn assign_ubl(stack: &[String], text: &str, p: &mut ParsedEInvoice) {
         set_date_once(&mut p.due_date, text);
     } else if n == 2 && l == "DocumentCurrencyCode" {
         set_once(&mut p.currency_code, text);
+    } else if n == 2 && (l == "InvoiceTypeCode" || l == "CreditNoteTypeCode") {
+        // BT-3 (Lauf F5c, neuer Fund): bisher nur bei CII gelesen — eine
+        // UBL-Gutschrift lief so als Kosten durch statt abgelehnt zu werden.
+        set_once(&mut p.type_code, text);
     }
     // Verkäufer.
     else if contains(stack, "AccountingSupplierParty") {
@@ -582,16 +615,15 @@ fn set_date_once(slot: &mut Option<NaiveDate>, text: &str) {
     }
 }
 
-fn set_amount_once(slot: &mut Option<i64>, text: &str) {
+/// Setzt den Betrag nur, solange noch keiner gesetzt ist — für die Rückfall-Felder
+/// (BT-106 LineTotal, BT-115 DuePayable bzw. UBL LineExtension/Payable), die nur
+/// gelten, wenn das maßgebliche Feld fehlt.
+fn set_amount_if_none(slot: &mut Option<i64>, text: &str) {
     if slot.is_none() {
         if let Some(c) = parse_decimal_to_cents(text) {
             *slot = Some(c);
         }
     }
-}
-
-fn set_amount_if_none(slot: &mut Option<i64>, text: &str) {
-    set_amount_once(slot, text);
 }
 
 /// Setzt den Betrag, sofern parsebar — **überschreibt** einen bestehenden Wert.
@@ -635,7 +667,15 @@ pub fn parse_date_flex(s: &str) -> Option<NaiveDate> {
 }
 
 /// Parst einen EN-16931-Dezimalbetrag (`.` als Dezimaltrenner) in Cents.
-/// Tausender-Kommas werden entfernt; auf 2 Nachkommastellen kaufmännisch gerundet.
+/// Tausender-Kommas werden entfernt.
+///
+/// **Rundung (R3-S2-PARSER):** EN 16931 erlaubt für Beträge (BT-106 ff.) höchstens
+/// zwei Nachkommastellen; mehr liefern nur fehlerhafte Absender. Dann wird
+/// kaufmännisch auf Cent gerundet (DIN 1333: ab der halben Einheit vom Betrag her
+/// aufgerundet, bei negativen Beträgen symmetrisch, also `-0.005` → `-1` Cent).
+/// Maßgeblich ist allein die dritte Nachkommastelle, weil jede Folge ab ihr
+/// genau dann ≥ 0,005 ist, wenn sie ≥ 5 ist. Das Original-XML bleibt im Archiv,
+/// der Nutzer sieht die Beträge vor dem Festschreiben.
 pub fn parse_decimal_to_cents(s: &str) -> Option<i64> {
     let t = s.trim();
     if t.is_empty() {
@@ -1043,15 +1083,67 @@ mod tests {
         assert!(input.reverse_charge_13b);
     }
 
+    /// KB-0015: abgeschnittene bzw. unbalancierte Dateien sind strikt ein Fehler.
     #[test]
     fn malformed_xml_errors() {
-        // Root erkannt (UBL), aber Tags brechen → Malformed.
-        let res = parse("<Invoice><cbc:ID>x</cbc:ID>");
-        // Unbalancierte Tags: quick-xml meldet beim EOF kein Fehler per se;
-        // hier prüfen wir nur, dass kein Panic passiert und das ID-Feld kam.
-        if let Ok(p) = res {
-            assert_eq!(p.invoice_number.as_deref(), Some("x"));
+        // Root erkannt (UBL), aber nie geschlossen.
+        assert!(matches!(
+            parse("<Invoice><cbc:ID>x</cbc:ID>"),
+            Err(ParseError::Malformed(_))
+        ));
+        // Mitten im Beleg abgeschnitten (vollständige Pflichtfelder davor).
+        let cut = &UBL_FIXTURE[..UBL_FIXTURE.find("<cac:LegalMonetaryTotal>").unwrap()];
+        let err = parse(cut).unwrap_err();
+        assert!(matches!(err, ParseError::Malformed(_)), "{err:?}");
+        assert!(err.to_string().contains("unvollständig"), "{err}");
+        // Falsches End-Tag.
+        let crossed = UBL_FIXTURE.replace("</cbc:ID>", "</cbc:Name>");
+        assert!(matches!(parse(&crossed), Err(ParseError::Malformed(_))));
+        // Vollständige Datei bleibt gültig.
+        assert!(parse(UBL_FIXTURE).is_ok());
+    }
+
+    /// Lauf F5c (neuer Fund): UBL liest BT-3; Gutschriften werden in beiden
+    /// Syntaxen mit jedem Gutschrift-Code abgelehnt, eine `CreditNote` auch ohne.
+    #[test]
+    fn ubl_type_code_and_credit_notes() {
+        assert_eq!(
+            parse(UBL_FIXTURE).unwrap().type_code.as_deref(),
+            Some("380")
+        );
+        for code in ["381", "396", "261"] {
+            let xml = UBL_FIXTURE.replace(
+                "<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>",
+                &format!("<cbc:InvoiceTypeCode>{code}</cbc:InvoiceTypeCode>"),
+            );
+            assert_eq!(
+                parse(&xml),
+                Err(ParseError::CreditNoteNotSupported),
+                "{code}"
+            );
         }
+        let credit_note = UBL_FIXTURE
+            .replace("<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>", "")
+            .replace("ubl:Invoice", "ubl:CreditNote")
+            .replace("schema:xsd:Invoice-2", "schema:xsd:CreditNote-2");
+        assert_eq!(parse(&credit_note), Err(ParseError::CreditNoteNotSupported));
+        // Korrekturrechnung (384) bleibt ein normaler Import.
+        let corrected = UBL_FIXTURE.replace(
+            "<cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>",
+            "<cbc:InvoiceTypeCode>384</cbc:InvoiceTypeCode>",
+        );
+        assert!(parse(&corrected).is_ok());
+    }
+
+    /// R3-S2-PARSER: Rundung auf Cent über die dritte Nachkommastelle, auch negativ.
+    #[test]
+    fn decimal_rounding_is_commercial_and_symmetric() {
+        assert_eq!(parse_decimal_to_cents("1.004999"), Some(100));
+        assert_eq!(parse_decimal_to_cents("1.005"), Some(101));
+        assert_eq!(parse_decimal_to_cents("-1.005"), Some(-101));
+        assert_eq!(parse_decimal_to_cents("-0.004"), Some(0));
+        assert_eq!(parse_decimal_to_cents("12.3a"), None);
+        assert_eq!(parse_decimal_to_cents("99999999999999999999"), None);
     }
 
     // ---- PV1-A2: ZUGFeRD-/XRechnung-Profil-Whitelist -----------------------

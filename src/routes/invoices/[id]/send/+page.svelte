@@ -80,6 +80,8 @@
         body: body || null,
       });
       flash(`Gesendet an ${res.to} (${res.attachmentCount} Anhang).`, "ok");
+      // R4-S2-EMAILLOG: Versand gelungen, Protokolleintrag fehlt.
+      if (res.warning) flash(res.warning, "error");
       setTimeout(() => goto(`/invoices/${id}`), 900);
     } catch (e) {
       flash("Versand fehlgeschlagen: " + String(e), "error");

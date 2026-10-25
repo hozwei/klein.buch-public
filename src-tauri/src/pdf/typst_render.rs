@@ -781,6 +781,30 @@ fn load_branding_fonts(dir: &Path) -> Vec<Font> {
     fonts
 }
 
+/// Gesetzter Text (alle Text-Läufe aller Seiten) eines Plain-Dokuments — nur
+/// für Tests anderer Module (z. B. Datumsformat im EÜR-PDF, KB-0018).
+#[cfg(test)]
+pub(crate) fn laid_out_text(template_source: &str, data_json: &str) -> String {
+    fn collect(frame: &typst::layout::Frame, out: &mut String) {
+        for (_, item) in frame.items() {
+            match item {
+                typst::layout::FrameItem::Group(g) => collect(&g.frame, out),
+                typst::layout::FrameItem::Text(t) => out.push_str(&t.text),
+                _ => {}
+            }
+        }
+    }
+    let world = TemplateWorld::new(template_source, data_json, None, &[]).expect("world");
+    let document = typst::compile::<PagedDocument>(&world)
+        .output
+        .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
+    let mut text = String::new();
+    for page in &document.pages {
+        collect(&page.frame, &mut text);
+    }
+    text
+}
+
 struct TemplateWorld {
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,

@@ -14,6 +14,7 @@
     MaterializedPackageItem,
   } from "$lib/types";
   import { euro } from "$lib/format";
+  import { applyTaxRules, documentTotals } from "$lib/tax";
   import Banner from "$lib/Banner.svelte";
   import PageBar from "$lib/PageBar.svelte";
   import TravelLineAdder from "$lib/TravelLineAdder.svelte";
@@ -85,24 +86,13 @@
 
   // §19-Hardline: USt-Felder gesperrt, Items auf category=E / rate=0 zwingen.
   // In-place pro Property mutieren (keine neue Array-Identität → kein Effect-Loop).
+  // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    if (!isKlein) return;
-    for (const it of items) {
-      if (it.taxRatePercent !== 0) it.taxRatePercent = 0;
-      if (it.taxCategoryCode !== "E") it.taxCategoryCode = "E" as TaxCategoryCode;
-    }
+    applyTaxRules(items, seller ? isKlein : null);
   });
 
-  let totals = $derived.by(() => {
-    let net = 0, tax = 0;
-    for (const it of items) {
-      const itNet = Math.round(it.quantity * it.unitPriceCents);
-      const itTax = Math.round((itNet * it.taxRatePercent) / 100);
-      net += itNet;
-      tax += itTax;
-    }
-    return { net, tax, gross: net + tax };
-  });
+  // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
+  let totals = $derived(documentTotals(items));
 
   onMount(async () => {
     loading = true;

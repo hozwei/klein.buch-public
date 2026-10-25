@@ -83,25 +83,52 @@ async fn mk_paid_invoice(
     number: &str,
     date: NaiveDate,
     cents: i64,
-) {
+) -> String {
+    let id = mk_locked_invoice(
+        pool,
+        contact_id,
+        number,
+        date,
+        vec![item(cents)],
+        true,
+        None,
+    )
+    .await;
+    invoices::record_payment(pool, &id, cents, &date.to_string(), None)
+        .await
+        .unwrap();
+    id
+}
+
+/// Legt eine ausgehende Rechnung über das Repo an und schreibt sie per
+/// Direkt-UPDATE fest (umgeht die Sidecar-Pipeline).
+async fn mk_locked_invoice(
+    pool: &SqlitePool,
+    contact_id: &str,
+    number: &str,
+    date: NaiveDate,
+    items: Vec<InvoiceItemInput>,
+    is_kleinunternehmer: bool,
+    is_storno_for: Option<String>,
+) -> String {
     let input = InvoiceInput {
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: None,
         due_date: None,
         currency_code: "EUR".into(),
-        items: vec![item(cents)],
+        items,
         notes: None,
         payment_note: None,
         pdf_template: "default".into(),
-        is_storno_for: None,
+        is_storno_for,
         cancel_reason: None,
     };
     let totals = compute_totals(&input.items);
     let payload = DraftCreatePayload {
         contact_id: contact_id.into(),
         fiscal_year: date.year() as i64,
-        is_kleinunternehmer: true,
+        is_kleinunternehmer,
         input,
         derived_from_quote_id: None,
     };
@@ -132,9 +159,7 @@ async fn mk_paid_invoice(
     .execute(pool)
     .await
     .unwrap();
-    invoices::record_payment(pool, &row.id, cents, &date.to_string(), None)
-        .await
-        .unwrap();
+    row.id
 }
 
 fn expense_input(category: &str, gross: i64, paid: NaiveDate) -> ExpenseInput {
@@ -277,29 +302,83 @@ async fn end_to_end_form_maps_income_expenses_and_afa() {
     let split = euer_repo::depreciation_split_for_year(&pool, 2026)
         .await
         .unwrap();
-    let form = elster_csv::build_form(&report, &split, true);
+    let form = build_form(&pool, &report, &split, true).await;
 
-    let entry = |zeile: u16| {
-        form.lines
-            .iter()
-            .find(|l| l.zeile == zeile && l.is_entry)
-            .map(|l| l.amount_cents)
-    };
-
-    assert_eq!(entry(12), Some(100_000)); // §19-Einnahmen
-    assert_eq!(entry(27), Some(20_000)); // Waren
-    assert_eq!(entry(60), Some(5_000)); // übrige BA (Büro)
-    assert_eq!(entry(33), Some(30_000)); // AfA beweglich
-    assert_eq!(entry(36), Some(80_000)); // GWG
+    // Vordruck 2026: Zeile und Kennzahl.
+    assert_eq!(entry(&form, 111), Some((12, 100_000))); // §19-Einnahmen
+    assert_eq!(entry(&form, 100), Some((29, 20_000))); // Waren
+    assert_eq!(entry(&form, 229), Some((52, 5_000))); // Arbeitsmittel (Büro)
+    assert_eq!(entry(&form, 130), Some((34, 30_000))); // AfA beweglich
+    assert_eq!(entry(&form, 132), Some((37, 80_000))); // GWG
     assert_eq!(form.income_total_cents, 100_000);
     assert_eq!(form.expense_total_cents, 135_000);
     assert_eq!(form.surplus_cents, -35_000);
+    assert_eq!(form.surplus_cents, report.surplus_cents);
 
     // CSV-Sanity: BOM + Kopfzeile + ein bekannter Betrag in deutscher Notation.
     let csv = elster_csv::to_csv(&form);
     assert!(csv.starts_with('\u{FEFF}'));
-    assert!(csv.contains("Zeile;Position;Betrag;Art"));
+    assert!(csv.contains("Zeile;Kennzahl;Position;Betrag;Art"));
+    assert!(csv.contains("12;111;"));
     assert!(csv.contains("1000,00")); // Einnahme 100.000 ct
+}
+
+/// Baut die Ausfüllhilfe wie `commands::euer` aus Report und Einzelposten.
+async fn build_form(
+    pool: &SqlitePool,
+    report: &aggregate::EuerReport,
+    split: &elster_csv::AfaSplit,
+    klein: bool,
+) -> elster_csv::ElsterForm {
+    let y = report.fiscal_year;
+    let income = euer_repo::income_detail(pool, y).await.unwrap();
+    let storno = euer_repo::storno_detail(pool, y).await.unwrap();
+    let expenses = euer_repo::expense_detail(pool, y).await.unwrap();
+    elster_csv::build_form(&elster_csv::ElsterInputs {
+        report,
+        afa: split,
+        income: &income,
+        storno: &storno,
+        expenses: &expenses,
+        is_kleinunternehmer: klein,
+    })
+}
+
+/// Eingetragene Position nach Kennzahl → (Zeile, Betrag).
+fn entry(form: &elster_csv::ElsterForm, kz: u16) -> Option<(u16, i64)> {
+    form.lines
+        .iter()
+        .find(|l| l.kennzahl == Some(kz) && l.is_entry)
+        .map(|l| (l.zeile, l.amount_cents))
+}
+
+/// DATEV-Stapel eines Jahres wie `commands::euer` (alle Einzelposten).
+async fn datev_bookings(pool: &SqlitePool, year: i32, klein: bool) -> Vec<datev_csv::DatevBooking> {
+    let income = euer_repo::income_detail(pool, year).await.unwrap();
+    let storno = euer_repo::storno_detail(pool, year).await.unwrap();
+    let expenses = euer_repo::expense_detail(pool, year).await.unwrap();
+    let capitalized = euer_repo::capitalized_expense_detail(pool, year)
+        .await
+        .unwrap();
+    let disposals = euer_repo::disposal_detail(pool, year).await.unwrap();
+    let assets = euer_repo::aveeur_items(pool, year).await.unwrap();
+    let private_movements = euer_repo::private_movement_detail(pool, year)
+        .await
+        .unwrap();
+    datev_csv::build_bookings(
+        datev_csv::Skr::Skr03,
+        year,
+        &datev_csv::DatevInputs {
+            income: &income,
+            storno: &storno,
+            expenses: &expenses,
+            capitalized: &capitalized,
+            disposals: &disposals,
+            assets: &assets,
+            private_movements: &private_movements,
+            is_kleinunternehmer: klein,
+        },
+    )
 }
 
 // ---- Einzelaufstellung + AVEÜR (Detail-Loader) -----------------------------
@@ -404,25 +483,7 @@ async fn datev_export_end_to_end() {
     add_asset(&pool, "a1", "AV-2026-0001", "linear", 2026).await;
     add_depreciation(&pool, "d1", "a1", 2026, 40_000).await;
 
-    let income = euer_repo::income_detail(&pool, 2026).await.unwrap();
-    let storno = euer_repo::storno_detail(&pool, 2026).await.unwrap();
-    let expenses_d = euer_repo::expense_detail(&pool, 2026).await.unwrap();
-    let disposals = euer_repo::disposal_detail(&pool, 2026).await.unwrap();
-    let assets = euer_repo::aveeur_items(&pool, 2026).await.unwrap();
-    let private_movements = euer_repo::private_movement_detail(&pool, 2026)
-        .await
-        .unwrap();
-
-    let bookings = datev_csv::build_bookings(
-        datev_csv::Skr::Skr03,
-        2026,
-        &income,
-        &storno,
-        &expenses_d,
-        &disposals,
-        &assets,
-        &private_movements,
-    );
+    let bookings = datev_bookings(&pool, 2026, true).await;
     // 1 Einnahme + 1 Ausgabe + 1 AfA = 3
     assert_eq!(bookings.len(), 3);
 
@@ -430,6 +491,8 @@ async fn datev_export_end_to_end() {
         fiscal_year: 2026,
         skr: datev_csv::Skr::Skr03,
         generated_at: "20260521120000000".into(),
+        consultant_number: None,
+        client_number: None,
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
     let text = String::from_utf8_lossy(&bytes);
@@ -458,4 +521,329 @@ async fn disposal_detail_lists_year_disposals_with_gain() {
         .await
         .unwrap()
         .is_empty());
+}
+
+// ---- Lauf F5b: Konsistenz, Storno, Regelbesteuerung, Zahlungskonten -------
+
+fn item_taxed(cents: i64, rate: f64) -> InvoiceItemInput {
+    InvoiceItemInput {
+        tax_rate_percent: rate,
+        tax_category_code: "S".into(),
+        ..item(cents)
+    }
+}
+
+fn expense_taxed(
+    category: &str,
+    net: i64,
+    tax: i64,
+    paid: NaiveDate,
+    account: Option<&str>,
+) -> ExpenseInput {
+    ExpenseInput {
+        net_amount_cents: net,
+        tax_amount_cents: tax,
+        gross_amount_cents: net + tax,
+        paid_from_account_id: account.map(str::to_string),
+        ..expense_input(category, net + tax, paid)
+    }
+}
+
+async fn add_account(pool: &SqlitePool, id: &str, kind: &str) {
+    sqlx::query("INSERT INTO payment_accounts (id, label, type) VALUES (?, ?, ?)")
+        .bind(id)
+        .bind(format!("Konto {kind}"))
+        .bind(kind)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Storno-Beleg zum Original anlegen, festschreiben und das Original als
+/// storniert markieren (wie `lock_with_pair_cancel`).
+async fn mk_storno(
+    pool: &SqlitePool,
+    cust: &str,
+    original: &str,
+    number: &str,
+    date: NaiveDate,
+    cents: i64,
+) {
+    let storno = mk_locked_invoice(
+        pool,
+        cust,
+        number,
+        date,
+        vec![item(-cents)],
+        true,
+        Some(original.to_string()),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE invoices SET status = 'canceled', canceled_at = datetime('now','utc'),
+                canceled_by_storno_id = ?, cancel_reason = 'Rückabwicklung'
+          WHERE id = ?",
+    )
+    .bind(&storno)
+    .bind(original)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// KB-0022 / KB-0025a: Die AfA des Jahres ist in Report, Zeilen-Aufteilung,
+/// Anlageverzeichnis und DATEV-Stapel dieselbe — auch mit einer im Jahr
+/// veräußerten Anlage (anteilige AfA im Abgangsjahr).
+#[tokio::test]
+async fn afa_totals_agree_across_report_split_aveeur_and_datev() {
+    let (pool, _dir) = setup_pool().await;
+    add_asset(&pool, "a-lin", "AV-2026-0001", "linear", 2026).await;
+    add_depreciation(&pool, "d-lin", "a-lin", 2026, 30_000).await;
+    add_asset(&pool, "a-gwg", "AV-2026-0002", "gwg_sofort", 2026).await;
+    add_depreciation(&pool, "d-gwg", "a-gwg", 2026, 80_000).await;
+    add_asset(&pool, "a-sold", "AV-2025-0001", "linear", 2025).await;
+    add_depreciation(&pool, "d-sold-25", "a-sold", 2025, 20_000).await;
+    add_depreciation(&pool, "d-sold-26", "a-sold", 2026, 5_000).await;
+    dispose_asset(&pool, "a-sold", "2026-03-31", 40_000, 75_000).await;
+
+    let inputs = euer_repo::load_inputs(&pool).await.unwrap();
+    let report = aggregate::aggregate(2026, &inputs);
+    let split = euer_repo::depreciation_split_for_year(&pool, 2026)
+        .await
+        .unwrap();
+    let assets = euer_repo::aveeur_items(&pool, 2026).await.unwrap();
+    let aveeur_sum: i64 = assets.iter().map(|a| a.afa_year_cents).sum();
+    let bookings = datev_bookings(&pool, 2026, true).await;
+    let datev_afa: i64 = bookings
+        .iter()
+        .filter(|b| b.konto == 4830 || b.konto == 4855)
+        .map(|b| b.amount_cents)
+        .sum();
+
+    assert_eq!(report.depreciation_total_cents, 115_000);
+    assert_eq!(split.total_cents(), report.depreciation_total_cents);
+    assert_eq!(aveeur_sum, report.depreciation_total_cents);
+    assert_eq!(datev_afa, report.depreciation_total_cents);
+    // Abgang: Restbuchwert (Buchverlust) an Anlagekonto, Erlös ohne USt.
+    assert!(bookings
+        .iter()
+        .any(|b| b.konto == 2310 && b.gegenkonto == 420 && b.amount_cents == 75_000));
+    assert!(bookings
+        .iter()
+        .any(|b| b.konto == 1200 && b.gegenkonto == 8800 && b.amount_cents == 40_000));
+
+    let form = build_form(&pool, &report, &split, true).await;
+    assert_eq!(form.surplus_cents, report.surplus_cents);
+}
+
+/// KB-0025b: DATEV-Storno im Folgejahr — Geldkonto im Haben an Erlöskonto, Betrag aus der
+/// Erstattung, Belegfeld 2 = Original. Die Ausfüllhilfe weist den Überhang
+/// als Betriebsausgabe aus (keine negative Zeile 12).
+#[tokio::test]
+async fn storno_in_following_year_reaches_datev_and_elster() {
+    let (pool, _dir) = setup_pool().await;
+    let cust = mk_customer(&pool).await;
+    let orig = mk_paid_invoice(&pool, &cust, "RE-2025-0001", d(2025, 11, 3), 100_000).await;
+    mk_storno(&pool, &cust, &orig, "ST-2026-0001", d(2026, 2, 10), 100_000).await;
+
+    let b = datev_bookings(&pool, 2026, true).await;
+    assert_eq!(b.len(), 1);
+    assert_eq!(
+        (b[0].konto, b[0].gegenkonto, b[0].soll_haben),
+        (1200, 8195, 'H')
+    );
+    assert_eq!(b[0].amount_cents, 100_000);
+    assert_eq!(b[0].belegfeld1, "ST-2026-0001");
+    assert_eq!(b[0].belegfeld2, "RE-2025-0001");
+
+    let inputs = euer_repo::load_inputs(&pool).await.unwrap();
+    let report = aggregate::aggregate(2026, &inputs);
+    let form = build_form(&pool, &report, &elster_csv::AfaSplit::default(), true).await;
+    assert_eq!(entry(&form, 111), None);
+    assert_eq!(entry(&form, 183), Some((61, 100_000)));
+    assert_eq!(form.surplus_cents, report.surplus_cents);
+    assert!(form.lines.iter().all(|l| l.zeile != 18));
+}
+
+/// KB-0021 / KB-0025c: Rechnung mit Regelbesteuerung — Zeile 15 netto,
+/// Zeile 17 Umsatzsteuer, Kosten netto mit Vorsteuer; DATEV auf 8400 und
+/// BU-Schlüssel 9; Hinweis zur Grenze der Ausfüllhilfe.
+#[tokio::test]
+async fn regelbesteuerung_is_split_in_elster_and_datev() {
+    let (pool, _dir) = setup_pool().await;
+    let cust = mk_customer(&pool).await;
+    let id = mk_locked_invoice(
+        &pool,
+        &cust,
+        "RE-2026-0001",
+        d(2026, 3, 1),
+        vec![item_taxed(100_000, 19.0)],
+        false,
+        None,
+    )
+    .await;
+    invoices::record_payment(&pool, &id, 119_000, "2026-03-05", None)
+        .await
+        .unwrap();
+    expenses::create(
+        &pool,
+        &expense_taxed("office", 10_000, 1_900, d(2026, 4, 1), None),
+        "KO-2026-0001",
+        2026,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let inputs = euer_repo::load_inputs(&pool).await.unwrap();
+    let report = aggregate::aggregate(2026, &inputs);
+    let form = build_form(&pool, &report, &elster_csv::AfaSplit::default(), false).await;
+    assert_eq!(entry(&form, 111), None);
+    assert_eq!(entry(&form, 112), Some((15, 100_000)));
+    assert_eq!(entry(&form, 140), Some((17, 19_000)));
+    assert_eq!(entry(&form, 229), Some((52, 10_000)));
+    assert_eq!(entry(&form, 185), Some((58, 1_900)));
+    assert_eq!(form.surplus_cents, report.surplus_cents);
+    assert!(form.notes.iter().any(|n| n.starts_with("Regelbesteuerung")));
+    let csv = elster_csv::to_csv(&form);
+    assert!(csv.contains("# Regelbesteuerung"));
+
+    let b = datev_bookings(&pool, 2026, false).await;
+    assert_eq!(
+        (b[0].konto, b[0].gegenkonto, b[0].amount_cents),
+        (1200, 8400, 119_000)
+    );
+    // BU-Schlüssel am Gegenkonto (Aufwand), Konto = Bank im Haben (F5-fix).
+    assert_eq!(
+        (
+            b[1].konto,
+            b[1].gegenkonto,
+            b[1].bu_schluessel.as_str(),
+            b[1].soll_haben
+        ),
+        (1200, 4930, "9", 'H')
+    );
+}
+
+/// R2-011: Zahlungskonten bestimmen das DATEV-Geldkonto (Eingang über die
+/// Zahlungshistorie, Kosten, Privatbewegung, Storno-Erstattung).
+#[tokio::test]
+async fn datev_money_accounts_follow_payment_accounts() {
+    let (pool, _dir) = setup_pool().await;
+    add_account(&pool, "acc-cash", "cash").await;
+    add_account(&pool, "acc-paypal", "paypal").await;
+    let cust = mk_customer(&pool).await;
+    let id = mk_locked_invoice(
+        &pool,
+        &cust,
+        "RE-2026-0001",
+        d(2026, 3, 1),
+        vec![item(50_000)],
+        true,
+        None,
+    )
+    .await;
+    invoices::record_payment_to_account(&pool, &id, 50_000, "2026-03-02", None, Some("acc-paypal"))
+        .await
+        .unwrap();
+    mk_storno(&pool, &cust, &id, "ST-2026-0001", d(2026, 3, 20), 50_000).await;
+    expenses::create(
+        &pool,
+        &expense_taxed("office", 2_000, 0, d(2026, 4, 1), Some("acc-cash")),
+        "KO-2026-0001",
+        2026,
+        None,
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO private_movements (id, movement_number, fiscal_year, movement_date,
+            movement_type, amount_cents, account_id, description)
+         VALUES ('pm1', 'PV-2026-0001', 2026, '2026-05-01', 'entnahme', 10000, 'acc-cash', 'Bar')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let b = datev_bookings(&pool, 2026, true).await;
+    let find = |nr: &str| b.iter().find(|x| x.belegfeld1 == nr).unwrap();
+    assert_eq!(
+        (find("RE-2026-0001").konto, find("RE-2026-0001").gegenkonto),
+        (1360, 8195)
+    );
+    assert_eq!(
+        (find("ST-2026-0001").konto, find("ST-2026-0001").gegenkonto),
+        (1360, 8195)
+    );
+    assert_eq!(find("ST-2026-0001").soll_haben, 'H');
+    assert_eq!(
+        (find("KO-2026-0001").konto, find("KO-2026-0001").gegenkonto),
+        (1000, 4930)
+    );
+    assert_eq!(
+        (find("PV-2026-0001").konto, find("PV-2026-0001").gegenkonto),
+        (1000, 1800)
+    );
+    assert_eq!(find("PV-2026-0001").soll_haben, 'H');
+
+    // Ein unbekanntes Konto wird beim Erfassen abgelehnt.
+    let other = mk_locked_invoice(
+        &pool,
+        &cust,
+        "RE-2026-0002",
+        d(2026, 3, 1),
+        vec![item(100)],
+        true,
+        None,
+    )
+    .await;
+    assert!(invoices::record_payment_to_account(
+        &pool,
+        &other,
+        100,
+        "2026-03-02",
+        None,
+        Some("nope")
+    )
+    .await
+    .is_err());
+}
+
+/// Lauf F5b: aktivierte Kosten sind keine Betriebsausgabe (die AfA der Anlage
+/// wirkt), im DATEV-Stapel stehen sie als Zugang auf dem Anlagekonto.
+#[tokio::test]
+async fn capitalized_expense_is_not_deducted_twice() {
+    let (pool, _dir) = setup_pool().await;
+    let row = expenses::create(
+        &pool,
+        &expense_input("hardware", 100_000, d(2026, 1, 10)),
+        "KO-2026-0001",
+        2026,
+        None,
+    )
+    .await
+    .unwrap();
+    add_asset(&pool, "a-cap", "AV-2026-0001", "linear", 2026).await;
+    add_depreciation(&pool, "d-cap", "a-cap", 2026, 33_333).await;
+    expenses::set_capitalized_asset_id(&pool, &row.id, "a-cap")
+        .await
+        .unwrap();
+
+    let inputs = euer_repo::load_inputs(&pool).await.unwrap();
+    let report = aggregate::aggregate(2026, &inputs);
+    assert_eq!(
+        report.expenses_total_cents, 0,
+        "Kosten nicht zusätzlich zur AfA"
+    );
+    assert_eq!(report.total_expenses_cents, 33_333);
+    assert!(euer_repo::expense_detail(&pool, 2026)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let b = datev_bookings(&pool, 2026, true).await;
+    assert!(b
+        .iter()
+        .any(|x| x.konto == 1200 && x.gegenkonto == 420 && x.amount_cents == 100_000));
+    assert!(b.iter().all(|x| x.gegenkonto != 4980));
 }

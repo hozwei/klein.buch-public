@@ -216,14 +216,8 @@ pub fn validate_recurring_invoice(
 
 // ---- Fehler-Texte ----------------------------------------------------------
 
-fn eur(c: i64) -> String {
-    // i64-pur (Schema-Hardline: kein Float für Geld, vgl. KB-0055/KB-0006).
-    // Vorzeichen erhalten — die Helfer formatieren auch negative Beträge
-    // (negativer Einzelpreis / Gesamtbetrag in Fehlertexten).
-    let sign = if c < 0 { "-" } else { "" };
-    let abs = c.unsigned_abs();
-    format!("{sign}{},{:02} €", abs / 100, abs % 100)
-}
+// i64-pur (Schema-Hardline: kein Float für Geld, vgl. KB-0055/KB-0006).
+use crate::domain::money::eur;
 
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI).
 pub fn message(e: &RecurringInvoiceValidationError) -> String {

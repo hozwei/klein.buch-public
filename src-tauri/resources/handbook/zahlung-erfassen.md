@@ -36,6 +36,12 @@ den tatsächlichen Geld-Eingang zählt). Wenn der Kunde den vollen
 Rechnungsbetrag bezahlt hat, lass die Checkbox "Komplett bezahlt"
 angehakt und bestätige.
 
+Unter "Zahlungs-Konto" wählst Du, wo das Geld eingegangen ist (Bank,
+Kasse, PayPal …); Klein.Buch schlägt Dein Standardkonto vor. Das Konto
+bestimmt im DATEV-Buchungsstapel das Geldkonto der Buchung (Bank, Kasse
+oder Geldtransit für Zahlungsdienste). Ohne Konto bucht Klein.Buch die
+Zahlung auf die Bank.
+
 Klein.Buch markiert die Rechnung je nach Restbetrag als "Bezahlt"
 oder "Teilzahlung", aktualisiert die EÜR im Hintergrund und legt
 ein Auto-Backup an.
@@ -87,4 +93,4 @@ Befüllung beim Bezahlen gibt es nicht.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

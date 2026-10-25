@@ -71,6 +71,11 @@ pub struct SendResult {
     pub to: String,
     pub subject: String,
     pub attachment_count: u32,
+    /// R4-S2-EMAILLOG (Lauf F5c): gesetzt, wenn die Mail hinausging, der Eintrag im
+    /// Versandprotokoll aber nicht geschrieben werden konnte (Hinweis in der Inbox,
+    /// Audit `mail.log_failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +97,11 @@ pub struct SendQuoteResult {
     pub subject: String,
     /// Angebot-PDF + AGB + Datenschutz = i. d. R. 3.
     pub attachment_count: u32,
+    /// R4-S2-EMAILLOG (Lauf F5c): gesetzt, wenn die Mail hinausging, der Eintrag im
+    /// Versandprotokoll aber nicht geschrieben werden konnte (Hinweis in der Inbox,
+    /// Audit `mail.log_failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +158,7 @@ pub async fn mail_account_create(
 
     let pool = &pool;
     check_smtp_only(&input)?;
+    check_saved_port(ctx, &input)?;
     check_plaintext(&input, password.as_deref())?;
     let row = mail_accounts::create(pool, &input).await?;
 
@@ -200,6 +211,13 @@ pub async fn mail_account_update(
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
     check_smtp_only(&input)?;
+    // Neuer Server oder Port: Port-Allowlist wie beim Test (ASVS V12.6.1); ein
+    // unveränderter Bestandswert bleibt nutzbar.
+    if before.smtp_host.as_deref().map(str::trim) != input.smtp_host.as_deref()
+        || before.smtp_port != input.smtp_port
+    {
+        check_saved_port(ctx, &input)?;
+    }
     let new_password = password.as_deref().filter(|p| !p.is_empty());
     let stored = secrets::get(pool, &secrets::smtp_key(&id)).await?;
     check_plaintext(
@@ -372,6 +390,20 @@ fn check_smtp_only(input: &mail_accounts::MailAccountInput) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Gespeicherte Ports unterliegen derselben Allowlist wie die Verbindungstests
+/// (ASVS V5.2.6/V12.6.1, Lauf F5c; Standard 25/465/587/2525, Betreiber:
+/// `KLEIN_BUCH_ALLOWED_TEST_PORTS`): was nicht getestet werden darf, wird auch nicht
+/// für den Versand gespeichert. Private und Loopback-Adressen bleiben erlaubt
+/// (Relay im LAN oder auf dem Docker-Host, ADR 0039 Nr. 136).
+fn check_saved_port(ctx: &AppCtx, input: &mail_accounts::MailAccountInput) -> Result<()> {
+    match input.smtp_port {
+        None => Ok(()),
+        Some(p) => ctx
+            .net_tests
+            .check_port(TestKind::Smtp, u16::try_from(p).unwrap_or(0)),
+    }
 }
 
 /// SMTP-Host getrimmt speichern und prüfen (W14-017, Lauf F4c): nur Hostname
@@ -906,10 +938,15 @@ pub async fn send_invoice_core(
         .clone()
         .ok_or_else(|| Error::Domain("Rechnung hat kein archiviertes ZUGFeRD-PDF.".into()))?;
 
-    // 3. Empfänger bestimmen: Override → Buyer-Snapshot → Live-Kontakt.
-    let recipient = match to_override {
-        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => resolve_recipient(pool, &invoice).await?,
+    // 3. Empfänger bestimmen: Override → Buyer-Snapshot → Live-Kontakt. Ein
+    //    abweichender Empfänger verlangt eine frische Bestätigung (W14-009).
+    let stored = resolve_recipient(pool, &invoice).await;
+    let recipient = match to_override.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            require_step_up_for_recipient(t, stored.as_deref().ok())?;
+            t.to_string()
+        }
+        None => stored?,
     };
 
     // 4. Betreff + Body: Overrides gewinnen, sonst Template.
@@ -938,7 +975,7 @@ pub async fn send_invoice_core(
         body_text: body,
         attachments: vec![attachment],
     };
-    send_and_log(
+    let receipt = send_and_log(
         pool,
         &account,
         &mail,
@@ -951,7 +988,7 @@ pub async fn send_invoice_core(
     .await?;
 
     // 8. GoBD: Status → 'sent', Audit-Log. Account-Nutzung tracken.
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = crate::clock::to_db_utc(crate::clock::now_utc());
     invoices::mark_sent(pool, invoice_id, &now).await?;
     mail_accounts::touch_last_used(pool, account_id).await.ok();
 
@@ -969,6 +1006,7 @@ pub async fn send_invoice_core(
         to: recipient,
         subject,
         attachment_count: 1,
+        warning: receipt.warning(),
     })
 }
 
@@ -1007,16 +1045,25 @@ pub async fn send_quote_core(
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
 
-    // 2. Bundle vorbereiten: Angebots-PDF sicherstellen + aktive Legal-Versionen
+    // 2. Empfänger: Override → E-Mail des verknüpften Kontakts. Ein abweichender
+    //    Empfänger verlangt eine frische Bestätigung (W14-009) — vor dem
+    //    Binden der Rechtsdokumente, damit eine Ablehnung nichts schreibt.
+    let quote_row = quotes::get(pool, quote_id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {quote_id}")))?;
+    let stored = resolve_quote_recipient(pool, &quote_row).await;
+    let recipient = match to_override.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            require_step_up_for_recipient(t, stored.as_deref().ok())?;
+            t.to_string()
+        }
+        None => stored?,
+    };
+
+    // 3. Bundle vorbereiten: Angebots-PDF sicherstellen + aktive Legal-Versionen
     //    append-only ans Angebot binden (Pflicht für Versand). Liefert die
     //    Archiv-IDs für die Anhänge.
     let dispatch = crate::commands::quotes::prepare_quote_dispatch(pool, paths, quote_id).await?;
-
-    // 3. Empfänger: Override → E-Mail des verknüpften Kontakts.
-    let recipient = match to_override {
-        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => resolve_quote_recipient(pool, &dispatch.quote).await?,
-    };
 
     // 4. Betreff + Body: Overrides gewinnen, sonst Template.
     let rendered = render_quote_mail(pool, paths, quote_id).await?;
@@ -1054,7 +1101,7 @@ pub async fn send_quote_core(
         body_text: body,
         attachments,
     };
-    send_and_log(
+    let receipt = send_and_log(
         pool,
         &account,
         &mail,
@@ -1095,6 +1142,7 @@ pub async fn send_quote_core(
         to: recipient,
         subject,
         attachment_count,
+        warning: receipt.warning(),
     })
 }
 
@@ -1122,7 +1170,21 @@ pub(crate) struct SendReceipt {
     provider_code: Option<String>,
     provider_message: Option<String>,
     request_id: Option<String>,
+    /// Der Eintrag im `email_log` konnte nicht geschrieben werden (R4-S2-EMAILLOG).
+    log_failed: bool,
 }
+
+impl SendReceipt {
+    /// Warnung für den Aufrufer, wenn das Versandprotokoll unvollständig ist.
+    pub(crate) fn warning(&self) -> Option<String> {
+        self.log_failed.then(|| LOG_FAILED_WARNING.to_string())
+    }
+}
+
+/// Warnung an den Aufrufer bei unvollständigem Versandprotokoll.
+pub(crate) const LOG_FAILED_WARNING: &str =
+    "Die E-Mail wurde versendet, der Eintrag im Versandprotokoll fehlt aber (Hinweis in der \
+     Inbox; der Versand steht im Audit-Log).";
 
 /// Versendet eine fertig zusammengebaute Mail über den Kanal des Accounts:
 /// SMTP (Passwort aus `secrets`) oder Microsoft Graph (OAuth-Token aus `secrets`,
@@ -1142,6 +1204,7 @@ async fn dispatch_send(
             provider_code: Some(g.status.to_string()),
             provider_message: Some("Accepted (Microsoft Graph)".to_string()),
             request_id: g.request_id,
+            log_failed: false,
         });
     }
 
@@ -1154,6 +1217,7 @@ async fn dispatch_send(
         provider_code: info.code,
         provider_message: info.message,
         request_id: None,
+        log_failed: false,
     })
 }
 
@@ -1166,8 +1230,9 @@ pub(crate) struct SendContext<'a> {
 
 /// Versendet eine Mail UND protokolliert den Versuch (Block 16b): schreibt JEDEN
 /// Versand — Erfolg wie Fehlschlag — in das append-only `email_log` und reicht
-/// das Versand-Ergebnis unverändert durch. Ein Fehler beim Protokollieren wird
-/// nur geloggt, überschreibt aber nie das eigentliche Versand-Ergebnis.
+/// das Versand-Ergebnis durch. Ein Fehler beim Protokollieren überschreibt nie das
+/// Versand-Ergebnis; er landet im Audit-Log und in der Inbox und setzt
+/// [`SendReceipt::warning`] ([`report_log_failure`]).
 pub(crate) async fn send_and_log(
     pool: &SqlitePool,
     account: &MailAccountRow,
@@ -1216,10 +1281,78 @@ pub(crate) async fn send_and_log(
             error: Some(e.to_string()),
         },
     };
-    if let Err(log_err) = email_log::insert(pool, &entry).await {
-        tracing::error!(error = %log_err, "E-Mail-Protokoll konnte nicht geschrieben werden");
+    match email_log::insert(pool, &entry).await {
+        Ok(_) => result,
+        Err(log_err) => {
+            report_log_failure(pool, &entry, &log_err).await;
+            result.map(|mut rc| {
+                rc.log_failed = true;
+                rc
+            })
+        }
     }
-    result
+}
+
+/// R4-S2-EMAILLOG (Lauf F5c): Der Versand ist nicht rückholbar; fehlt sein Eintrag im
+/// append-only `email_log`, hält Klein.Buch ihn im Audit-Log fest (`mail.log_failed`,
+/// mit Empfänger, Betreff und Beleg — wie `invoice.sent`) und legt einen Hinweis in
+/// die Inbox. Beides nach bestem Bemühen: ein weiterer Fehler wird nur geloggt.
+async fn report_log_failure(pool: &SqlitePool, entry: &email_log::EmailLogEntry, err: &Error) {
+    tracing::error!(
+        error = %err,
+        related_kind = %entry.related_kind,
+        "E-Mail-Protokoll konnte nicht geschrieben werden"
+    );
+    let sent = entry.status == "success";
+    if let Err(e) = audit_log::append(
+        pool,
+        "mail.log_failed",
+        "email_log",
+        entry.related_id.as_deref().unwrap_or("-"),
+        Some(serde_json::json!({
+            "related_kind": &entry.related_kind,
+            "related_number": &entry.related_number,
+            "status": &entry.status,
+            "account": &entry.account_id,
+            "to": &entry.to_email,
+            "subject": &entry.subject,
+            "error": err.to_string(),
+        })),
+    )
+    .await
+    {
+        tracing::error!(error = %e, "Audit mail.log_failed konnte nicht geschrieben werden");
+    }
+    let what = match entry.related_number.as_deref() {
+        Some(n) => format!("Die E-Mail zu {n}"),
+        None => "Eine E-Mail".to_string(),
+    };
+    let outcome = if sent {
+        "wurde versendet"
+    } else {
+        "konnte nicht versendet werden"
+    };
+    let body = format!(
+        "{what} {outcome}, der Eintrag im Versandprotokoll fehlt aber ({err}). Den Versuch \
+         belegt das Audit-Log (mail.log_failed). Bitte die Ursache prüfen (z. B. freier \
+         Speicherplatz)."
+    );
+    if let Err(e) = crate::notify::store::create(
+        pool,
+        crate::notify::store::NewNotification {
+            title: "Versandprotokoll unvollständig",
+            body: &body,
+            severity: "warning",
+            related_entity_type: Some(entry.related_kind.as_str()),
+            related_entity_id: entry.related_id.as_deref(),
+            action_url: Some("/settings/mail-log"),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::error!(error = %e, "Hinweis „Versandprotokoll unvollständig“ fehlgeschlagen");
+    }
 }
 
 /// Liefert einen frischen Access-Token für ein OAuth-Konto: holt ihn bei jedem
@@ -1263,6 +1396,67 @@ async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Res
         .ok();
 
     Ok(resp.access_token)
+}
+
+// =============================================================================
+// Step-up beim Versand an einen abweichenden Empfänger (W14-009, Lauf F5c)
+// =============================================================================
+
+/// Verlangt eine frische Bestätigung (Passphrase + zweiter Faktor, bzw. eine
+/// Anmeldung der letzten 5 min), wenn `recipient` nicht die hinterlegte Adresse
+/// des Belegs ist (Rechnung: Käufer-Snapshot, sonst Kontakt; Angebot: Kontakt).
+/// Groß-/Kleinschreibung zählt nicht. Ohne hinterlegte Adresse ist jeder
+/// eingegebene Empfänger „abweichend“. Betreff und Text bleiben frei (ADR 0039
+/// Nr. 136): Abwägung BEC-Risiko gegen Bedienbarkeit, Begründung in security.md.
+pub(crate) fn require_step_up_for_recipient(recipient: &str, stored: Option<&str>) -> Result<()> {
+    if stored.is_some_and(|s| s.trim().eq_ignore_ascii_case(recipient.trim())) {
+        Ok(())
+    } else {
+        crate::commands::reauth::require_fresh()
+    }
+}
+
+/// Vorprüfung von [`mail_send_invoice`] vor der Annahme des Jobs: ein
+/// abweichender Empfänger ergibt sofort 403 `reauth_required` (Dialog im
+/// Frontend, danach dieselbe Anfrage). Fehlt die Rechnung, meldet das der Kern.
+pub async fn mail_send_invoice_precheck(
+    ctx: &Arc<AppCtx>,
+    args: &MailSendInvoiceArgs,
+) -> Result<()> {
+    let Some(to) = args
+        .args
+        .to
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(());
+    };
+    let pool = ctx.pool()?;
+    let Some(invoice) = invoices::get(&pool, &args.args.invoice_id).await? else {
+        return Ok(());
+    };
+    let stored = resolve_recipient(&pool, &invoice).await.ok();
+    require_step_up_for_recipient(to, stored.as_deref())
+}
+
+/// Vorprüfung von [`mail_send_quote`] (wie [`mail_send_invoice_precheck`]).
+pub async fn mail_send_quote_precheck(ctx: &Arc<AppCtx>, args: &MailSendQuoteArgs) -> Result<()> {
+    let Some(to) = args
+        .args
+        .to
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(());
+    };
+    let pool = ctx.pool()?;
+    let Some(quote) = quotes::get(&pool, &args.args.quote_id).await? else {
+        return Ok(());
+    };
+    let stored = resolve_quote_recipient(&pool, &quote).await.ok();
+    require_step_up_for_recipient(to, stored.as_deref())
 }
 
 // =============================================================================

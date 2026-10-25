@@ -159,6 +159,10 @@
       {#if detail.invoice.voidedAt}
         <!-- Verworfener Entwurf: endgültig, keine Aktionen (W14-032). -->
       {:else if !detail.invoice.lockedAt}
+        {#if !detail.invoice.isStornoFor}
+          <!-- Neuer Fund F2a (Lauf F5): Entwurf bearbeiten; die Nummer bleibt. -->
+          <a class="btn-secondary" href={`/invoices/new?edit=${detail.invoice.id}`}>Bearbeiten</a>
+        {/if}
         <button class="btn-secondary" onclick={runValidation} disabled={validating}>
           {validating ? "Prüfe …" : "Prüfen"}
         </button>

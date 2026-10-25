@@ -280,6 +280,13 @@
         <li>regelmäßig eine Umsatzsteuer-Voranmeldung ans Finanzamt schicken,</li>
         <li>dich um den Vorsteuerabzug kümmern.</li>
       </ul>
+      <p>
+        Klein.Buch unterstützt das nur teilweise: Es weist die Umsatzsteuer auf
+        Rechnungen aus und teilt die EÜR-Ausfüllhilfe in netto und Umsatzsteuer
+        auf. Die Umsatzsteuer-Voranmeldung, Zahlungen an und Erstattungen vom
+        Finanzamt sowie die Umsatzsteuer auf Anlagenverkäufe bildet Klein.Buch
+        nicht ab — das klärst du mit deinem Steuerberater.
+      </p>
       <div class="modal-actions">
         <button type="button" class="secondary" onclick={cancelWaive}>Abbrechen</button>
         <button type="button" class="danger" onclick={confirmWaive}>

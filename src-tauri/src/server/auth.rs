@@ -429,8 +429,7 @@ async fn totp_lock_notice(st: &ServerState, released: bool) {
 /// Der zweite Faktor ist womöglich bekannt, empfohlen ist dessen
 /// Neueinrichtung (neues Geheimnis, neue Einmal-Codes).
 async fn factor_suspect(st: &ServerState, ip: std::net::IpAddr) {
-    let now = st.ctx.clock().now_utc().timestamp();
-    let (count, streak) = st.ratelimit.factor_suspect_failure(now);
+    let (count, streak) = st.ratelimit.factor_suspect_failure();
     if count != SUSPECT_FACTOR_AFTER {
         return;
     }
@@ -439,7 +438,7 @@ async fn factor_suspect(st: &ServerState, ip: std::net::IpAddr) {
         "auth.factor_suspect ip={ip} failures={SUSPECT_FACTOR_AFTER} — gültiger zweiter Faktor, \
          falsches Daten-Passwort"
     );
-    factor_suspect_notice(st, streak).await;
+    factor_suspect_notice(st, &streak).await;
 }
 
 /// Erfolgreiche Anmeldung bzw. Re-Auth beendet die Folge. Reichte sie bis zur
@@ -449,11 +448,11 @@ async fn factor_suspect(st: &ServerState, ip: std::net::IpAddr) {
 async fn factor_suspect_end(st: &ServerState) {
     let (count, streak) = st.ratelimit.factor_suspect_clear();
     if count >= SUSPECT_FACTOR_AFTER {
-        factor_suspect_notice(st, streak).await;
+        factor_suspect_notice(st, &streak).await;
     }
 }
 
-async fn factor_suspect_notice(st: &ServerState, streak: i64) {
+async fn factor_suspect_notice(st: &ServerState, streak: &str) {
     let Ok(pool) = st.ctx.pool() else {
         return;
     };

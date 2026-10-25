@@ -133,7 +133,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `domain::depreciation` | Core | AfA-Berechnung (linear/GWG/Computer/Privatanteil), idempotent (ADR 0025) |
 | `domain::fiscal_year` | Core | GJ-Grenzen, Cash-Basis-Periodisierung; GJ immer aus dem Belegdatum (Nr. 89) |
 | `euer::aggregate` | Core | EÜR-Aggregation Cash-Basis §11 EStG (ADR 0022) |
-| `euer::{elster_csv, datev_csv, detail, stb_package}` | Core/Shell | ELSTER-Zeilen-Mapping, DATEV-EXTF (SKR03/04), Einzelaufstellungen, Steuerberater-Paket (ADR 0026) |
+| `euer::{elster_csv, datev_csv, detail}` | Core | ELSTER-Ausfüllhilfe (Kennzahl + Zeile je Vordruck), DATEV-EXTF (SKR03/04), Einzelaufstellungen; das Steuerberater-Paket baut `commands::euer` (ADR 0026, ADR 0039 Nr. 135) |
 | `einvoice::parser` | Core | XRechnung CII+UBL + ZUGFeRD-Extract (Empfang, ADR 0024), Profil-Whitelist (ADR 0037) |
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |

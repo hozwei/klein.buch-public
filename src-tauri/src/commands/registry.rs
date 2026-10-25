@@ -125,6 +125,10 @@ fn auth_of(name: &str) -> Auth {
         // §19-Status (samt Verzicht) gegenüber dem gespeicherten Profil ändern
         // — Prüfung im Kern (`commands::settings::seller_profile_upsert`).
         "seller_profile_upsert" => Auth::Conditional,
+        // W14-009 (Lauf F5c): Versand an einen Empfänger, der von der hinterlegten
+        // Adresse des Belegs abweicht — Prüfung in der Vorprüfung und im Kern
+        // (`commands::mail::require_step_up_for_recipient`).
+        "mail_send_invoice" | "mail_send_quote" => Auth::Conditional,
         "backup_set_target"
         | "backup_set_sftp_target"
         | "backup_target_add_directory"
@@ -354,6 +358,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "invoices_open_pdf"
         | "invoices_record_payment"
         | "invoices_reveal_pdf"
+        | "invoices_update_draft"
         | "invoices_void_draft"
         | "legal_documents_activate"
         | "legal_documents_deactivate"
@@ -435,6 +440,8 @@ fn body_limit_of(_name: &str) -> usize {
 fn precheck_of(name: &str) -> Option<Precheck> {
     match name {
         "backup_restore_apply" => Some(pre::backup_restore_apply),
+        "mail_send_invoice" => Some(pre::mail_send_invoice),
+        "mail_send_quote" => Some(pre::mail_send_quote),
         _ => None,
     }
 }
@@ -573,6 +580,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("invoices_record_payment", h::invoices_record_payment),
     ("invoices_cancel", h::invoices_cancel),
     ("invoices_void_draft", h::invoices_void_draft),
+    ("invoices_update_draft", h::invoices_update_draft),
     ("legal_documents_list", h::legal_documents_list),
     ("legal_documents_upload", h::legal_documents_upload),
     ("legal_documents_activate", h::legal_documents_activate),
@@ -1426,6 +1434,15 @@ mod h {
             let args: crate::commands::invoices::InvoicesCancelArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_update_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesUpdateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_update_draft(&ctx, args).await?,
             )?)
         })
     }
@@ -2507,6 +2524,22 @@ mod pre {
         Box::pin(async move {
             let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
             crate::commands::backup::backup_restore_apply_precheck(&ctx, &args).await
+        })
+    }
+
+    /// W14-009: abweichender Empfänger → 403 `reauth_required` vor der Annahme.
+    pub fn mail_send_invoice(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendInvoiceArgs = parse(v)?;
+            crate::commands::mail::mail_send_invoice_precheck(&ctx, &args).await
+        })
+    }
+
+    /// W14-009: wie [`mail_send_invoice`].
+    pub fn mail_send_quote(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendQuoteArgs = parse(v)?;
+            crate::commands::mail::mail_send_quote_precheck(&ctx, &args).await
         })
     }
 }

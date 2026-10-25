@@ -13,7 +13,7 @@
 //! | `BadRequest` | 400 | `bad_request` |
 //! | `Locked` | 423 | `locked` |
 //! | `SchemaMismatch` | 409 | `schema_mismatch` |
-//! | `Db` mit `SQLITE_CONSTRAINT_TRIGGER` (RAISE in den Migrationen) | 409 | `constraint` |
+//! | `Db` mit `SQLITE_CONSTRAINT_TRIGGER` (RAISE in den Migrationen) | 409 | `constraint` (deutsche Meldung + `ref`, Trigger-Text nur im Log) |
 //! | `Sidecar` | 503 | `sidecar` (fester Text + `ref`) |
 //! | `Db` (sonst), `Migrate`, `Io`, `Json`, `Zip`, `Config`, `Other` | 500 | `internal` (+ `ref`) |
 
@@ -169,6 +169,21 @@ impl ApiError {
         }
     }
 
+    /// Schutzregel der Datenbank (RAISE in einem Trigger, R1-S3-TRIGGERTEXT): nach
+    /// außen eine deutsche, verständliche Meldung, der englische Trigger-Text nur
+    /// ins Log unter derselben `ref`.
+    pub fn constraint(raw: &str) -> Self {
+        let reference = new_reference();
+        tracing::warn!(target: "klein_buch_lib::http", reference = %reference, "Schutzregel der Datenbank: {raw}");
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "constraint",
+            message: constraint_message(raw).to_string(),
+            reference: Some(reference),
+            retry_after: None,
+        }
+    }
+
     /// Abbildung einer Kern-Variante (Tabelle oben).
     pub fn from_error(err: &Error) -> Self {
         match err {
@@ -185,7 +200,7 @@ impl ApiError {
             Error::Db(sqlx::Error::Database(db))
                 if db.code().as_deref() == Some(SQLITE_CONSTRAINT_TRIGGER) =>
             {
-                Self::new(StatusCode::CONFLICT, "constraint", db.message().to_string())
+                Self::constraint(db.message())
             }
             Error::Sidecar(_) => {
                 let reference = new_reference();
@@ -232,6 +247,135 @@ impl From<Error> for ApiError {
     }
 }
 
+/// Deutsche Meldung zu einem Trigger-Text aus den Migrationen (Präfix-Abgleich,
+/// spezifischere Präfixe zuerst). Unbekannte Texte ergeben eine allgemeine
+/// Meldung — nie den englischen Rohtext.
+pub fn constraint_message(raw: &str) -> &'static str {
+    const TABLE: &[(&str, &str)] = &[
+        (
+            "invoice draft is voided",
+            "Der Rechnungs-Entwurf ist verworfen und lässt sich nicht mehr ändern.",
+        ),
+        (
+            "invoice is canceled",
+            "Die Rechnung ist storniert; das Storno-Paar ist endgültig.",
+        ),
+        (
+            "invoice is locked or voided",
+            "Die Rechnung ist festgeschrieben oder verworfen; ihre Positionen sind unveränderlich (GoBD).",
+        ),
+        (
+            "invoice is locked",
+            "Die Rechnung ist festgeschrieben und kann nicht mehr geändert werden (GoBD). Korrigieren lässt sie sich nur mit einem Storno.",
+        ),
+        (
+            "invoice records are immutable",
+            "Rechnungen werden nie gelöscht (GoBD). Eine festgeschriebene Rechnung korrigiert ein Storno, einen Entwurf verwirfst Du.",
+        ),
+        (
+            "invoices are created as drafts",
+            "Rechnungen entstehen als Entwurf; verworfen wird ein Entwurf erst danach.",
+        ),
+        (
+            "only unlocked invoice drafts can be voided",
+            "Verwerfen geht nur für nicht festgeschriebene Entwürfe und nur mit Begründung.",
+        ),
+        (
+            "quote_legal_documents",
+            "Die einem Angebot zugeordneten Rechtstexte sind unveränderlich.",
+        ),
+        (
+            "quote is canceled",
+            "Das Angebot ist zurückgezogen und lässt sich nicht mehr ändern.",
+        ),
+        (
+            "quote is converted",
+            "Das Angebot ist in eine Rechnung umgewandelt. Zurück geht es nur, indem Du den Rechnungs-Entwurf verwirfst.",
+        ),
+        (
+            "quote is locked or canceled",
+            "Das Angebot ist festgeschrieben oder zurückgezogen; seine Positionen sind unveränderlich.",
+        ),
+        (
+            "quote is locked",
+            "Das Angebot ist festgeschrieben und kann nicht mehr geändert werden.",
+        ),
+        (
+            "quote records are immutable",
+            "Angebote werden nie gelöscht; ein nicht mehr gültiges Angebot ziehst Du zurück.",
+        ),
+        (
+            "expense is locked",
+            "Die Ausgabe ist festgeschrieben und kann nicht mehr geändert werden (GoBD). Korrigieren lässt sie sich nur mit einem Storno.",
+        ),
+        (
+            "expense records are immutable",
+            "Ausgaben werden nie gelöscht (GoBD); eine falsche Ausgabe stornierst Du.",
+        ),
+        (
+            "private_movement is locked",
+            "Die Privatbewegung ist festgeschrieben und kann nicht mehr geändert werden (GoBD).",
+        ),
+        (
+            "private_movement records are append-only",
+            "Privatbewegungen werden nie gelöscht (GoBD); korrigiert wird mit einer Gegenbuchung.",
+        ),
+        (
+            "asset is disposed",
+            "Die Anlage ist veräußert; Abgang und AfA-Buchungen sind endgültig.",
+        ),
+        (
+            "asset is locked",
+            "Die Anlage ist festgeschrieben und kann nicht mehr geändert werden (GoBD).",
+        ),
+        (
+            "asset records are append-only",
+            "Anlagen werden nie gelöscht (GoBD); einen Abgang buchst Du über „Veräußern“.",
+        ),
+        (
+            "depreciation entry is locked",
+            "Die AfA-Buchung ist festgeschrieben und unveränderlich.",
+        ),
+        (
+            "locked depreciation entries are immutable",
+            "Die AfA-Buchung ist festgeschrieben und unveränderlich.",
+        ),
+        (
+            "archive_entries",
+            "Archivierte Belegdateien sind unveränderlich und werden nie gelöscht (GoBD).",
+        ),
+        (
+            "audit_log",
+            "Das Audit-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "backup_log",
+            "Das Backup-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "email_log",
+            "Das E-Mail-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "fiscal_year_locks",
+            "Ein abgeschlossenes Geschäftsjahr ist unveränderlich.",
+        ),
+        (
+            "legal_documents",
+            "Rechtstexte sind versioniert und unveränderlich; eine Änderung legt eine neue Version an.",
+        ),
+        (
+            "package_revisions",
+            "Paket-Revisionen sind unveränderlich; „Bearbeiten“ legt eine neue Revision an.",
+        ),
+    ];
+    TABLE
+        .iter()
+        .find(|(prefix, _)| raw.starts_with(prefix))
+        .map(|(_, de)| *de)
+        .unwrap_or("Die Änderung verstößt gegen eine Schutzregel der Buchhaltung (GoBD) und wurde abgelehnt.")
+}
+
 /// `ref` eines Fehlers: die Kennung der laufenden Anfrage (korreliert mit
 /// `req=` im Zugriffsprotokoll), sonst eine neue UUID.
 fn new_reference() -> String {
@@ -246,6 +390,33 @@ pub async fn not_found() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R1-S3-TRIGGERTEXT: Jeder RAISE-Text der Migrationen hat eine eigene
+    /// deutsche Meldung (kein Rückfall auf die allgemeine), und keine enthält
+    /// den englischen Rohtext.
+    #[test]
+    fn every_trigger_text_has_a_german_message() {
+        let fallback = constraint_message("unbekannter Text");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let sql = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for part in sql.split("RAISE(ABORT,").skip(1) {
+                let raw = part.trim_start().trim_start_matches('\'');
+                let raw = &raw[..raw.find('\'').unwrap()];
+                let de = constraint_message(raw);
+                assert_ne!(de, fallback, "keine Meldung für {raw:?}");
+                assert!(!de.contains(raw), "{de}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 40, "nur {seen} RAISE-Texte gefunden");
+        let api =
+            ApiError::constraint("invoice is locked: immutable fields cannot change after lock");
+        assert_eq!(api.status, StatusCode::CONFLICT);
+        assert!(api.reference.is_some());
+        assert!(api.message.contains("Storno"), "{}", api.message);
+    }
 
     /// Statustabelle für jede Variante aus `error.rs` (Plan W5 Done-Check).
     #[test]

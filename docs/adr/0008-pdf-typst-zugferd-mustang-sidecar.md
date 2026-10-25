@@ -50,3 +50,22 @@ Mustang bleiben gesetzt. Für den Serverbetrieb gilt zusätzlich:
   Typst an jedem ASCII-Satzzeichen mit `\` maskiert. Vorher fehlten u. a. `/`, `=`, `~`, `-`
   und `+`; `//` begann einen Typst-Kommentar, der Text danach fehlte im PDF, stand aber im
   XML (BT-154). PDF und XRechnung zeigen damit denselben Text.
+
+## Amendment 2026-10-25 — ZUGFeRD-Profil XRECHNUNG (Lauf F5c, R3-017)
+
+Das Rechnungs-PDF wird mit dem Mustang-Profil `x` (**XRECHNUNG**) erzeugt statt `e`
+(EN 16931); Konstante `einvoice::mustang_bridge::ZUGFERD_PROFILE`. Grund: Das
+eingebettete XML ist eine XRechnung 3.0 (CII) mit der Guideline-ID
+`urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0` (BT-24).
+ZUGFeRD 2.x (seit 2.1.1) ordnet dieser Guideline das Profil XRECHNUNG zu — XMP
+`fx:ConformanceLevel` = `XRECHNUNG`, Anhang `xrechnung.xml`; das Profil EN 16931
+gehört zur Guideline `urn:cen.eu:en16931:2017` (Anhang `zugferd-invoice.xml`).
+Bisher widersprachen sich Container („EN 16931“) und XML (XRechnung). Beide Profile
+sind EN-16931-konform und damit E-Rechnung nach § 14 Abs. 1 UStG (BMF-Schreiben vom
+15.10.2024; ausgeschlossen sind nur MINIMUM und BASIC-WL); der Mustang-Validator prüft
+beide Fassungen als gültig (PDF/A-3u und XML, 25.10.2026 an derselben Rechnung
+verglichen). Das XML selbst ist unverändert (KoSIT wie bisher). Der eigene Empfang
+akzeptiert XRECHNUNG (ADR 0037). Test: `sidecar_real_mustang_combine_and_extract_pdfa3`
+(XMP `XRECHNUNG`, `xrechnung.xml`, Extraktion bitgleich). Alternative „bewusst bei
+EN 16931 bleiben“ verworfen, weil sie den Widerspruch zum XML stehen ließe; ein
+Wechsel der Guideline auf reines EN 16931 schiede für B2G (XRechnung-Pflicht) aus.

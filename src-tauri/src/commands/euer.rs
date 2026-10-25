@@ -25,9 +25,11 @@ use crate::db::repo::{audit_log, euer as euer_repo, seller_profile};
 use crate::domain::kleinunternehmer::{self, KleinunternehmerStatus, HINWEIS_TEXT};
 use crate::error::Result;
 use crate::euer::aggregate::{self, EuerReport};
-use crate::euer::datev_csv::{self, DatevHeader, Skr};
-use crate::euer::detail::{self, AveeurItem, DisposalItem, ExpenseItem, IncomeItem, StornoItem};
-use crate::euer::elster_csv::{self, ElsterForm};
+use crate::euer::datev_csv::{self, DatevHeader, DatevInputs, Skr};
+use crate::euer::detail::{
+    self, de_date, AveeurItem, DisposalItem, ExpenseItem, IncomeItem, StornoItem,
+};
+use crate::euer::elster_csv::{self, ElsterForm, ElsterInputs};
 use crate::fiscal_year::snapshot::{self, SnapshotCheck};
 use crate::pdf::{templates, typst_render};
 use sha2::{Digest, Sha256};
@@ -149,16 +151,27 @@ pub struct ElsterExportResult {
 }
 
 /// Baut die ELSTER-Ausfüllhilfe für ein Geschäftsjahr: EÜR-Report aggregieren,
-/// AfA nach Zeile aufteilen, §19-Status des Verkäuferprofils berücksichtigen.
+/// AfA nach Zeile aufteilen, Einnahmen nach dem eingefrorenen Status der
+/// Rechnung und Ausgaben nach dem §19-Status des Jahres aufteilen (Lauf F5b).
 async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<ElsterForm> {
     let inputs = euer_repo::load_inputs(pool).await?;
     let report = aggregate::aggregate(fiscal_year, &inputs);
     let afa = euer_repo::depreciation_split_for_year(pool, fiscal_year).await?;
+    let income = euer_repo::income_detail(pool, fiscal_year).await?;
+    let storno = euer_repo::storno_detail(pool, fiscal_year).await?;
+    let expenses = euer_repo::expense_detail(pool, fiscal_year).await?;
     // R2-002: §19-Status period-aware (Klein→Regel-Wechsel darf das Vor-Jahr
-    // nicht rückwirkend in Zeile 15 kippen).
+    // nicht rückwirkend kippen).
     let profile = seller_profile::get(pool).await?;
     let is_kleinunternehmer = is_klein_for_year(profile.as_ref(), fiscal_year);
-    Ok(elster_csv::build_form(&report, &afa, is_kleinunternehmer))
+    Ok(elster_csv::build_form(&ElsterInputs {
+        report: &report,
+        afa: &afa,
+        income: &income,
+        storno: &storno,
+        expenses: &expenses,
+        is_kleinunternehmer,
+    }))
 }
 
 /// Komplettes EÜR-Paket eines Geschäftsjahres für die Anzeige: Anlage-EÜR-
@@ -373,81 +386,18 @@ async fn build_euer_pdf_bytes(
     // R2-002: §19-Status period-aware.
     let is_klein = is_klein_for_year(seller.as_ref(), y);
 
-    let income_sum: i64 = income.iter().map(|i| i.amount_cents).sum();
-    let expense_sum: i64 = expenses.iter().map(|e| e.gross_cents).sum();
-
-    let data = json!({
-        "year": fiscal_year,
-        // Lauf F2c (KB-0031): Hinweiskasten bei Abweichung vom Jahresabschluss.
-        "snapshotMismatch": snapshot::pdf_block(check),
-        "generatedAt": crate::clock::today_berlin().to_string(),
-        "isKleinunternehmer": is_klein,
-        "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
-        "seller": {
-            "name": seller.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
-            "street": seller.as_ref().map(|s| s.street.clone()).unwrap_or_default(),
-            "postalCode": seller.as_ref().map(|s| s.postal_code.clone()).unwrap_or_default(),
-            "city": seller.as_ref().map(|s| s.city.clone()).unwrap_or_default(),
-            "taxNumber": seller.as_ref().and_then(|s| s.tax_number.clone()),
-            "vatId": seller.as_ref().and_then(|s| s.vat_id.clone()),
-            "email": seller.as_ref().map(|s| s.email.clone()).unwrap_or_default(),
-        },
-        "form": {
-            "lines": form.lines.iter().map(|l| json!({
-                "zeile": if l.zeile == 0 { "—".to_string() } else { l.zeile.to_string() },
-                "bezeichnung": l.bezeichnung,
-                "betrag": detail::eur_grouped(l.amount_cents),
-                "isEntry": l.is_entry,
-            })).collect::<Vec<_>>(),
-            "incomeTotal": detail::eur_grouped(form.income_total_cents),
-            "expenseTotal": detail::eur_grouped(form.expense_total_cents),
-            "surplus": detail::eur_grouped(form.surplus_cents),
-        },
-        "assets": assets.iter().map(|a| json!({
-            "assetNumber": a.asset_number,
-            "label": a.label,
-            "acquisitionDate": a.acquisition_date,
-            "acquisitionCost": detail::eur_grouped(a.acquisition_cost_cents),
-            "method": detail::method_label(&a.depreciation_method),
-            "afaYear": detail::eur_grouped(a.afa_year_cents),
-            "bookValueEnd": detail::eur_grouped(a.book_value_end_cents),
-            "disposalNote": if a.disposed_in_year {
-                format!("Abgang {}", a.disposal_date.clone().unwrap_or_default())
-            } else {
-                String::new()
-            },
-        })).collect::<Vec<_>>(),
-        "income": income.iter().map(|i| json!({
-            "paidDate": i.paid_date,
-            "invoiceNumber": i.invoice_number,
-            "customer": i.customer,
-            "description": i.description,
-            "amount": detail::eur_grouped(i.amount_cents),
-        })).collect::<Vec<_>>(),
-        "storno": storno.iter().map(|s| json!({
-            "stornoDate": s.storno_date,
-            "stornoNumber": s.storno_number,
-            "originalNumber": s.original_number,
-            "amount": detail::eur_grouped(s.refunded_cents),
-        })).collect::<Vec<_>>(),
-        "incomeSum": detail::eur_grouped(income_sum),
-        "expenses": expenses.iter().map(|e| json!({
-            "paidDate": e.paid_date,
-            "expenseNumber": e.expense_number,
-            "vendor": e.vendor,
-            "category": detail::category_label(&e.category),
-            "description": e.description,
-            "amount": detail::eur_grouped(e.gross_cents),
-        })).collect::<Vec<_>>(),
-        "expenseSum": detail::eur_grouped(expense_sum),
-        "disposals": disposals.iter().map(|d| json!({
-            "disposalDate": d.disposal_date,
-            "assetNumber": d.asset_number,
-            "label": d.label,
-            "proceeds": detail::eur_grouped(d.proceeds_cents),
-            "residual": detail::eur_grouped(d.residual_book_value_cents),
-            "gainLoss": detail::eur_grouped(d.gain_loss_cents),
-        })).collect::<Vec<_>>(),
+    let data = euer_pdf_data(&EuerPdfParts {
+        fiscal_year,
+        today: crate::clock::today_berlin(),
+        snapshot_block: snapshot::pdf_block(check),
+        is_klein,
+        seller: seller.as_ref(),
+        form: &form,
+        income: &income,
+        storno: &storno,
+        expenses: &expenses,
+        disposals: &disposals,
+        assets: &assets,
     });
     let data_json = serde_json::to_string(&data)?;
 
@@ -462,6 +412,125 @@ async fn build_euer_pdf_bytes(
     typst_render::plain_job(&source, &data_json, branding_opt)
         .compile_async()
         .await
+}
+
+/// Geladene Bestandteile des EÜR-PDFs.
+struct EuerPdfParts<'a> {
+    fiscal_year: i64,
+    today: chrono::NaiveDate,
+    snapshot_block: serde_json::Value,
+    is_klein: bool,
+    seller: Option<&'a SellerProfileRow>,
+    form: &'a ElsterForm,
+    income: &'a [IncomeItem],
+    storno: &'a [StornoItem],
+    expenses: &'a [ExpenseItem],
+    disposals: &'a [DisposalItem],
+    assets: &'a [AveeurItem],
+}
+
+/// Daten des EÜR-PDFs (pure): Beträge formatiert, Datumsangaben als
+/// TT.MM.JJJJ (KB-0018), Summe der Einnahmen-Tabelle abzüglich der dort
+/// aufgeführten Stornos (KB-0023).
+fn euer_pdf_data(p: &EuerPdfParts<'_>) -> serde_json::Value {
+    let EuerPdfParts {
+        fiscal_year,
+        today,
+        is_klein,
+        seller,
+        form,
+        income,
+        storno,
+        expenses,
+        disposals,
+        assets,
+        ..
+    } = *p;
+    let check_block = p.snapshot_block.clone();
+
+    // KB-0023: Summe der Tabelle = Zahlungen abzüglich der dort aufgeführten
+    // Storno-Erstattungen.
+    let income_sum: i64 = income.iter().map(|i| i.amount_cents).sum::<i64>()
+        - storno.iter().map(|s| s.refunded_cents).sum::<i64>();
+    let expense_sum: i64 = expenses.iter().map(|e| e.gross_cents).sum();
+
+    json!({
+        "year": fiscal_year,
+        // Lauf F2c (KB-0031): Hinweiskasten bei Abweichung vom Jahresabschluss.
+        "snapshotMismatch": check_block,
+        // KB-0018: Datumsangaben im PDF als TT.MM.JJJJ.
+        "generatedAt": today.format("%d.%m.%Y").to_string(),
+        "isKleinunternehmer": is_klein,
+        "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
+        "seller": {
+            "name": seller.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+            "street": seller.as_ref().map(|s| s.street.clone()).unwrap_or_default(),
+            "postalCode": seller.as_ref().map(|s| s.postal_code.clone()).unwrap_or_default(),
+            "city": seller.as_ref().map(|s| s.city.clone()).unwrap_or_default(),
+            "taxNumber": seller.as_ref().and_then(|s| s.tax_number.clone()),
+            "vatId": seller.as_ref().and_then(|s| s.vat_id.clone()),
+            "email": seller.as_ref().map(|s| s.email.clone()).unwrap_or_default(),
+        },
+        "form": {
+            "lines": form.lines.iter().map(|l| json!({
+                "zeile": l.zeile.to_string(),
+                "kennzahl": l.kennzahl.map(|k| k.to_string()).unwrap_or_default(),
+                "bezeichnung": l.bezeichnung,
+                "betrag": detail::eur_grouped(l.amount_cents),
+                "isEntry": l.is_entry,
+            })).collect::<Vec<_>>(),
+            "incomeTotal": detail::eur_grouped(form.income_total_cents),
+            "expenseTotal": detail::eur_grouped(form.expense_total_cents),
+            "surplus": detail::eur_grouped(form.surplus_cents),
+            "formYear": form.form_year,
+            "notes": form.notes,
+        },
+        "assets": assets.iter().map(|a| json!({
+            "assetNumber": a.asset_number,
+            "label": a.label,
+            "acquisitionDate": de_date(&a.acquisition_date),
+            "acquisitionCost": detail::eur_grouped(a.acquisition_cost_cents),
+            "method": detail::method_label(&a.depreciation_method),
+            "afaYear": detail::eur_grouped(a.afa_year_cents),
+            "bookValueEnd": detail::eur_grouped(a.book_value_end_cents),
+            "disposalNote": if a.disposed_in_year {
+                format!("Abgang {}", de_date(a.disposal_date.as_deref().unwrap_or_default()))
+            } else {
+                String::new()
+            },
+        })).collect::<Vec<_>>(),
+        "income": income.iter().map(|i| json!({
+            "paidDate": de_date(&i.paid_date),
+            "invoiceNumber": i.invoice_number,
+            "customer": i.customer,
+            "description": i.description,
+            "amount": detail::eur_grouped(i.amount_cents),
+        })).collect::<Vec<_>>(),
+        "storno": storno.iter().map(|s| json!({
+            "stornoDate": de_date(&s.storno_date),
+            "stornoNumber": s.storno_number,
+            "originalNumber": s.original_number,
+            "amount": detail::eur_grouped(s.refunded_cents),
+        })).collect::<Vec<_>>(),
+        "incomeSum": detail::eur_grouped(income_sum),
+        "expenses": expenses.iter().map(|e| json!({
+            "paidDate": de_date(&e.paid_date),
+            "expenseNumber": e.expense_number,
+            "vendor": e.vendor,
+            "category": detail::category_label(&e.category),
+            "description": e.description,
+            "amount": detail::eur_grouped(e.gross_cents),
+        })).collect::<Vec<_>>(),
+        "expenseSum": detail::eur_grouped(expense_sum),
+        "disposals": disposals.iter().map(|d| json!({
+            "disposalDate": de_date(&d.disposal_date),
+            "assetNumber": d.asset_number,
+            "label": d.label,
+            "proceeds": detail::eur_grouped(d.proceeds_cents),
+            "residual": detail::eur_grouped(d.residual_book_value_cents),
+            "gainLoss": detail::eur_grouped(d.gain_loss_cents),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Argumente von [`euer_export_pdf`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -521,6 +590,59 @@ pub struct DatevExport {
 pub struct EuerExportDatevArgs {
     pub fiscal_year: i64,
     pub skr: String,
+    /// Beraternummer für den DATEV-Kopf (optional, 1001–9999999).
+    #[serde(default)]
+    pub consultant_number: Option<u32>,
+    /// Mandantennummer für den DATEV-Kopf (optional, 1–99999).
+    #[serde(default)]
+    pub client_number: Option<u32>,
+}
+
+/// Lädt die Einzelposten eines Jahres und baut den DATEV-Buchungsstapel
+/// (gemeinsam für DATEV-Export und Steuerberater-Paket).
+async fn build_datev_bytes(
+    pool: &SqlitePool,
+    fiscal_year: i32,
+    skr: Skr,
+    consultant_number: Option<u32>,
+    client_number: Option<u32>,
+) -> Result<(Vec<u8>, usize)> {
+    datev_csv::validate_header_numbers(consultant_number, client_number)
+        .map_err(crate::error::Error::Domain)?;
+    let income = euer_repo::income_detail(pool, fiscal_year).await?;
+    let storno = euer_repo::storno_detail(pool, fiscal_year).await?;
+    let expenses = euer_repo::expense_detail(pool, fiscal_year).await?;
+    let capitalized = euer_repo::capitalized_expense_detail(pool, fiscal_year).await?;
+    let disposals = euer_repo::disposal_detail(pool, fiscal_year).await?;
+    let assets = euer_repo::aveeur_items(pool, fiscal_year).await?;
+    // R2-009: Privatbewegungen gehören in den DATEV-Stapel (EÜR-neutral, aber
+    // für die Abstimmung der Geldkonten beim STB nötig).
+    let private_movements = euer_repo::private_movement_detail(pool, fiscal_year).await?;
+    let profile = seller_profile::get(pool).await?;
+    let bookings = datev_csv::build_bookings(
+        skr,
+        fiscal_year,
+        &DatevInputs {
+            income: &income,
+            storno: &storno,
+            expenses: &expenses,
+            capitalized: &capitalized,
+            disposals: &disposals,
+            assets: &assets,
+            private_movements: &private_movements,
+            is_kleinunternehmer: is_klein_for_year(profile.as_ref(), fiscal_year),
+        },
+    );
+    let header = DatevHeader {
+        fiscal_year,
+        skr,
+        generated_at: crate::clock::now_berlin()
+            .format("%Y%m%d%H%M%S%3f")
+            .to_string(),
+        consultant_number,
+        client_number,
+    };
+    Ok((datev_csv::to_datev(&header, &bookings), bookings.len()))
 }
 
 /// Erzeugt den DATEV-Buchungsstapel (EXTF) eines Geschäftsjahres für die
@@ -531,40 +653,24 @@ pub async fn euer_export_datev(
     ctx: &Arc<AppCtx>,
     args: EuerExportDatevArgs,
 ) -> Result<DatevExport> {
-    let EuerExportDatevArgs { fiscal_year, skr } = args;
+    let EuerExportDatevArgs {
+        fiscal_year,
+        skr,
+        consultant_number,
+        client_number,
+    } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
-    let y = fiscal_year as i32;
-
-    let income = euer_repo::income_detail(pool, y).await?;
-    let storno = euer_repo::storno_detail(pool, y).await?;
-    let expenses = euer_repo::expense_detail(pool, y).await?;
-    let disposals = euer_repo::disposal_detail(pool, y).await?;
-    let assets = euer_repo::aveeur_items(pool, y).await?;
-    // R2-009: Privatbewegungen gehören in den DATEV-Stapel (EÜR-neutral, aber
-    // für die Bank-Abstimmung beim STB nötig).
-    let private_movements = euer_repo::private_movement_detail(pool, y).await?;
-
     let skr_enum = Skr::from_code(&skr);
-    let bookings = datev_csv::build_bookings(
+    let (bytes, booking_count) = build_datev_bytes(
+        pool,
+        fiscal_year as i32,
         skr_enum,
-        y,
-        &income,
-        &storno,
-        &expenses,
-        &disposals,
-        &assets,
-        &private_movements,
-    );
-    let header = DatevHeader {
-        fiscal_year: y,
-        skr: skr_enum,
-        generated_at: crate::clock::now_berlin()
-            .format("%Y%m%d%H%M%S%3f")
-            .to_string(),
-    };
-    let bytes = datev_csv::to_datev(&header, &bookings);
+        consultant_number,
+        client_number,
+    )
+    .await?;
 
     // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
     let (download_id, download_path) = ctx
@@ -581,7 +687,7 @@ pub async fn euer_export_datev(
         json!({
             "file_name": format!("DATEV-{fiscal_year}-{skr}.csv"),
             "skr": skr_enum.code(),
-            "bookings": bookings.len(),
+            "bookings": booking_count,
         }),
         check.as_ref(),
     )
@@ -593,7 +699,7 @@ pub async fn euer_export_datev(
             path,
             crate::downloads::DownloadKind::Export,
         )?,
-        booking_count: bookings.len(),
+        booking_count,
         snapshot_check: check,
     })
 }
@@ -614,6 +720,12 @@ pub struct StbExport {
 pub struct EuerExportStbZipArgs {
     pub fiscal_year: i64,
     pub skr: String,
+    /// Beraternummer für den DATEV-Kopf (optional, 1001–9999999).
+    #[serde(default)]
+    pub consultant_number: Option<u32>,
+    /// Mandantennummer für den DATEV-Kopf (optional, 1–99999).
+    #[serde(default)]
+    pub client_number: Option<u32>,
 }
 
 /// Erzeugt das **Steuerberater-Paket** als ZIP: Deckblatt-PDF, vollständiges
@@ -629,7 +741,12 @@ pub async fn euer_export_stb_zip(
     ctx: &Arc<AppCtx>,
     args: EuerExportStbZipArgs,
 ) -> Result<StbExport> {
-    let EuerExportStbZipArgs { fiscal_year, skr } = args;
+    let EuerExportStbZipArgs {
+        fiscal_year,
+        skr,
+        consultant_number,
+        client_number,
+    } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
@@ -643,36 +760,16 @@ pub async fn euer_export_stb_zip(
     // Bewegungen + Profil laden (für DATEV, Detail-CSVs, Deckblatt, Stammdaten).
     let form = build_form_for_year(pool, y).await?;
     let income = euer_repo::income_detail(pool, y).await?;
-    let storno = euer_repo::storno_detail(pool, y).await?;
     let expenses = euer_repo::expense_detail(pool, y).await?;
-    let disposals = euer_repo::disposal_detail(pool, y).await?;
     let assets = euer_repo::aveeur_items(pool, y).await?;
-    // R2-009: Privatbewegungen für den STB-DATEV-Stapel.
-    let private_movements = euer_repo::private_movement_detail(pool, y).await?;
     let seller = seller_profile::get(pool).await?;
     // R2-002: §19-Status period-aware.
     let is_klein = is_klein_for_year(seller.as_ref(), y);
 
     // DATEV-Buchungsstapel.
     let skr_enum = Skr::from_code(&skr);
-    let bookings = datev_csv::build_bookings(
-        skr_enum,
-        y,
-        &income,
-        &storno,
-        &expenses,
-        &disposals,
-        &assets,
-        &private_movements,
-    );
-    let datev_header = DatevHeader {
-        fiscal_year: y,
-        skr: skr_enum,
-        generated_at: crate::clock::now_berlin()
-            .format("%Y%m%d%H%M%S%3f")
-            .to_string(),
-    };
-    let datev_bytes = datev_csv::to_datev(&datev_header, &bookings);
+    let (datev_bytes, _) =
+        build_datev_bytes(pool, y, skr_enum, consultant_number, client_number).await?;
 
     // ELSTER-Ausfüllhilfe (R2-015).
     let elster_csv_bytes =
@@ -706,7 +803,7 @@ pub async fn euer_export_stb_zip(
     // Deckblatt-PDF (R2-019: §19-Klausel + Disclaimer in den Cover-Daten).
     let cover_data = json!({
         "year": fiscal_year,
-        "generatedAt": crate::clock::today_berlin().to_string(),
+        "generatedAt": crate::clock::today_berlin().format("%d.%m.%Y").to_string(),
         "skr": skr_enum.code(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
@@ -754,7 +851,14 @@ pub async fn euer_export_stb_zip(
     // LIESMICH.txt (R2-019); KB-0031: Abweichung vom Snapshot vorangestellt;
     // F2c: nicht festgeschriebene Nummern des Jahres.
     let unissued = euer_repo::unissued_numbers_for_year(pool, y).await?;
-    let mut liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum, &unissued);
+    let mut liesmich = build_stb_readme(
+        fiscal_year,
+        is_klein,
+        skr_enum,
+        &unissued,
+        consultant_number.is_some() && client_number.is_some(),
+        &form.notes,
+    );
     if let Some(c) = check.as_ref().filter(|c| !c.matches) {
         liesmich = format!("{}{liesmich}", snapshot::readme_block(c));
     }
@@ -913,6 +1017,8 @@ fn build_stb_readme(
     is_klein: bool,
     skr: Skr,
     unissued: &[detail::UnissuedNumberItem],
+    datev_numbers_set: bool,
+    elster_notes: &[String],
 ) -> String {
     let mut s = String::new();
     s.push_str(&format!(
@@ -950,6 +1056,26 @@ fn build_stb_readme(
     s.push_str("    belege/rechnungen/        — Original-Rechnungen (PDF + XRechnung-XML)\n");
     s.push_str("    belege/kosten/            — Original-Kostenbelege\n");
     s.push_str("    manifest.json             — SHA-256-Hash je Datei (Tamper-Detection)\n\n");
+    // Lauf F5b (R2-011, R2-S2-DATEV-HEADER, R2-S2-DATEV-MAPPING): Grenzen des
+    // DATEV-Stapels, die der Steuerberater beim Import kennen muss.
+    s.push_str("DATEV-Buchungsstapel:\n");
+    s.push_str("    Die Konten sind ein Vorschlag nach dem gewählten Kontenrahmen und\n");
+    s.push_str("    vor der Verbuchung zu prüfen. Geldkonto je hinterlegtem Zahlungskonto:\n");
+    s.push_str("    Bank 1200/1800, Kasse 1000/1600, PayPal/Stripe/sonstige 1360/1460\n");
+    s.push_str("    (Geldtransit). Zahlungen ohne hinterlegtes Konto laufen über Bank.\n");
+    if datev_numbers_set {
+        s.push_str("    Berater- und Mandantennummer stehen im Kopf der Datei.\n\n");
+    } else {
+        s.push_str("    Berater- und Mandantennummer sind leer; beim Import über die\n");
+        s.push_str("    Stapelverarbeitung gilt der geöffnete Mandant.\n\n");
+    }
+    if !elster_notes.is_empty() {
+        s.push_str("Hinweise zur ELSTER-Ausfüllhilfe:\n");
+        for n in elster_notes {
+            s.push_str(&format!("    - {n}\n"));
+        }
+        s.push('\n');
+    }
     s.push_str("Tamper-Detection:\n");
     s.push_str("    manifest.json enthält pro Datei den SHA-256-Hash zum\n");
     s.push_str("    Zeitpunkt des Exports. Beim Empfang kann der Steuerberater\n");
@@ -1028,6 +1154,172 @@ pub async fn euer_reveal_path(ctx: &Arc<AppCtx>, args: EuerRevealPathArgs) -> Re
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::euer::aggregate::EuerReport;
+    use crate::euer::elster_csv::AfaSplit;
+
+    fn report() -> EuerReport {
+        EuerReport {
+            fiscal_year: 2026,
+            invoice_income_cents: 100_000,
+            storno_refunds_cents: 30_000,
+            disposal_proceeds_cents: 0,
+            total_income_cents: 70_000,
+            expenses_by_category: Vec::new(),
+            expenses_total_cents: 2_000,
+            depreciation_total_cents: 0,
+            disposal_book_value_cents: 0,
+            total_expenses_cents: 2_000,
+            disposal_gain_loss_cents: 0,
+            surplus_cents: 68_000,
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn sample() -> (
+        ElsterForm,
+        Vec<IncomeItem>,
+        Vec<StornoItem>,
+        Vec<ExpenseItem>,
+        Vec<DisposalItem>,
+        Vec<AveeurItem>,
+    ) {
+        let income = vec![IncomeItem {
+            paid_date: "2026-03-01".into(),
+            invoice_number: "RE-2026-0001".into(),
+            customer: "ACME".into(),
+            description: "Beratung".into(),
+            amount_cents: 100_000,
+            is_kleinunternehmer: true,
+            ..Default::default()
+        }];
+        let storno = vec![StornoItem {
+            storno_date: "2026-04-02".into(),
+            storno_number: "ST-2026-0001".into(),
+            original_number: "RE-2025-0009".into(),
+            refunded_cents: 30_000,
+            is_kleinunternehmer: true,
+            ..Default::default()
+        }];
+        let expenses = vec![ExpenseItem {
+            paid_date: "2026-05-03".into(),
+            expense_number: "KO-2026-0001".into(),
+            vendor: "Shop".into(),
+            category: "office".into(),
+            description: "Papier".into(),
+            gross_cents: 2_000,
+            net_cents: 2_000,
+            ..Default::default()
+        }];
+        let disposals = vec![DisposalItem {
+            disposal_date: "2026-06-04".into(),
+            asset_number: "AV-2024-0001".into(),
+            label: "Drucker".into(),
+            depreciation_method: "linear".into(),
+            ..Default::default()
+        }];
+        let assets = vec![AveeurItem {
+            asset_number: "AV-2024-0001".into(),
+            label: "Drucker".into(),
+            acquisition_date: "2024-01-15".into(),
+            acquisition_cost_cents: 50_000,
+            depreciation_method: "linear".into(),
+            useful_life_years: Some(3.0),
+            business_share_percent: 100.0,
+            afa_year_cents: 0,
+            book_value_start_cents: 0,
+            book_value_end_cents: 0,
+            disposed_in_year: true,
+            disposal_date: Some("2026-06-04".into()),
+            disposal_proceeds_cents: Some(0),
+        }];
+        let form = elster_csv::build_form(&ElsterInputs {
+            report: &report(),
+            afa: &AfaSplit::default(),
+            income: &income,
+            storno: &storno,
+            expenses: &expenses,
+            is_kleinunternehmer: true,
+        });
+        (form, income, storno, expenses, disposals, assets)
+    }
+
+    /// KB-0018 / KB-0023: Datumsangaben im EÜR-PDF als TT.MM.JJJJ, die Summe
+    /// der Einnahmen-Tabelle zieht die dort aufgeführten Stornos ab; im
+    /// gesetzten Dokument stehen Datum, Summe und die Kennzahl-Spalte.
     #[test]
-    fn it_compiles() {}
+    fn euer_pdf_uses_german_dates_and_net_income_sum() {
+        let (form, income, storno, expenses, disposals, assets) = sample();
+        let data = euer_pdf_data(&EuerPdfParts {
+            fiscal_year: 2026,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+            snapshot_block: serde_json::Value::Null,
+            is_klein: true,
+            seller: None,
+            form: &form,
+            income: &income,
+            storno: &storno,
+            expenses: &expenses,
+            disposals: &disposals,
+            assets: &assets,
+        });
+        assert_eq!(data["generatedAt"], "25.10.2026");
+        assert_eq!(data["income"][0]["paidDate"], "01.03.2026");
+        assert_eq!(data["storno"][0]["stornoDate"], "02.04.2026");
+        assert_eq!(data["expenses"][0]["paidDate"], "03.05.2026");
+        assert_eq!(data["disposals"][0]["disposalDate"], "04.06.2026");
+        assert_eq!(data["assets"][0]["acquisitionDate"], "15.01.2024");
+        assert_eq!(data["assets"][0]["disposalNote"], "Abgang 04.06.2026");
+        assert_eq!(data["incomeSum"], "700,00 €");
+        assert_eq!(data["form"]["lines"][0]["kennzahl"], "111");
+
+        let text = crate::pdf::typst_render::laid_out_text(
+            templates::DEFAULT_EUER_TEMPLATE,
+            &serde_json::to_string(&data).unwrap(),
+        );
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(flat.contains("Erstelltam25.10.2026"), "{flat}");
+        assert!(flat.contains("01.03.2026"));
+        assert!(!flat.contains("2026-03-01"));
+        assert!(flat.contains("SummeZahlungseingängeabzüglichStorno-Erstattungen:700,00€"));
+        assert!(flat.contains("Kz"));
+    }
+
+    /// KB-0021: Hinweise der Ausfüllhilfe stehen im PDF.
+    #[test]
+    fn euer_pdf_shows_form_notes() {
+        let (mut form, income, storno, expenses, disposals, assets) = sample();
+        form.notes = vec!["Regelbesteuerung: Testhinweis".into()];
+        let data = euer_pdf_data(&EuerPdfParts {
+            fiscal_year: 2026,
+            today: chrono::NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+            snapshot_block: serde_json::Value::Null,
+            is_klein: false,
+            seller: None,
+            form: &form,
+            income: &income,
+            storno: &storno,
+            expenses: &expenses,
+            disposals: &disposals,
+            assets: &assets,
+        });
+        let text = crate::pdf::typst_render::laid_out_text(
+            templates::DEFAULT_EUER_TEMPLATE,
+            &serde_json::to_string(&data).unwrap(),
+        );
+        let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(flat.contains("HinweisezurAusfüllhilfe"));
+        assert!(flat.contains("Regelbesteuerung:Testhinweis"));
+    }
+
+    #[test]
+    fn stb_readme_names_money_accounts_and_header_numbers() {
+        let r = build_stb_readme(2026, true, Skr::Skr03, &[], false, &["Hinweis A".into()]);
+        assert!(r.contains("Kasse 1000/1600"));
+        assert!(r.contains("Berater- und Mandantennummer sind leer"));
+        assert!(r.contains("- Hinweis A"));
+        let r = build_stb_readme(2026, true, Skr::Skr03, &[], true, &[]);
+        assert!(r.contains("Berater- und Mandantennummer stehen im Kopf"));
+        assert!(!r.contains("Hinweise zur ELSTER-Ausfüllhilfe"));
+    }
 }

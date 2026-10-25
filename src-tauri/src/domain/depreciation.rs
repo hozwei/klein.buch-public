@@ -24,6 +24,7 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::asset::{business_book_value_start_cents, DepreciationMethod};
+use crate::domain::money;
 
 /// Stammdaten, die die Jahres-AfA-Rechnung braucht (Ausschnitt der Anlage).
 #[derive(Debug, Clone)]
@@ -74,10 +75,32 @@ pub fn months_used_in_acquisition_year(acquisition_date: NaiveDate) -> i32 {
 }
 
 /// Volle lineare Jahres-AfA (betrieblicher Wert / Nutzungsdauer), kaufmännisch
-/// auf Cent gerundet.
+/// auf Cent gerundet. Ganzzahlig (R1-S2-FLOAT): die Nutzungsdauer geht auf
+/// 1/100 Jahr genau ein, gerechnet wird `Wert × 100 / Dauer_in_Hundertstel` in
+/// `i128` mit Half-up-Rundung.
 pub fn annual_linear_cents(business_value_cents: i64, useful_life_years: f64) -> i64 {
-    let life = useful_life_years.max(f64::MIN_POSITIVE);
-    ((business_value_cents as f64) / life).round() as i64
+    money::mul_div_round(
+        business_value_cents,
+        100,
+        life_hundredths(useful_life_years),
+    )
+}
+
+/// Nutzungsdauer in Hundertstel Jahren, mindestens 1 (Schutz vor Division durch
+/// 0; NaN und negative Werte lehnt die Validierung der Anlage vorher ab).
+fn life_hundredths(useful_life_years: f64) -> i64 {
+    let h = (useful_life_years * 100.0).round();
+    if h.is_finite() && h >= 1.0 {
+        h.min(i64::MAX as f64) as i64
+    } else {
+        1
+    }
+}
+
+/// Anteilige AfA für `months` von 12 Monaten: `annual × months / 12`, ganzzahlig
+/// mit Half-up-Rundung (R1-S2-FLOAT).
+pub fn pro_rata_cents(annual_cents: i64, months: i32) -> i64 {
+    money::mul_div_round(annual_cents, i64::from(months), 12)
 }
 
 /// Genutzte Monate im Veräußerungsjahr: vom Jahresanfang (oder dem Anschaffungs-
@@ -111,7 +134,7 @@ pub fn compute_yearly(
 ) -> DepreciationCalc {
     let acq_year = asset.acquisition_date.year();
 
-    // Restbuchwert bereits am Erinnerungswert (1 Cent, R2-020) oder darunter
+    // Restbuchwert bereits am Erinnerungswert (1 Cent, R2-020/KB-0027) oder darunter
     // → nichts mehr abzuschreiben. Erst Disposal löst den Erinnerungswert auf.
     // GWG/Computer-Sonderregel sind oben spezialisiert und nicht betroffen.
     if previous_book_value_cents <= 1 {
@@ -152,18 +175,20 @@ pub fn compute_yearly(
                 12
             };
 
-            let mut amount = ((annual as f64) * (months as f64) / 12.0).round() as i64;
+            let mut amount = pro_rata_cents(annual, months);
 
             // Safety: bei sehr kleinen Werten/zu großer Nutzungsdauer könnte die
             // Rate auf 0 runden — dann den Rest abschreiben, statt zu stocken.
             if amount <= 0 {
                 amount = previous_book_value_cents;
             }
-            // Letztes (Teil-)Jahr: nie mehr als der Restbuchwert. R2-020 / §7 EStG
-            // i.V.m. R 7.4 Abs. 5 EStR: bei laufender betrieblicher Nutzung bleibt
-            // ein Erinnerungswert von 1 Cent im Bestand stehen, damit die Anlage
-            // im Anlagenverzeichnis sichtbar ist. Erst beim Disposal (`assets_dispose`)
-            // wird dieser Cent zusammen mit dem Restbuchwert ausgebucht.
+            // Letztes (Teil-)Jahr: nie mehr als der Restbuchwert. Erinnerungswert
+            // (R2-020, KB-0027 in ADR 0039 entschieden): Solange die Anlage genutzt
+            // wird, bleibt 1 Cent im Bestand, damit sie im Anlageverzeichnis
+            // (§ 4 Abs. 3 Satz 5 EStG) sichtbar bleibt. Das ist Buchführungs-
+            // praxis, keine Pflicht aus EStG oder EStR für die EÜR; steuerlich
+            // neutral, weil der Cent beim Abgang (`assets_dispose`) über den
+            // Restbuchwert (Anlage EÜR Kz 135) als Betriebsausgabe wirkt.
             // GWG/Computer-Sonderregel (Sofortabschreibung) bleibt davon unberührt
             // und läuft auf 0 — die Anlage gilt steuerlich sofort als verbraucht.
             if amount >= previous_book_value_cents {
@@ -237,7 +262,7 @@ pub fn compute_disposal_year_partial(
             let annual = annual_linear_cents(business_value, life);
             let months = months_until_disposal(asset.acquisition_date, disposal_date);
 
-            let mut amount = ((annual as f64) * (months as f64) / 12.0).round() as i64;
+            let mut amount = pro_rata_cents(annual, months);
             if amount < 0 {
                 amount = 0;
             }
@@ -262,6 +287,28 @@ pub fn compute_disposal_year_partial(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // R1-S2-FLOAT: AfA ganzzahlig mit Half-up-Rundung.
+    #[test]
+    fn annual_and_pro_rata_are_integer_half_up() {
+        // 1.000,00 € / 3 Jahre = 333,333… → 333,33 €.
+        assert_eq!(annual_linear_cents(100_000, 3.0), 33_333);
+        // 1.000,05 € / 2 = 500,025 → 500,03 € (Halbcent rundet auf).
+        assert_eq!(annual_linear_cents(100_005, 2.0), 50_003);
+        // Bruchteil-Nutzungsdauer auf 1/100 Jahr: 1.000 € / 2,5 = 400 €.
+        assert_eq!(annual_linear_cents(100_000, 2.5), 40_000);
+        // Unsinnige Dauer teilt nie durch 0.
+        assert_eq!(annual_linear_cents(100, 0.0), 10_000);
+        // 333,33 € × 7/12 = 194,4425 → 194,44 €; × 6/12 = 166,665 → 166,67 €.
+        assert_eq!(pro_rata_cents(33_333, 7), 19_444);
+        assert_eq!(pro_rata_cents(33_333, 6), 16_667);
+        assert_eq!(pro_rata_cents(33_333, 12), 33_333);
+        // Betrieblicher Anteil: 1.234,57 € × 33,33 % = 411,48…  → 411,48 €.
+        assert_eq!(business_book_value_start_cents(123_457, 33.33), 41_148);
+        // 0,05 € × 50 % = 0,025 € → 0,03 €.
+        assert_eq!(business_book_value_start_cents(5, 50.0), 3);
+        assert_eq!(business_book_value_start_cents(10_000, 150.0), 10_000);
+    }
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()

@@ -10,6 +10,7 @@ pub mod fiscal_year;
 pub mod invoice;
 pub mod kleinbetragsrechnung;
 pub mod kleinunternehmer;
+pub mod money;
 pub mod numbering;
 pub mod package;
 pub mod private_movement;

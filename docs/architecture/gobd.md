@@ -61,7 +61,9 @@ im Trigger ergänzen.
 Spalten.
 
 **Änderbar** (Status-Übergänge): `status`, `paid_amount_cents`, `paid_at`,
-`payment_history_json` (Zahlung, auch im Folge-GJ), `sent_at`, `canceled_at`,
+`payment_history_json` (Zahlung, auch im Folge-GJ; je Eintrag Betrag, Datum, Notiz,
+Erfassungszeit und seit Lauf F5b optional das Zahlungskonto `accountId` — deshalb
+bleibt `paid_to_account_id` gesperrt), `sent_at`, `canceled_at`,
 `canceled_by_storno_id`, `cancel_reason`, `updated_at`. Das Festschreiben selbst
 (Setzen von `locked_at`, Validierung, Archiv-IDs) feuert nicht, weil
 `OLD.locked_at` dabei noch `NULL` ist.
@@ -384,6 +386,18 @@ neutralisiert.
   Beleg (`locked_at IS NULL`, nichts draußen). Ein nicht benötigter Entwurf wird
   verworfen (§5.5). Löschen geht auch hier nicht: `trg_invoices_no_delete`
   blockt jedes `DELETE` (Migration 0028, R1-001).
+
+### 5.4a Entwurf bearbeiten (Lauf F5a, ADR 0039 Nr. 134)
+
+Ein offener Rechnungs-Entwurf ist noch kein Beleg im Sinn der Festschreibung;
+`invoices_update_draft` überschreibt Kopf, Snapshots, Summen und Positionen.
+Die Nummer bleibt — deshalb bleibt das Rechnungsdatum im Geschäftsjahr der
+Nummer, und das Jahr muss offen sein. Nie bearbeitbar: festgeschriebene
+Rechnungen (Korrektur nur per Storno), verworfene Entwürfe, Storno-Entwürfe
+und Entwürfe eines laufenden Abo-Laufs. Jede Änderung schreibt in derselben
+Transaktion das Audit `invoice.draft_updated` (Nummer, Brutto vorher und
+nachher, Positionen, Empfängerwechsel). Beim Festschreiben friert der Server
+den §19-Status am Beleg ein; ein Storno übernimmt den Status des Originals.
 
 ### 5.5 Entwurf verwerfen (Lauf F, W14-032)
 

@@ -3,16 +3,11 @@
 //! Stornos und Privatbewegungen werden ausgeklammert.
 //!
 //! - `aggregate`: Functional Core, pro GJ.
-//! - `elster_csv`, `datev_csv`, `stb_package`: Exporte.
+//! - `detail`: Einzelaufstellung und Anlageverzeichnis.
+//! - `elster_csv`, `datev_csv`: Exporte. Das Steuerberater-Paket setzt
+//!   `commands::euer::euer_export_stb_zip` aus diesen Bausteinen zusammen.
 
 pub mod aggregate;
 pub mod datev_csv;
 pub mod detail;
 pub mod elster_csv;
-pub mod stb_package;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_compiles() {}
-}

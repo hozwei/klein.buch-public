@@ -8,6 +8,7 @@
     todayBerlin,
     yearBerlin,
   } from "$lib/date";
+  import { dayClock } from "$lib/dayClock.svelte";
   // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
   // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
@@ -156,10 +157,11 @@
 
   // ---- Derived-Werte ---------------------------------------------------------
 
-  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1).
-  const today = new Date();
-  const todayIso = todayBerlin(today);
-  const currentYear = yearBerlin(today);
+  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1);
+  // reaktiv über Mitternacht (D-27, lib/dayClock.svelte.ts).
+  const today = $derived(dayClock.now);
+  const todayIso = $derived(todayBerlin(today));
+  const currentYear = $derived(yearBerlin(today));
 
   const fmtHeroDate = new Intl.DateTimeFormat("de-DE", {
     weekday: "long",
@@ -168,10 +170,10 @@
     year: "numeric",
     timeZone: APP_TIME_ZONE,
   });
-  const heroDate = fmtHeroDate.format(today);
+  const heroDate = $derived(fmtHeroDate.format(today));
 
-  const fyDay = dayOfYearBerlin(today);
-  const fyDaysInYear = daysInYear(currentYear);
+  const fyDay = $derived(dayOfYearBerlin(today));
+  const fyDaysInYear = $derived(daysInYear(currentYear));
   // Tag-Anzeige nur sinnvoll, wenn das offene GJ das laufende Kalenderjahr ist.
   // Bei offenem Vorjahr (currentYear < today.year) wäre „Tag X von 365" für
   // das Vorjahr irreführend → wir lassen die Tag-Zeile dann weg.

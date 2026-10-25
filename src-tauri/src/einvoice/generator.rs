@@ -573,37 +573,20 @@ pub fn to_xrechnung_with_preceding(
     Ok(x)
 }
 
-/// Pro (Tax-Category, Rate) gruppiert.
-#[derive(Debug, Clone)]
-struct TaxGroup {
-    category_code: String,
-    rate: f64,
-    taxable_amount_cents: i64,
-    tax_amount_cents: i64,
-}
-
+/// Steueraufschlüsselung je (Kategorie, Satz): Steuer aus der Gruppensumme
+/// (BR-CO-17), dieselbe Rechnung wie die USt-Summe in
+/// [`crate::domain::invoice::compute_totals`].
 fn group_tax(
     inputs: &[InvoiceItemInput],
     totals: &[crate::domain::invoice::ItemTotals],
-) -> Vec<TaxGroup> {
-    use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, TaxGroup> = BTreeMap::new();
-    for (it, t) in inputs.iter().zip(totals.iter()) {
-        let key = format!("{}|{:.4}", it.tax_category_code, it.tax_rate_percent);
-        groups
-            .entry(key)
-            .and_modify(|g| {
-                g.taxable_amount_cents += t.net_amount_cents;
-                g.tax_amount_cents += t.tax_amount_cents;
-            })
-            .or_insert(TaxGroup {
-                category_code: it.tax_category_code.clone(),
-                rate: it.tax_rate_percent,
-                taxable_amount_cents: t.net_amount_cents,
-                tax_amount_cents: t.tax_amount_cents,
-            });
-    }
-    groups.into_values().collect()
+) -> Vec<crate::domain::invoice::TaxGroupTotal> {
+    crate::domain::invoice::tax_groups(inputs.iter().zip(totals.iter()).map(|(it, t)| {
+        (
+            it.tax_category_code.as_str(),
+            it.tax_rate_percent,
+            t.net_amount_cents,
+        )
+    }))
 }
 
 #[cfg(test)]

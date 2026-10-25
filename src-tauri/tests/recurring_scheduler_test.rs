@@ -1655,3 +1655,90 @@ async fn run_now_resumes_interrupted_occurrence_first() {
     );
     assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM invoices").await, 2);
 }
+
+/// F5-fix (S2, KB-0014): Eine unter §19 gespeicherte Vorlage (Steuerart E)
+/// erzeugt nach dem Wechsel zur Regelbesteuerung keinen nummerierten Entwurf,
+/// der beim Festschreiben scheitert: der Termin wird übersprungen (Hinweis,
+/// keine Nummer, Vorlage bleibt stehen), bis die Vorlage umgestellt ist.
+/// Speichern mit E bei Regelbesteuerung lehnt der Server ab.
+#[tokio::test]
+async fn exempt_template_after_switch_to_regular_taxation_is_blocked() {
+    use klein_buch_lib::commands::recurring_invoice as cmd;
+    let env = setup().await;
+    mk_seller(&env.pool).await;
+    let contact = mk_contact(&env.pool).await;
+    let tmpl = recurring_invoice::create(
+        &env.pool,
+        &tmpl_input(&contact, d(2026, 5, 1), "issue_send"),
+    )
+    .await
+    .unwrap();
+    // Verzicht auf §19 (Regelbesteuerung) nach dem Speichern der Vorlage.
+    sqlx::query(
+        "UPDATE seller_profile SET is_kleinunternehmer = 0,
+                waived_paragraph_19_since = '2026-01-01'",
+    )
+    .execute(&env.pool)
+    .await
+    .unwrap();
+    let clock = noon(d(2026, 5, 20));
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 0, "{r:?}");
+    assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM invoices").await, 0);
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COALESCE(SUM(last_value), 0) FROM doc_number_counters"
+        )
+        .await,
+        0,
+        "keine Nummer verbraucht"
+    );
+    assert_eq!(notices(&env.pool, "recurring_invoice_blocked:").await, 1);
+    let bodies = notice_bodies(&env.pool).await;
+    assert!(bodies.contains("Steuerart S"), "{bodies}");
+    let t = recurring_invoice::get_row(&env.pool, &tmpl.template.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(t.next_due_date, "2026-05-01", "Termin bleibt offen");
+
+    // Ein zweiter Lauf am selben Tag: kein weiterer Hinweis, kein Entwurf.
+    scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(notices(&env.pool, "recurring_invoice_blocked:").await, 1);
+    assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM invoices").await, 0);
+
+    // Speichern mit E bei Regelbesteuerung wird abgelehnt; mit S/19 % geht es.
+    let ctx = ctx_for(&env, noon(d(2026, 5, 20))).await;
+    let err = cmd::recurring_invoices_update(
+        &ctx,
+        cmd::RecurringInvoicesUpdateArgs {
+            id: tmpl.template.id.clone(),
+            input: tmpl_input(&contact, d(2026, 5, 1), "issue_send"),
+        },
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("Steuerart E"), "{err}");
+    let mut fixed = tmpl_input(&contact, d(2026, 5, 1), "draft");
+    fixed.items[0].tax_category_code = "S".into();
+    fixed.items[0].tax_rate_percent = 19.0;
+    cmd::recurring_invoices_update(
+        &ctx,
+        cmd::RecurringInvoicesUpdateArgs {
+            id: tmpl.template.id.clone(),
+            input: fixed,
+        },
+    )
+    .await
+    .unwrap();
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 1, "{r:?}");
+}

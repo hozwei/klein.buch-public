@@ -340,6 +340,38 @@ async fn accrue_skips_disposed_assets() {
     );
 }
 
+/// KB-0028 (b): Eine 2026 veräußerte Anlage (Anschaffung 2025) bekommt im
+/// Folgejahr keine AfA — auch nicht über das Nachholen früherer Jahre.
+#[tokio::test]
+async fn disposed_asset_never_gets_entry_after_disposal_year() {
+    let (pool, dir) = setup().await;
+    let paths = paths_for(dir.path());
+    let session = BackupSession::default();
+    session.set("passphrase-1234".into());
+
+    let a = mk_asset(&pool, "linear", d(2025, 1, 1), 100_000, 100.0, Some(5.0)).await;
+    let r25 = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2025, noon(d(2025, 12, 31)))
+        .await
+        .unwrap();
+    assert_eq!(r25.booked_entries, 1);
+    assets::dispose(&pool, &a.id, "2026-06-30", "sale", 50_000, 80_000)
+        .await
+        .unwrap();
+
+    let r27 = accrue_yearly::accrue_for_year(&pool, &paths, &session, 2027, noon(d(2027, 12, 31)))
+        .await
+        .unwrap();
+    assert_eq!(r27.booked_entries, 0);
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM depreciation_entries WHERE asset_id = ? AND fiscal_year > 2025",
+    )
+    .bind(&a.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "keine AfA nach dem Veräußerungsjahr");
+}
+
 #[tokio::test]
 async fn accrue_rejects_future_fiscal_year() {
     let (pool, dir) = setup().await;
