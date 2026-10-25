@@ -15,14 +15,17 @@ Den Export-Bereich öffnest Du über das Hauptmenü "Steuer (EÜR)"
 und dort über den Link **"Für die Steuererklärung exportieren →"**.
 Jeder Export kommt als Download: Dein Browser speichert die Datei in
 seinem Download-Ordner. Unter dem Knopf zeigt Klein.Buch danach den
-Dateinamen an.
+Dateinamen an. Auf dem Server liegt die Datei nur kurz: Sie wird mit dem
+Herunterladen gelöscht, spätestens nach zehn Minuten. Bricht der Download
+ab, erzeugst Du den Export einfach noch einmal.
 
 ## ELSTER-Ausfüllhilfe
 
 Wenn Du die Steuererklärung selbst über das ELSTER-Portal abgibst,
 nutzt Du die Ausfüllhilfe. Im Export-Bereich findest Du das Feld
 **"ELSTER-Ausfüllhilfe (CSV)"**. Klick dort auf **"CSV
-herunterladen"**.
+herunterladen"**. Wie bei allen Exporten fragt Klein.Buch vorher noch
+einmal Daten-Passwort und App-Code ab (gilt fünf Minuten).
 
 Klein.Buch erzeugt eine CSV-Datei mit Deinen EÜR-Werten,
 aufgeschlüsselt nach den Zeilen der ELSTER-Anlage EÜR. Du öffnest

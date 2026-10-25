@@ -22,6 +22,7 @@ pub mod payment_accounts;
 pub mod pdf;
 pub mod private_movements;
 pub mod quotes;
+pub mod reauth;
 pub mod recurring;
 pub mod recurring_invoice;
 pub mod registry;

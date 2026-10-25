@@ -356,6 +356,29 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Höchstdauer, die das Frontend auf eine lange Anmeldung (Umstellung der
+ *  Datenbank nach einem Update samt Pflicht-Backup) wartet. */
+const PENDING_AUTH_MAX_MS = 30 * 60_000;
+
+/**
+ * W14-037 (Lauf F4a): Antwortet die Anmeldung bzw. Einrichtung mit 202
+ * (`state: "pending"`), läuft sie auf dem Server weiter; das Ergebnis holt
+ * `POST /api/auth/login/poll` ab (Ticket im HttpOnly-Cookie). Liefert die
+ * endgültige Antwort (200 mit Sitzung, sonst den Fehler).
+ */
+async function followPendingAuth(res: Response, intervalMs = 1000): Promise<Response> {
+  const started = Date.now();
+  let current = res;
+  while (current.status === 202) {
+    if (Date.now() - started > PENDING_AUTH_MAX_MS) {
+      throw "Die Anmeldung dauert ungewöhnlich lange — bitte das Server-Log prüfen und die Seite neu laden.";
+    }
+    await sleep(intervalMs);
+    current = await sendOnce("/api/auth/login/poll", authInit({}));
+  }
+  return current;
+}
+
 /** Neues TOTP-Geheimnis mit QR-Code (Einrichtung bzw. Erneuerung). */
 export interface TotpOffer {
   secret: string;
@@ -363,9 +386,14 @@ export interface TotpOffer {
   qrSvg: string;
 }
 
-/** Einrichtung Schritt 1: Setup-Token prüfen, TOTP-Geheimnis anfordern. */
-export async function authSetupOffer(setupToken: string): Promise<TotpOffer> {
-  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, step: "totp" }));
+/** Einrichtung Schritt 1: Setup-Token prüfen, TOTP-Geheimnis anfordern. Mit
+ *  `passphrase` (nur Ersteinrichtung) prüft der Server das neue Passwort schon
+ *  hier (422 `passphrase_common`/`_too_short`/`_too_long`, Lauf F4a). */
+export async function authSetupOffer(setupToken: string, passphrase?: string): Promise<TotpOffer> {
+  const body = passphrase === undefined
+    ? { setupToken, step: "totp" }
+    : { setupToken, step: "totp", passphrase };
+  return jsonOrThrow(await postAuth("/api/auth/setup", body));
 }
 
 /** Einrichtung Schritt 2: atomar mit Passphrase und TOTP-Bestätigung. */
@@ -374,7 +402,8 @@ export async function authSetupFinish(
   passphrase: string,
   totpCode: string,
 ): Promise<{ recoveryCodes: string[] }> {
-  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, passphrase, totpCode }));
+  const res = await postAuth("/api/auth/setup", { setupToken, passphrase, totpCode });
+  return jsonOrThrow(await followPendingAuth(res));
 }
 
 /** Zweiter Faktor: TOTP-Code oder Einmal-Code. */
@@ -390,9 +419,12 @@ export interface LoginResult {
   usedRecoveryCode?: boolean;
 }
 
-/** Anmelden; `ok:false` bei falschen Angaben (immer dieselbe Meldung). */
+/** Anmelden; `ok:false` bei falschen Angaben (immer dieselbe Meldung). Eine
+ *  lange Anmeldung (202, z. B. Umstellung der Datenbank) wird abgewartet. */
 export async function authLogin(passphrase: string, factor: SecondFactor): Promise<LoginResult> {
-  const res = await postAuth("/api/auth/login", { passphrase, ...factor });
+  const res = await followPendingAuth(
+    await postAuth("/api/auth/login", { passphrase, ...factor }),
+  );
   if (res.status === 401) return { ok: false };
   const body = await jsonOrThrow<Omit<LoginResult, "ok">>(res);
   return { ok: true, ...body };
@@ -439,6 +471,34 @@ export async function authSecurity(): Promise<{ recoveryLeft: number; insecureHt
     credentials: "same-origin",
   });
   return jsonOrThrow(res);
+}
+
+/** Eine angemeldete Sitzung (W14-005). Zeiten UTC wie DB-Zeitstempel. */
+export interface AuthSession {
+  /** Gekürzte Kennung (8 Hex-Zeichen), kein Rückschluss auf das Cookie. */
+  id: string;
+  loginAt: string;
+  lastSeenAt: string;
+  current: boolean;
+  reauthActive: boolean;
+}
+
+/** Übersicht der angemeldeten Sitzungen (W14-005). */
+export async function authSessions(): Promise<AuthSession[]> {
+  const res = await fetchWithRetry("/api/auth/sessions", {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  const body = await jsonOrThrow<{ sessions: AuthSession[] }>(res);
+  return body.sessions;
+}
+
+/** Alle anderen Sitzungen abmelden (Re-Auth); liefert die Anzahl. */
+export async function authRevokeOtherSessions(): Promise<number> {
+  const body = await jsonOrThrow<{ revoked: number }>(
+    await postAuthReauth("/api/auth/sessions/others/revoke", {}),
+  );
+  return body.revoked;
 }
 
 export async function authTotpRenewOffer(): Promise<TotpOffer> {

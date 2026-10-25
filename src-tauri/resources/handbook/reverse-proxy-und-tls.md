@@ -107,7 +107,11 @@ Klein.Buch warnt in diesem Fall beim Containerstart im Log.
    oder `X-Frame-Options` hinzufügen. Klein.Buch setzt sie selbst,
    auch HSTS (die Anweisung an den Browser, die Adresse ein Jahr lang
    nur über HTTPS aufzurufen), sobald eine Anfrage über einen vertrauten
-   Proxy mit HTTPS kommt.
+   Proxy mit HTTPS kommt. Klein.Buch setzt HSTS bewusst ohne
+   `includeSubDomains`, weil es die übrigen Namen Deiner Domain nicht
+   kennt. Sollen alle Subdomains nur noch über HTTPS erreichbar sein,
+   setzt Du HSTS mit `includeSubDomains` (und bei Bedarf `preload`) für
+   die Hauptdomain an Deinem Proxy oder Webserver.
 
 Bei den Zeitlimits musst Du meist nichts ändern. Klein.Buch beantwortet
 jede Anfrage innerhalb von 30 Sekunden; längere Arbeiten laufen im
@@ -171,8 +175,9 @@ nur über HTTPS (Reverse-Proxy) oder lokal möglich." bedeutet, dass
 der Proxy `X-Forwarded-Proto` nicht setzt. Eine Überwachung von außen
 kann `https://buch.example.org/healthz` abfragen: Die Adresse antwortet
 ohne Anmeldung mit Status 200, solange Klein.Buch läuft, und verrät
-sonst nichts.
+sonst nichts — auch dann nicht, wenn der Proxy auf demselben Rechner
+läuft.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

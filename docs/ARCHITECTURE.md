@@ -87,8 +87,8 @@ Frontends. `AppCtx` hält Pfade, den schließbaren Pool samt Passphrase
 (`BackupSession`), Inbox, Upload- und Download-Ablage, Scheduler-Gate und die
 Ablage eines angewendeten Restores. `commands::registry` listet alle Kerne mit
 Weg (`Cmd` = über `POST /api/cmd/{name}` erreichbar; `Replaced`, `Dropped`,
-`Blocked`), Auth-Klasse (`public`/`session`/`reauth`), Kostenklasse und
-Körperlimit.
+`Blocked`), Auth-Klasse (`public`/`session`/`reauth`/`conditional`; bedingte
+Re-Auth prüft der Kern, Lauf F4a), Kostenklasse und Körperlimit.
 
 **Verschlüsselung at Rest** (ADR 0035). Die SQLite-Datei ist
 SQLCipher-verschlüsselt; der Schlüssel wird per PBKDF2-HMAC-SHA512 (Salt im
@@ -194,16 +194,16 @@ entfallen (E11, Code entfernt in W11); Eingangsrechnungen kommen per Upload
 | `server::startup` | fail-closed-Prüfungen vor dem Port-Bind, Archivpfad-Stichprobe beim Entsperren |
 | `server::instance` | Instanz-Marker `/data/.klein-buch-instance` |
 | `server::state` | Zustand `setup`/`locked`/`unlocked`, Sitzungen, Jobs, Lastgrenzen, Setup-Token (nur stderr) |
-| `server::auth`, `server::totp`, `server::session`, `server::ratelimit` | Einrichtung, Anmeldung, Re-Auth, Sperren, Passphrase-/TOTP-Wechsel; TOTP (RFC 6238) + Einmal-Codes in `/data/auth/`; Cookie `__Host-kb_session`; Wartezeiten je Gerät/IP |
+| `server::auth`, `server::totp`, `server::session`, `server::ratelimit`, `server::pending`, `server::passphrase_policy` | Einrichtung, Anmeldung (202 + Abholung bei langer Umstellung), Re-Auth, Sperren, Passphrase-/TOTP-Wechsel, Sitzungsübersicht; TOTP (RFC 6238) + Einmal-Codes in `/data/auth/`; Cookie `__Host-kb_session`; Wartezeiten je Gerät/IP, Obergrenze in Folge; Prüfung neuer Passphrasen |
 | `server::dispatch`, `server::jobs`, `server::idempotency` | `POST /api/cmd/{name}` nach Registry; Jobs `202` + `GET /api/jobs/{id}`; Idempotenz-Schlüssel |
 | `server::uploads`, `server::files` | `POST /api/upload/{art}`; `GET /files/download/{id}`, `GET /files/archive/{id}` (hash-geprüft, auditiert) |
-| `server::headers`, `server::limits`, `server::http`, `server::errors`, `server::logging` | CSP mit Skript-Hashes, HSTS, Cache-Control; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout und geordnetem Herunterfahren; Fehlerabbildung; Log ohne Geheimnisse |
-| `server::health`, `server::legal` | `/healthz` (Loopback mit Zustand und `offsite`); `/legal/` ohne Sitzung |
+| `server::headers`, `server::limits`, `server::http`, `server::errors`, `server::logging` | CSP mit Skript-Hashes, HSTS, Cache-Control; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout und geordnetem Herunterfahren; Fehlerabbildung (`ref` = Aufruf-Kennung); Log ohne Geheimnisse, eine Zeile je Ereignis, Zugriffsprotokoll mit `ip=`/`req=`/`sess=` |
+| `server::health`, `server::legal` | `/healthz` (Loopback ohne Weiterleitungs-Header mit Zustand und `offsite`); `/legal/` ohne Sitzung, gestreamt |
 | `app_ctx` | Anwendungskontext der Kerne (Nr. 19–23) |
 | `config` | `Paths::from_env` (Pflicht: `KLEIN_BUCH_DATA_DIR`, `…_INPUTS_DIR`, `…_RESOURCE_DIR`, `…_WEB_DIR`; optional `…_BACKUP_TARGETS_DIR`) |
 | `seed` | Seed von `/inputs` mit `.seed-manifest.json` (nie überschreiben, was der Nutzer geändert hat) |
 | `uploads`, `downloads` | Ablagen mit Ticket unter `<data>/tmp`, Typprüfung am Inhalt, Platzprüfung |
-| `nettest` | Port-Allowlist und Kontingent für Verbindungstests, SFTP-Probe-Speicher |
+| `nettest` | Port-Allowlist und Kontingent für Verbindungstests, SFTP-Probe-Speicher, Prüfung von SMTP-/SFTP-Hosts (`check_host`) |
 | `build_info` | Version, Commit, Tag, Quell-URL (AGPL §13, `/api/public/info`) |
 | `clock`, `limits`, `locks` | Uhr Europe/Berlin; CPU-Arbeit außerhalb der Runtime; Sperren je Beleg/Pfad/Vorlage (W1/W2) |
 
@@ -260,9 +260,12 @@ Scheduler-Tick nach.
    Audit, ggf. `backup.restore.applied`.
 
 Ist die DB schon entsperrt, prüft die Anmeldung nur die Faktoren (Passphrase
-über den Verifier in `app_settings`) und legt eine Sitzung an. **„Datenbank
-sperren"** schließt den Pool, löscht die Passphrase (`zeroize`), beendet alle
-Sitzungen und pausiert den Scheduler.
+über den Verifier in `app_settings`) und legt eine Sitzung an. Dauert die
+Anmeldung länger als 25 s (Pflicht-Backup und Migration), antwortet sie mit 202
+und einem Ticket-Cookie; `POST /api/auth/login/poll` liefert das Ergebnis samt
+Sitzung (Lauf F4a, W14-037). **„Datenbank sperren"** schließt den Pool, löscht
+die Passphrase (`zeroize`), beendet alle Sitzungen, verwirft gespeicherte
+Antworten, Job-Ergebnisse und offene Anmeldungen und pausiert den Scheduler.
 
 **Konsequenz:** Kein DB-Command läuft vor dem Entsperren; die Registry
 verlangt für alles außer den öffentlichen Routen eine Sitzung, DB-Commands
@@ -483,8 +486,9 @@ werfen `ParseError::UnsupportedProfile(<URN>)` (D-73).
 Kein Command nimmt einen Server-Pfad an. Exporte und Vorschauen entstehen in
 `<data>/tmp/downloads/<uuid>/<Dateiname>`; der Kern liefert
 `{downloadId, fileName, sizeBytes}`, der Browser holt die Datei über
-`GET /files/download/{id}` (Sitzung). Exporte sind einmal abrufbar und
-verfallen nach 1 h, Vorschauen sind 10 min mehrfach abrufbar. Archivdateien
+`GET /files/download/{id}` (Sitzung). Exporte sind einmal abrufbar (die Datei
+wird mit dem Abruf gelöscht) und verfallen nach 10 min (Lauf F4b, W14-014),
+Vorschauen sind 10 min mehrfach abrufbar. Archivdateien
 liefert `GET /files/archive/{id}` nach Hash-Prüfung (Audit `archive.read`);
 inline nur eigene PDFs (Rechnung, Angebot), alles andere als `attachment` mit
 CSP `sandbox`.
@@ -637,7 +641,9 @@ den verlinkten ADRs.
   (Argon2id). Passphrase vor Pool-Open; kein Auto-Unlock (E3). Verlust =
   Totalverlust by design.
 - **Anmeldung** (ADR 0039, E5). Passphrase + TOTP, Einmal-Codes, Re-Auth für
-  kritische Aktionen, Fehlversuche nur im Log.
+  kritische Aktionen (Verkäuferprofil bedingt), Fehlversuche nur im Log; neue
+  Passphrasen gegen Sperrliste und Muster, Obergrenze von 100 Fehlversuchen in
+  Folge ohne Gerätecookie, Sitzungsübersicht (Lauf F4a, Nr. 130).
 - **Credentials** (ADR 0011/0028 + Amendment, E6). SMTP- und SFTP-Passwörter nur
   in der Tabelle `secrets` der verschlüsselten DB, gebunden an
   (Host, Port, Benutzer); nie in Log, Audit, Migrations- oder DSGVO-Export.

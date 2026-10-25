@@ -30,6 +30,7 @@ pub mod migration_export;
 pub mod nettest;
 pub mod notify;
 pub mod pdf;
+pub(crate) mod redact;
 pub mod scheduler;
 pub mod secrets;
 pub mod seed;

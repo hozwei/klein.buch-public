@@ -210,10 +210,9 @@ async fn read_db_snapshot_bytes(paths: &Paths, key: Option<&str>) -> Result<Vec<
         .await
         .and_then(|()| {
             fs::read(&snap).map_err(|e| {
-                Error::Backup(format!(
-                    "DB-Snapshot: {} konnte nicht gelesen werden: {e}",
-                    snap.display()
-                ))
+                // W5-ERR-PATHS: Serverpfad nur ins Log.
+                tracing::warn!("DB-Snapshot {} nicht lesbar: {e}", snap.display());
+                Error::Backup(format!("DB-Snapshot konnte nicht gelesen werden: {e}"))
             })
         });
     remove_db_files(&snap);
@@ -222,10 +221,8 @@ async fn read_db_snapshot_bytes(paths: &Paths, key: Option<&str>) -> Result<Vec<
 
 async fn snapshot_into(db_file: &Path, snap: &Path, key: Option<&str>) -> Result<()> {
     if !db_file.is_file() {
-        return Err(Error::Backup(format!(
-            "DB-Snapshot: {} fehlt",
-            db_file.display()
-        )));
+        tracing::warn!("DB-Snapshot: {} fehlt", db_file.display());
+        return Err(Error::Backup("DB-Snapshot: Datenbankdatei fehlt.".into()));
     }
     let snap_str = snap.to_string_lossy().to_string();
     let mut conn = connect_file(db_file, key).await?;

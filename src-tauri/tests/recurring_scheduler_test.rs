@@ -7,7 +7,8 @@
 //! Uhrsprung (ASVS V11.1.5), Modus „Erinnerung“ (D-01), Job-Isolation im Tick
 //! (KB-0045), Auto-AfA atomar mit Backoff (D-03), Standard-Zahlungskonten
 //! (D-14), Anonymisierung pausiert Abos (W14-031), DST/Monatswechsel; ein Backup
-//! je Tick und erster Tick ohne Vollscan (D-19), Abbruch-Anforderung (W14-025b).
+//! je Tick und erster Tick ohne Vollscan (D-19), Abbruch-Anforderung (W14-025b);
+//! keine Empfängeradresse im WARN-Log beim gescheiterten Auto-Versand (W14-016).
 
 use chrono::{NaiveDate, TimeZone, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -769,6 +770,153 @@ async fn first_tick_after_unlock_skips_integrity_scan() {
 }
 
 // ---- Abo-Rechnungen mit Festschreiben (Mock-Sidecar) -----------------------
+
+/// Log-Puffer für [`auto_send_failure_keeps_recipient_out_of_warn_log`].
+#[derive(Clone, Default)]
+struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+    type Writer = LogBuffer;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// SMTP-Gegenstelle auf 127.0.0.1, die jeden Empfänger mit seiner Adresse in
+/// der Antwort ablehnt (wie viele echte Mailserver).
+async fn rejecting_smtp_server() -> u16 {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let (read, mut write) = stream.into_split();
+                let mut lines = BufReader::new(read).lines();
+                let _ = write.write_all(b"220 smtp.example.org ESMTP\r\n").await;
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let upper = line.to_ascii_uppercase();
+                    let reply = if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+                        "250 smtp.example.org\r\n".to_string()
+                    } else if upper.starts_with("RCPT TO:") {
+                        let addr = line[8..].trim().to_string();
+                        format!("550 5.1.1 {addr}: Recipient address rejected\r\n")
+                    } else if upper.starts_with("QUIT") {
+                        let _ = write.write_all(b"221 Bye\r\n").await;
+                        break;
+                    } else {
+                        "250 OK\r\n".to_string()
+                    };
+                    if write.write_all(reply.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+/// W14-016 (Lauf F4c): Scheitert der Auto-Versand einer Abo-Rechnung, nennt
+/// die WARN-Zeile nur Rechnungsnummer und Fehlerart — die Empfängeradresse aus
+/// der Antwort des Mailservers steht nur auf DEBUG, im Hinweis und im
+/// E-Mail-Protokoll.
+#[tokio::test]
+async fn auto_send_failure_keeps_recipient_out_of_warn_log() {
+    let env = setup().await;
+    mk_seller(&env.pool).await;
+    let contact = mk_contact(&env.pool).await;
+    let port = rejecting_smtp_server().await;
+    let mail_templates = env.paths.inputs_dir.join("mail-templates");
+    std::fs::create_dir_all(&mail_templates).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../inputs/mail-templates/invoice-de.txt"),
+        mail_templates.join("invoice-de.txt"),
+    )
+    .unwrap();
+    klein_buch_lib::db::repo::mail_accounts::create(
+        &env.pool,
+        &klein_buch_lib::db::repo::mail_accounts::MailAccountInput {
+            label: "Test".into(),
+            auth_type: "smtp_password".into(),
+            smtp_host: Some("127.0.0.1".into()),
+            smtp_port: Some(i64::from(port)),
+            smtp_user: None,
+            smtp_use_tls: false,
+            from_email: "rechnung@example.org".into(),
+            from_name: "Beispiel IT-Service".into(),
+            is_default: true,
+            oauth_tenant_id: None,
+            oauth_client_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    recurring_invoice::create(
+        &env.pool,
+        &tmpl_input(&contact, d(2026, 5, 1), "issue_send"),
+    )
+    .await
+    .unwrap();
+    let buffer = LogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(buffer.clone())
+        .finish();
+    let clock = noon(d(2026, 5, 20));
+    {
+        // current_thread-Runtime: alle Ereignisse des Laufs auf diesem Thread.
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+            .await
+            .unwrap();
+        assert_eq!(r.created_invoices, 1, "{r:?}");
+    }
+    let text = String::from_utf8_lossy(&buffer.0.lock().unwrap()).into_owned();
+    let warn = text
+        .lines()
+        .find(|l| l.contains(" WARN ") && l.contains("Auto-Versand fehlgeschlagen"))
+        .unwrap_or_else(|| panic!("WARN-Zeile fehlt:\n{text}"));
+    assert!(warn.contains("Fehlerart mail"), "{warn}");
+    for line in text
+        .lines()
+        .filter(|l| l.contains(" WARN ") || l.contains(" INFO "))
+    {
+        assert!(
+            !line.contains("kunde@example.org"),
+            "Empfänger im Log: {line}"
+        );
+    }
+    assert!(
+        text.lines()
+            .any(|l| l.contains(" DEBUG ") && l.contains("kunde@example.org")),
+        "Volltext auf DEBUG:\n{text}"
+    );
+    assert!(
+        notice_bodies(&env.pool).await.contains("kunde@example.org"),
+        "Hinweis nennt den Fehler:\n{}",
+        notice_bodies(&env.pool).await
+    );
+    assert_eq!(
+        count(
+            &env.pool,
+            "SELECT COUNT(*) FROM email_log WHERE status = 'failed' AND error LIKE '%kunde@example.org%'"
+        )
+        .await,
+        1
+    );
+}
 
 /// W14-026: drei fällige Termine im Modus „Auto + Versand“ → nur der jüngste
 /// wird festgeschrieben (und ginge an den Versand), ältere bleiben Entwurf.

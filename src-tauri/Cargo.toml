@@ -38,8 +38,9 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "service"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-# Nur ServeDir/ServeFile für die SPA; kein CorsLayer (Plan W5.7).
-tower-http = { version = "0.6", features = ["fs"] }
+# ServeDir/ServeFile für die SPA, CatchPanicLayer (ASVS 7.4.3, Lauf F4b);
+# kein CorsLayer (Plan W5.7).
+tower-http = { version = "0.6", features = ["fs", "catch-panic"] }
 # Freier Platz vor Uploads (statvfs, Plan W7); ohne unsafe.
 rustix = { version = "1", features = ["fs", "process"] }
 

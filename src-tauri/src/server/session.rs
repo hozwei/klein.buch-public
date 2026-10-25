@@ -6,6 +6,14 @@
 //! - Idle-Timeout [`IDLE_TIMEOUT`], absolut [`ABSOLUTE_TIMEOUT`] (Plan §7);
 //!   abgelaufene Sitzungen werden bei der Prüfung entfernt.
 //! - Re-Auth gilt [`REAUTH_WINDOW`] (Plan W6).
+//! - Eine Anmeldung (Einrichtung, Login) gilt [`REAUTH_WINDOW`] lang als
+//!   frisch für Re-Auth-Prüfungen, die das ausdrücklich zulassen
+//!   ([`SessionStore::login_fresh`], W14-038, Lauf F4a).
+//! - Jede Anmeldung trägt eine Folgenummer, die eine Rotation durch Re-Auth
+//!   übersteht ([`SessionStore::login_seq`]); an sie sind Idempotenz-Schlüssel
+//!   gebunden (W14-033).
+//! - Übersicht und „andere abmelden“ ([`SessionStore::overview`],
+//!   [`SessionStore::retain_only`], W14-005).
 //! - Nur im RAM: ein Neustart meldet alle Sitzungen ab (die DB ist danach
 //!   ohnehin gesperrt, E3). Die Zeit kommt aus `tokio::time` (in Tests
 //!   pausierbar).
@@ -43,8 +51,28 @@ impl std::fmt::Debug for SessionId {
     }
 }
 
+impl SessionId {
+    /// Gekürzte Kennung für die Anzeige (die ersten 4 Byte des SHA-256 des
+    /// Cookie-Werts als Hex; erlaubt keinen Rückschluss auf das Cookie).
+    pub fn short(&self) -> String {
+        self.0[..4].iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+/// Eintrag der Sitzungsübersicht (W14-005). Zeitangaben relativ zu jetzt
+/// (die Antwort rechnet sie mit der Uhr des Servers in Zeitpunkte um).
+#[derive(Debug, Clone)]
+pub struct SessionSummary {
+    pub short_id: String,
+    pub since_login: Duration,
+    pub since_seen: Duration,
+    pub current: bool,
+    pub reauth_active: bool,
+}
+
 struct SessionData {
-    /// Anlage-Reihenfolge (für das Verdrängen der ältesten Sitzung).
+    /// Anlage-Reihenfolge (für das Verdrängen der ältesten Sitzung); bleibt
+    /// bei einer Rotation durch Re-Auth gleich (Folgenummer der Anmeldung).
     seq: u64,
     created: Instant,
     last_seen: Instant,
@@ -177,9 +205,21 @@ impl SessionStore {
         self.lock().clear();
     }
 
-    /// Alle außer `keep` ungültig (Passphrase geändert).
-    pub fn retain_only(&self, keep: SessionId) {
-        self.lock().retain(|id, _| *id == keep);
+    /// Alle außer `keep` ungültig (Passphrase geändert, „andere abmelden“);
+    /// liefert die Zahl der beendeten fremden Anmeldungen (ohne abgelaufene
+    /// und ohne die durch Re-Auth ersetzten IDs der eigenen Anmeldung).
+    pub fn retain_only(&self, keep: SessionId) -> usize {
+        let now = Instant::now();
+        let mut map = self.lock();
+        let own_seq = map.get(&keep).map(|d| d.seq);
+        let ended = map
+            .iter()
+            .filter(|(id, d)| {
+                **id != keep && !d.expired(now) && d.retire_at.is_none() && Some(d.seq) != own_seq
+            })
+            .count();
+        map.retain(|id, _| *id == keep);
+        ended
     }
 
     pub fn len(&self) -> usize {
@@ -204,6 +244,63 @@ impl SessionStore {
             .get(&id)
             .and_then(|d| d.reauth_until)
             .is_some_and(|until| now < until)
+    }
+
+    /// Folgenummer der Anmeldung (übersteht die Rotation durch Re-Auth);
+    /// Idempotenz-Schlüssel gelten nur innerhalb einer Anmeldung (W14-033).
+    pub fn login_seq(&self, id: SessionId) -> Option<u64> {
+        self.lock().get(&id).map(|d| d.seq)
+    }
+
+    /// Liegt die Anmeldung (Einrichtung bzw. Login mit Passphrase und
+    /// zweitem Faktor) dieser Sitzung weniger als [`REAUTH_WINDOW`] zurück?
+    /// Gilt nur für eine noch nicht durch Re-Auth ersetzte ID (W14-038:
+    /// bedingte Re-Auth direkt nach der Anmeldung).
+    pub fn login_fresh(&self, id: SessionId) -> bool {
+        let now = Instant::now();
+        self.lock().get(&id).is_some_and(|d| {
+            d.retire_at.is_none()
+                && !d.expired(now)
+                && now.duration_since(d.created) < REAUTH_WINDOW
+        })
+    }
+
+    /// Übersicht der gültigen Sitzungen (W14-005), älteste Anmeldung zuerst.
+    /// Durch Re-Auth ersetzte IDs (laufen in [`ROTATION_GRACE`] ab) fehlen.
+    pub fn overview(&self, current: SessionId) -> Vec<SessionSummary> {
+        let now = Instant::now();
+        let map = self.lock();
+        let mut out: Vec<(u64, SessionSummary)> = map
+            .iter()
+            .filter(|(_, d)| !d.expired(now) && d.retire_at.is_none())
+            .map(|(id, d)| {
+                (
+                    d.seq,
+                    SessionSummary {
+                        short_id: id.short(),
+                        since_login: now.duration_since(d.created),
+                        since_seen: now.duration_since(d.last_seen),
+                        current: *id == current,
+                        reauth_active: d.reauth_until.is_some_and(|u| now < u),
+                    },
+                )
+            })
+            .collect();
+        out.sort_by_key(|(seq, _)| *seq);
+        out.into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// Verschiebt alle Zeitpunkte der Sitzungen um `by` in die Vergangenheit
+    /// (nur Tests: Frist nach Anmeldung bzw. Re-Auth ablaufen lassen, ohne die
+    /// Tokio-Uhr anzuhalten).
+    #[doc(hidden)]
+    pub fn age_for_tests(&self, by: Duration) {
+        let mut map = self.lock();
+        for d in map.values_mut() {
+            d.created = d.created.checked_sub(by).unwrap_or(d.created);
+            d.last_seen = d.last_seen.checked_sub(by).unwrap_or(d.last_seen);
+            d.reauth_until = d.reauth_until.and_then(|u| u.checked_sub(by));
+        }
     }
 
     /// Zählt einen Render-/JVM-Aufruf; über dem Limit die Wartezeit bis zum
@@ -252,6 +349,13 @@ pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
         .find(|(n, _)| *n == name)
         .map(|(_, value)| value.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+/// Gekürzte Kennung (wie [`SessionId::short`]) des Sitzungs-Cookies einer
+/// Anfrage — ohne Prüfung, ob die Sitzung gilt, und ohne die Idle-Frist zu
+/// verlängern. Für das Zugriffsprotokoll (W14-018).
+pub fn short_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    token_from_headers(headers).map(|t| hash_token(&t).short())
 }
 
 /// Cookie-Wert der Sitzung.
@@ -374,5 +478,76 @@ mod tests {
             "alte ID nach der Frist ungültig"
         );
         assert!(store.validate(&new).is_some());
+    }
+
+    /// W14-033/W14-038 (Lauf F4a): Folgenummer übersteht die Rotation, die
+    /// Frische der Anmeldung endet nach dem Re-Auth-Fenster und gilt nicht für
+    /// eine ersetzte ID.
+    #[tokio::test(start_paused = true)]
+    async fn login_seq_survives_rotation_and_login_freshness_expires() {
+        let store = SessionStore::default();
+        let a = store.create();
+        let b = store.create();
+        let a_id = store.validate(&a).unwrap();
+        let b_id = store.validate(&b).unwrap();
+        assert_ne!(store.login_seq(a_id), store.login_seq(b_id));
+        assert!(store.login_fresh(a_id), "direkt nach der Anmeldung frisch");
+        let rotated = store.rotate_with_reauth(a_id).unwrap();
+        let rotated_id = store.validate(&rotated).unwrap();
+        assert_eq!(store.login_seq(rotated_id), store.login_seq(a_id));
+        assert!(
+            !store.login_fresh(a_id),
+            "eine ersetzte ID gilt nicht als frisch angemeldet"
+        );
+        tokio::time::advance(REAUTH_WINDOW).await;
+        assert!(store.validate(&b).is_some());
+        assert!(!store.login_fresh(b_id), "nach 5 min nicht mehr frisch");
+        assert!(store.login_seq(b_id).is_some());
+    }
+
+    /// W14-005 (Lauf F4a): Übersicht ohne ersetzte IDs, „andere abmelden“
+    /// zählt nur fremde Anmeldungen.
+    #[tokio::test(start_paused = true)]
+    async fn overview_lists_valid_sessions_and_retain_only_counts() {
+        let store = SessionStore::default();
+        let a = store.create();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        let b = store.create();
+        let c = store.create();
+        let a_id = store.validate(&a).unwrap();
+        let b_id = store.validate(&b).unwrap();
+        store.validate(&c).unwrap();
+        let b2 = store.rotate_with_reauth(b_id).unwrap();
+        let b2_id = store.validate(&b2).unwrap();
+        let list = store.overview(b2_id);
+        assert_eq!(list.len(), 3, "a, b (rotiert), c");
+        assert!(
+            list[0].since_login >= Duration::from_secs(60),
+            "älteste zuerst"
+        );
+        assert_eq!(list[0].short_id, a_id.short());
+        assert_eq!(a_id.short().len(), 8);
+        assert_eq!(list.iter().filter(|s| s.current).count(), 1);
+        assert!(list.iter().any(|s| s.current && s.reauth_active));
+        assert_eq!(store.retain_only(b2_id), 2, "a und c beendet");
+        assert!(store.validate(&a).is_none());
+        assert!(store.validate(&c).is_none());
+        assert!(
+            store.validate(&b).is_none(),
+            "die ersetzte ID der eigenen Anmeldung endet mit"
+        );
+        assert!(store.validate(&b2).is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn age_for_tests_moves_login_and_reauth_into_the_past() {
+        let store = SessionStore::default();
+        let id = store.validate(&store.create()).unwrap();
+        store.mark_reauth(id);
+        assert!(store.login_fresh(id) && store.reauth_fresh(id));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        store.age_for_tests(REAUTH_WINDOW);
+        assert!(!store.login_fresh(id));
+        assert!(!store.reauth_fresh(id));
     }
 }

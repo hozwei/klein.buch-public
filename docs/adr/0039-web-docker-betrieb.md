@@ -1317,7 +1317,7 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     lokaler Backups (W13-BACKUP-DOWNLOAD):** `backup_download {backupId}` (Re-Auth — die `.kbk`
     verlässt den Server und erlaubt einen Offline-Angriff auf die Passphrase) legt die
     verschlüsselte Datei per Hardlink (sonst Kopie) in den Download-Ordner und liefert ein
-    einmaliges Ticket wie die Exporte (eine Stunde, gelöscht beim Sperren); Audit
+    einmaliges Ticket wie die Exporte (eine Stunde, seit Lauf F4b 10 min — Nr. 131; gelöscht beim Sperren); Audit
     `backup.downloaded` vor der Freigabe. Erlaubt sind der lokale Backup-Ordner und
     Verzeichnis-Ziele unter `/backup-targets`, nicht SFTP. Das Herunterladen löscht nur den Link.
     Schaltfläche schlicht in der Backup-Liste, Gestaltung im UI/UX-Lauf. (4) **Wurzelprüfung
@@ -1487,6 +1487,276 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     `backup::snapshot::tests::{symlinks_are_reported_not_followed,
     vanished_file_between_listing_and_reading_is_skipped}`,
     `tests/backup_schedule_test.rs` (`incomplete_backup_is_logged_and_notified`).
+130. **Anmeldung, Sitzung, Geheimnisse im Speicher (Lauf F, Block F4a, 2026-10-25; keine
+    Migration; ergänzt Nr. 117 und 120).** (1) **Obergrenze in Folge (W14-004, NIST SP
+    800-63B §5.2.2):** Fehlversuche ohne Gerätecookie bei Anmeldung und Re-Auth mit TOTP
+    (nicht Einmal-Code-Logins, nicht die Einrichtung) zählen in Folge; nach 100 ohne
+    zwischenzeitliche erfolgreiche Anmeldung lehnt der Server Anmeldung und Re-Auth mit
+    TOTP ohne Gerätecookie ab (429 `totp_locked`, keine KDF), unabhängig von der Zeit.
+    Aufgehoben wird die Sperre nur durch eine Anmeldung mit Gerätecookie oder Einmal-Code
+    bzw. die abgeschlossene Einrichtung (`totp-reset`, Container-Zugriff). Zähler in
+    `/data/auth/totp-lock.json` (0600, Temp + rename; übersteht Neustarts; eine unlesbare
+    Datei beginnt bei 0 statt auszusperren); WARN `auth.totp_locked`, Inbox-Hinweise bei
+    Sperre (wenn entsperrt) und Aufhebung. Abgewogen: Sperre auch für Gerätecookies (würde
+    jedem Angreifer die Aussperrung des Inhabers erlauben) und ein Ablauf nach Zeit (NIST
+    verlangt eine Grenze aufeinanderfolgender Versuche; die Wartezeit-Staffel bleibt
+    zusätzlich). (2) **Sitzungsübersicht (W14-005, ASVS V3.3.4):** `GET /api/auth/sessions`
+    (Anmeldezeit und letzte Nutzung aus der Uhr des Servers, gekürzte Kennung = 4 Byte des
+    SHA-256, „diese Sitzung“; keine IP, kein Gerätename — nicht gespeichert) und
+    `POST /api/auth/sessions/others/revoke` (Re-Auth, Audit `auth.sessions_revoked` mit
+    Anzahl); schlichter Block in Einstellungen → Sicherheit. (3) **Bedingte Re-Auth
+    (W14-038; berichtigt Nr. 120 für `seller_profile_upsert`):** neue Art `Auth::Conditional`;
+    der Dispatcher gibt dem Kern per Task-Local (`commands::reauth`) mit, ob die Sitzung
+    frisch bestätigt ist — Re-Auth der letzten 5 min **oder** Anmeldung bzw. Einrichtung der
+    letzten 5 min (nur für bedingte Commands; für alle übrigen bleibt „eine Anmeldung ist
+    keine Re-Auth“). Der Kern vergleicht unter `locks::SELLER_PROFILE` mit dem gespeicherten
+    Profil: IBAN, BIC (ohne Leerraum, Groß-/Kleinschreibung egal) und §19-Status samt
+    Verzicht verlangen die Bestätigung (`Error::ReauthRequired` → 403 `reauth_required`),
+    Adresse, Steuernummer usw. nicht. Außerhalb des Dispatchers gilt fail-closed. 401/403
+    werden nicht als Idempotenz-Ergebnis gespeichert (die Wiederholung nach dem Dialog führt
+    aus). (4) **Re-Auth erweitert (W14-028, ASVS V11.1.4):** `euer_export_datev`,
+    `euer_export_elster`, `euer_export_pdf` (Buchungstexte, Kundennamen, Beträge im
+    Klartext) und `payment_accounts_set_active` (welche Bankverbindung auf Rechnungen steht)
+    — damit 29 Commands mit Re-Auth und einer bedingt. (5) **Idempotenz und Speicher
+    (W14-033, W14-015, R4-S2-ZEROIZE):** Idempotenz-Schlüssel gelten je Anmeldung
+    (Folgenummer der Sitzung, übersteht die Rotation durch Re-Auth — keine Übertragung
+    nötig). „Datenbank sperren“ leert Idempotenz-Speicher, Ergebnisse beendeter Jobs,
+    offene Anmelde-Ergebnisse und ein ausstehendes TOTP-Geheimnis. `BackupSession` hält die
+    Passphrase als `Zeroizing`, `get` liefert `Zeroizing`; `secrets::get` ebenso; die
+    Auth-Routen nehmen Passphrasen ohne Kopie aus dem Körper; `SmtpConfig.password` und das
+    SFTP-Passwort sind `Zeroizing`. Bewusst akzeptierte Reste und
+    `cipher_memory_security` = aus: security.md „Passphrase im Speicher“. (6) **Lange
+    Anmeldung (W14-037):** Anmeldung und Einrichtung warten höchstens 25 s
+    (`pending::LOGIN_SYNC_WAIT`), sonst `202 {"state":"pending"}` mit Ticket-Cookie
+    `__Host-kb_login` (256 bit, nur SHA-256 gespeichert, höchstens 8 offen, fertige
+    Ergebnisse 15 min abholbar); der Ablauf läuft zu Ende; `POST /api/auth/login/poll`
+    liefert genau einmal das Ergebnis, die Sitzung entsteht erst dort; unbekannt → 410
+    `login_expired`. Frontend, Image-Smoke-Test und Testhilfen folgen der 202. Abgewogen:
+    eine längere Zeitgrenze für die Route (scheitert am Proxy-Timeout, nginx-Standard 60 s)
+    und Abfragen über `/api/auth/status` (kein Fehlerkanal, müsste die Sitzung ausliefern).
+    (7) **Neue Passphrasen (ASVS V2.1.7, V2.1.2):** `server::passphrase_policy` —
+    eingebettete, eigens zusammengestellte Sperrliste (normalisiert, rund 250 Einträge:
+    bekannte Sätze, Beispiele aus Anleitungen und Comics, häufige lange Passwörter,
+    Anwendungsbegriffe), triviale Muster (≤ 3 verschiedene Zeichen, Wiederholung, ≥ 80 %
+    Tastatur-/Alphabet-/Zahlenfolgen), Rest nach Abzug von Anwendungs-, Firmen- und
+    E-Mail-Namen ≥ 8 Zeichen, höchstens 1024 Zeichen; 422 `passphrase_common` bzw.
+    `passphrase_too_long`. Gilt für Einrichtung (vorab schon beim Anfordern des QR-Codes,
+    verbindlich im letzten Schritt) und Wechsel; bestehende Passphrasen bleiben gültig.
+    Das Beispiel der Anmelde-Maske steht auf der Liste und wird nicht mehr angezeigt; die
+    Test-Passphrase der Server-Tests wurde ersetzt. Abgewogen: Online-Abfrage geleakter
+    Passwörter (k-Anonymität) widerspricht local-first; eine große fremde Liste brächte
+    Lizenz- und Größenfragen bei wenig Mehrwert gegenüber Mindestlänge + Mustern.
+    (8) **TOTP-Replay (ASVS V2.8.5):** `Check::Replay`, Log `reason=totp_replay`, Antwort
+    unverändert. (9) **Geschlossen mit Begründung** (security.md §11): V2.1.6 (gleichwertig
+    über Re-Auth mit Rotation), V2.2.3/V2.5.5 (kein Kanal außerhalb der Instanz), V2.3.1
+    (Setup-Token bis zum Neustart), V2.3.2 (kein WebAuthn), V2.6.2/V2.6.3 (Einmal-Codes
+    neben dem TOTP-Geheimnis), V2.8.2 (TOTP-Geheimnis 0600 vor dem DB-Open nötig).
+    (10) **Frontend:** Passphrasen nur im Zustand der jeweiligen Maske, geleert nach Absenden
+    bzw. Abbrechen (Restore, Passphrase-Wechsel, Einrichtung bei Zustandswechsel; Anmeldung
+    und Re-Auth schon zuvor), nie in Stores, URL oder Storage (Teil von R5-S2-UI).
+    `tasks:W6-ACTIVATE-ORDER` ist mit D-21 (Lauf F1) erledigt. Tests:
+    `tests/server_auth_test.rs` (`seller_profile_reauth_matrix`,
+    `sessions_overview_and_revoke_others`, `idempotency_key_is_bound_to_the_login`,
+    `lock_clears_stored_results_and_pending_logins`,
+    `totp_streak_lock_spares_recovery_codes_and_known_devices`,
+    `new_passphrases_are_checked_against_blocklist_patterns_and_profile`,
+    `slow_login_answers_202_and_poll_delivers_session_once`,
+    `reauth_commands_require_fresh_reauth`), `tests/server_restore_test.rs`
+    (`slow_unlock_with_migration_answers_202_and_poll_delivers_session`),
+    `tests/server_log_test.rs` (`reason=totp_replay`), `tests/server_contract_test.rs`,
+    Unit-Tests in `server::{session, idempotency, jobs, ratelimit, pending, totp,
+    passphrase_policy, errors}`, `commands::reauth`, `db::repo::seller_profile`;
+    `src/lib/transport.test.ts`.
+131. **HTTP-Server, Eingaben, Exporte, Sidecar (Lauf F, Block F4b, 2026-10-25; keine
+    Migration; ergänzt Nr. 63 und die Annahme-Schleife aus W5.8).** (1) **Verbindungen
+    (W12-LEGAL-TIMEOUTS):** höchstens 256 offene Verbindungen; die Annahme-Schleife holt
+    erst einen freien Platz und nimmt dann an — bei voller Grenze warten neue Verbindungen
+    im Backlog des Kernels, statt angenommen und ruhend gehalten zu werden. Jede Verbindung
+    trägt einen Schreib-Leerlauf-Timeout von 30 s (`http::WriteIdleTimeout`: kommt ein
+    Schreibvorgang so lange nicht voran, endet die Verbindung). Ein Lese-Timeout auf
+    Verbindungsebene entfällt bewusst: Header (10 s, auch Keep-Alive-Leerlauf), JSON-Körper
+    (10 s) und Uploads (Leerlauf je Datenblock) sind schon begrenzt, und ein Lese-Timeout
+    träfe lange laufende Anfragen. `/legal/` streamt die Datei (`ReaderStream`, mit
+    `Content-Length`) statt sie je Anfrage zu lesen; ein Cache entfällt (Dateien bis 32 MB,
+    selten abgerufen). Abgewogen: `tokio-io-timeout` (neue Abhängigkeit für 60 Zeilen) und
+    eine Mindest-Übertragungsrate (würde langsame Mobilverbindungen treffen). (2) **Panik
+    (ASVS 7.4.3):** `tower_http::catch_panic::CatchPanicLayer` (Feature `catch-panic`)
+    zwischen globaler Grenze und Policy — die 500 nach einer Panik bekommt Policy-Angaben
+    (HSTS), Sicherheits-Header und eine Protokollzeile; Antwort im `ApiError`-Format mit
+    `ref`, ERROR-Log nur mit der Referenz. Der Router-Aufbau ist in `routes` und `layered`
+    geteilt (Test mit einer Route, die panict). (3) **Inhaltstyp (ASVS V13.1.5/V13.2.5):**
+    `dispatch::read_body` verlangt bei nicht leerem Körper `application/json` (Parameter
+    erlaubt, Groß-/Kleinschreibung egal), sonst 415 `unsupported_media_type`; gilt für
+    `/api/cmd/*` und alle Auth-Routen; leere Körper ohne Inhaltstyp bleiben erlaubt. Alle
+    Aufrufer senden den Typ bereits (Frontend `transport.ts`, Image-Smoke-Test, ZAP über die
+    OpenAPI aus der Registry). (4) **`/healthz` (W14-006):** „lokal“ entscheidet die
+    Policy-Middleware (`ClientInfo.loopback`: Loopback-Gegenstelle **ohne**
+    Weiterleitungs-Header) statt der rohen Gegenstelle — ein Reverse-Proxy auf demselben
+    Host bekommt nur den Status. Der Subcommand `healthcheck` sendet keine
+    Weiterleitungs-Header und sieht weiter Zustand und Off-Site-Status. (5) **Art je
+    Command (W14-012):** `registry::classified_kind` stuft jeden der 196 Commands
+    ausdrücklich als Job (13), Read (75) oder Write (108) ein — dieselbe Einteilung wie
+    vorher, aber ohne Ableitung aus Namensendungen (`_list`, `_get`, `_check` …). Ein
+    neuer Command ohne Einstufung ergibt `None`; der Test
+    `server_contract_test::every_command_has_an_explicit_kind` scheitert dann, im Betrieb
+    gilt er vorsichtshalber als Write (abgekoppelt + Idempotenz). (6) **Klartext-Exporte
+    (W14-014):** `EXPORT_TTL` 10 min statt 1 h; die Datei verschwindet mit dem ersten Abruf
+    (Entnahme beim Abruf, Löschen am Ende des Streams, auch bei Abbruch — strenger als
+    „nach vollständigem Download“, dafür ohne Fenster für einen zweiten Abruf). Nicht
+    registrierte Download-Ordner (Kern schreibt noch) räumt der Sweeper erst nach
+    `ORPHAN_TTL` = 1 h ab, damit ein großer Migrations- oder DSGVO-Export nicht mitten im
+    Schreiben verschwindet. Eine Verschlüsselung mit flüchtigem Schlüssel entfällt bei
+    dieser Verweildauer. (7) **Zeichensatz (ASVS 14.4.1):** Textantworten ohne
+    Zeichensatz (`text/*` aus `ServeDir`, JavaScript, SVG) bekommen in der Header-Middleware
+    `charset=utf-8`. (8) **Sidecar-Health-Check (R3-014, deckt R3-015 unter Linux ab):**
+    direkt nach dem Port-Bind im Hintergrund (`einvoice::sidecar_health`): Launcher, beide
+    JARs, XRechnung-Konfiguration, `java -version` mit derselben Java-Auswahl wie
+    `klein-buch-java.sh` (`KLEIN_BUCH_JAVA`, `jre/bin/java`, `JAVA_HOME`, `PATH`; 30 s).
+    Ergebnis INFO bzw. ERROR im Log, bei Problemen ein dringender Inbox-Hinweis über die
+    neue Ablage `notify::deferred` (Hinweise aus dem gesperrten Zustand, beim Entsperren
+    bzw. nach der Einrichtung in die Inbox; `dedup_key` je Version und Berliner Tag). Kein
+    Abbruch — alles außer E-Rechnungen funktioniert, und der Betreiber soll die Instanz
+    erreichen. Mit Sidecar-Mock (nur Debug/Test) entfällt die Prüfung. Ein Feld in
+    `/healthz` entfällt (Details gibt es dort nur über Loopback, das Log reicht).
+    (9) **Geschlossen mit Begründung** (security.md §11): V5.1.1 (ein Parser), V11.1.3
+    (Entwürfe nur mit Sitzung, Verwerfen dokumentiert), V12.2.1 (Präfix-Prüfung reicht bei
+    Auslieferung als `attachment` + `sandbox`), V12.4.2 (kein ClamAV im Image), V13.2.2
+    (Lese-Timeouts vorhanden; kein `deny_unknown_fields`), 14.4.2 (CSP + `nosniff` auf der
+    API), 14.4.5 (HSTS ohne `includeSubDomains`, Nr. 63; Empfehlung für den Proxy im
+    Handbuch). **`tasks:W7-UPLOAD-RESERVE`** bewusst geschlossen: Die Platzprüfung
+    reserviert nichts für parallel laufende Uploads; im Einbenutzerbetrieb mit 20 MiB je
+    Upload und 2 GiB Reserve ist ein Überbuchen folgenlos (der Upload scheitert sauber),
+    als bekannte Grenze im Betriebshandbuch. Tests: `tests/server_hardening_test.rs`
+    (`json_body_requires_json_content_type`, `healthz_details_only_for_direct_loopback`,
+    `panic_in_handler_returns_500_with_reference`, `legal_file_is_streamed_with_length`,
+    `slow_reader_is_disconnected_after_write_idle_timeout`,
+    `connection_limit_defers_accept`, `sidecar_problem_reaches_the_inbox_on_unlock`),
+    `tests/server_contract_test.rs` (`every_command_has_an_explicit_kind`,
+    Header-Schnappschuss mit `charset`), Unit-Tests in `server::headers`, `downloads`,
+    `einvoice::sidecar_health`, `notify::deferred`.
+
+132. **Logs, Fehlermeldungen, Geheimnis-Tabelle, Mustang (Lauf F4c, 2026-10-25; keine
+    Migration, keine neue Abhängigkeit; ergänzt Nr. 16 und Plan W5.9).** (1) **Serverpfade
+    (W5-ERR-PATHS):** Fachliche Fehler, die an den Client gehen (`Domain`, `Backup`,
+    `Mail`), nennen keinen absoluten Serverpfad mehr: Archiv-Meldungen
+    (`archive::store::path_error`: Konflikt mit anderem Hash, parallel angelegt,
+    Rücklese-Prüfung, Nicht-UTF-8) nur den Dateinamen, DB-Snapshot, Archivpfad-Prüfung
+    beim Restore und die CA-Datei von `KLEIN_BUCH_SMTP_CA_FILE` nur die Art; der volle
+    Pfad steht als WARN im Log. Bewusst sichtbar bleiben die Wurzel der Verzeichnis-Ziele
+    (`/backup-targets`, Teil der Bedienung und der API) und der volle Pfad im
+    `backup_log` (Backup-Hardline). `Config`-Fehler mit Pfaden sind ohnehin 500 mit `ref`.
+    (2) **Log-Tests (W5-LOG-TESTS):** Unit-Test, dass `logging::filter` auch bei
+    `RUST_LOG=sqlx::query=trace` bzw. `trace` kein Statement-Ereignis durchlässt; der
+    Log-Test unter TRACE deckt zusätzlich Backup-Snapshot und Passphrase-Wechsel ab.
+    (3) **Mailadressen (W14-016):** Der gescheiterte Auto-Versand einer Abo-Rechnung
+    loggt auf WARN nur Nummer und Fehlerart (`Error::kind`, neu), den Volltext auf DEBUG;
+    Hinweis und `email_log` behalten ihn (der Inhaber braucht ihn zum Handeln).
+    (4) **Log-Injektion (W14-017):** `nettest::check_host` erlaubt für SMTP- und
+    SFTP-Hosts nur Hostnamen (Labels aus Buchstaben inkl. Umlauten, Ziffern, `-`, `_`,
+    je ≤ 63 Zeichen, gesamt ≤ 253, optional Punkt am Ende) oder IP-Adressen ohne
+    Klammern — geprüft beim Anlegen/Ändern (Host getrimmt gespeichert, leer → `None`),
+    beim Ad-hoc-Test und vor jeder Verbindung (`smtp::build_transport`, `sftp::open`),
+    damit auch Einträge älterer Stände abgewiesen werden; die Meldung wiederholt den Wert
+    nicht. Host-Felder im Log per Debug-Escaping (`?host`). Dazu global der Log-Writer
+    `logging::OneLine`: `tracing_subscriber::fmt` schreibt ein Ereignis mit einem
+    `write_all`, der Writer escaped darin Zeilenumbrüche (`\n`, `\r`) und übrige
+    Steuerzeichen (`\u{..}`) außer Tab und behält den abschließenden Umbruch — kein Wert
+    aus Eingaben oder Gegenstellen erzeugt eine zweite Zeile. Der fail2ban-Filter im
+    Handbuch und im Betriebshandbuch ist auf Zeilenanfang, Ziel `klein_buch_lib::auth`
+    direkt hinter dem Zeitstempel und Zeilenende verankert und passt auf `docker logs`
+    und `json-file` (mit und ohne von fail2ban entfernten Zeitstempel). Abgewogen: ein
+    JSON-Log-Format (bricht bestehende Filter und Lesbarkeit im Terminal) und ein
+    Escaping je Aufrufstelle (lückenanfällig). (5) **Zugriffsprotokoll (W14-018):** je
+    Anfrage `ip=` (Client-IP nach der Proxy-Regel; die Policy-Middleware hängt sie als
+    `ClientIp` an jede Antwort, auch an 421/403), `req=` (UUIDv4 je Anfrage als
+    Task-Local; `ApiError::internal` und Sidecar-Fehler nehmen sie als `ref`, abgekoppelte
+    Kerne, Jobs und Anmelde-Tasks erben sie über `logging::with_request_id`) und `sess=`
+    (erste 4 Byte des SHA-256 des Sitzungs-Cookies, wie `SessionId::short` in der
+    Sitzungsübersicht; ohne Prüfung und ohne Verlängern der Sitzung). Kein eigener
+    Header `X-Request-Id` (die `ref` im Fehlerkörper genügt). Datenschutz: Die IP ist
+    personenbezogen; Rechtsgrundlage berechtigtes Interesse an der Sicherheit (Art. 6
+    Abs. 1 lit. f DSGVO), Aufbewahrung über die Log-Rotation des Betreibers (Beispiel
+    5 × 10 MB). Dazu `auth.reauth.ok ip=…` (ASVS 7.2.1). (6) **`tasks:W8-SECRETS-ORPHANS`
+    bewusst geschlossen:** kein Aufräumen verwaister `secrets`-Einträge. Kein Pfad der
+    Anwendung erzeugt sie (Löschen eines Kontos bzw. Ziels nimmt den Eintrag mit; ein
+    Rest entsteht nur bei Absturz zwischen zwei Schritten oder durch DB-Eingriffe), ein
+    Rest ist verschlüsselt, über keine API lesbar und an eine nie wiederverwendete
+    UUIDv7 gebunden; ein automatisches Löschen „ohne Bezug“ könnte bei einem Lesefehler
+    der Ziel-Liste gültige Passwörter löschen. (7) **Mustang (`tasks:W12-MUSTANG`):**
+    Maven Central am 25.10.2026 geprüft — neueste Fassung 2.26.0, `core-2.26.0.pom`
+    setzt Jackson 2.22.2 (< 2.22.3). Kein Update; die befristeten Ausnahmen in
+    `.trivyignore` (Ablauf 30.04.2027, Nr. 114) bleiben, nächste Prüfung bis 01.03.2027.
+    Tests: `server::logging::tests` (`filter_keeps_sqlx_statements_off_whatever_rust_log_says`,
+    `one_line_per_event`, `request_id_reaches_detached_tasks`),
+    `nettest::tests::host_validation`,
+    `archive::store::tests::store_rejects_different_bytes_for_same_path` (ohne
+    Serverpfad), `tests/server_log_test.rs` (Snapshot, Passphrase-Wechsel, abgelehnter
+    Host, `ip=`/`req=`/`sess=`, `ref` = `req`), `tests/recurring_scheduler_test.rs`
+    (`auto_send_failure_keeps_recipient_out_of_warn_log` mit SMTP-Gegenstelle auf
+    127.0.0.1), `tests/server_restore_test.rs` (keine Serverpfade in abgelehnten
+    Restores).
+133. **Nachbesserung F4 (Lauf F4d, 2026-10-25; keine Migration, keine neue Abhängigkeit;
+    ergänzt Nr. 127, 130 und 131).** (1) **TOTP-Sperre (W14-004, Befund S3):** Die
+    Obergrenze von 100 Fehlversuchen in Folge zählt weiter auch falsche App-Codes ohne
+    jede Kenntnis der Passphrase (der zweite Faktor wird vor der KDF geprüft). Nur
+    Fehlversuche nach gültigem App-Code zu zählen, würde das Durchprobieren des zweiten
+    Faktors nicht mehr begrenzen (NIST SP 800-63B §5.2.2) und ist damit eine
+    Abschwächung; die Sperre bleibt also von jedem auslösbar, der die Anmeldeseite
+    erreicht, und kostet den Inhaber auf neuen Geräten Einmal-Codes (bekannte Geräte
+    bleiben frei) — als bekannte Grenze in security.md §11 (V2.2.1) festgehalten.
+    Richtiggestellt sind Hinweis und Doku: Die Sperre zeigt massenhaftes Durchprobieren,
+    das Daten-Passwort ist damit nicht verraten; empfohlen werden Prüfung der Sitzungen
+    und der restlichen Einmal-Codes. Getrennt davon zählt der Server den aussagekräftigen
+    Fall „falsche Passphrase nach gültigem App-Code bzw. Einmal-Code“ (Anmeldung und
+    Re-Auth, mit und ohne Gerätecookie): ab drei in Folge ohne erfolgreiche Anmeldung
+    dazwischen einmal je Folge WARN `auth.factor_suspect` und dringender Inbox-Hinweis
+    „Gültiger App-Code mit falschem Daten-Passwort“ mit der Empfehlung, den App-Code neu
+    einzurichten. Drei statt eins, damit ein Tippfehler des Inhabers keinen Alarm
+    auslöst. Der Zähler liegt im Speicher (`RateLimiter::factor_suspect_*`); bei
+    gesperrter Instanz holt die nächste erfolgreiche Anmeldung den Hinweis nach
+    (`dedup_key` mit der Kennung der Folge, kein Doppel). (2) **Verbindungen je
+    Gegenstelle (Befund S3 zu Nr. 131 (1)):** zusätzlich höchstens 32 offene
+    Verbindungen je Gegenstelle (IPv4-Adresse, IPv4-mapped kanonisiert, IPv6 je /64 wie
+    das Rate-Limit); weitere werden angenommen und sofort geschlossen (WARN höchstens
+    einmal je Minute), sie belegen keinen globalen Platz. Vertraute Proxys
+    (`TRUSTED_PROXIES`) zählen nur gegen die globale Grenze, weil hinter ihnen alle
+    Clients eine Peer-Adresse teilen. Bekannte Grenze: Ein Proxy ohne Antwort-Pufferung
+    reicht langsame Leser durch; dort helfen Pufferung bzw. Grenzen je Client im Proxy.
+    Abgewogen gegen eine absolute Schreibfrist für Antworten ohne Sitzung: träfe
+    legitime große Downloads über langsame Leitungen und hätte die globale Grenze
+    weiter einer einzelnen Gegenstelle überlassen. (3) **Restore-Tausch (CI von
+    `23ede89`):** `apply_pending` und `recover_pending_rollback` verschieben die Paare
+    über `rename_if_exists` — eine Quelle, die zwischen Prüfung und `rename` verschwindet
+    (das `-wal`, das SQLite beim Schließen der letzten Verbindung nachlaufend löscht),
+    gilt als „nicht vorhanden“ statt als Fehler und zählt nicht als verschoben;
+    `NotFound` bei noch vorhandener Quelle (fehlender Zielordner) bleibt ein Fehler.
+    Test-Hook `InjectAt::Vanish`. (4) **Hintergrund-Backups in Tests:**
+    `tests/server_support::settle_lock_backups` wartet auf die Tick-Sperre und legt ein
+    noch vermerktes Lock-Backup unter ihr an (wie der geweckte Lauf, Akteur
+    `scheduler`), statt mit `sleep` auf ADR 0040 Nr. 50/51 zu hoffen; Tests, die nach
+    Lock-Ereignissen Backups zählen, rufen ihn auf. (5) **Debug ohne Geheimnisse
+    (Hinweis F4a):** Argument-Structs mit Passphrase, Passwort, Token oder
+    Autorisierungs-Code leiten `Debug` nicht ab, sondern nutzen `redact::redacted_debug!`
+    (geheime Felder als `***` bzw. `Some(***)`): `BackupSetupPassphraseArgs`,
+    `BackupUnlockArgs`, `BackupRestoreApplyArgs`, `BackupTestSftpArgs`,
+    `BackupSetSftpTargetArgs`, `BackupTargetAddSftpArgs`, `TestConnectionArgs`,
+    `MailAccountCreateArgs`, `MailAccountUpdateArgs` sowie `oauth_ms::{Callback,
+    TokenResponse, TokenBundle}`. `AuthBody`, `SetupState`, `BackupSession` und
+    `SessionStore` haben ohnehin kein `Debug`. Ein eigener `Secret<String>`-Typ wurde
+    abgewogen: Er änderte die Schnittstelle aller Commands, ohne mehr zu schützen;
+    Zeroize bleibt wie bisher an den Verarbeitungsstellen (Nr. 130). (6) **Doku:** Der
+    Download-Link eines Backups gilt einmal und höchstens 10 min (seit Nr. 131 wie die
+    Exporte); Betriebshandbuch, Handbuch und security.md angeglichen.
+    Tests: `tests/server_auth_test.rs` (`wrong_passphrase_after_valid_totp_warns_once_per_streak`,
+    Hinweistext in `totp_streak_lock_spares_recovery_codes_and_known_devices`),
+    `tests/server_hardening_test.rs` (`per_peer_limit_closes_excess_connections`),
+    `backup::restore::tests` (`wal_vanishing_between_check_and_rename_does_not_abort_swap`,
+    `rename_if_exists_distinguishes_missing_source_from_missing_target_dir`),
+    `tests/server_restore_test.rs`
+    (`older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_release` mit
+    `settle_lock_backups`), `redact::tests::secret_fields_never_appear_in_debug_output`,
+    `commands::backup::tests::debug_output_of_secret_args_is_redacted`,
+    `commands::mail::tests::debug_output_of_password_args_is_redacted`.
 
 ## Konsequenzen
 
@@ -1565,7 +1835,10 @@ diesen Änderungen (die Historie bleibt unverändert stehen):
   Image-Fassung wieder. Hinweise tragen einen `dedup_key` (Lauf F, D-10).
 - **Nr. 120 (Re-Auth, 21 Commands):** Mit `scheduler_release_hold` und
   `numbering_raise` sind es 23, mit `numbering_restored_draft_confirm` (F1d,
-  ADR 0040 Entscheidung 35) 24, mit `invoices_void_draft` (F2a, Nr. 124) 25.
+  ADR 0040 Entscheidung 35) 24, mit `invoices_void_draft` (F2a, Nr. 124) 25, mit
+  `backup_download` (F3a, Nr. 127) 26; Lauf F4a (Nr. 130): dazu DATEV-, ELSTER-,
+  PDF-Export und `payment_accounts_set_active`, `seller_profile_upsert` nur noch
+  bedingt — 29 mit Re-Auth und einer bedingt.
 - **E12 (Zeitzone) in der Oberfläche:** DB-Zeitstempel (UTC) zeigt die
   Oberfläche über `date()`/`dateTime()` (`src/lib/format.ts`) in Europe/Berlin,
   Tage bis zur Fälligkeit über `daysUntilBerlin` (`src/lib/date.ts`) — nicht

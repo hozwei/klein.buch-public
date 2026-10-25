@@ -116,10 +116,10 @@ pub async fn store_bytes(
     .await?
     {
         StoreAttempt::Stored(s) => Ok(s),
-        StoreAttempt::Conflict(path) => Err(crate::error::Error::Domain(format!(
-            "archive::store: Datei existiert bereits mit anderem Hash: {}",
-            path.display()
-        ))),
+        StoreAttempt::Conflict(path) => Err(path_error(
+            "Datei existiert bereits mit anderem Hash",
+            &path,
+        )),
     }
 }
 
@@ -253,9 +253,7 @@ async fn store_bytes_inner(
     let archive_id = uuid::Uuid::now_v7().to_string();
     let path_str = abs_path
         .to_str()
-        .ok_or_else(|| {
-            crate::error::Error::Domain(format!("nicht-UTF-8-Pfad: {}", abs_path.display()))
-        })?
+        .ok_or_else(|| path_error("Pfad ist kein gültiges UTF-8", &abs_path))?
         .to_string();
 
     sqlx::query(
@@ -396,6 +394,17 @@ async fn lookup_by_path(pool: &SqlitePool, abs_path: &Path) -> Result<Option<Sto
     }))
 }
 
+/// Fachlicher Fehler mit Archivpfad (W5-ERR-PATHS, Lauf F4c): Die Meldung an
+/// den Client nennt nur den Dateinamen; der volle Serverpfad steht nur im Log.
+fn path_error(what: &str, path: &Path) -> crate::error::Error {
+    tracing::warn!("archive::store: {what}: {}", path.display());
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    crate::error::Error::Domain(format!("Archiv: {what} ({name})."))
+}
+
 fn build_path(root: &Path, fiscal_year: i32, kind: ArchiveKind, file_name: &str) -> PathBuf {
     let mut p = root.to_path_buf();
     p.push(fiscal_year.to_string());
@@ -439,10 +448,10 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
         drop(f);
         // KB-0040: Rücklese-Prüfung vor dem Sichtbarwerden.
         if sha256_hex(&fs::read(&tmp)?) != sha256_hex(bytes) {
-            return Err(crate::error::Error::Domain(format!(
-                "archive::store: Rücklese-Prüfung fehlgeschlagen (Inhalt weicht ab): {}",
-                final_path.display()
-            )));
+            return Err(path_error(
+                "Rücklese-Prüfung fehlgeschlagen (Inhalt weicht ab)",
+                final_path,
+            ));
         }
         set_readonly(&tmp)?;
         match fs::hard_link(&tmp, final_path) {
@@ -451,10 +460,7 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
             // Unter Linux braucht das Löschen nur Schreibrecht aufs Verzeichnis.
             Ok(()) => fs::remove_file(&tmp)?,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(crate::error::Error::Domain(format!(
-                    "archive::store: Datei wurde parallel angelegt: {}",
-                    final_path.display()
-                )));
+                return Err(path_error("Datei wurde parallel angelegt", final_path));
             }
             // Dateisystem ohne Hardlinks: umbenennen, ohne zu überschreiben.
             Err(_) => rename_no_clobber(&tmp, final_path)?,
@@ -482,12 +488,7 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
 /// Archiv-Volume ist ausgeschlossen (Betriebsdoku: DB und Archiv nicht auf
 /// CIFS/exFAT).
 fn rename_no_clobber(from: &Path, to: &Path) -> Result<()> {
-    let exists = || -> Result<()> {
-        Err(crate::error::Error::Domain(format!(
-            "archive::store: Datei wurde parallel angelegt: {}",
-            to.display()
-        )))
-    };
+    let exists = || -> Result<()> { Err(path_error("Datei wurde parallel angelegt", to)) };
     #[cfg(target_os = "linux")]
     {
         use rustix::fs::{renameat_with, RenameFlags, CWD};
@@ -873,6 +874,15 @@ mod tests {
         .await
         .unwrap_err();
         assert!(format!("{err}").contains("anderem Hash"));
+        // W5-ERR-PATHS (Lauf F4c): Die Meldung an den Client nennt den
+        // Dateinamen, aber keinen Serverpfad; die HTTP-Antwort ebenso.
+        let root = dir.path().to_string_lossy().into_owned();
+        assert!(format!("{err}").contains("RE-2026-0001.pdf"), "{err}");
+        assert!(!format!("{err}").contains(&root), "{err}");
+        let body = crate::server::errors::ApiError::from_error(&err)
+            .body()
+            .to_string();
+        assert!(!body.contains(&root), "{body}");
         unlock_for_test(Path::new(&r1.file_path)).unwrap();
     }
 

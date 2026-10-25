@@ -224,7 +224,8 @@ In der Oberfläche von Klein.Buch erscheint er nie.
 
 1. Trag den Setup-Token ein.
 2. Leg Dein Daten-Passwort fest (mindestens 16 Zeichen, am besten drei
-   oder vier zufällige Wörter) und wiederhole es. Das Daten-Passwort ist
+   oder vier zufällige Wörter, kein bekannter Spruch, nicht der
+   Firmenname) und wiederhole es. Das Daten-Passwort ist
    die Passphrase aus dem Glossar: Es verschlüsselt Datenbank und
    Backups. Es wird nirgends gespeichert und lässt sich nicht
    zurücksetzen. Mehr dazu im Kapitel "Passphrase einrichten".

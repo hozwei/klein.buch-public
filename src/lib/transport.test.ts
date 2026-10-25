@@ -3,6 +3,8 @@ import {
   IDEMPOTENCY_HEADER,
   REQUEST_HEADER,
   authLogin,
+  authRevokeOtherSessions,
+  authSessions,
   invoke,
   newIdempotencyKey,
   onAuthRequired,
@@ -152,6 +154,62 @@ describe("transport.auth", () => {
 
   it("erzeugt unterschiedliche Schlüssel", () => {
     expect(newIdempotencyKey()).not.toBe(newIdempotencyKey());
+  });
+
+  // W14-037 (Lauf F4a): lange Anmeldung → 202, Abholung ohne Passphrase.
+  it("authLogin: 202 → Ergebnis über /api/auth/login/poll", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls = mockFetch([
+        json(202, { state: "pending" }),
+        json(202, { state: "pending" }),
+        json(200, { state: "ok", failedAttempts: 0, recoveryLeft: 10, usedRecoveryCode: false }),
+        json(202, { state: "pending" }),
+        json(401, { code: "auth_failed", message: "Anmeldung fehlgeschlagen." }),
+      ]);
+      const ok = authLogin("richtig", { totpCode: "654321" });
+      await vi.advanceTimersByTimeAsync(2500);
+      await expect(ok).resolves.toMatchObject({ ok: true, recoveryLeft: 10 });
+      expect(calls.map((c) => c.url)).toEqual([
+        "/api/auth/login",
+        "/api/auth/login/poll",
+        "/api/auth/login/poll",
+      ]);
+      expect(JSON.parse(String(calls[1].init.body))).toEqual({});
+      expect(header(calls[1], REQUEST_HEADER)).toBe("1");
+      const failed = authLogin("falsch", { totpCode: "123456" });
+      await vi.advanceTimersByTimeAsync(1500);
+      await expect(failed).resolves.toEqual({ ok: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // W14-005 (Lauf F4a): Sitzungsübersicht und „andere abmelden“ (Re-Auth).
+  it("authSessions und authRevokeOtherSessions", async () => {
+    const session = {
+      id: "a1b2c3d4",
+      loginAt: "2026-10-25 08:00:00",
+      lastSeenAt: "2026-10-25 08:05:00",
+      current: true,
+      reauthActive: false,
+    };
+    let asked = 0;
+    setReauthHandler(async () => {
+      asked++;
+      return true;
+    });
+    const calls = mockFetch([
+      json(200, { count: 1, sessions: [session] }),
+      json(403, { code: "reauth_required", message: "Bitte bestätigen" }),
+      json(200, { state: "ok", revoked: 2 }),
+    ]);
+    expect(await authSessions()).toEqual([session]);
+    expect(calls[0].url).toBe("/api/auth/sessions");
+    expect(await authRevokeOtherSessions()).toBe(2);
+    expect(asked).toBe(1);
+    expect(calls[2].url).toBe("/api/auth/sessions/others/revoke");
+    setReauthHandler(null);
   });
 });
 

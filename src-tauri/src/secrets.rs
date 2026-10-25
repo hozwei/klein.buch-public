@@ -8,6 +8,7 @@
 
 use crate::error::Result;
 use sqlx::SqlitePool;
+use zeroize::Zeroizing;
 
 /// Schlüssel des SMTP-Passworts eines Mailkontos.
 pub fn smtp_key(account_id: &str) -> String {
@@ -24,12 +25,17 @@ pub fn sftp_key(target_id: &str) -> String {
     format!("sftp:{target_id}")
 }
 
-pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
+/// Liest einen Eintrag. Der Wert kommt als `Zeroizing` zurück und wird beim
+/// Drop überschrieben (R4-S2-ZEROIZE, Lauf F4a); Aufrufer reichen ihn nur als
+/// `&str` weiter. Puffer von SQLite/sqlx und der Gegenstelle (lettre, russh)
+/// liegen außerhalb dieser Kontrolle (security.md §4).
+pub async fn get(pool: &SqlitePool, key: &str) -> Result<Option<Zeroizing<String>>> {
     Ok(
         sqlx::query_scalar::<_, String>("SELECT value FROM secrets WHERE key = ?")
             .bind(key)
             .fetch_optional(pool)
-            .await?,
+            .await?
+            .map(Zeroizing::new),
     )
 }
 
@@ -71,7 +77,11 @@ mod tests {
         set(&pool, &smtp_key("a"), "geheim").await.unwrap();
         set(&pool, &smtp_key("a"), "neu").await.unwrap();
         assert_eq!(
-            get(&pool, &smtp_key("a")).await.unwrap().as_deref(),
+            get(&pool, &smtp_key("a"))
+                .await
+                .unwrap()
+                .as_deref()
+                .map(String::as_str),
             Some("neu")
         );
         delete(&pool, &smtp_key("a")).await.unwrap();

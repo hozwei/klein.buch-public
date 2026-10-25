@@ -79,7 +79,11 @@ fehlende Feld benennt. Korrigiere und speichere erneut.
 ## Spätere Änderungen
 
 Spätere Änderungen am Profil machst Du in "Einstellungen → Meine
-Firmendaten". Bereits ausgestellte Rechnungen ändern sich dadurch
+Firmendaten". Ändern sich dabei IBAN, BIC oder der
+Kleinunternehmer-Status, bestätigst Du das mit Daten-Passwort und
+App-Code (direkt nach der Anmeldung entfällt die Rückfrage für fünf
+Minuten). So kann niemand über ein offenes Browserfenster Zahlungen auf
+ein fremdes Konto umleiten. Bereits ausgestellte Rechnungen ändern sich dadurch
 nicht, sie bleiben mit dem alten Profilstand festgeschrieben. Das
 ist gesetzliche Pflicht laut GoBD. Nur neue Rechnungen ab dem
 Änderungs-Zeitpunkt erscheinen mit dem neuen Profil.

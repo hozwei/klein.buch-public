@@ -5,10 +5,12 @@
 //! - `validator` (Block 3): Bridge zum KoSIT-Sidecar.
 //! - `mustang_bridge` (Block 3): Bridge zum Mustang-Sidecar (ZUGFeRD-PDF/A-3-Erzeugung).
 //! - `types`: gemeinsame Datentypen (Profile, BT-Felder, Cardinality).
+//! - `sidecar_health` (Lauf F4b): Health-Check des Sidecars beim Serverstart.
 
 pub mod generator;
 pub mod mustang_bridge;
 pub mod parser;
+pub mod sidecar_health;
 pub mod types;
 pub mod validator;
 

@@ -25,6 +25,10 @@ RUSTSEC-2026-0195 exp:2027-04-30
 # sidecar_real-Tests) lädt keine Klasse aus Jackson, veraPDF oder AssertJ — die Lücken
 # sind im Betrieb nicht erreichbar. Mustang 2.26 bündelt veraPDF 1.30.2 und Jackson
 # 2.22.2 (behebt nur einen Teil); Update prüfen, sobald Jackson ≥ 2.22.3 enthalten ist.
+# Geprüft 25.10.2026 (Lauf F4c, repo1.maven.org): neueste Fassung ist 2.26.0
+# (org.mustangproject:core-2.26.0.pom: version.com.fasterxml.jackson.core = 2.22.2) —
+# kein Update, die Ausnahmen bleiben. Nächste Prüfung bis 01.03.2027 (vor dem Ablauf
+# am 30.04.2027); dann übernehmen, wenn eine Fassung Jackson ≥ 2.22.3 bündelt.
 # jackson-core 2.17.3 (DoS beim Parsen von JSON; Mustang liest bei uns kein JSON)
 CVE-2026-68494 exp:2027-04-30
 CVE-2026-89407 exp:2027-04-30

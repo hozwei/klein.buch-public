@@ -61,42 +61,39 @@ pub const SETTING_VERIFIER_CT: &str = "backup_verifier_ct_hex";
 /// den Scheduler, der es außerhalb der Antwort des Commands anlegt.
 #[derive(Default)]
 pub struct BackupSession {
-    inner: Mutex<Option<String>>,
+    inner: Mutex<Option<zeroize::Zeroizing<String>>>,
     backup_wake: tokio::sync::Notify,
 }
 
 impl BackupSession {
-    /// Sperre ohne Panik bei Poisoning (KB-0034): der Inhalt (`Option<String>`)
+    /// Sperre ohne Panik bei Poisoning (KB-0034): der Inhalt (die Passphrase)
     /// ist nach einer Panik eines anderen Halters weiter gültig.
-    fn guard(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+    fn guard(&self) -> std::sync::MutexGuard<'_, Option<zeroize::Zeroizing<String>>> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Übernimmt die Passphrase (ohne Kopie); der bisherige Wert wird beim
+    /// Ersetzen überschrieben.
     pub fn set(&self, passphrase: String) {
-        use zeroize::Zeroize as _;
-        let mut guard = self.guard();
-        if let Some(old) = guard.as_mut() {
-            old.zeroize();
-        }
-        *guard = Some(passphrase);
+        // Der alte `Zeroizing`-Wert überschreibt sich beim Drop.
+        *self.guard() = Some(zeroize::Zeroizing::new(passphrase));
     }
 
+    /// Sperren/Herunterfahren: Passphrase überschreiben und verwerfen.
     pub fn clear(&self) {
-        use zeroize::Zeroize as _;
-        let mut guard = self.guard();
-        if let Some(mut old) = guard.take() {
-            old.zeroize();
-        }
+        drop(self.guard().take());
     }
 
     pub fn is_unlocked(&self) -> bool {
         self.guard().is_some()
     }
 
-    /// Liefert eine Kopie der Passphrase, falls die Session entsperrt ist.
-    pub fn get(&self) -> Option<String> {
+    /// Liefert eine Kopie der Passphrase, falls die Session entsperrt ist —
+    /// als `Zeroizing`: auch die Kopie wird beim Drop überschrieben (W14-015).
+    /// Aufrufer reichen sie nur als `&str` weiter, ohne weitere Klone.
+    pub fn get(&self) -> Option<zeroize::Zeroizing<String>> {
         self.guard().clone()
     }
 
@@ -935,7 +932,7 @@ pub async fn create_with(
                     limit,
                     target::write_backup_shared(
                         &resolved,
-                        password.as_deref(),
+                        password.as_deref().map(String::as_str),
                         &file_name,
                         file_bytes.clone(),
                     ),
@@ -1647,11 +1644,17 @@ mod tests {
         .join();
         assert!(session.inner.is_poisoned());
         assert!(session.is_unlocked());
-        assert_eq!(session.get().as_deref(), Some("passphrase-1234567890"));
+        assert_eq!(
+            session.get().as_deref().map(String::as_str),
+            Some("passphrase-1234567890")
+        );
         session.clear();
         assert!(!session.is_unlocked());
         session.set("andere-passphrase-123".into());
-        assert_eq!(session.get().as_deref(), Some("andere-passphrase-123"));
+        assert_eq!(
+            session.get().as_deref().map(String::as_str),
+            Some("andere-passphrase-123")
+        );
     }
 
     /// Lauf F3a: Der Vermerk „Backup ausstehend“ wird nur von einem Backup

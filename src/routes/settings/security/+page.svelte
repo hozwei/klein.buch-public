@@ -2,6 +2,9 @@
   // Plan W6 — Sicherheit & Anmeldung: zweiter Faktor (TOTP) neu einrichten,
   // Einmal-Codes neu erzeugen, Daten-Passwort ändern. Alle drei verlangen eine
   // frische Bestätigung (Re-Auth-Dialog öffnet sich automatisch).
+  // Lauf F4a (W14-005): angemeldete Sitzungen, „andere abmelden“ (Re-Auth);
+  // schlichte Darstellung, Feinschliff im UI/UX-Lauf. Neue Passwörter liegen
+  // nur bis zum Absenden bzw. Abbrechen im Zustand der Seite.
   // Plan W12 — Versionsprüfung (opt-in, E14): Schalter für die tägliche
   // Abfrage der GitHub-Releases; Hinweise landen in der Inbox.
   import { onMount } from "svelte";
@@ -11,12 +14,15 @@
   import { confirmDialog } from "$lib/confirm.svelte";
   import {
     authSecurity,
+    authSessions,
+    authRevokeOtherSessions,
     authTotpRenewOffer,
     authTotpRenewFinish,
     authRecoveryRenew,
     authChangePassphrase,
     updateCheckGet,
     updateCheckSet,
+    type AuthSession,
     type TotpOffer,
   } from "$lib/api";
   import type { UpdateCheckSettings } from "$lib/types";
@@ -29,11 +35,49 @@
   let newPass = $state("");
   let newPassConfirm = $state("");
   let busy = $state(false);
+  let sessions = $state<AuthSession[] | null>(null);
 
   onMount(() => {
     load();
+    loadSessions();
     loadUpdateCheck();
   });
+
+  async function loadSessions() {
+    try {
+      sessions = await authSessions();
+    } catch (e) {
+      flash(String(e), "error");
+    }
+  }
+
+  async function revokeOthers() {
+    if (
+      !(await confirmDialog({
+        title: "Andere Sitzungen abmelden?",
+        body: "Alle anderen Browser und Geräte werden sofort abgemeldet; diese Sitzung bleibt.",
+        confirmLabel: "Abmelden",
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    busy = true;
+    try {
+      const n = await authRevokeOtherSessions();
+      flash(n === 1 ? "1 andere Sitzung abgemeldet." : `${n} andere Sitzungen abgemeldet.`, "ok");
+      await loadSessions();
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
+  function clearNewPass() {
+    newPass = "";
+    newPassConfirm = "";
+  }
 
   async function load() {
     try {
@@ -130,6 +174,7 @@
       return;
     }
     if (newPass !== newPassConfirm) {
+      clearNewPass();
       flash("Die beiden Passwörter stimmen nicht überein.", "error");
       return;
     }
@@ -144,6 +189,7 @@
         danger: true,
       }))
     ) {
+      clearNewPass();
       return;
     }
     busy = true;
@@ -156,9 +202,9 @@
     } catch (e) {
       flash(String(e), "error");
     } finally {
-      newPass = "";
-      newPassConfirm = "";
+      clearNewPass();
       busy = false;
+      await loadSessions();
     }
   }
 </script>
@@ -212,6 +258,34 @@
     <button type="button" class="btn-secondary" disabled={busy} onclick={startTotp}>
       Zweiten Faktor neu einrichten
     </button>
+  {/if}
+</section>
+
+<section class="card">
+  <h2>Angemeldete Sitzungen</h2>
+  <p>
+    Jede Anmeldung in einem Browser ist eine Sitzung. Unbekannte Einträge? Andere Sitzungen
+    abmelden und das Daten-Passwort ändern.
+  </p>
+  {#if sessions}
+    <ul class="sessions">
+      {#each sessions as s (s.id)}
+        <li>
+          <code>{s.id}</code> · angemeldet {dateTime(s.loginAt)} · zuletzt aktiv
+          {dateTime(s.lastSeenAt)}{#if s.current} · <strong>diese Sitzung</strong>{/if}
+        </li>
+      {/each}
+    </ul>
+    <button
+      type="button"
+      class="btn-secondary"
+      disabled={busy || sessions.length < 2}
+      onclick={revokeOthers}
+    >
+      Andere Sitzungen abmelden
+    </button>
+  {:else}
+    <p class="muted">Lade …</p>
   {/if}
 </section>
 
@@ -293,6 +367,10 @@
   .codes {
     columns: 2;
     max-width: 24rem;
+  }
+  .sessions {
+    padding-left: 1.2rem;
+    font-size: 0.9rem;
   }
   label.check {
     display: flex;

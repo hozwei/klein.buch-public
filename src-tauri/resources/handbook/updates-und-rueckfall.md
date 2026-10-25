@@ -70,7 +70,9 @@ ist Klein.Buch gesperrt, bis Du Dich anmeldest.
 Bringt die neue Version eine Umstellung der Datenbank mit (eine
 Migration), passiert sie bei Deiner ersten Anmeldung. Vorher schreibt
 Klein.Buch ein Backup des alten Stands, liest es vollständig zurück und
-prüft es. Erst wenn das gelungen ist, stellt es die Datenbank um. Im
+prüft es. Erst wenn das gelungen ist, stellt es die Datenbank um. Bei
+einem großen Archiv dauert das eine Weile; die Anmeldemaske wartet, bis
+es fertig ist (auch über Zeitlimits des Reverse-Proxys hinweg). Im
 Backup-Protokoll erscheint dieses Backup als manuell ausgelöst; es wird
 nie automatisch gelöscht. Scheitert das Backup, etwa weil der Platz
 nicht reicht, stellt Klein.Buch nichts um und bleibt gesperrt. Du siehst

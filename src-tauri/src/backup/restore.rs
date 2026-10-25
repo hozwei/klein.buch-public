@@ -520,12 +520,15 @@ async fn stage(
         // wäre die Instanz nach dem Tausch dauerhaft gesperrt.
         crate::server::startup::check_archive_paths(&pool, paths)
             .await
-            .map_err(|_| {
-                Error::Backup(format!(
-                    "Die Archivpfade im Backup passen nicht zu {} (Backup einer Instanz mit \
-                 anderem Datenverzeichnis oder der Desktop-Fassung) — Restore abgebrochen.",
-                    paths.archive_dir.display()
-                ))
+            .map_err(|e| {
+                // W5-ERR-PATHS: Pfade nur ins Log.
+                tracing::warn!("Restore: {e}");
+                Error::Backup(
+                    "Die Archivpfade im Backup passen nicht zum Archivverzeichnis dieser \
+                     Instanz (Backup einer Instanz mit anderem Datenverzeichnis oder der \
+                     Desktop-Fassung) — Restore abgebrochen; Einzelheiten im Server-Log."
+                        .into(),
+                )
             })?;
         check_migration_checksums(&pool).await?;
         // Lauf F2a: Auch die Prüfungen des Entsperrens (Fremdschlüssel, R1-012)
@@ -775,6 +778,10 @@ enum InjectAt {
     Stage1(usize),
     /// Stufe 2 nach dem Kopieren der DB.
     Stage2,
+    /// Stufe 1: Das n-te Original verschwindet zwischen Prüfung und
+    /// `rename` (wie das `-wal`, das SQLite beim Schließen der letzten
+    /// Verbindung nachlaufend löscht) — kein Fehler, sondern „nicht da“.
+    Vanish(usize),
 }
 
 #[cfg(test)]
@@ -797,6 +804,14 @@ fn injected_stage1(_index: usize) -> Result<()> {
 #[cfg(test)]
 fn injected_stage1(index: usize) -> Result<()> {
     injected(InjectAt::Stage1(index))
+}
+#[cfg(not(test))]
+fn injected_vanish(_index: usize, _path: &Path) {}
+#[cfg(test)]
+fn injected_vanish(index: usize, path: &Path) {
+    if INJECT.with(|i| i.get()) == Some(InjectAt::Vanish(index)) {
+        let _ = fs::remove_file(path);
+    }
 }
 #[cfg(not(test))]
 fn injected_stage2() -> Result<()> {
@@ -919,7 +934,7 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
                     if orig.exists() {
                         remove_path(orig, *is_dir)?;
                     }
-                    fs::rename(rb, orig)?;
+                    rename_if_exists(rb, orig)?;
                 }
             }
             clear_swap_state(paths);
@@ -937,7 +952,7 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
                 }
                 if *rb == wal_rb {
                     if db_restored && !orig.exists() {
-                        fs::rename(rb, orig)?;
+                        rename_if_exists(rb, orig)?;
                     } else {
                         quarantine(rb)?;
                     }
@@ -947,8 +962,7 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
                     if let Some(parent) = orig.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::rename(rb, orig)?;
-                    if *orig == paths.db_file {
+                    if rename_if_exists(rb, orig)? && *orig == paths.db_file {
                         db_restored = true;
                     }
                 }
@@ -1053,32 +1067,41 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
     // Transaktionen zurück. Das `-shm` ist abgeleitet und wird gelöscht.
     write_swap_state(paths, SwapPhase::Moving)?;
     remove_if_exists(&with_suffix(&paths.db_file, "-shm"))?;
+    // Lauf F4d (CI 23ede89): `orig.exists()` ist nur ein Vorfilter.
+    // Verschwindet ein Original zwischen Prüfung und `rename` (das `-wal`
+    // löscht SQLite beim Schließen der letzten Verbindung nachlaufend), gilt
+    // es als „nicht vorhanden“ statt als Fehler: `rename_if_exists` meldet
+    // `false`, das Paar zählt nicht als verschoben, Zustandsdatei und
+    // Rückfall bleiben konsistent.
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (index, (orig, rb, is_dir)) in pairs.iter().enumerate() {
         if !orig.exists() {
             continue;
         }
-        let step = (|| -> Result<()> {
+        let step = (|| -> Result<bool> {
             injected_stage1(index)?;
             if rb.exists() {
                 remove_path(rb, *is_dir)?;
             }
-            fs::rename(orig, rb)?;
-            Ok(())
+            injected_vanish(index, orig);
+            rename_if_exists(orig, rb)
         })();
-        if let Err(e) = step {
-            let mut undone = true;
-            for (o, r) in moved.iter().rev() {
-                if fs::rename(r, o).is_err() {
-                    undone = false;
+        match step {
+            Ok(true) => moved.push((orig.clone(), rb.clone())),
+            Ok(false) => {}
+            Err(e) => {
+                let mut undone = true;
+                for (o, r) in moved.iter().rev() {
+                    if rename_if_exists(r, o).is_err() {
+                        undone = false;
+                    }
                 }
+                if undone {
+                    clear_swap_state(paths);
+                }
+                return Err(e);
             }
-            if undone {
-                clear_swap_state(paths);
-            }
-            return Err(e);
         }
-        moved.push((orig.clone(), rb.clone()));
     }
     write_swap_state(paths, SwapPhase::Moved)?;
 
@@ -1120,7 +1143,7 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
             if orig.exists() && remove_path(orig, *is_dir).is_err() {
                 restored = false;
             }
-            if rb.exists() && fs::rename(rb, orig).is_err() {
+            if rb.exists() && rename_if_exists(rb, orig).is_err() {
                 restored = false;
             }
         }
@@ -1186,6 +1209,25 @@ fn remove_if_exists(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => Ok(other?),
+    }
+}
+
+/// Verschiebt `from` nach `to`. Fehlt die Quelle — auch wenn sie erst
+/// zwischen einer Prüfung und dem `rename` verschwindet —, ist das kein
+/// Fehler, sondern `Ok(false)` (Lauf F4d, TOCTOU wie LE-CI-FLAKE/N1).
+/// `NotFound` bei noch vorhandener Quelle (z. B. fehlender Zielordner)
+/// bleibt ein Fehler.
+fn rename_if_exists(from: &Path, to: &Path) -> Result<bool> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if fs::symlink_metadata(from).is_err() {
+                Ok(false)
+            } else {
+                Err(e.into())
+            }
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -2116,6 +2158,41 @@ mod tests {
         assert!(applied.is_some());
         assert_eq!(fs::read(&paths.db_file).unwrap(), b"NEUE-DB");
         assert!(!restore_incomplete(&paths));
+    }
+
+    /// Lauf F4d (CI 23ede89): Das WAL verschwindet zwischen Prüfung und
+    /// `rename` (SQLite löscht es beim Schließen nachlaufend) → der Tausch
+    /// gelingt ohne WAL, ohne `.rollback-wal` und ohne Zustandsdatei.
+    #[test]
+    fn wal_vanishing_between_check_and_rename_does_not_abort_swap() {
+        let dir = TempDir::new().unwrap();
+        let paths = swap_fixture(dir.path());
+        let wal = with_suffix(&paths.db_file, "-wal");
+        let rb_wal = with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX);
+        fs::write(&wal, b"ORIGINAL-WAL").unwrap();
+        let wal_index = swap_pairs(&paths, true).len() - 1;
+        INJECT.with(|i| i.set(Some(InjectAt::Vanish(wal_index))));
+        let applied = apply_pending(&paths);
+        INJECT.with(|i| i.set(None));
+        assert!(applied.unwrap().is_some());
+        assert_eq!(fs::read(&paths.db_file).unwrap(), b"NEUE-DB");
+        assert!(!wal.exists());
+        assert!(!rb_wal.exists());
+        assert!(!swap_state_path(&paths).exists());
+        assert!(!restore_incomplete(&paths));
+    }
+
+    /// Lauf F4d: `rename_if_exists` meldet eine fehlende Quelle als `false`,
+    /// einen fehlenden Zielordner bei vorhandener Quelle aber als Fehler.
+    #[test]
+    fn rename_if_exists_distinguishes_missing_source_from_missing_target_dir() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("a");
+        assert!(!rename_if_exists(&src, &dir.path().join("b")).unwrap());
+        fs::write(&src, b"x").unwrap();
+        assert!(rename_if_exists(&src, &dir.path().join("fehlt/b")).is_err());
+        assert!(rename_if_exists(&src, &dir.path().join("b")).unwrap());
+        assert_eq!(fs::read(dir.path().join("b")).unwrap(), b"x");
     }
 
     /// Review W2 S0-2: scheitert Stufe 2 (Kopie), kommen die Originale zurück.

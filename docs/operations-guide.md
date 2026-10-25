@@ -137,7 +137,7 @@ Alle Volumes müssen der UID aus `user:` gehören und für sie beschreibbar sein
 | `backups/` | lokale Backups (Floor), verschlüsselt |
 | `auth/totp.json` | TOTP-Geheimnis, gehashte Einmal-Codes (Datei 0600, Ordner 0700); nicht Teil der Backups |
 | `auth/device.key` | Schlüssel für die Gerätecookies des Rate-Limits; nicht Teil der Backups |
-| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Serverstart geleert, im Betrieb stündlich von Resten älter als 6 h befreit (Up-/Downloads nach 1 h) |
+| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Serverstart geleert, im Betrieb stündlich von Resten älter als 6 h befreit (Uploads nach 1 h, Exporte mit dem ersten Abruf bzw. nach 10 min) |
 | `.klein-buch-instance`, `.klein-buch.lock` | Instanz-Marker; Sperre gegen einen zweiten Prozess |
 | `restore-staging/`, `RESTORE_*.json`, `*.rollback` | nur während bzw. nach einem Restore |
 
@@ -208,6 +208,8 @@ Kapitel: `volumes-und-rechte`.
 - Der Server setzt die Sicherheits-Header selbst (CSP mit Skript-Hashes, HSTS bei
   HTTPS ohne `includeSubDomains`, `nosniff`, `frame-ancestors 'none'`). Der Proxy
   sollte sie nicht überschreiben.
+  `includeSubDomains`/`preload` gehören, falls gewünscht, an den Proxy bzw. die
+  Hauptdomain (die Instanz kennt die übrigen Subdomains nicht).
 - Uploads: Belege 20 MiB, E-Rechnungen 10 MiB, Logo/Unterschrift 2 MiB,
   Backup-Dateien bis `KLEIN_BUCH_MAX_RESTORE_BYTES`. Das Upload-Limit des Proxys
   (bei nginx `client_max_body_size`) und seine Timeouts müssen dazu passen, sonst
@@ -265,7 +267,8 @@ der Einrichtung zählt als Tages-Backup dieses Tages.
 **Herunterladen** (seit Lauf F3a): Einstellungen → Backups → Backup-Verlauf →
 „Herunterladen“ (Re-Auth) liefert die verschlüsselte `.kbk` aus dem Floor oder
 einem Ordner-Ziel — etwa für einen Umzug oder als zusätzliche Kopie ohne
-externes Ziel. Der Link gilt einmal und eine Stunde; Audit `backup.downloaded`.
+externes Ziel. Der Link gilt einmal und höchstens 10 Minuten; ein abgebrochener
+Download muss neu angefordert werden (Re-Auth). Audit `backup.downloaded`.
 Der Floor wird per Hardlink bereitgestellt, ein Ordner-Ziel auf einem anderen
 Dateisystem direkt von seinem Platz (keine Kopie unter `/data/tmp`, seit
 Lauf F3c). Kopien auf SFTP-Zielen holt der Betreiber auf dem Server.
@@ -313,7 +316,10 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
    zurück und migriert erst danach (Audit `backup.pre_migration`). Dieses
    Backup hat das Format, das die vorherige Version einspielt (für ein Update
    von 2026.10 Format 2, ADR 0039 Nr. 129). Scheitert es, wird nicht migriert
-   und die Instanz bleibt gesperrt (Meldung im Log und in der Inbox).
+   und die Instanz bleibt gesperrt (Meldung im Log und in der Inbox). Dauert
+   das Entsperren länger als 25 s (großes Archiv), antwortet der Server mit 202
+   und der Browser wartet, bis die Umstellung fertig ist (Abholung über
+   `POST /api/auth/login/poll`, Lauf F4a) — ein Proxy-Timeout von 60 s reicht.
 5. Neue Fassungen der mitgelieferten Vorlagen landen in `/inputs` (§5).
 
 **Rückfall** nach einem gescheiterten Update: vorheriges Tag starten und das
@@ -408,12 +414,23 @@ beendet der Kernel den Prozess mitten im Backup oder Restore.
 **Plattenplatz** auf `/data`: Datenbank + Archiv + lokale Backups (Floor, plus
 nie rotierte manuelle und Pre-Restore-Backups) + Reserve
 `KLEIN_BUCH_MIN_FREE_BYTES`; für einen Restore zusätzlich das Doppelte der
-entpackten Größe. Uploads unter der Reserve lehnt der Server mit 507 ab.
+entpackten Größe. Uploads unter der Reserve lehnt der Server mit 507 ab. Die
+Platzprüfung reserviert keinen Platz für gleichzeitig laufende Uploads; zwei
+parallele große Uploads können die Reserve also gemeinsam unterschreiten. Das
+ist im Einbenutzerbetrieb bewusst so: Die Größe je Upload ist begrenzt (20 MiB),
+die Reserve beträgt 2 GiB, und ein Upload, dem der Platz ausgeht, scheitert
+sauber ohne halbe Datei im Archiv (Lauf F4b).
 
 **Lastgrenzen** (fest): höchstens 64 Anfragen gleichzeitig; je Kostenklasse
 PDF-Erzeugung 2, Java 2, Passphrase-Ableitung 1, Backup/Export 1; je Sitzung
 höchstens 30 PDF-/Java-Aufrufe pro Minute; 30 s Timeout je API-Aufruf (lange
-Arbeiten laufen als Job weiter).
+Arbeiten laufen als Job weiter). Höchstens 256 offene Verbindungen (darüber nimmt
+der Server erst nach dem Ende einer Verbindung wieder an), davon höchstens 32 je
+Gegenstelle (IPv4-Adresse bzw. IPv6-/64; weitere werden sofort geschlossen,
+vertraute Proxys aus `TRUSTED_PROXIES` sind davon ausgenommen); eine Verbindung, auf
+der der Server 30 s lang nichts schreiben kann (Gegenstelle liest nicht), wird
+getrennt (Lauf F4b). Nicht leere Anfragekörper an die API müssen
+`application/json` sein, sonst 415.
 
 Kapitel: `speicherbedarf`.
 
@@ -422,26 +439,67 @@ Kapitel: `speicherbedarf`.
 **Logs** gehen nach stdout/stderr (`docker compose logs klein-buch`). Standard
 ist `info`; `RUST_LOG` ändert den Filter. Nie im Log: Passphrase, TOTP- und
 Einmal-Codes, Sitzungs-IDs, Zugangsdaten; der Setup-Token steht nur als eigene
-Zeile auf stderr. Das Zugriffsprotokoll nennt Methode, Pfad ohne Query, Status
-und Dauer.
+Zeile auf stderr. Jedes Ereignis ist genau eine Zeile: Zeilenumbrüche und
+Steuerzeichen innerhalb eines Ereignisses erscheinen als `\n`, `\r` bzw.
+`\u{..}` (Schutz vor gefälschten Zeilen, Lauf F4c). Empfängeradressen stehen nur
+auf DEBUG, nie auf INFO/WARN.
+
+Das **Zugriffsprotokoll** (Ziel `klein_buch_lib::http`) nennt je Anfrage Methode,
+Pfad ohne Query, Status, Dauer, Client-IP, Kennung der Anfrage und eine gekürzte
+Sitzungskennung:
+
+```text
+POST /api/cmd/invoices_lock 500 41 ms ip=203.0.113.7 req=<UUID> sess=1a2b3c4d
+```
+
+`ip` ist die Adresse des Browsers nach `KLEIN_BUCH_TRUSTED_PROXIES` (sonst die
+des Proxys), auch bei abgewiesenen Anfragen. `req` ist zugleich die `ref`, die
+eine Fehlermeldung „Interner Fehler (Ref …)“ dem Nutzer zeigt — mit
+`docker compose logs klein-buch | grep <ref>` findet man Zugriffszeile und
+Fehlertext. `sess` sind die ersten 4 Byte des SHA-256 des Sitzungs-Cookies (wie
+in Einstellungen → Sicherheit → „Angemeldete Sitzungen“), `-` ohne Cookie; das
+Cookie selbst lässt sich daraus nicht ableiten. Die IP ist ein personenbezogenes
+Datum: Sie steht im Log aus berechtigtem Interesse an der Sicherheit des Dienstes
+(Art. 6 Abs. 1 lit. f DSGVO, Erkennen und Sperren von Angriffen); die
+Aufbewahrung begrenzt die Log-Rotation der Compose-Datei (`max-size`/`max-file`,
+Beispiel 5 × 10 MB). Wer kürzer aufbewahren will, verkleinert diese Werte.
 
 Fehlversuche stehen nur im Log (nicht im Audit-Log), als `WARN` mit Ziel
 `klein_buch_lib::auth`:
 
 ```text
-auth.login.failed ip=<Client-IP> reason=totp|passphrase|rate_limited
-auth.setup.failed ip=<Client-IP> reason=token|passphrase
-auth.reauth.failed ip=<Client-IP> reason=totp|passphrase
+auth.login.failed ip=<Client-IP> reason=totp|totp_replay|passphrase|rate_limited|totp_locked
+auth.setup.failed ip=<Client-IP> reason=token|totp|passphrase
+auth.reauth.failed ip=<Client-IP> reason=totp|totp_replay|passphrase|totp_locked
+auth.totp_locked ip=<Client-IP> failures=100 …
 ```
 
-Die Zeilen eignen sich für fail2ban (Regex auf `auth\.\w+\.failed ip=<HOST>`).
+`totp_replay` = ein schon verbrauchter Code (Wiederholung), `totp_locked` = die
+Anmeldung mit TOTP ohne Gerätecookie ist nach 100 Fehlversuchen in Folge
+gesperrt (§12).
+
+Die Zeilen eignen sich für fail2ban. Der Filter muss auf Zeilenanfang, Ziel und
+Zeilenende verankert sein (Lauf F4c, W14-017); er passt auf das Format von
+`docker logs` und auf den Log-Treiber `json-file`:
+
+```ini
+failregex = ^(?:\{"log":")?\S*\s+WARN klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=[a-z_]+(?:\\n"|$)
+```
+
+`\S*` deckt den Zeitstempel ab, ob fail2ban ihn vor dem Vergleich herausschneidet
+oder nicht. Handbuch-Kapitel `fehlersuche-im-container` (mit Jail).
+
 Klein.Buch selbst antwortet ab dem fünften Fehlversuch je Client mit Wartezeiten
-(429 mit `Retry-After`, verdoppelnd bis 1 h, keine Dauersperre).
+(429 mit `Retry-After`, verdoppelnd bis 1 h). Eine Dauersperre gibt es nur für
+TOTP-Anmeldungen von unbekannten Geräten nach 100 Fehlversuchen in Folge (§12);
+bekannte Geräte und Einmal-Codes sind davon nie betroffen.
 
 **Healthcheck.** Das Image prüft sich selbst (`HEALTHCHECK`, alle 30 s, über den
 Subcommand `klein-buch-server healthcheck`). `GET /healthz` antwortet von außen
 nur 200 bzw. 503 (Herunterfahren, Neustart nach Restore) ohne Inhalt; über
-Loopback zusätzlich mit Zustand und Off-Site-Status:
+Loopback ohne Weiterleitungs-Header zusätzlich mit Zustand und Off-Site-Status.
+Ein Reverse-Proxy auf demselben Host (Gegenstelle `127.0.0.1` mit
+`X-Forwarded-*`) bekommt wie jeder externe Abruf nur den Status (Lauf F4b):
 
 ```sh
 docker compose exec klein-buch klein-buch-server healthcheck
@@ -474,6 +532,15 @@ nach einem Neustart jemand entsperrt hat, wertet `state` aus.
 Beim Entsperren: `Archiv-Eintrag … liegt nicht unter …` → das Datenverzeichnis
 passt nicht zur Datenbank (Entsperren verweigert, Anmeldung antwortet 409).
 
+**Sidecar-Prüfung** (Lauf F4b): Direkt nach dem Start prüft der Server im
+Hintergrund die Java-Komponente für E-Rechnungen (Launcher, JARs,
+XRechnung-Konfiguration, `java -version`). Im Log steht dann
+`Sidecar bereit (KoSIT-Validator, Mustang)` oder als `ERROR`
+`Sidecar nicht einsatzbereit (…): …` mit den fehlenden Teilen; zusätzlich
+erscheint nach dem Entsperren ein dringender Hinweis in der Inbox. Der Server
+läuft trotzdem weiter — nur Festschreiben sowie Prüfen und Einlesen von
+E-Rechnungen scheitern. Abhilfe: Image neu ziehen (Container neu erstellen).
+
 Kapitel: `fehlersuche-im-container`.
 
 ## 12. Anmeldung und zweiter Faktor
@@ -485,7 +552,37 @@ Kapitel: `fehlersuche-im-container`.
 - „Datenbank sperren“ (in der Oberfläche) meldet sofort alle Geräte ab,
   schließt die Datenbank und pausiert den Scheduler. Ein laufender Abo-Lauf
   beendet den aktuellen Termin, der Archiv-Vollscan die aktuelle Datei;
-  gesperrt wird spätestens nach 10 s.
+  gesperrt wird spätestens nach 10 s. Dabei verwirft der Server auch
+  gespeicherte Antworten, Job-Ergebnisse und offene Anmeldungen.
+- **Sitzungen:** Einstellungen → Sicherheit zeigt alle angemeldeten Sitzungen
+  (Anmeldezeit, letzte Nutzung, gekürzte Kennung) und meldet auf Wunsch alle
+  anderen ab (mit Bestätigung, Audit `auth.sessions_revoked`).
+- **Neue Daten-Passwörter** (Einrichtung, Wechsel) prüft der Server gegen eine
+  eingebettete Sperrliste bekannter Passwörter und Sätze, gegen einfache Muster
+  und gegen Firmenname und E-Mail aus dem Profil (Meldung „zu leicht zu
+  erraten“). Bestehende Passwörter bleiben gültig.
+- **Anmeldung mit App-Code gesperrt** (`totp_locked`, WARN
+  `auth.totp_locked`, Inbox-Hinweis): Nach 100 Fehlversuchen in Folge ohne
+  Gerätecookie nimmt der Server keine TOTP-Anmeldung von unbekannten Geräten
+  mehr an — unabhängig von der Zeit und auch nach einem Neustart
+  (`/data/auth/totp-lock.json`). Aufgehoben wird die Sperre durch eine
+  Anmeldung von einem bereits benutzten Browser (Gerätecookie) oder mit einem
+  Einmal-Code, notfalls durch `totp-reset` und Neueinrichtung. Die Sperre zeigt
+  massenhaftes Durchprobieren, nicht dass das Daten-Passwort bekannt ist: Schon
+  falsche App-Codes zählen mit (der zweite Faktor wird vor der Passphrase
+  geprüft), auslösen kann sie also jeder, der die Anmeldeseite erreicht. Sie
+  kostet den Inhaber auf neuen Geräten je einen Einmal-Code; bereits benutzte
+  Browser sind nicht betroffen. Danach Sitzungen und die Zahl der restlichen
+  Einmal-Codes prüfen, bei Bedarf den App-Code neu einrichten (neue
+  Einmal-Codes).
+- **Gültiger App-Code mit falschem Daten-Passwort** (WARN
+  `auth.factor_suspect`, dringender Inbox-Hinweis): Drei Anmeldungen bzw.
+  Re-Auths in Folge mit gültigem App-Code oder Einmal-Code, aber falschem
+  Daten-Passwort (ohne erfolgreiche Anmeldung dazwischen). Warst du das nicht,
+  kennt jemand womöglich das TOTP-Geheimnis oder einen Einmal-Code: App-Code
+  unter Einstellungen → Sicherheit neu einrichten und die Sitzungen prüfen. Bei
+  gesperrter Instanz (nach einem Neustart) erscheint der Hinweis mit der
+  nächsten erfolgreichen Anmeldung; der Zähler liegt nur im Speicher.
 - **Gerät mit der Authenticator-App verloren** und keine Einmal-Codes mehr:
 
   ```sh
@@ -506,7 +603,9 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
   ZIP mit einer JSON-Datei je Tabelle, dem Archiv, dem Schema, `erd.md`,
   `manifest.json` und `read_export.py` zum Sichten ohne Klein.Buch. Zugangsdaten
   sind nicht enthalten. Wie alle Exporte entsteht er unter `/data/tmp` und kommt
-  als Browser-Download (einmal abrufbar, nach 1 h gelöscht).
+  als Browser-Download: einmal abrufbar, die Datei wird mit dem Abruf gelöscht
+  (auch bei Abbruch — dann neu erzeugen), spätestens nach 10 min. Snapshots von
+  `/data` können einen Export nur in diesem kurzen Fenster im Klartext enthalten.
 - **Geschäftsjahres-Abschluss** (Menü → Geschäftsjahr): nur für
   abgelaufene Jahre, unumkehrbar; Korrekturen danach nur per Storno-Beleg.
 - **E-Mail-Versandprotokoll:** jeder Versandversuch append-only mit
@@ -523,7 +622,7 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13; Version 2026.5.1, Schema v31). Quellen:
+Stand: 2026-10-25 (Phase W, Block W13; Lauf F4b: Verbindungsgrenzen, Exporte, /healthz, Sidecar-Prüfung; Schema v32). Quellen:
 `Dockerfile`, `compose.example.yaml`, `src-tauri/src/server/` (`config.rs`,
 `startup.rs`, `health.rs`, `auth.rs`, `policy.rs`, `logging.rs`, `mod.rs`),
 `src-tauri/src/config.rs`, `src-tauri/src/uploads.rs`, `src-tauri/src/nettest.rs`,

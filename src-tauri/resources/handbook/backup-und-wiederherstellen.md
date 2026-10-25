@@ -66,7 +66,9 @@ Mit "Herunterladen" neben einem Backup holst Du die Datei auf Dein Gerät,
 zum Beispiel für einen Umzug auf einen neuen Server oder als zusätzliche
 Kopie. Das geht für Backups im lokalen Ordner und auf Ordner-Zielen, nicht
 für Kopien auf einem SFTP-Server (die holst Du dort). Klein.Buch fragt
-vorher noch einmal nach Daten-Passwort und App-Code. Die Datei bleibt
+vorher noch einmal nach Daten-Passwort und App-Code. Der Download-Link
+gilt einmal und höchstens zehn Minuten; bricht der Download ab, forderst
+Du ihn einfach neu an. Die Datei bleibt
 verschlüsselt; ohne die Passphrase dieses Backups kann niemand sie lesen.
 Bewahre sie trotzdem sorgfältig auf.
 

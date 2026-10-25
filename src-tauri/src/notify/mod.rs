@@ -1,6 +1,7 @@
 //! Notify-Modul (Phase 2D, Block 15).
 //! - `store`: persistente In-App-Inbox (Quelle der Wahrheit und einziger Kanal).
 //! - `rules`: Reminder-Konfiguration (User-editierbar, per Migration geseedet).
+//! - `deferred`: Hinweise aus dem gesperrten Zustand, beim Entsperren in die Inbox (Lauf F4b).
 //!
 //! [`emit`] ist der zentrale Einstieg: schreibt in die Inbox, idempotent über
 //! `dedup_key`. Einen Kanal außerhalb der Inbox gibt es im Server-Betrieb nicht;
@@ -9,6 +10,7 @@
 //! `notification_rules.deliver_os_native` bleibt (Migrationen sind forward-only),
 //! wird aber nicht mehr gelesen.
 
+pub mod deferred;
 pub mod rules;
 pub mod store;
 

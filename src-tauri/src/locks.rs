@@ -55,6 +55,9 @@ pub static RECURRING_TEMPLATES: KeyedLocks = KeyedLocks::new();
 /// Kosten-Abos: Tick, „Jetzt erfassen“, Bearbeiten und Pausieren je Abo
 /// nacheinander (Lauf F, W14-022).
 pub static RECURRING_SUBSCRIPTIONS: KeyedLocks = KeyedLocks::new();
+/// Verkäuferprofil: Prüfung der bedingten Re-Auth gegen den gespeicherten
+/// Stand und das Speichern am Stück (Lauf F4a, W14-038).
+pub static SELLER_PROFILE: KeyedLocks = KeyedLocks::new();
 
 #[cfg(test)]
 mod tests {

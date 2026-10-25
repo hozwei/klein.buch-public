@@ -85,6 +85,8 @@
       insecureHttp = s.insecureHttp;
       step = "token";
       offer = null;
+      // R5-S2-UI (Lauf F4a): kein Passwort über einen Zustandswechsel hinaus.
+      resetFields();
       if (s.state === "setup_required") status = "setup";
       else if (s.state === "totp_setup_required") status = "totp_setup";
       else status = s.state === "ok" ? "ready" : "login";
@@ -103,7 +105,7 @@
       if (pass.length < 16) {
         error =
           "Das Passwort muss mindestens 16 Zeichen haben. " +
-          "Tipp: Nimm 3–4 zufällige Wörter (z. B. „korrekt-pferd-batterie-klammer“).";
+          "Tipp: Nimm 3–4 zufällige Wörter, die nichts mit dir oder deiner Firma zu tun haben.";
         return;
       }
       if (pass !== confirm) {
@@ -117,7 +119,9 @@
     }
     busy = true;
     try {
-      offer = await authSetupOffer(token.trim());
+      // Lauf F4a: bei der Ersteinrichtung prüft der Server das neue Passwort
+      // schon hier (Sperrliste, Muster), damit es vor dem QR-Code korrigierbar ist.
+      offer = await authSetupOffer(token.trim(), status === "setup" ? pass : undefined);
       step = "qr";
       code = "";
     } catch (e) {
@@ -147,6 +151,8 @@
   }
 
   function done() {
+    resetFields();
+    token = "";
     recoveryCodes = [];
     offer = null;
     step = "token";

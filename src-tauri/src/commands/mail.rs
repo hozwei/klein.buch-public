@@ -32,13 +32,14 @@ use crate::error::{Error, Result};
 use crate::mail::templates::RenderedMail;
 use crate::mail::{oauth_ms, smtp, templates};
 use crate::nettest::{self, TestKind};
+use crate::redact::redacted_debug;
 use crate::secrets;
 
 // =============================================================================
 // DTOs
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestConnectionArgs {
     pub smtp_host: String,
@@ -49,6 +50,7 @@ pub struct TestConnectionArgs {
     /// gespeichert. Bei `None` wird ohne Auth getestet.
     pub password: Option<String>,
 }
+redacted_debug!(TestConnectionArgs { smtp_host, smtp_port, smtp_use_tls, smtp_user } secret { password });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,13 +124,14 @@ pub async fn mail_accounts_list(
 }
 
 /// Argumente von [`mail_account_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountCreateArgs {
     pub input: mail_accounts::MailAccountInput,
     #[serde(default)]
     pub password: Option<String>,
 }
+redacted_debug!(MailAccountCreateArgs { input } secret { password });
 
 /// Legt einen Mail-Account an und speichert (falls vorhanden) das Passwort in
 /// `secrets` (verschlüsselte DB), nie im Konto-Datensatz.
@@ -136,7 +139,11 @@ pub async fn mail_account_create(
     ctx: &Arc<AppCtx>,
     args: MailAccountCreateArgs,
 ) -> Result<MailAccountRow> {
-    let MailAccountCreateArgs { input, password } = args;
+    let MailAccountCreateArgs {
+        mut input,
+        password,
+    } = args;
+    normalize_smtp_host(&mut input)?;
     let pool = ctx.pool()?;
 
     let pool = &pool;
@@ -163,7 +170,7 @@ pub async fn mail_account_create(
 }
 
 /// Argumente von [`mail_account_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountUpdateArgs {
     pub id: String,
@@ -171,6 +178,7 @@ pub struct MailAccountUpdateArgs {
     #[serde(default)]
     pub password: Option<String>,
 }
+redacted_debug!(MailAccountUpdateArgs { id, input } secret { password });
 
 /// Aktualisiert einen Mail-Account. Ein nicht-leeres `password` überschreibt
 /// das gespeicherte Passwort; bleibt das Feld leer, bleibt das bestehende
@@ -181,11 +189,12 @@ pub async fn mail_account_update(
 ) -> Result<MailAccountRow> {
     let MailAccountUpdateArgs {
         id,
-        input,
+        mut input,
         password,
     } = args;
     let pool = ctx.pool()?;
 
+    normalize_smtp_host(&mut input)?;
     let pool = &pool;
     let before = mail_accounts::get(pool, &id)
         .await?
@@ -193,7 +202,10 @@ pub async fn mail_account_update(
     check_smtp_only(&input)?;
     let new_password = password.as_deref().filter(|p| !p.is_empty());
     let stored = secrets::get(pool, &secrets::smtp_key(&id)).await?;
-    check_plaintext(&input, new_password.or(stored.as_deref()))?;
+    check_plaintext(
+        &input,
+        new_password.or(stored.as_deref().map(String::as_str)),
+    )?;
     // Plan W8: Zugangsdaten gelten nur für (Host, Port, Benutzer). Ändert sich
     // eins davon, wird das gespeicherte Passwort gelöscht; mit Benutzer ist
     // dann ein neues Pflicht (sonst ginge es an den neuen Host).
@@ -296,6 +308,7 @@ pub async fn mail_account_test_connection(
     // Plan W8: nie ein gespeichertes Passwort an einen frei gewählten Host —
     // gespeicherte Konten testet `mail_account_test_saved`.
     ctx.net_tests.check_port(TestKind::Smtp, args.smtp_port)?;
+    crate::nettest::check_host(args.smtp_host.trim())?;
     let has_user = args
         .smtp_user
         .as_deref()
@@ -316,7 +329,7 @@ pub async fn mail_account_test_connection(
         port: args.smtp_port,
         use_tls: args.smtp_use_tls,
         username: args.smtp_user,
-        password: args.password,
+        password: args.password.map(zeroize::Zeroizing::new),
     };
     smtp::test_connection(&config)
         .await
@@ -357,6 +370,21 @@ fn check_smtp_only(input: &mail_accounts::MailAccountInput) -> Result<()> {
              Postfach per SMTP einrichten."
                 .into(),
         ));
+    }
+    Ok(())
+}
+
+/// SMTP-Host getrimmt speichern und prüfen (W14-017, Lauf F4c): nur Hostname
+/// oder IP-Adresse; ein leerer Host wird zu `None`.
+fn normalize_smtp_host(input: &mut mail_accounts::MailAccountInput) -> Result<()> {
+    input.smtp_host = input
+        .smtp_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    if let Some(host) = input.smtp_host.as_deref() {
+        crate::nettest::check_host(host)?;
     }
     Ok(())
 }
@@ -1223,7 +1251,7 @@ async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Res
 
     // Rotierten Refresh-Token (falls Microsoft einen neuen mitschickt) persistieren.
     if let Some(new_refresh) = resp.refresh_token.as_deref().filter(|r| !r.is_empty()) {
-        if new_refresh != stored_refresh {
+        if new_refresh != stored_refresh.as_str() {
             secrets::set(pool, &secrets::oauth_key(&account.id), new_refresh).await?;
         }
     }
@@ -1318,6 +1346,21 @@ async fn render_invoice_mail_from(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Lauf F4d (S3): SMTP-Passwörter erscheinen nicht in der Debug-Ausgabe.
     #[test]
-    fn it_compiles() {}
+    fn debug_output_of_password_args_is_redacted() {
+        let args = TestConnectionArgs {
+            smtp_host: "smtp.example.org".into(),
+            smtp_port: 587,
+            smtp_use_tls: true,
+            smtp_user: Some("kb@example.org".into()),
+            password: Some("smtp-geheim-4711".into()),
+        };
+        let out = format!("{:?}", MailAccountTestConnectionArgs { args });
+        assert!(!out.contains("smtp-geheim-4711"), "{out}");
+        assert!(out.contains("password: Some(***)"), "{out}");
+        assert!(out.contains("smtp.example.org"), "{out}");
+    }
 }

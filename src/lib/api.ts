@@ -18,12 +18,21 @@ export {
   authLogout,
   authLock,
   authSecurity,
+  authSessions,
+  authRevokeOtherSessions,
   authTotpRenewOffer,
   authTotpRenewFinish,
   authRecoveryRenew,
   authChangePassphrase,
 } from "./transport";
-export type { AuthState, AuthStatus, TotpOffer, SecondFactor, LoginResult } from "./transport";
+export type {
+  AuthState,
+  AuthStatus,
+  AuthSession,
+  TotpOffer,
+  SecondFactor,
+  LoginResult,
+} from "./transport";
 import type {
   AnonymizeCheck,
   DownloadTicket,

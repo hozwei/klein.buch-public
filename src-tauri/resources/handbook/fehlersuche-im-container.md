@@ -23,7 +23,25 @@ mit Datum und Uhrzeit in UTC (koordinierte Weltzeit, im Winter eine
 Stunde und im Sommer zwei Stunden hinter der deutschen Uhrzeit), dann
 folgen die Stufe (`INFO`, `WARN`, `ERROR`) und der Bereich. Mehr
 Einzelheiten bekommst Du mit der Umgebungsvariable `RUST_LOG=debug`;
-Dein Daten-Passwort steht auch dann nicht im Log.
+Dein Daten-Passwort steht auch dann nicht im Log. E-Mail-Adressen von
+Kunden stehen nur bei `debug` im Log.
+
+Jeder Aufruf der Oberfläche hinterlässt eine Zeile im Bereich
+`klein_buch_lib::http`, etwa:
+
+```
+2026-10-25T09:15:02.123456Z  INFO klein_buch_lib::http: POST /api/cmd/invoices_lock 500 41 ms ip=203.0.113.7 req=0d4e…-…-… sess=1a2b3c4d
+```
+
+`ip` ist die Adresse des Browsers, `sess` eine Kurzkennung der
+Sitzung. Dieselbe Kurzkennung siehst Du unter Einstellungen →
+Sicherheit bei "Angemeldete Sitzungen". `req` ist die Kennung des
+Aufrufs. Meldet die Oberfläche "Interner Fehler (Ref …)", ist die Ref
+genau diese Kennung. Mit
+`docker compose logs klein-buch | grep <Ref>` findest Du die
+Zugriffszeile und den eigentlichen Fehler. Die IP-Adressen bleiben nur
+so lange im Log, wie die Log-Rotation der Compose-Datei es zulässt
+(`max-size` und `max-file`, im Beispiel 5 Dateien zu 10 MB).
 
 Ob Klein.Buch läuft, prüft Docker alle 30 Sekunden selbst. Das Ergebnis
 zeigt `docker ps` in der Spalte "STATUS" (`healthy` oder `unhealthy`).
@@ -204,9 +222,18 @@ Ein passender Filter für fail2ban, zum Beispiel als
 
 ```
 [Definition]
-failregex = klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=
+failregex = ^(?:\{"log":")?\S*\s+WARN klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=[a-z_]+(?:\\n"|$)
 ignoreregex =
 ```
+
+Der Filter ist am Zeilenanfang und am Zeilenende verankert und verlangt
+das Ziel `klein_buch_lib::auth` direkt hinter dem Zeitstempel. So zählt
+nur eine echte Fehlversuch-Zeile, nie ein Text, der zufällig in einer
+anderen Zeile steht. Klein.Buch schreibt außerdem jedes Ereignis als
+genau eine Zeile; Zeilenumbrüche in Werten erscheinen als `\n`. Der
+Filter passt auf beide Formen: auf die Zeilen von `docker logs` und auf
+die Dateien des Log-Treibers `json-file`. Ältere, nicht verankerte
+Filter solltest Du durch diesen ersetzen.
 
 Und eine Jail dazu, zum Beispiel `/etc/fail2ban/jail.d/klein-buch.local`:
 

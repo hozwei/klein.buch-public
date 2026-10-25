@@ -134,6 +134,8 @@ async fn open(
     password: &str,
     handler: HostKeyVerifier,
 ) -> Result<(Handle<HostKeyVerifier>, SftpSession)> {
+    // W14-017: auch gespeicherte Ziele aus älteren Ständen.
+    crate::nettest::check_host(host)?;
     let config = Arc::new(client::Config::default());
     let mut session = client::connect(config, (host, port), handler)
         .await
@@ -349,7 +351,7 @@ pub async fn upload(
         })?;
     let password = password
         .filter(|p| !p.is_empty())
-        .map(str::to_string)
+        .map(|p| zeroize::Zeroizing::new(p.to_string()))
         .ok_or_else(|| {
             Error::Backup(
                 "Kein SFTP-Passwort gespeichert — bitte das SFTP-Ziel neu anlegen.".into(),

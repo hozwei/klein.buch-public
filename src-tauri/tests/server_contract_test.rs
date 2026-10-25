@@ -11,7 +11,9 @@ use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get as get_route;
 use axum::Router;
-use klein_buch_lib::commands::registry::{find_exposed, Auth, Kind, Route, REGISTRY};
+use klein_buch_lib::commands::registry::{
+    classified_kind, find_exposed, Auth, Kind, Route, REGISTRY,
+};
 use klein_buch_lib::server::headers::{self, ResponseClass};
 use server_support::*;
 
@@ -86,10 +88,14 @@ const REAUTH: &[&str] = &[
     "dsgvo_export",
     "euer_export_stb_zip",
     "euer_export_detail_zip",
-    // W14: Zahlungsdaten/§19-Status, unumkehrbare Schritte
-    "seller_profile_upsert",
+    // W14: Zahlungsdaten, unumkehrbare Schritte
     "payment_accounts_create",
     "payment_accounts_update",
+    // Lauf F4a (W14-028, ASVS V11.1.4): Konto aktivieren/deaktivieren, Exporte
+    "payment_accounts_set_active",
+    "euer_export_datev",
+    "euer_export_elster",
+    "euer_export_pdf",
     "contacts_anonymize",
     "fiscal_year_close",
     // Lauf F: Freigabe nach Pause der automatischen Belegerzeugung
@@ -103,6 +109,10 @@ const REAUTH: &[&str] = &[
     // Lauf F (F3a, W13-BACKUP-DOWNLOAD): verschlüsselte .kbk herunterladen
     "backup_download",
 ];
+
+/// Bedingte Re-Auth (W14-038, Lauf F4a): der Kern entscheidet (IBAN, BIC,
+/// §19-Status), frisch gilt auch eine Anmeldung der letzten 5 min.
+const CONDITIONAL: &[&str] = &["seller_profile_upsert"];
 
 /// Jobs laut Plan W5.6.
 const JOBS: &[&str] = &[
@@ -183,12 +193,14 @@ fn allowlist_is_exactly_plan_point_2() {
     for spec in REGISTRY.iter() {
         let reauth = REAUTH.contains(&spec.name);
         if spec.exposed() {
-            assert_eq!(
-                spec.auth,
-                if reauth { Auth::Reauth } else { Auth::Session },
-                "{}",
-                spec.name
-            );
+            let expected = if reauth {
+                Auth::Reauth
+            } else if CONDITIONAL.contains(&spec.name) {
+                Auth::Conditional
+            } else {
+                Auth::Session
+            };
+            assert_eq!(spec.auth, expected, "{}", spec.name);
             assert_ne!(
                 spec.auth,
                 Auth::Public,
@@ -339,6 +351,21 @@ async fn public_route_inventory() {
         "ohne Setup-Token: {}",
         r.text()
     );
+
+    // Lauf F4a: Abholung einer langen Anmeldung ohne Sitzung (nur mit
+    // Ticket-Cookie, sonst 410); Sitzungsübersicht und „andere abmelden“ nur
+    // mit Sitzung.
+    let r = send(app, post("/api/auth/login/poll", "{}", None, None)).await;
+    assert_eq!(r.status, StatusCode::GONE, "{}", r.text());
+    assert_eq!(r.json()["code"], "login_expired");
+    let r = send(app, get("/api/auth/sessions", None)).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = send(
+        app,
+        post("/api/auth/sessions/others/revoke", "{}", None, None),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 
     // SPA-Assets und Client-Routing
     for path in ["/", "/invoices/abc", "/settings/backup"] {
@@ -583,7 +610,7 @@ async fn header_snapshot_per_route_class() {
         expected(&[
             ("cache-control", "no-store"),
             ("content-security-policy", &spa_csp),
-            ("content-type", "text/html"),
+            ("content-type", "text/html; charset=utf-8"),
         ])
     );
     // API
@@ -603,7 +630,7 @@ async fn header_snapshot_per_route_class() {
         expected(&[
             ("cache-control", headers::CACHE_IMMUTABLE),
             ("content-security-policy", headers::CSP_NONE),
-            ("content-type", "text/javascript"),
+            ("content-type", "text/javascript; charset=utf-8"),
         ])
     );
 
@@ -650,4 +677,43 @@ async fn header_snapshot_per_route_class() {
     // die Registry-Funktion für den Dispatcher findet nur Freigegebenes
     assert!(find_exposed("mail_oauth_connect").is_none());
     assert!(find_exposed("factory_reset").is_none(), "seit W11 entfernt");
+}
+
+/// W14-012 (Lauf F4b): Die Art (Read/Write/Job) steht für jeden Command
+/// ausdrücklich in der Registry — keine Ableitung aus der Namensendung. Ein
+/// neuer Command ohne Einstufung lässt diesen Test scheitern.
+#[test]
+fn every_command_has_an_explicit_kind() {
+    let unclassified: Vec<&str> = REGISTRY
+        .iter()
+        .filter(|c| classified_kind(c.name).is_none())
+        .map(|c| c.name)
+        .collect();
+    assert!(
+        unclassified.is_empty(),
+        "Commands ohne ausdrückliche Art (Read/Write/Job): {unclassified:?}"
+    );
+    for spec in REGISTRY.iter() {
+        assert_eq!(classified_kind(spec.name), Some(spec.kind), "{}", spec.name);
+    }
+    // Keine Namens-Heuristik mehr: ein ausgedachter `*_list` ist nicht „Read“.
+    for made_up in ["ausgedacht_list", "ausgedacht_get", "ausgedacht_check"] {
+        assert_eq!(classified_kind(made_up), None, "{made_up}");
+    }
+    // Stichproben der Einstufung
+    assert_eq!(classified_kind("contacts_list"), Some(Kind::Read));
+    assert_eq!(classified_kind("travel_compute"), Some(Kind::Read));
+    assert_eq!(
+        classified_kind("recurring_run_due_check"),
+        Some(Kind::Write)
+    );
+    assert_eq!(classified_kind("contacts_create"), Some(Kind::Write));
+    assert_eq!(classified_kind("backup_create_now"), Some(Kind::Job));
+    let reads = REGISTRY.iter().filter(|c| c.kind == Kind::Read).count();
+    let writes = REGISTRY.iter().filter(|c| c.kind == Kind::Write).count();
+    assert_eq!(
+        (reads, writes, JOBS.len()),
+        (75, 108, 13),
+        "Einstufung wie vor W14-012 (Lauf F4b)"
+    );
 }

@@ -394,6 +394,11 @@
       return;
     }
     busy = true;
+    // R5-S2-UI (Lauf F4a): das Passwort des Backups nur für diesen Aufruf —
+    // danach aus dem Zustand der Seite (auch nach einem Fehler; nicht in
+    // Stores, URL oder Storage).
+    const passphrase = restorePass;
+    restorePass = "";
     try {
       let source: { uploadId: string } | { backupId: string };
       if (restoreFile) {
@@ -411,8 +416,7 @@
         return;
       }
       uploadPercent = null;
-      const r = await backupRestoreApply(source, restorePass);
-      restorePass = "";
+      const r = await backupRestoreApply(source, passphrase);
       restoreUploadId = null;
       // Plan W5: der Server startet nach dem Restore selbst neu und wendet ihn
       // dabei an; danach ist die Anmeldung mit der Passphrase des Backups nötig.

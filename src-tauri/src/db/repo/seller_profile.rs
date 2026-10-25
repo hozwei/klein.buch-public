@@ -46,6 +46,36 @@ pub struct SellerProfileInput {
     pub confirm_waive_paragraph_19: Option<bool>,
 }
 
+/// IBAN/BIC für den Vergleich: ohne Leerraum, Großbuchstaben, leer = keine.
+fn normalized_account(v: Option<&str>) -> Option<String> {
+    v.map(|s| {
+        s.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_uppercase()
+    })
+    .filter(|s| !s.is_empty())
+}
+
+/// Ändert `input` gegenüber dem gespeicherten Profil etwas, das eine frische
+/// Re-Auth verlangt (W14-038, Lauf F4a)? Das sind die Zahlungsdaten auf jeder
+/// künftigen Rechnung (IBAN, BIC; Schreibweise mit Leerzeichen oder klein
+/// zählt nicht) und der §19-Status samt Verzicht (§14c-Risiko). Ohne
+/// gespeichertes Profil gelten die Standardwerte (keine IBAN/BIC, §19 aktiv).
+pub fn reauth_relevant_change(prev: Option<&SellerProfileRow>, input: &SellerProfileInput) -> bool {
+    let (iban, bic, klein) = match prev {
+        Some(p) => (
+            normalized_account(p.iban.as_deref()),
+            normalized_account(p.bic.as_deref()),
+            p.is_kleinunternehmer == 1,
+        ),
+        None => (None, None, true),
+    };
+    iban != normalized_account(input.iban.as_deref())
+        || bic != normalized_account(input.bic.as_deref())
+        || klein != input.is_kleinunternehmer
+}
+
 pub async fn get(pool: &SqlitePool) -> Result<Option<SellerProfileRow>> {
     let row: Option<SellerProfileRow> = sqlx::query_as(
         "SELECT id, name, legal_form, street, postal_code, city, country_code,
@@ -300,6 +330,94 @@ fn validate_input(input: &SellerProfileInput) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn input() -> SellerProfileInput {
+        SellerProfileInput {
+            name: "Beispiel IT-Service".into(),
+            legal_form: None,
+            street: "Beispielweg 1".into(),
+            postal_code: "12345".into(),
+            city: "Musterstadt".into(),
+            country_code: "DE".into(),
+            tax_number: None,
+            vat_id: None,
+            email: "kontakt@example.org".into(),
+            phone: None,
+            iban: None,
+            bic: None,
+            logo_filename: None,
+            is_kleinunternehmer: true,
+            default_pdf_template: None,
+            default_currency: None,
+            confirm_waive_paragraph_19: None,
+        }
+    }
+
+    fn row(iban: Option<&str>, bic: Option<&str>, klein: bool) -> SellerProfileRow {
+        SellerProfileRow {
+            id: 1,
+            name: "Beispiel IT-Service".into(),
+            legal_form: None,
+            street: "Beispielweg 1".into(),
+            postal_code: "12345".into(),
+            city: "Musterstadt".into(),
+            country_code: "DE".into(),
+            tax_number: None,
+            vat_id: None,
+            email: "kontakt@example.org".into(),
+            phone: None,
+            iban: iban.map(str::to_string),
+            bic: bic.map(str::to_string),
+            logo_filename: None,
+            is_kleinunternehmer: i64::from(klein),
+            waived_paragraph_19_since: None,
+            default_pdf_template: "default".into(),
+            default_currency: "EUR".into(),
+            updated_at: "2026-10-25 08:00:00".into(),
+        }
+    }
+
+    /// W14-038 (Lauf F4a): Matrix der Re-Auth-pflichtigen Änderungen.
     #[test]
-    fn it_compiles() {}
+    fn reauth_relevant_change_matrix() {
+        // Erstes Speichern ohne Zahlungsdaten, §19 aktiv: nichts Relevantes.
+        assert!(!reauth_relevant_change(None, &input()));
+        // Erstes Speichern mit IBAN bzw. ohne §19: relevant.
+        let mut with_iban = input();
+        with_iban.iban = Some("DE02120300000000202051".into());
+        assert!(reauth_relevant_change(None, &with_iban));
+        let mut regular = input();
+        regular.is_kleinunternehmer = false;
+        assert!(reauth_relevant_change(None, &regular));
+
+        let stored = row(
+            Some("DE02 1203 0000 0000 2020 51"),
+            Some("BYLADEM1001"),
+            true,
+        );
+        // Adresse, Name, E-Mail: nicht relevant.
+        let mut same = input();
+        same.iban = Some("de02120300000000202051".into());
+        same.bic = Some(" BYLADEM1001 ".into());
+        same.street = "Neuer Weg 2".into();
+        same.email = "neu@example.org".into();
+        assert!(!reauth_relevant_change(Some(&stored), &same));
+        // IBAN, BIC, §19-Status: relevant; Leeren zählt als Änderung.
+        let mut iban = same.clone();
+        iban.iban = Some("DE89370400440532013000".into());
+        assert!(reauth_relevant_change(Some(&stored), &iban));
+        let mut bic = same.clone();
+        bic.bic = Some("COBADEFFXXX".into());
+        assert!(reauth_relevant_change(Some(&stored), &bic));
+        let mut cleared = same.clone();
+        cleared.iban = Some("  ".into());
+        assert!(reauth_relevant_change(Some(&stored), &cleared));
+        let mut waive = same.clone();
+        waive.is_kleinunternehmer = false;
+        waive.confirm_waive_paragraph_19 = Some(true);
+        assert!(reauth_relevant_change(Some(&stored), &waive));
+        let back = row(None, None, false);
+        assert!(reauth_relevant_change(Some(&back), &input()));
+    }
 }

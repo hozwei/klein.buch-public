@@ -30,6 +30,14 @@ danach wieder; höchstens zwei Java-Vorgänge laufen gleichzeitig.
 3. Beim Einlesen einer XRechnung-XML steht auf der Prüfseite "Die
    formale Prüfung (KoSIT) war nicht möglich".
 
+Außerdem prüft Klein.Buch den Sidecar bei jedem Start des Containers.
+Fehlt ein Teil oder startet Java nicht, steht nach dem Anmelden ein
+dringender Hinweis "E-Rechnungs-Komponente nicht einsatzbereit" in den
+Hinweisen, und im Container-Log steht eine Zeile "Sidecar nicht
+einsatzbereit" mit den fehlenden Teilen. Alles andere funktioniert
+weiter. Meist hilft es, das Image neu zu ziehen und den Container neu
+zu erstellen (Kapitel "Updates und Rückfall").
+
 ## Erste Schritte
 
 Versuch es nach einer Minute noch einmal. Laufen gerade andere
@@ -111,4 +119,4 @@ welche darin auftauchen.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

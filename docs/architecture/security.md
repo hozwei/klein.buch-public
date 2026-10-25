@@ -65,18 +65,26 @@ nicht (E1).
 
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
-| Aufruf beliebiger Commands, auch vor dem Entsperren | explizite Allowlist (alles andere 404), Sitzung Pflicht, DB-Commands nur im Zustand `unlocked` (sonst 423) | umgesetzt (W5) |
+| Aufruf beliebiger Commands, auch vor dem Entsperren | explizite Allowlist (alles andere 404), Sitzung Pflicht, DB-Commands nur im Zustand `unlocked` (sonst 423); die Art jedes Commands (Lesen, Ändern, Job) steht ausdrücklich in der Registry, nicht abgeleitet aus dem Namen — ein Registry-Test lehnt nicht eingestufte Commands ab | umgesetzt (W5; Lauf F4b: W14-012) |
 | Übernahme einer frischen Instanz (wer zuerst kommt, setzt die Passphrase) | Setup-Token aus dem Container-Log, Setup atomar mit Passphrase + TOTP | umgesetzt (W6) |
-| Passwort-Raten | Passphrase ≥ 16 Zeichen | umgesetzt |
+| Passwort-Raten | Passphrase ≥ 16 Zeichen; **neue** Passphrasen (Einrichtung, Wechsel) zusätzlich gegen eine eingebettete Sperrliste, triviale Muster (Wiederholung, Tastatur-/Zahlenfolgen) und Firmenname/E-Mail aus dem Profil geprüft (422 `passphrase_common`), höchstens 1024 Zeichen; bestehende bleiben gültig | umgesetzt (Lauf F4a, ASVS V2.1.7/V2.1.2) |
 | | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | umgesetzt (W6; IPv6 je /64, globales Budget ohne Gerätecookie; W14: Gerätecookie gleitend erneuert, Einmal-Code-Login nicht im globalen Budget) |
+| | Obergrenze in Folge: nach 100 Fehlversuchen ohne Gerätecookie (Anmeldung, Re-Auth) ohne zwischenzeitliche Anmeldung keine Anmeldung mit TOTP ohne Gerätecookie mehr (429 `totp_locked`), bis eine Anmeldung von einem bekannten Gerät oder mit Einmal-Code gelingt bzw. die Neueinrichtung (`totp-reset`) abgeschlossen ist; Zähler in `/data/auth/totp-lock.json` (übersteht Neustarts), WARN `auth.totp_locked` und Inbox-Hinweis | umgesetzt (Lauf F4a, W14-004, NIST SP 800-63B §5.2.2) |
+| | Falsche Passphrase nach **gültigem** App-Code bzw. Einmal-Code: drei in Folge ohne erfolgreiche Anmeldung bzw. Re-Auth dazwischen → WARN `auth.factor_suspect` und dringender Inbox-Hinweis „Gültiger App-Code mit falschem Daten-Passwort“ (Empfehlung: App-Code neu einrichten); bei gesperrter Instanz nach der nächsten erfolgreichen Anmeldung, je Folge ein Hinweis; die Obergrenze in Folge ist dagegen ohne Kenntnis der Passphrase auslösbar (§11, V2.2.1) | umgesetzt (Lauf F4d) |
+| Anmeldung länger als die Antwortzeit (erstes Entsperren nach einem Update: Pflicht-Backup und Umstellung der Datenbank) | nach 25 s `202 {"state":"pending"}` mit Ticket-Cookie `__Host-kb_login` (256 bit, nur SHA-256 gespeichert, HttpOnly/Secure/SameSite=Strict); der Ablauf läuft zu Ende, `POST /api/auth/login/poll` liefert genau einmal das Ergebnis (Sitzung entsteht erst dort), unbekannt → 410; „Datenbank sperren“ verwirft offene Ergebnisse | umgesetzt (Lauf F4a, W14-037) |
 | Überlast durch langsame Körper | Körper kleiner Anfragen höchstens 10 s, höchstens 16 gleichzeitige POSTs je Client-Adresse | umgesetzt (W14) |
+| Fremde Inhaltstypen (Formular-Posts, Parser-Verwechslung) | nicht leerer Körper auf `/api/cmd/*` und `/api/auth/*` nur als `application/json` (Parameter wie `charset` erlaubt), sonst 415; leere Körper (Abmelden, Sperren) ohne Inhaltstyp | umgesetzt (Lauf F4b, ASVS V13.1.5/V13.2.5) |
 | | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
-| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel, Zahlungsdaten/§19-Status, Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040), Anheben von Nummernkreisen, Freigabe vorgemerkter Entwürfe, Verwerfen von Rechnungs-Entwürfen (Lauf F); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung beendet andere Sitzungen | umgesetzt (W6; W14 Rotation und erweiterte Liste) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte (Steuerberater-, Detail-, DATEV-, ELSTER-, PDF-, Migrations-Export, DSGVO-Auskunft), Backup-Download, Passphrase-Wechsel, Zahlungskonten (Anlegen, Ändern, Aktivieren/Deaktivieren), Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040), Anheben von Nummernkreisen, Freigabe vorgemerkter Entwürfe, Verwerfen von Rechnungs-Entwürfen (Lauf F); Verkäuferprofil nur bei Änderung von IBAN, BIC oder §19-Status, dort zählt auch eine Anmeldung der letzten 5 min (bedingte Re-Auth im Kern); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung und Passphrase-Wechsel beenden andere Sitzungen; Sitzungsübersicht und „andere abmelden“ (Re-Auth, Audit `auth.sessions_revoked`); Idempotenz-Schlüssel gelten nur innerhalb einer Anmeldung | umgesetzt (W6; W14 Rotation und erweiterte Liste; Lauf F4a: W14-005, W14-028, W14-033, W14-038) |
 | CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | umgesetzt (W5/W6) |
 | Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | umgesetzt (W6) |
 | Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
 | | Header-Read-Timeout 10 s, Request-Timeouts, `ConcurrencyLimitLayer(64)`, Job-Warteschlange ≤ 8, ≤ 30 Render-/JVM-Aufrufe je Sitzung und Minute, Body-Limits je Route | umgesetzt (W5; globale Grenze 64 ohne Warteschlange) |
+| Langsame oder ruhende Gegenstellen halten Verbindungen | höchstens 256 offene Verbindungen (darüber nimmt der Server erst nach dem Ende einer Verbindung wieder an, die übrigen warten im Backlog des Kernels); Schreib-Leerlauf 30 s (eine Gegenstelle, die nicht mehr liest, verliert die Verbindung); Lesen begrenzt über Header-Timeout 10 s (auch Keep-Alive-Leerlauf), Körper 10 s, Uploads je Datenblock; `/legal/` gestreamt statt je Anfrage in den Speicher gelesen ; je Gegenstelle (IPv4-Adresse bzw. IPv6-/64) höchstens 32 davon, weitere werden angenommen und sofort geschlossen — vertraute Proxys (`TRUSTED_PROXIES`) zählen nur gegen die globale Grenze. Bekannte Grenze: Hinter einem Reverse-Proxy, der Antworten nicht puffert (z. B. Caddy in der Grundeinstellung), teilen sich alle Clients die Plätze des Proxys; ein langsamer Leser kann dort weiter Verbindungen des Proxys binden — Gegenmittel beim Betreiber: Antwort-Pufferung bzw. Grenzen je Client im Proxy | umgesetzt (Lauf F4b, W12-LEGAL-TIMEOUTS; Lauf F4d: Grenze je Gegenstelle) |
 | Interna in Fehlermeldungen | Fehlerabbildung je Variante; sonst 500 mit `ref`, Volltext nur im Log | umgesetzt (W5) |
+| Serverpfade in fachlichen Fehlermeldungen | Archiv-, Snapshot-, Restore- und CA-Datei-Meldungen nennen nur den Dateinamen bzw. die Art; der volle Pfad steht nur im Log. Bewusst sichtbar bleibt die Wurzel der Verzeichnis-Ziele (`/backup-targets`, Teil der Bedienung und der API) sowie der volle Pfad im `backup_log` (Backup-Hardline) | umgesetzt (Lauf F4c, W5-ERR-PATHS) |
+| Panik in Handler oder Middleware bricht die Verbindung ab | `CatchPanicLayer` innerhalb von Policy, Sicherheits-Headern und Zugriffsprotokoll: 500 im API-Format mit `ref`, ERROR-Log nur mit der Referenz (ohne Panik-Text und Anfrage-Inhalt); Kerne und Jobs laufen ohnehin als eigene Tasks (Panik → 500 mit `ref`) | umgesetzt (Lauf F4b, ASVS 7.4.3) |
+| Zustand der Instanz über `/healthz` | von außen nur 200/503 ohne Körper; Zustand und Off-Site-Status nur über Loopback **ohne** Weiterleitungs-Header — ein Reverse-Proxy auf demselben Host (Gegenstelle 127.0.0.1 mit `X-Forwarded-*`) bekommt nur den Status | umgesetzt (W5; Lauf F4b: W14-006) |
 | Versionsangabe vor dem Login | `GET /api/public/info` (Version, Commit, Tag, Quell-URL) und `/legal/` sind wegen AGPL §13 öffentlich | bewusst akzeptiert (ADR 0039) |
 | Überlast über die öffentlichen Routen | 120 Anfragen je Minute und Client-IP (IPv6 je /64) für `/api/public/info` und `/legal/*`, dann 429; `/legal/` liefert nur Dateien direkt im Ordner mit fester Endungsliste, CSP ohne Skripte | umgesetzt (W12) |
 
@@ -106,6 +114,7 @@ nicht (E1).
 | Hängende oder ausufernde Prüfung präparierter XML/PDF | eigener Prozess, Timeout + `kill_on_drop` | umgesetzt |
 | | höchstens 2 JVM-Starts gleichzeitig (`limits::JVM`) | umgesetzt (W2) |
 | Mock-Modus im Produktivbetrieb | Release-Build mit gesetztem `KLEIN_BUCH_SIDECAR_MOCK` startet nicht | umgesetzt (W1) |
+| Fehlender oder kaputter Sidecar fällt erst beim Festschreiben auf | Health-Check direkt nach dem Start im Hintergrund (Launcher, JARs, XRechnung-Konfiguration, `java -version` mit derselben Java-Auswahl wie der Launcher): ERROR im Container-Log und Inbox-Hinweis beim nächsten Entsperren, kein Abbruch | umgesetzt (Lauf F4b, R3-014) |
 | Manipulierte Java-Komponenten, zu viel Speicher | Linux-Sidecar mit SHA-256 der Original-JARs in `sidecar/versions.json` (CI vergleicht mit den Quellen), `-Xmx512m`, Temp unter `/data/tmp` | umgesetzt (W11) |
 
 Fehler in den Parsern der Drittkomponenten bleiben ein Restrisiko; begrenzt wird
@@ -116,8 +125,11 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Passphrase im Statement-Log (`PRAGMA key`, `ATTACH … KEY`) | Statement- und Slow-Statement-Logging auf allen verschlüsselten Verbindungen aus (`db::open_pool`, Snapshot, Verschlüsselungs-Migration) | umgesetzt (W2) |
-| Geheimnisse über andere Wege | `sqlx::query=off` fest im Filter, Default `info`, Request-Log nur Methode/Pfad ohne Query/Status/Dauer, keine Header und Bodies, Empfänger und Dateinamen nur auf DEBUG; Log-Test auf Passphrase, TOTP, Setup-Token, Session-ID | umgesetzt (W5/W6) |
-| Personenbezogene Daten im Audit | Fehlversuche nur als Logzeile `WARN auth.login.failed` (fail2ban-tauglich), nicht ins append-only `audit_log` | umgesetzt (W6) |
+| Geheimnisse über andere Wege | `sqlx::query=off` fest im Filter (auch gegen `RUST_LOG=sqlx::query=trace`, Unit-Test), Default `info`, Request-Log ohne Query, Header und Bodies, Empfänger und Dateinamen nur auf DEBUG; Log-Test unter TRACE auf Passphrase (auch Backup-Snapshot und Passphrase-Wechsel), TOTP, Setup-Token, Session-ID | umgesetzt (W5/W6; Lauf F4c W5-LOG-TESTS) |
+| Kunden-Mailadressen im Log | Der Fehlertext eines gescheiterten Versands (Antwort des Mailservers) nennt oft den Empfänger: WARN-Zeilen tragen nur Rechnungsnummer und Fehlerart (`Error::kind`), der Volltext steht auf DEBUG, im Inbox-Hinweis und im `email_log` | umgesetzt (Lauf F4c, W14-016) |
+| Log-Injektion (gefälschte Zeilen, etwa `auth.login.failed` für fail2ban) | Jedes Ereignis ist genau eine Zeile: der Log-Writer (`logging::OneLine`) escaped Zeilenumbrüche und Steuerzeichen innerhalb eines Ereignisses; SMTP- und SFTP-Hosts sind beim Anlegen, Ändern, Testen und vor jeder Verbindung auf Hostname bzw. IP-Adresse geprüft (`nettest::check_host`); Nutzerwerte in Feldern per Debug-Escaping (`?host`); der fail2ban-Filter im Handbuch ist auf Zeilenanfang, Ziel `klein_buch_lib::auth` und Zeilenende verankert | umgesetzt (Lauf F4c, W14-017) |
+| Vorfälle nicht nachvollziehbar (Zugriffsprotokoll ohne Client und Sitzung) | Zugriffsprotokoll mit `ip=` (Client-IP nach der Proxy-Regel, auch bei 421/403), `req=` (Kennung der Anfrage = `ref` interner Fehler, auch aus abgekoppelten Kernen und Jobs) und `sess=` (erste 4 Byte des SHA-256 des Sitzungs-Cookies wie in der Sitzungsübersicht); `auth.reauth.ok ip=…`. Datenschutz: IP im Log aus berechtigtem Interesse an der Sicherheit (Art. 6 Abs. 1 lit. f DSGVO), Aufbewahrung über die Log-Rotation des Containers (Beispiel 5 × 10 MB) | umgesetzt (Lauf F4c, W14-018) |
+| Personenbezogene Daten im Audit | Fehlversuche nur als Logzeile `WARN auth.login.failed ip=… reason=…` (fail2ban-tauglich; `reason` = `totp`, `totp_replay`, `passphrase`, `rate_limited`, `totp_locked`), nicht ins append-only `audit_log` | umgesetzt (W6; `totp_replay`/`totp_locked` Lauf F4a) |
 
 **Volumes** (`/data`, `/inputs`, optional `/backup-targets`)
 
@@ -128,6 +140,7 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Löschen oder Ersetzen von Archivdateien | Erkennung statt Verhinderung, siehe „Write-once unter Linux" | umgesetzt (W2), Doku W3 |
 | Temp-Dateien im RAM-tmpfs oder in fremden Verzeichnissen | DB-Snapshot unter `<data_dir>/tmp` | umgesetzt (W2) |
 | | alle Temp-Dateien unter `/data/tmp`: Uploads, Downloads, Exporte, DSGVO-Auskunft (W7), Java-Sidecar über `TMPDIR=/data/tmp` im Image (W11); alle Reste beim Serverstart, Up-/Downloads minütlich, übrige Reste und Backup-Teildateien stündlich ab 6 h Alter (Lauf F, D-13) | umgesetzt (W7/W11, Lauf F) |
+| Klartext-Exporte im persistenten Volume (Snapshots von `/data`) | Exporte (EÜR, DATEV, ELSTER, Steuerberater, Detail, Migration, DSGVO-Auskunft) liegen höchstens 10 min unter `/data/tmp/downloads`; der erste Abruf entnimmt sie, die Datei wird mit dem Ende der Übertragung gelöscht (auch bei Abbruch — dann neu erzeugen); „Datenbank sperren“ löscht alle; Ordner, in die ein Export noch geschrieben wird, räumt der Sweeper erst nach 1 h ab. Eine Verschlüsselung mit flüchtigem Schlüssel wäre bei dieser Verweildauer ohne nennenswerten Gewinn | umgesetzt (W7; Lauf F4b: W14-014) |
 | Start auf falschem oder leerem Volume, Klartext-DB | fail-closed vor dem Port-Bind: Mountpoints, Instanz-Marker, `chmod 0400`-Selbsttest im Archiv, Stichprobe der Archivpfade, Klartext-DB → Start verweigert | umgesetzt (W5; Stichprobe beim Entsperren, die DB ist vorher verschlüsselt) |
 | Rechteausweitung im Container | `USER 65532`, read-only Root-FS, `cap_drop: [ALL]`, `no-new-privileges`, Core-Dumps aus, `PR_SET_DUMPABLE` 0 | umgesetzt (W11; Image-Smoke prüft UID, read-only Root-FS und `CapEff` 0) |
 
@@ -164,13 +177,36 @@ es durch Prozessgrenze, Speicherlimit und den Nicht-root-Container.
 | Selbst-Update als Einfallstor | kein Update-Knopf in der App (bräuchte `docker.sock`, also praktisch root auf dem Host); opt-in Versionsprüfung ohne weitere Daten | umgesetzt (W12: Standard aus, fester User-Agent, keine Weiterleitungen, Hinweis nur als Text) |
 
 **Passphrase im Speicher.** Nach dem Entsperren liegt die Passphrase im
-Prozessspeicher (`BackupSession`). Die KDF-Pfade arbeiten mit `Zeroizing`-Kopien
-(umgesetzt). „Datenbank sperren" (Pool zu, Scheduler pausiert, Passphrase per
-`zeroize` gelöscht, alle Sitzungen ungültig) ist umgesetzt (W6). Die Sitzungen
-enden sofort; auf einen laufenden Scheduler-Tick wartet das Sperren höchstens
-10 s und sperrt dann trotzdem (Lauf F, ADR 0040 Nr. 9). Nach einem
-Neustart bleibt die Instanz gesperrt, bis der Nutzer im Browser entsperrt; ein
-Auto-Unlock ist ausgeschlossen (E3).
+Prozessspeicher (`BackupSession`, als `Zeroizing<String>`). Die KDF-Pfade
+arbeiten mit `Zeroizing`-Kopien (umgesetzt). „Datenbank sperren" (Pool zu,
+Scheduler pausiert, Passphrase überschrieben, alle Sitzungen ungültig) ist
+umgesetzt (W6). Die Sitzungen enden sofort; auf einen laufenden Scheduler-Tick
+wartet das Sperren höchstens 10 s und sperrt dann trotzdem (Lauf F, ADR 0040
+Nr. 9). Nach einem Neustart bleibt die Instanz gesperrt, bis der Nutzer im
+Browser entsperrt; ein Auto-Unlock ist ausgeschlossen (E3).
+
+Seit Lauf F4a (W14-015, R4-S2-ZEROIZE):
+
+- `BackupSession::get` und `secrets::get` liefern `Zeroizing<String>`; die
+  Aufrufer reichen sie nur als `&str` weiter. Die Auth-Routen nehmen Passphrase
+  und neue Passphrase ohne Kopie aus dem Körper (`take_passphrase`) und geben
+  sie ohne Kopie an Entsperren bzw. Einrichtung weiter; Passphrase-Wechsel,
+  Restore, SFTP- und SMTP-Tests halten ihre Werte als `Zeroizing`.
+- „Datenbank sperren“ leert zusätzlich gespeicherte Idempotenz-Antworten,
+  Ergebnisse beendeter Jobs (z. B. Download-Tickets), offene Anmelde-Ergebnisse
+  (W14-037) und ein ausstehendes TOTP-Geheimnis einer Neueinrichtung.
+- **Unvermeidbare Reste (bewusst akzeptiert):** die Pool-Optionen von sqlx
+  halten `PRAGMA key` für neue Verbindungen, solange der Pool offen ist;
+  SQLCipher hält den abgeleiteten Schlüssel je Verbindung; Empfangspuffer von
+  hyper/axum, der JSON-Wert im Dispatcher und Antwortkörper werden nicht
+  überschrieben; lettre (SMTP) und russh (SFTP) halten Zugangsdaten als eigene
+  `String`s für die Dauer der Verbindung. `PRAGMA cipher_memory_security`
+  bleibt aus (SQLCipher-Standard seit 4.5): Es überschreibt und sperrt jede
+  Speicherzuteilung von SQLite, kostet spürbar Leistung und schützt nur
+  freigegebenen Speicher — der Schlüssel muss bei offener Datenbank ohnehin im
+  Speicher liegen. Gegen das Auslesen schützen Nicht-root-Container,
+  `PR_SET_DUMPABLE` 0, Core-Dumps aus und `no-new-privileges`; root auf dem
+  Host ist vertraut (siehe Akteure).
 
 ### Restrisiken (bewusst akzeptiert)
 
@@ -424,7 +460,8 @@ Format-3-Kopf auf 2 herabzusetzen scheitert weiter am Tag.
   mit Re-Auth als verschlüsselte `.kbk` über ein einmaliges Download-Ticket
   herunterladen (Hardlink in den Download-Ordner; ein Ziel auf einem anderen
   Dateisystem direkt von seinem Platz, nie gelöscht, keine Kopie unter `/data/tmp`
-  — Lauf F3c; Audit `backup.downloaded`).
+  — Lauf F3c; Audit `backup.downloaded`). Das Ticket gilt einmal und höchstens
+  10 min (wie die Exporte, Lauf F4b); ein abgebrochener Download wird neu angefordert.
 - **Schreiben ins Verzeichnis** (Floor und Off-Site, W2): Temp-Datei
   `.<name>.<uuid>.part` im Zielordner, `fsync`, `rename`, Verzeichnis-`fsync`.
   Ein Abbruch hinterlässt nie eine halbe `.kbk` unter dem endgültigen Namen.
@@ -519,8 +556,20 @@ Desktop-Fassung (`keyring`, `libdbus`) gibt es nicht mehr.
   Passwort, wenn sich eins davon ändert; mit Benutzer ist ein neues Pflicht
   (sonst 422 ohne Änderung). SFTP-Ziele sind unveränderlich (§3.4).
 - Löschen eines Kontos bzw. Ziels löscht seine Einträge.
+- **Verwaiste Einträge** (Schlüssel ohne Konto bzw. Ziel) räumt die Anwendung
+  bewusst nicht auf (Lauf F4c, `tasks:W8-SECRETS-ORPHANS`): Kein Pfad der
+  Anwendung erzeugt sie (Löschen nimmt den Eintrag mit; ein Rest entsteht nur
+  bei einem Absturz genau zwischen zwei Schritten oder durch direkte
+  DB-Eingriffe). Ein Rest ist verschlüsselt, über keine API lesbar und an eine
+  nie wiederverwendete UUIDv7 gebunden. Ein automatisches Löschen „ohne Bezug“
+  wäre riskanter: Ein Lesefehler der Ziel-Liste würde dann gültige Passwörter
+  löschen (ADR 0039 Nr. 132).
 - App-/Daten-Passphrase liegt **nicht** hier — sie kommt vom Benutzer.
 - Kein Übernehmen alter Schlüsselbund-Einträge aus der Desktop-Fassung (E17).
+- Gelesene Werte kommen als `Zeroizing<String>` (`secrets::get`, Lauf F4a) und
+  werden beim Drop überschrieben; die Kopien in lettre bzw. russh für die Dauer
+  einer Verbindung sind ein bewusst akzeptierter Rest (siehe „Passphrase im
+  Speicher“).
 
 Test: `tests/server_secrets_test.rs` (Klartext weder in DB-Datei, Audit,
 Migrations- noch DSGVO-ZIP; Bindung; Port-Allowlist; Kontingent; SFTP gegen
@@ -745,6 +794,10 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
 - **Verbindungstests** (Verbindung testen, Testmail): nur freigegebene Ports
   (SMTP 25/465/587/2525), höchstens 10 je Minute, einheitliche Fehlermeldung,
   Re-Auth; gespeicherte Konten nur per ID (`mail_account_test_saved`).
+- **Hosts** von SMTP-Konten und SFTP-Zielen: nur Hostname (Buchstaben, Ziffern,
+  `-`, `_`, Punkt) oder IP-Adresse, ohne Leerzeichen, Steuerzeichen, Port oder
+  Protokoll — geprüft beim Anlegen, Ändern, Testen und vor jeder Verbindung
+  (auch für Einträge aus älteren Ständen; Lauf F4c, W14-017).
 - **OAuth/Graph** läuft über `oauth2` mit **PKCE-S256**, Loopback-Capture
   des Redirects auf `127.0.0.1:<random>`. Refresh-Token in `secrets` (Desktop: Keychain),
   Access-Token nur im Memory. **Im Server-Modus ausgeblendet** (E9; Commands
@@ -771,9 +824,49 @@ und Hash vor der Rückgabe der Bytes und schreibt bei Erfolg `archive.read`.
   verborgen wäre.
 - **Hardware-Token.** Yubikey/Smartcard/WebAuthn sind nicht vorgesehen. Im
   Server-Betrieb ist TOTP der zweite Faktor (umgesetzt W6); die Passphrase
-  gehört in einen guten Passwort-Manager.
+  gehört in einen guten Passwort-Manager. Begründung: §11 (ASVS V2.3.2).
 - **Physische Unveränderbarkeit des Archivs (WORM).** Siehe „Write-once unter
   Linux".
+
+---
+
+## 11. ASVS 4.0.3 Level 2 — Entscheidungen zu offenen und teilweise erfüllten Punkten (Lauf F)
+
+Die vollständige Checkliste des Security-Reviews W14 liegt im nicht
+veröffentlichten Projektordner (`docs/REVIEW-PHASE-W.md`). Hier stehen die dort
+als „offen“ oder „teilweise“ geführten Punkte mit ihrer Erledigung bzw.
+begründeten Entscheidung (ADR 0039 Nr. 130 ff.; Lauf F4b: Nr. 131; Lauf F4c: Nr. 132). **Erfüllt** = umgesetzt mit
+Test; **entschieden** = bewusst so belassen, mit Begründung.
+
+| ASVS | Status | Umsetzung bzw. Begründung |
+|---|---|---|
+| V2.1.2 (≥ 64 Zeichen erlaubt, > 128 abgelehnt) | entschieden (abweichend) | Neue Passphrasen bis 1024 Zeichen (422 `passphrase_too_long`), darüber hinaus begrenzt das Auth-Körperlimit (16 KiB). Die 128er-Grenze soll KDF-Überlast verhindern; Argon2id und SQLCipher-PBKDF2 verarbeiten die Eingabe nahezu längenunabhängig, die KDF läuft einzeln (Semaphore) und erst nach gültigem TOTP. Eine harte Grenze von 128 schadete Nutzern langer Diceware-Sätze ohne Sicherheitsgewinn. |
+| V2.1.6 (aktuelle Passphrase beim Wechsel) | erfüllt (gleichwertig) | Der Wechsel verlangt eine Re-Auth der letzten 5 min (Passphrase + TOTP), gebunden an die dabei rotierte Sitzungs-ID (W14); die alte ID verliert das Re-Auth-Recht. Das entspricht dem Mitsenden der aktuellen Passphrase und deckt Akteur A2. |
+| V2.1.7 (Prüfung gegen geleakte/häufige Passwörter) | erfüllt (Lauf F4a) | `server::passphrase_policy`: eingebettete Sperrliste (normalisiert: Kleinbuchstaben, nur Buchstaben/Ziffern; bekannte Sätze, Beispiele aus Anleitungen und Comics, häufige lange Passwörter, Anwendungsbegriffe), triviale Muster (≤ 3 verschiedene Zeichen, Wiederholung, ≥ 80 % Tastatur-/Alphabet-/Zahlenfolgen), Rest nach Abzug von Anwendungs-, Firmen- und E-Mail-Namen < 8 Zeichen. Nur für neue Passphrasen (Einrichtung — schon beim Anfordern des QR-Codes vorab —, Wechsel); kein Netzabruf (local-first). Das bisherige Beispiel der Anmelde-Maske steht auf der Liste und wird nicht mehr angezeigt. Stärkeanzeige (V2.1.8) im UI/UX-Lauf. |
+| V2.2.1 (Anti-Automatisierung) | erfüllt (W14, Lauf F4a) | Wartezeit je Gerät/IP und globales Budget (W6), kein Aussperren durch Fremde (Gerätecookie gleitend, Einmal-Code außerhalb des globalen Budgets; W14), dazu die Obergrenze von 100 Fehlversuchen in Folge ohne Gerätecookie (W14-004, siehe Threat Model „Passwort-Raten“). Bekannte Grenze (Lauf F4d): Die Obergrenze zählt auch falsche App-Codes ohne jede Kenntnis der Passphrase (der zweite Faktor wird vor der KDF geprüft) und ist damit von jedem auslösbar, der die Anmeldeseite erreicht; das globale Budget streckt das auf etwa zwei Tage ohne Anmeldung des Inhabers. Folge: Auf neuen Geräten kostet jede Anmeldung einen Einmal-Code, bis die Codes verbraucht sind (danach `totp-reset` im Container); bekannte Geräte bleiben frei. Bewusst so belassen, weil nur Fehlversuche nach gültigem App-Code zu zählen das Durchprobieren des zweiten Faktors nicht mehr begrenzen würde. Der Hinweis zur Sperre unterstellt deshalb keine Kenntnis der Passphrase; aussagekräftig ist eine falsche Passphrase nach gültigem App-Code (drei in Folge → WARN `auth.factor_suspect`, dringender Hinweis mit Empfehlung, den App-Code neu einzurichten). |
+| V2.2.3 / V2.5.5 (Benachrichtigung bei Wechsel von Passphrase bzw. TOTP) | entschieden | Es gibt einen Inhaber und keinen Kanal außerhalb der Instanz: Eine Mail über das gespeicherte SMTP-Konto der Instanz an die eigene Adresse wäre kein echter Out-of-Band-Schutz (dieselbe womöglich übernommene Instanz). Vorhanden: append-only Audit (`backup.passphrase.changed`, `auth.totp.renewed`, `auth.sessions_revoked`), Hinweis „Fehlversuche seit der letzten Anmeldung“ nach dem Login, Inbox-Hinweise bei Sperre und Freigabe der TOTP-Anmeldung, Sitzungsübersicht. |
+| V2.3.1 (zeitlich begrenzte Erst-Geheimnisse) | entschieden | Der Setup-Token (128 bit OsRng) gilt nur vor der Einrichtung bzw. nach `totp-reset`, nur bis zum nächsten Neustart, ist nach Erfolg ungültig, steht nur im Container-Log und ist rate-limitiert. Ein Ablauf erzwänge Neustarts ohne Sicherheitsgewinn (wer das Log lesen kann, kann auch neu starten). |
+| V2.3.2 (FIDO/WebAuthn) | entschieden | Nicht vorgesehen: WebAuthn braucht eine stabile RP-ID bzw. Origin je Instanz und eigene Wiederherstellungswege — zu viel Komplexität für Ein-Nutzer-Selbstbetrieb. TOTP + Passphrase + Einmal-Codes erfüllen L2. Mögliche Idee nach v1.0. |
+| V2.6.2 / V2.6.3 (Einmal-Codes: Entropie, gesalzene Ablage) | entschieden | 10 Codes zu 50 bit aus OsRng, gespeichert als SHA-256 in `/data/auth/totp.json` neben dem TOTP-Geheimnis. Wer die Datei liest, hat bereits das TOTP-Geheimnis; Salz oder KDF brächten keinen Schutzgewinn. Online-Raten ist durch Rate-Limit und Passphrase-Pflicht aussichtslos. |
+| V2.8.2 (TOTP-Geheimnis geschützt) | entschieden | Klartext in `/data/auth/totp.json` (0600, Verzeichnis 0700, Nutzer 65532). Die Datei muss vor dem Öffnen der Datenbank lesbar sein (TOTP wird vor der KDF geprüft); eine Verschlüsselung mit einem Schlüssel aus demselben Verzeichnis wäre nur Verschleierung, ein HSM gibt es im Container nicht. Das Geheimnis allein öffnet ohne Passphrase nichts. |
+| V2.8.5 (Wiederholung eines TOTP-Codes erkennen) | erfüllt (Lauf F4a) | Abgelehnt seit W6 (`last_used_step` persistiert); jetzt im Log eigens `reason=totp_replay` (gleiche Antwort an den Client, kein Orakel). Benachrichtigung über die Obergrenze in Folge (Inbox-Hinweis bei Sperre). |
+| V3.3.4 (aktive Sitzungen anzeigen und beenden) | erfüllt (Lauf F4a, W14-005) | `GET /api/auth/sessions` (Anmeldezeit, letzte Nutzung, gekürzte Kennung, „diese Sitzung“; keine IP, kein Gerätename) und `POST /api/auth/sessions/others/revoke` (Re-Auth, Audit mit Anzahl); Block in Einstellungen → Sicherheit. |
+| V8.2.2 (keine Geheimnisse im Browser-Speicher) | erfüllt (Lauf F4a, Teil von R5-S2-UI) | Passphrasen stehen nur im Zustand der jeweiligen Maske (Anmeldung, Einrichtung, Re-Auth, Passphrase-Wechsel, Restore) und werden nach dem Absenden bzw. Abbrechen geleert — nie in Stores, URL, `localStorage` oder `sessionStorage`. |
+| V11.1.4 (Anti-Automatisierung/Re-Auth für sensible Geschäftsfunktionen) | erfüllt (Lauf F4a, W14-028) | DATEV-, ELSTER- und PDF-Export sowie das Aktivieren/Deaktivieren von Zahlungskonten verlangen Re-Auth wie die übrigen Exporte; das Verkäuferprofil bedingt (nur IBAN, BIC, §19-Status; W14-038). Registry-Test der Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`, `seller_profile_reauth_matrix`). |
+| V5.1.1 (HTTP-Parameter-Pollution, doppelte JSON-Schlüssel) | entschieden (Lauf F4b) | Ein Körper wird genau einmal geparst (`serde_json` → typisiertes Args-Struct); bei doppelten Schlüsseln gewinnt der letzte. Es gibt keine vorgelagerte Prüfinstanz (WAF, zweiter Parser), die einen anderen Wert sähe als der Kern — damit keine Pollution zwischen Komponenten. |
+| 7.4.3 (letzte Fehlerbehandlung für Unerwartetes) | erfüllt (Lauf F4b) | `CatchPanicLayer` im Router (innerhalb von Policy, Headern und Zugriffsprotokoll): eine Panik ergibt 500 im API-Format mit `ref`, ERROR-Log nur mit der Referenz. Test `server_hardening_test::panic_in_handler_returns_500_with_reference`. |
+| V11.1.3 (Grenzen für billige Schreibvorgänge) | entschieden (Lauf F4b) | Nummernverbrauchende Entwürfe brauchen eine Sitzung (ein Inhaber); Render/JVM sind je Sitzung begrenzt (30/min), Jobs auf 8. Entwürfe sind keine Lücken im Nummernkreis, Verwerfen dokumentiert den Verbleib (W14-032, Lauf F2a). Ein eigenes Rate-Limit wäre für Ein-Nutzer-Betrieb unverhältnismäßig. |
+| V12.2.1 (Dateityp am Inhalt prüfen) | entschieden (Lauf F4b) | Magic-Bytes-Prüfung am Anfang der Datei gegen eine Allowlist je Upload-Art (PDF: `%PDF-`). Eine Textdatei mit diesem Präfix gilt als PDF — folgenlos: fremde Dateien gehen nur als `attachment` mit CSP `sandbox` und `nosniff` hinaus, Vorlagennamen sind geprüft (W14-F). Strukturelles Parsen jedes PDFs (z. B. `lopdf`) brächte eine neue Parser-Angriffsfläche ohne Schutzgewinn. |
+| V12.4.2 (Virenscan von Uploads) | entschieden (Lauf F4b) | Kein Scanner im Image: ClamAV kostet über 300 MB und braucht Signatur-Updates aus dem Netz (widerspricht local-first und schlankem Image). Uploads stammen vom Inhaber selbst; Minderung über Typprüfung, Größenlimits, Auslieferung als `attachment` mit CSP `sandbox`, `nosniff`, Archiv `0400`. Wer scannen will, scannt das Volume auf dem Host. |
+| V13.1.5 / V13.2.5 (Inhaltstyp prüfen) | erfüllt (Lauf F4b) | `/api/cmd/*` und `/api/auth/*` verlangen bei nicht leerem Körper `application/json` (Parameter erlaubt), sonst 415 `unsupported_media_type`; leere Körper (Abmelden, Sperren, Commands ohne Argumente) ohne Inhaltstyp. Uploads prüfen Multipart und Typ am Inhalt. Test `server_hardening_test::json_body_requires_json_content_type`. |
+| V13.2.2 (Schema-Prüfung der Eingaben, Lesen ohne Ende) | erfüllt bzw. entschieden (Lauf F4b) | Körper kleiner Anfragen höchstens 10 s (`dispatch::BODY_READ_TIMEOUT`, Test `server_limits_test::stalled_request_body_times_out`), Uploads mit Leerlauf-Timeout je Datenblock, Header 10 s. Ein Schema steckt in den typisierten Args-Structs mit Domänenprüfung; `deny_unknown_fields` über rund 170 Structs brächte viel Bruchrisiko (Frontend-Felder, ältere Clients) bei wenig Gewinn — unbekannte Felder bleiben wirkungslos. |
+| 14.4.1 (Inhaltstyp mit Zeichensatz) | erfüllt (Lauf F4b) | Textantworten ohne Zeichensatz (`text/html`, `text/css`, `text/javascript` aus `ServeDir`, SVG) bekommen `charset=utf-8` in der Header-Middleware; JSON ist per Definition UTF-8. Test `headers::tests::text_responses_get_utf8_charset`, Header-Schnappschuss im Contract-Test. |
+| 14.4.2 (`Content-Disposition` für API-Antworten) | entschieden (Lauf F4b) | API-Antworten werden nie als Dokument geöffnet: CSP `default-src 'none'`, `nosniff`, Pflicht-Header für ändernde Anfragen. Downloads tragen eine RFC-6266-Disposition (`attachment`, `inline` nur für selbst erzeugte PDFs). |
+| 14.4.5 (HSTS) | entschieden (Lauf F4b) | `Strict-Transport-Security: max-age=31536000` nur bei HTTPS über einen vertrauten Proxy, **ohne** `includeSubDomains`/`preload`: Die Instanz kennt die Subdomains des Betreibers nicht (ADR 0039 Nr. 63). Beides gehört an den Reverse-Proxy bzw. die Domain des Betreibers; das Handbuch zum Reverse-Proxy empfiehlt es dort. |
+| 7.1.2 (keine sonstigen sensiblen Daten im Log) | erfüllt (Lauf F4c, W14-016) | Empfängeradressen und Benutzernamen nur auf DEBUG; ein gescheiterter Auto-Versand nennt auf WARN nur Rechnungsnummer und Fehlerart (`Error::kind`), der Volltext (Antwort des Mailservers mit Empfänger) steht auf DEBUG, im Hinweis und im `email_log`. Serverpfade nicht in Meldungen an den Client (W5-ERR-PATHS). Test `recurring_scheduler_test::auto_send_failure_keeps_recipient_out_of_warn_log`. |
+| 7.1.3 / 7.2.1 / 7.2.2 (sicherheitsrelevante Ereignisse, Erfolg und Fehlschlag der Anmeldung, Zugriffsfehler) | erfüllt (Lauf F4c, W14-018) | `auth.{login,setup,reauth}.failed` und `auth.{login,setup,reauth}.ok` mit IP (`auth.reauth.ok` neu); Zugriffs- und Validierungsfehler (401/403/404/415/422/423) stehen im Zugriffsprotokoll mit `ip=`, `req=` und `sess=`. Ein eigenes Ereignis je abgelehnter Prüfung entfällt: Status, Pfad, IP und Sitzung reichen zur Auswertung, die fachliche Meldung geht an den Client. |
+| 7.1.4 (Angaben für die Untersuchung eines Vorfalls) | erfüllt (Lauf F4c, W14-018) | UTC-Zeitstempel, Ziel, Level; Zugriffsprotokoll mit Client-IP (nach der Proxy-Regel), Kennung der Anfrage (gleich der `ref` interner Fehler, auch aus abgekoppelten Kernen und Jobs) und gekürzter Sitzungskennung (wie in der Sitzungsübersicht, kein Rückschluss auf das Cookie). Datenschutz: IP im Log aus berechtigtem Interesse (Art. 6 Abs. 1 lit. f DSGVO), Aufbewahrung über die Log-Rotation des Containers. Test `server_log_test::no_passphrase_or_session_id_in_logs`. |
+| 7.3.1 (Log-Injektion) | erfüllt (Lauf F4c, W14-017) | Der Log-Writer `logging::OneLine` schreibt jedes Ereignis als eine Zeile (Zeilenumbrüche und Steuerzeichen innerhalb escaped; tracing-subscriber escaped selbst nur ANSI); SMTP-/SFTP-Hosts nur als Hostname oder IP (`nettest::check_host`, beim Anlegen, Ändern, Testen und vor jeder Verbindung); Host-Felder per Debug-Escaping; fail2ban-Filter auf Zeilenanfang, Ziel und Zeilenende verankert (Handbuch „Fehlersuche im Container“). Tests `logging::tests::one_line_per_event`, `nettest::tests::host_validation`, Ablehnung im Log-Test. |
 
 ---
 
@@ -853,12 +946,17 @@ dieser Benutzer nicht erreicht.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W nach W12, Fließtext in W13 an die Tabellen
-angeglichen; Version 2026.5.1, Schema v31), ADRs 0009/0034/0035/0036/0039.
+Stand: 2026-10-25 (Phase W nach W12, Fließtext in W13 an die Tabellen
+angeglichen; Lauf F4a: Anmeldung, Sitzungen, Geheimnisse im Speicher, §11;
+Lauf F4b: Verbindungen, Inhaltstyp, Panik, `/healthz`, Exporte, Sidecar;
+Schema v32), ADRs 0009/0034/0035/0036/0039.
 Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`, `restore.rs`, `target.rs`,
 `sftp.rs`, `manifest.rs`, `encrypt.rs`, `rotation.rs`), `src/db/mod.rs`
 (Pool-Open, `prepare_filesystem`, Neuverschlüsseln), `src/server/` (`mod.rs`,
-`startup.rs`, `auth.rs`, `policy.rs`), `src/archive/store.rs`,
+`startup.rs`, `auth.rs`, `policy.rs`, `session.rs`, `ratelimit.rs`, `pending.rs`,
+`passphrase_policy.rs`, `idempotency.rs`, `http.rs`, `health.rs`, `headers.rs`,
+`dispatch.rs`), `src/downloads.rs`, `src/einvoice/sidecar_health.rs`,
+`src/commands/reauth.rs`, `src/archive/store.rs`,
 `src/archive/integrity_check.rs`, `src/scheduler/integrity_check_cron.rs`,
 `src/limits.rs`, `src/locks.rs`, `src/secrets.rs`, `src/nettest.rs`,
 `src/mail/smtp.rs`, Cargo.toml (libsqlite3-sys-Pin).

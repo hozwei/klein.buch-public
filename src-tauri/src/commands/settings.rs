@@ -34,6 +34,12 @@ pub struct SellerProfileUpsertArgs {
     pub input: SellerProfileInput,
 }
 
+/// Speichert das Verkäuferprofil. Bedingte Re-Auth (W14-038, Lauf F4a):
+/// Ändern sich IBAN, BIC oder der §19-Status gegenüber dem gespeicherten
+/// Profil, verlangt der Kern eine frische Bestätigung
+/// ([`crate::commands::reauth::require_fresh`]; als frisch gilt auch eine
+/// Anmeldung der letzten 5 min). Prüfung und Speichern laufen unter
+/// [`crate::locks::SELLER_PROFILE`] am Stück.
 pub async fn seller_profile_upsert(
     ctx: &Arc<AppCtx>,
     args: SellerProfileUpsertArgs,
@@ -41,6 +47,11 @@ pub async fn seller_profile_upsert(
     let SellerProfileUpsertArgs { input } = args;
     let pool = ctx.pool()?;
 
+    let _profile = crate::locks::SELLER_PROFILE.lock("1").await;
+    let prev = seller_profile::get(&pool).await?;
+    if seller_profile::reauth_relevant_change(prev.as_ref(), &input) {
+        crate::commands::reauth::require_fresh()?;
+    }
     seller_profile::upsert(&pool, &input).await
 }
 

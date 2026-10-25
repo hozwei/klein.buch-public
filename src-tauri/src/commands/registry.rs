@@ -34,6 +34,10 @@ pub enum Auth {
     Session,
     /// gültige Sitzung + frische Re-Auth (Prüfung der Frische ab W6)
     Reauth,
+    /// gültige Sitzung; frische Re-Auth nur für Änderungen, die der Kern als
+    /// sicherheitsrelevant erkennt ([`crate::commands::reauth`]). Als frisch
+    /// gilt auch eine Anmeldung der letzten 5 min (W14-038, Lauf F4a).
+    Conditional,
 }
 
 /// Kostenklasse für Lastgrenzen (Plan W5.8).
@@ -112,9 +116,15 @@ fn route_of(name: &str) -> Route {
     }
 }
 
-/// Re-Auth-Pflicht (Plan W6; die Prüfung der Frische folgt in W6).
+/// Re-Auth-Pflicht (Plan W6). Die Liste wird nur erweitert oder gezielt
+/// bedingt gemacht (Lauf F4a); jede Änderung steht im Registry-Test der
+/// Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`).
 fn auth_of(name: &str) -> Auth {
     match name {
+        // W14-038 (Lauf F4a): Re-Auth nur, wenn sich IBAN, BIC oder der
+        // §19-Status (samt Verzicht) gegenüber dem gespeicherten Profil ändern
+        // — Prüfung im Kern (`commands::settings::seller_profile_upsert`).
+        "seller_profile_upsert" => Auth::Conditional,
         "backup_set_target"
         | "backup_set_sftp_target"
         | "backup_target_add_directory"
@@ -133,11 +143,18 @@ fn auth_of(name: &str) -> Auth {
         | "dsgvo_export"
         | "euer_export_stb_zip"
         | "euer_export_detail_zip"
-        // W14: Zahlungsdaten und §19-Status (IBAN auf jeder künftigen Rechnung,
-        // auch den automatisch versendeten), unumkehrbare Schritte.
-        | "seller_profile_upsert"
+        // W14: Zahlungsdaten (IBAN auf jeder künftigen Rechnung, auch den
+        // automatisch versendeten), unumkehrbare Schritte.
         | "payment_accounts_create"
         | "payment_accounts_update"
+        // Lauf F4a (W14-028/W14-003): Konto aktivieren bzw. deaktivieren
+        // ändert, welche Bankverbindung auf künftigen Rechnungen steht.
+        | "payment_accounts_set_active"
+        // Lauf F4a (W14-028, ASVS V11.1.4): Exporte mit Buchungstexten,
+        // Kundennamen und Beträgen verlassen den Server im Klartext.
+        | "euer_export_datev"
+        | "euer_export_elster"
+        | "euer_export_pdf"
         | "contacts_anonymize"
         | "fiscal_year_close"
         // Lauf F: Freigabe nach einer Pause der automatischen Belegerzeugung
@@ -190,10 +207,13 @@ fn cost_of(name: &str) -> Cost {
     }
 }
 
-/// Art des Aufrufs (Plan W5.6). Was nicht ausdrücklich nur liest, gilt als
-/// ändernd (abgekoppelt + Idempotenz — für reine Leser unschädlich).
-fn kind_of(name: &str) -> Kind {
-    match name {
+/// Art des Aufrufs (Plan W5.6). Jeder Command ist ausdrücklich eingestuft
+/// (W14-012, Lauf F4b): [`Kind::Job`], [`Kind::Read`] oder [`Kind::Write`]; ein
+/// neuer Command ohne Einstufung ergibt `None` und lässt den Registry-Test
+/// `every_command_has_an_explicit_kind` scheitern. Im Betrieb gilt ein
+/// nicht eingestufter Command vorsichtshalber als ändernd ([`kind_of`]).
+pub fn classified_kind(name: &str) -> Option<Kind> {
+    let kind = match name {
         // Festschreiben/Ausstellen, Storno, Versand, Backup, Restore, Exporte
         "invoices_lock_and_issue"
         | "quotes_issue"
@@ -208,37 +228,202 @@ fn kind_of(name: &str) -> Kind {
         | "euer_export_stb_zip"
         | "dsgvo_export"
         | "migration_export_run" => Kind::Job,
-        // legt fällige Abo-Kosten an
-        "recurring_run_due_check" => Kind::Write,
-        n if n.ends_with("_list")
-            || n.ends_with("_get")
-            || n.ends_with("_search")
-            || n.ends_with("_data")
-            || n.ends_with("_info")
-            || n.ends_with("_overview")
-            || n.ends_with("_history")
-            || n.ends_with("_preview")
-            || n.ends_with("_count")
-            || n.ends_with("_status")
-            || n.ends_with("_check") =>
-        {
-            Kind::Read
-        }
-        "euer_compute_report"
-        | "euer_available_years"
-        | "euer_package"
-        | "euer_afa_pending"
+        // liest nur (keine Datenänderung; Vorschauen und das EÜR-Paket legen
+        // höchstens einen flüchtigen Download an)
+        "app_info"
+        | "archive_integrity_history"
         | "assets_afa_table"
+        | "assets_get"
+        | "assets_list"
         | "assets_suggest_method"
+        | "attachments_list"
+        | "audit_trail_list"
+        | "backup_list"
+        | "backup_log_list"
+        | "backup_log_search"
+        | "backup_restore_preview"
+        | "contacts_anonymize_check"
+        | "contacts_get"
+        | "contacts_list"
+        | "contacts_search"
         | "depreciation_list_for_year"
+        | "document_terms_get"
         | "email_log_for"
+        | "email_log_list"
+        | "email_log_search"
+        | "euer_afa_pending"
+        | "euer_available_years"
+        | "euer_compute_report"
+        | "euer_package"
+        | "expenses_get"
+        | "expenses_list"
+        | "expenses_receipt_xml_text"
+        | "fiscal_year_auto_close_get"
+        | "fiscal_year_closed_list"
+        | "fiscal_year_overview"
+        | "invoices_get"
+        | "invoices_list"
         | "invoices_validate_draft"
-        | "quotes_validate_draft"
+        | "legal_documents_list"
+        | "mail_accounts_list"
+        | "mail_invoice_preview"
+        | "mail_oauth_status"
+        | "mail_quote_preview"
+        | "notification_rules_list"
+        | "notifications_list"
+        | "notifications_unread_count"
+        | "numbering_counters_list"
+        | "numbering_restored_drafts_list"
+        | "package_categories_list"
+        | "package_preview"
+        | "package_revisions_get"
+        | "package_revisions_list"
+        | "packages_get"
+        | "packages_list"
+        | "paragraph_19_info"
+        | "payment_accounts_list"
+        | "pdf_template_preview"
+        | "pdf_templates_list"
+        | "private_movements_get"
+        | "private_movements_list"
+        | "quote_signature_get"
+        | "quotes_attachments_list"
+        | "quotes_get"
         | "quotes_legal_bindings"
+        | "quotes_list"
+        | "quotes_validate_draft"
+        | "recurring_get"
+        | "recurring_invoices_get"
+        | "recurring_invoices_list"
+        | "recurring_list"
+        | "recurring_restore_review_list"
+        | "scheduler_hold_status"
+        | "seller_logo_data"
+        | "seller_owner_get"
+        | "seller_profile_get"
+        | "seller_signature_data"
         | "travel_compute"
-        | "expenses_receipt_xml_text" => Kind::Read,
-        _ => Kind::Write,
-    }
+        | "travel_settings_get"
+        | "update_check_get" => Kind::Read,
+        // ändert Daten, legt Dateien/Hinweise an oder ist im Server gesperrt bzw.
+        // ersetzt (abgekoppelt + Idempotenz)
+        "archive_integrity_run"
+        | "assets_create"
+        | "assets_dispose"
+        | "assets_update"
+        | "attachments_add"
+        | "attachments_open"
+        | "attachments_reveal"
+        | "backup_download"
+        | "backup_get_settings"
+        | "backup_is_unlocked"
+        | "backup_needs_onboarding"
+        | "backup_open_folder"
+        | "backup_reveal_path"
+        | "backup_set_daily_time"
+        | "backup_set_sftp_target"
+        | "backup_set_target"
+        | "backup_setup_passphrase"
+        | "backup_target_add_directory"
+        | "backup_target_add_sftp"
+        | "backup_target_remove"
+        | "backup_test_sftp"
+        | "backup_test_sftp_saved"
+        | "backup_unlock"
+        | "contacts_anonymize"
+        | "contacts_archive"
+        | "contacts_create"
+        | "contacts_unarchive"
+        | "contacts_update"
+        | "depreciation_accrue_year"
+        | "depreciation_reset_asset"
+        | "document_terms_set"
+        | "euer_export_datev"
+        | "euer_export_detail_zip"
+        | "euer_export_elster"
+        | "euer_export_pdf"
+        | "euer_reveal_path"
+        | "expenses_cancel"
+        | "expenses_create"
+        | "expenses_create_from_einvoice"
+        | "expenses_parse_einvoice"
+        | "expenses_set_payment"
+        | "fiscal_year_auto_close_set"
+        | "fiscal_year_close"
+        | "invoices_create_draft"
+        | "invoices_open_pdf"
+        | "invoices_record_payment"
+        | "invoices_reveal_pdf"
+        | "invoices_void_draft"
+        | "legal_documents_activate"
+        | "legal_documents_deactivate"
+        | "legal_documents_upload"
+        | "mail_account_create"
+        | "mail_account_delete"
+        | "mail_account_test_connection"
+        | "mail_account_test_saved"
+        | "mail_account_update"
+        | "mail_oauth_connect"
+        | "mail_oauth_disconnect"
+        | "mail_send_test"
+        | "notification_rules_set_enabled"
+        | "notifications_dismiss"
+        | "notifications_dismiss_all"
+        | "notifications_run_checks"
+        | "numbering_raise"
+        | "numbering_restored_draft_confirm"
+        | "package_catalog_render"
+        | "package_categories_reorder"
+        | "package_category_create"
+        | "package_category_update"
+        | "package_materialize_item"
+        | "package_revisions_rollback"
+        | "packages_archive"
+        | "packages_create"
+        | "packages_reactivate"
+        | "packages_update_as_new_revision"
+        | "payment_accounts_create"
+        | "payment_accounts_set_active"
+        | "payment_accounts_update"
+        | "private_movements_create"
+        | "quote_signature_set"
+        | "quotes_accept"
+        | "quotes_cancel"
+        | "quotes_convert_to_invoice"
+        | "quotes_create_draft"
+        | "quotes_generate_pdf"
+        | "quotes_open_bundle"
+        | "quotes_reject"
+        | "recurring_create"
+        | "recurring_invoices_create"
+        | "recurring_invoices_resolve_backlog"
+        | "recurring_invoices_set_active"
+        | "recurring_invoices_update"
+        | "recurring_resolve_backlog"
+        | "recurring_run_due_check"
+        | "recurring_run_now"
+        | "recurring_set_active"
+        | "recurring_update"
+        | "scheduler_release_hold"
+        | "seller_default_template_set"
+        | "seller_logo_clear"
+        | "seller_logo_set"
+        | "seller_owner_set"
+        | "seller_profile_upsert"
+        | "seller_signature_clear"
+        | "seller_signature_set"
+        | "third_party_licenses_path"
+        | "travel_settings_set"
+        | "update_check_set" => Kind::Write,
+        _ => return None,
+    };
+    Some(kind)
+}
+
+/// Art des Aufrufs für die Registry; nicht Eingestuftes gilt als ändernd
+/// (abgekoppelt + Idempotenz — für reine Leser unschädlich).
+fn kind_of(name: &str) -> Kind {
+    classified_kind(name).unwrap_or(Kind::Write)
 }
 
 fn body_limit_of(_name: &str) -> usize {

@@ -10,14 +10,21 @@
 //! - `POST /api/auth/login` `{passphrase, totpCode | recoveryCode}`: TOTP
 //!   **vor** der KDF, identische Antwort bei falschem TOTP und falscher
 //!   Passphrase, Rate-Limit je Gerät bzw. Client-IP.
+//! - `POST /api/auth/login/poll`: Ergebnis einer Anmeldung bzw. Einrichtung,
+//!   die länger als [`pending::LOGIN_SYNC_WAIT`] dauerte (202 + Ticket-Cookie,
+//!   W14-037, Lauf F4a).
 //! - Mit Sitzung: `logout`, `lock` („Datenbank sperren“), `reauth`,
-//!   `security`; mit Sitzung + frischer Re-Auth: `totp/renew`,
-//!   `recovery/renew`, `passphrase`.
+//!   `security`, `sessions` (Übersicht, W14-005); mit Sitzung + frischer
+//!   Re-Auth: `totp/renew`, `recovery/renew`, `passphrase`,
+//!   `sessions/others/revoke`.
 //!
 //! Zustandswechsel laufen als eigener Task (abbruchsicher). Vor dem Login gibt
 //! es nur generische Meldungen; Fehlversuche stehen als
-//! `WARN auth.login.failed ip=… reason=…` im Log (fail2ban-tauglich), nicht im
-//! `audit_log` — dort nur `auth.login.ok` / `auth.reauth.ok` ohne IP.
+//! `WARN auth.login.failed ip=… reason=…` im Log (fail2ban-tauglich; `reason`
+//! = `totp`, `totp_replay`, `passphrase`, `rate_limited`, `totp_locked`), nicht
+//! im `audit_log` — dort nur `auth.login.ok` / `auth.reauth.ok` ohne IP.
+//! Neue Passphrasen prüft [`super::passphrase_policy`] (Sperrliste, Muster,
+//! Kontext; ASVS V2.1.7).
 
 use std::sync::Arc;
 
@@ -29,13 +36,16 @@ use axum::Json;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize as _;
+use zeroize::Zeroizing;
 
 use super::dispatch::{read_body, require_request_header};
 use super::errors::ApiError;
 use super::instance;
 use super::limits::KDF_WAIT;
+use super::passphrase_policy::{self, Weakness};
+use super::pending::{self, AuthOutcome, AuthSuccess, Taken};
 use super::policy::ClientInfo;
-use super::ratelimit::{self, DEVICE_COOKIE};
+use super::ratelimit::{self, Streak, DEVICE_COOKIE, SUSPECT_FACTOR_AFTER, TOTP_LOCK_AFTER};
 use super::session::{self, SessionId};
 use super::startup::check_archive_paths;
 use super::state::{InstanceState, ServerState, DB_GATE_WAIT, SCHEDULER_STOP_WAIT};
@@ -81,8 +91,15 @@ impl Drop for AuthBody {
 }
 
 impl AuthBody {
-    fn passphrase(&self) -> String {
-        self.passphrase.clone().unwrap_or_default()
+    /// Nimmt die Passphrase aus dem Körper (ohne Kopie); sie wird beim Drop
+    /// des Rückgabewerts überschrieben (W14-015).
+    fn take_passphrase(&mut self) -> Zeroizing<String> {
+        Zeroizing::new(self.passphrase.take().unwrap_or_default())
+    }
+
+    /// Wie [`Self::take_passphrase`] für die neue Passphrase.
+    fn take_new_passphrase(&mut self) -> Zeroizing<String> {
+        Zeroizing::new(self.new_passphrase.take().unwrap_or_default())
     }
 }
 
@@ -117,6 +134,20 @@ fn rate_limited(wait: std::time::Duration) -> ApiError {
         format!("Anmeldung fehlgeschlagen. Zu viele Fehlversuche — bitte {secs} s warten."),
     )
     .with_retry_after(secs)
+}
+
+/// W14-004: Anmeldung mit TOTP ohne Gerätecookie gesperrt (keine Wartezeit,
+/// sondern bis zu einer Anmeldung mit Einmal-Code bzw. von einem bekannten
+/// Gerät).
+fn totp_locked_error() -> ApiError {
+    ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "totp_locked",
+        format!(
+            "Anmeldung mit App-Code von neuen Geräten gesperrt ({TOTP_LOCK_AFTER} Fehlversuche in \
+             Folge). Bitte mit einem Einmal-Code oder von einem bereits benutzten Gerät anmelden."
+        ),
+    )
 }
 
 /// Interner Fehler mit generischer Meldung (Details nur im Log).
@@ -237,7 +268,7 @@ where
     // Audit-Einträge eines Zustandswechsels der Anmeldung schreibt der
     // Inhaber (Lauf F, R1-S3-ACTOR); fehlgeschlagene Versuche auditieren nicht.
     let fut = crate::db::repo::audit_log::with_actor(crate::db::repo::audit_log::ACTOR_OWNER, fut);
-    match st.tasks.spawn(fut).await {
+    match st.tasks.spawn(super::logging::with_request_id(fut)).await {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => err.into_response(),
         Err(join) => generic_failure("Anmeldung", &join).into_response(),
@@ -251,19 +282,219 @@ fn into_response(result: Result<Response, ApiError>) -> Response {
     }
 }
 
+/// Antwort auf eine abgeschlossene Anmeldung bzw. Einrichtung: bei Erfolg
+/// erst jetzt die neue Sitzung (W14-037: auch beim späten Abholen).
+fn issue(st: &ServerState, outcome: AuthOutcome) -> Response {
+    match outcome {
+        Ok(AuthSuccess { body, device }) => with_new_session(st, body, device.as_deref()),
+        Err(e) => e.into_response(),
+    }
+}
+
+fn joined(result: Result<AuthOutcome, tokio::task::JoinError>) -> AuthOutcome {
+    result.unwrap_or_else(|join| Err(generic_failure("Anmeldung", &join)))
+}
+
+/// Anmeldung bzw. Einrichtung als eigener Task (W14-037, Lauf F4a): fertig
+/// innerhalb von [`ServerState::login_sync_wait`] → Antwort wie bisher; sonst
+/// `202 {"state":"pending"}` mit Ticket-Cookie, der Task läuft zu Ende und
+/// hinterlegt sein Ergebnis für `POST /api/auth/login/poll`.
+async fn detached_auth<F>(st: &Arc<ServerState>, fut: F) -> Response
+where
+    F: std::future::Future<Output = AuthOutcome> + Send + 'static,
+{
+    let fut = crate::db::repo::audit_log::with_actor(crate::db::repo::audit_log::ACTOR_OWNER, fut);
+    let mut handle = st.tasks.spawn(super::logging::with_request_id(fut));
+    match tokio::time::timeout(st.login_sync_wait(), &mut handle).await {
+        Ok(result) => issue(st, joined(result)),
+        Err(_) => {
+            let Some((ticket, key)) = st.pending_auth.park() else {
+                // Zu viele offene Abläufe: wie bisher Zeitüberschreitung; der
+                // Ablauf läuft trotzdem zu Ende.
+                return ApiError::timeout().into_response();
+            };
+            let runner = st.clone();
+            st.tasks.spawn(async move {
+                let outcome = joined(handle.await);
+                runner.pending_auth.finish(key, outcome);
+            });
+            tracing::info!(
+                target: "klein_buch_lib::auth",
+                "Anmeldung dauert länger (z. B. Umstellung der Datenbank) — Ergebnis per Abholung"
+            );
+            pending_response(Some(&ticket))
+        }
+    }
+}
+
+/// `202 {"state":"pending"}`, beim ersten Mal mit Ticket-Cookie.
+fn pending_response(ticket: Option<&str>) -> Response {
+    let mut response = (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "state": "pending", "pollAfterMs": 1000 })),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    if let Some(t) = ticket {
+        if let Ok(v) = HeaderValue::from_str(&pending::ticket_cookie(t)) {
+            response.headers_mut().append(header::SET_COOKIE, v);
+        }
+    }
+    response
+}
+
 /// Audit ohne IP (Plan W6); ein Fehler wird geloggt, nicht gemeldet. Nur
 /// erfolgreiche Schritte des Inhabers (Akteur `owner`, Lauf F).
 async fn audit(st: &ServerState, action: &str) {
+    audit_details(st, action, None).await;
+}
+
+/// Wie [`audit`], mit Details (nie Geheimnisse, nie IP).
+async fn audit_details(st: &ServerState, action: &str, details: Option<serde_json::Value>) {
     use crate::db::repo::audit_log;
     if let Ok(pool) = st.ctx.pool() {
         if let Err(e) = audit_log::with_actor(
             audit_log::ACTOR_OWNER,
-            audit_log::append(&pool, action, "auth", "session", None),
+            audit_log::append(&pool, action, "auth", "session", details),
         )
         .await
         {
             tracing::error!("Audit {action} nicht geschrieben: {e}");
         }
+    }
+}
+
+/// Inbox-Hinweis zur Sperre der TOTP-Anmeldung ohne Gerätecookie (W14-004);
+/// nur bei offener Datenbank (sonst steht die Sperre im Log und der Hinweis
+/// „aufgehoben“ folgt nach der nächsten Anmeldung).
+async fn totp_lock_notice(st: &ServerState, released: bool) {
+    let Ok(pool) = st.ctx.pool() else {
+        return;
+    };
+    let (title, body, severity) = if released {
+        (
+            "Sperre der App-Code-Anmeldung aufgehoben",
+            format!(
+                "Die Anmeldung mit App-Code von neuen Geräten war nach {TOTP_LOCK_AFTER} \
+                 Fehlversuchen in Folge gesperrt und ist mit dieser Anmeldung wieder frei. \
+                 Die Fehlversuche zeigen massenhaftes Durchprobieren; schon falsche App-Codes \
+                 zählen mit, das Daten-Passwort ist damit nicht verraten. Prüfe unter \
+                 Einstellungen → Sicherheit die Sitzungen und die Zahl der restlichen \
+                 Einmal-Codes."
+            ),
+            "warning",
+        )
+    } else {
+        (
+            "Anmeldung mit App-Code gesperrt",
+            format!(
+                "Nach {TOTP_LOCK_AFTER} Fehlversuchen in Folge ist die Anmeldung mit App-Code von \
+                 neuen Geräten gesperrt. Das zeigt massenhaftes Durchprobieren: Schon falsche \
+                 App-Codes zählen mit, das Daten-Passwort ist damit nicht verraten. Bereits \
+                 benutzte Geräte funktionieren weiter; von einem neuen Gerät hebt eine Anmeldung \
+                 mit Einmal-Code die Sperre auf. Jeder Einmal-Code gilt nur einmal — neue \
+                 entstehen beim Neueinrichten des App-Codes unter Einstellungen → Sicherheit."
+            ),
+            "urgent",
+        )
+    };
+    let dedup = format!(
+        "totp_lock:{}:{}",
+        if released { "released" } else { "locked" },
+        st.ctx.clock().now_utc().timestamp()
+    );
+    if let Err(e) = crate::notify::store::create(
+        &pool,
+        crate::notify::store::NewNotification {
+            title,
+            body: &body,
+            severity,
+            action_url: Some("/settings/security"),
+            dedup_key: Some(&dedup),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::error!("Hinweis zur TOTP-Sperre nicht geschrieben: {e}");
+    }
+}
+
+/// Falsche Passphrase nach **gültigem** zweitem Faktor (Lauf F4d): Anders als
+/// die Obergrenze in Folge setzt das einen gültigen App-Code bzw. Einmal-Code
+/// voraus. Ab [`SUSPECT_FACTOR_AFTER`] in Folge (ohne erfolgreiche Anmeldung
+/// bzw. Re-Auth dazwischen) einmal je Folge WARN-Log und dringender Hinweis:
+/// Der zweite Faktor ist womöglich bekannt, empfohlen ist dessen
+/// Neueinrichtung (neues Geheimnis, neue Einmal-Codes).
+async fn factor_suspect(st: &ServerState, ip: std::net::IpAddr) {
+    let now = st.ctx.clock().now_utc().timestamp();
+    let (count, streak) = st.ratelimit.factor_suspect_failure(now);
+    if count != SUSPECT_FACTOR_AFTER {
+        return;
+    }
+    tracing::warn!(
+        target: "klein_buch_lib::auth",
+        "auth.factor_suspect ip={ip} failures={SUSPECT_FACTOR_AFTER} — gültiger zweiter Faktor, \
+         falsches Daten-Passwort"
+    );
+    factor_suspect_notice(st, streak).await;
+}
+
+/// Erfolgreiche Anmeldung bzw. Re-Auth beendet die Folge. Reichte sie bis zur
+/// Grenze, wird der Hinweis jetzt (erneut) geschrieben: Bei gesperrter
+/// Instanz (nach einem Neustart) gab es beim Erreichen keine offene DB; die
+/// Kennung der Folge im `dedup_key` verhindert einen doppelten Hinweis.
+async fn factor_suspect_end(st: &ServerState) {
+    let (count, streak) = st.ratelimit.factor_suspect_clear();
+    if count >= SUSPECT_FACTOR_AFTER {
+        factor_suspect_notice(st, streak).await;
+    }
+}
+
+async fn factor_suspect_notice(st: &ServerState, streak: i64) {
+    let Ok(pool) = st.ctx.pool() else {
+        return;
+    };
+    let body = format!(
+        "{SUSPECT_FACTOR_AFTER} Anmeldeversuche in Folge hatten einen gültigen App-Code bzw. \
+         Einmal-Code, aber ein falsches Daten-Passwort. Warst du das nicht, kennt jemand \
+         womöglich das Geheimnis deiner Authenticator-App oder einen Einmal-Code: Richte den \
+         App-Code unter Einstellungen → Sicherheit neu ein (dabei entstehen neue Einmal-Codes) \
+         und prüfe die Sitzungen. Das Daten-Passwort selbst war bei diesen Versuchen falsch."
+    );
+    let dedup = format!("factor_suspect:{streak}");
+    if let Err(e) = crate::notify::store::create(
+        &pool,
+        crate::notify::store::NewNotification {
+            title: "Gültiger App-Code mit falschem Daten-Passwort",
+            body: &body,
+            severity: "urgent",
+            action_url: Some("/settings/security"),
+            dedup_key: Some(&dedup),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::error!("Hinweis zum zweiten Faktor nicht geschrieben: {e}");
+    }
+}
+
+/// Zählt einen Fehlversuch ohne Gerätecookie für die Obergrenze in Folge
+/// (W14-004); beim Erreichen WARN-Log und Hinweis. Zählt bewusst auch falsche
+/// App-Codes ohne jede Kenntnis der Passphrase: Die Grenze begrenzt das
+/// Durchprobieren des zweiten Faktors (NIST SP 800-63B §5.2.2); dass sie
+/// dadurch von jedem auslösbar ist, steht in security.md (V2.2.1).
+async fn count_streak(st: &ServerState, ip: std::net::IpAddr) {
+    if st.ratelimit.streak_failure() == Streak::Tripped {
+        tracing::warn!(
+            target: "klein_buch_lib::auth",
+            "auth.totp_locked ip={ip} failures={TOTP_LOCK_AFTER} — Anmeldung mit TOTP ohne \
+             Gerätecookie gesperrt bis zu einer Anmeldung mit Einmal-Code bzw. bekanntem Gerät"
+        );
+        totp_lock_notice(st, false).await;
     }
 }
 
@@ -337,7 +568,10 @@ fn totp_offer(st: &ServerState, secret: &[u8]) -> Result<Response, ApiError> {
     .into_response())
 }
 
-fn check_new_passphrase(p: &str) -> Result<(), ApiError> {
+/// Prüft eine **neue** Passphrase (Einrichtung, Wechsel): Mindestlänge, dann
+/// [`passphrase_policy::check`] mit Kontextbegriffen (z. B. Firmenname und
+/// E-Mail aus dem Profil). Bestehende Passphrasen prüft niemand nach.
+fn check_new_passphrase(p: &str, context: &[String]) -> Result<(), ApiError> {
     if p.chars().count() < MIN_PASSPHRASE {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -345,7 +579,35 @@ fn check_new_passphrase(p: &str) -> Result<(), ApiError> {
             "Passphrase muss mindestens 16 Zeichen haben (Tipp: 3–4 zufällige Wörter)",
         ));
     }
-    Ok(())
+    match passphrase_policy::check(p, context) {
+        Ok(()) => Ok(()),
+        Err(Weakness::TooLong) => Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "passphrase_too_long",
+            format!(
+                "Passphrase darf höchstens {} Zeichen haben.",
+                passphrase_policy::MAX_CHARS
+            ),
+        )),
+        Err(_) => Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "passphrase_common",
+            "Diese Passphrase ist zu leicht zu erraten (bekannter Satz, einfaches Muster oder \
+             Firmenname/E-Mail). Tipp: 3–4 zufällige Wörter.",
+        )),
+    }
+}
+
+/// Kontextbegriffe für eine neue Passphrase aus dem Verkäuferprofil (bei
+/// offener Datenbank; sonst keine).
+async fn passphrase_context(st: &ServerState) -> Vec<String> {
+    let Ok(pool) = st.ctx.pool() else {
+        return Vec::new();
+    };
+    match crate::db::repo::seller_profile::get(&pool).await {
+        Ok(Some(p)) => passphrase_policy::profile_context(&p.name, &p.email),
+        _ => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,12 +643,22 @@ pub async fn setup(State(st): State<Arc<ServerState>>, req: Request) -> Response
         .into_response();
     }
     if request.body.step.as_deref() == Some("totp") {
+        // Lauf F4a: Bei der Ersteinrichtung kann das Frontend die neue
+        // Passphrase schon hier prüfen lassen (vor dem QR-Code korrigierbar);
+        // verbindlich bleibt die Prüfung im letzten Schritt.
+        if let Some(p) = request.body.passphrase.as_deref() {
+            if st.instance_state() == InstanceState::Setup {
+                if let Err(e) = check_new_passphrase(p, &[]) {
+                    return e.into_response();
+                }
+            }
+        }
         let secret = totp::generate_secret();
         st.set_pending_setup(secret.clone());
         return into_response(totp_offer(&st, &secret));
     }
     let task_state = st.clone();
-    detached(&st, async move {
+    detached_auth(&st, async move {
         setup_final(task_state, request, key, has_device, device).await
     })
     .await
@@ -420,11 +692,11 @@ fn remove_db_files(db: &std::path::Path) -> usize {
 
 async fn setup_final(
     st: Arc<ServerState>,
-    request: AuthRequest,
+    mut request: AuthRequest,
     key: String,
     has_device: bool,
     device: Option<String>,
-) -> Result<Response, ApiError> {
+) -> AuthOutcome {
     let _transition = st.transition.lock().await;
     // Erneut unter der Sperre: parallele Versuche bekommen nicht mehr Anläufe.
     if let Err(wait) = st.ratelimit.check(&key, has_device) {
@@ -460,15 +732,21 @@ async fn setup_final(
             "Der TOTP-Code stimmt nicht — Uhrzeit des Geräts prüfen und den aktuellen Code eingeben.",
         ));
     };
-    let passphrase = request.body.passphrase();
+    let mut passphrase = request.body.take_passphrase();
     if fresh {
-        check_new_passphrase(&passphrase)?;
+        check_new_passphrase(&passphrase, &[])?;
     }
     let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
 
     if fresh {
-        let result =
-            backup_setup_passphrase(&st.ctx, BackupSetupPassphraseArgs { passphrase }).await;
+        // Ohne Kopie in den Kern (er überschreibt sie beim Verlassen).
+        let result = backup_setup_passphrase(
+            &st.ctx,
+            BackupSetupPassphraseArgs {
+                passphrase: std::mem::take(&mut *passphrase),
+            },
+        )
+        .await;
         match result {
             Ok(_) => {}
             // DB vollständig eingerichtet, erst danach (Erst-Backup) gescheitert:
@@ -488,10 +766,9 @@ async fn setup_final(
             InstanceState::Locked => unlock(&st, passphrase).await?,
             _ => {
                 let pool = st.ctx.pool()?;
-                let mut p = passphrase;
-                let verified = crate::backup::verify_passphrase(&pool, &p).await;
-                p.zeroize();
-                verified.map_err(|e| generic_failure("Einrichtung", &e))?
+                crate::backup::verify_passphrase(&pool, &passphrase)
+                    .await
+                    .map_err(|e| generic_failure("Einrichtung", &e))?
             }
         };
         if !ok {
@@ -508,6 +785,9 @@ async fn setup_final(
     st.finish_setup();
     st.sessions.clear();
     st.ratelimit.clear(&key);
+    // Einrichtung mit Setup-Token (Container-Zugriff) und Passphrase hebt eine
+    // Sperre der TOTP-Anmeldung auf (W14-004).
+    let was_locked = st.ratelimit.streak_success() >= TOTP_LOCK_AFTER;
     audit(
         &st,
         if fresh {
@@ -517,12 +797,14 @@ async fn setup_final(
         },
     )
     .await;
+    if was_locked {
+        totp_lock_notice(&st, true).await;
+    }
     tracing::info!(target: "klein_buch_lib::auth", "auth.setup.ok ip={}", request.info.ip);
-    Ok(with_new_session(
-        &st,
-        serde_json::json!({ "recoveryCodes": codes }),
-        device.as_deref(),
-    ))
+    Ok(AuthSuccess {
+        body: serde_json::json!({ "recoveryCodes": codes }),
+        device,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -549,11 +831,50 @@ pub async fn login(State(st): State<Arc<ServerState>>, req: Request) -> Response
         tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={} reason=rate_limited", request.info.ip);
         return rate_limited(wait).into_response();
     }
+    // W14-004: nach TOTP_LOCK_AFTER Fehlversuchen in Folge keine Anmeldung mit
+    // TOTP ohne Gerätecookie mehr (Einmal-Code und bekannte Geräte bleiben).
+    if !exempt && st.ratelimit.totp_locked() {
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={} reason=totp_locked", request.info.ip);
+        return totp_locked_error().into_response();
+    }
     let task_state = st.clone();
-    detached(&st, async move {
+    detached_auth(&st, async move {
         login_inner(task_state, request, key, exempt, device).await
     })
     .await
+}
+
+/// `POST /api/auth/login/poll` (W14-037): Ergebnis einer Anmeldung bzw.
+/// Einrichtung, die mit 202 beantwortet wurde. 202 solange sie läuft; danach
+/// einmal das Ergebnis (200 mit Sitzung bzw. Fehler); unbekannt → 410.
+pub async fn login_poll(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    let request = match read_request(req).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    if !st.policy.auth_transport_ok(&request.info) {
+        return insecure_transport().into_response();
+    }
+    let clear_ticket = |mut response: Response| {
+        if let Ok(v) = HeaderValue::from_str(&pending::clear_ticket_cookie()) {
+            response.headers_mut().append(header::SET_COOKIE, v);
+        }
+        response
+    };
+    let taken = session::cookie_from_headers(&request.headers, pending::TICKET_COOKIE)
+        .map_or(Taken::Unknown, |t| st.pending_auth.take(&t));
+    match taken {
+        Taken::Running => pending_response(None),
+        Taken::Done(outcome) => clear_ticket(issue(&st, outcome)),
+        Taken::Unknown => clear_ticket(
+            ApiError::new(
+                StatusCode::GONE,
+                "login_expired",
+                "Anmeldung abgelaufen oder unbekannt — bitte erneut anmelden.",
+            )
+            .into_response(),
+        ),
+    }
 }
 
 fn totp_missing(st: &ServerState) -> ApiError {
@@ -566,18 +887,25 @@ fn totp_missing(st: &ServerState) -> ApiError {
     )
 }
 
+/// Anmeldung unter der Zustandssperre. `exempt`: Gerätecookie bzw. reiner
+/// Einmal-Code-Login (zählt nicht im globalen Budget und nicht für die
+/// Obergrenze in Folge, W14-004).
 async fn login_inner(
     st: Arc<ServerState>,
-    request: AuthRequest,
+    mut request: AuthRequest,
     key: String,
-    has_device: bool,
+    exempt: bool,
     device: Option<String>,
-) -> Result<Response, ApiError> {
+) -> AuthOutcome {
     let _transition = st.transition.lock().await;
     let ip = request.info.ip;
     // Erneut unter der Sperre: parallele Versuche bekommen nicht mehr Anläufe.
-    if let Err(wait) = st.ratelimit.check(&key, has_device) {
+    if let Err(wait) = st.ratelimit.check(&key, exempt) {
         return Err(rate_limited(wait));
+    }
+    if !exempt && st.ratelimit.totp_locked() {
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason=totp_locked");
+        return Err(totp_locked_error());
     }
     if st.instance_state() == InstanceState::Setup {
         return Err(ApiError::new(
@@ -594,67 +922,83 @@ async fn login_inner(
     match check {
         Check::Valid => {}
         Check::Missing => return Err(totp_missing(&st)),
-        Check::Invalid => {
-            st.ratelimit.failure(&key, has_device);
-            tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason=totp");
+        Check::Invalid | Check::Replay => {
+            st.ratelimit.failure(&key, exempt);
+            if !exempt {
+                count_streak(&st, ip).await;
+            }
+            // ASVS V2.8.5: Wiederholung eines verbrauchten Codes eigens im Log
+            // (die Antwort bleibt dieselbe).
+            let reason = if check == Check::Replay {
+                "totp_replay"
+            } else {
+                "totp"
+            };
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason={reason}");
             return Err(auth_failed());
         }
     }
     let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
-    let passphrase = request.body.passphrase();
+    let passphrase = request.body.take_passphrase();
     let ok = match st.instance_state() {
         InstanceState::Locked => unlock(&st, passphrase).await?,
         _ => {
             let pool = st.ctx.pool()?;
-            let mut p = passphrase;
-            let verified = crate::backup::verify_passphrase(&pool, &p).await;
-            p.zeroize();
-            verified.map_err(|e| generic_failure("Anmeldung", &e))?
+            crate::backup::verify_passphrase(&pool, &passphrase)
+                .await
+                .map_err(|e| generic_failure("Anmeldung", &e))?
         }
     };
     if !ok {
-        st.ratelimit.failure(&key, has_device);
+        st.ratelimit.failure(&key, exempt);
+        if !exempt {
+            count_streak(&st, ip).await;
+        }
         tracing::warn!(target: "klein_buch_lib::auth", "auth.login.failed ip={ip} reason=passphrase");
+        factor_suspect(&st, ip).await;
         return Err(auth_failed());
     }
+    factor_suspect_end(&st).await;
     let failed = st.ratelimit.success_login(&key);
+    // W14-004: eine erfolgreiche Anmeldung beendet die Folge; war die
+    // TOTP-Anmeldung gesperrt, hebt diese (Gerätecookie bzw. Einmal-Code) sie auf.
+    let was_locked = st.ratelimit.streak_success() >= TOTP_LOCK_AFTER;
     audit(&st, "auth.login.ok").await;
+    if was_locked {
+        totp_lock_notice(&st, true).await;
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.totp_unlocked ip={ip}");
+    }
     tracing::info!(target: "klein_buch_lib::auth", "auth.login.ok ip={ip}");
-    Ok(with_new_session(
-        &st,
-        serde_json::json!({
+    Ok(AuthSuccess {
+        body: serde_json::json!({
             "failedAttempts": failed,
             "usedRecoveryCode": used_recovery,
             "recoveryLeft": st.totp.recovery_left(),
         }),
-        device.as_deref(),
-    ))
+        device,
+    })
 }
 
 /// Entsperren: DB öffnen und prüfen, Archivpfad-Stichprobe, erst dann
 /// migrieren und aktivieren (Pool, Scheduler, Audit). Passt die Stichprobe
 /// nicht, bleibt die Instanz gesperrt, ohne dass etwas geschrieben wurde.
-async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, ApiError> {
+async fn unlock(
+    st: &Arc<ServerState>,
+    mut passphrase: Zeroizing<String>,
+) -> Result<bool, ApiError> {
+    // `passphrase` wird auf jedem Rückweg beim Drop überschrieben (W14-015).
     let ctx = &st.ctx;
     if let Err(e) = ensure_no_pending_restore(&ctx.paths) {
-        passphrase.zeroize();
         return Err(generic_failure("Entsperren", &e));
     }
     let pool = match open_encrypted(&ctx.paths, &passphrase).await {
         Ok(Some(pool)) => pool,
-        Ok(None) => {
-            passphrase.zeroize();
-            return Ok(false);
-        }
-        Err(e) => {
-            passphrase.zeroize();
-            return Err(generic_failure("Entsperren", &e));
-        }
+        Ok(None) => return Ok(false),
+        Err(e) => return Err(generic_failure("Entsperren", &e)),
     };
     if let Err(e) = check_archive_paths(&pool, &ctx.paths).await {
         tracing::error!("{e}");
         pool.close().await;
-        passphrase.zeroize();
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "unlock_refused",
@@ -663,7 +1007,6 @@ async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, A
     }
     if let Err(e) = crate::commands::backup::migrate_with_backup(ctx, &pool, &passphrase).await {
         pool.close().await;
-        passphrase.zeroize();
         let msg = e.to_string();
         if msg.contains(crate::commands::backup::PRE_MIGRATION_FAILED) {
             // Plan W7: klare Meldung, Einzelheiten im Log (dort schon protokolliert).
@@ -701,7 +1044,8 @@ async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, A
         }
         return Err(generic_failure("Entsperren", &e));
     }
-    activate_unlocked(ctx, pool, passphrase)
+    // Ohne Kopie in die Sitzung (der leere Rest wird überschrieben).
+    activate_unlocked(ctx, pool, std::mem::take(&mut *passphrase))
         .await
         .map_err(|e| generic_failure("Entsperren", &e))?;
     Ok(true)
@@ -781,9 +1125,12 @@ pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     let _transition = st.transition.lock().await;
     st.sessions.clear();
     // Exporte (Klartext!) und Uploads nicht über das Sperren hinaus liegen
-    // lassen (Gegenprüfung W7).
+    // lassen (Gegenprüfung W7). Dazu (W14-015, Lauf F4a): offene
+    // Anmelde-Ergebnisse und ein ausstehendes TOTP-Geheimnis.
     st.ctx.downloads.clear();
     st.ctx.uploads.clear();
+    st.pending_auth.clear();
+    st.clear_pending_renew();
     crate::scheduler::tick::request_stop(&st.ctx);
     let _gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
         Ok(gate) => gate,
@@ -817,6 +1164,11 @@ pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     }
     st.ctx.session.clear();
     st.sessions.clear();
+    // W14-015/W14-033 (Lauf F4a): gespeicherte Antworten (Idempotenz) und
+    // Ergebnisse beendeter Jobs überdauern das Sperren nicht. Laufende Aktionen
+    // gibt es hier nicht mehr (Schreibsperre `db_gate`).
+    st.idem.clear();
+    st.jobs.clear_finished();
     tracing::info!(target: "klein_buch_lib::auth", "Datenbank gesperrt");
     Ok(())
 }
@@ -838,30 +1190,52 @@ pub async fn reauth(State(st): State<Arc<ServerState>>, req: Request) -> Respons
     if let Err(wait) = st.ratelimit.check(&key, has_device) {
         return rate_limited(wait).into_response();
     }
+    // W14-004: auch die Re-Auth mit TOTP ohne Gerätecookie ist gesperrt.
+    if !has_device && st.ratelimit.totp_locked() {
+        tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={} reason=totp_locked", request.info.ip);
+        return totp_locked_error().into_response();
+    }
     let task_state = st.clone();
     detached(&st, async move {
         let st = task_state;
+        let mut request = request;
         let ip = request.info.ip;
         let _transition = st.transition.lock().await;
         if let Err(wait) = st.ratelimit.check(&key, has_device) {
             return Err(rate_limited(wait));
         }
+        if !has_device && st.ratelimit.totp_locked() {
+            return Err(totp_locked_error());
+        }
         let pool = st.ctx.pool()?;
         let (check, _) = check_second_factor(&st, &request.body)?;
         if check != Check::Valid {
             st.ratelimit.failure(&key, has_device);
-            tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={ip} reason=totp");
+            if !has_device {
+                count_streak(&st, ip).await;
+            }
+            let reason = if check == Check::Replay {
+                "totp_replay"
+            } else {
+                "totp"
+            };
+            tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={ip} reason={reason}");
             return Err(auth_failed());
         }
         let _kdf = st.admission.admit(Cost::Kdf, KDF_WAIT).await?;
-        let mut passphrase = request.body.passphrase();
+        let passphrase = request.body.take_passphrase();
         let verified = crate::backup::verify_passphrase(&pool, &passphrase).await;
-        passphrase.zeroize();
+        drop(passphrase);
         if !verified.map_err(|e| generic_failure("Re-Auth", &e))? {
             st.ratelimit.failure(&key, has_device);
+            if !has_device {
+                count_streak(&st, ip).await;
+            }
             tracing::warn!(target: "klein_buch_lib::auth", "auth.reauth.failed ip={ip} reason=passphrase");
+            factor_suspect(&st, ip).await;
             return Err(auth_failed());
         }
+        factor_suspect_end(&st).await;
         st.ratelimit.clear(&key);
         // W14: neue Sitzungs-ID mit frischer Re-Auth; die alte (womöglich
         // gestohlene) verliert das Re-Auth-Recht und läuft kurz danach ab.
@@ -869,6 +1243,8 @@ pub async fn reauth(State(st): State<Arc<ServerState>>, req: Request) -> Respons
             return Err(ApiError::unauthenticated());
         };
         audit(&st, "auth.reauth.ok").await;
+        // ASVS 7.2.1 (Lauf F4c): auch die erfolgreiche Re-Auth mit IP im Log.
+        tracing::info!(target: "klein_buch_lib::auth", "auth.reauth.ok ip={ip}");
         let mut response = Json(serde_json::json!({
             "state": "ok",
             "reauthSeconds": session::REAUTH_WINDOW.as_secs(),
@@ -895,6 +1271,58 @@ pub async fn security(State(st): State<Arc<ServerState>>, req: Request) -> Respo
         "insecureHttp": st.policy.insecure_http,
     }))
     .into_response()
+}
+
+/// `GET /api/auth/sessions` (W14-005): gültige Sitzungen mit Anmeldezeit,
+/// letzter Nutzung (UTC wie DB-Zeitstempel), gekürzter Kennung und „diese
+/// Sitzung“. Keine IP, kein Gerätename (nicht gespeichert).
+pub async fn sessions(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    let id = match session_of(&st, req.headers()) {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
+    let now = st.ctx.clock().now_utc();
+    let at = |ago: std::time::Duration| {
+        let ago = chrono::Duration::from_std(ago).unwrap_or_else(|_| chrono::Duration::zero());
+        crate::clock::to_db_utc(now - ago)
+    };
+    let list: Vec<serde_json::Value> = st
+        .sessions
+        .overview(id)
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.short_id,
+                "loginAt": at(s.since_login),
+                "lastSeenAt": at(s.since_seen),
+                "current": s.current,
+                "reauthActive": s.reauth_active,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "count": list.len(), "sessions": list })).into_response()
+}
+
+/// `POST /api/auth/sessions/others/revoke` (Re-Auth, W14-005): beendet alle
+/// anderen Sitzungen; Audit `auth.sessions_revoked` mit der Anzahl.
+pub async fn revoke_other_sessions(State(st): State<Arc<ServerState>>, req: Request) -> Response {
+    into_response(
+        async {
+            let request = read_request(req).await?;
+            let id = session_of(&st, &request.headers)?;
+            require_reauth(&st, id)?;
+            let revoked = st.sessions.retain_only(id);
+            audit_details(
+                &st,
+                "auth.sessions_revoked",
+                Some(serde_json::json!({ "count": revoked })),
+            )
+            .await;
+            tracing::info!(target: "klein_buch_lib::auth", "auth.sessions_revoked count={revoked}");
+            Ok(Json(serde_json::json!({ "state": "ok", "revoked": revoked })).into_response())
+        }
+        .await,
+    )
 }
 
 /// `POST /api/auth/totp/renew` (Re-Auth): `{step:"totp"}` → neues Geheimnis;
@@ -965,9 +1393,11 @@ pub async fn recovery_renew(State(st): State<Arc<ServerState>>, req: Request) ->
     )
 }
 
-/// `POST /api/auth/passphrase` `{newPassphrase}` (Re-Auth).
+/// `POST /api/auth/passphrase` `{newPassphrase}` (Re-Auth). Die neue
+/// Passphrase prüft [`check_new_passphrase`] samt Firmenname und E-Mail aus
+/// dem Profil (ASVS V2.1.7, Lauf F4a).
 pub async fn change_passphrase(State(st): State<Arc<ServerState>>, req: Request) -> Response {
-    let request = match read_request(req).await {
+    let mut request = match read_request(req).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -981,8 +1411,9 @@ pub async fn change_passphrase(State(st): State<Arc<ServerState>>, req: Request)
         Ok(id) => id,
         Err(e) => return e.into_response(),
     };
-    let new = request.body.new_passphrase.clone().unwrap_or_default();
-    if let Err(e) = check_new_passphrase(&new) {
+    let new = request.body.take_new_passphrase();
+    let context = passphrase_context(&st).await;
+    if let Err(e) = check_new_passphrase(&new, &context) {
         return e.into_response();
     }
     let task_state = st.clone();
@@ -999,20 +1430,23 @@ pub async fn change_passphrase(State(st): State<Arc<ServerState>>, req: Request)
 /// Annahme, sondern ein Probe-Öffnen (erst alt, dann neu). Lässt sich der
 /// Verifier nicht schreiben, wird gesperrt — das Entsperren prüft dann über
 /// SQLCipher selbst, also nur mit der neuen Passphrase.
-async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<Response, ApiError> {
+///
+/// Alte und neue Passphrase liegen als `Zeroizing` vor und werden auf jedem
+/// Rückweg beim Drop überschrieben (W14-015).
+async fn rekey(
+    st: Arc<ServerState>,
+    id: SessionId,
+    new: Zeroizing<String>,
+) -> Result<Response, ApiError> {
     let _transition = st.transition.lock().await;
     let ctx = st.ctx.clone();
     if st.writes_blocked() {
-        new.zeroize();
         return Err(ApiError::restarting());
     }
-    let Some(mut old) = ctx.session.get() else {
-        new.zeroize();
+    let Some(old) = ctx.session.get() else {
         return Err(ApiError::from_error(&Error::Locked));
     };
     if bool::from(old.as_bytes().ct_eq(new.as_bytes())) {
-        old.zeroize();
-        new.zeroize();
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "passphrase_unchanged",
@@ -1027,16 +1461,12 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
         Ok(g) => g,
         Err(_) => {
             crate::scheduler::tick::withdraw_stop(&ctx);
-            old.zeroize();
-            new.zeroize();
             return Err(ApiError::busy(10));
         }
     };
     if !crate::scheduler::tick::stop_within(&ctx, SCHEDULER_STOP_WAIT).await {
         crate::scheduler::tick::withdraw_stop(&ctx);
         drop(gate);
-        old.zeroize();
-        new.zeroize();
         return Err(ApiError::busy(30));
     }
     if let Some(pool) = ctx.take_pool() {
@@ -1065,8 +1495,6 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
             "Passphrase-Wechsel unklar abgebrochen — bitte neu anmelden (zuerst mit der neuen, \
              sonst mit der bisherigen Passphrase)."
         };
-        old.zeroize();
-        new.zeroize();
         drop(gate);
         let api = generic_failure("Passphrase ändern", &reason);
         return Err(ApiError {
@@ -1083,8 +1511,6 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
         new_pool.close().await;
         ctx.session.clear();
         st.sessions.clear();
-        old.zeroize();
-        new.zeroize();
         drop(gate);
         let api = generic_failure("Passphrase ändern", &e);
         return Err(ApiError {
@@ -1096,9 +1522,10 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
             ..api
         });
     }
+    drop(old);
     ctx.set_pool(new_pool.clone());
-    ctx.session.set(new.clone());
-    old.zeroize();
+    // Die Sitzung hält eine eigene, beim Ersetzen überschriebene Kopie.
+    ctx.session.set(new.to_string());
     st.sessions.retain_only(id);
     crate::scheduler::tick::resume(&ctx).await;
     if let Err(e) = crate::db::repo::audit_log::with_actor(
@@ -1124,7 +1551,7 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
             Ok(o) => tracing::info!("Backup nach Passphrase-Wechsel: {}", o.file_path),
             Err(e) => tracing::error!("Backup nach Passphrase-Wechsel fehlgeschlagen: {e}"),
         }
-        new.zeroize();
+        // `new` wird hier beim Drop überschrieben.
     });
     tracing::info!(target: "klein_buch_lib::auth", "Passphrase geändert");
     Ok(Json(serde_json::json!({ "state": "ok", "backupStarted": true })).into_response())

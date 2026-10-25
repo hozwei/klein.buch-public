@@ -88,6 +88,9 @@ pub struct AppCtx {
     pub downloads: crate::downloads::DownloadStore,
     /// Uploads aus `POST /api/upload/{art}` bis zum Verbrauch (W7).
     pub uploads: crate::uploads::UploadStore,
+    /// Hinweise aus Prüfungen im gesperrten Zustand (Serverstart), beim nächsten
+    /// Entsperren in die Inbox (Lauf F4b, R3-014).
+    pub deferred_notices: crate::notify::deferred::DeferredNotices,
 }
 
 impl AppCtx {
@@ -99,6 +102,7 @@ impl AppCtx {
         Self {
             downloads: crate::downloads::DownloadStore::new(&paths.data_dir),
             uploads: crate::uploads::UploadStore::new(&paths.data_dir),
+            deferred_notices: Default::default(),
             paths,
             pool: RwLock::new(None),
             session: BackupSession::default(),

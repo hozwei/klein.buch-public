@@ -155,6 +155,12 @@ async fn assert_rejected(srv: &TestServer, cookie: &str, kbk: &[u8], needle: &st
     let text = r.text();
     assert_eq!(r.json()["state"], "failed", "{needle}: {text}");
     assert!(text.contains(needle), "erwartet „{needle}“: {text}");
+    // W5-ERR-PATHS (Lauf F4c): keine Serverpfade in der Meldung an den Client.
+    let data_dir = srv.state.ctx.paths.data_dir.to_string_lossy().into_owned();
+    assert!(
+        !text.contains(&data_dir),
+        "{needle}: Serverpfad in der Meldung: {text}"
+    );
     assert!(staging_is_clean(srv), "{needle}: Staging nicht leer");
     assert!(!marker_exists(srv), "{needle}: Marker");
     assert!(!srv.state.writes_blocked(), "{needle}: Sperre aufgehoben");
@@ -1591,12 +1597,18 @@ async fn older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_releas
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
 
-    // Stand A: eine Rechnung. Danach zwei weitere (Nummern 2 und 3).
+    // Stand A: eine Rechnung. Danach zwei weitere (Nummern 2 und 3). Die
+    // Lock-Backups entstehen im Hintergrund; der Test wartet sie jeweils ab
+    // (Lauf F4d), sonst hängt die Zahl der Backup-Dateien unten am Timing und
+    // ein im Stand A vermerktes Backup würde nach dem Restore nachgeholt.
     let _ = locked_invoice(&srv, &cookie).await;
+    settle_lock_backups(&srv).await;
     let a = backup_now(&srv, &cookie).await;
     let a_id = a["historyId"].as_str().unwrap().to_string();
     let _ = locked_invoice(&srv, &cookie).await;
+    settle_lock_backups(&srv).await;
     let _ = locked_invoice(&srv, &cookie).await;
+    settle_lock_backups(&srv).await;
     let year = scalar_i64(&srv, "SELECT MAX(fiscal_year) FROM invoices").await;
     assert_eq!(
         scalar_i64(
@@ -2440,5 +2452,101 @@ async fn restore_over_other_instance_with_lower_counters_asks_to_raise() {
         )
         .await,
         1
+    );
+}
+
+/// W14-037 (Lauf F4a): Entsperren mit Migration (Pflicht-Backup + Umstellung)
+/// über die Wartezeit der Anmelde-Route hinaus antwortet 202 mit
+/// Ticket-Cookie; die Abholung liefert die Sitzung, die Datenbank ist
+/// migriert. Die Wartezeit ist hier auf 0 verkürzt (statt einer künstlich
+/// verzögerten Migration: jede echte Migration dauert länger).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn slow_unlock_with_migration_answers_202_and_poll_delivers_session() {
+    use axum::http::header;
+    let srv = test_server();
+    let _cookie = setup(&srv).await;
+    srv.state.ctx.take_pool().unwrap().close().await;
+    srv.state.ctx.session.clear();
+    let db = srv.state.ctx.paths.db_file.clone();
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = db.as_os_str().to_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+    let old = EXPECTED_SCHEMA_VERSION - 1;
+    {
+        let _serial = kdf_serial().await;
+        let pool = klein_buch_lib::db::open_pool(&db, Some(PASS))
+            .await
+            .unwrap();
+        migrator_without_last().run(&pool).await.unwrap();
+        pool.close().await;
+    }
+    srv.state
+        .set_login_sync_wait_for_tests(std::time::Duration::ZERO);
+    let _serial = kdf_serial().await;
+    let code = next_totp(&srv);
+    let r = send(
+        &srv.app,
+        post(
+            "/api/auth/login",
+            &serde_json::json!({ "passphrase": PASS, "totpCode": code }).to_string(),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text());
+    let ticket = r
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|raw| {
+            raw.split(';')
+                .next()
+                .and_then(|c| c.strip_prefix("__Host-kb_login="))
+                .map(str::to_string)
+        })
+        .expect("Ticket-Cookie");
+    let mut done = None;
+    for _ in 0..1200 {
+        let mut req = post("/api/auth/login/poll", "{}", None, None);
+        req.headers_mut().insert(
+            header::COOKIE,
+            format!("__Host-kb_login={ticket}").parse().unwrap(),
+        );
+        let r = send(&srv.app, req).await;
+        if r.status != StatusCode::ACCEPTED {
+            done = Some(r);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let done = done.expect("Entsperren nach höchstens 60 s fertig");
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text());
+    let cookie = session_cookie(&done);
+    let s = send(&srv.app, get("/api/auth/status", Some(&cookie))).await;
+    assert_eq!(s.json()["state"], "ok");
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'schema_version'"
+        )
+        .await,
+        EXPECTED_SCHEMA_VERSION as i64,
+        "migriert"
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            &format!(
+                "SELECT COUNT(*) FROM backup_history WHERE trigger_reason = 'manual' \
+                 AND db_schema_version = {old}"
+            )
+        )
+        .await,
+        1,
+        "Pflicht-Backup vor der Umstellung"
     );
 }

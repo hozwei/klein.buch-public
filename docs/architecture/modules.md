@@ -74,6 +74,7 @@ Zweigeteilt: **Generator** (Core, pur) baut CII-XML aus Domain-Daten,
 | `einvoice::parser` | Core | CII + UBL (Empfang, ADR 0024), ZUGFeRD-PDF-Extract (XML aus PDF/A-3-Embedded-File), ZUGFeRD-Profile-Whitelist `check_profile_whitelist` (akzeptiert `en16931`/`extended`/`xrechnung`, lehnt `minimum`/`basic-wl` mit `ParseError::UnsupportedProfile` ab — ADR 0037 D-73) |
 | `einvoice::validator` | Shell | `validate(xml, sidecar_dir)`: KoSIT-Sidecar-Aufruf, Rückgabe als strukturierter `ValidationReport` |
 | `einvoice::mustang_bridge` | Shell | `create_zugferd` (PDF + XML → PDF/A-3 mit eingebettetem XML), `extract_xml` (Empfang, Roh-XML-Viewer) |
+| `einvoice::sidecar_health` | Shell | Health-Check beim Serverstart (Lauf F4b, R3-014): Launcher, JARs, XRechnung-Konfiguration, `java -version` wie im Launcher; Ergebnis ins Log und als zurückgestellter Inbox-Hinweis (`notify::deferred`) |
 
 **Pipeline** (Festschreiben, `../ARCHITECTURE.md` §4.1):
 `generator::to_xrechnung` → `validator::validate` (KoSIT) →
@@ -300,6 +301,7 @@ ADRs: 0026 (im Kontext EÜR-Export), 0039 (E10, Downloads statt Server-Pfade).
 | Datei | Schicht | Verantwortung |
 |---|---|---|
 | `notify::store` | Shell | CRUD auf `notifications`: `create` (mit `dedup_key` idempotent, `None` bei Treffer), `list`, `count_unread`, `dismiss`, `dismiss_all` |
+| `notify::deferred` | Shell | Hinweise aus dem gesperrten Zustand (Serverstart) im Speicher; beim Entsperren bzw. nach der Einrichtung in die Inbox, idempotent über `dedup_key` (Lauf F4b) |
 | `notify::rules` | Shell | Schaltbare Regeln aus `notification_rules` (per Migration geseedet, u. a. `rule_backup_overdue`, `rule_backup_result`, `rule_invoice_overdue`, `rule_archive_integrity_failed`, `rule_fiscal_year_lock_pending`, `rule_monthly_doc_check`): `list`, `get`, `get_enabled_by_type`, `set_enabled` |
 | `notify::mod` | Shell | `emit` (schreibt in die Inbox, idempotent über `dedup_key`); einen Kanal außerhalb der Inbox gibt es nicht (Trait `Notifier`/`InboxOnly` mit Lauf F entfernt, D-16) |
 
@@ -397,8 +399,13 @@ HTTP-Dispatcher (`server::dispatch`) aufruft (ADR 0039 Nr. 19–21).
 **Registry** (`commands::registry`). Jeder Eintrag nennt Name, Weg (`Route`:
 `Cmd` = über `POST /api/cmd/{name}` erreichbar; `Replaced` = eigene Route für
 Auth, Upload oder Download; `Dropped` = Desktop-Funktion, entfällt; `Blocked` =
-im Server gesperrt, z. B. `mail_oauth_*`), `Auth` (`Public`/`Session`/`Reauth`),
-`Cost` (`Cheap`/`Render`/`Jvm`/`Kdf`/`Backup`), `Kind` (`Read`/`Write`/`Job`)
+im Server gesperrt, z. B. `mail_oauth_*`), `Auth` (`Public`/`Session`/`Reauth`/
+`Conditional` — Re-Auth nur für Änderungen, die der Kern über
+`commands::reauth::require_fresh` verlangt, z. B. IBAN/BIC/§19 im Verkäuferprofil,
+Lauf F4a),
+`Cost` (`Cheap`/`Render`/`Jvm`/`Kdf`/`Backup`), `Kind` (`Read`/`Write`/`Job` —
+je Command ausdrücklich in `registry::classified_kind`, nicht aus dem Namen
+abgeleitet; ein Test lehnt nicht eingestufte Commands ab, Lauf F4b)
 und `body_limit`. Was nicht `Route::Cmd` hat, beantwortet der Dispatcher mit 404.
 
 **Disziplin.** Jeder Kern ist dünn:
@@ -437,13 +444,15 @@ und §3; Bedrohungsmodell: `security.md`.
 | `server::startup` | fail-closed-Prüfungen vor dem Port-Bind (Sperre `/data/.klein-buch.lock`, Mounts, `db::prepare_filesystem`, Instanz-Marker, keine Klartext-DB, `0o400`-Selbsttest, `<data>/tmp` leeren, Backup-Teildateien entfernen); `sweep_tmp`/`sweep_partial_backups` für den stündlichen Sweeper (Reste älter als 6 h, D-13); Archivpfad-Stichprobe beim Entsperren |
 | `server::instance` | Instanz-Marker `/data/.klein-buch-instance` |
 | `server::state` | Zustand `setup`/`locked`/`unlocked`, Sitzungen, Jobs, Lastgrenzen, Setup-Token (nur stderr) |
-| `server::auth` | Einrichtung, Anmeldung = Entsperren, Re-Auth, „Datenbank sperren", Passphrase- und TOTP-Wechsel |
-| `server::totp`, `server::session`, `server::ratelimit` | TOTP (RFC 6238) + Einmal-Codes in `/data/auth/`; Cookie `__Host-kb_session`; Wartezeiten je Gerät/IP ohne Selbstaussperrung |
-| `server::dispatch`, `server::jobs`, `server::idempotency` | `POST /api/cmd/{name}` nach Registry; Jobs `202` + `GET /api/jobs/{id}`; Idempotenz-Schlüssel |
+| `server::auth` | Einrichtung, Anmeldung = Entsperren, Re-Auth, „Datenbank sperren", Passphrase- und TOTP-Wechsel, Sitzungsübersicht und „andere abmelden“ (Lauf F4a) |
+| `server::totp`, `server::session`, `server::ratelimit` | TOTP (RFC 6238) + Einmal-Codes in `/data/auth/` (Replay als `Check::Replay`); Cookie `__Host-kb_session`, Folgenummer je Anmeldung, Frische der Anmeldung; Wartezeiten je Gerät/IP ohne Selbstaussperrung, Obergrenze von 100 Fehlversuchen in Folge ohne Gerätecookie (`/data/auth/totp-lock.json`) |
+| `server::pending` | Anmeldung bzw. Einrichtung über 25 s hinaus: 202 mit Ticket-Cookie, Abholung über `POST /api/auth/login/poll` (W14-037) |
+| `server::passphrase_policy` | Prüfung neuer Passphrasen: Sperrliste (`passphrase_blocklist.txt`), triviale Muster, Kontext aus dem Profil, Höchstlänge (ASVS V2.1.7) |
+| `server::dispatch`, `server::jobs`, `server::idempotency` | `POST /api/cmd/{name}` nach Registry; Jobs `202` + `GET /api/jobs/{id}`; Idempotenz-Schlüssel je Anmeldung (401/403 nicht gespeichert); bedingte Re-Auth über `commands::reauth` |
 | `server::uploads`, `server::files` | `POST /api/upload/{art}` (multipart, gestreamt); `GET /files/download/{id}`, `GET /files/archive/{id}` (hash-geprüft, auditiert) |
-| `server::headers`, `server::limits`, `server::http` | CSP mit Skript-Hashes, HSTS, Cache-Control, SPA-Auslieferung; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout und geordnetem Herunterfahren |
-| `server::errors`, `server::logging` | Fehlerabbildung auf HTTP (z. B. `Locked` → 423); Log ohne Geheimnisse (kein `PRAGMA key` im Log) |
-| `server::health`, `server::legal` | `/healthz` (über Loopback mit Zustand und `offsite`); `/legal/` (Lizenzen, Quellen) ohne Sitzung |
+| `server::headers`, `server::limits`, `server::http` | CSP mit Skript-Hashes, HSTS, Cache-Control, SPA-Auslieferung; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout, höchstens 256 Verbindungen, Schreib-Leerlauf 30 s und geordnetem Herunterfahren; `CatchPanicLayer` (500 mit `ref`) und `charset=utf-8` für Textantworten (Lauf F4b) |
+| `server::errors`, `server::logging` | Fehlerabbildung auf HTTP (z. B. `Locked` → 423); Log ohne Geheimnisse (kein `PRAGMA key` im Log), eine Zeile je Ereignis (`OneLine`), Zugriffsprotokoll mit `ip=`, `req=` (= `ref` interner Fehler, auch in abgekoppelten Tasks) und `sess=` (Lauf F4c) |
+| `server::health`, `server::legal` | `/healthz` (über Loopback ohne Weiterleitungs-Header mit Zustand und `offsite`, W14-006); `/legal/` (Lizenzen, Quellen, gestreamt) ohne Sitzung |
 
 **Tests.** `tests/server_*_test.rs` (u. a. `auth`, `contract`, `files`,
 `jobs`, `legal`, `limits`, `restore`, `secrets`, `startup`, `targets`,
@@ -465,7 +474,7 @@ ADRs: 0039 (E1–E17), 0014 (AGPL §13, `/legal/`).
 | `seed.rs` | Seed von `/inputs` aus dem Image mit `.seed-manifest.json`: fehlende Dateien kopieren, unveränderte ersetzen, vom Nutzer geänderte nie anfassen (neue Fassung je Fassung einmal als `<name>.neu`, gemerkt in `offered`, Hinweis mit `dedup_key` in die Inbox; D-10) |
 | `secrets.rs` | Zugangsdaten in der Tabelle `secrets` der verschlüsselten DB (Migration 0031, E6): `get`, `set`, `delete`; Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie in Log, Audit, Migrations- oder DSGVO-Export |
 | `uploads.rs`, `downloads.rs` | Upload-Ablage (`<data>/tmp/uploads/<uuid>`, Typprüfung am Inhalt, Größe je Art, Platzprüfung, höchstens 1 h) und Download-Ablage (`<data>/tmp/downloads/<uuid>/<Dateiname>`, Exporte einmal abrufbar, Vorschauen mehrfach) — E10 |
-| `nettest.rs` | Verbindungstests (SMTP, SFTP): Port-Allowlist, höchstens 10 Tests je Minute, Fehler ohne Unterscheidung, SFTP-Fingerprint aus der letzten Probe (10 min) |
+| `nettest.rs` | Verbindungstests (SMTP, SFTP): Port-Allowlist, höchstens 10 Tests je Minute, Fehler ohne Unterscheidung, SFTP-Fingerprint aus der letzten Probe (10 min), `check_host` (nur Hostname oder IP, Lauf F4c) |
 | `build_info.rs` | Version, Commit, Tag, Quell-URL (AGPL §13; `GET /api/public/info`, `app_info`) |
 | `clock.rs` | Zentrale Uhr in Europe/Berlin (E12); kein `chrono::Local` im Produktivcode; in Tests je Thread fixierbar |
 | `limits.rs` | Lastgrenzen für Typst, JVM-Starts und Passphrase-KDF außerhalb der Runtime (`run_blocking`, Semaphoren) |

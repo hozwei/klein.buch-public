@@ -44,9 +44,16 @@ Beispiel-Muster (nicht zum Übernehmen):
 Namen von Familienmitgliedern, "passwort123" und alle Passwörter, die Du
 schon irgendwo anders verwendest.
 
-Klein.Buch erzwingt nur die Mindestlänge von 16 Zeichen. Alles andere
-ist Empfehlung. Du gibst die Passphrase zweimal ein, damit ein
-Tippfehler nicht unbemerkt bleibt.
+Klein.Buch verlangt mindestens 16 Zeichen und lehnt Passphrasen ab, die
+zu leicht zu erraten sind: bekannte Sätze und häufige Passwörter (auch
+Beispiele aus Anleitungen), einfache Muster wie Wiederholungen oder
+Tastaturreihen ("qwertzuiop…") sowie Passphrasen, die im Wesentlichen
+nur aus Deinem Firmennamen oder Deiner E-Mail-Adresse bestehen. Du
+siehst dann die Meldung "zu leicht zu erraten" und wählst eine andere.
+Geprüft wird schon, bevor der QR-Code erscheint, und noch einmal beim
+Passwort-Wechsel; eine bereits eingerichtete Passphrase bleibt gültig.
+Du gibst die Passphrase zweimal ein, damit ein Tippfehler nicht
+unbemerkt bleibt.
 
 ## Der Setup-Token
 
@@ -109,7 +116,14 @@ und gibst einen Deiner Einmal-Codes ein.
 Eine Anmeldung gilt für diesen Browser. Nach 30 Minuten ohne Aktivität
 und spätestens nach 12 Stunden musst Du Dich neu anmelden. Im Hauptmenü
 beendet "Abmelden" nur die Anmeldung in diesem Browser. "Datenbank
-sperren" schließt die Datenbank und meldet alle Geräte ab.
+sperren" schließt die Datenbank und meldet alle Geräte ab. Welche
+Browser gerade angemeldet sind, siehst Du unter "Einstellungen" →
+"Sicherheit & Anmeldung"; dort meldest Du auch alle anderen ab.
+
+Nach einem Update kann die erste Anmeldung länger dauern, weil
+Klein.Buch vorher ein Backup anlegt und die Datenbank umstellt. Die
+Anmeldemaske wartet dann, bis das fertig ist; lade die Seite in dieser
+Zeit nicht neu.
 
 ## Nach einem Neustart ist Klein.Buch gesperrt
 

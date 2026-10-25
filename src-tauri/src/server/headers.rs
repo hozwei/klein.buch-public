@@ -206,9 +206,33 @@ pub async fn security_headers(
         .extensions()
         .get::<super::policy::ClientInfo>()
         .is_some_and(|c| c.https);
+    ensure_utf8_charset(response.headers_mut());
     let class = classify(&path, &response);
     apply(class, response.headers_mut(), &st.csp, https);
     response
+}
+
+/// ASVS 14.4.1 (Lauf F4b): Textantworten ohne Zeichensatz (`ServeDir` liefert
+/// `text/html`, `text/css`, `text/javascript` ohne Parameter) bekommen
+/// `charset=utf-8` — alle ausgelieferten Texte sind UTF-8 (Build der SPA,
+/// eigene Antworten). Vorhandene Parameter bleiben unangetastet.
+pub fn ensure_utf8_charset(headers: &mut HeaderMap) {
+    let Some(current) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return;
+    };
+    let lower = current.to_ascii_lowercase();
+    let textual = lower.starts_with("text/")
+        || lower.starts_with("application/javascript")
+        || lower.starts_with("image/svg+xml");
+    if !textual || lower.contains("charset=") {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!("{current}; charset=utf-8")) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
 }
 
 /// Statische Auslieferung der SPA; unbekannte Pfade bekommen `index.html`
@@ -221,6 +245,32 @@ pub fn spa_service(web_dir: &Path) -> ServeDir<ServeFile> {
 mod tests {
     use super::*;
 
+    /// ASVS 14.4.1 (Lauf F4b): Textantworten bekommen `charset=utf-8`.
+    #[test]
+    fn text_responses_get_utf8_charset() {
+        let run = |ct: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap());
+            ensure_utf8_charset(&mut h);
+            h.get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(run("text/html"), "text/html; charset=utf-8");
+        assert_eq!(run("text/css"), "text/css; charset=utf-8");
+        assert_eq!(run("text/javascript"), "text/javascript; charset=utf-8");
+        assert_eq!(run("image/svg+xml"), "image/svg+xml; charset=utf-8");
+        assert_eq!(run("text/html; charset=utf-8"), "text/html; charset=utf-8");
+        assert_eq!(run("text/csv; Charset=UTF-8"), "text/csv; Charset=UTF-8");
+        for unchanged in ["application/json", "application/pdf", "image/png"] {
+            assert_eq!(run(unchanged), unchanged);
+        }
+        let mut none = HeaderMap::new();
+        ensure_utf8_charset(&mut none);
+        assert!(none.get(header::CONTENT_TYPE).is_none());
+    }
     #[test]
     fn hashes_only_inline_scripts() {
         let html = r#"<html><head><script type="module" src="/_app/a.js"></script>

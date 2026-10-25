@@ -4,8 +4,9 @@
 //! (Vorlage, Paket, Broschüre, Angebots-Bundle) entstehen in
 //! `<data>/tmp/downloads/<uuid>/<Dateiname>`; der Kern gibt ein
 //! [`DownloadTicket`] zurück, der Browser holt die Datei über
-//! `GET /files/download/{id}`. Exporte sind einmalig abrufbar und verfallen
-//! nach [`EXPORT_TTL`], Vorschauen sind mehrfach abrufbar (PDF-Ansicht lädt
+//! `GET /files/download/{id}`. Exporte sind einmalig abrufbar (die Datei wird
+//! mit dem ersten Abruf gelöscht) und verfallen nach [`EXPORT_TTL`] (10 min),
+//! Vorschauen sind mehrfach abrufbar (PDF-Ansicht lädt
 //! nach) und verfallen nach [`PREVIEW_TTL`]. Abgelaufene werden bei jedem
 //! Registrieren und Abrufen gelöscht, Reste beim Serverstart
 //! und durch den stündlichen Sweeper (`<data>/tmp`).
@@ -20,8 +21,16 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result};
 
-pub const EXPORT_TTL: Duration = Duration::from_secs(3600);
+/// Lauf F4b (W14-014): Klartext-Exporte liegen höchstens 10 min auf dem
+/// persistenten Volume (`<data>/tmp`, mit in Snapshots von `/data`); der erste
+/// Abruf entnimmt sie und löscht die Datei, sobald der Stream endet — auch bei
+/// Abbruch (dann den Export neu erzeugen).
+pub const EXPORT_TTL: Duration = Duration::from_secs(600);
 pub const PREVIEW_TTL: Duration = Duration::from_secs(600);
+/// Nicht registrierte Download-Ordner (Kern schreibt noch bzw. Vorgang
+/// abgebrochen) erst nach dieser Zeit löschen: ein großer Export (Migration,
+/// DSGVO) kann länger als [`EXPORT_TTL`] brauchen, bis er registriert ist.
+pub const ORPHAN_TTL: Duration = Duration::from_secs(3600);
 const DIR: &str = "downloads";
 
 /// Was der Kern dem Browser zurückgibt.
@@ -195,7 +204,7 @@ impl DownloadStore {
     }
 
     /// Entfernt abgelaufene Einträge samt Dateien, dazu nicht registrierte
-    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`EXPORT_TTL`] sind.
+    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`ORPHAN_TTL`] sind.
     pub fn sweep(&self) {
         let now = Instant::now();
         let (expired, known): (Vec<PathBuf>, Vec<String>) = {
@@ -228,7 +237,7 @@ impl DownloadStore {
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age > EXPORT_TTL);
+                .is_some_and(|age| age > ORPHAN_TTL);
             if old && !known.contains(&name) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
@@ -338,6 +347,29 @@ mod tests {
         assert!(file.is_file(), "Sperren löscht das Backup nicht");
     }
 
+    /// W14-014 (Lauf F4b): Exporte verfallen nach 10 min; ein Ordner, in den
+    /// ein Kern noch schreibt (nicht registriert), bleibt bis [`ORPHAN_TTL`].
+    #[test]
+    fn exports_expire_after_ten_minutes_unregistered_dirs_survive() {
+        assert_eq!(EXPORT_TTL, Duration::from_secs(600));
+        assert!(ORPHAN_TTL > EXPORT_TTL);
+        let dir = tempfile::tempdir().unwrap();
+        let store = DownloadStore::new(dir.path());
+        let (_, writing) = store.prepare("migration.zip").unwrap();
+        std::fs::write(&writing, b"PK").unwrap();
+        let ticket = store
+            .put_bytes("EÜR.csv", b"a;b", DownloadKind::Export)
+            .unwrap();
+        {
+            let id = Uuid::parse_str(&ticket.download_id).unwrap();
+            let mut map = store.lock();
+            map.get_mut(&id).unwrap().expires =
+                Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        }
+        store.sweep();
+        assert!(store.take(&ticket.download_id).is_none(), "abgelaufen");
+        assert!(writing.is_file(), "Ordner im Schreiben bleibt");
+    }
     #[test]
     fn file_names_are_cleaned() {
         assert_eq!(safe_file_name("a\"b\r\n.pdf", "x"), "ab.pdf");

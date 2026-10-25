@@ -570,10 +570,27 @@ async fn reauth_commands_require_fresh_reauth() {
         .collect();
     assert_eq!(
         reauth_cmds.len(),
-        26,
+        29,
         "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d) \
-         + invoices_void_draft (F2a) + backup_download (F3a)"
+         + invoices_void_draft (F2a) + backup_download (F3a) + euer_export_datev/_elster/_pdf \
+         + payment_accounts_set_active (F4a) - seller_profile_upsert (F4a: bedingt)"
     );
+    // W14-038 (Lauf F4a): genau ein Command mit bedingter Re-Auth; die Matrix
+    // prüft `seller_profile_reauth_matrix`.
+    let conditional: Vec<&str> = REGISTRY
+        .iter()
+        .filter(|c| c.exposed() && c.auth == Auth::Conditional)
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(conditional, vec!["seller_profile_upsert"]);
+    for name in [
+        "euer_export_datev",
+        "euer_export_elster",
+        "euer_export_pdf",
+        "payment_accounts_set_active",
+    ] {
+        assert!(reauth_cmds.contains(&name), "{name} (W14-028)");
+    }
     for name in &reauth_cmds {
         let r = send(
             &srv.app,
@@ -1032,4 +1049,670 @@ async fn shutdown_does_not_wait_forever_for_running_tick() {
         "Passphrase aus dem RAM"
     );
     drop(tick);
+}
+
+// ---- Lauf F4a: Anmeldung, Sitzung, Geheimnisse im Speicher ---------------------
+
+/// Gerätecookie (`name=wert`) aus einer Antwort.
+fn device_cookie_of(r: &Reply) -> Option<String> {
+    r.headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|v| v.starts_with("__Host-kb_device="))
+        .map(|v| v.split(';').next().unwrap().to_string())
+}
+
+fn profile_args(
+    iban: Option<&str>,
+    bic: Option<&str>,
+    klein: bool,
+    street: &str,
+) -> serde_json::Value {
+    serde_json::json!({ "input": {
+        "name": "Beispiel IT-Service", "legalForm": null, "street": street,
+        "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",
+        "taxNumber": "123/456/78901", "vatId": null, "email": "kontakt@example.org",
+        "phone": null, "iban": iban, "bic": bic, "logoFilename": null,
+        "isKleinunternehmer": klein, "defaultPdfTemplate": "default",
+        "defaultCurrency": "EUR",
+        "confirmWaiveParagraph19": if klein { None } else { Some(true) }
+    }})
+}
+
+async fn stored_iban(srv: &TestServer, cookie: &str) -> Option<String> {
+    let r = call(
+        &srv.app,
+        cookie,
+        "seller_profile_get",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    r.json()["iban"].as_str().map(str::to_string)
+}
+
+/// W14-038 (Lauf F4a): Re-Auth-Matrix des Verkäuferprofils. Re-Auth nur bei
+/// IBAN, BIC oder §19-Status — und nicht in den ersten 5 min nach Einrichtung
+/// bzw. Anmeldung. Eine 403 wird nicht als Idempotenz-Ergebnis gespeichert.
+#[tokio::test]
+async fn seller_profile_reauth_matrix() {
+    use klein_buch_lib::server::session::REAUTH_WINDOW;
+    const IBAN_A: &str = "DE02 1203 0000 0000 2020 51";
+    const IBAN_B: &str = "DE89370400440532013000";
+    const BIC: &str = "BYLADEM1001";
+    let later = REAUTH_WINDOW + std::time::Duration::from_secs(1);
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let upsert = "seller_profile_upsert";
+
+    // 1. Direkt nach der Einrichtung: Zahlungsdaten ohne Re-Auth.
+    let r = call(
+        &srv.app,
+        &cookie,
+        upsert,
+        profile_args(Some(IBAN_A), Some(BIC), true, "Weg 1"),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "frisch eingerichtet: {}",
+        r.text()
+    );
+
+    // 2. Fünf Minuten später: Adresse und Schreibweise frei, Zahlungsdaten
+    // und §19-Status nicht.
+    srv.state.sessions.age_for_tests(later);
+    let r = call(
+        &srv.app,
+        &cookie,
+        upsert,
+        profile_args(Some(IBAN_A), Some(BIC), true, "Weg 2"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "Adresse: {}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie,
+        upsert,
+        profile_args(
+            Some("de02120300000000202051"),
+            Some(" BYLADEM1001 "),
+            true,
+            "Weg 2",
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "nur Schreibweise: {}", r.text());
+    for (what, args) in [
+        ("IBAN", profile_args(Some(IBAN_B), Some(BIC), true, "Weg 2")),
+        ("IBAN leeren", profile_args(None, Some(BIC), true, "Weg 2")),
+        (
+            "BIC",
+            profile_args(Some(IBAN_A), Some("COBADEFFXXX"), true, "Weg 2"),
+        ),
+        (
+            "§19-Verzicht",
+            profile_args(Some(IBAN_A), Some(BIC), false, "Weg 2"),
+        ),
+    ] {
+        let r = call(&srv.app, &cookie, upsert, args).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{what}: {}", r.text());
+        assert_eq!(r.json()["code"], "reauth_required", "{what}");
+    }
+    assert_eq!(
+        stored_iban(&srv, &cookie).await.as_deref(),
+        Some("de02120300000000202051"),
+        "unverändert (zuletzt gespeicherte Schreibweise)"
+    );
+
+    // 3. 403 mit Idempotenz-Schlüssel, Re-Auth (rotiert die ID), dieselbe
+    // Anfrage mit demselben Schlüssel: wird jetzt ausgeführt.
+    let body = profile_args(Some(IBAN_B), Some(BIC), true, "Weg 2").to_string();
+    let r = send(
+        &srv.app,
+        post(
+            "/api/cmd/seller_profile_upsert",
+            &body,
+            Some(&cookie),
+            Some("profil-1"),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
+    let fresh = reauth_cookie(&srv, &cookie).await;
+    let r = send(
+        &srv.app,
+        post(
+            "/api/cmd/seller_profile_upsert",
+            &body,
+            Some(&fresh),
+            Some("profil-1"),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "nach Re-Auth: {}", r.text());
+    assert_eq!(r.json()["iban"], IBAN_B);
+
+    // 4. Re-Auth abgelaufen: wieder Pflicht.
+    srv.state.sessions.age_for_tests(later);
+    let r = call(
+        &srv.app,
+        &fresh,
+        upsert,
+        profile_args(Some(IBAN_A), Some(BIC), true, "Weg 2"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text());
+
+    // 5. Eine frische Anmeldung (Passphrase + TOTP) zählt 5 min.
+    let login_cookie = session_cookie(&login(&srv, PASS).await);
+    let r = call(
+        &srv.app,
+        &login_cookie,
+        upsert,
+        profile_args(Some(IBAN_A), Some(BIC), true, "Weg 2"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "frisch angemeldet: {}", r.text());
+    // … aber nicht für Commands mit fester Re-Auth-Pflicht (W14: Anmeldung
+    // ist keine Re-Auth).
+    let r = send(
+        &srv.app,
+        post(
+            "/api/cmd/payment_accounts_set_active",
+            "{}",
+            Some(&login_cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(r.json()["code"], "reauth_required", "{}", r.text());
+}
+
+/// W14-005 (Lauf F4a): Sitzungsübersicht und „andere abmelden“ (Re-Auth,
+/// Audit mit Anzahl).
+#[tokio::test]
+async fn sessions_overview_and_revoke_others() {
+    let srv = test_server();
+    let a = setup(&srv).await;
+    let b = session_cookie(&login(&srv, PASS).await);
+    let r = send(&srv.app, get("/api/auth/sessions", Some(&a))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let list = r.json();
+    assert_eq!(list["count"], 2);
+    let sessions = list["sessions"].as_array().unwrap();
+    assert_eq!(sessions.iter().filter(|s| s["current"] == true).count(), 1);
+    for s in sessions {
+        assert_eq!(s["id"].as_str().unwrap().len(), 8, "{s}");
+        let login_at = s["loginAt"].as_str().unwrap();
+        assert!(
+            klein_buch_lib::clock::db_utc(login_at).is_some(),
+            "UTC wie DB-Zeitstempel: {login_at}"
+        );
+        assert!(!s.to_string().contains(&a) && !s.to_string().contains(&b));
+    }
+    assert_eq!(
+        send(&srv.app, get("/api/auth/sessions", None)).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let revoke = |cookie: &str| post("/api/auth/sessions/others/revoke", "{}", Some(cookie), None);
+    let r = send(&srv.app, revoke(&a)).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.json()["code"], "reauth_required");
+    let a2 = reauth_cookie(&srv, &a).await;
+    let r = send(&srv.app, revoke(&a2)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(r.json()["revoked"], 1, "nur die fremde Anmeldung zählt");
+    let r = send(&srv.app, get("/api/auth/status", Some(&b))).await;
+    assert_eq!(
+        r.json()["state"],
+        "login_required",
+        "andere Sitzung beendet"
+    );
+    let r = send(&srv.app, get("/api/auth/sessions", Some(&a2))).await;
+    assert_eq!(r.json()["count"], 1);
+    let details: String = {
+        let pool = srv.state.ctx.pool().unwrap();
+        sqlx::query_scalar(
+            "SELECT details_json FROM audit_log WHERE action = 'auth.sessions_revoked'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert!(details.contains("\"count\":1"), "{details}");
+}
+
+/// W14-033 (Lauf F4a): Idempotenz-Schlüssel gelten nur innerhalb einer
+/// Anmeldung — auch über die Rotation durch Re-Auth hinweg.
+#[tokio::test]
+async fn idempotency_key_is_bound_to_the_login() {
+    let srv = test_server();
+    let a = setup(&srv).await;
+    let b = session_cookie(&login(&srv, PASS).await);
+    let body = serde_json::json!({"input": {
+        "contactType": "customer", "name": "Schlüssel GmbH", "street": "Weg 1",
+        "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",
+        "acceptsEinvoice": true
+    }})
+    .to_string();
+    let create = |cookie: &str| {
+        post(
+            "/api/cmd/contacts_create",
+            &body,
+            Some(cookie),
+            Some("gleicher-schluessel"),
+        )
+    };
+    let r1 = send(&srv.app, create(&a)).await;
+    assert_eq!(r1.status, StatusCode::OK, "{}", r1.text());
+    let r2 = send(&srv.app, create(&b)).await;
+    assert_eq!(r2.status, StatusCode::OK, "{}", r2.text());
+    assert_ne!(
+        r1.json()["id"],
+        r2.json()["id"],
+        "andere Anmeldung: eigene Ausführung"
+    );
+    let r3 = send(&srv.app, create(&a)).await;
+    assert_eq!(
+        r3.json()["id"],
+        r1.json()["id"],
+        "gleiche Anmeldung: Wiederholung"
+    );
+    let a2 = reauth_cookie(&srv, &a).await;
+    let r4 = send(&srv.app, create(&a2)).await;
+    assert_eq!(
+        r4.json()["id"],
+        r1.json()["id"],
+        "nach Rotation dieselbe Anmeldung"
+    );
+}
+
+/// W14-015/W14-033 (Lauf F4a): „Datenbank sperren“ leert gespeicherte
+/// Antworten, beendete Job-Ergebnisse und offene Anmelde-Ergebnisse.
+#[tokio::test]
+async fn lock_clears_stored_results_and_pending_logins() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let body = serde_json::json!({"input": {
+        "contactType": "customer", "name": "Gespeichert GmbH", "street": "Weg 1",
+        "postalCode": "12345", "city": "Musterstadt", "countryCode": "DE",
+        "acceptsEinvoice": true
+    }})
+    .to_string();
+    let r = send(
+        &srv.app,
+        post(
+            "/api/cmd/contacts_create",
+            &body,
+            Some(&cookie),
+            Some("k-1"),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!srv.state.idem.is_empty());
+    let job = srv.state.jobs.reserve("backup_create_now").unwrap();
+    srv.state.jobs.finish(
+        job,
+        Ok(serde_json::json!({"download": {"downloadId": "x"}})),
+    );
+    assert!(srv.state.jobs.view(job).is_some());
+    let _parked = srv.state.pending_auth.park().unwrap();
+    let r = send(&srv.app, post("/api/auth/lock", "{}", Some(&cookie), None)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(srv.state.idem.is_empty(), "Idempotenz-Speicher leer");
+    assert!(srv.state.jobs.view(job).is_none(), "Job-Ergebnis verworfen");
+    assert!(
+        srv.state.pending_auth.is_empty(),
+        "offene Anmeldungen verworfen"
+    );
+    assert!(srv.state.ctx.session.get().is_none());
+}
+
+/// W14-004 (Lauf F4a, NIST SP 800-63B §5.2.2): Nach 100 Fehlversuchen in Folge
+/// ohne Gerätecookie ist die TOTP-Anmeldung ohne Gerätecookie gesperrt —
+/// Einmal-Code und bekanntes Gerät bleiben, eine solche Anmeldung hebt die
+/// Sperre auf; Hinweise in der Inbox; der Zähler übersteht einen Neustart.
+#[tokio::test]
+async fn totp_streak_lock_spares_recovery_codes_and_known_devices() {
+    use klein_buch_lib::server::ratelimit::TOTP_LOCK_AFTER;
+    let srv = test_server();
+    let reply = setup_reply(&srv).await;
+    let cookie = session_cookie(&reply);
+    let device = device_cookie_of(&reply).unwrap();
+    let codes: Vec<String> = serde_json::from_value(reply.json()["recoveryCodes"].clone()).unwrap();
+    let notices = |title: &'static str| {
+        let pool = srv.state.ctx.pool().unwrap();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM notifications WHERE title = ?")
+                .bind(title)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    srv.state
+        .ratelimit
+        .set_streak_for_tests(TOTP_LOCK_AFTER - 1);
+    // Der 100. Fehlversuch sperrt (Hinweis, da entsperrt).
+    let r = send(
+        &srv.app,
+        from_peer(
+            post("/api/auth/login", &login_body(PASS, "000000"), None, None),
+            "198.51.100.30:4000",
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert!(srv.state.ratelimit.totp_locked());
+    assert_eq!(notices("Anmeldung mit App-Code gesperrt").await, 1);
+    // Lauf F4d: Der Hinweis unterstellt keine Kenntnis der Passphrase (die
+    // Sperre ist schon mit falschen App-Codes auslösbar).
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        let body: String = sqlx::query_scalar(
+            "SELECT body FROM notifications WHERE title = 'Anmeldung mit App-Code gesperrt'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(body.contains("nicht verraten"), "{body}");
+        assert!(!body.contains("kennt"), "{body}");
+        assert!(body.contains("Einmal-Code gilt nur einmal"), "{body}");
+    }
+    // Gültiger TOTP ohne Gerätecookie: gesperrt, ohne KDF.
+    let kdf_before = srv.state.admission.admitted(Cost::Kdf);
+    let code = next_totp(&srv);
+    let r = send(
+        &srv.app,
+        from_peer(
+            post("/api/auth/login", &login_body(PASS, &code), None, None),
+            "198.51.100.31:4000",
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::TOO_MANY_REQUESTS, "{}", r.text());
+    assert_eq!(r.json()["code"], "totp_locked");
+    assert_eq!(
+        srv.state.admission.admitted(Cost::Kdf),
+        kdf_before,
+        "keine KDF"
+    );
+    // Re-Auth mit TOTP ohne Gerätecookie ebenso.
+    let code = next_totp(&srv);
+    let r = send(
+        &srv.app,
+        post(
+            "/api/auth/reauth",
+            &login_body(PASS, &code),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(r.json()["code"], "totp_locked", "{}", r.text());
+    // Neustart hebt die Sperre nicht auf.
+    let reloaded = klein_buch_lib::server::ratelimit::RateLimiter::load_or_create(
+        &srv.state.ctx.paths.data_dir,
+    )
+    .unwrap();
+    assert!(reloaded.totp_locked(), "Zähler in /data/auth");
+    // Bekanntes Gerät: TOTP-Anmeldung geht und hebt die Sperre auf.
+    let code = next_totp(&srv);
+    let mut req = from_peer(
+        post("/api/auth/login", &login_body(PASS, &code), None, None),
+        "198.51.100.32:4000",
+    );
+    req.headers_mut()
+        .insert(header::COOKIE, device.parse().unwrap());
+    let r = {
+        let _serial = kdf_serial().await;
+        send(&srv.app, req).await
+    };
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!srv.state.ratelimit.totp_locked());
+    assert_eq!(notices("Sperre der App-Code-Anmeldung aufgehoben").await, 1);
+    // Erneut gesperrt: ein Einmal-Code (neues Gerät) hebt sie ebenso auf.
+    srv.state.ratelimit.set_streak_for_tests(TOTP_LOCK_AFTER);
+    let body = serde_json::json!({ "passphrase": PASS, "recoveryCode": codes[0] }).to_string();
+    let r = {
+        let _serial = kdf_serial().await;
+        send(
+            &srv.app,
+            from_peer(
+                post("/api/auth/login", &body, None, None),
+                "198.51.100.33:4000",
+            ),
+        )
+        .await
+    };
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(!srv.state.ratelimit.totp_locked());
+    let r = login(&srv, PASS).await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "TOTP ohne Gerätecookie wieder frei: {}",
+        r.text()
+    );
+}
+
+/// Lauf F4d (Befund F4 S3 zu W14-004): Aussagekräftig ist eine falsche
+/// Passphrase nach **gültigem** App-Code. Ab drei in Folge entsteht genau ein
+/// dringender Hinweis „Gültiger App-Code mit falschem Daten-Passwort“
+/// (Neueinrichtung des App-Codes empfohlen); einzelne Tippfehler und falsche
+/// App-Codes lösen ihn nicht aus. Bei gesperrter Instanz (nach Neustart) folgt
+/// der Hinweis mit der nächsten erfolgreichen Anmeldung.
+#[tokio::test]
+async fn wrong_passphrase_after_valid_totp_warns_once_per_streak() {
+    const TITLE: &str = "Gültiger App-Code mit falschem Daten-Passwort";
+    const WRONG: &str = "falsch-aber-lang-genug-1234";
+    let srv = test_server();
+    let _ = setup(&srv).await;
+    async fn notices(srv: &TestServer) -> i64 {
+        let pool = srv.state.ctx.pool().unwrap();
+        sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE title = ?")
+            .bind(TITLE)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    }
+    // Zwei Tippfehler, dann Erfolg: kein Hinweis, Folge beendet.
+    for _ in 0..2 {
+        assert_eq!(login(&srv, WRONG).await.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(login(&srv, PASS).await.status, StatusCode::OK);
+    assert_eq!(notices(&srv).await, 0, "Tippfehler lösen nichts aus");
+    // Falsche App-Codes zählen nicht für diesen Hinweis.
+    for _ in 0..3 {
+        let r = send(
+            &srv.app,
+            post("/api/auth/login", &login_body(PASS, "000000"), None, None),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(notices(&srv).await, 0, "falsche App-Codes zählen nicht");
+    // (Erfolg setzt das Rate-Limit des Schlüssels zurück.)
+    assert_eq!(login(&srv, PASS).await.status, StatusCode::OK);
+    // Vier in Folge: genau ein Hinweis (beim dritten); der Erfolg danach
+    // schreibt ihn nicht erneut.
+    for _ in 0..4 {
+        assert_eq!(login(&srv, WRONG).await.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(notices(&srv).await, 1);
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        let (body, severity): (String, String) =
+            sqlx::query_as("SELECT body, severity FROM notifications WHERE title = ?")
+                .bind(TITLE)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(severity, "urgent");
+        assert!(body.contains("neu ein"), "{body}");
+    }
+    assert_eq!(login(&srv, PASS).await.status, StatusCode::OK);
+    assert_eq!(notices(&srv).await, 1, "ein Hinweis je Folge");
+
+    // Gesperrte Instanz: keine offene DB beim Erreichen — der Hinweis folgt
+    // mit der nächsten erfolgreichen Anmeldung.
+    let srv = restart(srv).await;
+    for _ in 0..3 {
+        assert_eq!(login(&srv, WRONG).await.status, StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(login(&srv, PASS).await.status, StatusCode::OK);
+    assert_eq!(notices(&srv).await, 2, "nachgeholt nach dem Entsperren");
+}
+
+/// ASVS V2.1.7/V2.1.2 (Lauf F4a): neue Passphrasen gegen Sperrliste, Muster
+/// und Profil (Firmenname/E-Mail); Höchstlänge 1024. Bestehende gelten weiter.
+#[tokio::test]
+async fn new_passphrases_are_checked_against_blocklist_patterns_and_profile() {
+    let srv = test_server();
+    // Vorprüfung schon beim Anfordern des QR-Codes (Ersteinrichtung).
+    let token = srv.state.setup_token_for_tests().unwrap();
+    let r = send(
+        &srv.app,
+        post(
+            "/api/auth/setup",
+            &serde_json::json!({
+                "setupToken": token, "step": "totp", "passphrase": "aaaaaaaaaaaaaaaaaaaa"
+            })
+            .to_string(),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert_eq!(r.json()["code"], "passphrase_common");
+    // Verbindlich im letzten Schritt (auch ohne Vorprüfung).
+    let r = setup_reply_with(&srv, "korrekt-pferd-batterie-klammer").await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert_eq!(r.json()["code"], "passphrase_common");
+    assert!(!srv.state.ctx.paths.db_file.exists(), "nichts angelegt");
+    let cookie = setup(&srv).await;
+    let r = call(
+        &srv.app,
+        &cookie,
+        "seller_profile_upsert",
+        profile_args(None, None, true, "Weg 1"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let change = |p: &str| {
+        post(
+            "/api/auth/passphrase",
+            &serde_json::json!({ "newPassphrase": p }).to_string(),
+            Some(&cookie),
+            None,
+        )
+    };
+    for (p, code) in [
+        ("Beispiel IT-Service 2026!", "passphrase_common"),
+        ("kontakt@example.org-2026", "passphrase_common"),
+        ("qwertzuiopasdfghjkl", "passphrase_common"),
+        ("Klein.Buch-Passwort-2026", "passphrase_common"),
+    ] {
+        let r = send(&srv.app, change(p)).await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{p}: {}",
+            r.text()
+        );
+        assert_eq!(r.json()["code"], code, "{p}");
+    }
+    let long = "Gletscher Moped Ahorn Tinte ".repeat(40);
+    let r = send(&srv.app, change(&long)).await;
+    assert_eq!(r.json()["code"], "passphrase_too_long", "{}", r.text());
+    // Bestehende (in diesem Test beliebige) Passphrase: Anmeldung geht weiter.
+    assert_eq!(login(&srv, PASS).await.status, StatusCode::OK);
+}
+
+/// W14-037 (Lauf F4a): Dauert die Anmeldung länger als die Wartezeit, kommt
+/// 202 mit Ticket-Cookie; die Abholung liefert genau einmal das Ergebnis.
+#[tokio::test]
+async fn slow_login_answers_202_and_poll_delivers_session_once() {
+    let srv = test_server();
+    let _ = setup(&srv).await;
+    srv.state
+        .set_login_sync_wait_for_tests(std::time::Duration::ZERO);
+    let poll = |ticket: Option<&str>| {
+        let mut req = post("/api/auth/login/poll", "{}", None, None);
+        if let Some(t) = ticket {
+            req.headers_mut().insert(
+                header::COOKIE,
+                format!("__Host-kb_login={t}").parse().unwrap(),
+            );
+        }
+        req
+    };
+    let ticket_of = |r: &Reply| {
+        r.headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|raw| {
+                raw.split(';')
+                    .next()
+                    .and_then(|c| c.strip_prefix("__Host-kb_login="))
+                    .map(str::to_string)
+            })
+    };
+    for (pass, expected) in [
+        (PASS, StatusCode::OK),
+        ("falsche-lange-passphrase-1", StatusCode::UNAUTHORIZED),
+    ] {
+        // KDF im Hintergrund-Task: bis zur Abholung serialisiert.
+        let _serial = kdf_serial().await;
+        let code = next_totp(&srv);
+        let r = send(
+            &srv.app,
+            post("/api/auth/login", &login_body(pass, &code), None, None),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::ACCEPTED, "{}", r.text());
+        assert_eq!(r.json()["state"], "pending");
+        let ticket = ticket_of(&r).expect("Ticket-Cookie");
+        let raw = r
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find(|v| v.starts_with("__Host-kb_login="))
+            .unwrap()
+            .to_string();
+        for attr in ["HttpOnly", "Secure", "SameSite=Strict", "Path=/"] {
+            assert!(raw.contains(attr), "{raw}");
+        }
+        let mut done = None;
+        for _ in 0..600 {
+            let r = send(&srv.app, poll(Some(&ticket))).await;
+            if r.status != StatusCode::ACCEPTED {
+                done = Some(r);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let done = done.expect("Ergebnis nach höchstens 30 s");
+        assert_eq!(done.status, expected, "{pass}: {}", done.text());
+        assert_eq!(ticket_of(&done).as_deref(), Some(""), "Ticket gelöscht");
+        if expected == StatusCode::OK {
+            let cookie = session_cookie(&done);
+            let s = send(&srv.app, get("/api/auth/status", Some(&cookie))).await;
+            assert_eq!(s.json()["state"], "ok");
+        }
+        let again = send(&srv.app, poll(Some(&ticket))).await;
+        assert_eq!(again.status, StatusCode::GONE, "nur einmal abholbar");
+        assert_eq!(again.json()["code"], "login_expired");
+    }
+    let r = send(&srv.app, poll(None)).await;
+    assert_eq!(r.status, StatusCode::GONE);
 }

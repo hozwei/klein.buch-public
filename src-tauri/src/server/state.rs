@@ -5,7 +5,7 @@
 //! sie entstehen beim Einrichten und Anmelden, enden per Timeout oder Abmelden;
 //! „Datenbank sperren“ schließt den Pool und beendet alle Sitzungen.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -19,6 +19,7 @@ use super::headers::Csp;
 use super::idempotency::IdempotencyStore;
 use super::jobs::JobRegistry;
 use super::limits::Admission;
+use super::pending::PendingAuths;
 use super::policy::HttpPolicy;
 use super::ratelimit::{PublicRateLimiter, RateLimiter};
 use super::session::{SessionId, SessionStore};
@@ -123,6 +124,11 @@ pub struct ServerState {
     pub db_gate: tokio::sync::RwLock<()>,
     /// Verschiebung der TOTP-Uhr in Sekunden (nur Tests).
     totp_clock_offset: AtomicI64,
+    /// Anmeldungen bzw. Einrichtungen über die Antwortzeit hinaus (W14-037).
+    pub pending_auth: PendingAuths,
+    /// Wartezeit der Anmelde-Route vor der Antwort 202 in ms
+    /// ([`super::pending::LOGIN_SYNC_WAIT`]; in Tests verkürzbar).
+    login_sync_wait_ms: AtomicU64,
 }
 
 impl ServerState {
@@ -154,6 +160,8 @@ impl ServerState {
             setup: Mutex::new(SetupState::default()),
             db_gate: tokio::sync::RwLock::new(()),
             totp_clock_offset: AtomicI64::new(0),
+            pending_auth: PendingAuths::default(),
+            login_sync_wait_ms: AtomicU64::new(super::pending::LOGIN_SYNC_WAIT.as_millis() as u64),
         })
     }
 
@@ -220,6 +228,24 @@ impl ServerState {
 
     pub fn set_pending_renew(&self, session: SessionId, secret: Vec<u8>) {
         self.setup_state().pending_renew = Some((session, secret));
+    }
+
+    /// Verwirft ein ausstehendes Geheimnis einer TOTP-Neueinrichtung
+    /// („Datenbank sperren“: die Sitzung ist beendet, W14-015).
+    pub fn clear_pending_renew(&self) {
+        self.setup_state().pending_renew = None;
+    }
+
+    /// Wartezeit der Anmelde-Route vor der Antwort 202 (W14-037).
+    pub fn login_sync_wait(&self) -> Duration {
+        Duration::from_millis(self.login_sync_wait_ms.load(Ordering::SeqCst))
+    }
+
+    /// Verkürzt die Wartezeit vor der Antwort 202 (nur Tests).
+    #[doc(hidden)]
+    pub fn set_login_sync_wait_for_tests(&self, wait: Duration) {
+        self.login_sync_wait_ms
+            .store(wait.as_millis() as u64, Ordering::SeqCst);
     }
 
     /// Ausstehendes Geheimnis einer TOTP-Neueinrichtung dieser Sitzung.

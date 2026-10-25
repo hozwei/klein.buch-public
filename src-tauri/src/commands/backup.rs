@@ -8,6 +8,7 @@ use crate::backup::{self, restore, BackupOutcome};
 use crate::config::Paths;
 use crate::db;
 use crate::error::{Error, Result};
+use crate::redact::redacted_debug;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -223,11 +224,12 @@ pub async fn backup_set_daily_time(
 }
 
 /// Argumente von [`backup_setup_passphrase`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupSetupPassphraseArgs {
     pub passphrase: String,
 }
+redacted_debug!(BackupSetupPassphraseArgs {} secret { passphrase });
 
 /// Onboarding: legt die DB **verschlüsselt** an (SQLCipher, Passphrase = DB-Key,
 /// ADR 0035), hängt den Pool in den State, speichert den Verifier, startet den
@@ -244,6 +246,9 @@ pub async fn backup_setup_passphrase(
     args: BackupSetupPassphraseArgs,
 ) -> Result<BackupOutcome> {
     let BackupSetupPassphraseArgs { passphrase } = args;
+    // Lauf F4a (W14-015): beim Verlassen überschreiben; die Sitzung hält eine
+    // eigene Kopie.
+    let passphrase = zeroize::Zeroizing::new(passphrase);
     let session = &ctx.session;
 
     let paths = ctx.paths.clone();
@@ -296,15 +301,21 @@ pub async fn backup_setup_passphrase(
     }
     ctx.mark_unlocked();
     crate::scheduler::tick::ensure_started(ctx);
+    // Hinweise aus Prüfungen beim Serverstart (Sidecar, Lauf F4b) auch nach der
+    // Einrichtung in die Inbox.
+    if let Err(e) = ctx.deferred_notices.deliver(&pool).await {
+        tracing::warn!("Hinweise vom Serverstart nicht übernommen: {e}");
+    }
     outcome
 }
 
 /// Argumente von [`backup_unlock`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupUnlockArgs {
     pub passphrase: String,
 }
+redacted_debug!(BackupUnlockArgs {} secret { passphrase });
 
 /// Entsperrt die App: öffnet den DB-Pool mit der Passphrase und hängt ihn in den
 /// State. Liefert `true` bei korrekter Passphrase, `false` bei falscher.
@@ -317,6 +328,7 @@ pub struct BackupUnlockArgs {
 /// fälliges Auto-Daily-Backup auslösen.
 pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<bool> {
     let BackupUnlockArgs { passphrase } = args;
+    let mut passphrase = zeroize::Zeroizing::new(passphrase);
 
     let paths = ctx.paths.clone();
     ensure_no_pending_restore(&paths)?;
@@ -336,7 +348,8 @@ pub async fn backup_unlock(ctx: &Arc<AppCtx>, args: BackupUnlockArgs) -> Result<
         return Ok(false);
     };
     migrate_with_backup(ctx, &pool, &passphrase).await?;
-    activate_unlocked(ctx, pool, passphrase).await?;
+    // Ohne Kopie in die Sitzung (der leere Rest wird überschrieben).
+    activate_unlocked(ctx, pool, std::mem::take(&mut *passphrase)).await?;
     Ok(true)
 }
 
@@ -503,6 +516,10 @@ pub async fn activate_unlocked(
     // Hinweise des Seeds von /inputs (Plan W11) in die Inbox.
     if let Err(e) = crate::seed::deliver_notices(&pool, &ctx.paths.inputs_dir).await {
         tracing::warn!("Seed-Hinweise nicht übernommen: {e}");
+    }
+    // Hinweise aus Prüfungen beim Serverstart (Sidecar, Lauf F4b) in die Inbox.
+    if let Err(e) = ctx.deferred_notices.deliver(&pool).await {
+        tracing::warn!("Hinweise vom Serverstart nicht übernommen: {e}");
     }
     Ok(())
 }
@@ -743,7 +760,7 @@ pub async fn backup_target_remove(ctx: &Arc<AppCtx>, args: BackupTargetRemoveArg
 }
 
 /// Argumente von [`backup_test_sftp`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupTestSftpArgs {
     pub host: String,
@@ -754,6 +771,7 @@ pub struct BackupTestSftpArgs {
     /// (Plan W8; gespeicherte Ziele testet `backup_test_sftp_saved`).
     pub password: String,
 }
+redacted_debug!(BackupTestSftpArgs { host, port, user, remote_dir } secret { password });
 
 /// Testet eine neue SFTP-Verbindung (G1-BKP.3): Handshake + Auth +
 /// Schreibrechte. Liefert den SHA-256-Host-Key-Fingerprint zum Bestätigen und
@@ -770,12 +788,14 @@ pub async fn backup_test_sftp(
         remote_dir,
         password,
     } = args;
+    let password = zeroize::Zeroizing::new(password);
     let host = host.trim().to_string();
     if host.is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
         ));
     }
+    crate::nettest::check_host(&host)?;
     if password.is_empty() {
         return Err(Error::Backup("Bitte das SFTP-Passwort eingeben.".into()));
     }
@@ -842,7 +862,7 @@ pub async fn backup_test_sftp_saved(
 }
 
 /// Argumente von [`backup_set_sftp_target`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)] // nicht mehr freigegeben, entfällt in W11
 pub struct BackupSetSftpTargetArgs {
@@ -853,6 +873,7 @@ pub struct BackupSetSftpTargetArgs {
     pub host_fingerprint: String,
     pub password: String,
 }
+redacted_debug!(BackupSetSftpTargetArgs { host, port, user, remote_dir, host_fingerprint } secret { password });
 
 /// Setzt ein SFTP-Backup-Ziel (G1-BKP.3). Speichert Host/Port/User/Ordner +
 /// gepinnten Fingerprint als Ziel (Desktop-Fassung). Im Server ersetzt durch
@@ -870,7 +891,7 @@ pub async fn backup_set_sftp_target(
 }
 
 /// Argumente von [`backup_target_add_sftp`].
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupTargetAddSftpArgs {
     pub label: String,
@@ -881,6 +902,7 @@ pub struct BackupTargetAddSftpArgs {
     pub host_fingerprint: String,
     pub password: String,
 }
+redacted_debug!(BackupTargetAddSftpArgs { label, host, port, user, remote_dir, host_fingerprint } secret { password });
 
 /// Neues SFTP-Ziel (Plan W7, Re-Auth). `host_fingerprint` ist Pflicht (aus
 /// [`backup_test_sftp`], MITM-Schutz); das Passwort liegt je Ziel in der
@@ -898,12 +920,14 @@ pub async fn backup_target_add_sftp(
         host_fingerprint,
         password,
     } = args;
+    let password = zeroize::Zeroizing::new(password);
     let pool = ctx.pool()?;
     if host.trim().is_empty() || user.trim().is_empty() {
         return Err(Error::Backup(
             "Host und Benutzer dürfen nicht leer sein.".into(),
         ));
     }
+    crate::nettest::check_host(host.trim())?;
     if port == 0 {
         return Err(Error::Backup("Ungültiger SFTP-Port.".into()));
     }
@@ -1079,7 +1103,7 @@ pub async fn backup_restore_preview(
 }
 
 /// Argumente von [`backup_restore_apply`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRestoreApplyArgs {
     /// `.kbk` aus `POST /api/upload/restore` (Plan W7) …
@@ -1091,6 +1115,7 @@ pub struct BackupRestoreApplyArgs {
     /// Passphrase des Backups (danach die Passphrase der Instanz).
     pub passphrase: String,
 }
+redacted_debug!(BackupRestoreApplyArgs { upload_id, backup_id } secret { passphrase });
 
 /// Restore Phase A (Plan W7): Quelle ist ein Upload oder ein lokales Backup
 /// aus der Historie (nur Dateien im lokalen Backup-Ordner); danach Neustart.
@@ -1105,6 +1130,7 @@ pub async fn backup_restore_apply(
         backup_id,
         passphrase,
     } = args;
+    let passphrase = zeroize::Zeroizing::new(passphrase);
     let pool = ctx.pool()?;
     let upload_id = upload_id.filter(|s| !s.is_empty());
     let backup_id = backup_id.filter(|s| !s.is_empty());
@@ -1304,6 +1330,73 @@ pub async fn backup_download(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Lauf F4d (S3, Hinweis F4a): Die Debug-Ausgabe der Argumente mit
+    /// Passphrase oder Passwort enthält das Geheimnis nie.
     #[test]
-    fn it_compiles() {}
+    fn debug_output_of_secret_args_is_redacted() {
+        let pass = "tinte-gletscher-moped-ahorn".to_string();
+        let outputs = [
+            format!(
+                "{:?}",
+                BackupSetupPassphraseArgs {
+                    passphrase: pass.clone()
+                }
+            ),
+            format!(
+                "{:?}",
+                BackupUnlockArgs {
+                    passphrase: pass.clone()
+                }
+            ),
+            format!(
+                "{:#?}",
+                BackupRestoreApplyArgs {
+                    upload_id: Some("u1".into()),
+                    backup_id: None,
+                    passphrase: pass.clone(),
+                }
+            ),
+            format!(
+                "{:?}",
+                BackupTestSftpArgs {
+                    host: "backup.example.org".into(),
+                    port: 22,
+                    user: "kb".into(),
+                    remote_dir: "kb".into(),
+                    password: pass.clone(),
+                }
+            ),
+            format!(
+                "{:?}",
+                BackupSetSftpTargetArgs {
+                    host: "backup.example.org".into(),
+                    port: 22,
+                    user: "kb".into(),
+                    remote_dir: "kb".into(),
+                    host_fingerprint: "SHA256:x".into(),
+                    password: pass.clone(),
+                }
+            ),
+            format!(
+                "{:?}",
+                BackupTargetAddSftpArgs {
+                    label: "NAS".into(),
+                    host: "backup.example.org".into(),
+                    port: 22,
+                    user: "kb".into(),
+                    remote_dir: "kb".into(),
+                    host_fingerprint: "SHA256:x".into(),
+                    password: pass.clone(),
+                }
+            ),
+        ];
+        for out in &outputs {
+            assert!(!out.contains(&pass), "{out}");
+            assert!(out.contains("***"), "{out}");
+        }
+        assert!(outputs[2].contains("\"u1\""), "{}", outputs[2]);
+        assert!(outputs[3].contains("backup.example.org"), "{}", outputs[3]);
+    }
 }

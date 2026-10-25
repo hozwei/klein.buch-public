@@ -152,6 +152,12 @@ pub struct ClientInfo {
     pub https: bool,
 }
 
+/// Client-IP als Antwort-Extension für das Zugriffsprotokoll (W14-018), auch
+/// bei abgewiesenen Anfragen (421/403) — anders als [`ClientInfo`], das nur
+/// angenommene Anfragen tragen (HSTS).
+#[derive(Debug, Clone, Copy)]
+pub struct ClientIp(pub IpAddr);
+
 fn header_values<'a>(headers: &'a HeaderMap, name: &str) -> Vec<&'a str> {
     headers
         .get_all(name)
@@ -251,17 +257,25 @@ fn is_unsafe(method: &Method) -> bool {
 
 /// Middleware: Host (421), Origin (403), `ClientInfo` als Extension an
 /// Anfrage und Antwort (für HSTS).
-pub async fn http_policy(
-    State(st): State<Arc<ServerState>>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn http_policy(State(st): State<Arc<ServerState>>, req: Request, next: Next) -> Response {
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    let policy = &st.policy;
-    let (info, host) = policy.client_info(peer, req.headers());
+    let (info, host) = st.policy.client_info(peer, req.headers());
+    let mut response = admit(&st.policy, info, host, req, next).await;
+    response.extensions_mut().insert(ClientIp(info.ip));
+    response
+}
+
+/// Host- und Origin-Prüfung, dann der eigentliche Aufruf.
+async fn admit(
+    policy: &HttpPolicy,
+    info: ClientInfo,
+    host: Option<String>,
+    mut req: Request,
+    next: Next,
+) -> Response {
     let healthz_local = req.uri().path() == "/healthz" && info.loopback;
     if !healthz_local {
         let ok = host

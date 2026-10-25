@@ -60,6 +60,27 @@ def request(method, path, body=None, cookie=None, headers=None, raw=False):
         return e.code, e.headers, parsed
 
 
+def finish_pending(status, headers, body):
+    """W14-037 (Lauf F4a): Antwortet Einrichtung bzw. Anmeldung mit 202 (lange
+    Umstellung der Datenbank), das Ergebnis mit dem Ticket-Cookie abholen."""
+    if status != 202:
+        return status, headers, body
+    ticket = None
+    for v in headers.get_all("Set-Cookie") or []:
+        first = v.split(";", 1)[0]
+        if first.startswith("__Host-kb_login="):
+            ticket = first.split("=", 1)[1]
+    if not ticket:
+        fail("202 ohne Ticket-Cookie")
+    for _ in range(1800):
+        time.sleep(1)
+        status, headers, body = request(
+            "POST", "/api/auth/login/poll", {}, headers={"Cookie": f"__Host-kb_login={ticket}"})
+        if status != 202:
+            return status, headers, body
+    fail("Anmeldung nach 30 min nicht abgeschlossen")
+
+
 def session_from(headers):
     for v in headers.get_all("Set-Cookie") or []:
         first = v.split(";", 1)[0]
@@ -159,17 +180,16 @@ def main():
     if s != 200:
         fail(f"Setup Schritt 1: {s} {offer}")
     secret = offer["secret"]
-    s, h, done = request(
+    s, h, done = finish_pending(*request(
         "POST", "/api/auth/setup",
         {"setupToken": token, "passphrase": PASS, "totpCode": fresh_totp(secret)},
-    )
+    ))
     if s != 200:
         fail(f"Setup Schritt 2: {s} {done}")
     cookie = session_from(h)
     print("Einrichtung ok", flush=True)
-    # Firmendaten (Zahlungsdaten, §19) verlangen seit W14 eine Re-Auth; sie
-    # rotiert die Sitzungs-ID.
-    cookie = reauth(secret, cookie)
+    # Firmendaten ohne Zahlungsdaten und mit §19: seit Lauf F4a ohne Re-Auth
+    # (bedingte Re-Auth nur bei IBAN, BIC oder §19-Status, W14-038).
 
     today = time.strftime("%Y-%m-%d")
     due = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 14 * 86400))
@@ -279,7 +299,8 @@ def main():
     s, _, st = request("GET", "/api/auth/status")
     if s != 200 or (st or {}).get("state") != "login_required":
         fail(f"Zustand nach dem Neustart: {s} {st}")
-    s, h, body = request("POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)})
+    s, h, body = finish_pending(*request(
+        "POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)}))
     if s != 200:
         fail(f"Anmeldung nach Restore: {s} {body}")
     cookie = session_from(h)

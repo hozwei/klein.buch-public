@@ -842,7 +842,14 @@ async fn try_auto_send(job: &JobCtx<'_>, label: &str, invoice_id: &str, number: 
                     .await;
                 }
                 Err(e) => {
-                    tracing::warn!("Abo-Rechnung {number}: Auto-Versand fehlgeschlagen: {e}");
+                    // W14-016: Der Fehlertext nennt oft die Empfängeradresse (Antwort des
+                    // Mailservers) — WARN nur mit Fehlerart, Volltext auf DEBUG, im
+                    // Hinweis und im E-Mail-Protokoll.
+                    tracing::warn!(
+                        "Abo-Rechnung {number}: Auto-Versand fehlgeschlagen (Fehlerart {})",
+                        e.kind()
+                    );
+                    tracing::debug!("Abo-Rechnung {number}: Auto-Versand: {e}");
                     emit_notice(
                         job,
                         "Abo-Rechnung: Versand fehlgeschlagen",
@@ -871,7 +878,11 @@ async fn try_auto_send(job: &JobCtx<'_>, label: &str, invoice_id: &str, number: 
             .await;
         }
         Err(e) => {
-            tracing::warn!("Abo-Rechnung {number}: Mail-Konto-Abruf fehlgeschlagen: {e}");
+            tracing::warn!(
+                "Abo-Rechnung {number}: Mail-Konto-Abruf fehlgeschlagen (Fehlerart {})",
+                e.kind()
+            );
+            tracing::debug!("Abo-Rechnung {number}: Mail-Konto-Abruf: {e}");
             emit_notice(
                 job,
                 "Abo-Rechnung erstellt — Versand offen",

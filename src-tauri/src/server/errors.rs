@@ -154,9 +154,11 @@ impl ApiError {
         .with_retry_after(10)
     }
 
-    /// Interner Fehler: Text nur ins Log, nach außen `ref`.
+    /// Interner Fehler: Text nur ins Log, nach außen `ref`. Die `ref` ist die
+    /// Kennung der Anfrage aus dem Zugriffsprotokoll (`req=`, W14-018), außerhalb
+    /// einer Anfrage eine neue UUID.
     pub fn internal(detail: &dyn std::fmt::Display) -> Self {
-        let reference = uuid::Uuid::new_v4().to_string();
+        let reference = new_reference();
         tracing::error!(target: "klein_buch_lib::http", reference = %reference, "interner Fehler: {detail}");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -176,6 +178,7 @@ impl ApiError {
             Error::Crypto(m) => Self::new(StatusCode::BAD_REQUEST, "crypto", m.clone()),
             Error::BadRequest(_) => Self::bad_request(err.to_string()),
             Error::Locked => Self::new(StatusCode::LOCKED, "locked", err.to_string()),
+            Error::ReauthRequired => Self::reauth_required(),
             Error::SchemaMismatch { .. } => {
                 Self::new(StatusCode::CONFLICT, "schema_mismatch", err.to_string())
             }
@@ -185,7 +188,7 @@ impl ApiError {
                 Self::new(StatusCode::CONFLICT, "constraint", db.message().to_string())
             }
             Error::Sidecar(_) => {
-                let reference = uuid::Uuid::new_v4().to_string();
+                let reference = new_reference();
                 tracing::error!(target: "klein_buch_lib::http", reference = %reference, "Sidecar: {err}");
                 Self {
                     status: StatusCode::SERVICE_UNAVAILABLE,
@@ -227,6 +230,12 @@ impl From<Error> for ApiError {
     fn from(err: Error) -> Self {
         Self::from_error(&err)
     }
+}
+
+/// `ref` eines Fehlers: die Kennung der laufenden Anfrage (korreliert mit
+/// `req=` im Zugriffsprotokoll), sonst eine neue UUID.
+fn new_reference() -> String {
+    super::logging::current_request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
 /// 404 für alles außerhalb der Routen bzw. der Allowlist.
@@ -294,6 +303,11 @@ mod tests {
             ),
             (Error::Backup("b".into()), StatusCode::CONFLICT, "backup"),
             (Error::Locked, StatusCode::LOCKED, "locked"),
+            (
+                Error::ReauthRequired,
+                StatusCode::FORBIDDEN,
+                "reauth_required",
+            ),
             (
                 Error::BadRequest("x".into()),
                 StatusCode::BAD_REQUEST,

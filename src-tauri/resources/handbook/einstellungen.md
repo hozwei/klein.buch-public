@@ -20,6 +20,11 @@ diesem Bereich sitzt auch der Schalter "Ich bin Kleinunternehmer
 nach §19 UStG". Standardmäßig ist er an. Mehr dazu im Kapitel
 "Verkäuferprofil anlegen".
 
+Änderst Du Bankverbindung (IBAN, BIC) oder den Kleinunternehmer-Status,
+fragt Klein.Buch zur Bestätigung nach Daten-Passwort und App-Code
+(nicht in den ersten fünf Minuten nach der Anmeldung). Adresse,
+Steuernummer und Logo speicherst Du ohne Rückfrage.
+
 Klein.Buch schreibt zum Zeitpunkt jeder Festschreibung eine Kopie
 der relevanten Profil-Daten in den Beleg. Spätere Profil-Änderungen
 wirken nur auf neue Belege.
@@ -112,6 +117,11 @@ auf Wunsch höchstens einmal täglich bei GitHub nach einer neuen
 Version und legt dann einen Hinweis an. Neue Einmal-Codes, einen neuen
 zweiten Faktor und ein neues Daten-Passwort bestätigst Du vorher mit
 Daten-Passwort und App-Code.
+
+Unter "Angemeldete Sitzungen" siehst Du jede Anmeldung mit Zeitpunkt,
+letzter Nutzung und einer kurzen Kennung; Deine eigene ist als "diese
+Sitzung" markiert. "Andere Sitzungen abmelden" beendet nach einer
+Bestätigung alle übrigen Anmeldungen sofort.
 
 Einen Bereich zum Zurücksetzen oder Löschen aller Daten gibt es
 nicht. Über das Netz wäre das die gefährlichste einzelne Aktion. Wer

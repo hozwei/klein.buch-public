@@ -162,6 +162,53 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 - **Off-Site-Status „veraltet“ (Lauf F3a):** Hat ein externes Ziel noch keine
   Kopie oder ist seine letzte älter als sieben Tage, zeigt die Übersicht eine
   Aufgabe; Healthcheck und Einstellungen melden `stale`.
+- **Anmeldung und Sitzungen (Lauf F4a, ADR 0039 Nr. 130):** Einstellungen →
+  Sicherheit zeigt die angemeldeten Sitzungen und meldet auf Wunsch alle anderen
+  ab (Re-Auth). Nach 100 Fehlversuchen in Folge ist die Anmeldung mit App-Code
+  von unbekannten Geräten gesperrt, bis eine Anmeldung mit Einmal-Code oder von
+  einem bekannten Gerät gelingt (Inbox-Hinweis). Neue Daten-Passwörter prüft der
+  Server gegen eine eingebettete Sperrliste, einfache Muster und Firmenname bzw.
+  E-Mail (höchstens 1024 Zeichen); bestehende bleiben gültig. Eine Anmeldung, die
+  wegen einer Datenbank-Umstellung länger dauert, antwortet nach 25 s mit 202
+  und wird abgeholt statt abzubrechen. Firmendaten verlangen eine Bestätigung
+  nur noch bei Änderung von IBAN, BIC oder §19-Status (nicht in den ersten 5 min
+  nach der Anmeldung); DATEV-, ELSTER- und PDF-Export sowie das Aktivieren bzw.
+  Deaktivieren von Zahlungskonten verlangen sie neu. „Datenbank sperren“ leert
+  zusätzlich gespeicherte Antworten, Job-Ergebnisse und offene Anmeldungen;
+  Passphrase und Zugangsdaten liegen im Speicher als überschreibbare Werte;
+  Idempotenz-Schlüssel gelten je Anmeldung; verbrauchte TOTP-Codes stehen als
+  `reason=totp_replay` im Log.
+- **HTTP-Server und Eingaben (Lauf F4b, ADR 0039 Nr. 131):** Höchstens 256
+  offene Verbindungen, Gegenstellen, die 30 s lang nichts mehr annehmen, werden
+  getrennt; `/legal/` wird gestreamt. Eine Panik in einem Handler ergibt 500 mit
+  Referenz statt eines Verbindungsabbruchs. Nicht leere Anfragekörper an die API
+  müssen `application/json` sein (sonst 415). `/healthz` zeigt Zustand und
+  Off-Site-Status nur direkt über Loopback, nicht über einen Proxy auf demselben
+  Host. Textantworten tragen `charset=utf-8`. Klartext-Exporte liegen höchstens
+  10 min statt 1 h auf dem Server und verschwinden mit dem ersten Abruf. Die Art
+  jedes Commands (Lesen/Ändern/Job) steht ausdrücklich in der Registry statt aus
+  dem Namen abgeleitet. Beim Start prüft der Server den Java-Sidecar (Log und
+  Inbox-Hinweis beim Entsperren, kein Abbruch).
+- **Logs und Fehlermeldungen (Lauf F4c, ADR 0039 Nr. 132):** Das
+  Zugriffsprotokoll nennt Client-IP (`ip=`), Aufruf-Kennung (`req=`, gleich der
+  `ref` in „Interner Fehler (Ref …)“) und eine gekürzte Sitzungskennung
+  (`sess=`); erfolgreiche Re-Auth steht mit IP im Log. Jedes Log-Ereignis ist
+  genau eine Zeile (Zeilenumbrüche in Werten escaped). SMTP- und SFTP-Hosts
+  müssen ein Hostname oder eine IP-Adresse sein. Ein gescheiterter Auto-Versand
+  nennt auf WARN keine Empfängeradresse mehr (Volltext auf DEBUG, im Hinweis und
+  im E-Mail-Protokoll). Fehlermeldungen an die Oberfläche nennen keine
+  absoluten Serverpfade mehr. Der fail2ban-Filter im Handbuch ist verankert —
+  bestehende Filter bitte ersetzen. Mustang bleibt auf 2.23.0 (auch 2.26.0
+  bündelt Jackson 2.22.2); die befristeten Scan-Ausnahmen bleiben bis 30.04.2027.
+- **Nachbesserung Anmeldung und Server (Lauf F4d, ADR 0039 Nr. 133):** Der
+  Hinweis zur Sperre der App-Code-Anmeldung unterstellt nicht mehr, dass das
+  Daten-Passwort bekannt ist (die Sperre ist schon mit falschen App-Codes
+  auslösbar). Neu: Drei Anmeldungen in Folge mit gültigem App-Code, aber
+  falschem Daten-Passwort ergeben einen dringenden Hinweis mit der Empfehlung,
+  den App-Code neu einzurichten. Höchstens 32 offene Verbindungen je
+  Gegenstelle (vertraute Proxys ausgenommen). Passphrasen und Passwörter in
+  Command-Argumenten erscheinen in Debug-Ausgaben nur als `***`. Doku: Der
+  Download-Link eines Backups gilt höchstens 10 Minuten.
 
 - **Beiträge Dritter:** `CONTRIBUTING.md` formuliert „vorerst keine
   Code-Beiträge“ als Entscheidung (Fehlerberichte, Wünsche, Sicherheitsmeldungen
@@ -179,6 +226,11 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 
 ### Fixed
 
+- **Restore-Tausch (Lauf F4d, ADR 0039 Nr. 133):** Verschwindet das WAL der
+  Datenbank zwischen Prüfung und Verschieben (SQLite löscht es beim Schließen
+  der letzten Verbindung nachlaufend), bricht der Tausch nicht mehr mit „nicht
+  gefunden“ ab. Tests, die nach einem Festschreiben Backups zählen, warten das
+  Lock-Backup im Hintergrund jetzt deterministisch ab.
 - **Nachbesserung Backup (Lauf F3c, ADR 0039 Nr. 129, ADR 0040 Nr. 57–59):**
   - Das Backup vor einer Datenbank-Umstellung entsteht im Format, das die
     vorherige Version liest (beim Update von 2026.10 Format 2) — der

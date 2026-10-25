@@ -53,12 +53,32 @@ Daten-Passwort falsch war. Hast Du Dich beim Passwort vertippt, warte
 also auf den nächsten Code.
 
 Nach fünf Fehlversuchen musst Du eine Minute warten, danach verdoppelt
-sich die Wartezeit bis höchstens eine Stunde. Eine dauerhafte Sperre
-gibt es nicht; der Zähler verfällt 24 Stunden nach dem letzten
-Fehlversuch. Dein eigener Browser bekommt nach der ersten Anmeldung ein
-Gerätecookie und muss deshalb nicht warten, wenn jemand anderes
-Passwörter durchprobiert. Nach der Anmeldung meldet Klein.Buch, wie viele
-Fehlversuche es seit Deiner letzten Anmeldung gab.
+sich die Wartezeit bis höchstens eine Stunde; der Zähler verfällt 24
+Stunden nach dem letzten Fehlversuch. Dein eigener Browser bekommt nach
+der ersten Anmeldung ein Gerätecookie und muss deshalb nicht warten,
+wenn jemand anderes Passwörter durchprobiert. Nach der Anmeldung meldet
+Klein.Buch, wie viele Fehlversuche es seit Deiner letzten Anmeldung gab.
+
+Gab es 100 Fehlversuche in Folge ohne erfolgreiche Anmeldung dazwischen,
+nimmt Klein.Buch die Anmeldung mit App-Code von unbekannten Browsern gar
+nicht mehr an (Meldung "Anmeldung mit App-Code von neuen Geräten
+gesperrt"), auch nicht nach einem Neustart. Von einem Browser, mit dem
+Du Dich schon angemeldet hast, oder mit einem Einmal-Code kommst Du
+weiter hinein; diese Anmeldung hebt die Sperre auf, und die Inbox
+meldet es. Die Sperre heißt nicht, dass jemand Dein Daten-Passwort
+kennt: Schon falsche App-Codes zählen mit, auslösen kann sie also
+jeder, der die Anmeldeseite erreicht. Auf einem neuen Gerät kostet sie
+Dich einen Einmal-Code, und jeder Einmal-Code gilt nur einmal. Prüfe
+danach unter "Einstellungen" → "Sicherheit & Anmeldung" die
+angemeldeten Sitzungen und wie viele Einmal-Codes noch übrig sind; bei
+Bedarf richte den App-Code neu ein (dabei entstehen neue Einmal-Codes).
+
+Meldet die Inbox "Gültiger App-Code mit falschem Daten-Passwort", gab
+es drei Anmeldeversuche in Folge mit einem gültigen App-Code oder
+Einmal-Code, aber falschem Daten-Passwort. Warst Du das nicht, kennt
+jemand womöglich das Geheimnis Deiner Authenticator-App oder einen
+Einmal-Code: Richte den App-Code neu ein (siehe unten) und prüfe die
+Sitzungen.
 
 ## Handy verloren, Einmal-Codes vorhanden
 
@@ -105,14 +125,17 @@ ist Absicht (Kapitel "Passphrase einrichten").
 Auch mit gültiger Anmeldung fragt Klein.Buch bei manchen Aktionen noch
 einmal nach Daten-Passwort und Code (oder einem Einmal-Code). Die
 Bestätigung gilt fünf Minuten. Das betrifft: ein Backup
-wiederherstellen, Backup-Ziele anlegen, entfernen und testen,
-Mailkonten anlegen, ändern, löschen und testen, eine Testmail senden,
-den Export für den Steuerberater, den Detail-Export, den
-Migrations-Export, die DSGVO-Auskunft, neue Einmal-Codes, den zweiten
-Faktor neu einrichten und das Daten-Passwort ändern, außerdem das
-Speichern der Firmendaten (Bankverbindung, Kleinunternehmer-Status),
-Zahlungskonten anlegen und ändern, einen Kontakt anonymisieren und ein
-Geschäftsjahr abschließen. So kann jemand, der Dein offenes
+wiederherstellen oder herunterladen, Backup-Ziele anlegen, entfernen
+und testen, Mailkonten anlegen, ändern, löschen und testen, eine
+Testmail senden, alle Exporte (Steuerberater-Paket, Detail-Export,
+DATEV-Buchungsstapel, ELSTER-Ausfüllhilfe, EÜR als PDF,
+Migrations-Export, DSGVO-Auskunft), neue Einmal-Codes, den zweiten
+Faktor neu einrichten, das Daten-Passwort ändern, andere Sitzungen
+abmelden, Zahlungskonten anlegen, ändern, aktivieren und deaktivieren,
+einen Kontakt anonymisieren und ein Geschäftsjahr abschließen. Bei den
+Firmendaten fragt Klein.Buch nur, wenn sich Bankverbindung (IBAN, BIC)
+oder der Kleinunternehmer-Status ändern — und nicht in den ersten fünf
+Minuten nach der Anmeldung bzw. Einrichtung. So kann jemand, der Dein offenes
 Browserfenster erwischt, keine Daten abziehen, keine Zugänge ändern
 und keine Zahlungen auf ein fremdes Konto umleiten. Mit jeder
 Bestätigung erneuert Klein.Buch Deine Anmeldung im Hintergrund; neue

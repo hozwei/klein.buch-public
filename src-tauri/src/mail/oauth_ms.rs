@@ -33,6 +33,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::mail::smtp::OutgoingMail;
+use crate::redact::redacted_debug;
 
 /// Delegated-Scopes: `offline_access` (Refresh-Token), `Mail.Send` (Versand),
 /// `User.Read` (Postfach-Adresse via `/me` anzeigen).
@@ -127,11 +128,12 @@ pub fn build_authorize_url(
 }
 
 /// Erfolgreich extrahierte Redirect-Parameter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Callback {
     pub code: String,
     pub state: String,
 }
+redacted_debug!(Callback { state } secret { code });
 
 /// Parst die Query eines Redirect-Aufrufs (Teil **nach** dem `?`, ohne führendes
 /// `?`). Liefert `code`+`state` oder mappt einen `error`-Redirect auf einen
@@ -171,7 +173,7 @@ pub fn parse_callback_query(query: &str) -> Result<Callback> {
 // =============================================================================
 
 /// Rohe Antwort des Token-Endpoints.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
     #[serde(default)]
@@ -183,15 +185,17 @@ pub struct TokenResponse {
     #[serde(default)]
     pub token_type: Option<String>,
 }
+redacted_debug!(TokenResponse { expires_in, scope, token_type } secret { access_token, refresh_token });
 
 /// Im Keychain persistiertes Token-Bundle (JSON).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenBundle {
     pub access_token: String,
     pub refresh_token: String,
     /// Ablaufzeitpunkt des Access-Tokens, UTC (RFC 3339).
     pub expires_at: String,
 }
+redacted_debug!(TokenBundle { expires_at } secret { access_token, refresh_token });
 
 /// Baut aus einer Token-Antwort + Ausgangszeit ein Bundle (pure).
 /// `fallback_refresh` greift, wenn die Antwort keinen neuen Refresh-Token
