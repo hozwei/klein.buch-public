@@ -24,8 +24,19 @@
 
   const maxDate = todayBerlin();
 
+  // Lauf F8: Privatentnahme/Geschenk mit Entnahmewert (Teilwert, § 6 Abs. 1
+  // Nr. 4 EStG; 0 bei einem betrieblichen Geschenk) — Pflichtangabe.
+  let withdrawalEuros = $state<number | null>(null);
+
   let isSale = $derived(disposalType === "sale");
-  let proceedsCents = $derived(isSale ? Math.round(proceedsEuros * 100) : 0);
+  let isWithdrawal = $derived(disposalType === "given_away");
+  let proceedsCents = $derived(
+    isSale
+      ? Math.round(proceedsEuros * 100)
+      : isWithdrawal
+        ? Math.round((withdrawalEuros ?? 0) * 100)
+        : 0,
+  );
   let residual = $derived(detail?.asset.bookValueCents ?? 0);
   let gainLoss = $derived(proceedsCents - residual);
 
@@ -48,6 +59,13 @@
   async function save() {
     if (isSale && proceedsCents < 0) {
       flash("Der Verkaufserlös darf nicht negativ sein.", "error");
+      return;
+    }
+    if (isWithdrawal && (withdrawalEuros == null || withdrawalEuros < 0)) {
+      flash(
+        "Bitte den Entnahmewert angeben (Zeitwert bei Privatentnahme, 0 bei einem betrieblichen Geschenk).",
+        "error",
+      );
       return;
     }
     busy = true;
@@ -118,10 +136,23 @@
             {euro(gainLoss)} <span class="muted">(Erlös − Restbuchwert)</span>
           </span>
         </div>
+      {:else if isWithdrawal}
+        <label>
+          Entnahmewert (€) *
+          <input type="number" step="0.01" min="0" bind:value={withdrawalEuros} required />
+        </label>
+        <div class="info-cell">
+          <span class="info">
+            Bei einer <strong>Privatentnahme</strong> den Zeitwert (Teilwert) eintragen:
+            Er zählt als Betriebseinnahme, der Restbuchwert von {euro(residual)} als
+            Ausgabe. Bei einem <strong>betrieblichen Geschenk</strong> an Dritte 0 eintragen
+            (Grenzen nach § 4 Abs. 5 Nr. 1 EStG beachten).
+          </span>
+        </div>
       {:else}
         <div class="info-cell span2">
           <span class="info">
-            Ohne Erlös (Verschrottung/Verschenken) wird der Restbuchwert von
+            Ohne Erlös (Verschrottung) wird der Restbuchwert von
             {euro(residual)} als Verlust ausgebucht.
           </span>
         </div>

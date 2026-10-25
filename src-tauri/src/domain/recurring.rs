@@ -90,7 +90,7 @@ pub struct RecurringInput {
     /// Am Stichtag automatisch eine Kosten-Position anlegen (Catch-up), sonst
     /// nur als „fällig" in der Liste melden (Reminder).
     pub auto_create_expense: bool,
-    /// §13b-Vorgabe für die erzeugten Kosten (reines Hinweis-Flag).
+    /// §13b-Vorgabe für die erzeugten Kosten (mit Flag muss die USt 0 sein, ADR 0039 Nr. 143).
     pub reverse_charge_13b_default: bool,
 }
 

@@ -882,6 +882,54 @@ Teil F3c — Nachbesserung F3 nach der Prüfung (25.10.2026):
     mehr. Test `src/lib/dayClock.test.ts` (Fokus nach Ruhezustand mit
     Jahreswechsel, `pageshow`, Minutentakt, Mitternachts-Timer am
     25-Stunden-Tag).
+62. **Restore hält abgeschlossene Geschäftsjahre (zu Nr. 11–14, Lauf F8, S2).** Der
+    Restore-Marker sicherte Nummernkreise, Abo-Termine und festgeschriebene Nummern der
+    ersetzten DB, aber nicht `fiscal_year_locks` — ein älteres Backup öffnete ein inzwischen
+    abgeschlossenes Jahr wieder (Buchungen darin möglich, zweiter Abschluss mit anderem
+    Snapshot). Phase A schreibt jetzt die Abschlüsse in den Marker (`fiscal_year_locks`);
+    `finish_restore` trägt in der Transaktion des Restore-Audits fehlende Jahre mit dem
+    Snapshot der ersetzten DB ein (`notes` „nach Restore übernommen …“), schreibt AfA des
+    Jahres und Anlagen bis zum Jahr fest und auditiert `fiscal_year.lock_restored_after_restore`
+    (`fiscal_year::lock::restore_locks_in`); ein Hinweis nennt die Jahre. Fehlt im Backup, was
+    der Snapshot enthielt (z. B. die beim Abschluss gebuchte AfA), zeigt die vorhandene
+    Snapshot-Prüfung die Abweichung. Wie bei den Nummernkreisen gilt „nur vorwärts“. Test:
+    `server_restore_test::restore_keeps_fiscal_year_closed_after_backup`.
+63. **„Datenbank sperren“ und „Passphrase ändern“ mit festem Ausgang (zu Nr. 50/57, Lauf F8,
+    S2).** (1) `lock_database` beendet zuerst alle Sitzungen und wartete dann höchstens
+    `DB_GATE_WAIT` (60 s) auf laufende Aktionen; danach brach es still ab (Pool offen,
+    Passphrase im RAM, Scheduler lief weiter), während der Browser nach 30 s `timeout` als
+    Erfolg wertete. Jetzt wird nach dem Beenden der Sitzungen ohne Abbruch zu Ende gesperrt,
+    mit einer WARN-Zeile je `DB_GATE_WAIT`. (2) `rekey` wartete bis 60 s auf den `db_gate`
+    — eine 503-`timeout`-Antwort nach 30 s, und der Wechsel wurde im Hintergrund doch
+    wirksam, während die Oberfläche „Fehler“ meldete und die Felder leerte (Risiko
+    Passphrase-Verlust). Alle Wartezeiten (Gate, Tick, Backup) liegen jetzt zusammen unter
+    `REKEY_WAIT_BUDGET` (20 s) und damit samt Neuverschlüsseln vor dem Antwort-Timeout;
+    sonst 503 `busy` ohne Änderung. Kommt doch `timeout`, meldet die Oberfläche „Ergebnis
+    unklar“ und behält die neue Passphrase (`PassphraseChangeUnclear`). (3) Das Backup nach
+    einem Wechsel nimmt weder `db_gate` noch den Tick; ein zweiter Wechsel tauschte die
+    DB-Datei unter dessen offener Snapshot-Verbindung aus — beim Schließen löschte SQLite
+    dann `-wal`/`-shm` des neuen Pools (Sperren je Inode). `rekey` hält jetzt vor dem
+    Schließen des Pools die Backup-Sperre (`backup::exclusive_against_backups`, innerhalb des
+    Budgets). Tests: `server_lock_rekey_test::lock_completes_after_long_running_action`,
+    `server_lock_rekey_test::passphrase_change_waits_for_running_backup`,
+    `src/lib/transport.test.ts` („authChangePassphrase: 503 timeout …“).
+64. **„Datenbank sperren“ bei hängendem Tick: Dauer geklärt (zu Nr. 63, Lauf F8b, S2).** Die
+    F8-Nachprüfung fragte, ob die gelegentliche 503-`timeout`-Antwort von `POST
+    /api/auth/lock` in `server_auth_test::unlock_does_not_wait_for_tick_still_running_from_lock`
+    ein Fehler ist. Befund: Die Verlängerung ist echt und gewollt, kein Fehler. Hält ein
+    Tick die Tick-Sperre (im Test der Test selbst, im Betrieb ein hängender Sidecar oder
+    SMTP), wartet das Sperren fest `SCHEDULER_STOP_WAIT` (10 s) und sperrt dann ohne ihn;
+    danach folgen Audit `auth.lock`, das Nachholen eines Lock-Backups und das Schließen
+    des Pools (WAL-Checkpoint, fsync; je höchstens `DB_GATE_WAIT`). Im Test steht kein
+    Lock-Backup aus (jetzt vorab geprüft), das Nachholen wartet also nicht auf die vom
+    Test gehaltene Sperre; über 30 s (`REQUEST_TIMEOUT`) kommt das Sperren nur, wenn
+    Audit und Schließen des Pools unter Volllast mehr als die restlichen 20 s brauchen.
+    Dann sperrt es nach Nr. 63 im Hintergrund zu Ende, und die Oberfläche meldet das so.
+    Entschieden: keine Änderung am Ablauf; der Test prüft jetzt bei `timeout` ausdrücklich
+    den Abschluss (er erwirbt `transition`, das `lock_database` bis zum Schluss hält,
+    innerhalb von `SCHEDULER_STOP_WAIT + DB_GATE_WAIT + 10 s`, sonst Fehlschlag), danach
+    Pool zu, Passphrase aus dem RAM und eine Mindestdauer von `SCHEDULER_STOP_WAIT`; ein
+    stilles Schleifenende gibt es nicht mehr.
 
 ## Referenzen
 

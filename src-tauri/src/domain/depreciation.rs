@@ -31,7 +31,8 @@ use crate::domain::money;
 pub struct DepreciationAsset {
     pub depreciation_method: DepreciationMethod,
     pub acquisition_date: NaiveDate,
-    /// Netto-Anschaffungskosten (voll, vor Privatanteil) — für die lineare
+    /// Anschaffungskosten (voll, vor Privatanteil; bei §19 brutto, sonst netto,
+    /// § 9b Abs. 1 EStG) — für die lineare
     /// Jahresrate.
     pub acquisition_cost_cents: i64,
     pub business_share_percent: f64,

@@ -38,6 +38,11 @@ und bestätige. Klein.Buch erzeugt einen neuen Beleg mit:
 4. Dem Verweis „Storno zur Rechnung <Nummer> vom <Datum>“ unter der
    Überschrift „Stornorechnung“ — auch in der E-Rechnung (XML)
 
+Das Storno-Datum liegt zwischen dem Rechnungsdatum und heute. Ist die
+Rechnung schon (ganz oder teilweise) bezahlt, frühestens am Tag des letzten
+Zahlungseingangs: Klein.Buch führt die Erstattung am Storno-Datum in der
+EÜR, und erstatten lässt sich erst, was zugeflossen ist (§ 11 EStG).
+
 Der Original-Beleg bleibt unverändert in der Datenbank. Beide
 Belege sind sichtbar und werden gemeinsam in der EÜR
 berücksichtigt.

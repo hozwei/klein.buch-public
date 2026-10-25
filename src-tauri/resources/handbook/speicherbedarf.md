@@ -54,11 +54,15 @@ Dazu kommen:
    64 MiB, immer nur eine gleichzeitig.
 
 Die Faustregel aus dem Compose-Beispiel lautet: 512 MiB Grundbedarf plus
-das Doppelte des größten Backups. Sie gilt für das Anlegen eines Backups
-und für die Wiederherstellung. Die Grenze setzt der Betreiber in der
-Compose-Datei mit `mem_limit`. Im Beispiel steht `mem_limit: 2g`. Nach
-der Faustregel reicht das für Backups bis etwa 750 MiB. Werden die
-Backups größer, hebt der Betreiber die Grenze an.
+1 GiB für die Java-Komponente (zwei Läufe) plus das Doppelte des größten
+Backups. Die Java-Komponente gehört dazu, weil ein Backup nach dem
+Festschreiben im Hintergrund läuft, während Du schon die nächste Rechnung
+festschreibst. Die Regel gilt für das Anlegen eines Backups und für die
+Wiederherstellung. Die Grenze setzt der Betreiber in der Compose-Datei mit
+`mem_limit`. Im Beispiel steht `mem_limit: 2g`. Nach der Faustregel reicht
+das für Backups bis etwa 250 MiB; für Backups bis etwa 750 MiB braucht es
+`mem_limit: 3g`. Werden die Backups größer, hebt der Betreiber die Grenze
+weiter an.
 
 Ist die Grenze zu klein, beendet das Betriebssystem Klein.Buch mitten im
 Backup oder in der Wiederherstellung, weil der Speicher ausgeht. Der
@@ -86,9 +90,9 @@ Im Daten-Ordner (`/data`) liegen:
    Backups löscht Klein.Buch nie, sie kommen jedes Mal dazu. Während die
    automatischen Abläufe angehalten sind (nach einer Wiederherstellung),
    sortiert Klein.Buch nichts aus.
-3. Zwischendateien in `/data/tmp`: Exporte bis zum Herunterladen (höchstens
-   eine Stunde), hochgeladene Dateien bis zu ihrer Verarbeitung (ebenfalls
-   höchstens eine Stunde) und die Kopie der Datenbank, die beim Backup
+3. Zwischendateien in `/data/tmp`: Exporte bis zum ersten Herunterladen
+   (höchstens zehn Minuten), hochgeladene Dateien bis zu ihrer Verarbeitung
+   (höchstens eine Stunde) und die Kopie der Datenbank, die beim Backup
    kurz entsteht. Reste abgebrochener Läufe räumt Klein.Buch stündlich auf,
    sobald sie älter als sechs Stunden sind, und beim Containerstart vollständig.
 

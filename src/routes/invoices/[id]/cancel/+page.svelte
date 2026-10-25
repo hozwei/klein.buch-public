@@ -25,6 +25,28 @@
       !!detail.invoice.lockedAt &&
       !detail.invoice.isStornoFor,
   );
+  // Lauf F8 (§ 11 EStG): Die Erstattung kann erst nach dem Zufluss erfolgen —
+  // frühestes Storno-Datum ist der späteste von Rechnungsdatum und letztem
+  // Zahlungseingang (der Server prüft dasselbe).
+  let minStornoDate = $derived(detail ? earliestStornoDate(detail) : "");
+
+  function earliestStornoDate(d: InvoiceDetail): string {
+    let min = d.invoice.invoiceDate.slice(0, 10);
+    if (d.invoice.paidAmountCents <= 0) return min;
+    const dates: string[] = [];
+    try {
+      const hist = JSON.parse(d.invoice.paymentHistoryJson ?? "[]") as {
+        amountCents: number;
+        paidDate: string;
+      }[];
+      for (const e of hist) if (e.amountCents !== 0) dates.push(e.paidDate.slice(0, 10));
+    } catch {
+      // Beschädigte Historie: der Server lehnt mit klarer Meldung ab.
+    }
+    if (dates.length === 0 && d.invoice.paidAt) dates.push(d.invoice.paidAt.slice(0, 10));
+    for (const x of dates) if (x > min) min = x;
+    return min;
+  }
 
   async function load() {
     loading = true;
@@ -117,7 +139,7 @@
           <input
             type="date"
             bind:value={stornoDate}
-            min={inv.invoiceDate}
+            min={minStornoDate}
             max={todayBerlin()}
             required
           />

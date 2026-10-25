@@ -14,6 +14,7 @@
 use crate::db::models::{AssetDetail, AssetListItem, AssetRow};
 use crate::domain::asset::AssetInput;
 use crate::error::{Error, Result};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -36,6 +37,31 @@ pub struct ListFilter {
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     pool: &SqlitePool,
+    input: &AssetInput,
+    asset_number: &str,
+    fiscal_year: i64,
+    method_db: &str,
+    useful_life_years: Option<f64>,
+    book_value_cents: i64,
+) -> Result<AssetRow> {
+    let mut conn = pool.acquire().await?;
+    create_in(
+        &mut conn,
+        input,
+        asset_number,
+        fiscal_year,
+        method_db,
+        useful_life_years,
+        book_value_cents,
+    )
+    .await
+}
+
+/// [`create`] innerhalb einer laufenden Transaktion (Lauf F8): Nummer, Anlage,
+/// Verweis der Quell-Kosten und Audit entstehen zusammen oder gar nicht.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_in(
+    conn: &mut sqlx::SqliteConnection,
     input: &AssetInput,
     asset_number: &str,
     fiscal_year: i64,
@@ -67,10 +93,12 @@ pub async fn create(
     .bind(input.business_share_percent)
     .bind(book_value_cents)
     .bind(input.notes.as_deref())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
-    get(pool, &id)
+    sqlx::query_as::<_, AssetRow>("SELECT * FROM assets WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| Error::Domain("create: post-INSERT SELECT leer".into()))
 }
@@ -190,9 +218,13 @@ pub async fn update(
 
     // Guard auch im UPDATE (Lauf F2c): ein paralleles Veräußern oder
     // Festschreiben zwischen Prüfung und Schreiben greift nicht durch.
+    // Lauf F8: Das Anschaffungsjahr folgt dem korrigierten Anschaffungsdatum
+    // (AfA-Beginn, Jahresfilter, Prüfung abgeschlossener Jahre); die
+    // Anlagennummer behält das Jahr ihrer Vergabe (ADR 0039 Nr. 148 (6)).
     let res = sqlx::query(
         "UPDATE assets SET
-            label = ?, acquisition_date = ?, acquisition_cost_cents = ?,
+            label = ?, acquisition_date = ?, acquisition_fiscal_year = ?,
+            acquisition_cost_cents = ?,
             expense_id = ?, vendor_contact_id = ?, depreciation_method = ?,
             useful_life_years = ?, afa_category = ?, business_share_percent = ?,
             book_value_cents = ?, notes = ?, updated_at = datetime('now','utc')
@@ -200,6 +232,7 @@ pub async fn update(
     )
     .bind(input.label.trim())
     .bind(input.acquisition_date.to_string())
+    .bind(i64::from(input.acquisition_date.year()))
     .bind(input.acquisition_cost_cents)
     .bind(input.expense_id.as_deref())
     .bind(input.vendor_contact_id.as_deref())

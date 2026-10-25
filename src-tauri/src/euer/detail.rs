@@ -139,7 +139,7 @@ pub struct StornoItem {
 }
 
 /// Eine bezahlte Kostenposition (Betriebsausgabe, brutto).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpenseItem {
     pub paid_date: String,
@@ -155,6 +155,13 @@ pub struct ExpenseItem {
     pub net_cents: i64,
     /// Umsatzsteuer laut Beleg (bei Regelbesteuerung abziehbare Vorsteuer).
     pub tax_cents: i64,
+    /// §19-Status bei Leistungsbezug (Lauf F8d, ADR 0039 Nr. 148): Status im
+    /// Jahr des Belegdatums, nicht des Zahlungsjahres (§ 15 Abs. 1 UStG,
+    /// Abschn. 19.5 UStAE). Er entscheidet über brutto bzw. netto mit
+    /// Vorsteuer (Kz 185, DATEV-BU-Schlüssel) und die Anschaffungskosten
+    /// aktivierter Kosten (§ 9b Abs. 1 EStG); das Jahr der Ausgabe bleibt das
+    /// Zahlungsjahr (§ 11 Abs. 2 EStG).
+    pub is_kleinunternehmer: bool,
     /// Typ des Zahlungskontos (R2-011); `None` = Bank.
     pub account_type: Option<String>,
     /// Nur für aktivierte Kosten (Anlage aus dieser Position): AfA-Methode
@@ -162,6 +169,35 @@ pub struct ExpenseItem {
     /// Anschaffungskosten wirken über die AfA, § 4 Abs. 3 Satz 3 EStG) und
     /// erscheinen nur im DATEV-Stapel auf dem Anlagekonto.
     pub capitalized_asset_method: Option<String>,
+    /// Nur für aktivierte Kosten: Anschaffungskosten der Anlage (Lauf F8b,
+    /// Abgleich mit dem Betrag der Kosten in der Ausfüllhilfe).
+    #[serde(default)]
+    pub capitalized_asset_cost_cents: Option<i64>,
+    /// Nur für aktivierte Kosten: Nummer der Anlage (Lauf F8d, Hinweis der
+    /// Ausfüllhilfe bei abweichenden Anschaffungskosten).
+    #[serde(default)]
+    pub capitalized_asset_number: Option<String>,
+}
+
+/// Standard: §19 (Zielgruppe von Klein.Buch, wie ohne Profil), sonst leer.
+impl Default for ExpenseItem {
+    fn default() -> Self {
+        Self {
+            paid_date: String::new(),
+            expense_number: String::new(),
+            vendor: String::new(),
+            category: String::new(),
+            description: String::new(),
+            gross_cents: 0,
+            net_cents: 0,
+            tax_cents: 0,
+            is_kleinunternehmer: true,
+            account_type: None,
+            capitalized_asset_method: None,
+            capitalized_asset_cost_cents: None,
+            capitalized_asset_number: None,
+        }
+    }
 }
 
 /// Eine Privatbewegung (Entnahme/Einlage) — EÜR-neutral, aber für den DATEV-
@@ -193,6 +229,11 @@ pub struct DisposalItem {
     pub gain_loss_cents: i64,
     /// AfA-Methode der Anlage (DATEV: GWG- oder allgemeines Anlagekonto).
     pub depreciation_method: String,
+    /// Abgangsart (`sale` | `scrap` | `given_away`). Lauf F8: Bei Privatentnahme
+    /// (`given_away`) ist `proceeds_cents` der Entnahmewert — DATEV bucht ihn
+    /// vom Privatkonto statt von der Bank.
+    #[serde(default)]
+    pub disposal_type: String,
 }
 
 /// ISO-Datum (`YYYY-MM-DD`, ggf. mit Zeitanteil) als `TT.MM.JJJJ` für PDF und

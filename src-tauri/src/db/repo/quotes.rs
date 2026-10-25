@@ -485,6 +485,36 @@ pub async fn mark_converted(pool: &SqlitePool, id: &str, invoice_id: &str) -> Re
     Ok(())
 }
 
+/// [`mark_converted`] innerhalb einer laufenden Transaktion (Lauf F8): Entwurf
+/// der Rechnung und Abschluss des Angebots werden zusammen committet. Die
+/// Status-Bedingung im UPDATE verhindert eine zweite Umwandlung.
+pub async fn mark_converted_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    invoice_id: &str,
+) -> Result<()> {
+    let res = sqlx::query(
+        "UPDATE quotes SET
+            status = 'converted',
+            converted_at = datetime('now','utc'),
+            converted_invoice_id = ?,
+            updated_at = datetime('now','utc')
+         WHERE id = ? AND status = 'accepted'",
+    )
+    .bind(invoice_id)
+    .bind(id)
+    .execute(conn)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Konvertierung nur für angenommene Angebote möglich — das Angebot ist \
+             inzwischen umgewandelt oder zurückgezogen."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Setzt das Angebots-PDF-Archiv (Block 8). Erlaubt durch `trg_quotes_immutable`
 /// (Migration 0005): `pdf_archive_id` steht nicht in der Immutability-Whitelist
 /// der Kernfelder, lässt sich also auch auf einem gelockten Angebot setzen.

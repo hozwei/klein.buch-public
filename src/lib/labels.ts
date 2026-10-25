@@ -86,7 +86,7 @@ export function depreciationMethodShort(value: string): string {
 export const DISPOSAL_TYPES: { value: DisposalType; label: string }[] = [
   { value: "sale", label: "Verkauf" },
   { value: "scrap", label: "Verschrottung / Entsorgung" },
-  { value: "given_away", label: "Verschenkt / Privatentnahme" },
+  { value: "given_away", label: "Privatentnahme / Geschenk" },
 ];
 
 export function disposalTypeLabel(value: string | null): string {

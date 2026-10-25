@@ -625,6 +625,16 @@ pub async fn update_draft_core(
         })),
     )
     .await?;
+    // Lauf F8: Ein nach dem Restore bestätigter Entwurf (Nummer war schon
+    // festgeschrieben) gilt nach jeder Änderung wieder als vorgemerkt — die
+    // Bestätigung galt dem Stand, der dem versandten Original entsprach.
+    crate::backup::after_restore::reflag_confirmed_in(
+        &mut tx,
+        "invoice",
+        id,
+        &current.invoice_number,
+    )
+    .await?;
     tx.commit().await?;
     invoices::get_detail(pool, id)
         .await?
@@ -1285,6 +1295,21 @@ pub async fn invoices_cancel(
             original_date.format("%d.%m.%Y")
         )));
     }
+    // Lauf F8 (§ 11 EStG): Die EÜR setzt die Erstattung des gezahlten Betrags
+    // am Storno-Datum an. Vor dem (letzten) Zahlungseingang läge sie in einem
+    // Zeitraum, in dem das Geld noch gar nicht zugeflossen war.
+    if original.invoice.paid_amount_cents > 0 {
+        if let Some(last_paid) = last_payment_date(&original.invoice)? {
+            if storno_date < last_paid {
+                return Err(Error::Domain(format!(
+                    "Das Storno-Datum liegt vor dem letzten Zahlungseingang ({0}). \
+                     Erstatten lässt sich erst, was zugeflossen ist (§ 11 EStG): \
+                     bitte ein Storno-Datum ab dem {0} wählen.",
+                    last_paid.format("%d.%m.%Y")
+                )));
+            }
+        }
+    }
     let _fy = crate::fiscal_year::guard::ensure_year_open(
         pool,
         chrono::Datelike::year(&storno_date) as i64,
@@ -1332,7 +1357,6 @@ pub async fn invoices_cancel(
         invoices::refresh_storno_draft(pool, &id, storno_date, &args.reason).await?;
         (id, number)
     } else {
-        let storno_number = numbering::next_number(pool, DocType::StornoInvoice, storno_fy).await?;
         let totals = invoice::compute_totals(&storno_input.items);
         let snapshot = invoices::SellerSnapshot {
             name: seller_row.name.as_str(),
@@ -1370,8 +1394,14 @@ pub async fn invoices_cancel(
             input: storno_input,
             derived_from_quote_id: None,
         };
-        let storno_draft = invoices::create_draft(
-            pool,
+        // Lauf F8: Nummer, Entwurf und Audit in **einer** Transaktion wie bei
+        // jedem anderen Entwurf (F1) — scheitert etwas, ist keine ST-Nummer
+        // ohne Spur verbraucht.
+        let mut tx = crate::db::begin_immediate(pool).await?;
+        let storno_number =
+            numbering::next_number_in(&mut tx, DocType::StornoInvoice, storno_fy).await?;
+        let storno_draft_id = invoices::create_draft_in(
+            &mut tx,
             &payload,
             &storno_number,
             &snapshot,
@@ -1379,7 +1409,21 @@ pub async fn invoices_cancel(
             &totals,
         )
         .await?;
-        (storno_draft.id, storno_number)
+        audit_log::append_in(
+            &mut tx,
+            "invoice.draft_create",
+            "invoice",
+            &storno_draft_id,
+            Some(serde_json::json!({
+                "number": &storno_number,
+                "gross": totals.gross_amount_cents,
+                "items": payload.input.items.len(),
+                "storno_for": &original.invoice.id,
+            })),
+        )
+        .await?;
+        tx.commit().await?;
+        (storno_draft_id, storno_number)
     };
 
     // Storno locken (Pipeline läuft inkl. KoSIT + Mustang + Archive). Der
@@ -1875,6 +1919,23 @@ fn detail_to_input(detail: &InvoiceDetail) -> Result<InvoiceInput> {
         is_storno_for: invoice.is_storno_for.clone(),
         cancel_reason: invoice.cancel_reason.clone(),
     })
+}
+
+/// Jüngstes Zahlungsdatum einer Rechnung (Lauf F8): aus der Zahlungshistorie,
+/// ohne Historie `paid_at`.
+fn last_payment_date(invoice: &InvoiceRow) -> Result<Option<NaiveDate>> {
+    let history = invoices::parse_payment_history(invoice.payment_history_json.as_deref())?;
+    let mut last: Option<NaiveDate> = None;
+    for entry in history.iter().filter(|e| e.amount_cents != 0) {
+        let d = parse_date(&entry.paid_date)?;
+        last = Some(last.map_or(d, |l| l.max(d)));
+    }
+    if last.is_none() {
+        if let Some(at) = invoice.paid_at.as_deref() {
+            last = Some(parse_date(at)?);
+        }
+    }
+    Ok(last)
 }
 
 fn parse_date(s: &str) -> Result<NaiveDate> {

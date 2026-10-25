@@ -451,8 +451,10 @@ export async function authLogout(): Promise<void> {
 }
 
 /** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. Ein ausstehendes
- *  Lock-Backup kann das Sperren über die 30-s-Grenze ziehen (Lauf F3c); der
- *  Server sperrt dann im Hintergrund zu Ende, die Sitzungen sind bereits beendet. */
+ *  Lock-Backup oder eine laufende Aktion kann das Sperren über die 30-s-Grenze
+ *  ziehen (Lauf F3c); der Server sperrt dann garantiert im Hintergrund zu Ende
+ *  (Lauf F8: nach dem Beenden der Sitzungen bricht er nicht mehr ab), die
+ *  Sitzungen sind bereits beendet. */
 export async function authLock(): Promise<void> {
   const res = await postAuth("/api/auth/lock", {});
   if (res.status === 503) {
@@ -519,10 +521,30 @@ export async function authRecoveryRenew(): Promise<string[]> {
   return body.recoveryCodes;
 }
 
+/** Lauf F8: Antwort `timeout` beim Passphrase-Wechsel — das Ergebnis ist
+ *  unklar. Der Server begrenzt seine Wartezeiten so, dass das nicht vorkommen
+ *  sollte; tritt es doch ein (etwa sehr große Datenbank), darf die Oberfläche
+ *  weder „Fehler“ melden noch die neue Passphrase verwerfen. */
+export class PassphraseChangeUnclear extends Error {}
+
 export async function authChangePassphrase(
   newPassphrase: string,
 ): Promise<{ backupStarted: boolean }> {
-  return jsonOrThrow(await postAuthReauth("/api/auth/passphrase", { newPassphrase }));
+  const res = await postAuthReauth("/api/auth/passphrase", { newPassphrase });
+  if (res.status === 503) {
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    if (body?.code === "timeout") {
+      throw new PassphraseChangeUnclear(
+        "Ergebnis unklar: Der Server hat nicht rechtzeitig geantwortet, der Wechsel kann im " +
+          "Hintergrund noch wirksam geworden sein. Bewahre die neue Passphrase auf und versuche " +
+          "beim nächsten Anmelden zuerst die neue, dann die bisherige.",
+      );
+    }
+  }
+  return jsonOrThrow(res);
 }
 
 // ---- Neustart nach Restore ---------------------------------------------------

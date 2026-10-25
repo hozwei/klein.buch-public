@@ -231,9 +231,10 @@ Grundlage: §33 UStDV.
 ## Kleinunternehmer
 
 Eine Person mit Gewerbeschein oder freiberuflicher Tätigkeit, deren
-Umsatz unter den gesetzlichen Grenzen bleibt (ab 2026: maximal
-25.000 € im Vorjahr und voraussichtlich maximal 100.000 € im
-laufenden Jahr). Wer Kleinunternehmer ist, weist auf Rechnungen
+Umsatz unter den gesetzlichen Grenzen bleibt (seit 2025: höchstens
+25.000 € im Vorjahr und höchstens 100.000 € im laufenden Jahr; wer
+die 100.000 € im laufenden Jahr überschreitet, verliert §19 ab diesem
+Umsatz). Wer Kleinunternehmer ist, weist auf Rechnungen
 keine Umsatzsteuer aus, darf aber auch keine Vorsteuer abziehen.
 Gesetzliche Grundlage: §19 UStG.
 

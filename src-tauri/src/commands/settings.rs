@@ -52,7 +52,16 @@ pub async fn seller_profile_upsert(
     if seller_profile::reauth_relevant_change(prev.as_ref(), &input) {
         crate::commands::reauth::require_fresh()?;
     }
-    seller_profile::upsert(&pool, &input).await
+    let row = seller_profile::upsert(&pool, &input).await?;
+    // Lauf F8d (ADR 0039 Nr. 148): Ein Verzicht auf §19 (wirkt ab Jahresbeginn)
+    // oder eine Rückkehr kann den Status bereits aktivierter Kosten ändern.
+    // Nicht blockieren (§ 19 Abs. 2 UStG), aber die betroffenen Anlagen mit
+    // Handlungsweg in der Inbox nennen.
+    let prev_klein = prev.as_ref().is_none_or(|p| p.is_kleinunternehmer == 1);
+    if prev_klein != (row.is_kleinunternehmer == 1) {
+        crate::commands::assets::notify_capitalized_status_change(&pool).await;
+    }
+    Ok(row)
 }
 
 /// Argumente von [`seller_logo_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

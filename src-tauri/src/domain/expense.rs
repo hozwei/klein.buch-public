@@ -82,7 +82,7 @@ pub struct ExpenseInput {
     pub tax_amount_cents: i64,
     pub gross_amount_cents: i64,
     pub currency_code: String,
-    /// §13b Reverse-Charge Hinweis-Flag.
+    /// §13b Reverse-Charge: mit Flag muss `tax_amount_cents` 0 sein (ADR 0039 Nr. 143).
     pub reverse_charge_13b: bool,
     pub notes: Option<String>,
 }

@@ -36,10 +36,12 @@ services:
     ulimits:
       core: 0
     pids_limit: 256
-    # Faustregel: 512 MiB Grundbedarf + 2 × größtes Backup (Erstellen; ein Restore
-    # entschlüsselt mit etwa 1 × und legt erst danach das Pre-Restore-Backup an,
-    # ADR 0039 Nr. 127/129)
-    # Java-Sidecar höchstens 512 MiB je Lauf.
+    # Faustregel: 512 MiB Grundbedarf + 1 GiB Java-Sidecar (höchstens 512 MiB je
+    # Lauf, zwei Läufe; ein Lock-Backup läuft im Hintergrund, während schon die
+    # nächste Rechnung festgeschrieben wird) + 2 × größtes Backup (Erstellen; ein
+    # Restore entschlüsselt mit etwa 1 × und legt erst danach das Pre-Restore-
+    # Backup an, ADR 0039 Nr. 127/129). 2g reichen für Backups bis etwa 250 MiB,
+    # 3g bis etwa 750 MiB.
     mem_limit: 2g
     # Herunterfahren: Verbindungen bis 30 s, laufende Jobs und Scheduler-Tick
     # bis 30 s, danach ein ausstehendes Lock-Backup (zusammen bis 40 s), Pool

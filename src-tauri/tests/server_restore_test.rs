@@ -1856,6 +1856,87 @@ async fn restore_from_history(srv: TestServer, cookie: &str, backup_id: &str) ->
     restart(srv).await
 }
 
+/// Lauf F8 (ADR 0040 Nr. 62): Ein älteres Backup öffnet ein inzwischen
+/// abgeschlossenes Geschäftsjahr nicht wieder. Der Abschluss der ersetzten DB
+/// wird beim ersten Entsperren übernommen (Snapshot, Vermerk, Audit, Hinweis);
+/// Buchungen mit Datum in diesem Jahr scheitern danach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restore_keeps_fiscal_year_closed_after_backup() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let closed = i64::from(chrono::Datelike::year(
+        &klein_buch_lib::clock::today_berlin(),
+    )) - 1;
+    let a = backup_now(&srv, &cookie).await;
+    let a_id = a["historyId"].as_str().unwrap().to_string();
+    // Nach dem Backup: Abschluss des Vorjahres (Protokoll direkt, der
+    // Abschluss-Weg selbst ist anderswo getestet).
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        sqlx::query(
+            "INSERT INTO fiscal_year_locks
+                (fiscal_year, closed_at, income_total_cents, expense_total_cents,
+                 afa_total_cents, surplus_cents, app_version, schema_version)
+             VALUES (?, '2026-02-01 10:00:00', 500000, 100000, 0, 400000, '2026.11.0', 32)",
+        )
+        .bind(closed)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let srv = restore_from_history(srv, &cookie, &a_id).await;
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let cookie = session_cookie(&r);
+
+    let (income, notes): (i64, Option<String>) = {
+        let pool = srv.state.ctx.pool().unwrap();
+        sqlx::query_as(
+            "SELECT income_total_cents, notes FROM fiscal_year_locks WHERE fiscal_year = ?",
+        )
+        .bind(closed)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(income, 500000, "Snapshot der ersetzten DB");
+    assert!(
+        notes
+            .as_deref()
+            .is_some_and(|n| n.starts_with("nach Restore übernommen")),
+        "{notes:?}"
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'fiscal_year.lock_restored_after_restore'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &srv,
+            "SELECT COUNT(*) FROM notifications WHERE dedup_key LIKE 'restore_fiscal_year_locks:%'"
+        )
+        .await,
+        1
+    );
+    // Buchung mit Datum im abgeschlossenen Jahr: abgelehnt.
+    let mut args = expense_args("Papier im Vorjahr");
+    args["args"]["input"]["expenseDate"] = serde_json::Value::from(format!("{closed}-12-01"));
+    let r = call(&srv.app, &cookie, "expenses_create", args).await;
+    assert_ne!(r.status, StatusCode::OK, "{}", r.text());
+    assert!(
+        r.text()
+            .contains(&format!("Geschäftsjahr {closed} ist abgeschlossen")),
+        "{}",
+        r.text()
+    );
+}
+
 /// Lauf F1d (S1, S2, Nummernkreis-Hinweis): Restore eines **älteren** Backups
 /// in dieselbe Instanz.
 /// - Ein nach dem Backup abgerechneter Abo-Termin und ein gebuchtes Kosten-Abo

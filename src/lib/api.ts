@@ -24,6 +24,7 @@ export {
   authTotpRenewFinish,
   authRecoveryRenew,
   authChangePassphrase,
+  PassphraseChangeUnclear,
 } from "./transport";
 export type {
   AuthState,
@@ -115,7 +116,7 @@ import type {
   AssetInputDto,
   AssetDisposeArgs,
   AfaTabellen,
-  MethodSuggestion,
+  AssetSuggestion,
   DepreciationEntry,
   AccrueReport,
   EuerReport,
@@ -855,10 +856,12 @@ export function assetsAfaTable(): Promise<AfaTabellen> {
 export function assetsSuggestMethod(
   expenseCategory: string | null,
   acquisitionCostCents: number,
-): Promise<MethodSuggestion> {
-  return invoke<MethodSuggestion>("assets_suggest_method", {
+  expenseId: string | null = null,
+): Promise<AssetSuggestion> {
+  return invoke<AssetSuggestion>("assets_suggest_method", {
     expenseCategory,
     acquisitionCostCents,
+    expenseId,
   });
 }
 

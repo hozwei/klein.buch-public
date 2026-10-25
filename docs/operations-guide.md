@@ -407,9 +407,13 @@ Kapitel: `backup-und-wiederherstellen`, `disaster-recovery`.
   gleichzeitig.
 
 `compose.example.yaml` setzt `mem_limit: 2g` mit der Faustregel „512 MiB
-Grundbedarf + 2 × größtes Backup“ (seit Lauf F3a; vorher 3 ×); sie deckt auch
-den Restore (seit Lauf F3c). Mit wachsendem Archiv `mem_limit` mitziehen, sonst
-beendet der Kernel den Prozess mitten im Backup oder Restore.
+Grundbedarf + 1 GiB Java-Sidecar (zwei Läufe) + 2 × größtes Backup“ (Java-Anteil
+seit Lauf F8: Lock-Backups laufen seit F3a im Hintergrund unter dem Scheduler,
+ohne Kostenklassen-Semaphore, also gleichzeitig mit einem Festschreiben; Backup-
+Anteil seit F3a 2 ×, vorher 3 ×); sie deckt auch den Restore (seit Lauf F3c).
+2g reichen damit für Backups bis etwa 250 MiB, 3g bis etwa 750 MiB. Mit wachsendem
+Archiv `mem_limit` mitziehen, sonst beendet der Kernel den Prozess mitten im
+Backup, Restore oder Festschreiben (`"OOMKilled": true` in `docker inspect`).
 
 **Plattenplatz** auf `/data`: Datenbank + Archiv + lokale Backups (Floor, plus
 nie rotierte manuelle und Pre-Restore-Backups) + Reserve

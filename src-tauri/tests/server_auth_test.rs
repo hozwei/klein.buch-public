@@ -968,10 +968,54 @@ async fn unlock_does_not_wait_for_tick_still_running_from_lock() {
     use std::sync::atomic::Ordering;
     let srv = test_server();
     let cookie = setup(&srv).await;
+    use klein_buch_lib::server::state::{DB_GATE_WAIT, SCHEDULER_STOP_WAIT};
+    // Lauf F8b: Ohne ausstehendes Lock-Backup wartet das Nachholen
+    // (`flush_pending_backup`) nicht auf die vom Test gehaltene Tick-Sperre —
+    // die Dauer des Sperrens ist dann SCHEDULER_STOP_WAIT (fest, der Tick
+    // „hängt“) plus Audit und Schließen des Pools (WAL-Checkpoint, fsync).
+    let pool = srv.state.ctx.pool().unwrap();
+    assert!(
+        !klein_buch_lib::backup::is_backup_pending(&pool)
+            .await
+            .unwrap(),
+        "kein Lock-Backup ausstehend"
+    );
+    drop(pool);
     let tick = srv.state.ctx.scheduler_gate.lock().await; // alter Tick läuft weiter
+    let lock_started = std::time::Instant::now();
     let r = send(&srv.app, post("/api/auth/lock", "{}", Some(&cookie), None)).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
-    assert!(!srv.state.ctx.is_unlocked());
+    // Die Verlängerung ist echt, kein Fehler: 10 s der 30-s-Antwortfrist
+    // (REQUEST_TIMEOUT) verbraucht das Abwarten des hängenden Ticks; unter
+    // Volllast des Gates (parallele Testprogramme, synchrone Schreibzugriffe)
+    // können Audit und Schließen des Pools den Rest überschreiten. Dann endet
+    // die Antwort mit 503 `timeout`, und das Sperren läuft im Hintergrund zu
+    // Ende (Lauf F8, ADR 0040 Nr. 63/64). Das prüft der Test ausdrücklich:
+    // `lock_database` hält `transition` bis zum Schluss.
+    let timed_out = r.status == StatusCode::SERVICE_UNAVAILABLE && r.json()["code"] == "timeout";
+    if !timed_out {
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    }
+    let bound = SCHEDULER_STOP_WAIT + DB_GATE_WAIT + std::time::Duration::from_secs(10);
+    let done = tokio::time::timeout(
+        bound.saturating_sub(lock_started.elapsed()),
+        srv.state.transition.lock(),
+    )
+    .await
+    .expect("Sperren im Hintergrund nicht abgeschlossen");
+    drop(done);
+    let took = lock_started.elapsed();
+    if timed_out {
+        eprintln!("Datenbank sperren endete nach {took:?} (Antwort: 503 timeout)");
+    }
+    assert!(
+        took >= SCHEDULER_STOP_WAIT,
+        "hat auf den Tick gewartet: {took:?}"
+    );
+    assert!(!srv.state.ctx.is_unlocked(), "Pool zu");
+    assert!(
+        srv.state.ctx.session.get().is_none(),
+        "Passphrase aus dem RAM"
+    );
     let started = std::time::Instant::now();
     let r = tokio::time::timeout(std::time::Duration::from_secs(60), login(&srv, PASS))
         .await

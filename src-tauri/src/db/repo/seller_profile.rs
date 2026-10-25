@@ -76,16 +76,61 @@ pub fn reauth_relevant_change(prev: Option<&SellerProfileRow>, input: &SellerPro
         || klein != input.is_kleinunternehmer
 }
 
-pub async fn get(pool: &SqlitePool) -> Result<Option<SellerProfileRow>> {
-    let row: Option<SellerProfileRow> = sqlx::query_as(
-        "SELECT id, name, legal_form, street, postal_code, city, country_code,
+/// Period-aware §19-Status eines Geschäftsjahres aus dem Profil (R2-002): für
+/// Jahre vor dem Verzichts-Stichtag gilt §19 weiter; ohne Profil gilt §19
+/// (Zielgruppe von Klein.Buch).
+pub fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bool {
+    let status = profile
+        .map(|p| KleinunternehmerStatus {
+            is_kleinunternehmer: p.is_kleinunternehmer == 1,
+            waived_since: p
+                .waived_paragraph_19_since
+                .as_deref()
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        })
+        .unwrap_or(KleinunternehmerStatus {
+            is_kleinunternehmer: true,
+            waived_since: None,
+        });
+    crate::domain::kleinunternehmer::is_active_for_year(&status, fiscal_year)
+}
+
+/// §19-Status, unter dem eine Kostenposition steuerlich zu behandeln ist
+/// (Lauf F8d, ADR 0039 Nr. 148): maßgeblich ist der Status bei
+/// **Leistungsbezug**, nicht im Zahlungsjahr (§ 15 Abs. 1 Satz 1 Nr. 1 UStG;
+/// Abschn. 19.5 UStAE zum Wechsel der Besteuerungsform). Das bestimmt die
+/// Aufteilung netto/Vorsteuer in EÜR-Ausfüllhilfe und DATEV-Stapel und die
+/// Anschaffungskosten aktivierter Kosten (§ 9b Abs. 1 EStG). Kosten haben
+/// kein eigenes Leistungsdatum; es gilt das Belegdatum (`expense_date`, ein
+/// festgeschriebenes Kernfeld). Die zeitliche Zuordnung der Ausgabe
+/// (Zahlungsjahr, § 11 Abs. 2 EStG) bleibt davon unberührt.
+pub fn is_klein_for_expense(
+    profile: Option<&SellerProfileRow>,
+    expense_date: &str,
+) -> Result<bool> {
+    let head = expense_date.get(..10).unwrap_or(expense_date);
+    let date = NaiveDate::parse_from_str(head, "%Y-%m-%d").map_err(|e| {
+        Error::Domain(format!(
+            "Kosten: ungültiges Belegdatum '{expense_date}': {e}"
+        ))
+    })?;
+    Ok(is_klein_for_year(profile, chrono::Datelike::year(&date)))
+}
+
+const SELECT_PROFILE: &str = "SELECT id, name, legal_form, street, postal_code, city, country_code,
                 tax_number, vat_id, email, phone, iban, bic, logo_filename,
                 is_kleinunternehmer, waived_paragraph_19_since,
                 default_pdf_template, default_currency, updated_at
-         FROM seller_profile WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await?;
+         FROM seller_profile WHERE id = 1";
+
+pub async fn get(pool: &SqlitePool) -> Result<Option<SellerProfileRow>> {
+    let row: Option<SellerProfileRow> = sqlx::query_as(SELECT_PROFILE).fetch_optional(pool).await?;
+    Ok(row)
+}
+
+/// Wie [`get`], auf einer Verbindung bzw. in einer laufenden Transaktion.
+pub async fn get_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<SellerProfileRow>> {
+    let row: Option<SellerProfileRow> = sqlx::query_as(SELECT_PROFILE).fetch_optional(conn).await?;
     Ok(row)
 }
 
@@ -419,5 +464,20 @@ mod tests {
         assert!(reauth_relevant_change(Some(&stored), &waive));
         let back = row(None, None, false);
         assert!(reauth_relevant_change(Some(&back), &input()));
+    }
+
+    /// Lauf F8d (ADR 0039 Nr. 148): Der Status von Kosten folgt dem Jahr des
+    /// Belegdatums (Leistungsbezug), nicht dem Zahlungsjahr. Verzicht 2027:
+    /// Kosten mit Belegdatum Dezember 2026 bleiben §19, ab 2027 Regel.
+    #[test]
+    fn expense_status_follows_the_document_date() {
+        let mut waived = row(None, None, false);
+        waived.waived_paragraph_19_since = Some("2027-03-15".into());
+        assert!(is_klein_for_expense(Some(&waived), "2026-12-31").unwrap());
+        assert!(!is_klein_for_expense(Some(&waived), "2027-01-01").unwrap());
+        // Zeitanteil wird ignoriert; ohne Profil gilt §19.
+        assert!(!is_klein_for_expense(Some(&waived), "2027-06-01 10:00:00").unwrap());
+        assert!(is_klein_for_expense(None, "2030-01-01").unwrap());
+        assert!(is_klein_for_expense(Some(&waived), "31.12.2026").is_err());
     }
 }

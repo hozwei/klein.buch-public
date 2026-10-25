@@ -19,6 +19,7 @@
     AfaTabellen,
     DepreciationMethod,
     AssetInputDto,
+    MethodSuggestion,
   } from "#lib/types.ts";
   import { DEPRECIATION_METHODS } from "#lib/labels.ts";
   import { euro } from "#lib/format.ts";
@@ -33,6 +34,10 @@
   let editId = $state<string | null>(null);
   let expenseId = $state<string | null>(null);
   let sourceExpenseCategory = $state<string | null>(null);
+  // Lauf F8: Herkunft der vorbelegten Anschaffungskosten (§ 9b Abs. 1 EStG).
+  let sourceIsKlein = $state<boolean | null>(null);
+  // Lauf F8c: §13b-Kosten bei §19 — selbst geschuldete Steuer als eigene Kosten + Anlage.
+  let sourceReverseCharge = $state(false);
 
   // Formularfelder
   let label = $state("");
@@ -97,10 +102,20 @@
         if (detail) {
           const e = detail.expense;
           label = e.description;
-          costEuros = e.netAmountCents / 100;
           vendorContactId = e.vendorContactId ?? "";
           sourceExpenseCategory = e.category;
-          await applySuggestion();
+          // Lauf F8: Anschaffungskosten brutto bei §19, netto bei Regelbesteuerung
+          // (§ 9b Abs. 1 EStG), Anschaffungsdatum = Belegdatum der Kosten.
+          const s = await assetsSuggestMethod(e.category, e.netAmountCents, expenseId);
+          if (s.source) {
+            costEuros = s.source.acquisitionCostCents / 100;
+            acquisitionDate = s.source.acquisitionDate;
+            sourceIsKlein = s.source.isKleinunternehmer;
+            sourceReverseCharge = s.source.reverseCharge13b;
+          } else {
+            costEuros = e.netAmountCents / 100;
+          }
+          applySuggestionResult(s);
         }
       } catch (e) {
         flash("Quell-Kosten konnten nicht geladen werden: " + String(e), "error");
@@ -132,14 +147,20 @@
       return;
     }
     try {
-      const s = await assetsSuggestMethod(sourceExpenseCategory, costCents);
-      depreciationMethod = s.method;
-      if (s.usefulLifeYears != null) usefulLifeYears = s.usefulLifeYears;
-      if (s.afaCategory) afaCategory = s.afaCategory;
-      flash(s.reason);
+      // Mit Quell-Kosten prüft der Server die GWG-Grenze an deren Nettobetrag.
+      applySuggestionResult(
+        await assetsSuggestMethod(sourceExpenseCategory, costCents, expenseId),
+      );
     } catch (e) {
       flash("Vorschlag fehlgeschlagen: " + String(e), "error");
     }
+  }
+
+  function applySuggestionResult(s: MethodSuggestion) {
+    depreciationMethod = s.method;
+    if (s.usefulLifeYears != null) usefulLifeYears = s.usefulLifeYears;
+    if (s.afaCategory) afaCategory = s.afaCategory;
+    flash(s.reason);
   }
 
   async function save() {
@@ -210,8 +231,26 @@
       <input type="date" bind:value={acquisitionDate} max={maxDate} />
     </label>
     <label>
-      Anschaffungskosten netto (€)
+      Anschaffungskosten (€)
       <input type="number" step="0.01" min="0" bind:value={costEuros} />
+      <span class="lbl-hint">
+        {#if sourceIsKlein === true && sourceReverseCharge}
+          Rechnungsbetrag aus den Kosten (§ 13b, ohne Umsatzsteuer). Die selbst geschuldete
+          Steuer erfasst Du bei der Zahlung an das Finanzamt als eigene Kosten und übernimmst
+          sie als eigene Anlage mit gleichem Anschaffungsdatum, gleicher Methode und
+          Nutzungsdauer.
+        {:else if sourceIsKlein === true}
+          Brutto aus den Kosten: Als Kleinunternehmer gehört die Umsatzsteuer zu den
+          Anschaffungskosten. Ein anderer Betrag ist nicht möglich; Sammelrechnungen
+          vorher in getrennte Kosten aufteilen.
+        {:else if sourceIsKlein === false}
+          Netto aus den Kosten: Die Vorsteuer ziehst Du gesondert ab. Ein anderer Betrag
+          ist nicht möglich; Sammelrechnungen vorher in getrennte Kosten aufteilen.
+        {:else}
+          Als Kleinunternehmer brutto, bei Regelbesteuerung netto. Die GWG-Grenze
+          gilt immer für den Betrag ohne Umsatzsteuer.
+        {/if}
+      </span>
     </label>
     <label>
       Lieferant (Kontakt, optional)

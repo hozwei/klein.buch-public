@@ -20,12 +20,33 @@
 //! die AfA läuft auf diesem betrieblichen Wert. Der private Anteil wird nie
 //! aktiviert (keine Betriebsausgabe).
 //!
-//! ## Anschaffungskosten = NETTO
+//! ## Anschaffungskosten (Lauf F8, § 9b Abs. 1 EStG)
 //!
-//! `acquisition_cost_cents` ist der **Netto**-Wert. Für §19-Kleinunternehmer ist
-//! die gezahlte Vorsteuer nicht abziehbar und gehört steuerlich eigentlich in die
-//! AfA-Bemessungsgrundlage; in v0.1 setzen wir bewusst den Netto-Wert an und
-//! dokumentieren das als Vereinfachung (Steuerberater-Gegencheck, PRD-Caveat).
+//! `acquisition_cost_cents` sind die Anschaffungskosten, auf denen die AfA läuft:
+//! bei Regelbesteuerung der **Netto**-Wert (die Vorsteuer ist abziehbar), bei
+//! §19-Kleinunternehmern der **Brutto**-Wert — die gezahlte Umsatzsteuer ist dort
+//! nicht abziehbar und gehört zu den Anschaffungskosten. Seit Lauf F5b zählt eine
+//! aktivierte Kostenposition nicht mehr selbst in der EÜR; die Anschaffung wirkt
+//! nur über die AfA. [`acquisition_cost_from_expense`] liefert den richtigen
+//! Wert, [`check_cost_against_expense`] verlangt ihn genau (Lauf F8b): Weil die
+//! EÜR und der DATEV-Stapel die **ganze** Kostenposition herausnehmen, würde ein
+//! abweichender Betrag einen Rest nie abziehen (Teil-Aktivierung) oder das
+//! Anlagekonto nie auf 0 bringen. Bei Regelbesteuerung bleibt die gezahlte
+//! Vorsteuer der Position Betriebsausgabe im Zahlungsjahr (EÜR „gezahlte
+//! Vorsteuerbeträge“, DATEV Vorsteuerkonto); nur der Nettobetrag wirkt über die AfA.
+//! Ob §19 oder Regelbesteuerung gilt, entscheidet der Status bei Leistungsbezug
+//! (Jahr des Belegdatums der Kosten, Lauf F8d, ADR 0039 Nr. 148).
+//!
+//! **§13b bei §19 (Lauf F8c):** Die selbst geschuldete Steuer steht nicht auf der
+//! Lieferantenrechnung; sie wird bei der Zahlung an das Finanzamt als eigene
+//! Kostenposition erfasst und als eigene Anlage übernommen (siehe
+//! [`check_cost_against_expense`]). Beide Kostenpositionen fallen aus der EÜR
+//! heraus, beide Anlagen zusammen schreiben Rechnung + Steuer ab.
+//!
+//! Die **GWG-Grenze** (§ 6 Abs. 2 Satz 1 EStG) gilt dagegen immer für den Betrag
+//! **ohne** enthaltene Umsatzsteuer, auch wenn sie nicht abziehbar ist (R 9b
+//! Abs. 2 EStR): Der Methodenvorschlag nimmt bei Aktivierung aus Kosten deren
+//! Nettobetrag.
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -78,7 +99,11 @@ pub enum DisposalType {
     Sale,
     /// Verschrottung/Entsorgung — Erlös 0.
     Scrap,
-    /// Verschenkt/Privatentnahme — Erlös 0.
+    /// Privatentnahme oder Geschenk (Lauf F8) — `disposal_proceeds_cents` ist der
+    /// Entnahmewert: bei einer Privatentnahme der Teilwert (§ 6 Abs. 1 Nr. 4
+    /// EStG), als Betriebseinnahme wie ein Erlös (Anlage EÜR „Veräußerung oder
+    /// Entnahme von Anlagevermögen“); bei einem betrieblichen Geschenk an Dritte 0
+    /// (§ 4 Abs. 5 Nr. 1 EStG beachten). Die DB-Kennung bleibt `given_away`.
     GivenAway,
 }
 
@@ -110,7 +135,8 @@ pub struct AssetInput {
     pub label: String,
     /// Anschaffungsdatum. Bestimmt das Geschäftsjahr der Belegnummer + AfA-Start.
     pub acquisition_date: NaiveDate,
-    /// Netto-Anschaffungskosten in Cent (voll, vor Privatanteil-Kürzung).
+    /// Anschaffungskosten in Cent (voll, vor Privatanteil-Kürzung): netto bei
+    /// Regelbesteuerung, brutto bei §19 (siehe Moduldoku).
     pub acquisition_cost_cents: i64,
     /// Optionaler Quell-Kosten-Beleg (wenn aus einer Kosten-Position aktiviert).
     pub expense_id: Option<String>,
@@ -142,6 +168,114 @@ pub fn business_book_value_start_cents(
     // lehnt NaN vorher ab).
     let basis_points = (share * 100.0).round() as i64;
     crate::domain::money::mul_div_round(acquisition_cost_cents, basis_points, 10_000)
+}
+
+/// Anschaffungskosten einer aus Kosten aktivierten Anlage (Lauf F8, § 9b Abs. 1
+/// EStG): bei §19 der Bruttobetrag — die Umsatzsteuer ist nicht abziehbar —, bei
+/// Regelbesteuerung der Nettobetrag. Maßgeblich ist der Status bei
+/// Leistungsbezug (Jahr des Belegdatums, § 15 Abs. 1 UStG; Lauf F8d), nicht der
+/// des Zahlungsjahres.
+pub fn acquisition_cost_from_expense(
+    net_amount_cents: i64,
+    gross_amount_cents: i64,
+    is_kleinunternehmer: bool,
+) -> i64 {
+    if is_kleinunternehmer {
+        gross_amount_cents
+    } else {
+        net_amount_cents
+    }
+}
+
+/// Lauf F8b (§ 9b Abs. 1, § 4 Abs. 3 Satz 3 EStG, GoBD-Nachvollziehbarkeit):
+/// Die Anschaffungskosten einer aus Kosten übernommenen Anlage müssen genau
+/// [`acquisition_cost_from_expense`] entsprechen. EÜR und DATEV-Stapel nehmen
+/// die ganze Kostenposition heraus; ein kleinerer Betrag (Teil-Aktivierung einer
+/// Sammelrechnung) ließe den Rest in keinem Jahr wirken, ein größerer
+/// (Nebenkosten aus einem anderen Beleg) würde ohne Ausgabe abgeschrieben, und
+/// das Anlagekonto ginge nie auf 0. Sammelrechnungen werden vorher in getrennte
+/// Kostenpositionen aufgeteilt; Nebenkosten auf demselben Beleg gehören in
+/// dieselbe Kostenposition, Nebenkosten aus einem eigenen Beleg werden als eigene
+/// Kostenposition erfasst und als eigene Anlage (gleiche Methode und
+/// Nutzungsdauer) übernommen. `None` = in Ordnung, sonst die Meldung.
+///
+/// Lauf F8c (§ 13b Abs. 5 Satz 1, Abs. 8 UStG; § 9b Abs. 1 EStG; ADR 0039
+/// Nr. 147): Bei §19 und `reverse_charge_13b` gehört die selbst geschuldete,
+/// nicht abziehbare Umsatzsteuer zu den Anschaffungskosten, steht aber nicht
+/// auf der Lieferantenrechnung (netto = brutto). Sie wird bei der Zahlung an
+/// das Finanzamt als eigene Kostenposition erfasst und als eigene Anlage
+/// (gleiches Anschaffungsdatum, gleiche Methode und Nutzungsdauer) übernommen;
+/// die Rechnungsposition selbst bleibt beim Rechnungsbetrag. Ein höherer Betrag
+/// bekommt deshalb eine eigene Meldung, die diesen Weg nennt.
+pub fn check_cost_against_expense(
+    acquisition_cost_cents: i64,
+    net_amount_cents: i64,
+    gross_amount_cents: i64,
+    is_kleinunternehmer: bool,
+    reverse_charge_13b: bool,
+) -> Option<String> {
+    use crate::domain::money::eur;
+    let expected =
+        acquisition_cost_from_expense(net_amount_cents, gross_amount_cents, is_kleinunternehmer);
+    if acquisition_cost_cents == expected {
+        return None;
+    }
+    if reverse_charge_13b && is_kleinunternehmer && acquisition_cost_cents > expected {
+        return Some(format!(
+            "Bei Reverse-Charge (§ 13b UStG) schuldest Du als Kleinunternehmer die \
+             Umsatzsteuer selbst und kannst sie nicht als Vorsteuer abziehen; sie gehört zu \
+             den Anschaffungskosten (§ 9b Abs. 1 EStG). Diese Kostenposition enthält sie \
+             nicht: Übernimm hier den Rechnungsbetrag {} statt {}. Die selbst geschuldete \
+             Steuer erfasst Du bei der Zahlung an das Finanzamt als eigene Kostenposition \
+             (nur der Anteil dieser Anlage, USt-Betrag 0, ohne §13b-Schalter) und \
+             übernimmst sie als eigene Anlage mit gleichem Anschaffungsdatum, gleicher \
+             Methode und Nutzungsdauer. So wirkt sie über die AfA und nicht zusätzlich als \
+             Betriebsausgabe.",
+            eur(expected),
+            eur(acquisition_cost_cents)
+        ));
+    }
+    if net_amount_cents != gross_amount_cents
+        && is_kleinunternehmer
+        && acquisition_cost_cents == net_amount_cents
+    {
+        return Some(format!(
+            "Als Kleinunternehmer (§ 19 UStG) kannst Du die Umsatzsteuer nicht als \
+             Vorsteuer abziehen; sie gehört zu den Anschaffungskosten (§ 9b Abs. 1 EStG). \
+             Bitte den Bruttobetrag {} statt des Nettobetrags {} übernehmen.",
+            eur(gross_amount_cents),
+            eur(net_amount_cents)
+        ));
+    }
+    if net_amount_cents != gross_amount_cents
+        && !is_kleinunternehmer
+        && acquisition_cost_cents == gross_amount_cents
+    {
+        return Some(format!(
+            "Bei Regelbesteuerung ziehst Du die Umsatzsteuer als Vorsteuer ab; \
+             Anschaffungskosten sind der Nettobetrag {} statt des Bruttobetrags {}.",
+            eur(net_amount_cents),
+            eur(gross_amount_cents)
+        ));
+    }
+    let basis = if is_kleinunternehmer {
+        "als Kleinunternehmer (§ 19 UStG) der Bruttobetrag"
+    } else {
+        "bei Regelbesteuerung der Nettobetrag"
+    };
+    Some(format!(
+        "Die Anschaffungskosten einer aus Kosten übernommenen Anlage müssen dem Betrag \
+         der Kosten entsprechen: {} {} statt {}. Die EÜR nimmt die ganze Kostenposition \
+         heraus; ein abweichender Betrag würde einen Rest nie oder einen Mehrbetrag ohne \
+         Ausgabe abschreiben. Ist nur ein Teil der Rechnung eine Anlage, teile sie vorher \
+         in getrennte Kostenpositionen auf. Nebenkosten auf demselben Beleg gehören in \
+         dieselbe Kostenposition; Nebenkosten aus einem eigenen Beleg erfasst Du als eigene \
+         Kostenposition und übernimmst sie als eigene Anlage mit gleicher Methode und \
+         Nutzungsdauer.",
+        basis,
+        eur(expected),
+        eur(acquisition_cost_cents)
+    ))
 }
 
 // ---- Validation ------------------------------------------------------------
@@ -364,7 +498,8 @@ pub enum DisposalValidationError {
 }
 
 /// Prüft einen Abgang im Functional Core (R1-020) und liefert den zu buchenden
-/// Erlös: beim Verkauf den angegebenen (nicht negativ), sonst 0. Das Datum muss
+/// Erlös: beim Verkauf den Erlös, bei Privatentnahme/Geschenk den Entnahmewert
+/// (Lauf F8; beide nicht negativ), bei Verschrottung 0. Das Datum muss
 /// zwischen Anschaffung und heute liegen — ein Abgang vor der Anschaffung hätte
 /// keine anteilige AfA und schöbe den Restbuchwert in ein Jahr vor dem Zugang.
 pub fn validate_disposal(
@@ -384,14 +519,16 @@ pub fn validate_disposal(
         });
     }
     match disposal_type {
-        DisposalType::Sale if proceeds_cents < 0 => {
+        DisposalType::Scrap => Ok(0),
+        DisposalType::Sale | DisposalType::GivenAway if proceeds_cents < 0 => {
             Err(DisposalValidationError::ProceedsNegative { proceeds_cents })
         }
-        DisposalType::Sale if !crate::domain::money::amount_in_range(proceeds_cents) => {
+        DisposalType::Sale | DisposalType::GivenAway
+            if !crate::domain::money::amount_in_range(proceeds_cents) =>
+        {
             Err(DisposalValidationError::ProceedsOutOfRange)
         }
-        DisposalType::Sale => Ok(proceeds_cents),
-        DisposalType::Scrap | DisposalType::GivenAway => Ok(0),
+        DisposalType::Sale | DisposalType::GivenAway => Ok(proceeds_cents),
     }
 }
 
@@ -410,7 +547,7 @@ pub fn disposal_message(e: &DisposalValidationError) -> String {
             acquisition_date.format("%d.%m.%Y")
         ),
         DisposalValidationError::ProceedsNegative { .. } => {
-            "Der Verkaufserlös darf nicht negativ sein.".into()
+            "Der Verkaufserlös bzw. Entnahmewert darf nicht negativ sein.".into()
         }
         DisposalValidationError::ProceedsOutOfRange => {
             crate::domain::money::amount_out_of_range_message()
@@ -438,7 +575,20 @@ mod tests {
         );
         assert_eq!(
             validate_disposal(DisposalType::GivenAway, 5, today, acq, today),
+            Ok(5)
+        );
+        // Lauf F8: Privatentnahme mit Teilwert; betriebliches Geschenk mit 0.
+        assert_eq!(
+            validate_disposal(DisposalType::GivenAway, 30_000, today, acq, today),
+            Ok(30_000)
+        );
+        assert_eq!(
+            validate_disposal(DisposalType::GivenAway, 0, today, acq, today),
             Ok(0)
+        );
+        assert_eq!(
+            validate_disposal(DisposalType::GivenAway, -1, today, acq, today),
+            Err(DisposalValidationError::ProceedsNegative { proceeds_cents: -1 })
         );
         assert!(matches!(
             validate_disposal(DisposalType::Sale, 1, d(2026, 5, 21), acq, today),
@@ -637,5 +787,66 @@ mod tests {
             validate_disposal(DisposalType::Sale, i64::MAX, d(2026, 1, 5), acq, now),
             Err(DisposalValidationError::ProceedsOutOfRange)
         );
+    }
+
+    // Lauf F8/F8b (§ 9b Abs. 1 EStG): bei §19 brutto, bei Regelbesteuerung netto;
+    // jeder andere Betrag wird abgelehnt (auch Teil-Aktivierung und Nebenkosten).
+    #[test]
+    fn acquisition_cost_from_expense_by_tax_status() {
+        assert_eq!(
+            acquisition_cost_from_expense(100_000, 119_000, true),
+            119_000
+        );
+        assert_eq!(
+            acquisition_cost_from_expense(100_000, 119_000, false),
+            100_000
+        );
+        assert!(check_cost_against_expense(119_000, 100_000, 119_000, true, false).is_none());
+        let m = check_cost_against_expense(100_000, 100_000, 119_000, true, false).unwrap();
+        assert!(m.contains("1190,00") && m.contains("1000,00"), "{m}");
+        assert!(check_cost_against_expense(100_000, 100_000, 119_000, false, false).is_none());
+        assert!(check_cost_against_expense(119_000, 100_000, 119_000, false, false).is_some());
+        // Lauf F8b: Teil-Aktivierung und Nebenkosten (Mehrbetrag) abgelehnt, mit
+        // Hinweis auf das Aufteilen; Kosten ohne USt: genau der Betrag.
+        let m = check_cost_against_expense(50_000, 100_000, 119_000, true, false).unwrap();
+        assert!(
+            m.contains("1190,00") && m.contains("500,00") && m.contains("getrennte"),
+            "{m}"
+        );
+        let m = check_cost_against_expense(105_000, 100_000, 119_000, false, false).unwrap();
+        assert!(
+            m.contains("Nettobetrag") && m.contains("Nebenkosten"),
+            "{m}"
+        );
+        assert!(check_cost_against_expense(80_000, 80_000, 80_000, true, false).is_none());
+        assert!(check_cost_against_expense(80_000, 80_000, 80_000, false, false).is_none());
+        assert!(check_cost_against_expense(79_999, 80_000, 80_000, true, false).is_some());
+    }
+
+    // Lauf F8c (§ 13b Abs. 8 UStG, § 9b Abs. 1 EStG): §13b-Kosten stehen netto
+    // (= brutto) in der Kostenposition. Bei §19 bleibt die Anlage beim
+    // Rechnungsbetrag; ein Betrag mit der selbst geschuldeten Steuer wird mit
+    // dem Weg über eine eigene Kostenposition abgelehnt. Bei Regelbesteuerung ist
+    // die Steuer Vorsteuer, dort gilt die allgemeine Meldung.
+    #[test]
+    fn reverse_charge_under_par19_points_to_separate_tax_asset() {
+        assert!(check_cost_against_expense(100_000, 100_000, 100_000, true, true).is_none());
+        let m = check_cost_against_expense(119_000, 100_000, 100_000, true, true).unwrap();
+        assert!(
+            m.contains("§ 13b")
+                && m.contains("1000,00")
+                && m.contains("1190,00")
+                && m.contains("eigene Anlage")
+                && m.contains("nicht zusätzlich als")
+                && m.contains("Betriebsausgabe"),
+            "{m}"
+        );
+        // Teilbetrag: allgemeine Meldung (Aufteilen).
+        let m = check_cost_against_expense(50_000, 100_000, 100_000, true, true).unwrap();
+        assert!(m.contains("getrennte") && !m.contains("§ 13b"), "{m}");
+        // Regelbesteuerung: §13b-Steuer ist abziehbar, Anschaffungskosten netto.
+        assert!(check_cost_against_expense(100_000, 100_000, 100_000, false, true).is_none());
+        let m = check_cost_against_expense(119_000, 100_000, 100_000, false, true).unwrap();
+        assert!(!m.contains("§ 13b"), "{m}");
     }
 }

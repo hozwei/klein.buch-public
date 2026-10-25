@@ -2386,6 +2386,240 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     (nicht im Zugriffsprotokoll) und wie die globale Grenze von außen sichtbar wird
     (`core_cut_test::operations_guide_names_connection_limit_log_line`). (5) **ADR-Index**
     um die Amendments vom 24./25.10.2026 ergänzt.
+145. **Nachbesserung F8 — Fachlogik (Lauf F8, Schlussprüfung, 2026-10-25; keine Migration,
+    keine neue Abhängigkeit).** (1) **Aktivieren von Kosten** (`assets_create` mit
+    `expense_id`): Seit F5b nimmt die EÜR aktivierte Kosten heraus; das Aktivieren ändert also
+    das Jahr der Kosten. Beleg- und Zahlungsjahr der Kosten müssen offen sein (unter der
+    Erlaubnis des Anschaffungsjahres), stornierte Kosten lassen sich nicht aktivieren, und
+    Nummer, Anlage, Verweis `capitalized_as_asset_id` (UPDATE mit `IS NULL AND status =
+    'recorded'`, `rows_affected == 1`) und Audit entstehen in **einer** Transaktion. Die
+    Quell-Kosten einer Anlage lassen sich beim Korrigieren nicht mehr ändern. (2) **§ 9b
+    Abs. 1 EStG:** Anschaffungskosten aus Kosten sind bei §19 (Status des Zahlungsjahres) der
+    Bruttobetrag, bei Regelbesteuerung der Nettobetrag (`domain::asset::
+    acquisition_cost_from_expense`). Der eindeutige Fehlgriff (genau netto bei §19, genau
+    brutto bei Regelbesteuerung) wird abgelehnt (`check_cost_against_expense`), andere Beträge
+    (Teil-Aktivierung, Nebenkosten) bleiben erlaubt. Die GWG-Grenze prüft der Vorschlag am
+    Nettobetrag der Kosten (§ 6 Abs. 2 Satz 1 EStG, R 9b Abs. 2 EStR); `assets_suggest_method`
+    liefert mit `expenseId` die Vorbelegung (Belegdatum, Anschaffungskosten). Damit wird die
+    nicht abziehbare USt über die AfA abgezogen, und das DATEV-Anlagekonto geht auf 0
+    (Zugang brutto = AfA-Summe). (3) **Privatentnahme einer Anlage:** Die Abgangsart
+    `given_away` heißt „Privatentnahme / Geschenk“ und trägt einen Entnahmewert (Teilwert,
+    § 6 Abs. 1 Nr. 4 EStG; 0 bei einem betrieblichen Geschenk, § 4 Abs. 5 Nr. 1 EStG) in
+    `disposal_proceeds_cents` — er zählt wie ein Erlös (Anlage EÜR „Veräußerung oder Entnahme
+    von Anlagevermögen“), DATEV bucht ihn vom Privatkonto (SKR03 1800 / SKR04 2100) statt von
+    der Bank. Entschieden statt einer neuen Abgangsart: Der CHECK von `assets.disposal_type`
+    ließe sich nur mit einem Tabellenumbau erweitern; eine Art mit Pflichtwert deckt beide
+    Fälle ab. Konten vom Steuerberater bestätigen lassen. (4) **Storno-Datum ≥ letzter
+    Zahlungseingang** (§ 11 EStG): Die EÜR setzt die Erstattung am Storno-Datum an; vor dem
+    Zufluss lehnt `invoices_cancel` ab (das Formular setzt `min`). (5) **Eine Transaktion** auch
+    für den Storno-Entwurf (Nummer, Entwurf, Audit `invoice.draft_create` mit `storno_for`)
+    und die Angebotsumwandlung (Entwurf, `accepted → converted` mit Status-Bedingung, Audit
+    `quote.converted`). (6) **Restore-Konflikt nach dem Bestätigen:** Jede Änderung eines
+    bestätigten Entwurfs merkt ihn wieder vor (`after_restore::reflag_confirmed_in`, Audit
+    `numbering.restored_draft_reflagged`) — sonst ließe sich nach der Bestätigung ein anderer
+    Inhalt unter der versandten Nummer festschreiben (§ 14 Abs. 4 Nr. 4 UStG). (7) **Aktivierte
+    Kosten nicht stornierbar:** Eine Rückabwicklung des Kaufs ist ein Abgang der Anlage
+    (Verkauf, Erlös = Erstattung); `expenses::cancel` sichert das auch im UPDATE. Tests:
+    `lauf_f8_test` (alle Punkte), `domain::asset::tests::acquisition_cost_from_expense_by_tax_status`,
+    `domain::asset::tests::validate_disposal_dates_and_proceeds`,
+    `euer::datev_csv::tests::private_withdrawal_of_asset_books_from_private_account`.
+146. **Anschaffungskosten aus Kosten genau, Vorsteuer aktivierter Kosten (Lauf F8b,
+    2026-10-25; keine Migration, keine neue Abhängigkeit; ersetzt in Nr. 145 (2) den Satz
+    „andere Beträge … bleiben erlaubt“).** (1) **Kein abweichender Betrag:** EÜR
+    (`expense_payments`, Einzelaufstellung, Ausfüllhilfe) und DATEV-Stapel nehmen eine
+    aktivierte Kostenposition **ganz** heraus. Eine Teil-Aktivierung (Sammelrechnung) ließ
+    den Rest in keinem Jahr wirken, ein Mehrbetrag (Nebenkosten aus einem anderen Beleg)
+    wurde ohne Ausgabe abgeschrieben, und das Anlagekonto ging nie auf 0 — gegen § 4 Abs. 3
+    EStG (jede Ausgabe genau einmal) und die Nachvollziehbarkeit (GoBD Rz. 30 ff.: Beleg →
+    Buchung → Konto). Entschieden: Beim Anlegen und Korrigieren einer Anlage mit
+    Quell-Kosten verlangt der Server `acquisition_cost_cents ==
+    acquisition_cost_from_expense(...)` (§ 9b Abs. 1 EStG: bei §19 im Zahlungsjahr brutto,
+    bei Regelbesteuerung netto) und lehnt jede Abweichung mit einer Meldung ab, die das
+    Vorgehen nennt: Sammelrechnungen vorher in getrennte Kostenpositionen aufteilen;
+    Nebenkosten auf demselben Beleg in derselben Kostenposition, aus einem eigenen Beleg als
+    eigene Kostenposition, übernommen als eigene Anlage mit gleicher Methode und
+    Nutzungsdauer (`domain::asset::check_cost_against_expense`). Verworfen: einen Rest als
+    Betriebsausgabe weiterführen (`brutto − Anschaffungskosten`) — das vermischt die
+    Vorsteuer mit nicht aktivierten Teilen, und die GWG-Prüfung liefe am falschen Betrag.
+    (2) **Vorsteuer bei Regelbesteuerung:** Bisher fiel mit der Position auch die gezahlte
+    Vorsteuer aus EÜR-Report und Kz 185 heraus (die Ausfüllhilfe nannte „Vorsteuer aus
+    Anlagenkäufen“ als nicht abgebildet); der DATEV-Stapel buchte sie bereits richtig
+    (brutto mit BU-Schlüssel 9/8 bzw. gesondert aufs Vorsteuerkonto, netto aufs Anlagekonto).
+    Jetzt bleibt sie Betriebsausgabe im Zahlungsjahr (§ 11 Abs. 2 EStG; Anlage EÜR „gezahlte
+    Vorsteuerbeträge“): `db::repo::euer::capitalized_input_tax` (Kategorie der Kosten, §19-
+    Status des Zahlungsjahres über `seller_profile::is_klein_for_year`) und `elster_csv` mit
+    `ElsterInputs::capitalized`. Nur der Nettobetrag wirkt über die AfA; AfA + Rest
+    (Erinnerungswert) + Vorsteuer = Zahlung. (3) **Bestand:** Anlagen aus älteren Versionen
+    mit abweichendem Betrag ändert Klein.Buch nicht still; die Ausfüllhilfe (Anzeige,
+    CSV, PDF, Steuerberater-Paket) nennt die betroffenen Kostennummern
+    („Aktivierte Kosten mit abweichenden Anschaffungskosten …“), der CHANGELOG den Hinweis
+    für Betreiber. Abgeschlossene Jahre mit Regelbesteuerung und aktivierten Kosten zeigen
+    im Snapshot-Abgleich eine Abweichung (die Vorsteuer zählt jetzt mit). Tests:
+    `lauf_f8b_test` (`partial_activation_and_extra_cost_are_refused`,
+    `par19_gross_activation_sums_to_the_payment`,
+    `regel_net_activation_keeps_input_tax_as_expense`,
+    `legacy_mismatch_is_flagged_not_changed`),
+    `domain::asset::tests::acquisition_cost_from_expense_by_tax_status`,
+    `euer::elster_csv::tests::capitalized_expense_input_tax_counts_under_regelbesteuerung`,
+    `euer::elster_csv::tests::mismatched_capitalized_cost_is_flagged`,
+    `euer::datev_csv::tests::capitalized_expense_under_regelbesteuerung_books_net_and_input_tax`.
+147. **Aktivierte Kosten: Zahldatum und §13b bei §19 (Lauf F8c, 2026-10-25; keine Migration,
+    keine neue Abhängigkeit).** (1) **Zahldatum aktivierter Kosten (S2):** Nr. 145/146 prüfen
+    die Anschaffungskosten gegen den §19-Status des Zahlungsjahres (ohne Zahlung: Belegjahr)
+    nur beim Anlegen und Korrigieren der Anlage. `expenses_set_payment` konnte das Zahldatum
+    danach in ein Jahr mit anderem Status verschieben oder entfernen (z. B. im Dezember unter
+    §19 unbezahlt brutto aktiviert, im Januar nach dem Verzicht bezahlt); dann setzten EÜR,
+    Kz 185 und DATEV-Stapel eine Vorsteuer an, die schon in der AfA steckt. Entschieden:
+    Wechselt ein neues Zahldatum oder das Entfernen der Zahlung den maßgeblichen Status
+    aktivierter Kosten und genügen die Anschaffungskosten der Anlage unter dem neuen Status
+    `check_cost_against_expense` nicht, lehnt der Server die Änderung mit konkreter Meldung ab
+    (Kosten- und Anlagennummer, Status alt/neu, Anschaffungskosten ist/soll;
+    `commands::assets::check_payment_change_of_capitalized_in`). Prüfung, Änderung
+    (`expenses::set_payment_in`, Bedingung `status = 'recorded'`) und Audit laufen in **einer**
+    `BEGIN IMMEDIATE`-Transaktion unter der Buchungserlaubnis; ändern sich Zahldatum oder
+    Aktivierung zwischen Jahresprüfung und Transaktion, scheitert der Aufruf. Umgekehrt
+    verknüpft `assets_create` die Kosten nur, wenn ihr Zahldatum noch dem geprüften Stand
+    entspricht (`AND paid_date IS ?`). Bleibt der Status gleich, bleibt die Änderung erlaubt
+    (auch bei Bestandsanlagen mit abweichendem Betrag, die die Ausfüllhilfe weiter nennt; ihr
+    Hinweis ist neutral gefasst, ohne „ältere Version“). Verworfen: Aktivieren nur bezahlter
+    Kosten erzwingen — das verschöbe die AfA unbezahlter Anschaffungen und lenkte im
+    Grenzfall nur auf die Konvention des Zahlungsjahres um; das Handbuch empfiehlt es als
+    einfachsten Weg. **Entschieden in Nr. 148 (Lauf F8d; vorher „Offen“):** Für
+    Vorsteuerabzug und damit § 9b EStG ist nach § 15 Abs. 1 UStG der Status bei
+    Leistungsbezug maßgeblich, nicht das Zahlungsjahr (Abschn. 19.5 UStAE). Klein.Buch
+    bestimmt den Status der Kosten seither nach dem Belegdatum; das Zahldatum ändert ihn
+    nicht mehr, die hier beschriebene Sperre ist gegenstandslos und entfallen
+    (`check_payment_change_of_capitalized_in` gibt es nicht mehr).
+    (2) **§13b bei §19 (S3):** Der Kleinunternehmer schuldet die Steuer auf Reverse-Charge-
+    Bezüge (§ 13b Abs. 5 Satz 1, Abs. 8 UStG) und kann sie nicht abziehen; sie gehört zu den
+    Anschaffungskosten (§ 9b Abs. 1 EStG). Auf der Lieferantenrechnung steht sie nicht
+    (Nr. 143: netto = brutto). Entschieden: **eigene Kostenposition, eigene Anlage** — wie
+    Nebenkosten aus einem eigenen Beleg (Nr. 146). Die Rechnungsposition wird zum
+    Rechnungsbetrag aktiviert; die Zahlung der selbst geschuldeten Steuer ans Finanzamt (nur
+    der Anteil dieser Anlage, USt-Betrag 0, ohne §13b-Schalter) wird als eigene
+    Kostenposition erfasst und als eigene Anlage mit gleichem Anschaffungsdatum, gleicher
+    Methode und Nutzungsdauer übernommen. So deckt jede abgeschriebene Summe eine
+    Kostenposition, die die EÜR herausnimmt; Rechnung + Steuer wirken genau einmal über die
+    AfA, die Steuerzahlung nicht zusätzlich als Betriebsausgabe, und das DATEV-Anlagekonto
+    geht auf 0 (Beleg → Buchung → Konto, GoBD Rz. 30 ff.). Verworfen: an der
+    Rechnungsposition „netto + selbst geschuldete Steuer“ zulassen — die EÜR nähme nur die
+    Rechnung heraus, die Steuerzahlung bliebe als Ausgabe stehen (doppelt) oder bliebe ohne
+    Beleg (Anlagekonto ginge nie auf 0), und Steuersatz und Zeitpunkt der Steuerentstehung
+    berechnet Klein.Buch nicht (PRD G16). `check_cost_against_expense` bekommt den Schalter
+    `reverse_charge_13b` und nennt bei §19 für einen höheren Betrag diesen Weg;
+    `assets_suggest_method` liefert `reverseCharge13b`, das Formular zeigt den Hinweis.
+    Handbuch „Anlagen und AfA“ und „Kosten erfassen“ beschreiben beides. Tests:
+    `lauf_f8b_test` (`payment_date_cannot_move_capitalized_cost_across_tax_status` —
+    entfallen mit Nr. 148, ersetzt durch
+    `lauf_f8d_test::capitalized_cost_at_the_boundary_follows_the_document_date`;
+    `reverse_charge_tax_under_par19_is_capitalized_once_as_own_asset`: EÜR 0, AfA + Rest
+    beider Anlagen = Rechnung + Steuer, DATEV-Zugang = Rechnung + Steuer),
+    `domain::asset::tests::reverse_charge_under_par19_points_to_separate_tax_asset`.
+148. **Steuerstatus der Kosten nach dem Leistungsbezug (Lauf F8d, 2026-10-25; keine
+    Migration, keine neue Abhängigkeit; ersetzt in Nr. 145 (2), 146 (1)/(2) und 147 (1) den
+    „Status des Zahlungsjahres“).** **Rechtsgrundlage:** Der Vorsteuerabzug setzt voraus,
+    dass die Leistung für das Unternehmen *ausgeführt* wurde (§ 15 Abs. 1 Satz 1 Nr. 1
+    UStG); maßgeblich sind die Verhältnisse im Zeitpunkt des Leistungsbezugs. Abschn. 19.5
+    UStAE zum Wechsel der Besteuerungsform: Vorsteuer aus Leistungen, die vor dem Übergang
+    zur Regelbesteuerung bezogen wurden, ist nicht abziehbar, auch wenn Rechnung oder
+    Zahlung danach liegen; umgekehrt bleibt sie nach der Rückkehr zu §19 für vorher bezogene
+    Leistungen abziehbar. Nicht abziehbare Vorsteuer gehört zu den Anschaffungskosten (§ 9b
+    Abs. 1 EStG). Die **zeitliche** Zuordnung der Ausgabe richtet sich davon unabhängig nach
+    dem Abfluss (§ 11 Abs. 2 EStG). **Entschieden:** (1) Für die steuerliche Behandlung von
+    Kosten — brutto bzw. netto mit Vorsteuer in Ausfüllhilfe (Kz 185) und EÜR-Report
+    (Vorsteuer aktivierter Kosten, `db::repo::euer::capitalized_input_tax`), BU-Schlüssel und
+    Vorsteuerbuchung im DATEV-Stapel, Anschaffungskosten aus Kosten
+    (`acquisition_cost_from_expense`, `check_cost_against_expense`,
+    `assets_suggest_method`, `assets_create`/`assets_update`) — gilt der §19-Status im Jahr
+    des **Belegdatums** (`seller_profile::is_klein_for_expense`). Kosten haben kein eigenes
+    Leistungsdatum (keine neue Migration); das Belegdatum der Eingangsrechnung ist die
+    beste verfügbare Näherung und ein festgeschriebenes Kernfeld (`trg_expenses_immutable`).
+    Nur bei aktivierten Kosten gibt es mit dem Anschaffungsdatum der Anlage ein eigenes
+    Datum des Leistungsbezugs; dazu (5).
+    Eine Anzahlungsrechnung ist eine eigene Kostenposition mit eigenem Belegdatum. Jede
+    Kostenposition trägt ihren Status (`ExpenseItem::is_kleinunternehmer`); `DatevInputs`
+    hat kein Jahresfeld mehr, `ElsterInputs::is_kleinunternehmer` bestimmt nur noch Kopf
+    und Hinweise. Die Ausfüllhilfe nennt Kosten, deren Status vom Jahr abweicht („Kosten
+    mit Leistungsbezug unter einem anderen Steuerstatus …“), und zeigt den
+    Regelbesteuerungs-Hinweis auch in einem §19-Jahr, sobald dort abziehbare Vorsteuer
+    steht. (2) **Zahldatum:** Es ändert den Status nicht mehr; die F8c-Sperre in
+    `expenses_set_payment` entfällt (Transaktion und Gleichzeitigkeitsprüfung des
+    Zahldatums bleiben). Ein Wechsel des Belegdatums, der den Status änderte, ist
+    ausgeschlossen, weil das Belegdatum nach dem Festschreiben unveränderlich ist (DB-
+    Trigger; es gibt keinen Änderungsweg). (3) **Wechsel in den Einstellungen:** Ein
+    Verzicht auf §19 wirkt ab Beginn des Kalenderjahres (Modell `is_active_for_year`),
+    eine Rückkehr ebenso; beides kann den Status bereits aktivierter Kosten ändern. Nicht
+    blockiert (gesetzliches Recht, § 19 Abs. 2 UStG). `seller_profile_upsert` legt nach
+    einem Statuswechsel einen Inbox-Hinweis an, der jede betroffene Anlage mit Ist- und
+    Soll-Anschaffungskosten und Handlungsweg nennt
+    (`commands::assets::capitalized_cost_mismatches`,
+    `notify_capitalized_status_change`, Dedup über die Anlagennummern): Anschaffungskosten
+    in der Anlage korrigieren (eine gebuchte AfA vorher im offenen Jahr zurücksetzen);
+    ist AfA in einem abgeschlossenen Jahr festgeschrieben, das Anschaffungsjahr
+    abgeschlossen oder die Anlage abgegangen, mit der Steuerberatung klären. Die
+    Ausfüllhilfe nennt bezahlte betroffene Kosten zusätzlich mit Anlagennummer, Ist- und
+    Soll-Betrag und demselben Weg. Eine Vorsteuerberichtigung nach § 15a UStG beim
+    Wechsel (Anlagen aus früheren Jahren) berechnet Klein.Buch nicht; der Hinweis nennt
+    das. (4) **Bestand:** Bestandsanlagen, die nach der alten Regel (Status des
+    Zahlungsjahres) an der Grenze angelegt wurden, erscheinen im Hinweis der
+    Ausfüllhilfe; abgeschlossene Jahre mit solchen Kosten zeigen im Snapshot-Abgleich eine
+    Abweichung (Vorsteuer aktivierter Kosten). (5) **Anschaffungsdatum und Belegdatum
+    (Lauf F8e, 2026-10-25):** Bei einer Anlage ist der Leistungsbezug die Lieferung (§ 9a
+    EStDV), also das eingegebene Anschaffungsdatum; es kann im Vorjahr des Belegdatums
+    liegen (Lieferung im Dezember, Rechnung im Januar). Liegen Anschaffungsdatum und
+    Belegdatum in Jahren mit unterschiedlichem Status, lehnen `assets_create` und
+    `assets_update` vor der Betragsprüfung ab (`commands::assets::expense_status_for_asset`);
+    die Meldung nennt beide Daten, beide Status, den Leistungsbezug als maßgeblich und
+    verweist an die Steuerberatung. Kommt eine bestehende Anlage erst durch einen späteren
+    Wechsel in diese Lage, gilt sie in `capitalized_cost_mismatches` als nicht korrigierbar
+    (Inbox: „mit der Steuerberatung klären“), weil der Soll-Betrag nach dem Belegdatum dann
+    kein sicherer Korrekturweg ist. Verworfen: den Status aktivierter Kosten überall aus
+    dem Anschaffungsdatum bestimmen — das hätte Vorsteuer aktivierter Kosten, DATEV-Stapel,
+    Ausfüllhilfe und Abgleich für einen seltenen Grenzfall umgebaut; ein Datum, das Kosten
+    und Anlage verschieden behandeln, bliebe ohnehin eine Frage an die Steuerberatung.
+    (6) **Anschaffungsjahr beim Korrigieren (Lauf F8, Orchestrator):** `assets::update`
+    führt `acquisition_fiscal_year` jetzt mit dem korrigierten Anschaffungsdatum mit
+    (vorher blieb es auf dem Jahr der Anlage stehen, obwohl AfA-Beginn, Jahresfilter und die
+    Prüfung abgeschlossener Jahre es nutzen); beide Jahre müssen offen sein
+    (`assets_update`). Die Anlagennummer behält das Jahr ihrer Vergabe — sie ist eine
+    interne, lückenlose Ordnungsnummer, kein Pflichtmerkmal des Anlagenverzeichnisses.
+    Test: `assets_repo_test::update_moves_acquisition_fiscal_year_with_the_date`.
+    **Bekannte Grenzen:** (a) Eine Rückkehr zu §19 setzt `waived_paragraph_19_since`
+    zurück; danach gelten alle Jahre als §19, auch die regelbesteuerten (seit R2-002
+    bekannt, frühestens 6 Jahre nach einem Verzicht relevant; eine Statushistorie braucht
+    eine Migration und bleibt einer späteren Version vorbehalten). (b) **Wegfall von §19
+    mitten im Jahr (Lauf F8e):** Seit dem JStG 2024 endet §19 bereits mit dem Umsatz, mit
+    dem im laufenden Jahr 100.000 € überschritten werden (§ 19 Abs. 1 UStG); dieser und
+    alle folgenden Umsätze unterliegen der Regelbesteuerung, Kosten mit Leistungsbezug vor
+    dem Überschreiten bleiben ohne Vorsteuerabzug. Klein.Buch überwacht die Umsatzgrenzen
+    nicht und kennt nur den Status je Kalenderjahr: Der einzige Weg ist der Schalter in den
+    Einstellungen (Dialog des Verzichts), und `is_active_for_year` wertet ihn für das ganze
+    Jahr. Rechnungen behalten den Status, mit dem sie ausgestellt wurden; Rechnungen ab dem
+    Umlegen des Schalters weisen Umsatzsteuer aus, die Rechnung, mit der die Grenze
+    überschritten wird, aber nur, wenn der Schalter vorher umgelegt wurde. Bei den Kosten
+    des Wechseljahres setzen Ausfüllhilfe (Kz 185) und DATEV-Stapel dagegen auch für
+    Kosten vor dem Überschreiten Vorsteuer an, und der Hinweis aus (3) nennt bisher brutto
+    aktivierte Anlagen als abweichend. Deshalb nennen Inbox-Hinweis, Hinweis der
+    Ausfüllhilfe zu aktivierten Kosten und Regelbesteuerungs-Hinweis der Ausfüllhilfe
+    diesen Fall ausdrücklich: Anlagen dann nicht korrigieren, Kosten vor dem Überschreiten
+    bleiben brutto, Erfassung des Jahres mit der Steuerberatung klären; die Handbuch-
+    Kapitel „Kleinunternehmer-Regelung“ und „Anlagen und AfA“ beschreiben das ebenso. Eine
+    echte Lösung (Wechsel mit genauem Datum, auch für die Einnahmen) braucht die
+    vorgemerkte Statushistorie mit Migration. Verworfen: eine Sperre des Verzichts bei aktivierten Kosten — sie nähme
+    ein gesetzliches Wahlrecht; ein eigenes Leistungsdatum der Kosten — braucht eine
+    Migration und bringt bei Eingangsrechnungen kaum mehr als das Belegdatum. Tests:
+    `lauf_f8d_test` (`supply_under_par19_paid_under_regel_is_gross_without_input_tax`,
+    `supply_under_regel_paid_in_par19_year_deducts_input_tax`,
+    `capitalized_cost_at_the_boundary_follows_the_document_date`,
+    `waiver_after_capitalizing_names_affected_assets`; Lauf F8e:
+    `acquisition_date_in_year_with_other_status_than_document_is_rejected`,
+    `waiver_splitting_delivery_and_document_year_is_not_correctable`),
+    `euer::elster_csv::tests::expense_status_at_supply_decides_input_tax`,
+    `euer::elster_csv::tests::mismatched_capitalized_cost_is_flagged`,
+    `euer::datev_csv::tests::regular_taxation_uses_automatic_accounts_and_tax_keys`,
+    `euer::datev_csv::tests::capitalized_expense_under_regelbesteuerung_books_net_and_input_tax`,
+    `db::repo::seller_profile::tests::expense_status_follows_the_document_date`,
+    `euer_elster_export_test::regelbesteuerung_is_split_in_elster_and_datev`.
 
 ## Konsequenzen
 

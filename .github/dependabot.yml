@@ -1,6 +1,6 @@
 # Dependabot (Plan W12): wöchentliche Versions-Updates, gruppiert je Ökosystem.
-# Pfade gelten im öffentlichen Repo (Wurzel = ). Dependabot liest diese Datei
-# nur vom Standardzweig (main).
+# Pfade gelten relativ zur Wurzel des öffentlichen Repos (= Inhalt des Produktordners).
+# Dependabot liest diese Datei nur vom Standardzweig (main).
 #
 # Die PRs sind Hinweise: Übernommen wird eine Änderung im Entwicklungsordner und mit dem
 # nächsten Veröffentlichen, nicht per Merge auf GitHub (ein fremder Commit ließe

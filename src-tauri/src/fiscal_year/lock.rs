@@ -31,7 +31,7 @@ use chrono::{DateTime, Datelike, Utc};
 use serde::Serialize;
 use sqlx::{SqliteConnection, SqlitePool};
 
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct FiscalYearLock {
     pub fiscal_year: i64,
@@ -48,7 +48,7 @@ pub struct FiscalYearLock {
     /// Offene Entwürfe des Jahres zum Zeitpunkt des Abschlusses — nur in der
     /// Antwort von [`close_year`], nicht gespeichert (Lauf F).
     #[sqlx(skip)]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default, skip_deserializing)]
     pub open_drafts: Option<OpenDrafts>,
 }
 
@@ -278,6 +278,112 @@ pub async fn list_closed(pool: &SqlitePool) -> Result<Vec<FiscalYearLock>> {
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Ein nach einem Restore wieder eingetragener Abschluss (Lauf F8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredLock {
+    pub fiscal_year: i64,
+    /// Abschlusszeitpunkt aus der ersetzten Datenbank (UTC).
+    pub closed_at: String,
+    pub assets_locked: u64,
+    pub depreciation_entries_locked: u64,
+}
+
+/// Lauf F8: Übernimmt nach einem Restore die Abschlüsse der ersetzten
+/// Datenbank, die der eingespielten fehlen (in der Transaktion des
+/// Restore-Audits, [`crate::db`] `finish_restore`). Der Abschluss ist
+/// unumkehrbar (GoBD Rz. 107 ff.) — ein älteres Backup darf ein inzwischen
+/// abgeschlossenes Jahr nicht wieder öffnen, so wie Nummernkreise nur vorwärts
+/// gehen. Eingetragen wird der Snapshot der ersetzten DB (Eckwerte, Zeitpunkt,
+/// Version) mit Vermerk in `notes`; AfA-Buchungen und Anlagen bis zu diesem
+/// Jahr werden wie beim Abschluss festgeschrieben. Fehlt in der eingespielten
+/// DB etwas, das der Snapshot enthielt (etwa die beim Abschluss gebuchte AfA),
+/// zeigt die vorhandene Snapshot-Prüfung die Abweichung als Hinweis.
+pub async fn restore_locks_in(
+    conn: &mut SqliteConnection,
+    replaced: &[FiscalYearLock],
+) -> Result<Vec<RestoredLock>> {
+    let mut out = Vec::new();
+    let mut years: Vec<&FiscalYearLock> = replaced.iter().collect();
+    years.sort_by_key(|l| l.fiscal_year);
+    for l in years {
+        let present: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM fiscal_year_locks WHERE fiscal_year = ?")
+                .bind(l.fiscal_year)
+                .fetch_optional(&mut *conn)
+                .await?;
+        if present.is_some() {
+            continue;
+        }
+        let note = match l.notes.as_deref() {
+            Some(n) if !n.trim().is_empty() => format!(
+                "nach Restore übernommen (Abschluss vom {}); {n}",
+                l.closed_at
+            ),
+            _ => format!("nach Restore übernommen (Abschluss vom {})", l.closed_at),
+        };
+        sqlx::query(
+            "INSERT INTO fiscal_year_locks
+                (fiscal_year, closed_at, income_total_cents, expense_total_cents,
+                 afa_total_cents, surplus_cents, assets_locked,
+                 depreciation_entries_locked, app_version, schema_version, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(l.fiscal_year)
+        .bind(&l.closed_at)
+        .bind(l.income_total_cents)
+        .bind(l.expense_total_cents)
+        .bind(l.afa_total_cents)
+        .bind(l.surplus_cents)
+        .bind(l.assets_locked)
+        .bind(l.depreciation_entries_locked)
+        .bind(&l.app_version)
+        .bind(l.schema_version)
+        .bind(&note)
+        .execute(&mut *conn)
+        .await?;
+        let dep_locked = sqlx::query(
+            "UPDATE depreciation_entries
+                SET locked_at = datetime('now','utc')
+              WHERE fiscal_year = ? AND locked_at IS NULL",
+        )
+        .bind(l.fiscal_year)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+        let assets_locked = sqlx::query(
+            "UPDATE assets SET locked_at = datetime('now','utc')
+              WHERE acquisition_fiscal_year <= ? AND locked_at IS NULL",
+        )
+        .bind(l.fiscal_year)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+        audit_log::append_in(
+            &mut *conn,
+            "fiscal_year.lock_restored_after_restore",
+            "fiscal_year",
+            &l.fiscal_year.to_string(),
+            Some(serde_json::json!({
+                "closed_at": &l.closed_at,
+                "income": l.income_total_cents,
+                "expenses": l.expense_total_cents,
+                "afa": l.afa_total_cents,
+                "surplus": l.surplus_cents,
+                "assets_locked": assets_locked,
+                "depreciation_locked": dep_locked,
+            })),
+        )
+        .await?;
+        out.push(RestoredLock {
+            fiscal_year: l.fiscal_year,
+            closed_at: l.closed_at.clone(),
+            assets_locked,
+            depreciation_entries_locked: dep_locked,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

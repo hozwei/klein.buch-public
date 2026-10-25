@@ -188,8 +188,13 @@ holt genau diesen Build, prüft dessen Digest gegen den geprüften Index und ver
    `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
    `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Der Digest steht
    vor dem Push fest (gebauter Index). Bei einer Wiederholung werden nur fehlende
-   Assets hochgeladen, vorhandene nie ersetzt. Ist das Release danach noch ein
-   Entwurf, bricht der Lauf vor dem Push ab.
+   Assets hochgeladen, vorhandene nie ersetzt — außer das Release stammt aus einem
+   früheren Lauf, zu dessen Build nie ein Image veröffentlicht wurde (etwa „Re-run all
+   jobs“ nach einem gescheiterten Push: der neue Build hat einen anderen Digest); dann
+   werden Assets und Notes neu geschrieben (`--clobber`). Gehört das Release zu einem
+   Build, dessen Image schon öffentlich ist, bricht der Lauf ab (Quellen und Image
+   gehören zusammen). Ist das Release danach noch ein Entwurf, bricht der Lauf vor dem
+   Push ab.
 6. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
    `ghcr.io/<owner>/klein-buch:<Version>`; der gepushte Digest muss dem
    gebauten Index entsprechen. Gibt es das Tag schon mit anderem Inhalt, bricht

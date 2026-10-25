@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   IDEMPOTENCY_HEADER,
   REQUEST_HEADER,
+  PassphraseChangeUnclear,
+  authChangePassphrase,
   authLogin,
   authRevokeOtherSessions,
   authSessions,
@@ -210,6 +212,26 @@ describe("transport.auth", () => {
     expect(asked).toBe(1);
     expect(calls[2].url).toBe("/api/auth/sessions/others/revoke");
     setReauthHandler(null);
+  });
+
+  // Lauf F8: `timeout` beim Passphrase-Wechsel ist kein Fehler, sondern ein
+  // unklarer Ausgang (eigene Fehlerklasse, die Seite verwirft nichts).
+  it("authChangePassphrase: 503 timeout → PassphraseChangeUnclear, 503 busy → Meldung", async () => {
+    mockFetch([
+      json(503, { code: "timeout", message: "Eine begonnene Aktion läuft im Hintergrund zu Ende" }),
+      json(503, { code: "busy", message: "Gerade beschäftigt" }),
+      json(200, { state: "ok", backupStarted: true }),
+    ]);
+    await expect(authChangePassphrase("eine-neue-lange-passphrase")).rejects.toBeInstanceOf(
+      PassphraseChangeUnclear,
+    );
+    await expect(authChangePassphrase("eine-neue-lange-passphrase")).rejects.toBe(
+      "Gerade beschäftigt",
+    );
+    expect(await authChangePassphrase("eine-neue-lange-passphrase")).toEqual({
+      state: "ok",
+      backupStarted: true,
+    });
   });
 });
 

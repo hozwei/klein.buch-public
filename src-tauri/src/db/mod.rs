@@ -489,7 +489,9 @@ pub async fn duplicate_locked_stornos(pool: &SqlitePool) -> Result<i64> {
 ///    Anheben der Nummernkreise auf die Stände der ersetzten DB, wo diese
 ///    höher waren (D-24, Audit `numbering.raised_after_restore`), und der
 ///    Abgleich der Abo-Termine, Marker und Entwürfe
-///    ([`crate::backup::after_restore::apply_in`], F1d).
+///    ([`crate::backup::after_restore::apply_in`], F1d) sowie die Übernahme
+///    der Abschlüsse der ersetzten DB, die der eingespielten fehlen
+///    ([`crate::fiscal_year::lock::restore_locks_in`], F8).
 /// 2. Danach (best-effort): Hinweise zur Pause, zu den Nummernkreisen und den
 ///    Abo-Terminen, Pre-Restore-Backup und verwaiste Backups in die Historie
 ///    (D-22), Warnung zu fehlenden PDF-Vorlagen, `RESTORE_APPLIED.json`
@@ -561,8 +563,47 @@ async fn finish_restore(
     let followup =
         crate::backup::after_restore::apply_in(&mut tx, &info.series, &info.locked_numbers, today)
             .await?;
+    // Lauf F8: Abschlüsse der ersetzten DB, die der eingespielten fehlen,
+    // wieder eintragen — ein Abschluss ist unumkehrbar.
+    let restored_locks =
+        crate::fiscal_year::lock::restore_locks_in(&mut tx, &info.fiscal_year_locks).await?;
     let hold = crate::scheduler::hold::set_restore_in(&mut tx, now).await?;
     tx.commit().await?;
+    if !restored_locks.is_empty() {
+        let years: Vec<String> = restored_locks
+            .iter()
+            .map(|l| l.fiscal_year.to_string())
+            .collect();
+        tracing::info!(
+            "Restore: Abschluss der Geschäftsjahre {} aus der ersetzten Datenbank übernommen",
+            years.join(", ")
+        );
+        let body = format!(
+            "Das eingespielte Backup ist älter als der Abschluss der Geschäftsjahre {}. \
+             Klein.Buch hat die Abschlüsse aus der ersetzten Datenbank übernommen: Diese \
+             Jahre bleiben abgeschlossen, Buchungen mit Datum darin sind nicht möglich. \
+             Weicht der Stand des Backups vom Abschluss ab (etwa weil die beim Abschluss \
+             gebuchte AfA fehlt), meldet die EÜR des Jahres eine Abweichung vom \
+             Festschreibungs-Snapshot — kläre sie mit Deiner Steuerberatung.",
+            years.join(", ")
+        );
+        let dedup = format!("restore_fiscal_year_locks:{}", info.staged_at);
+        if let Err(e) = crate::notify::store::create(
+            pool,
+            crate::notify::NewNotification {
+                title: "Abgeschlossene Geschäftsjahre übernommen",
+                body: &body,
+                severity: "warning",
+                action_url: Some("/fiscal-year"),
+                dedup_key: Some(&dedup),
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            tracing::warn!("Hinweis zu den Geschäftsjahren nicht angelegt: {e}");
+        }
+    }
     tracing::info!(
         "Restore angewendet (Quelle: {}); automatische Abläufe pausiert bis zur Freigabe \
          ({} Abo-Reihe(n) vorgerückt, {} zu prüfen, {} Entwurf/Entwürfe vorgemerkt)",

@@ -70,6 +70,16 @@ Klein.Buch v1.0 ist für §19-Kleinunternehmer gebaut. Regelbesteuerte
 Workflows (Vorsteuer-Abzug, Umsatzsteuer-Voranmeldung) sind nicht
 voll abgebildet.
 
+Hast Du auf §19 verzichtet, zählt für jede Kostenposition Dein
+Steuerstatus bei Leistungsbezug, nicht der im Jahr der Zahlung (§15
+Abs. 1 UStG). Klein.Buch nimmt dafür das Belegdatum. Eine Rechnung
+vom Dezember, als Du noch Kleinunternehmer warst, bleibt brutto ohne
+Vorsteuer, auch wenn Du sie erst im Januar unter Regelbesteuerung
+bezahlst. In welchem Jahr die Ausgabe in der EÜR steht, bestimmt
+weiterhin das Zahldatum (§11 EStG). Die EÜR-Ausfüllhilfe nennt
+Kosten, bei denen Leistungsbezug und Jahr der Zahlung unter
+verschiedenem Steuerstatus liegen.
+
 ## §13b: Du schuldest die Steuer
 
 Bei manchen Leistungen schuldet der Empfänger die Umsatzsteuer statt
@@ -95,6 +105,16 @@ Was Du tun musst:
    Zahlung eine Betriebsausgabe. Trag die Zahlung ans Finanzamt als
    eigene Kosten ein oder lass sie Deinen Steuerberater in der EÜR
    ergänzen.
+4. Ist der Kauf eine Anlage (z. B. ein Gerät oder eine Lizenz, die Du
+   über mehrere Jahre abschreibst), gehört die selbst geschuldete
+   Steuer zu den Anschaffungskosten (§9b Abs. 1 EStG) und ist keine
+   sofortige Betriebsausgabe. Übernimm die Rechnung zum
+   Rechnungsbetrag als Anlage. Die Steuer erfasst Du bei der Zahlung
+   ans Finanzamt als eigene Kosten (nur der Anteil dieser Anlage,
+   Umsatzsteuer 0, ohne §13b-Schalter) und übernimmst sie als eigene
+   Anlage mit gleichem Anschaffungsdatum, gleicher Methode und
+   Nutzungsdauer. So wird sie genau einmal abgeschrieben. Mehr unter
+   "Anlagen und AfA", Abschnitt "Aus Kosten aktivieren".
 
 Wenn Du unsicher bist, ob eine Rechnung unter §13b fällt, frag
 Deinen Steuerberater. Eine E-Rechnung, die neben §13b-Positionen

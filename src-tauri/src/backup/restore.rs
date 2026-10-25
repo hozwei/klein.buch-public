@@ -326,6 +326,17 @@ pub async fn apply(
         }
     };
 
+    // Lauf F8: abgeschlossene Geschäftsjahre der laufenden DB — ein älteres
+    // Backup darf ein inzwischen abgeschlossenes Jahr nicht wieder öffnen
+    // (`fiscal_year::lock::restore_locks_in` beim ersten Entsperren).
+    let fiscal_year_locks = match crate::fiscal_year::lock::list_closed(pool).await {
+        Ok(l) => l,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+
     // Marker vorbereiten (Dateisystem, nicht DB). Er wird erst nach dem
     // Pflicht-Audit an seinen Platz gebracht (Review W2 S1-6): scheitert der
     // Audit, meldet der Restore einen Fehler und wird beim Neustart auch NICHT
@@ -347,6 +358,7 @@ pub async fn apply(
         "series": series,
         "locked_numbers": locked_numbers,
         "locked_ids": locked_ids,
+        "fiscal_year_locks": fiscal_year_locks,
     });
     let written = (|| -> Result<()> {
         use std::io::Write;
@@ -660,6 +672,9 @@ pub struct AppliedInfo {
     /// IDs derselben Belege (F3b); leer bei Markern vor F3b.
     #[serde(default)]
     pub locked_ids: Vec<String>,
+    /// Abschlüsse der ersetzten DB (Lauf F8); leer bei Markern vor F8.
+    #[serde(default)]
+    pub fiscal_year_locks: Vec<crate::fiscal_year::lock::FiscalYearLock>,
 }
 
 /// Datei im `data_dir`: angewendeter Restore, dessen Audit noch aussteht
@@ -1051,6 +1066,11 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         .cloned()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
+    let fiscal_year_locks: Vec<crate::fiscal_year::lock::FiscalYearLock> = info
+        .get("fiscal_year_locks")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
     let staged_db = staging.join("klein-buch.sqlite");
     if !staged_db.is_file() {
@@ -1167,6 +1187,7 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         series,
         locked_numbers,
         locked_ids,
+        fiscal_year_locks,
     };
     {
         use std::io::Write;
@@ -1525,6 +1546,14 @@ mod tests {
                 locked_at TEXT, is_storno_for TEXT) STRICT",
             "CREATE TABLE quotes (id TEXT PRIMARY KEY NOT NULL, quote_number TEXT NOT NULL,
                 locked_at TEXT) STRICT",
+            // Abschlüsse (Phase A hält sie fest, Lauf F8)
+            "CREATE TABLE fiscal_year_locks (fiscal_year INTEGER PRIMARY KEY NOT NULL,
+                closed_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                income_total_cents INTEGER NOT NULL, expense_total_cents INTEGER NOT NULL,
+                afa_total_cents INTEGER NOT NULL, surplus_cents INTEGER NOT NULL,
+                assets_locked INTEGER NOT NULL DEFAULT 0,
+                depreciation_entries_locked INTEGER NOT NULL DEFAULT 0,
+                app_version TEXT NOT NULL, schema_version INTEGER NOT NULL, notes TEXT) STRICT",
             // für die Prüfungen in Phase A (Archivpfade, Migrationen)
             "CREATE TABLE archive_entries (id TEXT PRIMARY KEY NOT NULL, file_path TEXT NOT NULL)",
             "CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, checksum BLOB NOT NULL,

@@ -1296,6 +1296,24 @@ export interface MethodSuggestion {
   reason: string;
 }
 
+/** Korrespondiert zu `commands::assets::AssetSourceDefaults` (Lauf F8). */
+export interface AssetSourceDefaults {
+  /** Belegdatum der Quell-Kosten (YYYY-MM-DD). */
+  acquisitionDate: string;
+  /** Brutto bei §19, netto bei Regelbesteuerung (§ 9b Abs. 1 EStG; Status bei Leistungsbezug = Belegdatum, Lauf F8d). */
+  acquisitionCostCents: number;
+  /** Betrag ohne Umsatzsteuer — Grundlage der GWG-Grenze. */
+  gwgBasisCents: number;
+  isKleinunternehmer: boolean;
+  /** Kosten mit §13b-Schalter (Lauf F8c): bei §19 die selbst geschuldete Steuer als eigene Kosten + Anlage. */
+  reverseCharge13b: boolean;
+}
+
+/** Korrespondiert zu `commands::assets::AssetSuggestion` (Lauf F8). */
+export interface AssetSuggestion extends MethodSuggestion {
+  source: AssetSourceDefaults | null;
+}
+
 /** Korrespondiert zu `accrue_yearly::AccrueReport` in Rust. */
 export interface AccrueReport {
   skippedLocked: boolean;
@@ -1406,6 +1424,8 @@ export interface EuerExpenseItem {
   category: string; // ExpenseCategory-Code → Label via expenseCategoryLabel()
   description: string;
   grossCents: Cents;
+  /** §19-Status bei Leistungsbezug (Jahr des Belegdatums, Lauf F8d). */
+  isKleinunternehmer: boolean;
 }
 
 /** Eine Anlagen-Veräußerung (`euer::detail::DisposalItem`). */

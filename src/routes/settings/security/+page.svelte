@@ -20,6 +20,7 @@
     authTotpRenewFinish,
     authRecoveryRenew,
     authChangePassphrase,
+    PassphraseChangeUnclear,
     updateCheckGet,
     updateCheckSet,
     type AuthSession,
@@ -36,6 +37,8 @@
   let newPassConfirm = $state("");
   let busy = $state(false);
   let sessions = $state<AuthSession[] | null>(null);
+  // Lauf F8: Hinweis bei unklarem Ausgang des Passphrase-Wechsels.
+  let passphraseUnclear = $state<string | null>(null);
 
   onMount(() => {
     load();
@@ -193,6 +196,8 @@
       return;
     }
     busy = true;
+    passphraseUnclear = null;
+    let keepFields = false;
     try {
       await authChangePassphrase(newPass);
       flash(
@@ -200,9 +205,15 @@
         "ok",
       );
     } catch (e) {
-      flash(String(e), "error");
+      if (e instanceof PassphraseChangeUnclear) {
+        // Nicht verwerfen: Die neue Passphrase kann schon gelten.
+        passphraseUnclear = e.message;
+        keepFields = true;
+      } else {
+        flash(String(e), "error");
+      }
     } finally {
-      clearNewPass();
+      if (!keepFields) clearNewPass();
       busy = false;
       await loadSessions();
     }
@@ -291,6 +302,9 @@
 
 <section class="card">
   <h2>Daten-Passwort ändern</h2>
+  {#if passphraseUnclear}
+    <p class="unclear" role="alert">{passphraseUnclear}</p>
+  {/if}
   <form
     novalidate
     onsubmit={(e) => {
@@ -338,6 +352,7 @@
 </section>
 
 <style>
+  .unclear { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 0.6rem 0.8rem; border-radius: 4px; }
   .card {
     margin-bottom: 1rem;
   }

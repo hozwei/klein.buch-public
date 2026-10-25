@@ -71,14 +71,23 @@ pub const SHUTDOWN_BACKUP_MIN: Duration = Duration::from_secs(10);
 /// Höchstens so lange wartet das Herunterfahren auf das Schließen des Pools
 /// (WAL-Checkpoint, ausgeliehene Verbindungen).
 pub const POOL_CLOSE_WAIT: Duration = Duration::from_secs(5);
-/// So lange warten „Datenbank sperren“ und „Passphrase ändern“ auf laufende
-/// Aktionen, bevor sie mit 503 abbrechen.
+/// Wartetakt von „Datenbank sperren“ auf laufende Aktionen: Nach dem Beenden der
+/// Sitzungen wartet das Sperren ohne Abbruch weiter und schreibt je Takt eine
+/// WARN-Zeile (Lauf F8). Zugleich Frist für das Nachholen eines Lock-Backups
+/// und das Schließen des Pools beim Sperren. „Passphrase ändern“ nutzt
+/// [`REKEY_WAIT_BUDGET`].
 pub const DB_GATE_WAIT: Duration = Duration::from_secs(60);
 /// So lange warten „Datenbank sperren“ und „Passphrase ändern“ darauf, dass ein
 /// laufender Scheduler-Tick nach dem aktuellen Termin aufhört (W14-027, ADR
 /// 0040). Danach sperrt „Datenbank sperren“ trotzdem (der Tick läuft ohne Pool
 /// und Passphrase leer); „Passphrase ändern“ bricht mit 503 ab.
 pub const SCHEDULER_STOP_WAIT: Duration = Duration::from_secs(10);
+/// Lauf F8: Gesamtfrist, in der „Passphrase ändern“ auf laufende Aktionen, den
+/// Tick und ein laufendes Backup wartet. Sie liegt mit dem Neuverschlüsseln
+/// unter dem Antwort-Timeout ([`crate::server::limits::REQUEST_TIMEOUT`], 30 s):
+/// Das Ergebnis steht fest, bevor der Browser eine Antwort bekommt — sonst
+/// meldete er `timeout`, während der Wechsel im Hintergrund doch wirksam würde.
+pub const REKEY_WAIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// Setup-Token und ausstehende TOTP-Geheimnisse (Plan W6).
 #[derive(Default)]

@@ -185,6 +185,26 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
 - **ADR 0034** (F6b) — Krypto-Linie mit russh 0.64, `sha2`/`hmac`/`sha1` neu mit gleichen
   Hexwerten.
 
+**Amendments 2026-10-25 — Lauf F7b/F8:**
+
+- **ADR 0019** (F7b/F8) — §13b-Flag verlangt USt 0 (ADR 0039 Nr. 143); aktivierte Kosten
+  nicht stornierbar (Nr. 145).
+- **ADR 0025** (F8) — Anschaffungskosten nach § 9b Abs. 1 EStG (bei §19 brutto), GWG-Grenze
+  netto, Aktivieren nur in offenen Jahren und in einer Transaktion, Privatentnahme mit
+  Entnahmewert (ADR 0039 Nr. 145).
+- **ADR 0040** Nr. 62/63 (F8) — Restore hält abgeschlossene Geschäftsjahre; „Datenbank
+  sperren“ sperrt nach dem Beenden der Sitzungen immer zu Ende, „Passphrase ändern“ mit
+  Wartebudget unter dem Antwort-Timeout und Backup-Sperre.
+
+**Amendments 2026-10-25 — Lauf F8d:**
+
+- **ADR 0019** (F8d) — Vorsteuer und Anschaffungskosten aus Kosten nach dem §19-Status bei
+  Leistungsbezug (Jahr des Belegdatums), nicht nach dem Zahlungsjahr; das Jahr der Ausgabe
+  bleibt das Zahlungsjahr (ADR 0039 Nr. 148).
+- **ADR 0025** (F8d) — Anschaffungskosten aus Kosten nach dem Status bei Leistungsbezug; ein
+  §19-Wechsel wird nicht blockiert, Inbox und Ausfüllhilfe nennen betroffene Anlagen
+  (ADR 0039 Nr. 148).
+
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
 explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
@@ -209,6 +229,6 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 ## Letzte Verifikation
 
-Stand: 2026-10-25, ADR-Files 0001–0040 (Amendments bis Lauf F7). Bei einer neuen
+Stand: 2026-10-25, ADR-Files 0001–0040 (Amendments bis Lauf F8). Bei einer neuen
 ADR diese Tabelle am Ende verlängern und das passende Vertiefungs-Dokument verlinken;
 bei einem neuen Amendment eine Zeile in Abschnitt 3 ergänzen.

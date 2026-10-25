@@ -240,7 +240,18 @@ sich erst, wenn Du ihn an die verschickte Rechnung angepasst und das unter
 "Einstellungen" → "Backups" → "Nummernkreise" mit "Abgleich bestätigen …"
 bestätigt hast (mit Begründung, Daten-Passwort und Authenticator-Code). So
 steht die verschickte Rechnung unter ihrer Nummer genau einmal in Deinen
-Büchern. Dasselbe gilt für Storno-Entwürfe und Angebote.
+Büchern. Dasselbe gilt für Storno-Entwürfe und Angebote. Änderst Du den
+Entwurf nach der Bestätigung noch einmal, merkt Klein.Buch ihn wieder vor:
+Die Bestätigung galt dem Stand, der der verschickten Rechnung entsprach.
+
+**Abgeschlossene Geschäftsjahre:** Hast Du nach dem Stand des Backups ein
+Geschäftsjahr abgeschlossen, bleibt es abgeschlossen. Klein.Buch übernimmt
+den Abschluss aus der ersetzten Datenbank (mit ihren Eckwerten) und nennt
+die Jahre im Hinweis "Abgeschlossene Geschäftsjahre übernommen". Buchungen
+mit Datum in diesen Jahren sind danach nicht möglich. Fehlt im Backup
+etwas, das beim Abschluss schon gebucht war (etwa die AfA des Jahres),
+meldet die EÜR des Jahres eine Abweichung vom Festschreibungs-Snapshot;
+kläre sie mit Deiner Steuerberatung.
 
 **Abo-Vorlagen und Abo-Kosten:** Hat eine Vorlage nach dem Stand des Backups
 schon eine Rechnung erzeugt (oder ein Abo schon Kosten gebucht), rückt

@@ -35,7 +35,10 @@
 //!   Festschreiben eingefrorene Status der Rechnung (Anleitung zu Zeile 12:
 //!   vor dem Wechsel ausgeführte Umsätze bleiben in ihrer Besteuerung).
 //! - Betriebsausgaben: Kleinunternehmer brutto; bei Regelbesteuerung netto,
-//!   die Vorsteuer in Zeile 57/58 (Kz 185).
+//!   die Vorsteuer in Zeile 57/58 (Kz 185). Maßgeblich ist der Status bei
+//!   Leistungsbezug (Jahr des Belegdatums, § 15 Abs. 1 UStG, Abschn. 19.5
+//!   UStAE; Lauf F8d), nicht der des Zahlungsjahres; das Jahr der Ausgabe
+//!   bleibt das Zahlungsjahr (§ 11 Abs. 2 EStG).
 //! - Storno-Erstattungen mindern die Einnahmen-Zeile; ein Überhang (Erstattung
 //!   einer Vorjahres-Einnahme bei geringen Einnahmen im Jahr) ist eine
 //!   Betriebsausgabe im Abflussjahr (§ 11 Abs. 2 EStG) und steht in „übrige
@@ -311,7 +314,9 @@ impl ElsterLine {
 #[serde(rename_all = "camelCase")]
 pub struct ElsterForm {
     pub fiscal_year: i32,
-    /// §19-Status des Geschäftsjahres (bestimmt brutto/netto der Ausgaben).
+    /// §19-Status des Geschäftsjahres (Kopf der Ausfüllhilfe). Brutto/netto der
+    /// Ausgaben folgt seit Lauf F8d dem Status jeder Kostenposition bei
+    /// Leistungsbezug (`ExpenseItem::is_kleinunternehmer`).
     pub is_kleinunternehmer: bool,
     /// Jahr des Vordrucks, dem die Zeilennummern folgen.
     pub form_year: i32,
@@ -338,7 +343,13 @@ pub struct ElsterInputs<'a> {
     pub storno: &'a [StornoItem],
     /// Bezahlte, nicht aktivierte Kosten des Jahres.
     pub expenses: &'a [ExpenseItem],
-    /// §19-Status des Geschäftsjahres.
+    /// Bezahlte, als Anlage aktivierte Kosten des Jahres (Lauf F8b): bei
+    /// Regelbesteuerung zählt ihre Vorsteuer in Kz 185; weichen die
+    /// Anschaffungskosten der Anlage vom Betrag der Kosten ab, weist die
+    /// Ausfüllhilfe darauf hin.
+    pub capitalized: &'a [ExpenseItem],
+    /// §19-Status des Geschäftsjahres (Kopf, Hinweise). Die Ausgaben tragen
+    /// ihren eigenen Status bei Leistungsbezug (Lauf F8d).
     pub is_kleinunternehmer: bool,
 }
 
@@ -450,14 +461,55 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
             by_pos.entry(pos.zeile(layout)).or_insert((pos, 0)).1 += amount;
         }
     };
+    // Lauf F8d: Brutto bzw. netto mit Vorsteuer nach dem §19-Status der
+    // Kosten bei Leistungsbezug (`ExpenseItem::is_kleinunternehmer`), nicht
+    // nach dem Status des Zahlungsjahres (§ 15 Abs. 1 UStG, Abschn. 19.5
+    // UStAE). Kosten, deren Status vom Jahr abweicht, nennt ein Hinweis.
     let mut vorsteuer: i64 = 0;
+    let mut regel_expense = false;
+    let mut other_status: Vec<&str> = Vec::new();
     for e in inp.expenses {
-        if inp.is_kleinunternehmer {
+        if e.is_kleinunternehmer {
             add(category_pos(&e.category), e.gross_cents);
         } else {
             // Regelbesteuerung: netto in der Kategorie, Vorsteuer gesondert.
             add(category_pos(&e.category), e.gross_cents - e.tax_cents);
             vorsteuer += e.tax_cents;
+            regel_expense |= e.tax_cents != 0;
+        }
+        if e.is_kleinunternehmer != inp.is_kleinunternehmer && e.tax_cents != 0 {
+            other_status.push(&e.expense_number);
+        }
+    }
+    // Lauf F8b: Aktivierte Kosten wirken über die AfA; bei Regelbesteuerung
+    // (bei Leistungsbezug) bleibt ihre gezahlte Vorsteuer Betriebsausgabe des
+    // Zahlungsjahres.
+    let mut mismatched: Vec<String> = Vec::new();
+    for e in inp.capitalized {
+        if !e.is_kleinunternehmer && e.tax_cents > 0 {
+            vorsteuer += e.tax_cents;
+            regel_expense = true;
+        }
+        if e.is_kleinunternehmer != inp.is_kleinunternehmer && e.tax_cents != 0 {
+            other_status.push(&e.expense_number);
+        }
+        let expected = crate::domain::asset::acquisition_cost_from_expense(
+            e.net_cents,
+            e.gross_cents,
+            e.is_kleinunternehmer,
+        );
+        if e.capitalized_asset_cost_cents
+            .is_some_and(|c| c != expected)
+        {
+            mismatched.push(match e.capitalized_asset_number.as_deref() {
+                Some(asset) => format!(
+                    "{} (Anlage {asset}, {} statt {})",
+                    e.expense_number,
+                    fmt_eur_note(e.capitalized_asset_cost_cents.unwrap_or_default()),
+                    fmt_eur_note(expected)
+                ),
+                None => e.expense_number.clone(),
+            });
         }
     }
     add(Pos::Vorsteuer, vorsteuer);
@@ -489,7 +541,19 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
             Pos::Uebrige.kennzahl()
         ));
     }
-    if !inp.is_kleinunternehmer || regel_income {
+    if !mismatched.is_empty() {
+        notes.push(format!(
+            "Aktivierte Kosten mit abweichenden Anschaffungskosten: {}. Die EÜR nimmt diese Kostenpositionen ganz heraus und setzt nur die AfA der Anlage an; maßgeblich ist nach dem Steuerstatus bei Leistungsbezug (Belegdatum der Kosten) als Kleinunternehmer der Bruttobetrag, bei Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Ursache ist oft ein späterer Verzicht auf §19; Klein.Buch wendet einen Wechsel des Steuerstatus immer ab Beginn des Kalenderjahres an. Ein nicht aktivierter Rest wird sonst in keinem Jahr abgezogen, ein Mehrbetrag ohne Ausgabe abgeschrieben. Korrigiere die Anschaffungskosten der Anlage (Anlage bearbeiten; eine gebuchte AfA vorher im offenen Geschäftsjahr zurücksetzen). Nicht korrigieren, sondern mit der Steuerberatung klären: wenn für die Anlage AfA in einem abgeschlossenen Jahr festgeschrieben oder die Anlage abgegangen ist, und wenn §19 im laufenden Jahr durch Überschreiten der 100.000-€-Grenze weggefallen ist (§ 19 Abs. 1 UStG). Im zweiten Fall bleiben Kosten mit Leistungsbezug vor dem Überschreiten beim Bruttobetrag ohne Vorsteuer; Klein.Buch bildet einen Wechsel mitten im Jahr nicht ab.",
+            mismatched.join(", "),
+        ));
+    }
+    if !other_status.is_empty() {
+        notes.push(format!(
+            "Kosten mit Leistungsbezug unter einem anderen Steuerstatus als dem dieses Jahres: {}. Sie sind nach dem Status bei Leistungsbezug (Belegdatum) behandelt — als Kleinunternehmer brutto ohne Vorsteuer, bei Regelbesteuerung netto mit Vorsteuer (§ 15 Abs. 1 UStG, Abschn. 19.5 UStAE); das Jahr der Ausgabe bleibt das Zahlungsjahr (§ 11 Abs. 2 EStG).",
+            other_status.join(", "),
+        ));
+    }
+    if !inp.is_kleinunternehmer || regel_income || regel_expense {
         notes.push(regel_note(layout));
     }
 
@@ -510,7 +574,7 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
 /// aufteilt und was der Steuerberater ergänzen muss.
 fn regel_note(layout: Layout) -> String {
     format!(
-        "Regelbesteuerung: Einnahmen stehen netto in Zeile {} (Kz 112), die vereinnahmte Umsatzsteuer in Zeile {} (Kz 140), Ausgaben netto mit der Vorsteuer in Zeile {} (Kz 185). Nicht abgebildet sind die an das Finanzamt gezahlte und die vom Finanzamt erstattete Umsatzsteuer (Kz 186 und 141), die Umsatzsteuer auf Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer und die Vorsteuer aus Anlagenkäufen; die Umsatzsteuer-Voranmeldung erstellt Klein.Buch nicht. Bitte mit dem Steuerberater ergänzen.",
+        "Regelbesteuerung: Einnahmen stehen netto in Zeile {} (Kz 112), die vereinnahmte Umsatzsteuer in Zeile {} (Kz 140), Ausgaben netto mit der Vorsteuer in Zeile {} (Kz 185). Nicht abgebildet sind die an das Finanzamt gezahlte und die vom Finanzamt erstattete Umsatzsteuer (Kz 186 und 141), die Umsatzsteuer auf Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer und die Vorsteuer aus Anlagen, die nicht aus einer erfassten Kostenposition übernommen wurden; die Umsatzsteuer-Voranmeldung erstellt Klein.Buch nicht. Bitte mit dem Steuerberater ergänzen. Ist §19 in diesem Jahr durch Überschreiten der 100.000-€-Grenze weggefallen, wendet Klein.Buch die Regelbesteuerung auf alle Kosten des Jahres an: Kz 185 enthält dann auch die nicht abziehbare Umsatzsteuer aus Kosten mit Leistungsbezug vor dem Überschreiten, die dort brutto als Ausgabe gehört (§ 19 Abs. 1, § 15 Abs. 1 UStG); auch das bitte mit dem Steuerberater korrigieren.",
         Pos::UstPflichtig.zeile(layout),
         Pos::VereinnahmteUst.zeile(layout),
         Pos::Vorsteuer.zeile(layout),
@@ -668,12 +732,21 @@ mod tests {
         expenses: &[ExpenseItem],
         klein: bool,
     ) -> ElsterForm {
+        // Leistungsbezug im selben Status wie das Jahr (Lauf F8d).
+        let expenses: Vec<ExpenseItem> = expenses
+            .iter()
+            .map(|e| ExpenseItem {
+                is_kleinunternehmer: klein,
+                ..e.clone()
+            })
+            .collect();
         build_form(&ElsterInputs {
             report: r,
             afa,
             income,
             storno,
-            expenses,
+            expenses: &expenses,
+            capitalized: &[],
             is_kleinunternehmer: klein,
         })
     }
@@ -821,6 +894,157 @@ mod tests {
         assert_eq!(f.expense_total_cents, 11_900);
         assert_eq!(f.surplus_cents, 107_100);
         assert!(f.notes.iter().any(|n| n.starts_with("Regelbesteuerung")));
+    }
+
+    /// Kosten mit Leistungsbezug unter Regelbesteuerung.
+    fn regel(e: ExpenseItem) -> ExpenseItem {
+        ExpenseItem {
+            is_kleinunternehmer: false,
+            ..e
+        }
+    }
+
+    fn capitalized(gross: i64, tax: i64, asset_cost: i64) -> ExpenseItem {
+        ExpenseItem {
+            expense_number: "K-2025-0007".into(),
+            capitalized_asset_number: Some("AV-2025-0003".into()),
+            capitalized_asset_method: Some("linear".into()),
+            capitalized_asset_cost_cents: Some(asset_cost),
+            ..expense("office", gross, tax)
+        }
+    }
+
+    /// Lauf F8b: Bei Regelbesteuerung zählt die Vorsteuer aktivierter Kosten in
+    /// Kz 185 des Zahlungsjahres (aktiviert ist nur der Nettobetrag); bei §19
+    /// gibt es keine Vorsteuer. Ohne Abweichung kein Hinweis.
+    #[test]
+    fn capitalized_expense_input_tax_counts_under_regelbesteuerung() {
+        let r = report(2025, 0, 0, 0);
+        let items = [regel(capitalized(119_000, 19_000, 100_000))];
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: &[regel(expense("office", 11_900, 1_900))],
+            capitalized: &items,
+            is_kleinunternehmer: false,
+        });
+        assert_eq!(entry(&f, 185).unwrap().amount_cents, 20_900);
+        assert_eq!(entry(&f, 229).unwrap().amount_cents, 10_000);
+        assert_eq!(f.expense_total_cents, 30_900);
+        assert!(!f.notes.iter().any(|n| n.contains("abweichenden")));
+
+        let items = [capitalized(119_000, 19_000, 119_000)];
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: &[],
+            capitalized: &items,
+            is_kleinunternehmer: true,
+        });
+        assert!(entry(&f, 185).is_none());
+        assert_eq!(f.expense_total_cents, 0);
+        assert!(f.notes.is_empty(), "{:?}", f.notes);
+    }
+
+    /// Lauf F8b: Bestandsanlagen mit abweichenden Anschaffungskosten (Teil-
+    /// Aktivierung aus einer älteren Version) ändert die Ausfüllhilfe nicht
+    /// still, sie weist mit der Kostennummer darauf hin.
+    #[test]
+    fn mismatched_capitalized_cost_is_flagged() {
+        let r = report(2025, 0, 0, 0);
+        let items = [capitalized(119_000, 19_000, 50_000)];
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: &[],
+            capitalized: &items,
+            is_kleinunternehmer: true,
+        });
+        let note = f
+            .notes
+            .iter()
+            .find(|n| n.contains("abweichenden Anschaffungskosten"))
+            .expect("Hinweis");
+        assert!(
+            note.contains("K-2025-0007")
+                && note.contains("Anlage AV-2025-0003, 500,00 € statt 1.190,00 €")
+                && note.contains("Bruttobetrag")
+                && note.contains("Anlage bearbeiten")
+                && note.contains("Steuerberatung"),
+            "{note}"
+        );
+    }
+
+    /// Lauf F8d (§ 15 Abs. 1 UStG, Abschn. 19.5 UStAE): Brutto bzw. netto mit
+    /// Vorsteuer folgt dem Status der Kosten bei Leistungsbezug, nicht dem des
+    /// Zahlungsjahres. Regeljahr mit Kosten aus der §19-Zeit: brutto, keine
+    /// Vorsteuer; §19-Jahr mit Kosten aus der Regel-Zeit: netto, Vorsteuer in
+    /// Kz 185. Ein Hinweis nennt die Kosten; der Gewinn bleibt gleich.
+    #[test]
+    fn expense_status_at_supply_decides_input_tax() {
+        let r = report(2027, 0, 0, 0);
+        let klein_supply = ExpenseItem {
+            expense_number: "K-2026-0040".into(),
+            ..expense("office", 11_900, 1_900)
+        };
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: std::slice::from_ref(&klein_supply),
+            capitalized: &[],
+            is_kleinunternehmer: false,
+        });
+        assert_eq!(entry(&f, 229).unwrap().amount_cents, 11_900);
+        assert!(entry(&f, 185).is_none());
+        assert_eq!(f.expense_total_cents, 11_900);
+        let note = f
+            .notes
+            .iter()
+            .find(|n| n.starts_with("Kosten mit Leistungsbezug"))
+            .expect("Hinweis");
+        assert!(note.contains("K-2026-0040"), "{note}");
+
+        let regel_supply = regel(ExpenseItem {
+            expense_number: "K-2031-0099".into(),
+            ..expense("office", 11_900, 1_900)
+        });
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: std::slice::from_ref(&regel_supply),
+            capitalized: &[],
+            is_kleinunternehmer: true,
+        });
+        assert_eq!(entry(&f, 229).unwrap().amount_cents, 10_000);
+        assert_eq!(entry(&f, 185).unwrap().amount_cents, 1_900);
+        assert_eq!(f.expense_total_cents, 11_900);
+        assert!(f.notes.iter().any(|n| n.contains("K-2031-0099")));
+        assert!(f.notes.iter().any(|n| n.starts_with("Regelbesteuerung")));
+
+        // Aktivierte Kosten: Anschaffungskosten nach dem Status bei
+        // Leistungsbezug — brutto aus der §19-Zeit ist im Regeljahr richtig.
+        let items = [capitalized(119_000, 19_000, 119_000)];
+        let f = build_form(&ElsterInputs {
+            report: &r,
+            afa: &AfaSplit::default(),
+            income: &[],
+            storno: &[],
+            expenses: &[],
+            capitalized: &items,
+            is_kleinunternehmer: false,
+        });
+        assert!(entry(&f, 185).is_none());
+        assert!(!f.notes.iter().any(|n| n.contains("abweichenden")));
     }
 
     /// Eine vor dem Wechsel zu §19 ausgestellte Rechnung bleibt in Zeile 15/17,

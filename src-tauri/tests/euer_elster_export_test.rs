@@ -40,6 +40,40 @@ async fn setup_pool() -> (SqlitePool, tempfile::TempDir) {
     (pool, dir)
 }
 
+/// Verzicht auf §19 ab `since` (Lauf F8d: Kosten tragen ihren Status bei
+/// Leistungsbezug aus dem Profil; ohne Profil gilt §19).
+async fn waive_paragraph_19_since(pool: &SqlitePool, since: &str) {
+    let input = klein_buch_lib::db::repo::seller_profile::SellerProfileInput {
+        name: "Beispiel IT-Service".into(),
+        legal_form: None,
+        street: "Beispielweg 1".into(),
+        postal_code: "12345".into(),
+        city: "Musterstadt".into(),
+        country_code: "DE".into(),
+        tax_number: Some("123/456/78901".into()),
+        vat_id: None,
+        email: "kontakt@example.org".into(),
+        phone: None,
+        iban: None,
+        bic: None,
+        logo_filename: None,
+        is_kleinunternehmer: true,
+        default_pdf_template: Some("default".into()),
+        default_currency: Some("EUR".into()),
+        confirm_waive_paragraph_19: None,
+    };
+    klein_buch_lib::db::repo::seller_profile::upsert(pool, &input)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE seller_profile SET is_kleinunternehmer = 0, waived_paragraph_19_since = ? WHERE id = 1",
+    )
+    .bind(since)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn mk_customer(pool: &SqlitePool) -> String {
     let input = ContactInput {
         contact_type: ContactType::Customer,
@@ -334,12 +368,16 @@ async fn build_form(
     let income = euer_repo::income_detail(pool, y).await.unwrap();
     let storno = euer_repo::storno_detail(pool, y).await.unwrap();
     let expenses = euer_repo::expense_detail(pool, y).await.unwrap();
+    let capitalized = euer_repo::capitalized_expense_detail(pool, y)
+        .await
+        .unwrap();
     elster_csv::build_form(&elster_csv::ElsterInputs {
         report,
         afa: split,
         income: &income,
         storno: &storno,
         expenses: &expenses,
+        capitalized: &capitalized,
         is_kleinunternehmer: klein,
     })
 }
@@ -353,7 +391,7 @@ fn entry(form: &elster_csv::ElsterForm, kz: u16) -> Option<(u16, i64)> {
 }
 
 /// DATEV-Stapel eines Jahres wie `commands::euer` (alle Einzelposten).
-async fn datev_bookings(pool: &SqlitePool, year: i32, klein: bool) -> Vec<datev_csv::DatevBooking> {
+async fn datev_bookings(pool: &SqlitePool, year: i32) -> Vec<datev_csv::DatevBooking> {
     let income = euer_repo::income_detail(pool, year).await.unwrap();
     let storno = euer_repo::storno_detail(pool, year).await.unwrap();
     let expenses = euer_repo::expense_detail(pool, year).await.unwrap();
@@ -376,7 +414,6 @@ async fn datev_bookings(pool: &SqlitePool, year: i32, klein: bool) -> Vec<datev_
             disposals: &disposals,
             assets: &assets,
             private_movements: &private_movements,
-            is_kleinunternehmer: klein,
         },
     )
 }
@@ -483,7 +520,7 @@ async fn datev_export_end_to_end() {
     add_asset(&pool, "a1", "AV-2026-0001", "linear", 2026).await;
     add_depreciation(&pool, "d1", "a1", 2026, 40_000).await;
 
-    let bookings = datev_bookings(&pool, 2026, true).await;
+    let bookings = datev_bookings(&pool, 2026).await;
     // 1 Einnahme + 1 Ausgabe + 1 AfA = 3
     assert_eq!(bookings.len(), 3);
 
@@ -613,7 +650,7 @@ async fn afa_totals_agree_across_report_split_aveeur_and_datev() {
         .unwrap();
     let assets = euer_repo::aveeur_items(&pool, 2026).await.unwrap();
     let aveeur_sum: i64 = assets.iter().map(|a| a.afa_year_cents).sum();
-    let bookings = datev_bookings(&pool, 2026, true).await;
+    let bookings = datev_bookings(&pool, 2026).await;
     let datev_afa: i64 = bookings
         .iter()
         .filter(|b| b.konto == 4830 || b.konto == 4855)
@@ -646,7 +683,7 @@ async fn storno_in_following_year_reaches_datev_and_elster() {
     let orig = mk_paid_invoice(&pool, &cust, "RE-2025-0001", d(2025, 11, 3), 100_000).await;
     mk_storno(&pool, &cust, &orig, "ST-2026-0001", d(2026, 2, 10), 100_000).await;
 
-    let b = datev_bookings(&pool, 2026, true).await;
+    let b = datev_bookings(&pool, 2026).await;
     assert_eq!(b.len(), 1);
     assert_eq!(
         (b[0].konto, b[0].gegenkonto, b[0].soll_haben),
@@ -671,6 +708,7 @@ async fn storno_in_following_year_reaches_datev_and_elster() {
 #[tokio::test]
 async fn regelbesteuerung_is_split_in_elster_and_datev() {
     let (pool, _dir) = setup_pool().await;
+    waive_paragraph_19_since(&pool, "2026-01-01").await;
     let cust = mk_customer(&pool).await;
     let id = mk_locked_invoice(
         &pool,
@@ -708,7 +746,7 @@ async fn regelbesteuerung_is_split_in_elster_and_datev() {
     let csv = elster_csv::to_csv(&form);
     assert!(csv.contains("# Regelbesteuerung"));
 
-    let b = datev_bookings(&pool, 2026, false).await;
+    let b = datev_bookings(&pool, 2026).await;
     assert_eq!(
         (b[0].konto, b[0].gegenkonto, b[0].amount_cents),
         (1200, 8400, 119_000)
@@ -765,7 +803,7 @@ async fn datev_money_accounts_follow_payment_accounts() {
     .await
     .unwrap();
 
-    let b = datev_bookings(&pool, 2026, true).await;
+    let b = datev_bookings(&pool, 2026).await;
     let find = |nr: &str| b.iter().find(|x| x.belegfeld1 == nr).unwrap();
     assert_eq!(
         (find("RE-2026-0001").konto, find("RE-2026-0001").gegenkonto),
@@ -841,7 +879,7 @@ async fn capitalized_expense_is_not_deducted_twice() {
         .unwrap()
         .is_empty());
 
-    let b = datev_bookings(&pool, 2026, true).await;
+    let b = datev_bookings(&pool, 2026).await;
     assert!(b
         .iter()
         .any(|x| x.konto == 1200 && x.gegenkonto == 420 && x.amount_cents == 100_000));

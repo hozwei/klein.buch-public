@@ -22,7 +22,7 @@ use crate::archive;
 use crate::config::Paths;
 use crate::db::models::SellerProfileRow;
 use crate::db::repo::{audit_log, euer as euer_repo, seller_profile};
-use crate::domain::kleinunternehmer::{self, KleinunternehmerStatus, HINWEIS_TEXT};
+use crate::domain::kleinunternehmer::HINWEIS_TEXT;
 use crate::error::Result;
 use crate::euer::aggregate::{self, EuerReport};
 use crate::euer::datev_csv::{self, DatevHeader, DatevInputs, Skr};
@@ -33,28 +33,11 @@ use crate::euer::elster_csv::{self, ElsterForm, ElsterInputs};
 use crate::fiscal_year::snapshot::{self, SnapshotCheck};
 use crate::pdf::{templates, typst_render};
 
-/// Period-aware §19-Status für ein konkretes Geschäftsjahr. Liest das
-/// aktuelle `seller_profile` und reicht das (zusammen mit dem Verzichts-
-/// Stichtag) durch [`kleinunternehmer::is_active_for_year`]. Default
-/// (kein Profil) ist §19 = aktiv, weil Klein.Buch §19-Kleinunternehmer
-/// als Zielgruppe hat. Fix: R2-002.
-fn klein_status_from_profile(profile: Option<&SellerProfileRow>) -> KleinunternehmerStatus {
-    profile
-        .map(|p| KleinunternehmerStatus {
-            is_kleinunternehmer: p.is_kleinunternehmer == 1,
-            waived_since: p
-                .waived_paragraph_19_since
-                .as_deref()
-                .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
-        })
-        .unwrap_or(KleinunternehmerStatus {
-            is_kleinunternehmer: true,
-            waived_since: None,
-        })
-}
-
-fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bool {
-    kleinunternehmer::is_active_for_year(&klein_status_from_profile(profile), fiscal_year)
+/// Period-aware §19-Status für ein konkretes Geschäftsjahr (Fix R2-002). Die
+/// Logik (Verzichts-Stichtag, ohne Profil §19 = aktiv) liegt seit Lauf F8b in
+/// [`seller_profile::is_klein_for_year`], damit auch die EÜR-Eingaben sie nutzen.
+pub(crate) fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bool {
+    seller_profile::is_klein_for_year(profile, fiscal_year)
 }
 
 /// Pflicht-Audit eines Exports (Lauf F, R2-016 / ASVS 8.3.5): Geschäftsjahr,
@@ -151,7 +134,8 @@ pub struct ElsterExportResult {
 
 /// Baut die ELSTER-Ausfüllhilfe für ein Geschäftsjahr: EÜR-Report aggregieren,
 /// AfA nach Zeile aufteilen, Einnahmen nach dem eingefrorenen Status der
-/// Rechnung und Ausgaben nach dem §19-Status des Jahres aufteilen (Lauf F5b).
+/// Rechnung (Lauf F5b) und Ausgaben nach dem §19-Status bei Leistungsbezug
+/// (Jahr des Belegdatums, Lauf F8d) aufteilen.
 async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<ElsterForm> {
     let inputs = euer_repo::load_inputs(pool).await?;
     let report = aggregate::aggregate(fiscal_year, &inputs);
@@ -159,6 +143,7 @@ async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<Elst
     let income = euer_repo::income_detail(pool, fiscal_year).await?;
     let storno = euer_repo::storno_detail(pool, fiscal_year).await?;
     let expenses = euer_repo::expense_detail(pool, fiscal_year).await?;
+    let capitalized = euer_repo::capitalized_expense_detail(pool, fiscal_year).await?;
     // R2-002: §19-Status period-aware (Klein→Regel-Wechsel darf das Vor-Jahr
     // nicht rückwirkend kippen).
     let profile = seller_profile::get(pool).await?;
@@ -169,6 +154,7 @@ async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<Elst
         income: &income,
         storno: &storno,
         expenses: &expenses,
+        capitalized: &capitalized,
         is_kleinunternehmer,
     }))
 }
@@ -617,7 +603,7 @@ async fn build_datev_bytes(
     // R2-009: Privatbewegungen gehören in den DATEV-Stapel (EÜR-neutral, aber
     // für die Abstimmung der Geldkonten beim STB nötig).
     let private_movements = euer_repo::private_movement_detail(pool, fiscal_year).await?;
-    let profile = seller_profile::get(pool).await?;
+    // Lauf F8d: Die Kosten tragen ihren §19-Status bei Leistungsbezug selbst.
     let bookings = datev_csv::build_bookings(
         skr,
         fiscal_year,
@@ -629,7 +615,6 @@ async fn build_datev_bytes(
             disposals: &disposals,
             assets: &assets,
             private_movements: &private_movements,
-            is_kleinunternehmer: is_klein_for_year(profile.as_ref(), fiscal_year),
         },
     );
     let header = DatevHeader {
@@ -1219,6 +1204,7 @@ mod tests {
             income: &income,
             storno: &storno,
             expenses: &expenses,
+            capitalized: &[],
             is_kleinunternehmer: true,
         });
         (form, income, storno, expenses, disposals, assets)

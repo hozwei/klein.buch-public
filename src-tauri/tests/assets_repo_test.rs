@@ -158,6 +158,23 @@ async fn update_allowed_while_unlocked_blocked_after_lock() {
 }
 
 #[tokio::test]
+async fn update_moves_acquisition_fiscal_year_with_the_date() {
+    // Lauf F8: Korrigiert der Nutzer das Anschaffungsdatum einer noch nicht
+    // festgeschriebenen Anlage in ein anderes Jahr, folgt das Anschaffungsjahr
+    // (AfA-Beginn, Jahresfilter); die Nummer behält ihr Vergabejahr.
+    let (pool, _d) = setup().await;
+    let a = mk_asset(&pool, "linear", d(2026, 1, 10), 100_000, 100.0, Some(5.0)).await;
+    assert_eq!(a.acquisition_fiscal_year, 2026);
+    let inp = input("linear", d(2025, 12, 20), 100_000, 100.0, Some(5.0));
+    let updated = assets::update(&pool, &a.id, &inp, "linear", Some(5.0), 100_000)
+        .await
+        .unwrap();
+    assert_eq!(updated.acquisition_date, "2025-12-20");
+    assert_eq!(updated.acquisition_fiscal_year, 2025);
+    assert_eq!(updated.asset_number, a.asset_number);
+}
+
+#[tokio::test]
 async fn locked_asset_core_fields_immutable_via_trigger() {
     let (pool, _d) = setup().await;
     let a = mk_asset(&pool, "linear", d(2026, 1, 1), 100_000, 100.0, Some(5.0)).await;

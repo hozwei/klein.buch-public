@@ -41,7 +41,7 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 | `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer); Geschäftsjahr aus dem Storno-Datum, Bezug aufs Original (Nummer, Datum) für XML und PDF (Lauf E) | `build_storno_input`, `storno_fiscal_year`, `PrecedingInvoice` |
 | `domain::numbering` | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) | `DocType`, `format`, `format_invoice`, `format_storno`, `format_quote`, `format_expense` |
 | `domain::quote` | Angebots-Validierung und -Totals, Konvertierung zu Rechnung | `validate_quote`, `compute_totals`, `convert_to_invoice` |
-| `domain::expense` | Kosten-Validierung, §13b nur als Hinweis-Flag, Brutto in die EÜR | `validate_expense`, `compute_gross` |
+| `domain::expense` | Kosten-Validierung, §13b-Flag (mit Flag muss die USt 0 sein, ADR 0039 Nr. 143), Brutto in die EÜR | `validate_expense`, `compute_gross` |
 | `domain::private_movement` | Privatentnahme/-einlage als EÜR-neutrale Bewegung | `validate_private_movement` |
 | `domain::fiscal_year` | Geschäftsjahres-Grenzen (GJ = Kalenderjahr) | `fiscal_year_for`, `fiscal_year_bounds`, `soft_lock_deadline` |
 | `domain::asset` | Anlagen-Validierung (Anschaffungsdatum, Nutzungsdauer, GWG-Grenze), Methoden-Vorschlag | `validate_asset`, `suggest_method` |

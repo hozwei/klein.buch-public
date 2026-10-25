@@ -14,7 +14,9 @@
 //!   ([`expenses_cancel`]), nie Edit/Löschung.
 //! - §19 betrifft NUR Ausgangsbelege — Eingangsrechnungen DÜRFEN USt enthalten.
 //!   Diese Pipeline erzwingt daher keine USt-Freiheit (siehe domain::expense).
-//! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
+//! - §13b-Flag (ADR 0039 Nr. 143): Mit Flag muss die USt der Kosten 0 sein
+//!   (`ReverseChargeWithTax`); die selbst geschuldete Steuer berechnet Klein.Buch
+//!   nicht, sie geht über die Umsatzsteuer-Voranmeldung.
 
 use crate::app_ctx::AppCtx;
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
@@ -310,6 +312,22 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
             guard::check_open(pool, &fy, d.year() as i64).await?;
         }
     }
+    // Lauf F8: Aktivierte Kosten wirken seit F5b nur noch über die AfA der
+    // Anlage; ein Storno ließe die Anlage mit voller AfA stehen (EÜR) und das
+    // DATEV-Anlagekonto ohne Zugang. Eine Rückabwicklung des Kaufs ist ein
+    // Abgang der Anlage.
+    if let Some(asset_id) = existing.capitalized_as_asset_id.as_deref() {
+        let number = crate::db::repo::assets::get(pool, asset_id)
+            .await?
+            .map(|a| a.asset_number)
+            .unwrap_or_else(|| asset_id.to_string());
+        return Err(Error::Domain(format!(
+            "Diese Kosten sind als Anlage {number} aktiviert und lassen sich nicht \
+             stornieren. Einen rückabgewickelten Kauf erfasst Du als Abgang der Anlage \
+             (Art „Verkauf“, Erlös = Erstattung); die Kosten bleiben als Anschaffung \
+             bestehen."
+        )));
+    }
 
     expenses::cancel(pool, &args.expense_id, args.reason.trim()).await?;
     audit_log::append(
@@ -380,16 +398,31 @@ pub async fn expenses_set_payment(
         guard::check_open(pool, &fy, new_paid.year() as i64).await?;
     }
 
+    // Lauf F8c/F8d (ADR 0039 Nr. 147, 148): Änderung und Audit in **einer**
+    // Transaktion; das Zahldatum muss noch dem Stand der Jahresprüfung oben
+    // entsprechen (sonst gleichzeitig geändert). Den §19-Status der Kosten
+    // ändert das Zahldatum nicht mehr: maßgeblich ist der Status bei
+    // Leistungsbezug (Belegdatum, ein festgeschriebenes Kernfeld), § 15 Abs. 1
+    // UStG. Anschaffungskosten aktivierter Kosten bleiben damit passend.
     let paid = args.paid_date.map(|d| d.to_string());
-    let row = expenses::set_payment(
-        pool,
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let current = expenses::get_in(&mut tx, &args.expense_id)
+        .await?
+        .ok_or_else(|| Error::Domain("set_payment: Kostenbeleg nicht gefunden.".into()))?;
+    if current.paid_date != existing.paid_date {
+        return Err(Error::Domain(
+            "Die Kosten wurden inzwischen geändert. Bitte neu laden.".into(),
+        ));
+    }
+    let row = expenses::set_payment_in(
+        &mut tx,
         &args.expense_id,
         paid.as_deref(),
         args.paid_from_account_id.as_deref(),
     )
     .await?;
-    audit_log::append(
-        pool,
+    audit_log::append_in(
+        &mut tx,
         "expense.payment_set",
         "expense",
         &args.expense_id,
@@ -399,6 +432,8 @@ pub async fn expenses_set_payment(
         })),
     )
     .await?;
+    tx.commit().await?;
+    drop(fy);
     Ok(row)
 }
 

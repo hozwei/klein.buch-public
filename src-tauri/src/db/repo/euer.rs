@@ -17,7 +17,15 @@
 //!   nicht aktivierte Kosten, brutto, am `paid_date`. Aktivierte Kosten
 //!   (`capitalized_as_asset_id`) wirken nur über die AfA der Anlage
 //!   (§ 4 Abs. 3 Satz 3 EStG) — sonst stünden die Anschaffungskosten doppelt in
-//!   der EÜR (Lauf F5b).
+//!   der EÜR (Lauf F5b). Ausnahme (Lauf F8b): Bei Regelbesteuerung im
+//!   Zeitpunkt des Leistungsbezugs (Jahr des Belegdatums, Lauf F8d) bleibt die
+//!   gezahlte **Vorsteuer** einer aktivierten Position Betriebsausgabe des
+//!   Zahlungsjahres (Anlage EÜR „gezahlte Vorsteuerbeträge“); aktiviert ist nur
+//!   der Nettobetrag (§ 9b Abs. 1 EStG).
+//! - **Steuerstatus der Kosten** (Lauf F8d, ADR 0039 Nr. 148): brutto bzw.
+//!   netto mit Vorsteuer nach dem §19-Status bei Leistungsbezug (§ 15 Abs. 1
+//!   UStG, Abschn. 19.5 UStAE), nicht nach dem Zahlungsjahr; die zeitliche
+//!   Zuordnung bleibt das Zahlungsjahr (§ 11 Abs. 2 EStG).
 //! - **AfA** = `depreciation_entries` (Jahres-Größe über `fiscal_year`).
 //! - **Veräußerungen** = veräußerte Anlagen mit Erlös + Restbuchwert-Abgang am
 //!   `disposal_date`.
@@ -150,6 +158,42 @@ pub async fn expense_payments<'e, E: sqlx::SqliteExecutor<'e>>(
             })
         })
         .collect()
+}
+
+/// Gezahlte Vorsteuer aktivierter Kosten (Lauf F8b). Bei Regelbesteuerung im
+/// Zeitpunkt des Leistungsbezugs ist nur der Nettobetrag Anschaffungskosten
+/// (§ 9b Abs. 1 EStG); die Vorsteuer bleibt Betriebsausgabe im Jahr der
+/// Zahlung (§ 11 Abs. 2 EStG, Anlage EÜR „gezahlte Vorsteuerbeträge“). Bei §19
+/// gibt es keine abziehbare Vorsteuer — der Bruttobetrag wirkt ganz über die
+/// AfA. Maßgeblich ist der Status im Jahr des Belegdatums, nicht des
+/// Zahlungsjahres (Lauf F8d, § 15 Abs. 1 UStG, Abschn. 19.5 UStAE). Kategorie
+/// wie die Kosten (bei Regelbesteuerung stehen auch sonst Kosten brutto in
+/// ihrer Kategorie; die Ausfüllhilfe weist die Vorsteuer gesondert aus).
+pub async fn capitalized_input_tax(conn: &mut sqlx::SqliteConnection) -> Result<Vec<ExpenseView>> {
+    let profile = crate::db::repo::seller_profile::get_in(&mut *conn).await?;
+    let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT paid_date, expense_date, category, tax_amount_cents
+           FROM expenses
+          WHERE status = 'recorded'
+            AND paid_date IS NOT NULL
+            AND capitalized_as_asset_id IS NOT NULL
+            AND tax_amount_cents > 0",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let mut out = Vec::new();
+    for (paid_date, expense_date, category, tax_cents) in rows {
+        if crate::db::repo::seller_profile::is_klein_for_expense(profile.as_ref(), &expense_date)? {
+            continue;
+        }
+        out.push(ExpenseView {
+            paid_date: parse_date(&paid_date)?,
+            category,
+            gross_cents: tax_cents,
+        });
+    }
+    Ok(out)
 }
 
 /// Alle AfA-Buchungen (Periodenzuordnung über `fiscal_year` im Core).
@@ -424,6 +468,7 @@ pub async fn storno_detail(pool: &SqlitePool, year: i32) -> Result<Vec<StornoIte
 #[derive(sqlx::FromRow)]
 struct ExpenseDetailRow {
     paid_date: String,
+    expense_date: String,
     expense_number: String,
     vendor_name_snapshot: String,
     category: String,
@@ -433,21 +478,28 @@ struct ExpenseDetailRow {
     tax_amount_cents: i64,
     account_type: Option<String>,
     asset_method: Option<String>,
+    asset_cost: Option<i64>,
+    asset_number: Option<String>,
 }
 
-impl From<ExpenseDetailRow> for ExpenseItem {
-    fn from(r: ExpenseDetailRow) -> Self {
+impl ExpenseDetailRow {
+    /// `is_klein` = §19-Status bei Leistungsbezug (Lauf F8d,
+    /// [`crate::db::repo::seller_profile::is_klein_for_expense`]).
+    fn into_item(self, is_klein: bool) -> ExpenseItem {
         ExpenseItem {
-            paid_date: trim_date(&r.paid_date),
-            expense_number: r.expense_number,
-            vendor: r.vendor_name_snapshot,
-            category: r.category,
-            description: r.description,
-            gross_cents: r.gross_amount_cents,
-            net_cents: r.net_amount_cents,
-            tax_cents: r.tax_amount_cents,
-            account_type: r.account_type,
-            capitalized_asset_method: r.asset_method,
+            paid_date: trim_date(&self.paid_date),
+            expense_number: self.expense_number,
+            vendor: self.vendor_name_snapshot,
+            category: self.category,
+            description: self.description,
+            gross_cents: self.gross_amount_cents,
+            net_cents: self.net_amount_cents,
+            tax_cents: self.tax_amount_cents,
+            is_kleinunternehmer: is_klein,
+            account_type: self.account_type,
+            capitalized_asset_method: self.asset_method,
+            capitalized_asset_cost_cents: self.asset_cost,
+            capitalized_asset_number: self.asset_number,
         }
     }
 }
@@ -460,9 +512,11 @@ async fn expense_rows(pool: &SqlitePool, year: i32, capitalized: bool) -> Result
         "e.capitalized_as_asset_id IS NULL"
     };
     let sql = format!(
-        "SELECT e.paid_date, e.expense_number, e.vendor_name_snapshot, e.category, e.description,
+        "SELECT e.paid_date, e.expense_date, e.expense_number, e.vendor_name_snapshot,
+                e.category, e.description,
                 e.gross_amount_cents, e.net_amount_cents, e.tax_amount_cents,
-                pa.type AS account_type, a.depreciation_method AS asset_method
+                pa.type AS account_type, a.depreciation_method AS asset_method,
+                a.acquisition_cost_cents AS asset_cost, a.asset_number AS asset_number
            FROM expenses e
            LEFT JOIN payment_accounts pa ON pa.id = e.paid_from_account_id
            LEFT JOIN assets a ON a.id = e.capitalized_as_asset_id
@@ -473,7 +527,16 @@ async fn expense_rows(pool: &SqlitePool, year: i32, capitalized: bool) -> Result
           ORDER BY e.paid_date, e.expense_number"
     );
     let rows: Vec<ExpenseDetailRow> = sqlx::query_as(&sql).bind(&yp).fetch_all(pool).await?;
-    Ok(rows.into_iter().map(ExpenseItem::from).collect())
+    let profile = crate::db::repo::seller_profile::get(pool).await?;
+    rows.into_iter()
+        .map(|r| {
+            let is_klein = crate::db::repo::seller_profile::is_klein_for_expense(
+                profile.as_ref(),
+                &r.expense_date,
+            )?;
+            Ok(r.into_item(is_klein))
+        })
+        .collect()
 }
 
 /// Einzelne bezahlte Kostenpositionen eines Geschäftsjahres (brutto, mit
@@ -530,9 +593,17 @@ pub async fn private_movement_detail(
 pub async fn disposal_detail(pool: &SqlitePool, year: i32) -> Result<Vec<DisposalItem>> {
     let yp = format!("{year:04}");
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(String, String, String, Option<i64>, Option<i64>, String)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        Option<i64>,
+        Option<i64>,
+        String,
+        Option<String>,
+    )> = sqlx::query_as(
         "SELECT disposal_date, asset_number, label, disposal_proceeds_cents,
-                disposal_residual_book_value_cents, depreciation_method
+                disposal_residual_book_value_cents, depreciation_method, disposal_type
            FROM assets
           WHERE disposed = 1 AND disposal_date IS NOT NULL
             AND substr(disposal_date, 1, 4) = ?
@@ -544,7 +615,7 @@ pub async fn disposal_detail(pool: &SqlitePool, year: i32) -> Result<Vec<Disposa
     Ok(rows
         .into_iter()
         .map(
-            |(disposal_date, asset_number, label, proceeds, residual, method)| {
+            |(disposal_date, asset_number, label, proceeds, residual, method, dtype)| {
                 let p = proceeds.unwrap_or(0);
                 let r = residual.unwrap_or(0);
                 DisposalItem {
@@ -555,6 +626,7 @@ pub async fn disposal_detail(pool: &SqlitePool, year: i32) -> Result<Vec<Disposa
                     residual_book_value_cents: r,
                     gain_loss_cents: p - r,
                     depreciation_method: method,
+                    disposal_type: dtype.unwrap_or_default(),
                 }
             },
         )
@@ -815,7 +887,11 @@ pub async fn load_inputs_in(conn: &mut sqlx::SqliteConnection) -> Result<EuerInp
     Ok(EuerInputs {
         payments: income_payments(&mut *conn).await?,
         storno_reversals: storno_reversals(&mut *conn).await?,
-        expenses: expense_payments(&mut *conn).await?,
+        expenses: {
+            let mut v = expense_payments(&mut *conn).await?;
+            v.extend(capitalized_input_tax(&mut *conn).await?);
+            v
+        },
         depreciation: depreciation_views(&mut *conn).await?,
         disposals: disposals(&mut *conn).await?,
     })

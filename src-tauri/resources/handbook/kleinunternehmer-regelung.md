@@ -42,16 +42,49 @@ Du bist Kleinunternehmer, wenn Du beide Bedingungen erfüllst:
 2. Im laufenden Jahr bleibst Du unter **100.000 € Umsatz**.
 
 Seit dem JStG 2024 (gültig ab 01.01.2025) sind das harte Grenzen,
-keine bloßen Prognosen. Klein.Buch zeigt Dir den aktuellen Stand
-in den Einstellungen.
+keine bloßen Prognosen. **Klein.Buch überwacht die Grenzen nicht**
+und warnt Dich nicht, wenn Du Dich ihnen näherst. Behalte Deinen
+Umsatz selbst im Blick, zum Beispiel über die Einnahmen in der EÜR.
 
 Sobald Dein laufender Jahresumsatz die 100.000 €-Grenze
 überschreitet, fällt der §19-Status **ab diesem Umsatz** sofort
 weg — der Umsatz, mit dem die Schwelle gerissen wird, gehört
 bereits zur Regelbesteuerung. Alle vorherigen Umsätze des Jahres
-bleiben §19. Ab dem Folgejahr bist Du dauerhaft regelbesteuert.
-Klein.Buch warnt Dich, sobald die laufende Summe sich dem
-Schwellenwert nähert.
+bleiben §19. Im Folgejahr bist Du ebenfalls regelbesteuert, weil Dein
+Vorjahresumsatz dann über 25.000 € liegt. Liegt Dein Umsatz im
+laufenden Jahr nur über 25.000 €, aber unter 100.000 €, bleibst Du
+in diesem Jahr Kleinunternehmer; die Regelbesteuerung beginnt dann
+erst im Folgejahr. Im Jahr der Gründung gilt im laufenden Jahr schon
+die 25.000 €-Grenze; für ihr Überschreiten gilt dasselbe wie unten für
+die 100.000 €-Grenze beschrieben.
+
+### Wenn Du die 100.000 €-Grenze mitten im Jahr überschreitest
+
+Klein.Buch kennt den Steuerstatus nur je Kalenderjahr. Einen Wechsel
+mitten im Jahr bildet es nicht vollständig ab; der einzige Weg ist der
+Schalter "Ich bin Kleinunternehmer" in den Einstellungen. Der Dialog
+dort ist für den freiwilligen Verzicht geschrieben; seine Warnung zur
+5-Jahres-Bindung betrifft den Verzicht, nicht den gesetzlichen Wegfall
+durch die Umsatzgrenze. So gehst Du vor:
+
+- **Einnahmen:** Leg den Schalter um, **bevor** Du die Rechnung
+  ausstellst, mit der Du die Grenze überschreitest. Rechnungen behalten
+  den Status, mit dem sie ausgestellt wurden: Alle danach ausgestellten
+  Rechnungen weisen Umsatzsteuer aus, die früheren bleiben §19. Hast Du
+  die Rechnung, mit der Du die Grenze überschritten hast, noch mit dem
+  §19-Hinweis ausgestellt, stornierst Du sie und stellst sie mit
+  Umsatzsteuer neu aus. Ab dann musst Du Umsatzsteuer-Voranmeldungen
+  abgeben; die erstellt Klein.Buch nicht.
+- **Kosten:** Kosten, die Du vor dem Überschreiten bezogen hast,
+  bleiben ohne Vorsteuerabzug. Klein.Buch wendet die Regelbesteuerung
+  aber auf alle Kosten des Jahres an: Die EÜR-Ausfüllhilfe zeigt auch
+  für diese Kosten Vorsteuer in Kz 185, und der DATEV-Stapel bucht sie
+  mit Vorsteuerabzug. Das musst Du mit Deiner Steuerberatung korrigieren; die
+  Ausfüllhilfe weist darauf hin.
+- **Anlagen:** Der Inbox-Hinweis nach dem Umlegen nennt Deine bisher
+  brutto übernommenen Anlagen als abweichend. **Korrigiere sie in diesem
+  Fall nicht** — für Anlagen, die Du vor dem Überschreiten bekommen hast,
+  ist der Brutto-Betrag richtig (Kapitel "Anlagen und AfA").
 
 ## Der Pflicht-Hinweis
 
@@ -102,10 +135,32 @@ In der EÜR-Ausfüllhilfe stehen Einnahmen aus Rechnungen mit
 Regelbesteuerung netto in Zeile 15, die eingenommene Umsatzsteuer in
 Zeile 17; Ausgaben stehen netto, die Vorsteuer in einer eigenen Zeile.
 Maßgeblich ist der Status, mit dem die Rechnung ausgestellt wurde, nicht
-der des Zahlungsjahres. Nicht abgebildet sind die Umsatzsteuer-
+der des Zahlungsjahres. Für Deine Kosten gilt dasselbe Prinzip: Ob Du die
+Vorsteuer abziehen darfst, hängt von Deinem Status bei Leistungsbezug ab
+(§15 Abs. 1 UStG), nicht vom Jahr der Zahlung. Vorsteuer aus Leistungen,
+die Du vor dem Verzicht noch als Kleinunternehmer bezogen hast, ist nicht
+abziehbar, auch wenn Du die Rechnung erst danach bezahlst. Klein.Buch nimmt
+als Zeitpunkt des Leistungsbezugs das Belegdatum der Kosten; das Jahr der
+Ausgabe bleibt das Jahr der Zahlung.
+
+Der Verzicht gilt ab Beginn des Kalenderjahres, in dem Du den Schalter
+umlegst. Hast Du in diesem Jahr schon Kosten als Anlage übernommen
+(brutto), passen deren Anschaffungskosten nicht mehr. Klein.Buch hindert
+Dich nicht am Wechsel, nennt Dir die betroffenen Anlagen aber in der Inbox
+und in der EÜR-Ausfüllhilfe; wie Du sie korrigierst, steht im Kapitel
+"Anlagen und AfA" unter "Nach einem Wechsel des Steuerstatus". Eine
+Vorsteuerberichtigung nach §15a UStG für Anlagen aus früheren Jahren
+berechnet Klein.Buch nicht. Hast Du §19 nicht freiwillig aufgegeben, sondern
+durch Überschreiten der 100.000 €-Grenze verloren, korrigierst Du die
+Anlagen nicht (siehe "Wenn Du die 100.000 €-Grenze mitten im Jahr
+überschreitest").
+
+Nicht abgebildet sind die Umsatzsteuer-
 Voranmeldung, die an das Finanzamt gezahlte und die vom Finanzamt
 erstattete Umsatzsteuer, die Umsatzsteuer auf Anlagenverkäufe und
-Entnahmen sowie die Vorsteuer aus Anlagenkäufen. Diese Werte ergänzt Dein
+Entnahmen sowie die Vorsteuer aus Anlagen, die Du nicht aus einer erfassten
+Kostenposition übernommen hast (aus Kosten übernommene Anlagen: Vorsteuer in
+der Vorsteuer-Zeile des Zahlungsjahres). Diese Werte ergänzt Dein
 Steuerberater; die Ausfüllhilfe weist darauf hin.
 
 ---

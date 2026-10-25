@@ -581,6 +581,51 @@ pub async fn list_conflicts(pool: &SqlitePool) -> Result<Vec<Conflict>> {
     Ok(out)
 }
 
+/// Lauf F8: Merkt einen schon bestätigten Entwurf nach einer Änderung wieder
+/// vor (in der Transaktion der Änderung). Die Bestätigung galt dem Stand, der
+/// dem versandten Original entsprach; danach geänderte Preise oder Empfänger
+/// ergäben zwei verschiedene Belege mit derselben Nummer (§ 14 Abs. 4 Nr. 4
+/// UStG). Ohne Bestätigung im Audit (kein Restore-Konflikt) geschieht nichts.
+pub async fn reflag_confirmed_in(
+    conn: &mut SqliteConnection,
+    kind: &str,
+    id: &str,
+    number: &str,
+) -> Result<()> {
+    let confirmed: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM audit_log
+          WHERE action = 'numbering.restored_draft_confirmed'
+            AND entity_type = ? AND entity_id = ?
+          LIMIT 1",
+    )
+    .bind(kind)
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    if confirmed.is_none() {
+        return Ok(());
+    }
+    let key = conflict_key(kind, id);
+    let flagged: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key = ?")
+            .bind(&key)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if flagged.is_some() {
+        return Ok(());
+    }
+    app_settings::set_in(&mut *conn, &key, number).await?;
+    audit_log::append_in(
+        &mut *conn,
+        "numbering.restored_draft_reflagged",
+        kind,
+        id,
+        Some(serde_json::json!({ "number": number })),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Bestätigt den Abgleich eines vorgemerkten Entwurfs mit dem versandten
 /// Original (Re-Auth im Command): Audit `numbering.restored_draft_confirmed`
 /// mit Begründung, danach lässt er sich wie gewohnt festschreiben.

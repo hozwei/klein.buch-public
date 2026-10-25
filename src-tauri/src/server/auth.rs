@@ -48,7 +48,9 @@ use super::policy::ClientInfo;
 use super::ratelimit::{self, Streak, DEVICE_COOKIE, SUSPECT_FACTOR_AFTER, TOTP_LOCK_AFTER};
 use super::session::{self, SessionId};
 use super::startup::check_archive_paths;
-use super::state::{InstanceState, ServerState, DB_GATE_WAIT, SCHEDULER_STOP_WAIT};
+use super::state::{
+    InstanceState, ServerState, DB_GATE_WAIT, REKEY_WAIT_BUDGET, SCHEDULER_STOP_WAIT,
+};
 use super::totp::{self, Check};
 use crate::commands::backup::{
     activate_unlocked, backup_setup_passphrase, ensure_no_pending_restore, open_encrypted,
@@ -1090,7 +1092,7 @@ pub async fn logout(State(st): State<Arc<ServerState>>, req: Request) -> Respons
 
 /// `POST /api/auth/lock` — „Datenbank sperren“: beendet sofort alle Sitzungen,
 /// bittet den Scheduler um Abbruch nach dem laufenden Termin, wartet auf
-/// laufende Aktionen (höchstens [`DB_GATE_WAIT`]) und den Tick (höchstens
+/// laufende Aktionen (ohne Abbruch, Lauf F8; WARN je [`DB_GATE_WAIT`]) und den Tick (höchstens
 /// [`SCHEDULER_STOP_WAIT`]), schreibt ein ausstehendes Lock-Backup (Lauf F3c),
 /// schließt den Pool und überschreibt die Passphrase im RAM (W14-027).
 pub async fn lock(State(st): State<Arc<ServerState>>, req: Request) -> Response {
@@ -1131,13 +1133,25 @@ pub async fn lock_database(st: &Arc<ServerState>) -> Result<(), ApiError> {
     st.pending_auth.clear();
     st.clear_pending_renew();
     crate::scheduler::tick::request_stop(&st.ctx);
-    let _gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
-        Ok(gate) => gate,
-        Err(_) => {
-            // Gesperrt wird nicht; der Scheduler läuft weiter. Die Sitzungen
-            // bleiben beendet (Anmeldung nötig, dann erneut sperren).
-            crate::scheduler::tick::withdraw_stop(&st.ctx);
-            return Err(ApiError::busy(10));
+    // Lauf F8: Sind die Sitzungen einmal beendet, wird zu Ende gesperrt — auch
+    // wenn eine laufende Aktion (großes Backup mit SFTP-Spiegel, Export) den
+    // `db_gate` länger hält. Die Antwort an den Browser endet nach
+    // REQUEST_TIMEOUT mit `timeout`, die Oberfläche wertet das als „sperrt im
+    // Hintergrund zu Ende“; früher brach das Sperren nach DB_GATE_WAIT still ab
+    // und ließ Pool, Passphrase und Scheduler laufen.
+    let mut waited = std::time::Duration::ZERO;
+    let _gate = loop {
+        match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
+            Ok(gate) => break gate,
+            Err(_) => {
+                waited += DB_GATE_WAIT;
+                tracing::warn!(
+                    target: "klein_buch_lib::auth",
+                    "Datenbank sperren: eine laufende Aktion hält die Datenbank seit {} s — \
+                     es wird weiter gewartet, danach gesperrt",
+                    waited.as_secs()
+                );
+            }
         }
     };
     audit(st, "auth.lock").await;
@@ -1455,19 +1469,33 @@ async fn rekey(
     // W14-027: Scheduler zuerst um Abbruch bitten, dann Schreibsperre; auf den
     // Tick höchstens SCHEDULER_STOP_WAIT warten (der Wechsel braucht die Datei
     // exklusiv — läuft der Tick noch, lieber 503 als unbegrenzt warten).
+    //
+    // Lauf F8: Alle Wartezeiten zusammen höchstens REKEY_WAIT_BUDGET — das
+    // Ergebnis steht vor dem Antwort-Timeout fest (sonst bekäme der Browser
+    // `timeout`, und der Wechsel würde im Hintergrund doch noch wirksam).
+    let deadline = tokio::time::Instant::now() + REKEY_WAIT_BUDGET;
+    let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
     crate::scheduler::tick::request_stop(&ctx);
-    let gate = match tokio::time::timeout(DB_GATE_WAIT, st.db_gate.write()).await {
+    let gate = match tokio::time::timeout(left(), st.db_gate.write()).await {
         Ok(g) => g,
         Err(_) => {
             crate::scheduler::tick::withdraw_stop(&ctx);
             return Err(ApiError::busy(10));
         }
     };
-    if !crate::scheduler::tick::stop_within(&ctx, SCHEDULER_STOP_WAIT).await {
+    if !crate::scheduler::tick::stop_within(&ctx, SCHEDULER_STOP_WAIT.min(left())).await {
         crate::scheduler::tick::withdraw_stop(&ctx);
         drop(gate);
         return Err(ApiError::busy(30));
     }
+    // Lauf F8: kein Backup darf beim Dateitausch noch eine Verbindung auf die
+    // alte Datei halten (etwa das Backup nach einem vorigen Wechsel, das weder
+    // `db_gate` noch den Tick nimmt).
+    let Some(backups_paused) = crate::backup::exclusive_against_backups(left()).await else {
+        crate::scheduler::tick::resume(&ctx).await;
+        drop(gate);
+        return Err(ApiError::busy(30));
+    };
     if let Some(pool) = ctx.take_pool() {
         pool.close().await;
     }
@@ -1541,6 +1569,7 @@ async fn rekey(
     {
         tracing::error!("Audit backup.passphrase.changed nicht geschrieben: {e}");
     }
+    drop(backups_paused);
     drop(gate);
     // Sofort ein Backup mit der neuen Passphrase (ältere bleiben mit der alten
     // einspielbar) — nach der Antwort, das Herunterfahren wartet darauf.

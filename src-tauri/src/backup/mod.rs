@@ -38,6 +38,17 @@ use std::sync::Mutex;
 /// Serialisiert [`create_now`] (Plan W2.3).
 static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Lauf F8: Wartet höchstens `wait` darauf, dass kein Backup läuft, und hält
+/// danach die Backup-Sperre. „Passphrase ändern“ tauscht die DB-Datei aus; ein
+/// Backup, dessen Snapshot-Verbindung noch auf der alten Datei offen ist,
+/// löschte beim Schließen sonst `-wal`/`-shm` des neuen Pools (SQLite-Sperren
+/// gelten je Inode). `None` = Frist abgelaufen.
+pub async fn exclusive_against_backups(
+    wait: std::time::Duration,
+) -> Option<tokio::sync::MutexGuard<'static, ()>> {
+    tokio::time::timeout(wait, BACKUP_LOCK.lock()).await.ok()
+}
+
 // ---------------------------------------------------------------------------
 // app_settings-Keys (Block 4)
 // ---------------------------------------------------------------------------

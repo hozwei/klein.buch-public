@@ -683,10 +683,11 @@ pub struct QuotesConvertToInvoiceArgs {
 /// (inkl. eines bereits konvertierten Angebots) werden abgelehnt.
 ///
 /// Ablauf: Positionen übernehmen (oder im Frontend angepasst) →
-/// [`quote::convert_to_invoice`] (pure) → gemeinsamer Draft-Helper
-/// [`crate::commands::invoices::create_invoice_draft_from_input`] (setzt
-/// `derived_from_quote_id` + Audit `invoice.draft_create`) → Angebot auf
-/// `converted` setzen ([`quotes::mark_converted`]) → Audit `quote.converted`.
+/// [`quote::convert_to_invoice`] (pure) → Entwurf vorbereiten
+/// ([`crate::commands::invoices::prepare_invoice_draft`]) → in **einer**
+/// Transaktion (Lauf F8): Entwurf mit `derived_from_quote_id` + Audit
+/// `invoice.draft_create`, Angebot auf `converted` ([`quotes::mark_converted_in`])
+/// und Audit `quote.converted`.
 ///
 /// Die erzeugte Rechnung ist ein normaler Draft und wird über die übliche
 /// Invoice-Pipeline (`invoices_lock_and_issue`) festgeschrieben — inkl.
@@ -756,28 +757,36 @@ pub async fn quotes_convert_to_invoice(
     // GJ leitet create_invoice_draft_from_input aus dem Rechnungsdatum ab (W1.2).
 
     // Gemeinsamer Draft-Helper: Snapshots, Belegnummer, derived_from_quote_id,
-    // Audit invoice.draft_create.
-    let invoice_detail = crate::commands::invoices::create_invoice_draft_from_input(
+    // Audit invoice.draft_create. Lauf F8: Entwurf, Abschluss des Angebots
+    // (accepted → converted) und Audit in **einer** Transaktion — ein Abbruch
+    // dazwischen lässt kein Angebot auf „angenommen“ mit fertigem Entwurf
+    // zurück, eine zweite Umwandlung scheitert an der Status-Bedingung.
+    let prepared = crate::commands::invoices::prepare_invoice_draft(
         pool,
         &quote.contact_id,
         &input,
         Some(&quote.id),
+        ctx.clock().today_berlin(),
     )
     .await?;
-
-    // Angebot abschließen: accepted → converted (Guard im Repo).
-    quotes::mark_converted(pool, &quote.id, &invoice_detail.invoice.id).await?;
-
-    audit_log::append(
-        pool,
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let (invoice_id, invoice_number) =
+        crate::commands::invoices::insert_prepared_draft(&mut tx, &prepared).await?;
+    quotes::mark_converted_in(&mut tx, &quote.id, &invoice_id).await?;
+    audit_log::append_in(
+        &mut tx,
         "quote.converted",
         "quote",
         &quote.id,
-        Some(serde_json::json!({ "quote_number": quote.quote_number, "invoice": invoice_detail.invoice.id, "invoice_number": invoice_detail.invoice.invoice_number })),
+        Some(serde_json::json!({ "quote_number": quote.quote_number, "invoice": &invoice_id, "invoice_number": &invoice_number })),
     )
     .await?;
+    tx.commit().await?;
+    drop(prepared);
 
-    Ok(invoice_detail)
+    crate::db::repo::invoices::get_detail(pool, &invoice_id)
+        .await?
+        .ok_or_else(|| Error::Domain("Umwandlung: Entwurf nicht gefunden".into()))
 }
 
 // =============================================================================

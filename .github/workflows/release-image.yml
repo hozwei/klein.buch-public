@@ -9,7 +9,10 @@
 # Notes) VERÖFFENTLICHEN und erst dann Push nach ghcr.io/<owner>/klein-buch:<CalVer> und cosign
 # keyless. Reihenfolge bauen → testen → Quellarchiv → Release → Push → Signatur: Das Paket ist
 # öffentlich, der Quelltext der Komponenten Dritter muss es vor dem Image sein (GPLv2 §3,
-# GPLv3 §6(d); Lauf E, ADR 0039 Nr. 123). Release-Assets werden nie überschrieben.
+# GPLv3 §6(d); Lauf E, ADR 0039 Nr. 123). Vorhandene Release-Assets werden nie ersetzt, außer
+# das Release stammt aus einem früheren Lauf, zu dessen Build nie ein Image veröffentlicht
+# wurde (dann werden Assets und Notes per --clobber neu geschrieben, siehe Schritt
+# „Release veröffentlichen“).
 #
 # Gebaut wird ein OCI-Layout samt Attestierungen (der `docker`-Exporter von `--load`
 # behält sie ohne containerd-Store nicht). Getestet wird derselbe Inhalt, per skopeo in
@@ -437,7 +440,9 @@ jobs:
       # Erst das Release mit Quellarchiv, SBOM und Digest veröffentlichen, dann das Image
       # pushen (Lauf E, ADR 0039 Nr. 123). Der Digest steht schon fest: Der Push prüft ihn
       # gegen den gebauten Index. Bei einer Wiederholung werden nur fehlende Assets
-      # hochgeladen, vorhandene nie ersetzt.
+      # hochgeladen, vorhandene nie ersetzt — außer das Release stammt aus einem früheren
+      # Lauf, zu dessen Build nie ein Image veröffentlicht wurde (neuer Build mit anderem
+      # Digest nach gescheitertem Push): dann Assets und Notes neu (--clobber).
       - name: Release veröffentlichen (Quellarchiv, SBOM, Digest — vor dem Image)
         env:
           GH_TOKEN: ${{ github.token }}

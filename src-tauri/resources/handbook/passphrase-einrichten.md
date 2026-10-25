@@ -175,6 +175,13 @@ Passwort an. Ältere Backups bleiben mit dem bisherigen Passwort
 verschlüsselt und lassen sich nur mit ihm einspielen. Bewahre das alte
 Passwort deshalb im Passwort-Manager auf.
 
+Läuft gerade ein Backup oder ein Export, wartet Klein.Buch höchstens etwa
+20 Sekunden darauf und meldet sonst "beschäftigt", ohne etwas zu ändern;
+versuch es dann etwas später noch einmal. Meldet Klein.Buch dagegen
+"Ergebnis unklar", kann der Wechsel trotzdem wirksam geworden sein: Die
+Felder bleiben dann gefüllt. Speichere das neue Passwort sofort und
+versuch bei der nächsten Anmeldung zuerst das neue, dann das bisherige.
+
 ## Wenn Du das Telefon mit der Authenticator-App verlierst
 
 Dann meldest Du Dich mit einem Einmal-Code an und richtest unter
@@ -200,4 +207,4 @@ Sofort.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

@@ -311,9 +311,6 @@ pub struct DatevInputs<'a> {
     pub disposals: &'a [DisposalItem],
     pub assets: &'a [AveeurItem],
     pub private_movements: &'a [PrivateMovementItem],
-    /// §19-Status des Geschäftsjahres (Vorsteuer der Kosten nur bei
-    /// Regelbesteuerung).
-    pub is_kleinunternehmer: bool,
 }
 
 // ============================================================================
@@ -412,13 +409,14 @@ fn input_tax_key(net: i64, tax: i64) -> Option<&'static str> {
 /// Aufwands- bzw. Zugangsbuchung einer Kostenposition: Konto = Geldkonto im
 /// Haben, Gegenkonto = Aufwands- bzw. Anlagekonto mit BU-Schlüssel (F5-fix —
 /// DATEV ordnet den Steuerschlüssel dem Gegenkonto zu; Feld „Gegenkonto (ohne
-/// BU-Schlüssel)“).
+/// BU-Schlüssel)“). Vorsteuer nur bei Regelbesteuerung im Zeitpunkt des
+/// Leistungsbezugs (`ExpenseItem::is_kleinunternehmer`, Lauf F8d, § 15 Abs. 1
+/// UStG), nicht nach dem Status des Zahlungsjahres.
 fn expense_bookings(
     out: &mut Vec<DatevBooking>,
     skr: Skr,
     e: &ExpenseItem,
     konto: u32,
-    is_klein: bool,
     text: &str,
 ) {
     if e.gross_cents <= 0 {
@@ -439,7 +437,7 @@ fn expense_bookings(
         belegfeld2: String::new(),
         buchungstext: truncate(text.trim(), 60),
     };
-    if is_klein || e.tax_cents <= 0 {
+    if e.is_kleinunternehmer || e.tax_cents <= 0 {
         out.push(mk(e.gross_cents, konto, ""));
         return;
     }
@@ -512,12 +510,13 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
             skr,
             e,
             skr.expense_account(&e.category),
-            inp.is_kleinunternehmer,
             &format!("{} {}", e.vendor, e.description),
         );
     }
 
-    // Aktivierte Kosten: Geldkonto (Haben) an Anlagekonto (Soll) — Zugang.
+    // Aktivierte Kosten: Geldkonto (Haben) an Anlagekonto (Soll) — Zugang. Bei
+    // Regelbesteuerung (bei Leistungsbezug, F8d) nur der Nettobetrag (BU-Schlüssel bzw. gesonderte
+    // Vorsteuerbuchung); die Vorsteuer bleibt Aufwand des Zahlungsjahres (F8b).
     for e in inp.capitalized {
         let method = e.capitalized_asset_method.as_deref().unwrap_or("linear");
         expense_bookings(
@@ -525,7 +524,6 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
             skr,
             e,
             skr.asset_account_for(method),
-            inp.is_kleinunternehmer,
             &format!("Zugang {} {}", e.vendor, e.description),
         );
     }
@@ -538,16 +536,31 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
         };
         let gain = d.proceeds_cents >= d.residual_book_value_cents;
         if d.proceeds_cents > 0 {
+            // Lauf F8: Bei einer Privatentnahme fließt kein Geld — der
+            // Entnahmewert (Teilwert, § 6 Abs. 1 Nr. 4 EStG) geht vom
+            // Privatkonto an die Erlöse aus dem Anlagenabgang.
+            let withdrawal = d.disposal_type == "given_away";
             out.push(DatevBooking {
                 amount_cents: d.proceeds_cents,
                 soll_haben: 'S',
-                konto: skr.bank(),
+                konto: if withdrawal {
+                    skr.private_withdrawal()
+                } else {
+                    skr.bank()
+                },
                 gegenkonto: skr.revenue_disposal(gain),
                 bu_schluessel: String::new(),
                 belegdatum: date,
                 belegfeld1: truncate(&d.asset_number, 36),
                 belegfeld2: String::new(),
-                buchungstext: truncate(&format!("Verkauf {}", d.label), 60),
+                buchungstext: truncate(
+                    &format!(
+                        "{} {}",
+                        if withdrawal { "Entnahme" } else { "Verkauf" },
+                        d.label
+                    ),
+                    60,
+                ),
             });
         }
         if d.residual_book_value_cents > 0 {
@@ -830,7 +843,6 @@ mod tests {
             disposals: &[],
             assets: &[],
             private_movements: &[],
-            is_kleinunternehmer: true,
         }
     }
 
@@ -1054,6 +1066,14 @@ mod tests {
         }
     }
 
+    /// Kosten mit Leistungsbezug unter Regelbesteuerung (Lauf F8d).
+    fn regel(e: ExpenseItem) -> ExpenseItem {
+        ExpenseItem {
+            is_kleinunternehmer: false,
+            ..e
+        }
+    }
+
     fn aveeur(method: &str, afa: i64) -> AveeurItem {
         AveeurItem {
             asset_number: "AV-2026-0001".into(),
@@ -1093,6 +1113,7 @@ mod tests {
             residual_book_value_cents: 1_000,
             gain_loss_cents: 4_000,
             depreciation_method: "linear".into(),
+            disposal_type: "sale".into(),
         }];
         let assets = vec![aveeur("linear", 40_000), aveeur("gwg_sofort", 80_000)];
         let private_movements = vec![
@@ -1166,6 +1187,7 @@ mod tests {
             residual_book_value_cents: 5_000,
             gain_loss_cents: -4_000,
             depreciation_method: "gwg_sofort".into(),
+            disposal_type: "sale".into(),
         }];
         let inp = DatevInputs {
             disposals: &disposals,
@@ -1174,6 +1196,32 @@ mod tests {
         let b = build_bookings(Skr::Skr04, 2026, &inp);
         assert_eq!((b[0].konto, b[0].gegenkonto), (1800, 6889));
         assert_eq!((b[1].konto, b[1].gegenkonto), (6895, 670));
+    }
+
+    /// Lauf F8: Privatentnahme einer Anlage — der Entnahmewert kommt vom
+    /// Privatkonto (kein Geldfluss), nicht von der Bank.
+    #[test]
+    fn private_withdrawal_of_asset_books_from_private_account() {
+        let disposals = vec![DisposalItem {
+            disposal_date: "2026-06-01".into(),
+            asset_number: "AV-2025-0003".into(),
+            label: "Notebook".into(),
+            proceeds_cents: 30_000,
+            residual_book_value_cents: 40_000,
+            gain_loss_cents: -10_000,
+            depreciation_method: "linear".into(),
+            disposal_type: "given_away".into(),
+        }];
+        let inp = DatevInputs {
+            disposals: &disposals,
+            ..empty_inputs()
+        };
+        let b = build_bookings(Skr::Skr03, 2026, &inp);
+        assert_eq!((b[0].konto, b[0].gegenkonto), (1800, 8800));
+        assert_eq!(b[0].amount_cents, 30_000);
+        assert!(b[0].buchungstext.starts_with("Entnahme"));
+        let b = build_bookings(Skr::Skr04, 2026, &inp);
+        assert_eq!((b[0].konto, b[0].gegenkonto), (2100, 6889));
     }
 
     /// R2-011: Kasse und PayPal statt pauschal Bank.
@@ -1220,15 +1268,18 @@ mod tests {
             ],
             ..Default::default()
         }];
-        let expenses = vec![
+        // Leistungsbezug unter Regelbesteuerung (Lauf F8d: Status je Kosten).
+        let expenses: Vec<ExpenseItem> = [
             expense("2026-03-02", "KO-1", "office", 11_900, 1_900),
             expense("2026-03-03", "KO-2", "training", 10_700, 700),
             expense("2026-03-04", "KO-3", "goods", 11_600, 1_600),
-        ];
+        ]
+        .into_iter()
+        .map(regel)
+        .collect();
         let inp = DatevInputs {
             income: &income,
             expenses: &expenses,
-            is_kleinunternehmer: false,
             ..empty_inputs()
         };
         let b = build_bookings(Skr::Skr03, 2026, &inp);
@@ -1249,9 +1300,14 @@ mod tests {
             .all(|x| x.konto == 1200 && x.soll_haben == 'H'));
         assert_eq!(b.len(), 6);
 
-        // Gleiche Kosten im §19-Jahr: brutto, ohne BU-Schlüssel.
+        // Gleiche Kosten mit Leistungsbezug unter §19: brutto, ohne
+        // BU-Schlüssel — auch wenn das Zahlungsjahr regelbesteuert ist.
+        let klein = vec![ExpenseItem {
+            is_kleinunternehmer: true,
+            ..expenses[0].clone()
+        }];
         let inp = DatevInputs {
-            expenses: &expenses[..1],
+            expenses: &klein,
             ..empty_inputs()
         };
         let b = build_bookings(Skr::Skr03, 2026, &inp);
@@ -1276,6 +1332,68 @@ mod tests {
         let b = build_bookings(Skr::Skr03, 2026, &inp);
         assert_eq!((b[0].konto, b[0].gegenkonto), (1200, 420));
         assert_eq!((b[1].konto, b[1].gegenkonto), (1200, 480));
+    }
+
+    /// Lauf F8b: Bei Regelbesteuerung geht auf das Anlagekonto nur der
+    /// Nettobetrag (Zugang = Anschaffungskosten = AfA-Summe); die Vorsteuer
+    /// zieht der BU-Schlüssel 9 bzw. die gesonderte Buchung aufs
+    /// Vorsteuerkonto. Bei §19 geht der Bruttobetrag aufs Anlagekonto.
+    #[test]
+    fn capitalized_expense_under_regelbesteuerung_books_net_and_input_tax() {
+        let mut e = regel(expense(
+            "2026-02-01",
+            "KO-2026-0005",
+            "hardware",
+            119_000,
+            19_000,
+        ));
+        e.capitalized_asset_method = Some("linear".into());
+        // 16 %: kein BU-Schlüssel → Netto aufs Anlagekonto, Vorsteuer gesondert.
+        let mut g = regel(expense(
+            "2026-02-02",
+            "KO-2026-0006",
+            "hardware",
+            116_000,
+            16_000,
+        ));
+        g.capitalized_asset_method = Some("linear".into());
+        let capitalized = vec![e, g];
+        let inp = DatevInputs {
+            capitalized: &capitalized,
+            ..empty_inputs()
+        };
+        let b = build_bookings(Skr::Skr03, 2026, &inp);
+        assert_eq!(
+            (
+                b[0].amount_cents,
+                b[0].gegenkonto,
+                b[0].bu_schluessel.as_str()
+            ),
+            (119_000, 420, "9")
+        );
+        assert_eq!((b[1].amount_cents, b[1].gegenkonto), (100_000, 420));
+        assert_eq!(
+            (b[2].amount_cents, b[2].gegenkonto),
+            (16_000, Skr::Skr03.input_tax())
+        );
+
+        let klein = vec![ExpenseItem {
+            is_kleinunternehmer: true,
+            ..capitalized[0].clone()
+        }];
+        let inp = DatevInputs {
+            capitalized: &klein,
+            ..empty_inputs()
+        };
+        let b = build_bookings(Skr::Skr03, 2026, &inp);
+        assert_eq!(
+            (
+                b[0].amount_cents,
+                b[0].gegenkonto,
+                b[0].bu_schluessel.as_str()
+            ),
+            (119_000, 420, "")
+        );
     }
 
     /// Summe der Geldkonto-Bewegungen (S positiv, H negativ).
@@ -1339,7 +1457,6 @@ mod tests {
         }];
         let inp = DatevInputs {
             income: &income,
-            is_kleinunternehmer: false,
             ..empty_inputs()
         };
         let b = build_bookings(Skr::Skr03, 2026, &inp);
@@ -1353,7 +1470,6 @@ mod tests {
 
         let inp = DatevInputs {
             storno: &storno,
-            is_kleinunternehmer: false,
             ..empty_inputs()
         };
         let b = build_bookings(Skr::Skr03, 2026, &inp);

@@ -37,9 +37,12 @@ Aufwand sofort als Ausgabe absetzen ("geringwertiges
 Wirtschaftsgut", GWG, §6 Abs. 2 EStG) — eine Pflicht ist das nicht,
 aber meist die bequemere Wahl.
 
-In Klein.Buch gibst Du den Netto-Wert ein. Als §19-Kleinunternehmer
-ist Netto gleich Brutto, weil Du keine Vorsteuer abziehst — die
-800 €-Grenze gilt also auf den vollen Kaufpreis.
+Die 800 €-Grenze gilt immer für den Preis ohne Umsatzsteuer, auch
+als §19-Kleinunternehmer (R 9b Abs. 2 EStR). Abgeschrieben wird
+dagegen als §19-Kleinunternehmer der Brutto-Betrag, weil Du die
+gezahlte Umsatzsteuer nicht als Vorsteuer abziehst (§ 9b Abs. 1
+EStG); bei Regelbesteuerung der Netto-Betrag. Mehr dazu im Kapitel
+"Anschaffungen und AfA".
 
 ## Nutzungsdauer
 
@@ -124,4 +127,4 @@ hilft Dir dann, die Anlage korrekt zu erfassen.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

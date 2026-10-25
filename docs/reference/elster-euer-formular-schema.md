@@ -86,8 +86,13 @@ Kfz-Sammelposten (amtlich Leasing, Steuern/Versicherungen, sonstige Kosten),
 `fees` mischt Bankspesen und Gebühren. Aktivierte Kosten (Anlage aus einer
 Kostenposition) sind keine Betriebsausgabe; sie wirken über die AfA.
 
-Bei **Regelbesteuerung** (Status des Geschäftsjahres) stehen die Ausgaben netto
-in ihrer Zeile und die Belegsteuer als Vorsteuer in Kz 185, bei §19 brutto.
+Bei **Regelbesteuerung** im Zeitpunkt des Leistungsbezugs (Jahr des Belegdatums,
+ADR 0039 Nr. 148) stehen die Ausgaben netto in ihrer Zeile und die Belegsteuer als
+Vorsteuer in Kz 185, bei §19 brutto; das Jahr der Ausgabe ist das Zahlungsjahr.
+Einen Wegfall von §19 mitten im Jahr (Überschreiten der 100.000-€-Grenze, § 19 Abs. 1
+UStG) bildet Klein.Buch nicht ab: Wird dafür der Schalter umgelegt, stehen im
+Wechseljahr auch Kosten vor dem Überschreiten netto mit Vorsteuer (ADR 0039
+Nr. 148, Bekannte Grenze (b); STB prüfen).
 
 ## AfA & Anlagenabgang
 
@@ -116,7 +121,9 @@ Verluste stehen mit Minus in der Kontrollsumme Gewinn/Verlust.
 Nicht abgebildet (Hinweis in CSV, PDF, Export-Seite und LIESMICH): an das
 Finanzamt gezahlte bzw. erstattete Umsatzsteuer (Kz 186/141), Umsatzsteuer auf
 Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer, Vorsteuer aus
-Anlagenkäufen, die Umsatzsteuer-Voranmeldung.
+Anlagen, die nicht aus einer erfassten Kostenposition übernommen wurden (seit
+Lauf F8b zählt die Vorsteuer aktivierter Kosten in Kz 185 des Zahlungsjahres),
+die Umsatzsteuer-Voranmeldung.
 
 ## Vollständiges EÜR-Paket (gesetzlicher Anspruch)
 

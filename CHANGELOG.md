@@ -37,6 +37,27 @@ dem UI/UX-Lauf (Lauf F); erscheint mit 2026.11.0.
   Abweichung — das ist die frühere Doppelzählung (Kosten und AfA). Der
   festgeschriebene Stand bleibt; ob die abgegebene Erklärung zu berichtigen ist,
   klärt der Steuerpflichtige mit dem Steuerberater.
+- **Arbeitsspeicher (`mem_limit`):** Die Faustregel rechnet jetzt den Java-Sidecar
+  mit: 512 MiB + 1 GiB (Java, zwei Läufe) + 2 × größtes Backup. `mem_limit: 2g`
+  reicht damit für Backups bis etwa 250 MiB, `3g` bis etwa 750 MiB (Handbuch
+  „Speicherbedarf“). Lock-Backups laufen im Hintergrund, während schon die nächste
+  Rechnung festgeschrieben wird.
+- **Anlagen aus Kosten bei §19:** Anschaffungskosten sind als Kleinunternehmer der
+  Bruttobetrag (§ 9b Abs. 1 EStG). Vor 2026.11 aus Kosten übernommene Anlagen tragen
+  den Nettobetrag; solange für sie keine AfA gebucht ist, lassen sie sich korrigieren,
+  sonst klärt der Steuerpflichtige die Korrektur mit dem Steuerberater.
+- **Anlagen aus Kosten mit abweichendem Betrag:** Ältere Anlagen, deren
+  Anschaffungskosten nicht dem Betrag ihrer Kosten entsprechen (Teil-Aktivierung,
+  Nebenkosten), ändert Klein.Buch nicht; die EÜR-Ausfüllhilfe nennt die betroffenen
+  Kosten. Die Korrektur klärt der Steuerpflichtige mit dem Steuerberater. Bei
+  Regelbesteuerung zählt die Vorsteuer aktivierter Kosten jetzt in der EÜR mit;
+  abgeschlossene Jahre zeigen dann eine Abweichung im Snapshot-Abgleich.
+- **Steuerstatus der Kosten nach dem Leistungsbezug:** Vorsteuer und Anschaffungskosten
+  aus Kosten richten sich jetzt nach dem §19-Status im Jahr des Belegdatums, nicht des
+  Zahlungsjahres. Wer auf §19 verzichtet hat, sieht für Kosten, deren Beleg und Zahlung
+  in Jahren mit verschiedenem Status liegen, eine andere Aufteilung (brutto/netto,
+  Kz 185, DATEV-BU-Schlüssel) und einen Hinweis in der Ausfüllhilfe; abgeschlossene
+  Jahre mit solchen aktivierten Kosten zeigen eine Abweichung im Snapshot-Abgleich.
 
 ### Changed
 
@@ -355,6 +376,91 @@ dem UI/UX-Lauf (Lauf F); erscheint mit 2026.11.0.
 
 ### Fixed
 
+- **Anschaffungsjahr beim Korrigieren einer Anlage (Lauf F8):** Wird das Anschaffungsdatum
+  einer noch nicht festgeschriebenen Anlage in ein anderes (offenes) Jahr korrigiert, folgt
+  jetzt auch das Anschaffungsjahr (AfA-Beginn, Jahresfilter); die Anlagennummer bleibt.
+- **Nachbesserung F8e (ADR 0039 Nr. 148 (5), Bekannte Grenze (b)):**
+  - *Anschaffungsdatum und Belegdatum:* Liegen das Anschaffungsdatum einer Anlage aus
+    Kosten (Lieferung, § 9a EStDV) und das Belegdatum der Kosten in Jahren mit
+    unterschiedlichem §19-Status, lehnen Anlegen und Bearbeiten mit beiden Daten,
+    beiden Status und Verweis an die Steuerberatung ab; bestehende Anlagen in dieser
+    Lage gelten nach einem Wechsel als nicht korrigierbar.
+  - *Wegfall von §19 mitten im Jahr (100.000-€-Grenze):* als bekannte Grenze
+    dokumentiert. Inbox-Hinweis und Ausfüllhilfe raten in diesem Fall nicht mehr zur
+    Korrektur der Anlagen und nennen die zu hohe Vorsteuer in Kz 185; das Handbuch
+    beschreibt das Vorgehen bei Einnahmen, Kosten und Anlagen und sagt, dass
+    Klein.Buch die Umsatzgrenzen nicht überwacht.
+- **Nachbesserung F8d (ADR 0039 Nr. 148):**
+  - *Steuerstatus der Kosten nach dem Leistungsbezug:* Ob Kosten brutto oder netto mit
+    Vorsteuer zählen (Ausfüllhilfe Kz 185, EÜR-Vorsteuer aktivierter Kosten,
+    DATEV-BU-Schlüssel) und welche Anschaffungskosten eine Anlage aus Kosten hat
+    (§ 9b Abs. 1 EStG), richtet sich nach dem §19-Status bei Leistungsbezug (Jahr des
+    Belegdatums; § 15 Abs. 1 UStG, Abschn. 19.5 UStAE), nicht mehr nach dem
+    Zahlungsjahr. Die Ausgabe bleibt im Zahlungsjahr (§ 11 EStG). Die Ausfüllhilfe
+    nennt Kosten mit abweichendem Status.
+  - *Zahldatum aktivierter Kosten:* Die F8c-Sperre entfällt; das Zahldatum ändert den
+    Status nicht mehr. Das Belegdatum bleibt unveränderlich.
+  - *§19-Wechsel nach dem Aktivieren:* Ein Verzicht oder eine Rückkehr wird nicht
+    blockiert; die Inbox nennt jede betroffene Anlage mit richtigem Betrag und
+    Handlungsweg (korrigieren bzw. Steuerberatung), die Ausfüllhilfe ebenso.
+- **Nachbesserung F8c (ADR 0039 Nr. 147):**
+  - *Zahldatum aktivierter Kosten:* Ein neues Zahldatum (oder das Entfernen), das den
+    §19-Status der Kosten wechselt, lehnt der Server ab, wenn die Anschaffungskosten
+    der Anlage dann nicht mehr passen — sonst setzten EÜR, Kz 185 und DATEV eine
+    Vorsteuer an, die schon in der AfA steckt. Prüfung, Änderung und Protokoll laufen
+    in einer Transaktion. Der Hinweis der Ausfüllhilfe zu abweichenden
+    Anschaffungskosten ist neutral gefasst.
+  - *§13b als Kleinunternehmer:* Die selbst geschuldete Steuer auf eine Anlage
+    erfasst Du bei der Zahlung ans Finanzamt als eigene Kosten und übernimmst sie als
+    eigene Anlage (gleiches Datum, gleiche Methode); die Rechnung selbst wird zum
+    Rechnungsbetrag aktiviert. Einen höheren Betrag an der Rechnung lehnt der Server
+    mit diesem Hinweis ab; das Formular zeigt ihn an.
+- **Nachbesserung F8b (ADR 0039 Nr. 146, ADR 0040 Nr. 64):**
+  - *Anlage aus Kosten nur mit genau dem Betrag der Kosten:* als Kleinunternehmer
+    brutto, bei Regelbesteuerung netto (§ 9b Abs. 1 EStG). Teil-Aktivierungen und
+    Mehrbeträge lehnt der Server ab — die EÜR nimmt die ganze Kostenposition heraus,
+    ein Rest wurde sonst nie abgezogen und das Anlagekonto ging nie auf 0.
+    Sammelrechnungen vorher in getrennte Kostenpositionen aufteilen; Nebenkosten aus
+    einem eigenen Beleg als eigene Anlage übernehmen.
+  - *Vorsteuer aktivierter Kosten (Regelbesteuerung):* zählt jetzt als
+    Betriebsausgabe im Zahlungsjahr (EÜR, Ausfüllhilfe Kz 185); bisher fiel sie mit
+    der Kostenposition heraus. Der DATEV-Stapel buchte sie schon richtig.
+- **Schlussprüfung Lauf F (F8, ADR 0039 Nr. 145, ADR 0040 Nr. 62/63):**
+  - *Anlage aus Kosten:* Kosten eines abgeschlossenen Jahres (Beleg- oder
+    Zahlungsjahr) und stornierte Kosten lassen sich nicht mehr als Anlage
+    übernehmen — das Aktivieren änderte sonst die EÜR des abgeschlossenen Jahres.
+    Nummer, Anlage, Verweis und Protokoll entstehen in einem Schritt (keine
+    doppelte Aktivierung, keine Nummer ohne Spur); die Quell-Kosten einer Anlage
+    lassen sich nicht mehr tauschen.
+  - *§ 9b EStG:* Als Kleinunternehmer übernimmt das Formular die Anschaffungskosten
+    brutto (die nicht abziehbare Umsatzsteuer ging seit F5 sonst in keinem Jahr in
+    die EÜR ein, und auf dem DATEV-Anlagekonto blieb sie stehen), bei
+    Regelbesteuerung netto; Anschaffungsdatum = Belegdatum. Der Methodenvorschlag
+    prüft die GWG-Grenze am Nettobetrag. Genau netto bei §19 (bzw. genau brutto bei
+    Regelbesteuerung) lehnt der Server ab.
+  - *Privatentnahme einer Anlage:* Abgangsart „Privatentnahme / Geschenk“ mit
+    Pflichtfeld Entnahmewert (Teilwert; 0 bei einem betrieblichen Geschenk). Er zählt
+    als Betriebseinnahme wie ein Erlös; DATEV bucht ihn vom Privatkonto statt von der
+    Bank. Bisher galt fest 0 € — der Gewinn war zu niedrig.
+  - *Storno:* Das Storno-Datum liegt frühestens am letzten Zahlungseingang (die
+    Erstattung stand sonst in der EÜR vor dem Zufluss, § 11 EStG). Storno-Entwurf und
+    Angebotsumwandlung entstehen samt Nummer und Protokoll in einem Schritt.
+  - *Aktivierte Kosten* lassen sich nicht mehr stornieren (die Anlage schrieb sonst
+    auf einen stornierten Kauf weiter ab); eine Rückabwicklung ist ein Abgang der
+    Anlage.
+  - *Restore:* Ein älteres Backup öffnet ein inzwischen abgeschlossenes
+    Geschäftsjahr nicht wieder — der Abschluss wird übernommen, Hinweis in der Inbox.
+    Ein nach dem Restore bestätigter Entwurf mit schon festgeschriebener Nummer wird
+    nach jeder Änderung wieder vorgemerkt.
+  - *„Datenbank sperren“* sperrt nach dem Abmelden immer zu Ende, auch wenn ein
+    langes Backup oder ein Export die Datenbank länger als 60 s hält (bisher brach es
+    dann still ab, und Abo-Läufe gingen weiter).
+  - *„Passphrase ändern“* steht innerhalb der Antwortzeit fest (höchstens etwa 20 s
+    Wartezeit, sonst „beschäftigt“ ohne Änderung) und wartet ein laufendes Backup ab,
+    bevor es die Datenbankdatei tauscht. Meldet der Browser trotzdem eine
+    Zeitüberschreitung, zeigt die Seite „Ergebnis unklar“ und behält das neue
+    Passwort in den Feldern.
+  - *Abhängigkeiten:* `futures-*` 0.3.34 (Rest der Dependabot-Rust-Gruppe).
 - **Nachbesserung Technik (Lauf F6-fix, ADR 0039 Nr. 141):** Der ZAP-API-Scan
   (`security.yml`) bricht nicht mehr beim Erzeugen der OpenAPI-Beschreibung ab:
   `openapi_from_registry.py` nimmt alle Registry-Einträge (seit F6 genau die
