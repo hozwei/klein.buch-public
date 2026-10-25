@@ -199,14 +199,11 @@ pub async fn apply_in(
                             &format!("{action}.advanced_after_restore"),
                             action,
                             &id,
-                            Some(
-                                &serde_json::json!({
-                                    "label": label,
-                                    "from": next_due,
-                                    "to": before,
-                                })
-                                .to_string(),
-                            ),
+                            Some(serde_json::json!({
+                                "label": label,
+                                "from": next_due,
+                                "to": before,
+                            })),
                         )
                         .await?;
                         out.advanced.push(Advanced {
@@ -227,14 +224,11 @@ pub async fn apply_in(
                             &format!("{action}.restore_review"),
                             action,
                             &id,
-                            Some(
-                                &serde_json::json!({
-                                    "label": label,
-                                    "next_due": next_due,
-                                    "restored_on": today.to_string(),
-                                })
-                                .to_string(),
-                            ),
+                            Some(serde_json::json!({
+                                "label": label,
+                                "next_due": next_due,
+                                "restored_on": today.to_string(),
+                            })),
                         )
                         .await?;
                         out.review.push(Review {
@@ -285,14 +279,11 @@ pub async fn apply_in(
             "recurring.markers_cleared_after_restore",
             "recurring",
             "restore",
-            Some(
-                &serde_json::json!({
-                    "pending": pending.len(),
-                    "pending_drafts": out.pending_drafts,
-                    "confirmations": confirmations,
-                })
-                .to_string(),
-            ),
+            Some(serde_json::json!({
+                "pending": pending.len(),
+                "pending_drafts": out.pending_drafts,
+                "confirmations": confirmations,
+            })),
         )
         .await?;
     }
@@ -301,8 +292,10 @@ pub async fn apply_in(
     let locked: BTreeSet<&str> = locked_numbers.iter().map(String::as_str).collect();
     if !locked.is_empty() {
         let drafts: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT 'invoice', id, invoice_number FROM invoices WHERE locked_at IS NULL
-             UNION ALL SELECT 'quote', id, quote_number FROM quotes WHERE locked_at IS NULL
+            "SELECT 'invoice', id, invoice_number FROM invoices
+              WHERE locked_at IS NULL AND voided_at IS NULL
+             UNION ALL SELECT 'quote', id, quote_number FROM quotes
+              WHERE locked_at IS NULL AND status = 'draft'
              ORDER BY 3",
         )
         .fetch_all(&mut *conn)
@@ -317,7 +310,7 @@ pub async fn apply_in(
                 "numbering.restored_draft_flagged",
                 &kind,
                 &id,
-                Some(&serde_json::json!({ "number": number }).to_string()),
+                Some(serde_json::json!({ "number": number })),
             )
             .await?;
             out.conflicts.push(Conflict { kind, id, number });
@@ -482,7 +475,7 @@ pub async fn confirm_conflict(pool: &SqlitePool, kind: &str, id: &str, reason: &
         "numbering.restored_draft_confirmed",
         kind,
         id,
-        Some(&serde_json::json!({ "number": number, "reason": reason }).to_string()),
+        Some(serde_json::json!({ "number": number, "reason": reason })),
     )
     .await?;
     tx.commit().await?;

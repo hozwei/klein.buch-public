@@ -181,8 +181,8 @@
 
   async function cancel() {
     if (!detail) return;
-    if (!cancelReason.trim()) {
-      flash("Storno-Grund ist Pflicht.", "error");
+    if (cancelReason.trim().length < 10) {
+      flash("Bitte einen Grund angeben (mindestens 10 Zeichen).", "error");
       return;
     }
     await run(() => quotesCancel({ quoteId: detail!.quote.id, reason: cancelReason.trim() }), "Angebot storniert.");
@@ -327,7 +327,7 @@
       <p class="muted">Das Angebot wird nicht gelöscht, sondern als storniert markiert (so verlangt es das Gesetz).</p>
       <label class="block">
         Storno-Grund *
-        <textarea rows="2" bind:value={cancelReason} placeholder="Pflichtangabe"></textarea>
+        <textarea rows="2" bind:value={cancelReason} placeholder="Pflichtangabe, mindestens 10 Zeichen"></textarea>
       </label>
       <div class="actions">
         <button class="btn-secondary" onclick={() => (showCancel = false)} disabled={busy}>Abbrechen</button>

@@ -570,8 +570,9 @@ async fn reauth_commands_require_fresh_reauth() {
         .collect();
     assert_eq!(
         reauth_cmds.len(),
-        24,
-        "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d)"
+        25,
+        "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d) \
+         + invoices_void_draft (F2a)"
     );
     for name in &reauth_cmds {
         let r = send(
@@ -592,6 +593,42 @@ async fn reauth_commands_require_fresh_reauth() {
         assert_ne!(r.status, StatusCode::FORBIDDEN, "{name}: {}", r.text());
         assert_ne!(r.status, StatusCode::UNAUTHORIZED, "{name}");
     }
+}
+
+/// R1-012 (Lauf F2a): Ein verletzter Fremdschlüssel blockiert das Entsperren
+/// mit 409 `db_integrity_failed`; die Instanz bleibt gesperrt, nichts wird
+/// angefasst.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_key_violation_refuses_unlock() {
+    let srv = test_server();
+    let _cookie = setup(&srv).await;
+    srv.state.ctx.take_pool().unwrap().close().await;
+    srv.state.ctx.session.clear();
+    {
+        // SQLCipher-KDF beim Öffnen: nicht parallel zu anderen Anmeldungen
+        let _serial = kdf_serial().await;
+        let pool = klein_buch_lib::db::open_pool(&srv.state.ctx.paths.db_file, Some(PASS))
+            .await
+            .unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO notifications (id, rule_id, title, body, severity)
+             VALUES ('n-fk', 'rule_gibt_es_nicht', 'T', 'B', 'info')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+        pool.close().await;
+    }
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert_eq!(r.json()["code"], "db_integrity_failed", "{}", r.text());
+    assert!(!srv.state.ctx.is_unlocked(), "bleibt gesperrt");
 }
 
 #[tokio::test]

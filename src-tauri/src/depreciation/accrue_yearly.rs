@@ -119,6 +119,16 @@ pub async fn reset_asset(
     let asset = assets::get(pool, asset_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {asset_id}")))?;
+    // Lauf F2c: Nach dem Abgang bleibt die AfA stehen — der AfA-Lauf bucht
+    // veräußerte Anlagen nicht mehr, die AfA des Abgangsjahres fehlte sonst
+    // endgültig in der EÜR (DB-Backstop
+    // `trg_depreciation_entries_no_delete_disposed`).
+    if asset.disposed == 1 {
+        return Err(Error::Domain(format!(
+            "Anlage {} ist veräußert — ihre Abschreibung lässt sich nicht mehr zurücksetzen.",
+            asset.asset_number
+        )));
+    }
 
     let entries = depreciation_repo::list_for_asset(pool, asset_id).await?; // year asc
     if !entries.iter().any(|e| e.locked_at.is_none()) {
@@ -146,27 +156,25 @@ pub async fn reset_asset(
     assets::set_book_value(pool, asset_id, book_value, last_year).await?;
 
     // Gelöschte Werte revisionssicher protokollieren (ursprünglicher Inhalt feststellbar).
-    let removed_json = removed
+    let removed_json: Vec<serde_json::Value> = removed
         .iter()
         .map(|e| {
-            format!(
-                r#"{{"fiscal_year":{},"amount":{}}}"#,
-                e.fiscal_year, e.depreciation_amount_cents
-            )
+            serde_json::json!({
+                "fiscal_year": e.fiscal_year,
+                "amount": e.depreciation_amount_cents,
+            })
         })
-        .collect::<Vec<_>>()
-        .join(",");
+        .collect();
     audit_log::append(
         pool,
         "depreciation.reset",
         "asset",
         asset_id,
-        Some(&format!(
-            r#"{{"asset_number":"{}","removed":[{}],"book_value_restored":{}}}"#,
-            esc(&asset.asset_number),
-            removed_json,
-            book_value
-        )),
+        Some(serde_json::json!({
+            "asset_number": &asset.asset_number,
+            "removed": removed_json,
+            "book_value_restored": book_value,
+        })),
     )
     .await?;
 
@@ -182,6 +190,19 @@ pub async fn reset_asset(
 struct AssetAccrual {
     entries: usize,
     total_cents: i64,
+}
+
+/// Holt für **eine** Anlage die noch nicht gebuchte AfA bis einschließlich
+/// `target_year` nach (abgeschlossene Jahre ausgenommen) und liefert die Zahl
+/// der neuen Buchungen. Lauf F2c: `assets_dispose` ruft das vor der anteiligen
+/// AfA des Abgangsjahres für die Vorjahre — danach bucht der AfA-Lauf die
+/// veräußerte Anlage nicht mehr.
+pub(crate) async fn accrue_asset_through(
+    pool: &SqlitePool,
+    asset: &AssetRow,
+    target_year: i64,
+) -> Result<usize> {
+    Ok(accrue_asset(pool, asset, target_year).await?.entries)
 }
 
 /// Holt für eine Anlage alle noch nicht gebuchten Jahre vom Anschaffungsjahr bis
@@ -230,6 +251,17 @@ async fn accrue_asset(
         if running <= 0 {
             break;
         }
+        // Lauf F (R2-S2-GJLOCK): nie in ein abgeschlossenes Geschäftsjahr
+        // buchen — geprüft in der Schreib-Transaktion (der Abschluss bucht die
+        // AfA vor seinem Eintrag in `fiscal_year_locks`).
+        let closed: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM fiscal_year_locks WHERE fiscal_year = ?")
+                .bind(year)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if closed.is_some() {
+            continue;
+        }
         // Bereits gebucht? → überspringen (idempotent), Restbuchwert bleibt.
         let booked: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM depreciation_entries WHERE asset_id = ? AND fiscal_year = ?",
@@ -257,16 +289,13 @@ async fn accrue_asset(
             "depreciation.accrue",
             "asset",
             &asset.id,
-            Some(
-                &serde_json::json!({
-                    "asset_number": asset.asset_number,
-                    "fiscal_year": year,
-                    "amount": calc.depreciation_amount_cents,
-                    "book_value_after": calc.book_value_after_cents,
-                    "full_writeoff": calc.is_full_writeoff,
-                })
-                .to_string(),
-            ),
+            Some(serde_json::json!({
+                "asset_number": asset.asset_number,
+                "fiscal_year": year,
+                "amount": calc.depreciation_amount_cents,
+                "book_value_after": calc.book_value_after_cents,
+                "full_writeoff": calc.is_full_writeoff,
+            })),
         )
         .await?;
         tx.commit().await?;
@@ -281,10 +310,6 @@ async fn accrue_asset(
 fn parse_date(s: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|e| Error::Domain(format!("Ungültiges Datum '{s}': {e}")))
-}
-
-fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

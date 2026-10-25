@@ -270,7 +270,7 @@ pub async fn run(
             "backup.rotation.prune",
             "backup",
             &d.id,
-            Some(&serde_json::json!({ "tag": d.retention_tag }).to_string()),
+            Some(serde_json::json!({ "tag": d.retention_tag })),
         )
         .await
         .ok();

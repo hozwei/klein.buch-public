@@ -273,24 +273,16 @@ async fn store_bytes_inner(
     .execute(pool)
     .await?;
 
-    let orphan = replaced_orphan
-        .map(|(h, kept)| {
-            format!(
-                r#","replaced_orphan_hash":"{h}","orphan_kept_as":"{}""#,
-                escape_json(&kept)
-            )
-        })
-        .unwrap_or_default();
+    let mut details = serde_json::json!({ "path": &path_str, "size": size, "hash": &hash });
+    if let Some((orphan_hash, kept)) = replaced_orphan {
+        details["replaced_orphan_hash"] = serde_json::Value::from(orphan_hash);
+        details["orphan_kept_as"] = serde_json::Value::from(kept);
+    }
     audit::archive_event(
         pool,
         audit::ArchiveAction::Store,
         &archive_id,
-        Some(&format!(
-            r#"{{"path":"{}","size":{},"hash":"{}"{orphan}}}"#,
-            escape_json(&path_str),
-            size,
-            hash
-        )),
+        Some(details),
     )
     .await?;
 
@@ -375,11 +367,7 @@ async fn read_and_verify_inner(
             pool,
             audit::ArchiveAction::Read,
             archive_id,
-            Some(&format!(
-                r#"{{"path":"{}","bytes":{}}}"#,
-                path.replace('\\', "\\\\").replace('"', "\\\""),
-                bytes.len()
-            )),
+            Some(serde_json::json!({ "path": &path, "bytes": bytes.len() })),
         )
         .await?;
     }
@@ -426,10 +414,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Schreibt `bytes` als neue, schreibgeschützte Datei an `final_path` (Plan
 /// W2.1): eindeutiger Temp-Name im selben Verzeichnis (keine Kollision mit
-/// Resten früherer Läufe oder parallelen Schreibern), `fsync`, Schreibschutz
-/// **vor** dem Sichtbarwerden, dann ohne Überschreiben an den Zielnamen
-/// (`hard_link` scheitert, wenn das Ziel schon existiert). Fehler räumen die
-/// Temp-Datei weg.
+/// Resten früherer Läufe oder parallelen Schreibern), `fsync`, Rücklese-Prüfung
+/// (Lauf F, KB-0040: die Temp-Datei wird gelesen und gegen den SHA-256 des
+/// Puffers geprüft, bevor sie sichtbar wird), Schreibschutz **vor** dem
+/// Sichtbarwerden, dann ohne Überschreiben an den Zielnamen (`hard_link`
+/// scheitert, wenn das Ziel schon existiert; ohne Hardlinks `renameat2` mit
+/// `RENAME_NOREPLACE`, Lauf F W2-S2-4). Fehler räumen die Temp-Datei weg.
 fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let name = final_path
@@ -447,6 +437,13 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
+        // KB-0040: Rücklese-Prüfung vor dem Sichtbarwerden.
+        if sha256_hex(&fs::read(&tmp)?) != sha256_hex(bytes) {
+            return Err(crate::error::Error::Domain(format!(
+                "archive::store: Rücklese-Prüfung fehlgeschlagen (Inhalt weicht ab): {}",
+                final_path.display()
+            )));
+        }
         set_readonly(&tmp)?;
         match fs::hard_link(&tmp, final_path) {
             // Der Hardlink teilt den Inode: die Temp-Datei nur entfernen, ihre
@@ -459,8 +456,8 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
                     final_path.display()
                 )));
             }
-            // Dateisystem ohne Hardlinks: rename (Ziel wurde vorher geprüft).
-            Err(_) => fs::rename(&tmp, final_path)?,
+            // Dateisystem ohne Hardlinks: umbenennen, ohne zu überschreiben.
+            Err(_) => rename_no_clobber(&tmp, final_path)?,
         }
         if let Some(parent) = final_path.parent() {
             // Verzeichniseintrag dauerhaft machen (best-effort, nicht überall möglich).
@@ -470,10 +467,43 @@ fn write_new_readonly(final_path: &Path, bytes: &[u8]) -> Result<()> {
         }
         Ok(())
     })();
-    if result.is_err() && tmp.exists() {
+    if result.is_err() {
+        // Fehlt die Temp-Datei schon (NotFound), ist nichts zu tun.
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Umbenennen ohne Überschreiben (Lauf F, W2-S2-4): unter Linux `renameat2`
+/// mit `RENAME_NOREPLACE` (atomar; existiert das Ziel, `AlreadyExists`).
+/// Kennt das Dateisystem das Flag nicht (`EINVAL`/`ENOSYS`/`EOPNOTSUPP`), wird
+/// das Ziel unmittelbar vorher geprüft und normal umbenannt — gegen Schreiber
+/// im selben Prozess schützt die Pfad-Sperre, ein fremder Schreiber auf dem
+/// Archiv-Volume ist ausgeschlossen (Betriebsdoku: DB und Archiv nicht auf
+/// CIFS/exFAT).
+fn rename_no_clobber(from: &Path, to: &Path) -> Result<()> {
+    let exists = || -> Result<()> {
+        Err(crate::error::Error::Domain(format!(
+            "archive::store: Datei wurde parallel angelegt: {}",
+            to.display()
+        )))
+    };
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{renameat_with, RenameFlags, CWD};
+        use rustix::io::Errno;
+        match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+            Ok(()) => return Ok(()),
+            Err(Errno::EXIST) => return exists(),
+            Err(Errno::INVAL | Errno::NOSYS | Errno::OPNOTSUPP) => {}
+            Err(e) => return Err(std::io::Error::from(e).into()),
+        }
+    }
+    match fs::symlink_metadata(to) {
+        Ok(_) => exists(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(fs::rename(from, to)?),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub(crate) fn set_readonly(path: &Path) -> Result<()> {
@@ -488,10 +518,6 @@ pub(crate) fn set_readonly(path: &Path) -> Result<()> {
         fs::set_permissions(path, p)?;
     }
     Ok(())
-}
-
-fn escape_json(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Test-Helper: setzt readonly zurück, damit Tests Files aufräumen
@@ -966,5 +992,57 @@ mod tests {
         .await
         .unwrap_err();
         assert!(format!("{err}").contains("Pfad-Trennzeichen"));
+    }
+    /// Lauf F (W2-S2-4): der Rückfall ohne Hardlinks überschreibt nie ein
+    /// vorhandenes Ziel.
+    #[test]
+    fn rename_no_clobber_never_overwrites() {
+        let dir = TempDir::new().unwrap();
+        let from = dir.path().join("a.tmp");
+        let to = dir.path().join("a.pdf");
+        fs::write(&from, b"neu").unwrap();
+        fs::write(&to, b"alt").unwrap();
+        let err = rename_no_clobber(&from, &to).unwrap_err();
+        assert!(format!("{err}").contains("parallel angelegt"), "{err}");
+        assert_eq!(fs::read(&to).unwrap(), b"alt", "Ziel unverändert");
+        assert_eq!(fs::read(&from).unwrap(), b"neu", "Quelle bleibt");
+
+        let to2 = dir.path().join("b.pdf");
+        rename_no_clobber(&from, &to2).unwrap();
+        assert_eq!(fs::read(&to2).unwrap(), b"neu");
+        assert!(!from.exists());
+    }
+
+    /// Lauf F (W14-010): Anführungs- und Steuerzeichen im Dateinamen ergeben
+    /// gültige Audit-Details.
+    #[tokio::test]
+    async fn store_audit_details_are_valid_json_for_odd_names() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let name = "Beleg \"Q3\"\tTab.pdf";
+        let res = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            name,
+            "application/pdf",
+            b"inhalt",
+        )
+        .await
+        .unwrap();
+        use sqlx::Row;
+        let details: String = sqlx::query(
+            "SELECT details_json FROM audit_log WHERE action = 'archive.store' AND entity_id = ?",
+        )
+        .bind(&res.archive_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+        .get("details_json");
+        let v: serde_json::Value = serde_json::from_str(&details).expect("gültiges JSON");
+        assert_eq!(v["path"], res.file_path.as_str());
+        assert_eq!(v["size"], 6);
+        unlock_for_test(Path::new(&res.file_path)).unwrap();
     }
 }

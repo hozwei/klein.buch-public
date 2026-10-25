@@ -1050,6 +1050,248 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     der Digest eines bestehenden Releases vom neuen Build ab, wird nur ersetzt, wenn zum alten
     Digest nie ein Image in GHCR lag; sonst Abbruch. Registry-Abfragen unterscheiden „nicht
     vorhanden“ von Fehlern; der Release-Checkout hält kein Schreib-Token für git.
+124. **Migration 0032: GoBD- und Schema-Absicherungen (Lauf F, Block F2a, 2026-10-24).** Die
+    einzige Migration von Lauf F verschärft nur, kein Trigger wird gelockert, kein
+    festgeschriebener Beleg geändert (Schema 32, nächste freie Migration 0033). Entschieden:
+    (1) **Höchstens ein festgeschriebener Storno je Original** als Partial Unique Index
+    `ux_invoices_one_locked_storno` (`WHERE is_storno_for IS NOT NULL AND locked_at IS NOT
+    NULL`); offene Storno-Entwürfe bleiben DB-seitig mehrfach möglich (`invoices_cancel`
+    verwendet einen offenen wieder, verworfene nicht). Gibt es im Bestand schon zwei
+    festgeschriebene Stornos zu einem Original, **bricht die Migration ab** (benannter CHECK auf
+    einer temporären Tabelle, Meldung „Migration 0032 abgebrochen: …“): bereinigen ließe sich das
+    nur durch Ändern festgeschriebener Belege. Die Transaktion rollt zurück (seit F2c lehnt schon die
+    Vorabprüfung vor dem Pflicht-Backup ab, Nr. 126 (1)), das Entsperren antwortet 409
+    `db_integrity_failed`, das Handbuch
+    („Fehlersuche im Container“) nennt Rückfall auf das vorige Image bzw. Restore. Die
+    Index-Bedingung wurde nicht aufgeweicht, weil eine Doppel-Erstattung in der EÜR genau der
+    Fehler ist, den der Index verhindern soll. (2) **Integritäts-Historie:** `files_missing`,
+    `files_unreadable` und die ID-Listen als JSON (per `serde_json`) sind **nullbar** statt
+    `NOT NULL DEFAULT 0` — für Läufe vor 0032 sind die Werte nicht erfasst, eine 0 behauptete
+    „nichts fehlte“. (3) **Entwurf verwerfen (W14-032)** über `voided_at` + `void_reason` statt
+    eines neuen Status: ein neuer Wert im `status`-CHECK hieße Tabellenumbau von `invoices` mit
+    allen Triggern und Fremdschlüsseln; `status` bleibt `draft`. `invoices_void_draft` mit
+    Re-Auth (unumkehrbar, die Nummer bleibt verbraucht) und Begründung ≥ 10 Zeichen (wie
+    `numbering_raise`), Audit `invoice.draft_voided` in derselben Transaktion, die auch einen
+    Abo-Fortsetzungs-Marker und eine Restore-Vormerkung auf den Entwurf entfernt. Kein DELETE:
+    Der verworfene Entwurf dokumentiert die Nummer (GoBD Rz. 58 ff., Lücke zulässig, wenn
+    dokumentiert; §14 Abs. 4 Nr. 4 UStG verbietet nur die Doppelvergabe); die Anonymisierung des
+    Kontakts blockiert er nicht mehr. **Empfängerdaten (Amendment F2c, 2026-10-25; ersetzt „bleibt
+    mit seinem Empfänger-Stand wie die übrigen Unterlagen aufbewahrt“):** Ein nie ausgestellter,
+    verworfener Entwurf ist weder Buchungsbeleg noch empfangener oder abgesandter Handelsbrief
+    (§147 Abs. 1 AO) noch eine ausgestellte Rechnung (§14b UStG); Art. 17 Abs. 3 lit. b DSGVO trägt
+    seine Aufbewahrung deshalb nicht. Für die Dokumentation der Nummernlücke genügen Nummer,
+    Geschäftsjahr, Datum, Betrag, Positionen, Zeitpunkt und Grund des Verwerfens. Darum entfernt die
+    Anonymisierung des Kontakts (`contacts::anonymize_with_pauses`, eine Transaktion samt Audit
+    `contact.anonymize` mit den betroffenen Nummern) den Empfänger-Snapshot: `buyer_name` wird der
+    Platzhalter des anonymisierten Kontakts, `buyer_street`, `buyer_postal_code`, `buyer_city`,
+    `buyer_vat_id`, `buyer_email` und die interne `notes` werden `NULL`; das Land bleibt (nicht
+    identifizierend), ebenso `void_reason` (Handbuch: keine Namen in den Grund). Dafür hat
+    `trg_invoices_voided_final` die **einzige, eng begrenzte Ausnahme**: zulässig ist nur genau
+    diese Änderung, nur wenn `contacts.anonymized_at` gesetzt ist und `buyer_name` dem Platzhalter
+    des Kontakts entspricht; jede andere Spalte ist im Trigger einzeln als unverändert geprüft
+    (auch `updated_at`), ein Test vergleicht die Liste mit `PRAGMA table_info(invoices)`, damit eine
+    künftige Spalte nicht stillschweigend änderbar wird. Kein Trigger wird dadurch für
+    festgeschriebene Belege gelockert. Gleich behandelt werden zurückgezogene, nie festgeschriebene
+    Angebote (ohne Trigger-Änderung, `trg_quotes_canceled_final` schützt Status und Rückzug).
+    Positionen bleiben: Sie dokumentieren, wofür die Nummer verbraucht wurde. Verwerfen geht auch in einem
+    abgeschlossenen Geschäftsjahr (ein Entwurf ist nicht Teil der EÜR). Danach ist der Entwurf
+    unveränderlich und nicht festschreibbar (`trg_invoices_voided_final`,
+    `trg_invoices_void_draft_only`, `trg_invoices_void_not_on_insert`). **Angebote** bekommen keine
+    eigene Spalte: Das bestehende „Zurückziehen“ (`status = 'canceled'` mit Zeitpunkt, Grund,
+    Audit) verwirft einen Angebots-Entwurf bereits; zurückgezogen ist jetzt endgültig
+    (`trg_quotes_canceled_final`), ohne Re-Auth (ein Angebot ist kein Buchungsbeleg). (4)
+    **Positionen** festgeschriebener oder verworfener Rechnungen und festgeschriebener oder
+    zurückgezogener Angebote: INSERT, UPDATE (auch Verschieben in einen solchen Beleg) und DELETE
+    scheitern (KB-0002). (5) **`archive_entries` ohne DELETE** (KB-0004; kein App-Pfad löscht).
+    (6) **Storno endgültig:** `trg_invoices_canceled_final` hält `status`, `canceled_at`,
+    `canceled_by_storno_id`, `cancel_reason` nach dem ersten Setzen fest; die nur noch von Tests
+    genutzte Repo-Funktion `mark_canceled` ohne Guard ist entfernt (R1-S2-MARKCANCELED). (7)
+    **Anlagen-Abgang endgültig** (`trg_assets_disposal_final`, `dispose` mit `AND disposed = 0`);
+    Buchwert-Fortschreibung bleibt offen. (8) **Ein Standard-Zahlungskonto** als
+    `uq_payment_accounts_default` mit `WHERE is_default = 1` — strenger als der Vorschlag
+    `AND active = 1`, weil `ensure_one_default` ein inaktives Konto ohnehin nie Standard sein
+    lässt und zuerst räumt, dann befördert. Bestand: inaktive Standardkonten und von mehreren
+    aktiven alle außer dem ältesten (wie `ensure_one_default`) verlieren den Standard, je Konto
+    Audit `payment_account.default_cleared` (Stammdaten, nicht festgeschrieben). (9)
+    **Fremdschlüssel-Prüfung bei jedem Entsperren** (`PRAGMA foreign_key_check` nach den
+    Migrationen, R1-012), nicht nur nach einer angewendeten Migration: billig und erkennt auch
+    eine Bearbeitung von außen. **Amendment F2c:** stehen Migrationen an, prüft
+    `db::precheck_before_migration` (Fremdschlüssel und doppelte festgeschriebene Stornos)
+    zusätzlich **vor** dem Pflicht-Backup und vor der ersten Migration — sonst sperrte ein Altfehler
+    die Instanz auf dem neuen Schema aus, auf dem das vorige Image sie nicht mehr öffnet
+    (Nr. 126 (1)). Ein Treffer blockiert das Entsperren (409
+    `db_integrity_failed`), Daten werden nicht angefasst; das Log nennt Tabelle, rowid und
+    Zieltabelle, keine Inhalte. Dieselbe Antwort gilt für jede künftige Vorab-Prüfung einer
+    Migration nach dem Muster „CHECK constraint failed: Migration 00NN abgebrochen: …“. (10)
+    **Seed `rule_recurring_due`** (ADR 0040 Nr. 8) mit `deliver_os_native = 0`; der Code verlangt
+    die Regel-Zeile jetzt wie alle anderen Regeln. (11) **Phase A eines Restores** prüft
+    beides schon vor dem Tausch (Fremdschlüssel; doppelte festgeschriebene Stornos über
+    `db::duplicate_locked_stornos`, dieselbe Bedingung wie in der Migration) und lehnt das
+    Backup ab — wie bei den Archivpfaden (Gegenprüfung W7) bliebe die Instanz sonst nach dem
+    Tausch dauerhaft gesperrt. Tests: `tests/migration_0032_test.rs`,
+    `tests/server_auth_test.rs` (`foreign_key_violation_refuses_unlock`),
+    `tests/server_restore_test.rs` (`schema_31_backup_is_restored_and_migrated_forward`,
+    `backups_the_unlock_would_refuse_are_rejected_in_phase_a`),
+    `scheduler::recurring_invoice::pipeline_tests::pending_marker_on_voided_draft_is_dropped`.
+125. **Audit, Exporte, Jahresabschluss, Archiv, DSGVO (Lauf F, Block F2b, 2026-10-25; keine
+    Migration).** (1) **Audit-Details nur als JSON-Wert** (W14-010, R2-S2-AUDITJSON):
+    `audit_log::append`/`append_in` und `archive::audit::archive_event` nehmen
+    `Option<serde_json::Value>` und serialisieren selbst; die neun `escape`-Kopien und alle
+    `format!`-JSON-Stellen sind entfernt. Die Signatur macht handgebautes JSON unmöglich (Typfehler
+    statt Review-Befund). (2) **Akteur** (R1-S3-ACTOR) statt „bewusst schließen“: der Aufwand ist
+    gering und die Verfahrensdoku gewinnt die Unterscheidung Handlung/Automatik. Task-lokaler Wert
+    (`audit_log::with_actor`): `owner` setzt der Dispatcher für Commands und Jobs und die Anmeldung
+    für ihre erfolgreichen Schritte, `scheduler` der Tick, sonst `system`. Ein eigener
+    `tokio::spawn` erbt den Wert nicht (fällt auf `system`) — bewusst, solche Tasks sind
+    Automatik; Bestandseinträge bleiben `system`. (3) **Jeder Export auditiert** (R2-016, ASVS
+    8.3.5): `euer.pdf_export`, `euer.datev_export`, `euer.elster_export`, `euer.detail_export`
+    neben dem bestehenden `euer.stb_export`; Details Geschäftsjahr, Dateiname, Zählwerte,
+    Snapshot-Status, keine Inhalte, Pflicht (`?`: ohne Audit kein Download). DSGVO- und
+    Migrations-Export waren schon auditiert. (4) **Snapshot-Abgleich abgeschlossener Jahre**
+    (KB-0031, Variante a): weiter aus den Einzelbuchungen rechnen und gegen `fiscal_year_locks`
+    prüfen, nicht aus dem Snapshot rechnen (er hat nur Summen; Einzelaufstellung, DATEV-Stapel
+    und Belege entstehen nur aus den Buchungen, und Summen ohne passende Einzelposten wären nicht
+    nachvollziehbar). Anzeige (`EuerPackage.snapshotCheck`, `FiscalYearStatus.snapshotMatches`)
+    schreibt nichts; jeder Export schreibt bei Abweichung `euer.snapshot_mismatch` (beide
+    Eckwerte, Felder, Version des Abschlusses), einen dringenden Hinweis einmal je Jahr und im
+    Steuerberater-Paket einen LIESMICH-Block. Nichts wird blockiert (`gobd.md` §6.1). (5)
+    **Keine automatische Löschung nach Fristablauf** (ASVS 8.3.8, entschieden): §147 Abs. 3 Satz 5
+    AO verlängert die Frist, solange Unterlagen für offene Festsetzungen gebraucht werden — das
+    kann die App nicht beurteilen. Nach Fristablauf entscheidet der Inhaber (Anonymisierung,
+    Stilllegung der Instanz); Handbuch „Aufbewahrung 10 Jahre“, `gobd.md` §6. **Korrektur F2c:**
+    Die Anonymisierung entfernt nur Stammdaten und die Snapshots nie ausgestellter Belege
+    (Nr. 124 (3)); Belege mit Empfänger-Snapshot, Archivdateien, Versandprotokoll und Audit bleiben
+    bis zur Stilllegung (Nr. 126 (9)). (6) **Archiv**
+    (W2-S2-4, KB-0040): ohne Hardlinks `renameat2(RENAME_NOREPLACE)` (rustix), bei
+    `EINVAL`/`ENOSYS`/`EOPNOTSUPP` Prüfung unmittelbar vorher und `rename` unter der Pfad-Sperre;
+    die Temp-Datei wird nach `fsync` zurückgelesen und gegen den Hash des Puffers geprüft, bevor
+    sie sichtbar wird (Restrisiko Seiten-Cache, abgedeckt durch Re-Hash und Integritätslauf). (7)
+    **Archivpfad-Stichprobe beim Entsperren nur Präfix** (W5-ARCHIVE-PREFIX, entschieden): eine
+    fehlende Datei sperrt den Zugang nicht — GoBD verlangt Erkennung und Wiederherstellbarkeit,
+    keine Aussperrung vom übrigen Bestand; die Integritätsprüfung meldet „fehlt“ und historisiert
+    es seit Migration 0032 (Nr. 124 (2)). (8) **Löschen ohne `exists()` vorab** (LE-CI-FLAKE):
+    `db::remove_file_if_exists`, `backup::restore::remove_if_exists`, `remove_path` und
+    `branding::clear_logo` löschen direkt und werten nur `NotFound` als Erfolg — SQLite entfernt
+    `-wal`/`-shm` beim Schließen der letzten Verbindung selbst, das Schließen kann nachlaufen
+    (Ursache des CI-Ausreißers; betraf Bestands-Migration, Passphrase-Wechsel und Restore-Tausch).
+    (9) **Nummernkreise** (KB-0005): Doku begründet die Garantie mit `UPDATE … RETURNING` in einer
+    Schreib-Transaktion und dem Single-Writer-Modell, Test mit Datei-DB, WAL und mehreren
+    Verbindungen. (10) **DSGVO-Auskunft** (KB-0049, R2-S2-DSGVO, R1-S2-NPLUS1): feste Zahl von
+    Abfragen (Positionen, Anhänge und Archiv-Metadaten je eine Abfrage, ID-Listen als ein
+    `json_each`-Parameter); Versandprotokoll über Beleg-IDs, den Kontakt (Katalogversand) und die
+    Adressmenge aus aktueller Adresse und den `buyer_email`-Snapshots seiner Rechnungen und
+    Angebote, verglichen nach `trim` und ASCII-Kleinschreibung (dieselbe Faltung wie SQLites
+    `lower()`); Audit-Bezüge nur bei passendem Paar `entity_type`/`entity_id`
+    (`contact`/`invoice`/`quote`/`expense`). `euer::income_detail` ist kein N+1 (eine Abfrage mit
+    korreliertem Unterselect über `uq_invoice_items_position`). (11) **Katalogversand im
+    `email_log`** mit `related_id` = Kontakt (bisher leer), damit die Auskunft ihn auch nach einem
+    Adresswechsel findet. (12) **Audit bei Stammdaten ohne Buchungsbezug bleibt best-effort**
+    (Fund F2b): Paket-, Kategorie- und Katalog-Audits sowie die Reisekosten-Einstellung schreiben
+    ihr Audit nach dem Commit und werten einen Fehlschlag nur als Log-Warnung — sie sind keine
+    Buchungsdaten (Paket-Revisionen sind selbst append-only), und eine bereits gespeicherte Änderung
+    darf nicht als gescheitert gemeldet werden. Buchungen, Abschluss, Exporte und
+    Archivvorgänge auditieren als Pflicht bzw. in derselben Transaktion. Tests: `tests/audit_export_test.rs`, `tests/fiscal_year_guard_test.rs`,
+    `tests/dsgvo_export_test.rs`
+    (`gather_matches_old_addresses_case_insensitively_and_filters_audit_by_type`),
+    `db::repo::audit_log::tests`, `archive::store::tests::{rename_no_clobber_never_overwrites,
+    store_audit_details_are_valid_json_for_odd_names}`,
+    `db::tests::remove_file_if_exists_tolerates_vanished_files`,
+    `db::numbering::tests::parallel_allocations_over_several_connections_stay_gapless`,
+    `fiscal_year::snapshot::tests`, `scheduler::tick::tests::tick_creates_daily_backup_without_unlock_event`
+    (Akteur `scheduler`). Sperre Abschluss ↔ Buchung: ADR 0040 Nr. 48.
+126. **Nachprüfung F2 (Lauf F, Block F2c, 2026-10-25; Korrekturen direkt in der unveröffentlichten
+    Migration 0032).** (1) **Fremdschlüssel vor der Umstellung (S1):** Bisher lief
+    `PRAGMA foreign_key_check` erst nach dem Commit der Migrationen. Ein Altfehler hätte die Instanz
+    auf Schema 32 gesperrt: das vorige Image lehnt die neuere DB ab (Down-Migration-Schutz), ein
+    Restore braucht eine Sitzung, und die Meldung „nichts verändert“ stimmte nicht. Jetzt prüft
+    `db::precheck_before_migration` vor dem Pflicht-Backup (kein Backup-Ballast je Fehlversuch) und
+    vor der ersten Migration Fremdschlüssel und, für Schema < 32, doppelte festgeschriebene Stornos
+    (in Rust, also auch vor 0031 bei einem Stand 30; der benannte CHECK in 0032 bleibt zweite Linie).
+    Ein Treffer lehnt mit 409 `db_integrity_failed` ab, die DB steht unverändert auf dem alten
+    Schema, das vorige Image öffnet sie. Die Prüfung nach den Migrationen bleibt **blockierend**
+    (R1-012), unterscheidet aber die Meldung: ohne Umstellung „Daten nicht angefasst“; nach einer
+    gespeicherten Umstellung (nur noch durch einen Fehler der Migration selbst möglich) sagt sie
+    das (`db::INTEGRITY_AFTER_MIGRATION`) und nennt den Rückweg ohne Sitzung: neue Instanz mit dem
+    vorigen Image, das Pflicht-Backup davor einspielen (Handbuch „Fehlersuche im Container“).
+    Abgewogen gegen „nach der Umstellung nur warnen“: das ließe mit verwaisten Verweisen arbeiten;
+    der Fall ist nach der Vorabprüfung ein Programmfehler, für den der dokumentierte Rückweg reicht.
+    `check_foreign_keys` ist ersetzt durch `foreign_key_violations` (nur Befunde) und
+    `log_foreign_key_violations` (mit Kontext); Restore Phase A meldet als „Restore-Prüfung eines
+    Backups“ statt „beim Entsperren“. (2) **Anonymisierung verworfener Entwürfe:** Nr. 124 (3)
+    (Amendment). Zusätzlich verlieren die Abo-Vorlagen des Kontakts Bezeichnung (Platzhalter
+    „Abo-Vorlage (Kontakt anonymisiert)“) und Notiz; ihre Positionen bleiben wie Rechnungspositionen.
+    Kosten-Abos, bei denen der Kontakt Lieferant ist, werden nur pausiert (sie beschreiben die
+    eingekaufte Leistung). Das Audit `contact.anonymize` steht jetzt in derselben Transaktion.
+    (3) **Umwandlung zurücknehmen:** Verwirft der Inhaber den aus einem Angebot entstandenen
+    Entwurf, setzt `void_draft_core` das Angebot in derselben Transaktion auf `accepted` zurück
+    (`converted_at`/`converted_invoice_id` leer, Audit `quote.conversion_reverted`); sonst bliebe
+    ein angenommenes Angebot auf einen verworfenen Beleg zeigend für immer blockiert (Entwürfe sind
+    nicht bearbeitbar, die Korrektur ist „verwerfen, neu anlegen“). Abgelehnt: das Verwerfen solcher
+    Entwürfe zu verbieten (dann gäbe es keinen Korrekturweg). Ein Angebot ist kein Buchungsbeleg;
+    der Statuswechsel ist dokumentiert, der verworfene Entwurf behält `derived_from_quote_id`.
+    Neu `trg_quotes_converted_final` (verschärft): umgewandelt bleibt umgewandelt, Rücknahme nur auf
+    `accepted` ohne Bezug und nur, wenn der Bezugs-Entwurf verworfen ist. (4) **Angebot
+    zurückziehen:** Grund Pflicht (mindestens 10 Zeichen, wie beim Verwerfen einer Rechnung — das
+    Zurückziehen verwirft einen Angebots-Entwurf endgültig), Statuswechsel, Audit `quote.cancel` und
+    das Erledigen einer Restore-Vormerkung in einer `BEGIN IMMEDIATE`-Transaktion, Status-Bedingung im
+    `UPDATE` (`status NOT IN ('canceled','converted')`) und eine Sperre je Angebot
+    (`locks::QUOTES`), die auch die Umwandlung nimmt; ein zweites Zurückziehen meldet „bereits
+    zurückgezogen“ statt eines rohen Trigger-Fehlers. (5) **DSGVO-Auskunft vollständig:** Abo-
+    Rechnungs-Vorlagen samt Positionen, Kosten-Abos und Anlagen mit dem Kontakt als Lieferant und
+    deren Audit-Bezüge (`recurring_invoice`, `recurring`, `asset`, je Paar Typ/ID) sowie ihre
+    Anhänge; ohne interne Notizen. Ein verworfener Entwurf erscheint mit Status `voided`,
+    `voidedAt` und `voidReason` statt als `draft`; die PDF-Vorlage zeigt Status deutsch.
+    (6) **Veräußerte Anlage:** `reset_asset` und `assets_update` lehnen `disposed = 1` ab (das
+    Bearbeiten auch im `UPDATE` per `AND disposed = 0 AND locked_at IS NULL`);
+    `trg_assets_disposal_final` hält zusätzlich Nummer, Bezeichnung, Anschaffung, AfA-Grundlage,
+    Verknüpfungen und Restbuchwert fest; `trg_depreciation_entries_no_delete_disposed` verbietet das
+    Löschen ihrer AfA-Buchungen (sonst fehlte die AfA des Abgangsjahres endgültig, der AfA-Lauf bucht
+    veräußerte Anlagen nicht). Der Jahresabschluss schreibt alle bis zum Jahr angeschafften Anlagen
+    fest, auch veräußerte — im Jahr oder später veräußerte Anlagen stehen im Anlageverzeichnis des
+    Jahres. **Neuer Fund:** `assets_dispose` holte fehlende Vorjahres-AfA nicht nach; danach blieb sie
+    für immer aus, und die anteilige AfA des Abgangsjahres rechnete vom zu hohen Restbuchwert. Jetzt
+    bucht es vorher `accrue_asset_through(…, Abgangsjahr − 1)` (abgeschlossene Jahre ausgenommen).
+    (7) **Verworfene Nummern in der Steuerberater-Übergabe:** `nicht-festgeschriebene-nummern.csv`
+    (Nummer, Art, Belegdatum, Status verworfen/offen, Zeitpunkt in Europe/Berlin, Grund, Betrag) im
+    Paket und im Manifest; die `LIESMICH.txt` nennt die Anzahl — sonst sähe der Prüfer eine
+    unerklärte Lücke (GoBD Rz. 58 ff.). Offene Entwürfe stehen mit drin, weil auch sie Lücken in der
+    Folge der beigelegten Belege erklären. (8) **Halbes Storno-Paar aus dem Altbestand:** Gibt es zu
+    einem nicht stornierten Original schon einen festgeschriebenen Storno (Desktop-Zeit vor
+    R1-003), vervollständigt `invoices_cancel` das Paar in einer Transaktion (Original `canceled`
+    mit Verweis und Festschreibe-Zeitpunkt des Stornos, Audit `invoice.cancel_pair_completed`)
+    statt einen zweiten Storno samt verwaister Archivdateien zu erzeugen und am Index zu scheitern.
+    Die EÜR ändert sich nicht (Erstattung über den festgeschriebenen Storno, Einnahme am
+    Zahlungsdatum). (9) **ASVS 8.3.8 korrigiert:** Die Anonymisierung entfernt nach Fristablauf
+    **nicht** alle Personendaten: Empfänger-Snapshots festgeschriebener Belege, deren PDF/XML im
+    write-once-Archiv, `email_log.to_email` und Audit-Details bleiben bis zur Stilllegung der Instanz
+    (`gobd.md` §6, Handbuch „Aufbewahrung 10 Jahre“). Eine „Beleg-Pseudonymisierung nach
+    Fristablauf“ (gezielte, protokollierte Ausnahme für Jahre jenseits der verlängerten Frist) ist
+    eine Post-v1.0-Aufgabe; bis dahin bleibt die Entscheidung „keine automatische Löschung“ mit dieser
+    ehrlichen Grenze. (10) **Snapshot-Abweichung in Einzel-Exporten:** EÜR-PDF mit Hinweiskasten
+    (festgeschrieben/heute), ELSTER-Ausfüllhilfe mit Kommentarzeile `# ACHTUNG: …` unter dem Titel,
+    Einzelaufstellung mit `HINWEIS-ABWEICHUNG-JAHRESABSCHLUSS.txt`; im Steuerberater-Paket gelten PDF
+    und ELSTER-Datei ebenso. Der DATEV-Buchungsstapel bleibt unverändert (EXTF erlaubt keine
+    Zusatzzeilen, ein Begleitfile zur Einzel-CSV gibt es nicht); Audit, Hinweis und
+    `snapshotCheck` in der Antwort tragen die Abweichung, die Anzeige im Export-Dialog gestaltet der
+    UI/UX-Lauf. (11) `server::auth::remove_partial_db` löscht ohne `exists()` vorab
+    (`db::remove_file_if_exists`, Nr. 125 (8)). Tests: `tests/migration_0032_test.rs`
+    (`foreign_key_violation_before_migration_keeps_old_schema`,
+    `integrity_message_after_migration_is_honest`, `voided_final_trigger_lists_every_invoice_column`,
+    `voided_draft_snapshot_changes_only_by_anonymization`,
+    `voided_drafts_no_longer_block_anonymization`,
+    `voiding_converted_draft_reverts_quote_and_allows_new_conversion`,
+    `quote_cancel_needs_reason_and_reports_repeat_cleanly`,
+    `legacy_half_storno_pair_is_completed_without_second_storno`,
+    `disposed_asset_keeps_depreciation_and_master_data`,
+    `dispose_catches_up_missing_prior_year_depreciation`), `tests/server_restore_test.rs`
+    (`schema_30_backup_is_restored_and_migrated_forward`,
+    `foreign_key_violation_before_migration_refuses_unlock_without_changes`),
+    `tests/dsgvo_export_test.rs` (`export_includes_templates_subscriptions_assets_and_voided_drafts`),
+    `tests/audit_export_test.rs`, `tests/fiscal_year_lock_test.rs`
+    (`close_year_locks_disposed_assets_too`), `fiscal_year::snapshot::tests::pdf_block_only_on_mismatch`,
+    `euer::detail::tests::unissued_numbers_csv_lists_voided_and_open_drafts`,
+    `euer::elster_csv::tests::notes_are_comment_lines_after_the_title`,
+    `server::auth::tests::remove_db_files_ignores_vanished_companions`.
 
 ## Konsequenzen
 
@@ -1128,7 +1370,7 @@ diesen Änderungen (die Historie bleibt unverändert stehen):
   Image-Fassung wieder. Hinweise tragen einen `dedup_key` (Lauf F, D-10).
 - **Nr. 120 (Re-Auth, 21 Commands):** Mit `scheduler_release_hold` und
   `numbering_raise` sind es 23, mit `numbering_restored_draft_confirm` (F1d,
-  ADR 0040 Entscheidung 35) 24.
+  ADR 0040 Entscheidung 35) 24, mit `invoices_void_draft` (F2a, Nr. 124) 25.
 - **E12 (Zeitzone) in der Oberfläche:** DB-Zeitstempel (UTC) zeigt die
   Oberfläche über `date()`/`dateTime()` (`src/lib/format.ts`) in Europe/Berlin,
   Tage bis zur Fälligkeit über `daysUntilBerlin` (`src/lib/date.ts`) — nicht

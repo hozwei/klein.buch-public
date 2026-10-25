@@ -42,6 +42,24 @@ Der Original-Beleg bleibt unverändert in der Datenbank. Beide
 Belege sind sichtbar und werden gemeinsam in der EÜR
 berücksichtigt.
 
+## Und Entwürfe?
+
+Ein Entwurf ist noch kein Beleg und braucht keinen Storno. Weil er seine
+Nummer aber schon beim Anlegen bekommt, löscht Klein.Buch auch ihn nicht:
+Einen nicht benötigten Entwurf **verwirfst** Du (Kapitel "Rechnungen").
+Zeitpunkt und Grund stehen am Entwurf und im Protokoll, die Nummer
+bleibt vergeben. Auch ein Storno-Entwurf, der beim Stornieren hängen
+geblieben ist, lässt sich so verwerfen; das nächste "Stornieren" legt
+dann einen neuen an.
+
+Aus Datenbeständen der früheren Desktop-Fassung kann ein halbes
+Storno-Paar stammen: Der Storno ist ausgestellt, die Original-Rechnung
+steht aber noch als offen da (etwa nach einem Absturz mitten im
+Stornieren). Klickst Du bei so einer Rechnung auf "Stornieren", legt
+Klein.Buch keinen zweiten Storno an, sondern markiert die Rechnung als
+durch den vorhandenen Storno storniert und vermerkt das im Protokoll. Die
+EÜR ändert sich dadurch nicht; sie rechnet den Storno schon.
+
 ## EÜR-Wirkung
 
 Maßgeblich ist die Cash-Basis (§11 EStG): in die EÜR fließen nur
@@ -105,4 +123,4 @@ Erinnern weißt, was passiert ist.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

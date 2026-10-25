@@ -612,6 +612,56 @@ Teil F1d — Prüferbefunde zu F1 (24.10.2026):
     Anheben (dringend). Vorgemerkte Entwürfe (Nr. 35) machen jeden Fall
     dringend.
 
+Teil F2a — Migration 0032 (24.10.2026; Einzelheiten ADR 0039 Nr. 124):
+
+46. **Regel „Kosten-Abo fällig“ geseedet (zu Nr. 8).** Migration 0032 legt
+    `rule_recurring_due` an (an, abschaltbar, nur Inbox). Der Hinweis trägt
+    die Regel; ohne aktive Regel-Zeile entsteht keiner — wie bei allen
+    übrigen Regeln (die Übergangslösung „ohne Zeile immer aktiv“ entfällt).
+47. **Verworfene Entwürfe und vorgemerkte Abläufe (zu Nr. 34, 35, 42).** Das
+    Verwerfen eines Rechnungs-Entwurfs (`invoices_void_draft`) entfernt in
+    derselben Transaktion einen Fortsetzungs-Marker
+    `recurring_invoice_pending:*`, der auf ihn zeigt, und seine
+    Restore-Vormerkung `restored_number_conflict:invoice:<id>`; ein
+    zurückgezogener Angebots-Entwurf verliert seine Vormerkung ebenso. Liest
+    ein Lauf den Marker noch vor dem Verwerfen, beendet `post_process` den
+    Termin ohne Festschreiben und ohne Fehlerhinweis. Damit ist auch die in
+    Nr. 35 erwogene Variante „verwerfen“ für einen vorgemerkten Entwurf
+    möglich: Der Inhaber entscheidet zwischen Bestätigen (Original nachtragen)
+    und Verwerfen (Nummer dokumentiert, Beleg fehlt bewusst).
+
+Teil F2b — Audit, Exporte, Jahresabschluss (25.10.2026; Einzelheiten ADR 0039
+Nr. 125):
+
+48. **Sperre Jahresabschluss ↔ Buchung (zu Nr. 12; R2-S2-GJLOCK, W14-034).**
+    Statt einer Prüfung in jeder einzelnen Schreib-Transaktion (viele
+    Buchungswege sind mehrstufig: Archiv, Render, KoSIT, mehrere Statements)
+    eine prozessweite Sperre in `fiscal_year::guard` mit zwei Seiten:
+    `ensure_year_open` nimmt eine **Buchungserlaubnis** (`BookingPermit`,
+    `#[must_use]`, der Compiler erzwingt das Halten) und prüft danach das Jahr;
+    `close_year` nimmt `closing()`, wartet, bis keine Erlaubnis mehr gehalten
+    wird, und sperrt bis zum Commit neue Erlaubnisse. Erlaubnisse sind
+    verschachtelbar (ein Storno, der die Lock-Pipeline aufruft, oder ein
+    Angebot, das einen Rechnungsentwurf anlegt, blockieren sich nicht): ein
+    Abschluss beginnt nur ohne gehaltene Erlaubnis, also kann während eines
+    Abschlusses keine verschachtelte Anforderung warten. Ein Abschluss darf
+    selbst keine Erlaubnis nehmen (seine AfA-Buchung läuft ohne). Eine Buchung,
+    die während des Abschlusses ankommt, wartet und prüft danach erneut — sie
+    landet nie im geschlossenen Jahr. Der Entwurf aus
+    `prepare_invoice_draft` trägt seine Erlaubnis bis zum Schreiben mit
+    (auch im Abo-Lauf), die Lock-Pipeline nimmt sie selbst (Abo-Läufe,
+    Festschreiben, Storno). AfA-Buchungen prüfen das Jahr zusätzlich in ihrer
+    Transaktion (`accrue_yearly`). Festschreiben von AfA und Anlagen, Snapshot,
+    Protokoll und Audit laufen in einer Transaktion, das Backup danach ohne
+    Sperre. Mögliches Aushungern eines Abschlusses durch ununterbrochene
+    Buchungen ist bei einem Einzelbenutzer-Betrieb ausgeschlossen (E1). Tests:
+    `tests/fiscal_year_guard_test.rs`,
+    `fiscal_year::guard::tests::closing_waits_for_bookings_and_blocks_new_ones`.
+49. **Akteur der Scheduler-Abläufe.** `scheduler::tick::run_jobs` setzt für
+    alle Audit-Einträge des Ticks den Akteur `scheduler`; „Jetzt erstellen“
+    und andere vom Inhaber ausgelöste Läufe schreiben `owner`, weil sie über
+    den Dispatcher laufen (ADR 0039 Nr. 125 (2)).
+
 ## Referenzen
 
 `clock`, `app_ctx`, `scheduler::{mod, tick, hold, catch_up, backoff, recurring,

@@ -293,6 +293,9 @@ pub struct PreparedDraft {
     seller_row: crate::db::models::SellerProfileRow,
     totals: invoice::Totals,
     derived_from_quote_id: Option<String>,
+    /// Kein Jahresabschluss, bevor der Entwurf geschrieben ist (Lauf F,
+    /// R2-S2-GJLOCK).
+    _year_permit: crate::fiscal_year::guard::BookingPermit,
 }
 
 /// Liest Empfänger und Stammdaten, prüft die strukturellen Vorbedingungen und
@@ -358,8 +361,9 @@ pub async fn prepare_invoice_draft(
     }
 
     // Kein Entwurf (und keine Nummer) in einem abgeschlossenen Geschäftsjahr
-    // (Gegenprüfung Lauf E; wie bei Kosten und Privatbewegungen).
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    // (Gegenprüfung Lauf E; wie bei Kosten und Privatbewegungen). Die
+    // Erlaubnis reist im Entwurf mit, bis er geschrieben ist (Lauf F).
+    let year_permit = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
 
     // Draft "verbraucht" eine Nummer (siehe db::repo::invoices::create_draft Docs).
     let doc_type = if input.is_storno_for.is_some() {
@@ -377,6 +381,7 @@ pub async fn prepare_invoice_draft(
         seller_row,
         totals,
         derived_from_quote_id: derived_from_quote_id.map(str::to_string),
+        _year_permit: year_permit,
     })
 }
 
@@ -432,16 +437,17 @@ pub async fn insert_prepared_draft(
         "invoice.draft_create",
         "invoice",
         &id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"items":{}{}}}"#,
-            invoice_number,
-            prepared.totals.gross_amount_cents,
-            prepared.input.items.len(),
-            match prepared.derived_from_quote_id.as_deref() {
-                Some(qid) => format!(r#","derived_from_quote_id":"{}""#, escape(qid)),
-                None => String::new(),
+        Some({
+            let mut details = serde_json::json!({
+                "number": &invoice_number,
+                "gross": prepared.totals.gross_amount_cents,
+                "items": prepared.input.items.len(),
+            });
+            if let Some(qid) = prepared.derived_from_quote_id.as_deref() {
+                details["derived_from_quote_id"] = serde_json::Value::from(qid);
             }
-        )),
+            details
+        }),
     )
     .await?;
     Ok((id, invoice_number))
@@ -531,7 +537,7 @@ pub async fn invoices_lock_and_issue(
                 .into(),
         ));
     }
-    crate::fiscal_year::guard::ensure_year_open(pool, draft.invoice.fiscal_year).await?;
+    let _fy = crate::fiscal_year::guard::ensure_year_open(pool, draft.invoice.fiscal_year).await?;
     let resp = run_lock_pipeline(
         pool,
         &paths,
@@ -636,6 +642,17 @@ async fn run_lock_pipeline_inner(
             "invoice {invoice_id} ist bereits gelockt"
         )));
     }
+    // W14-032: Ein verworfener Entwurf wird nie festgeschrieben (DB-Backstop
+    // `trg_invoices_voided_final`).
+    if detail.invoice.voided_at.is_some() {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {} ist verworfen und lässt sich nicht mehr festschreiben.",
+            detail.invoice.invoice_number
+        )));
+    }
+    // Lauf F (R2-S2-GJLOCK): Geschäftsjahr offen — und bis zum Festschreiben
+    // beginnt kein Jahresabschluss (gilt auch für Abo-Läufe und Storno).
+    let _fy = crate::fiscal_year::guard::ensure_year_open(pool, detail.invoice.fiscal_year).await?;
     // F1d: Ein wiederhergestellter Entwurf, dessen Nummer vor dem Restore schon
     // festgeschrieben war, wird erst nach der Bestätigung des Inhabers
     // festgeschrieben (nie zwei verschiedene Belege mit derselben Nummer).
@@ -873,14 +890,7 @@ async fn run_lock_pipeline_inner(
         "invoice.lock",
         "invoice",
         invoice_id,
-        Some(&format!(
-            r#"{{"number":"{}","pdf":"{}","xml":"{}","kosit":"{}","warnings":{}}}"#,
-            detail.invoice.invoice_number,
-            pdf_archive.archive_id,
-            xml_archive.archive_id,
-            validation_status_str,
-            report.warning_count
-        )),
+        Some(serde_json::json!({ "number": detail.invoice.invoice_number, "pdf": pdf_archive.archive_id, "xml": xml_archive.archive_id, "kosit": validation_status_str, "warnings": report.warning_count })),
     )
     .await?;
 
@@ -896,7 +906,7 @@ async fn run_lock_pipeline_inner(
         "invoice.lock.backup_pending",
         "invoice",
         invoice_id,
-        Some(r#"{"hook":"backup::auto_backup_if_unlocked(auto_critical)","module":"block-4"}"#),
+        Some(serde_json::json!({"hook":"backup::auto_backup_if_unlocked(auto_critical)","module":"block-4"})),
     )
     .await
     .ok();
@@ -945,7 +955,7 @@ pub async fn invoices_record_payment(
     }
     // GJ-Festschreibung (Block 15): eine Zahlung mit Zahldatum in einem
     // abgeschlossenen Geschäftsjahr ist nicht mehr erfassbar (Storno bleibt möglich).
-    crate::fiscal_year::guard::ensure_year_open(
+    let _fy = crate::fiscal_year::guard::ensure_year_open(
         pool,
         chrono::Datelike::year(&args.paid_date) as i64,
     )
@@ -963,10 +973,7 @@ pub async fn invoices_record_payment(
         "invoice.payment_recorded",
         "invoice",
         &args.invoice_id,
-        Some(&format!(
-            r#"{{"amount":{},"paid_date":"{}","status":"{}"}}"#,
-            args.amount_cents, args.paid_date, row.status
-        )),
+        Some(serde_json::json!({ "amount": args.amount_cents, "paid_date": args.paid_date, "status": row.status })),
     )
     .await?;
     Ok(row)
@@ -1008,7 +1015,8 @@ pub async fn invoices_cancel(
 
     if original.invoice.locked_at.is_none() {
         return Err(Error::Domain(
-            "Storno nur für gelockte Rechnungen möglich. Drafts bitte einfach löschen.".into(),
+            "Storno nur für festgeschriebene Rechnungen möglich. Einen Entwurf bitte verwerfen."
+                .into(),
         ));
     }
     if original.invoice.status == "canceled" {
@@ -1020,6 +1028,14 @@ pub async fn invoices_cancel(
         return Err(Error::Domain(
             "Storno einer Storno-Rechnung ist nicht zulässig (Buchhaltung).".into(),
         ));
+    }
+    // Lauf F2c: Altbestand aus der Desktop-Zeit vor R1-003 — zur Rechnung gibt
+    // es schon einen festgeschriebenen Storno, das Original steht aber nicht
+    // auf 'canceled' (Absturz zwischen beiden Schritten). Kein zweiter Storno
+    // (der Index `ux_invoices_one_locked_storno` ließe ihn nicht zu, PDF und XML
+    // lägen verwaist im Archiv): das Paar wird vervollständigt.
+    if let Some(storno) = invoices::locked_storno_for(pool, &original.invoice.id).await? {
+        return complete_storno_pair(pool, &original.invoice, storno, &args.reason).await;
     }
 
     let seller_row = seller_profile::get(pool)
@@ -1037,8 +1053,11 @@ pub async fn invoices_cancel(
             original_date.format("%d.%m.%Y")
         )));
     }
-    crate::fiscal_year::guard::ensure_year_open(pool, chrono::Datelike::year(&storno_date) as i64)
-        .await?;
+    let _fy = crate::fiscal_year::guard::ensure_year_open(
+        pool,
+        chrono::Datelike::year(&storno_date) as i64,
+    )
+    .await?;
 
     // Domain-Storno bauen.
     let original_view = OriginalInvoiceView {
@@ -1156,12 +1175,7 @@ pub async fn invoices_cancel(
         "invoice.cancel",
         "invoice",
         &original.invoice.id,
-        Some(&format!(
-            r#"{{"storno_id":"{}","storno_number":"{}","reason":"{}"}}"#,
-            storno_id,
-            storno_number,
-            escape(&args.reason)
-        )),
+        Some(serde_json::json!({ "storno_id": storno_id, "storno_number": storno_number, "reason": &args.reason })),
     )
     .await?;
 
@@ -1177,6 +1191,229 @@ pub async fn invoices_cancel(
         original: original_refreshed,
         storno: lock,
     })
+}
+
+/// Vervollständigt ein Storno-Paar aus dem Altbestand (Lauf F2c): der Storno
+/// ist festgeschrieben, das Original noch nicht storniert. In **einer**
+/// Transaktion: Original auf `canceled` mit Verweis auf den vorhandenen Storno
+/// und dessen Festschreibe-Zeitpunkt, Audit `invoice.cancel_pair_completed`.
+/// Kein neuer Beleg, keine Nummer, kein Archiv. Die EÜR ändert sich nicht: die
+/// Erstattung rechnet sie schon über den festgeschriebenen Storno
+/// (`storno_reversals`), die Einnahme bleibt am Zahlungsdatum.
+async fn complete_storno_pair(
+    pool: &SqlitePool,
+    original: &InvoiceRow,
+    storno: InvoiceRow,
+    reason: &str,
+) -> Result<CancelResponse> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let res = sqlx::query(
+        "UPDATE invoices
+            SET status = 'canceled',
+                canceled_at = ?,
+                canceled_by_storno_id = ?,
+                cancel_reason = COALESCE(cancel_reason, ?, ?),
+                updated_at = datetime('now','utc')
+          WHERE id = ? AND status != 'canceled' AND locked_at IS NOT NULL",
+    )
+    .bind(storno.locked_at.as_deref())
+    .bind(&storno.id)
+    .bind(storno.cancel_reason.as_deref())
+    .bind(reason)
+    .bind(&original.id)
+    .execute(&mut *tx)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Original-Rechnung ist bereits storniert.".into(),
+        ));
+    }
+    audit_log::append_in(
+        &mut tx,
+        "invoice.cancel_pair_completed",
+        "invoice",
+        &original.id,
+        Some(serde_json::json!({
+            "number": original.invoice_number,
+            "storno_id": storno.id,
+            "storno_number": storno.invoice_number,
+            "storno_locked_at": storno.locked_at,
+            "reason": reason,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    tracing::warn!(
+        "Storno-Paar aus dem Altbestand vervollständigt: {} ist durch {} storniert",
+        original.invoice_number,
+        storno.invoice_number
+    );
+    let original_refreshed = invoices::get(pool, &original.id)
+        .await?
+        .ok_or_else(|| Error::Domain("cancel: post-UPDATE SELECT leer".into()))?;
+    let validation_status = match storno.validation_status.as_deref() {
+        Some("warning") => ValidationStatus::Warning,
+        Some("failed") => ValidationStatus::Failed,
+        _ => ValidationStatus::Passed,
+    };
+    Ok(CancelResponse {
+        original: original_refreshed,
+        storno: LockResponse {
+            pdf_archive_id: storno.pdf_archive_id.clone().unwrap_or_default(),
+            xml_archive_id: storno.xml_archive_id.clone().unwrap_or_default(),
+            validation_status,
+            validation_findings_count: 0,
+            validation_warnings_count: 0,
+            invoice: storno,
+        },
+    })
+}
+
+// =============================================================================
+// Commands — Entwurf verwerfen (W14-032)
+// =============================================================================
+
+/// Argumente von [`invoices_void_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesVoidDraftArgs {
+    pub id: String,
+    /// Begründung (Pflicht, mindestens 10 Zeichen) — steht am Beleg und im
+    /// Audit-Log.
+    pub reason: String,
+}
+
+/// Verwirft einen nummerierten Rechnungs- oder Storno-Entwurf (W14-032,
+/// Re-Auth). Kein Löschen: Zeitpunkt und Grund stehen am Beleg, die Nummer
+/// bleibt verbraucht und ist über den verworfenen Entwurf und das Audit
+/// `invoice.draft_voided` nachvollziehbar (GoBD: Vollständigkeit und
+/// Nachvollziehbarkeit des Nummernkreises). Danach ist der Entwurf
+/// unveränderlich, lässt sich nicht festschreiben und blockiert die
+/// DSGVO-Anonymisierung seines Kontakts nicht mehr. Festgeschriebene
+/// Rechnungen korrigiert weiterhin nur ein Storno.
+pub async fn invoices_void_draft(
+    ctx: &Arc<AppCtx>,
+    args: InvoicesVoidDraftArgs,
+) -> Result<InvoiceRow> {
+    let InvoicesVoidDraftArgs { id, reason } = args;
+    let pool = ctx.pool()?;
+    void_draft_core(&pool, &id, &reason, ctx.clock().now_utc()).await
+}
+
+/// Testbarer Kern von [`invoices_void_draft`] (`now` aus der Uhr des
+/// Aufrufers). Verwirft in **einer** Transaktion den Entwurf, einen offenen
+/// Fortsetzungs-Marker eines Abo-Laufs, der auf ihn zeigt (sonst versuchte der
+/// nächste Tick, ihn festzuschreiben), und eine Restore-Vormerkung (F1d), nimmt
+/// die Umwandlung des Angebots zurück, aus dem der Entwurf entstand (F2c,
+/// Audit `quote.conversion_reverted`), und schreibt das Audit.
+pub async fn void_draft_core(
+    pool: &SqlitePool,
+    id: &str,
+    reason: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<InvoiceRow> {
+    let reason: String = reason
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(500)
+        .collect();
+    if reason.chars().count() < 10 {
+        return Err(Error::BadRequest(
+            "Bitte eine Begründung angeben (mindestens 10 Zeichen) — sie steht am Beleg und im \
+             Audit-Log."
+                .into(),
+        ));
+    }
+    // Nie parallel zum Festschreiben oder Stornieren desselben Belegs.
+    let _invoice_guard = crate::locks::INVOICES.lock(id).await;
+    // Lauf F2c: Stammt der Entwurf aus einer Angebots-Umwandlung, nie parallel
+    // zum Zurückziehen oder erneuten Umwandeln dieses Angebots.
+    let source_quote: Option<String> =
+        sqlx::query_scalar("SELECT id FROM quotes WHERE converted_invoice_id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    let _quote_guard = match source_quote.as_deref() {
+        Some(qid) => Some(crate::locks::QUOTES.lock(qid).await),
+        None => None,
+    };
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let voided =
+        invoices::void_draft_in(&mut tx, id, &reason, &crate::clock::to_db_utc(now)).await?;
+    // Lauf F2c: Das Angebot, aus dem der Entwurf entstand, wird wieder
+    // „angenommen“ und lässt sich neu umwandeln — sonst bliebe es für immer auf
+    // einen verworfenen Beleg zeigend blockiert (Entwürfe sind nicht
+    // bearbeitbar, die Korrektur ist „verwerfen, neu anlegen“). Die DB lässt
+    // das nur für einen verworfenen Entwurf zu (`trg_quotes_converted_final`).
+    let reverted: Option<(String, String)> = sqlx::query_as(
+        "UPDATE quotes
+            SET status = 'accepted', converted_at = NULL, converted_invoice_id = NULL,
+                updated_at = datetime('now','utc')
+          WHERE converted_invoice_id = ? AND status = 'converted'
+         RETURNING id, quote_number",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((quote_id, quote_number)) = &reverted {
+        audit_log::append_in(
+            &mut tx,
+            "quote.conversion_reverted",
+            "quote",
+            quote_id,
+            Some(serde_json::json!({
+                "quote_number": quote_number,
+                "invoice": id,
+                "invoice_number": voided.invoice_number,
+                "reason": reason,
+            })),
+        )
+        .await?;
+    }
+    let pending_prefix = crate::scheduler::recurring_invoice::PENDING_PREFIX;
+    let markers: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM app_settings
+          WHERE substr(key, 1, length(?1)) = ?1
+            AND substr(value, 1, length(?2) + 1) = ?2 || '|'
+         RETURNING key",
+    )
+    .bind(pending_prefix)
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let conflict_key = format!(
+        "{}invoice:{id}",
+        crate::backup::after_restore::CONFLICT_PREFIX
+    );
+    let conflict_cleared = sqlx::query("DELETE FROM app_settings WHERE key = ?")
+        .bind(&conflict_key)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+        > 0;
+    audit_log::append_in(
+        &mut tx,
+        "invoice.draft_voided",
+        "invoice",
+        id,
+        Some(serde_json::json!({
+            "number": voided.invoice_number,
+            "fiscal_year": voided.fiscal_year,
+            "gross": voided.gross_amount_cents,
+            "storno_for": voided.is_storno_for,
+            "reason": reason,
+            "recurring_markers_cleared": markers.len(),
+            "restore_conflict_cleared": conflict_cleared,
+            "quote_conversion_reverted": reverted.as_ref().map(|(_, n)| n),
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    tracing::info!("Rechnungs-Entwurf {} verworfen", voided.invoice_number);
+    invoices::get(pool, id)
+        .await?
+        .ok_or_else(|| Error::Domain("void_draft: post-UPDATE SELECT leer".into()))
 }
 
 // =============================================================================
@@ -1433,10 +1670,6 @@ fn variant_name(e: &invoice::InvoiceValidationError) -> &'static str {
         E::ItemTaxRateNegative { .. } => "ItemTaxRateNegative",
         E::Paragraph19VatViolation(_) => "Paragraph19VatViolation",
     }
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

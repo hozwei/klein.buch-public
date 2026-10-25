@@ -35,7 +35,10 @@ pub async fn depreciation_accrue_year(
 
     let pool = &pool;
     let paths = ctx.paths.clone();
-    let today = crate::clock::today_berlin();
+    let today = ctx.clock().today_berlin();
+    // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss während der Buchung; ein
+    // schon abgeschlossenes Jahr überspringt `accrue_yearly` in der Transaktion.
+    let _fy = crate::fiscal_year::guard::booking_permit().await;
     accrue_yearly::accrue_for_year(pool, &paths, session, fiscal_year, today).await
 }
 
@@ -58,6 +61,9 @@ pub async fn depreciation_reset_asset(
 
     let pool = &pool;
     let paths = ctx.paths.clone();
+    // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss zwischen Zurücksetzen und
+    // Festschreiben (die AfA des Jahres fehlte sonst im Snapshot).
+    let _fy = crate::fiscal_year::guard::booking_permit().await;
     accrue_yearly::reset_asset(pool, &paths, session, &asset_id).await?;
     assets::get_detail(pool, &asset_id)
         .await?

@@ -513,12 +513,21 @@ async fn storno_creates_new_invoice_and_marks_original() {
     )
     .await
     .unwrap();
-    inv_cmd::run_lock_pipeline(&env.pool, &env.paths, &storno_draft.id, "N/A")
-        .await
-        .unwrap();
-    invoices::mark_canceled(&env.pool, &id, &storno_draft.id, Some("Test-Storno"))
-        .await
-        .unwrap();
+    // Storno-Paar: Lock des Storno-Belegs und Cancel des Originals in einer
+    // Transaktion (R1-003; das frühere `mark_canceled` ist entfernt,
+    // R1-S2-MARKCANCELED).
+    inv_cmd::run_lock_pipeline_with_pair(
+        &env.pool,
+        &env.paths,
+        &storno_draft.id,
+        "N/A",
+        inv_cmd::LockCancelPair {
+            original_id: &id,
+            reason: Some("Test-Storno"),
+        },
+    )
+    .await
+    .unwrap();
 
     // Verifikation
     let original = invoices::get(&env.pool, &id).await.unwrap().unwrap();

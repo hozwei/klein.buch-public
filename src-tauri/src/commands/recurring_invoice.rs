@@ -102,7 +102,7 @@ pub async fn recurring_invoices_create(
         "recurring_invoice.create",
         "recurring_invoice",
         &detail.template.id,
-        Some(&audit_details(&detail.template)),
+        Some(audit_details(&detail.template)),
     )
     .await?;
     Ok(detail)
@@ -133,7 +133,7 @@ pub async fn recurring_invoices_update(
         "recurring_invoice.update",
         "recurring_invoice",
         &detail.template.id,
-        Some(&audit_details(&detail.template)),
+        Some(audit_details(&detail.template)),
     )
     .await?;
     Ok(detail)
@@ -191,9 +191,7 @@ pub async fn recurring_invoices_set_active(
         },
         "recurring_invoice",
         &id,
-        applied
-            .map(|m| serde_json::json!({ "resume_mode": m }).to_string())
-            .as_deref(),
+        applied.map(|m| serde_json::json!({ "resume_mode": m })),
     )
     .await?;
     recurring_invoice::get_row(&pool, &id)
@@ -374,17 +372,12 @@ pub(crate) async fn check_items_no_vat(
     Ok(())
 }
 
-fn audit_details(t: &RecurringInvoiceRow) -> String {
-    format!(
-        r#"{{"label":"{}","frequency":"{}","mode":"{}"}}"#,
-        esc(&t.label),
-        esc(&t.frequency),
-        esc(&t.auto_mode)
-    )
-}
-
-fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+fn audit_details(t: &RecurringInvoiceRow) -> serde_json::Value {
+    serde_json::json!({
+        "label": &t.label,
+        "frequency": &t.frequency,
+        "mode": &t.auto_mode,
+    })
 }
 
 #[cfg(test)]

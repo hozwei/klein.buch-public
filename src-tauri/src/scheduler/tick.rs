@@ -155,6 +155,15 @@ async fn run_tick(ctx: &Arc<AppCtx>) -> Result<()> {
 /// beendet den Tick vor dem nächsten Job; ein gesammeltes Lock-Backup entsteht
 /// trotzdem (Backup-Hardline).
 pub async fn run_jobs(job: &JobCtx<'_>) -> Result<()> {
+    // Akteur aller Audit-Einträge des Ticks (Lauf F, R1-S3-ACTOR).
+    crate::db::repo::audit_log::with_actor(
+        crate::db::repo::audit_log::ACTOR_SCHEDULER,
+        run_jobs_inner(job),
+    )
+    .await
+}
+
+async fn run_jobs_inner(job: &JobCtx<'_>) -> Result<()> {
     let lock_backup_due = AtomicBool::new(false);
     let deferred = job.with_deferred_backup(&lock_backup_due);
     let stopped = run_booking_jobs(&deferred).await;
@@ -322,6 +331,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(daily, 1, "Tages-Backup aus dem Tick");
+        // Lauf F (R1-S3-ACTOR): Audit-Einträge des Ticks tragen den Akteur
+        // `scheduler`.
+        let actors: Vec<String> = sqlx::query_scalar("SELECT DISTINCT actor FROM audit_log")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(actors, vec!["scheduler".to_string()], "{actors:?}");
 
         super::run_jobs(&job).await.unwrap();
         let daily: i64 = sqlx::query_scalar(

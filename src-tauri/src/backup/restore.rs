@@ -195,14 +195,11 @@ pub async fn apply(
         "backup.restore.requested",
         "backup",
         "restore",
-        Some(
-            &serde_json::json!({
-                "source": label,
-                "schema": header.schema_version,
-                "format": header.format_version,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "source": label,
+            "schema": header.schema_version,
+            "format": header.format_version,
+        })),
     )
     .await?;
 
@@ -464,7 +461,35 @@ async fn stage(
                     paths.archive_dir.display()
                 ))
             })?;
-        check_migration_checksums(&pool).await
+        check_migration_checksums(&pool).await?;
+        // Lauf F2a: Auch die Prüfungen des Entsperrens (Fremdschlüssel, R1-012)
+        // und die Vorab-Prüfung der Migration 0032 schon hier — sonst bliebe
+        // die Instanz nach dem Tausch gesperrt. F2c: Befunde mit dem Kontext
+        // dieser Prüfung loggen, nicht als „beim Entsperren“.
+        let violations = crate::db::foreign_key_violations(&pool).await?;
+        if !violations.is_empty() {
+            crate::db::log_foreign_key_violations("Restore-Prüfung eines Backups", &violations);
+            tracing::error!(
+                "Restore abgebrochen: {} verletzte(r) Fremdschlüssel in der Datenbank des \
+                 Backups, z. B. {} — die laufende Instanz bleibt unverändert.",
+                violations.len(),
+                violations[0]
+            );
+            return Err(Error::Backup(
+                "Die Datenbank im Backup enthält verwaiste Verweise (Fremdschlüssel; \
+                 Einzelheiten im Server-Log) — Restore abgebrochen."
+                    .into(),
+            ));
+        }
+        if crate::db::duplicate_locked_stornos(&pool).await? > 0 {
+            return Err(Error::Backup(
+                "Die Datenbank im Backup enthält zu mindestens einer Rechnung mehr als einen \
+                 festgeschriebenen Storno-Beleg; diese Version könnte sie nicht entsperren — \
+                 Restore abgebrochen."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
     .await;
     pool.close().await;
@@ -491,8 +516,9 @@ pub async fn warn_missing_templates(
         };
     let referenced: Vec<String> = match sqlx::query_scalar(
         "SELECT default_pdf_template FROM seller_profile
-         UNION SELECT pdf_template FROM invoices WHERE locked_at IS NULL
-         UNION SELECT pdf_template FROM quotes WHERE locked_at IS NULL
+         UNION SELECT pdf_template FROM invoices
+                WHERE locked_at IS NULL AND voided_at IS NULL
+         UNION SELECT pdf_template FROM quotes WHERE locked_at IS NULL AND status = 'draft'
          UNION SELECT pdf_template FROM recurring_invoices WHERE active = 1",
     )
     .fetch_all(pool)
@@ -739,8 +765,9 @@ fn swap_pairs(paths: &Paths, with_branding: bool) -> Vec<(PathBuf, PathBuf, bool
 fn remove_path(path: &Path, is_dir: bool) -> Result<()> {
     if is_dir {
         clear_dir_force(path)?;
-        if path.exists() {
-            fs::remove_dir(path)?;
+        match fs::remove_dir(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            other => other?,
         }
     } else {
         remove_if_exists(path)?;
@@ -1040,12 +1067,15 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Entfernt eine Datei, falls vorhanden — ohne `exists()` vorab (Lauf F,
+/// LE-CI-FLAKE: `-wal`/`-shm` verschwinden beim Schließen der letzten
+/// Verbindung, das Schließen kann nachlaufen).
 fn remove_if_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        make_writable(path)?;
-        fs::remove_file(path)?;
+    make_writable(path)?;
+    match fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => Ok(other?),
     }
-    Ok(())
 }
 
 fn make_writable(path: &Path) -> Result<()> {
@@ -1339,7 +1369,7 @@ mod tests {
             "CREATE TABLE recurring_subscriptions (id TEXT PRIMARY KEY NOT NULL,
                 next_due_date TEXT NOT NULL) STRICT",
             "CREATE TABLE invoices (id TEXT PRIMARY KEY NOT NULL, invoice_number TEXT NOT NULL,
-                locked_at TEXT) STRICT",
+                locked_at TEXT, is_storno_for TEXT) STRICT",
             "CREATE TABLE quotes (id TEXT PRIMARY KEY NOT NULL, quote_number TEXT NOT NULL,
                 locked_at TEXT) STRICT",
             // für die Prüfungen in Phase A (Archivpfade, Migrationen)

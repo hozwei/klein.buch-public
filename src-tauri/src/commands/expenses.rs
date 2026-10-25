@@ -212,9 +212,9 @@ pub async fn create_core(
     ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     if let Some(pd) = input.paid_date {
-        crate::fiscal_year::guard::ensure_year_open(pool, pd.year() as i64).await?;
+        crate::fiscal_year::guard::check_open(pool, &fy, pd.year() as i64).await?;
     }
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
@@ -253,14 +253,13 @@ pub async fn create_core(
         "expense.create",
         "expense",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"category":"{}","reverse_charge_13b":{},"receipt":{}}}"#,
-            expense_number,
-            row.gross_amount_cents,
-            escape(&row.category),
-            row.reverse_charge_13b == 1,
-            receipt_archive_id.is_some()
-        )),
+        Some(serde_json::json!({
+            "number": expense_number,
+            "gross": row.gross_amount_cents,
+            "category": &row.category,
+            "reverse_charge_13b": row.reverse_charge_13b == 1,
+            "receipt": receipt_archive_id.is_some(),
+        })),
     )
     .await?;
 
@@ -303,10 +302,10 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
     let existing = expenses::get(pool, &args.expense_id)
         .await?
         .ok_or_else(|| Error::Domain("cancel: Kostenbeleg nicht gefunden.".into()))?;
-    guard::ensure_year_open(pool, existing.fiscal_year).await?;
+    let fy = guard::ensure_year_open(pool, existing.fiscal_year).await?;
     if let Some(paid) = existing.paid_date.as_deref() {
         if let Ok(d) = NaiveDate::parse_from_str(paid, "%Y-%m-%d") {
-            guard::ensure_year_open(pool, d.year() as i64).await?;
+            guard::check_open(pool, &fy, d.year() as i64).await?;
         }
     }
 
@@ -316,7 +315,7 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
         "expense.cancel",
         "expense",
         &args.expense_id,
-        Some(&format!(r#"{{"reason":"{}"}}"#, escape(args.reason.trim()))),
+        Some(serde_json::json!({ "reason": args.reason.trim() })),
     )
     .await?;
 
@@ -363,13 +362,14 @@ pub async fn expenses_set_payment(
     let existing = expenses::get(pool, &args.expense_id)
         .await?
         .ok_or_else(|| Error::Domain("set_payment: Kostenbeleg nicht gefunden.".into()))?;
+    let fy = guard::booking_permit().await;
     if let Some(old_paid) = existing.paid_date.as_deref() {
         if let Ok(d) = NaiveDate::parse_from_str(old_paid, "%Y-%m-%d") {
-            guard::ensure_year_open(pool, d.year() as i64).await?;
+            guard::check_open(pool, &fy, d.year() as i64).await?;
         }
     }
     if let Some(new_paid) = args.paid_date {
-        guard::ensure_year_open(pool, new_paid.year() as i64).await?;
+        guard::check_open(pool, &fy, new_paid.year() as i64).await?;
     }
 
     let paid = args.paid_date.map(|d| d.to_string());
@@ -385,17 +385,10 @@ pub async fn expenses_set_payment(
         "expense.payment_set",
         "expense",
         &args.expense_id,
-        Some(&format!(
-            r#"{{"paid_date":{},"account":{}}}"#,
-            match paid.as_deref() {
-                Some(d) => format!("\"{d}\""),
-                None => "null".to_string(),
-            },
-            match args.paid_from_account_id.as_deref() {
-                Some(a) => format!("\"{}\"", escape(a)),
-                None => "null".to_string(),
-            }
-        )),
+        Some(serde_json::json!({
+            "paid_date": paid.as_deref(),
+            "account": args.paid_from_account_id.as_deref(),
+        })),
     )
     .await?;
     Ok(row)
@@ -581,9 +574,9 @@ pub async fn create_from_einvoice_with(
     ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     if let Some(pd) = input.paid_date {
-        crate::fiscal_year::guard::ensure_year_open(pool, pd.year() as i64).await?;
+        crate::fiscal_year::guard::check_open(pool, &fy, pd.year() as i64).await?;
     }
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
@@ -629,20 +622,13 @@ pub async fn create_from_einvoice_with(
         "expense.import_einvoice",
         "expense",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"source_format":"{}","vendor_invoice_number":{},"validation":{}}}"#,
-            expense_number,
-            row.gross_amount_cents,
-            escape(&args.source_format),
-            match input.vendor_invoice_number.as_deref() {
-                Some(v) => format!("\"{}\"", escape(v)),
-                None => "null".to_string(),
-            },
-            match status_str.as_deref() {
-                Some(s) => format!("\"{s}\""),
-                None => "null".to_string(),
-            }
-        )),
+        Some(serde_json::json!({
+            "number": expense_number,
+            "gross": row.gross_amount_cents,
+            "source_format": &args.source_format,
+            "vendor_invoice_number": input.vendor_invoice_number.as_deref(),
+            "validation": status_str.as_deref(),
+        })),
     )
     .await?;
 
@@ -659,10 +645,6 @@ pub async fn create_from_einvoice_with(
 /// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 // =============================================================================

@@ -10,9 +10,8 @@
 //!
 //! Lauf F (D-01, ADR 0040): Kosten-Abos im Modus „Erinnerung“
 //! (`auto_create_expense = 0`) erzeugen am Stichtag einen Hinweis „Abo fällig“
-//! (einmal je Abo und Stichtag). Die Regel `recurring_due` steht seit Migration
-//! 0012 im CHECK, ist aber nicht geseedet; bis zur Seed-Migration läuft sie ohne
-//! Regel-Zeile (immer aktiv).
+//! (einmal je Abo und Stichtag). Die abschaltbare Regel `rule_recurring_due`
+//! (rule_type `recurring_due`) seedet Migration 0032.
 
 use crate::error::Result;
 use crate::fiscal_year::guard;
@@ -42,19 +41,19 @@ pub async fn run(pool: &SqlitePool, today: NaiveDate, targets_root: &Path) -> Re
     if let Some(rule) = rules::get_enabled_by_type(pool, "invoice_overdue").await? {
         created += invoice_overdue(pool, &rule, today).await?;
     }
-    created += recurring_due(pool, today).await?;
+    if let Some(rule) = rules::get_enabled_by_type(pool, "recurring_due").await? {
+        created += recurring_due(pool, &rule, today).await?;
+    }
     Ok(created)
 }
 
 /// „Abo fällig“ für Kosten-Abos im Modus Erinnerung. Dedup je Abo und Stichtag;
 /// der Stichtag rückt erst mit „Buchen“ (`recurring_run_now`) vor.
-async fn recurring_due(pool: &SqlitePool, today: NaiveDate) -> Result<usize> {
-    // Eine abgeschaltete Regel (falls sie per Migration geseedet ist) gilt.
-    if let Some(rule) = rules::get_by_type(pool, "recurring_due").await? {
-        if rule.enabled == 0 {
-            return Ok(0);
-        }
-    }
+async fn recurring_due(
+    pool: &SqlitePool,
+    rule: &rules::NotificationRule,
+    today: NaiveDate,
+) -> Result<usize> {
     let due = crate::db::repo::recurring::list_due_reminders(pool, &today.to_string()).await?;
     let mut created = 0usize;
     for sub in &due {
@@ -71,6 +70,7 @@ async fn recurring_due(pool: &SqlitePool, today: NaiveDate) -> Result<usize> {
         created += emit_one(
             pool,
             NewNotification {
+                rule_id: Some(&rule.id),
                 title: "Abo fällig",
                 body: &body,
                 severity: "info",
@@ -78,7 +78,6 @@ async fn recurring_due(pool: &SqlitePool, today: NaiveDate) -> Result<usize> {
                 related_entity_id: Some(&sub.id),
                 action_url: Some("/expenses/recurring"),
                 dedup_key: Some(&key),
-                ..Default::default()
             },
         )
         .await?;

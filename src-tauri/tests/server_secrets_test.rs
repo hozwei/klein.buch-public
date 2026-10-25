@@ -150,7 +150,7 @@ async fn mail_password_is_encrypted_and_never_exported() {
     let _draft = draft_invoice(&srv).await;
     let cookie = reauth_cookie(&srv, &cookie).await;
 
-    // Migration 0031: STRICT-Tabelle, Schema 31
+    // Migration 0031: STRICT-Tabelle; Schema-Version der Binary (ab 0031)
     {
         let pool = srv.state.ctx.pool().unwrap();
         let sql: String = sqlx::query_scalar(
@@ -165,7 +165,10 @@ async fn mail_password_is_encrypted_and_never_exported() {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(v, "31");
+        assert_eq!(
+            v,
+            klein_buch_lib::db::schema_version::EXPECTED_SCHEMA_VERSION.to_string()
+        );
     }
 
     let id = create_account(&srv, &cookie).await;

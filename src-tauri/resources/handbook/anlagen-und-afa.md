@@ -95,6 +95,13 @@ Bestätige mit "Veräußerung bestätigen". Klein.Buch beendet die
 laufende AfA, verbucht den Rest-Buchwert als Ausgabe und legt den
 Verkaufs-Erlös als Einnahme an.
 
+Fehlt für ein Vorjahr noch die AfA-Buchung, holt Klein.Buch sie vor dem
+Abgang nach; danach bucht es für das Abgangsjahr die anteilige AfA bis
+zum Monat des Abgangs. Eine veräußerte Anlage ist abgeschlossen: Ihre
+Daten, ihre AfA-Buchungen und ihr Rest-Buchwert lassen sich nicht mehr
+ändern oder zurücksetzen, auch solange das Geschäftsjahr noch offen ist.
+Prüf die Angaben deshalb vor dem Bestätigen.
+
 Bei einem Verkauf an einen anderen Unternehmer brauchst Du
 zusätzlich eine Verkaufsrechnung. Die legst Du normal im Bereich
 "Rechnungen" an.
@@ -106,7 +113,8 @@ korrigieren. Sobald die erste AfA-Buchung steht, sind die
 Kern-Felder gesperrt. Wenn Du dennoch korrigieren musst, gibt es
 in der Detail-Ansicht den Knopf **"Abschreibung zurücksetzen"** —
 das funktioniert nur, solange das Geschäftsjahr nicht abgeschlossen
-ist. Nach dem Geschäftsjahr-Abschluss sind die AfA-Werte für das
+ist und die Anlage nicht veräußert wurde. Nach dem
+Geschäftsjahr-Abschluss sind die AfA-Werte für das
 abgeschlossene Jahr endgültig fest.
 
 ## AfA in der EÜR
@@ -119,4 +127,4 @@ reinen Cash-Basis und steht ausdrücklich in §4 Abs. 3 Satz 3 EStG.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

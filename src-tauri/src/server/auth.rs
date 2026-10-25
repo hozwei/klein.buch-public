@@ -234,6 +234,9 @@ async fn detached<F>(st: &Arc<ServerState>, fut: F) -> Response
 where
     F: std::future::Future<Output = Result<Response, ApiError>> + Send + 'static,
 {
+    // Audit-Einträge eines Zustandswechsels der Anmeldung schreibt der
+    // Inhaber (Lauf F, R1-S3-ACTOR); fehlgeschlagene Versuche auditieren nicht.
+    let fut = crate::db::repo::audit_log::with_actor(crate::db::repo::audit_log::ACTOR_OWNER, fut);
     match st.tasks.spawn(fut).await {
         Ok(Ok(response)) => response,
         Ok(Err(err)) => err.into_response(),
@@ -248,11 +251,16 @@ fn into_response(result: Result<Response, ApiError>) -> Response {
     }
 }
 
-/// Audit ohne IP (Plan W6); ein Fehler wird geloggt, nicht gemeldet.
+/// Audit ohne IP (Plan W6); ein Fehler wird geloggt, nicht gemeldet. Nur
+/// erfolgreiche Schritte des Inhabers (Akteur `owner`, Lauf F).
 async fn audit(st: &ServerState, action: &str) {
+    use crate::db::repo::audit_log;
     if let Ok(pool) = st.ctx.pool() {
-        if let Err(e) =
-            crate::db::repo::audit_log::append(&pool, action, "auth", "session", None).await
+        if let Err(e) = audit_log::with_actor(
+            audit_log::ACTOR_OWNER,
+            audit_log::append(&pool, action, "auth", "session", None),
+        )
+        .await
         {
             tracing::error!("Audit {action} nicht geschrieben: {e}");
         }
@@ -388,17 +396,26 @@ pub async fn setup(State(st): State<Arc<ServerState>>, req: Request) -> Response
 /// (vorher war der Zustand `setup`, es gab also keine DB). Bliebe sie liegen,
 /// könnte der erste Login sie mit beliebiger Passphrase übernehmen.
 fn remove_partial_db(st: &ServerState) {
-    let db = &st.ctx.paths.db_file;
+    remove_db_files(&st.ctx.paths.db_file);
+}
+
+/// Löscht die DB-Datei samt `-wal`/`-shm`/`-journal` ohne `exists()` vorab
+/// (Lauf F2c, LE-CI-FLAKE): SQLite entfernt `-wal`/`-shm` beim Schließen des
+/// Pools selbst; eine dazwischen verschwundene Datei ist kein Fehler und
+/// erzeugt keinen Fehler-Logeintrag mehr. Liefert die Zahl der Dateien, die
+/// sich nicht entfernen ließen.
+fn remove_db_files(db: &std::path::Path) -> usize {
+    let mut failed = 0;
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let mut name = db.as_os_str().to_os_string();
         name.push(suffix);
         let path = std::path::PathBuf::from(name);
-        if path.exists() {
-            if let Err(e) = std::fs::remove_file(&path) {
-                tracing::error!("Unvollständige DB {} nicht entfernbar: {e}", path.display());
-            }
+        if let Err(e) = crate::db::remove_file_if_exists(&path) {
+            tracing::error!("Unvollständige DB {} nicht entfernbar: {e}", path.display());
+            failed += 1;
         }
     }
+    failed
 }
 
 async fn setup_final(
@@ -655,6 +672,31 @@ async fn unlock(st: &Arc<ServerState>, mut passphrase: String) -> Result<bool, A
                 "pre_migration_backup_failed",
                 "Entsperren abgebrochen: Vor der Datenbank-Umstellung ließ sich kein Backup \
                  schreiben. Es wurde nichts verändert — Einzelheiten im Server-Log.",
+            ));
+        }
+        if msg.contains(crate::db::INTEGRITY_REFUSED)
+            && msg.contains(crate::db::INTEGRITY_AFTER_MIGRATION)
+        {
+            // Lauf F2c: Die Prüfung schlug erst nach der gespeicherten
+            // Umstellung an — „nichts verändert“ stimmt dann nicht.
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "db_integrity_failed",
+                "Entsperren abgebrochen: Nach der Umstellung der Datenbank hat die Prüfung \
+                 Unstimmigkeiten gefunden. Die Umstellung ist gespeichert, vorher wurde ein \
+                 Backup angelegt — Rückweg und Einzelheiten im Server-Log (Handbuch: Fehlersuche \
+                 im Container).",
+            ));
+        }
+        if msg.contains(crate::db::INTEGRITY_REFUSED) {
+            // R1-012 / Vorab-Prüfung vor der Umstellung: Einzelheiten stehen
+            // schon im Log; die Datenbank ist unverändert.
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "db_integrity_failed",
+                "Entsperren abgebrochen: Die Prüfung der Datenbank hat Unstimmigkeiten gefunden. \
+                 Daten wurden nicht verändert — Einzelheiten im Server-Log (Handbuch: Fehlersuche \
+                 im Container).",
             ));
         }
         return Err(generic_failure("Entsperren", &e));
@@ -1054,12 +1096,15 @@ async fn rekey(st: Arc<ServerState>, id: SessionId, mut new: String) -> Result<R
     old.zeroize();
     st.sessions.retain_only(id);
     crate::scheduler::tick::resume(&ctx).await;
-    if let Err(e) = crate::db::repo::audit_log::append(
-        &new_pool,
-        "backup.passphrase.changed",
-        "backup",
-        "passphrase",
-        None,
+    if let Err(e) = crate::db::repo::audit_log::with_actor(
+        crate::db::repo::audit_log::ACTOR_OWNER,
+        crate::db::repo::audit_log::append(
+            &new_pool,
+            "backup.passphrase.changed",
+            "backup",
+            "passphrase",
+            None,
+        ),
     )
     .await
     {
@@ -1110,5 +1155,25 @@ pub fn totp_reset_command() -> std::process::ExitCode {
             eprintln!("totp-reset fehlgeschlagen: {e}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lauf F2c (LE-CI-FLAKE): fehlende Begleitdateien (`-wal`/`-shm`/`-journal`,
+    /// die SQLite beim Schließen schon entfernt hat) sind kein Fehler; vorhandene
+    /// werden gelöscht.
+    #[test]
+    fn remove_db_files_ignores_vanished_companions() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("klein-buch.db");
+        assert_eq!(remove_db_files(&db), 0, "nichts da: kein Fehler");
+        std::fs::write(&db, b"x").unwrap();
+        std::fs::write(dir.path().join("klein-buch.db-wal"), b"x").unwrap();
+        assert_eq!(remove_db_files(&db), 0);
+        assert!(!db.exists());
+        assert!(!dir.path().join("klein-buch.db-wal").exists());
     }
 }

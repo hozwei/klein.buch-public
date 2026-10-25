@@ -282,11 +282,25 @@ fn csv_field(s: &str) -> String {
 /// Excel mit korrekten Umlauten); Dezimaltrenner Komma. Eine Kommentarzeile
 /// nennt Geschäftsjahr und Quelle.
 pub fn to_csv(form: &ElsterForm) -> String {
+    to_csv_with_notes(form, &[])
+}
+
+/// Wie [`to_csv`], mit zusätzlichen Kommentarzeilen (`# …`) nach der
+/// Titelzeile — z. B. der Hinweis auf eine Abweichung vom Jahresabschluss
+/// (Lauf F2c). Zeilenumbrüche in einem Hinweis werden zu Leerzeichen.
+pub fn to_csv_with_notes(form: &ElsterForm, notes: &[String]) -> String {
     let mut out = String::from("\u{FEFF}");
     out.push_str(&format!(
         "# Anlage EÜR {} — Ausfüllhilfe (Klein.Buch). Vorschlag, vom Steuerberater zu prüfen.\n",
         form.fiscal_year
     ));
+    for note in notes {
+        let one_line: String = note
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        out.push_str(&format!("# {one_line}\n"));
+    }
     out.push_str("Zeile;Position;Betrag;Art\n");
     for l in &form.lines {
         let zeile = if l.zeile == 0 {
@@ -518,6 +532,20 @@ mod tests {
         assert!(csv.contains("200,00"));
         assert!(csv.contains("Eingabe"));
         assert!(csv.contains("Kontrollsumme"));
+    }
+
+    /// Lauf F2c: Hinweise (Abweichung vom Jahresabschluss) stehen als
+    /// Kommentarzeilen zwischen Titel und Spaltenkopf, einzeilig.
+    #[test]
+    fn notes_are_comment_lines_after_the_title() {
+        let r = report_with(10_000, 0, 0, 0, 0, &[]);
+        let form = build_form(&r, &AfaSplit::default(), true);
+        let csv = to_csv_with_notes(&form, &["ACHTUNG: Abweichung\nzweite Zeile".to_string()]);
+        let lines: Vec<&str> = csv.trim_start_matches('\u{FEFF}').lines().collect();
+        assert!(lines[0].starts_with("# Anlage EÜR"));
+        assert_eq!(lines[1], "# ACHTUNG: Abweichung zweite Zeile");
+        assert_eq!(lines[2], "Zeile;Position;Betrag;Art");
+        assert_eq!(to_csv(&form), to_csv_with_notes(&form, &[]));
     }
 
     #[test]

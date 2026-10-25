@@ -72,6 +72,66 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Entsperren statt des Programmstarts der Desktop-Fassung.
 - **Nur noch die Inbox:** Der ungenutzte Weiterleitungskanal für
   OS-Benachrichtigungen aus der Desktop-Fassung ist entfernt.
+- **Migration 0032 (Schema 32, Lauf F, ADR 0039 Nr. 124):** Nummerierte
+  Rechnungs- und Storno-Entwürfe lassen sich verwerfen (`invoices_void_draft`,
+  Re-Auth, Grund Pflicht) — ohne Löschen: Zeitpunkt und Grund stehen am Entwurf
+  und im Audit, die Nummer bleibt verbraucht, ein verworfener Entwurf ist
+  endgültig und blockiert die DSGVO-Anonymisierung nicht mehr; zurückgezogene
+  Angebots-Entwürfe ebenso. Die Datenbank erzwingt zusätzlich: höchstens ein
+  festgeschriebener Storno je Rechnung, Storno endgültig, Positionen
+  festgeschriebener Belege unveränderlich, Archiv-Einträge nie gelöscht,
+  Anlagen-Abgang endgültig, höchstens ein Standard-Zahlungskonto (Bestand mit
+  Audit bereinigt). Die Integritäts-Historie speichert „fehlt“ und „nicht
+  lesbar“; die Regel „Kosten-Abo fällig“ ist abschaltbar.
+- **Prüfung beim Entsperren:** Verletzte Fremdschlüssel oder eine gescheiterte
+  Vorab-Prüfung einer Migration blockieren das Entsperren mit klarer Meldung
+  (409 `db_integrity_failed`, Einzelheiten im Log). Nach einem Update prüft
+  Klein.Buch das schon vor dem Pflicht-Backup und vor der Umstellung; die
+  Datenbank bleibt dann auf dem alten Schema, und das vorige Image öffnet sie
+  weiter (Lauf F2c, ADR 0039 Nr. 126). Schlägt die Prüfung erst nach einer
+  Umstellung an, sagt die Meldung das und das Handbuch nennt den Rückweg.
+- **Verworfene Entwürfe und DSGVO (Lauf F2c):** Die Anonymisierung eines
+  Kontakts entfernt auch den Empfänger aus seinen verworfenen
+  Rechnungs-Entwürfen und nie ausgestellten, zurückgezogenen Angeboten sowie
+  Bezeichnung und Notiz seiner Abo-Vorlagen; Nummer, Betrag und Grund bleiben.
+  Die Auskunft enthält Abo-Vorlagen, Kosten-Abos und Anlagen des Kontakts und
+  zeigt verworfene Entwürfe als „verworfen“. Handbuch und `gobd.md` sagen
+  ehrlich, was nach Ablauf der Frist bleibt.
+- **Angebote (Lauf F2c):** Wird der aus einem Angebot entstandene Entwurf
+  verworfen, ist das Angebot wieder „angenommen“ und lässt sich neu umwandeln.
+  Zurückziehen braucht einen Grund (mindestens 10 Zeichen), läuft mit Audit in
+  einer Transaktion und nie parallel zur Umwandlung; ein umgewandeltes Angebot
+  bleibt umgewandelt.
+- **Anlagen (Lauf F2c):** Eine veräußerte Anlage lässt sich weder bearbeiten
+  noch ihre AfA zurücksetzen; beim Abgang holt Klein.Buch fehlende Vorjahres-AfA
+  nach, und der Jahresabschluss schreibt auch veräußerte Anlagen fest.
+- **Exporte abgeschlossener Jahre (Lauf F2c):** Bei einer Abweichung vom
+  Abschluss tragen das EÜR-PDF (Kasten), die ELSTER-Ausfüllhilfe
+  (Kommentarzeile) und die Einzelaufstellung (Begleitdatei) den Vermerk in der
+  Datei. Das Steuerberater-Paket listet nicht festgeschriebene Rechnungs- und
+  Storno-Nummern (`nicht-festgeschriebene-nummern.csv`).
+- **Audit-Log (Lauf F, ADR 0039 Nr. 125):** Details sind immer gültiges JSON,
+  auch mit Anführungs- oder Steuerzeichen in Namen und Gründen. Der Akteur
+  unterscheidet `owner` (über die Sitzung), `scheduler` (automatische Läufe) und
+  `system`. Jeder EÜR-Export (PDF, DATEV, ELSTER, Einzelaufstellung,
+  Steuerberater-Paket) steht mit Jahr, Dateiname und Zählwerten im Protokoll,
+  ohne Inhalte.
+- **Abgeschlossene Jahre:** Anzeige und Exporte vergleichen die EÜR mit dem beim
+  Abschluss festgeschriebenen Stand. Bei einer Abweichung gibt es einen
+  dringenden Hinweis, einen Audit-Eintrag je Export und im Steuerberater-Paket
+  eine Gegenüberstellung in der `LIESMICH.txt`; blockiert wird nichts.
+- **Geschäftsjahres-Abschluss:** wartet auf laufende Buchungen, und Buchungen
+  während des Abschlusses warten und werden danach erneut geprüft; Festschreiben,
+  Snapshot, Protokoll und Audit laufen in einer Transaktion. Das Audit nennt die
+  Zahl der Rechnungen, Stornos, Kosten, Privatbewegungen und offenen Entwürfe;
+  die Übersicht meldet offene Entwürfe vorab.
+- **DSGVO-Auskunft:** findet Mails auch an frühere Adressen der Person (aus
+  ihren Belegen) und unabhängig von Groß-/Kleinschreibung; Katalog-Mails stehen
+  mit Kontaktbezug im Versandprotokoll; Audit-Bezüge nur mit passendem Typ; eine
+  feste Zahl von Datenbank-Abfragen statt einer je Beleg.
+- **Archiv:** Jede neue Archivdatei wird vor dem Sichtbarwerden zurückgelesen
+  und gegen ihren Prüfwert verglichen; auf Dateisystemen ohne Hardlinks legt
+  Klein.Buch sie mit `RENAME_NOREPLACE` ab (nie überschreiben).
 
 - **Storno im Folgejahr:** Ein Storno-Beleg bekommt Geschäftsjahr und Nummer aus
   seinem eigenen Datum (`ST-2027-0001` vom Januar 2027 zu einer Rechnung vom
@@ -100,6 +160,14 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
 
 ### Fixed
 
+- **Halbes Storno-Paar aus der Desktop-Zeit (Lauf F2c):** Gibt es zu einer
+  offenen Rechnung schon einen festgeschriebenen Storno, vervollständigt
+  „Stornieren“ das Paar mit Audit, statt einen zweiten Storno anzulegen und mit
+  „UNIQUE constraint failed“ abzubrechen.
+- **Restore-Prüfung im Log (Lauf F2c):** Verwaiste Verweise in einem
+  hochgeladenen Backup stehen als „Restore-Prüfung eines Backups“ im Log, nicht
+  als Fehler beim Entsperren; beim Aufräumen einer abgebrochenen Einrichtung
+  erzeugen schon verschwundene `-wal`/`-shm`-Dateien keinen Fehler-Logeintrag.
 - **Keine doppelten Belegnummern nach einem Restore:** Wird ein älteres Backup
   in dieselbe Instanz eingespielt, übernimmt Klein.Buch die höheren
   Zählerstände von vor der Wiederherstellung (Audit, Hinweis); bereits vergebene
@@ -211,9 +279,16 @@ Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E); erscheint mit 2026.11.0.
   Nummer (BT-25) und Rechnungsdatum (BT-26) des Originals im XML. Bereits
   festgeschriebene Storno-XML bleiben unverändert (das PDF nennt die Nummer).
 
+- **Gelegentlicher Fehler „Datei nicht gefunden“** beim Passphrase-Wechsel, bei
+  der Umstellung auf die verschlüsselte DB und beim Restore-Tausch: SQLite
+  entfernt `-wal`/`-shm` beim Schließen selbst; Klein.Buch prüfte erst und
+  löschte dann. Jetzt wird direkt gelöscht und „fehlt schon“ als Erfolg gewertet.
+
 ### Removed
 
 - Testrest `sandbox-write-test.txt`.
+- Repo-Funktion `invoices::mark_canceled` ohne Idempotenz-Prüfung (nur noch von
+  Tests genutzt; das Storno-Paar läuft über `lock_with_pair_cancel`).
 
 ## [2026.10.0] — Web-/Docker-Fassung, veröffentlicht 2026-10-24
 

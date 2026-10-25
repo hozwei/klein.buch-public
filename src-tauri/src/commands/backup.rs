@@ -215,7 +215,7 @@ pub async fn backup_set_daily_time(
         "backup.daily_time_set",
         "backup",
         "daily_time",
-        Some(&serde_json::json!({ "time": value }).to_string()),
+        Some(serde_json::json!({ "time": value })),
     )
     .await?;
     Ok(value)
@@ -365,19 +365,22 @@ pub const PRE_MIGRATION_FAILED: &str = "Pflicht-Backup vor der Datenbank-Migrati
 /// Backup `manual` mit der alten Version, das vollständig gelesen und geprüft
 /// wird. Scheitert es, wird nicht migriert (Fehler, Instanz bleibt gesperrt;
 /// Log + Inbox-Hinweis). Vor der Migration Audit `backup.pre_migration`.
-/// Frische oder aktuelle Datenbanken migrieren ohne Backup.
+/// Frische oder aktuelle Datenbanken migrieren ohne Backup. Vor dem Backup
+/// prüft [`db::precheck_before_migration`] die alte Datenbank (Lauf F2c).
 pub async fn migrate_with_backup(
     ctx: &Arc<AppCtx>,
     pool: &sqlx::SqlitePool,
     passphrase: &str,
 ) -> Result<()> {
     use crate::db::schema_version::EXPECTED_SCHEMA_VERSION;
-    let Some(from) = db::schema_version::read(pool)
-        .await?
-        .filter(|v| *v < EXPECTED_SCHEMA_VERSION)
-    else {
+    let Some(from) = db::pending_migration_from(pool).await? else {
         return db::run_migrations(ctx, pool).await;
     };
+    // Lauf F2c: Bestandsfehler (verletzte Fremdschlüssel, doppelte
+    // festgeschriebene Stornos) lehnen ab, solange die Datenbank noch auf dem
+    // alten Schema steht — vor dem Pflicht-Backup und vor jeder Migration. Das
+    // vorige Image öffnet sie dann weiter (Handbuch: Fehlersuche im Container).
+    db::precheck_before_migration(pool, from).await?;
     // D-23: Ein gerade eingespielter (älterer) Stand geht nicht auf die
     // Off-Site-Ziele, bevor seine Pause gesetzt ist (`run_migrations`).
     let restore_pending = ctx
@@ -442,13 +445,10 @@ pub async fn migrate_with_backup(
         "backup.pre_migration",
         "backup",
         &outcome.history_id,
-        Some(&format!(
-            r#"{{"from":{from},"to":{EXPECTED_SCHEMA_VERSION},"backup_id":"{}"}}"#,
-            outcome.history_id
-        )),
+        Some(serde_json::json!({ "from": from, "to": EXPECTED_SCHEMA_VERSION, "backup_id": outcome.history_id })),
     )
     .await?;
-    db::run_migrations(ctx, pool).await?;
+    db::run_migrations_prechecked(ctx, pool, Some(from)).await?;
     tracing::info!(
         "Datenbank von Schema {from} auf {EXPECTED_SCHEMA_VERSION} migriert (Backup {})",
         outcome.file_name

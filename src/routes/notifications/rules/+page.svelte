@@ -50,6 +50,8 @@
         return "Hinweis auf festgeschriebene Rechnungen, deren Fälligkeitsdatum überschritten ist.";
       case "archive_integrity_failed":
         return "Dringender Hinweis, wenn der monatliche Archiv-Check einen Schaden findet.";
+      case "recurring_due":
+        return "Hinweis am Stichtag eines Kosten-Abos im Modus „Erinnerung“ – die Kosten-Position legst du dann mit „Buchen“ an.";
       default:
         return rule.label;
     }

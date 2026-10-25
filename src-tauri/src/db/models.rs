@@ -207,6 +207,10 @@ pub struct InvoiceRow {
     // Zahlungs-Eingangs-Konto (Migration 0007, Block 9). Spalte additiv;
     // in den Zahlungs-Workflow wird sie erst bei Bedarf verdrahtet.
     pub paid_to_account_id: Option<String>,
+    // Verworfener Entwurf (Migration 0032, W14-032): Zeitpunkt (UTC) und
+    // Grund. Die Nummer bleibt verbraucht; status bleibt 'draft'.
+    pub voided_at: Option<String>,
+    pub void_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -257,6 +261,8 @@ pub struct InvoiceListItem {
     pub currency_code: String,
     pub status: String,
     pub is_storno_for: Option<String>,
+    /// Verworfener Entwurf (Migration 0032).
+    pub voided_at: Option<String>,
 }
 
 // ---- Quotes (Block 6, Migration 0005) --------------------------------------

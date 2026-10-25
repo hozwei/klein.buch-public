@@ -175,6 +175,7 @@ async fn catalog_send_writes_exactly_one_email_log_and_no_archive() {
     let contact_id = create_contact(&env.pool, Some("empfaenger@kunde-test.de")).await;
     let package_id = create_package(&env.pool).await;
     let account_id = create_unreachable_account(&env.pool).await;
+    let contact_id_for_log = contact_id.clone();
 
     let args = SendPackageCatalogArgs {
         account_id,
@@ -198,7 +199,14 @@ async fn catalog_send_writes_exactly_one_email_log_and_no_archive() {
     assert_eq!(e.status, "failed");
     assert_eq!(e.to_email, "empfaenger@kunde-test.de");
     assert_eq!(e.attachment_count, 1);
-    assert!(e.related_id.is_none(), "Broschüre hat keinen Beleg-Bezug");
+    // Kein Beleg-Bezug; seit Lauf F (KB-0049) zeigt `related_id` auf den
+    // Kontakt, damit die DSGVO-Auskunft den Versand auch nach einem
+    // Adresswechsel findet.
+    assert_eq!(
+        e.related_id.as_deref(),
+        Some(contact_id_for_log.as_str()),
+        "Katalogversand verweist auf den Kontakt"
+    );
 
     // KEIN write-once-Archiv: die Broschüre ist kein §14-Beleg.
     let archive_count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM archive_entries")

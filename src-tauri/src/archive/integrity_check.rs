@@ -87,11 +87,10 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityUnreadable,
                 archive_id,
-                Some(&format!(
-                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
-                    escape(&path),
-                    e.kind()
-                )),
+                Some(serde_json::json!({
+                    "path": &path,
+                    "error_kind": format!("{:?}", e.kind()),
+                })),
             )
             .await?;
             return Ok(VerifyOutcome::Unreadable);
@@ -102,7 +101,7 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
             pool,
             audit::ArchiveAction::IntegrityMissing,
             archive_id,
-            Some(&format!(r#"{{"path":"{}"}}"#, escape(&path))),
+            Some(serde_json::json!({ "path": &path })),
         )
         .await?;
         return Ok(VerifyOutcome::Missing);
@@ -123,11 +122,10 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityUnreadable,
                 archive_id,
-                Some(&format!(
-                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
-                    escape(&path),
-                    e.kind()
-                )),
+                Some(serde_json::json!({
+                    "path": &path,
+                    "error_kind": format!("{:?}", e.kind()),
+                })),
             )
             .await?;
             Ok(VerifyOutcome::Unreadable)
@@ -140,7 +138,7 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityFail,
                 archive_id,
-                Some(&format!(r#"{{"error":"{}"}}"#, escape(&msg))),
+                Some(serde_json::json!({ "error": &msg })),
             )
             .await?;
             Ok(VerifyOutcome::Tampered)
@@ -232,20 +230,32 @@ pub async fn run_full_scan_until(
     failed_ids.extend(missing_ids.iter().cloned());
     let files_failed = failed_ids.len() as i64;
 
-    let failed_json = serde_json::to_string(&failed_ids).unwrap_or_else(|_| "[]".into());
+    // W2-INTEGRITY-UNREADABLE (Migration 0032): „fehlt“ und „nicht lesbar“
+    // stehen mit in der Historie; die ID-Listen per serde_json.
+    let failed_json = serde_json::to_string(&failed_ids)?;
+    let missing_json = serde_json::to_string(&missing_ids)?;
+    let unreadable_json = serde_json::to_string(&unreadable_ids)?;
     sqlx::query(
         "UPDATE archive_integrity_checks
             SET finished_at = datetime('now','utc'),
                 files_checked = ?,
                 files_passed = ?,
                 files_failed = ?,
-                failed_archive_ids_json = ?
+                failed_archive_ids_json = ?,
+                files_missing = ?,
+                files_unreadable = ?,
+                missing_archive_ids_json = ?,
+                unreadable_archive_ids_json = ?
           WHERE id = ?",
     )
     .bind(ids.len() as i64)
     .bind(passed)
     .bind(files_failed)
     .bind(&failed_json)
+    .bind(missing_ids.len() as i64)
+    .bind(unreadable_ids.len() as i64)
+    .bind(&missing_json)
+    .bind(&unreadable_json)
     .bind(check_id)
     .execute(pool)
     .await?;
@@ -261,10 +271,6 @@ pub async fn run_full_scan_until(
         files_unreadable: unreadable_ids.len() as i64,
         unreadable_archive_ids: unreadable_ids,
     }))
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]
@@ -319,7 +325,11 @@ mod tests {
                 files_checked INTEGER NOT NULL DEFAULT 0,
                 files_passed INTEGER NOT NULL DEFAULT 0,
                 files_failed INTEGER NOT NULL DEFAULT 0,
-                failed_archive_ids_json TEXT
+                failed_archive_ids_json TEXT,
+                files_missing INTEGER,
+                files_unreadable INTEGER,
+                missing_archive_ids_json TEXT,
+                unreadable_archive_ids_json TEXT
             ) STRICT",
         )
         .execute(&pool)
@@ -395,6 +405,17 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fails, 0);
+        // Migration 0032: „nicht lesbar“ steht in der Historie
+        let (unreadable, ids): (Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT files_unreadable, unreadable_archive_ids_json FROM archive_integrity_checks
+              ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(unreadable, Some(1));
+        let ids: Vec<String> = serde_json::from_str(&ids.unwrap()).unwrap();
+        assert_eq!(ids, vec![r.archive_id.clone()]);
 
         fs::set_permissions(&r.file_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
@@ -565,6 +586,19 @@ mod tests {
         .unwrap()
         .get("n");
         assert_eq!(cnt, 1);
+        // Migration 0032: „fehlt“ steht in der Historie
+        let (missing, ids, unreadable): (Option<i64>, Option<String>, Option<i64>) =
+            sqlx::query_as(
+                "SELECT files_missing, missing_archive_ids_json, files_unreadable
+                   FROM archive_integrity_checks ORDER BY id DESC LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(missing, Some(1));
+        assert_eq!(unreadable, Some(0));
+        let ids: Vec<String> = serde_json::from_str(&ids.unwrap()).unwrap();
+        assert_eq!(ids, vec![r2.archive_id.clone()]);
 
         unlock_for_test(Path::new(&r1.file_path)).unwrap();
     }

@@ -303,6 +303,9 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 //   data.expenses[].{paidDate, expenseNumber, vendor, category, description, amount}
 //   data.disposals[].{disposalDate, assetNumber, label, proceeds, residual, gainLoss}
 //   data.{incomeSum, expenseSum}
+//   data.snapshotMismatch: null | {closedAt, version, fields, rows[].{label, snapshot, live}}
+//     (abgeschlossenes Jahr, dessen heutige Eckwerte vom Festschreibungs-Snapshot
+//     abweichen — Lauf F2c, KB-0031)
 
 #let data = json.decode(sys.inputs.at("data-json"))
 #let muted = luma(120)
@@ -340,6 +343,22 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 
 #v(3mm)
 #line(length: 100%, stroke: 0.5pt + luma(180))
+
+#if data.at("snapshotMismatch", default: none) != none [
+  #let m = data.snapshotMismatch
+  #v(2mm)
+  #block(width: 100%, inset: 8pt, radius: 3pt, stroke: 1pt + rgb("#b91c1c"), fill: rgb("#fef2f2"))[
+    #text(weight: "bold", fill: rgb("#b91c1c"))[Abweichung vom Jahresabschluss] \
+    #text(size: 8.5pt)[Das Geschäftsjahr #str(data.year) wurde am #m.closedAt (Klein.Buch #m.version) abgeschlossen. Die heute aus den Einzelbuchungen gerechneten Eckwerte weichen vom damals festgeschriebenen Stand ab (#m.fields). Maßgeblich für die abgegebene Erklärung ist der festgeschriebene Stand; die Ursache steht im Audit-Protokoll.]
+    #v(1mm)
+    #table(
+      columns: (1fr, auto, auto),
+      align: (left, right, right),
+      [*Eckwert*], [*festgeschrieben*], [*heute*],
+      ..m.rows.map(r => (r.label, r.snapshot, r.live)).flatten()
+    )
+  ]
+]
 
 == 1. Anlage EÜR — Übertrag ins ELSTER-Formular
 #text(size: 8pt, fill: muted)[Positionen mit Zeilennummer in „Mein ELSTER" eintragen; die Summen berechnet ELSTER selbst.]
@@ -521,6 +540,19 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
 }
 #let dash(v) = if v == none [—] else [#v]
 #let yesno(b) = if b [Ja] else [Nein]
+#let invoice_status(s) = (
+  draft: "Entwurf", issued: "ausgestellt", sent: "versandt",
+  partially_paid: "teilweise bezahlt", paid: "bezahlt", canceled: "storniert",
+  voided: "verworfen (nie ausgestellt)",
+).at(s, default: s)
+#let quote_status(s) = (
+  draft: "Entwurf", sent: "versandt", accepted: "angenommen", rejected: "abgelehnt",
+  canceled: "zurückgezogen", converted: "in Rechnung umgewandelt",
+).at(s, default: s)
+#let frequency_label(f) = (
+  monthly: "monatlich", quarterly: "vierteljährlich", semiannually: "halbjährlich",
+  annually: "jährlich",
+).at(f, default: f)
 
 #set page(
   paper: "a4",
@@ -596,11 +628,14 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
     #table(
       columns: (auto, 1fr, auto, 1fr),
       stroke: none, inset: 2.5pt,
-      [*Datum*], [#format_date(inv.invoiceDate)], [*Status*], [#inv.status#if inv.isStorno [ (Storno)]],
+      [*Datum*], [#format_date(inv.invoiceDate)], [*Status*], [#invoice_status(inv.status)#if inv.isStorno [ (Storno)]],
       [*Leistungsdatum*], [#format_date(inv.deliveryDate)], [*Fällig*], [#format_date(inv.dueDate)],
       [*Netto*], [#format_euro(inv.netAmountCents)], [*Brutto*], [#format_euro(inv.grossAmountCents)],
       [*Bezahlt*], [#format_euro(inv.paidAmountCents) (#format_date(inv.paidAt))], [*Versandt*], [#format_date(inv.sentAt)],
     )
+    #if inv.at("voidedAt", default: none) != none [
+      #text(size: 8.5pt, fill: muted)[Verworfen am #format_date(inv.voidedAt), nie ausgestellt. Grund: #dash(inv.voidReason)]
+    ]
     #if inv.at("buyerSnapshot", default: none) != none [
       #text(size: 8.5pt, fill: muted)[Empfänger-Stand zur Rechnungszeit: #dash(inv.buyerSnapshot.name), #dash(inv.buyerSnapshot.street), #dash(inv.buyerSnapshot.postalCode) #dash(inv.buyerSnapshot.city)]
     ]
@@ -630,7 +665,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
     #table(
       columns: (auto, 1fr, auto, 1fr),
       stroke: none, inset: 2.5pt,
-      [*Datum*], [#format_date(q.quoteDate)], [*Status*], [#q.status],
+      [*Datum*], [#format_date(q.quoteDate)], [*Status*], [#quote_status(q.status)],
       [*Gültig bis*], [#format_date(q.validUntil)], [*Brutto*], [#format_euro(q.grossAmountCents)],
     )
     #if q.items.len() > 0 [
@@ -658,6 +693,63 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
     table.header([Beleg-Nr.], [Datum], [Beschreibung], [Status], [Brutto]),
     ..data.expenses.map(e => (
       [#e.expenseNumber], [#format_date(e.expenseDate)], [#e.description], [#e.status], [#format_euro(e.grossAmountCents)],
+    )).flatten()
+  )
+]
+
+= Wiederkehrende Rechnungen (Abo-Vorlagen)
+#if data.at("recurringInvoices", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Abo-Vorlagen gespeichert.]
+] else [
+  #for t in data.recurringInvoices [
+    == #t.label
+    #table(
+      columns: (auto, 1fr, auto, 1fr),
+      stroke: none, inset: 2.5pt,
+      [*Rhythmus*], [#frequency_label(t.frequency)], [*Aktiv*], [#yesno(t.active)],
+      [*Nächster Termin*], [#format_date(t.nextDueDate)], [*Zahlungsziel*], [#t.paymentTermsDays Tage],
+      [*Beginn*], [#format_date(t.startDate)], [*Ende*], [#format_date(t.endDate)],
+    )
+    #if t.items.len() > 0 [
+      #table(
+        columns: (auto, 1fr, auto, auto, auto),
+        align: (right, left, right, right, right),
+        inset: 3pt,
+        table.header([Pos.], [Beschreibung], [Menge], [Einzel], [Netto]),
+        ..t.items.map(it => (
+          [#it.position], [#it.description], [#it.quantity #it.unitCode], [#format_euro(it.unitPriceCents)], [#format_euro(it.netAmountCents)],
+        )).flatten()
+      )
+    ]
+  ]
+]
+
+= Kosten-Abos (Sie als Lieferant)
+#if data.at("subscriptions", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Kosten-Abos gespeichert.]
+] else [
+  #table(
+    columns: (1fr, auto, auto, auto, auto),
+    align: (left, left, left, right, center),
+    inset: 3pt,
+    table.header([Bezeichnung], [Rhythmus], [Nächster Termin], [Betrag], [Aktiv]),
+    ..data.subscriptions.map(s => (
+      [#s.label], [#frequency_label(s.frequency)], [#format_date(s.nextDueDate)], [#format_euro(s.expectedAmountCents)], [#yesno(s.active)],
+    )).flatten()
+  )
+]
+
+= Anlagen (Sie als Lieferant)
+#if data.at("assets", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Anlagen gespeichert.]
+] else [
+  #table(
+    columns: (auto, 1fr, auto, auto, auto),
+    align: (left, left, left, right, left),
+    inset: 3pt,
+    table.header([Nr.], [Bezeichnung], [Anschaffung], [Kosten], [Abgang]),
+    ..data.assets.map(a => (
+      [#a.assetNumber], [#a.label], [#format_date(a.acquisitionDate)], [#format_euro(a.acquisitionCostCents)], [#if a.disposed [#format_date(a.disposalDate)] else [—]],
     )).flatten()
   )
 ]

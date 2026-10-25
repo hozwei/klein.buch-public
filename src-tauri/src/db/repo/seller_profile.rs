@@ -90,11 +90,10 @@ pub async fn upsert(pool: &SqlitePool, input: &SellerProfileInput) -> Result<Sel
                 "seller_profile_waive_paragraph_19",
                 "seller_profile",
                 "1",
-                Some(&format!(
-                    "{{\"since\":\"{}\",\"deadline\":\"{}\"}}",
-                    today,
-                    waiver_deadline(today)
-                )),
+                Some(serde_json::json!({
+                    "since": today.to_string(),
+                    "deadline": waiver_deadline(today).to_string(),
+                })),
             )
             .await?;
             Some(today.to_string())
@@ -118,7 +117,7 @@ pub async fn upsert(pool: &SqlitePool, input: &SellerProfileInput) -> Result<Sel
                 "seller_profile_return_to_paragraph_19",
                 "seller_profile",
                 "1",
-                Some(&format!("{{\"since\":\"{today}\"}}")),
+                Some(serde_json::json!({ "since": today.to_string() })),
             )
             .await?;
             // waived_paragraph_19_since wird auf NULL zurückgesetzt — Bindung ist abgelaufen.

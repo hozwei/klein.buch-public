@@ -173,7 +173,13 @@ angewendet, sondern verweigert den Start; Datenbank und Instanz-Marker passen
 zusammen (ohne beide muss `archive/` leer sein); keine unverschlüsselte
 Datenbank; Selbsttest des Schreibschutzes im Archiv (scheitert als root, mit
 NFSv4-ACLs und auf ungeeigneten Dateisystemen). Beim Entsperren prüft eine
-Stichprobe, ob die Archivpfade der Datenbank unter `/data/archive` liegen.
+Stichprobe, ob die Archivpfade der Datenbank unter `/data/archive` liegen, und
+`PRAGMA foreign_key_check` die Fremdschlüssel der ganzen Datenbank — nach einem
+Update schon vor der Umstellung und vor dem Pflicht-Backup (die Datenbank bleibt
+dann auf dem alten Schema, das vorige Image öffnet sie), danach erneut. Ein
+Treffer (oder eine gescheiterte Vorab-Prüfung einer Migration) lässt die
+Instanz gesperrt (409 `db_integrity_failed`, Einzelheiten im Log, Handbuch
+`fehlersuche-im-container`).
 
 Kapitel: `volumes-und-rechte`.
 

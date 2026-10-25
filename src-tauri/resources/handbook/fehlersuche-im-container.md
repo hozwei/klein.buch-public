@@ -115,6 +115,49 @@ dass die Pfade im Archiv nicht zur Datenbank passen. Klein.Buch prüft beim
 Entsperren einige Archiveinträge; liegen sie nicht unter
 `/data/archive`, gehört der Datenordner nicht zu dieser Datenbank.
 
+"Entsperren abgebrochen: Die Prüfung der Datenbank hat Unstimmigkeiten
+gefunden" bedeutet, dass die Datenbank nicht in sich stimmig ist.
+Klein.Buch hat dann nichts verändert und bleibt gesperrt. Im Log steht
+eine Zeile `ERROR` mit "Datenbank-Prüfung beim Entsperren fehlgeschlagen"
+und dem Grund:
+
+- "verletzte(r) Fremdschlüssel": Ein Eintrag verweist auf einen Datensatz,
+  den es nicht gibt, etwa nach einer Bearbeitung der Datenbank von Hand.
+  Die Zeilen davor nennen Tabelle und Zeilennummer, aber keine Inhalte.
+- "Migration 0032 abgebrochen: Zu mindestens einer Rechnung gibt es mehr
+  als einen festgeschriebenen Storno-Beleg": Das Update hätte eine Regel
+  eingeführt, gegen die Deine Daten schon verstoßen. Festgeschriebene
+  Belege ändert Klein.Buch nie, auch nicht zur Reparatur.
+
+Nach einem Update prüft Klein.Buch beides, bevor es die Datenbank auf das
+neue Format umstellt, und auch vor dem Backup, das jeder Umstellung
+vorausgeht. Steht in der Meldung "Die Datenbank steht unverändert auf
+Schema …", ist also nichts umgestellt. Dann gilt: Setz wieder das Image
+der Version ein, mit der die Datenbank zuletzt lief (Kapitel "Updates
+und Rückfall"). Es öffnet die Datenbank wie vorher. Ohne Update, also
+ohne anstehende Umstellung, gilt dasselbe: Die Daten sind unverändert.
+
+Schlägt die Prüfung erst nach der Umstellung an, sagt die Meldung im
+Browser "Nach der Umstellung der Datenbank hat die Prüfung
+Unstimmigkeiten gefunden", und im Log steht "nach der Umstellung von
+Schema …". Das ist ein Fehler der Umstellung selbst und sollte nicht
+vorkommen. Die Umstellung ist dann schon gespeichert, das vorige Image
+öffnet die Datenbank nicht mehr, und ohne Anmeldung lässt sich in dieser
+Instanz kein Backup einspielen. Der Rückweg führt über eine neue Instanz:
+
+1. Kopiere das Backup, das Klein.Buch unmittelbar vor der Umstellung
+   angelegt hat (die neueste `.kbk`-Datei im Backup-Ordner
+   `/data/backups`), an einen sicheren Ort, ebenso den ganzen Ordner
+   `/data` als Sicherung.
+2. Richte mit dem Image der vorigen Version und einem leeren Ordner für
+   `/data` eine neue Instanz ein und spiel dieses Backup ein (Kapitel
+   "Notfall: Instanz neu aufsetzen und wiederherstellen").
+3. Wende Dich mit den Log-Zeilen an den Support, bevor Du das Update
+   erneut versuchst.
+
+Lässt sich die Ursache in keinem der Fälle klären, wende Dich mit den
+Log-Zeilen an den Support.
+
 Lehnt Klein.Buch einen Upload mit dem Hinweis auf zu wenig Platz ab
 (HTTP-Status 507), liegt der freie Platz in `/data` unter
 `KLEIN_BUCH_MIN_FREE_BYTES` (Standard 2 GiB) plus der Größe der Datei.
@@ -187,4 +230,4 @@ Firewall nicht. Bei iptables gehört sie dann in die Kette `DOCKER-USER`
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

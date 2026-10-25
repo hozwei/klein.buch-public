@@ -67,10 +67,33 @@ Spalten.
 `OLD.locked_at` dabei noch `NULL` ist.
 
 **`trg_invoices_no_delete`:** jedes `DELETE` scheitert, auch bei Entwürfen.
-Ein Entwurf wird über `status = 'canceled'` neutralisiert.
+Ein nicht benötigter Entwurf wird **verworfen** (§5.5, Migration 0032).
+
+**Seit Migration 0032 zusätzlich** (Lauf F, Block F2a):
+
+- `trg_invoices_canceled_final` — ein storniertes Original bleibt storniert:
+  `status`, `canceled_at`, `canceled_by_storno_id` und `cancel_reason` ändern
+  sich nach dem ersten Setzen nicht mehr (R1-S2-MARKCANCELED). Zusammen mit dem
+  Unique-Index `ux_invoices_one_locked_storno` (höchstens ein festgeschriebener
+  Storno je Original, LE-STORNO-UNIQUE) ist das Storno-Paar auch bei einem
+  zweiten Lauf idempotent.
+- `trg_invoices_voided_final`, `trg_invoices_void_draft_only`,
+  `trg_invoices_void_not_on_insert` — Verwerfen nur für offene Entwürfe, nur
+  mit Grund; danach ist der Entwurf unveränderlich und lässt sich nicht
+  festschreiben (§5.5). Einzige Ausnahme (Lauf F2c): Die Anonymisierung des
+  Kontakts darf den Empfänger-Snapshot (`buyer_*` außer Land) und `notes`
+  eines verworfenen Entwurfs auf den Platzhalter bzw. `NULL` setzen — nur in
+  diese Richtung, nur bei anonymisiertem Kontakt, alle übrigen Spalten
+  einzeln als unverändert geprüft (Test
+  `voided_final_trigger_lists_every_invoice_column`).
+- `trg_invoice_items_frozen_insert`/`_update`/`_delete` — Positionen einer
+  festgeschriebenen oder verworfenen Rechnung lassen sich weder ändern noch
+  löschen noch ergänzen (KB-0002); vorher schützten die Kopf-Trigger nur die
+  Summen.
 
 Tests: `tests/migration_0028_test.rs` (je geschütztem Feld bzw. Feldgruppe ein
 Fall, Unlock-Schutz, erlaubte Übergänge, `DELETE` auf Entwurf und Beleg),
+`tests/migration_0032_test.rs` (Positionen, Storno-Paar, Verwerfen),
 `tests/invoice_lock_pipeline_test.rs`
 (`gobd_trigger_blocks_core_field_update_after_lock`).
 
@@ -81,7 +104,17 @@ Beträge, `contact_id`, `fiscal_year`, `is_kleinunternehmer`, `valid_until`,
 `currency_code`, `pdf_template` und die Snapshots. Änderbar bleiben Status und
 Zeitpunkte von Annahme, Ablehnung, Storno und Konvertierung
 (`converted_invoice_id`) sowie `pdf_archive_id` (Re-Render-Pfad von
-`ensure_quote_pdf`). Kein `DELETE`.
+`ensure_quote_pdf`). Kein `DELETE`. Seit Migration 0032: ein zurückgezogenes
+Angebot (`canceled`, auch ein zurückgezogener Entwurf = verworfen) bleibt
+zurückgezogen (`trg_quotes_canceled_final`), und Positionen festgeschriebener
+oder zurückgezogener Angebote sind unveränderlich
+(`trg_quote_items_frozen_*`). Seit Lauf F2c bleibt ein umgewandeltes Angebot
+umgewandelt (`trg_quotes_converted_final`): kein Zurückziehen, kein anderer
+Rechnungsbezug; nur das Verwerfen des daraus entstandenen Entwurfs setzt es in
+derselben Transaktion auf `accepted` zurück (Audit
+`quote.conversion_reverted`). Das Zurückziehen verlangt einen Grund (mindestens
+10 Zeichen) und schreibt Statuswechsel und Audit `quote.cancel` in einer
+Transaktion mit Status-Bedingung im `UPDATE`.
 
 ### 2.3 `trg_expenses_immutable` + `trg_expenses_no_delete`
 
@@ -99,7 +132,15 @@ Vorher sind Anlagen Stammdaten. Geschützt: Nummer, Anschaffungsdatum, -kosten,
 -GJ, AfA-Methode, Nutzungsdauer, betrieblicher Anteil, AfA-Kategorie,
 Verknüpfungen, Bezeichnung. Änderbar bleiben Buchwert-Fortschreibung
 (`book_value_cents`, `last_depreciation_year`) und Veräußerung (`disposal_*`).
-Kein `DELETE`.
+Kein `DELETE`. Die Veräußerung geschieht genau einmal: danach sind `disposed`
+und alle `disposal_*`-Felder unveränderlich (`trg_assets_disposal_final`,
+Migration 0032; `assets::dispose` mit `AND disposed = 0`). Seit Lauf F2c hält
+derselbe Trigger auch Bezeichnung, Anschaffung, AfA-Grundlage und Restbuchwert
+einer veräußerten Anlage fest, `trg_depreciation_entries_no_delete_disposed`
+verbietet das Löschen ihrer AfA-Buchungen (Reset und Bearbeiten lehnt schon
+die App ab), `assets_dispose` holt fehlende Vorjahres-AfA vor der anteiligen
+AfA des Abgangsjahres nach, und der Jahresabschluss schreibt alle bis zum Jahr
+angeschafften Anlagen fest, auch veräußerte (vorher nur `disposed = 0`).
 
 ### 2.5 `trg_depreciation_immutable` + `trg_depreciation_entries_no_delete_locked`
 
@@ -119,7 +160,9 @@ vertippt, bucht eine Gegenbewegung. Kein `DELETE`.
 `package_revisions`; dazu `legal_documents` und `quote_legal_documents`
 (Kernfelder unveränderlich, kein `DELETE`; bei `legal_documents` bleibt das
 Aktivieren/Deaktivieren möglich). Korrigiert wird nur per Insert eines neueren
-Datensatzes (z. B. neue Paket-Revision).
+Datensatzes (z. B. neue Paket-Revision). `archive_entries` ist seit Migration
+0032 ebenfalls ohne `DELETE` (`trg_archive_no_delete`, KB-0004; Hash, Pfad und
+Größe waren schon unveränderlich).
 
 ---
 
@@ -138,12 +181,18 @@ file_name, mime_type, bytes)`:
 3. Sperre je Zielpfad (`locks::ARCHIVE_PATHS`): Prüfen, Schreiben und Insert
    laufen am Stück.
 4. Schreiben (W2): Temp-Datei mit eindeutigem Namen (`.<name>.<uuid>.tmp`,
-   `create_new`), `fsync`, Schreibschutz `0o400` **vor** dem Sichtbarwerden,
-   dann `hard_link` an den Zielnamen. Der Hardlink scheitert, wenn das Ziel
-   schon existiert — überschrieben wird nie (Ausnahme: Dateisysteme ohne
-   Hardlinks, dort `rename` nach vorheriger Prüfung unter der Pfad-Sperre;
-   deshalb gehören DB und Archiv nicht auf NFS/SMB/exFAT). Temp-Name entfernen,
-   Ordner-`fsync`.
+   `create_new`), `fsync`, **Rücklese-Prüfung** (Lauf F, KB-0040: die
+   Temp-Datei wird gelesen und gegen den SHA-256 des Puffers geprüft, bevor sie
+   sichtbar wird), Schreibschutz `0o400` **vor** dem Sichtbarwerden, dann
+   `hard_link` an den Zielnamen. Der Hardlink scheitert, wenn das Ziel schon
+   existiert — überschrieben wird nie. Ohne Hardlinks (Lauf F, W2-S2-4)
+   `renameat2` mit `RENAME_NOREPLACE` (ebenfalls atomar ohne Überschreiben);
+   kennt das Dateisystem das Flag nicht, wird das Ziel unmittelbar vorher
+   geprüft und unter der Pfad-Sperre umbenannt — deshalb gehören DB und Archiv
+   nicht auf NFS/SMB/exFAT. Temp-Name entfernen, Ordner-`fsync`. Restrisiko: die
+   Rücklese-Prüfung liest in der Regel aus dem Seiten-Cache, nicht vom Medium;
+   Fehler des Mediums erkennen Re-Hash beim Lesen und der monatliche
+   Integritätslauf (§3.2, §3.3).
 5. `archive_entries`-Insert `(id UUIDv7, file_path UNIQUE, file_name,
    file_hash_sha256, file_size_bytes, mime_type, source)` + Audit
    `archive.store`.
@@ -241,11 +290,31 @@ Mutationen schreiben einen Eintrag (Auswahl, Namen wie im Code):
 - Anmeldung: `auth.setup.ok`, `auth.login.ok`, `auth.reauth.ok`,
   `auth.totp.setup`, `auth.totp.renewed`, `auth.recovery.renewed`.
   **Fehlversuche stehen nicht im Audit-Log**, nur im Server-Log (ADR 0039 E5).
-- DSGVO und Exporte: `dsgvo.export`, `contact.anonymize`, `migration.export`,
-  `euer.stb_export`.
+- DSGVO und Exporte: `dsgvo.export`, `contact.anonymize`, `migration.export`
+  und **jeder** EÜR-Export (Lauf F, R2-016 / ASVS 8.3.5): `euer.pdf_export`,
+  `euer.datev_export`, `euer.elster_export`, `euer.detail_export`,
+  `euer.stb_export` — mit Geschäftsjahr, Dateiname, Zählwerten und
+  Snapshot-Status (`open`/`match`/`mismatch`), ohne Inhalte; bei einer
+  Abweichung vom Festschreibungs-Snapshot zusätzlich `euer.snapshot_mismatch`
+  (§6.1).
 - Mailkonten: `mail_account.create`, `mail_account.update`,
   `mail_account.delete`, `mail_account.test_send`; jeder Versand zusätzlich im
   append-only `email_log`.
+
+**Details als JSON (Lauf F, W14-010).** `audit_log::append` nimmt die Details
+nur als `serde_json::Value` entgegen und serialisiert sie selbst — handgebautes
+JSON per `format!` ist damit ausgeschlossen. Anführungs- und Steuerzeichen in
+Namen, Gründen oder Pfaden ergeben immer gültiges JSON; über `details_json`
+lässt sich nichts in Auswertungen einschleusen (Tests
+`db::repo::audit_log::tests::details_are_serialized_as_valid_json`,
+`tests/audit_export_test.rs`).
+
+**Akteur (Lauf F, R1-S3-ACTOR).** `actor` ist `owner` für alles, was über die
+Sitzung des Inhabers läuft (Commands, Jobs, erfolgreiche Schritte der
+Anmeldung), `scheduler` für die Abläufe des Schedulers (Abo-Läufe, Auto-AfA,
+Tages-Backup, Integritätslauf) und `system` für den Rest (Start, Migrationen,
+Nacharbeit nach einem Restore). Klein.Buch hat genau einen Benutzer (E1); der
+Akteur unterscheidet daher Handlung und Automatik, keine Personen.
 
 **Hardline.** Trigger blocken UPDATE und DELETE; `audit_log` wächst monoton.
 Bei Performance-Bedenken: 10 Jahre × erwartetes Volumen einer §19-Praxis
@@ -280,12 +349,15 @@ die dabei verwendet wurden*.
 - `invoice_number = ST-{YYYY}-{NNNN}` (eigener Nummernkreis).
 - `is_storno_for = original.id`.
 - Alle Positionen mit **negierten Mengen** (also negativem `quantity_thousandths`).
-- Selber Buyer-Snapshot, selbe Klausel-Lage, selbes `delivery_date`,
-  selbes `fiscal_year` wie das Original (auch bei einem Storno im Folgejahr;
-  fachliche Prüfung offen, ADR 0039 Nr. 18).
+- Selber Buyer-Snapshot und selbe Klausel-Lage wie das Original;
+  Geschäftsjahr und Nummernkreis folgen dem **Storno-Datum** (ADR 0039
+  Nr. 122, löst Nr. 18 ab).
 - Beim Festschreiben werden Storno-Lock und `canceled` am Original in **einer**
-  Transaktion gesetzt (`tests/migration_0028_test.rs`,
-  `lock_with_pair_cancel_*`).
+  Transaktion gesetzt (`lock_with_pair_cancel`; `tests/migration_0028_test.rs`,
+  `tests/migration_0032_test.rs` `storno_pair_is_final_and_idempotent`).
+  Höchstens ein festgeschriebener Storno je Original
+  (`ux_invoices_one_locked_storno`), und das storniert markierte Original ist
+  endgültig (`trg_invoices_canceled_final`), beides seit Migration 0032.
 
 Der Storno-Beleg durchläuft die **gleiche Lock-Pipeline** wie das Original
 (Domain-Validate → CII-XML → KoSIT → Klausel-Check → PDF/A-3 → Mustang →
@@ -300,10 +372,54 @@ neutralisiert.
 - **Keine Korrektur.** Wer den Storno auch noch falsch macht, schreibt
   einen *zweiten* Storno auf den Storno (Anti-Storno) und danach die
   korrekte neue Rechnung. Selten, aber möglich.
-- **Nicht nötig bei Entwürfen.** Eine Rechnung im Status `draft` lässt sich
-  ändern (`locked_at IS NULL`, kein Beleg draußen) und über `status =
-  'canceled'` verwerfen. Löschen geht auch hier nicht: `trg_invoices_no_delete`
+- **Nicht nötig bei Entwürfen.** Eine Rechnung im Status `draft` ist noch kein
+  Beleg (`locked_at IS NULL`, nichts draußen). Ein nicht benötigter Entwurf wird
+  verworfen (§5.5). Löschen geht auch hier nicht: `trg_invoices_no_delete`
   blockt jedes `DELETE` (Migration 0028, R1-001).
+
+### 5.5 Entwurf verwerfen (Lauf F, W14-032)
+
+Ein Rechnungs- oder Storno-Entwurf trägt seine Nummer ab dem Anlegen (der
+Entwurf teilt den Nummernkreis mit den festgeschriebenen Belegen). Bisher gab es
+keinen Weg, einen nicht benötigten Entwurf loszuwerden — er blockierte auf
+Dauer die DSGVO-Anonymisierung seines Kontakts.
+
+- **`invoices_void_draft`** (Re-Auth, Begründung mindestens 10 Zeichen) setzt
+  `voided_at` (UTC) und `void_reason` und schreibt in derselben Transaktion das
+  Audit `invoice.draft_voided` (Nummer, Geschäftsjahr, Betrag, Bezug bei
+  Stornos, Grund). **Kein `DELETE`:** Die Nummer bleibt verbraucht und ist über
+  den verworfenen Entwurf und das Audit nachvollziehbar — eine Lücke im
+  Nummernkreis ist zulässig, wenn sie dokumentiert ist; eine erneute Vergabe
+  wäre es nicht (§14 Abs. 4 Nr. 4 UStG, GoBD Rz. 58 ff. Vollständigkeit,
+  Rz. 103 ff. Nachvollziehbarkeit).
+- **Endgültig.** Ein verworfener Entwurf ändert sich nicht mehr, lässt sich
+  nicht festschreiben und wird beim nächsten Stornieren nicht wiederverwendet
+  (DB-Trigger, §2.1) und blockiert die Anonymisierung des Kontakts nicht
+  mehr. Die Anonymisierung entfernt seinen Empfänger-Snapshot (Lauf F2c, ADR
+  0039 Nr. 124 (3)): Ein nie ausgestellter Entwurf ist weder Buchungsbeleg noch
+  Handelsbrief (§147 Abs. 1 AO, §14b UStG), Art. 17 Abs. 3 lit. b DSGVO trägt
+  seine Aufbewahrung nicht; für den Nachweis der Nummer genügen Nummer, Datum,
+  Betrag, Positionen, Zeitpunkt und Grund. Dasselbe gilt für zurückgezogene, nie
+  festgeschriebene Angebote.
+- **Nur Entwürfe.** Festgeschriebene Rechnungen korrigiert weiterhin nur ein
+  Storno (§5.1).
+- **Nebenwirkungen in derselben Transaktion:** ein Fortsetzungs-Marker eines
+  Abo-Laufs, der auf den Entwurf zeigt, und eine Restore-Vormerkung (§5.4)
+  werden entfernt.
+- **Angebote:** Ein Angebots-Entwurf wird über das bestehende „Zurückziehen“
+  verworfen (`status = 'canceled'`, Zeitpunkt und Grund, Audit
+  `quote.cancel`); ein Angebot ist kein Buchungsbeleg, Re-Auth ist dafür nicht
+  nötig.
+- **Aus einem Angebot entstanden:** Das Verwerfen nimmt die Umwandlung zurück
+  (Angebot wieder `accepted`, ohne Rechnungsbezug, Audit
+  `quote.conversion_reverted`), sonst bliebe das angenommene Angebot auf einen
+  verworfenen Beleg zeigend blockiert (Lauf F2c).
+- **Steuerberater-Übergabe:** Das Paket listet in
+  `nicht-festgeschriebene-nummern.csv` jede Rechnungs- und Storno-Nummer des
+  Jahres ohne festgeschriebenen Beleg (verworfen mit Zeitpunkt und Grund, oder
+  offen), die `LIESMICH.txt` nennt die Anzahl (Lauf F2c).
+- Auch in einem bereits abgeschlossenen Geschäftsjahr erlaubt: Ein Entwurf ist
+  nicht Teil der EÜR, das Verwerfen ändert den Abschluss-Snapshot nicht.
 
 ---
 
@@ -356,8 +472,8 @@ beigetragen hat). Klein.Buch hat:
 
 - **Kein** UI-Button, um eine Rechnung, Kosten-Buchung, AfA-Zeile oder
   Privatbewegung zu **löschen**; die DB verbietet `DELETE` auf diesen Tabellen
-  (ungelockte AfA-Buchungen ausgenommen, Reset-Pfad). Entwürfe werden storniert
-  bzw. verworfen, nicht gelöscht.
+  (ungelockte AfA-Buchungen ausgenommen, Reset-Pfad). Entwürfe werden verworfen
+  (§5.5), nicht gelöscht.
 - **Kein** UI-Button für „Datenbank leeren" oder „nur dieses Jahr löschen",
   und im Server keinen Factory Reset (E7).
 - **Kein** Auto-Pruning von Belegen. Auch 12 Jahre alte Belege werden nicht
@@ -366,6 +482,71 @@ beigetragen hat). Klein.Buch hat:
 
 Die Aufbewahrung über 10 Jahre stützt sich zusätzlich auf Off-Site-Backups und
 die Sicherungen des Betreibers (`../operations-guide.md` §7).
+
+**Keine automatische Löschung nach Fristablauf (Lauf F, ASVS 8.3.8,
+entschieden).** Die Aufbewahrungsfrist beginnt mit dem Schluss des
+Kalenderjahres der letzten Eintragung (§147 Abs. 4 AO) und verlängert sich,
+solange die Unterlagen für noch nicht festsetzungsverjährte Steuern von
+Bedeutung sind (§147 Abs. 3 Satz 5 AO, z. B. laufende Außenprüfung oder
+Einspruch). Das kann die App nicht beurteilen; eine Automatik, die nach zehn
+Jahren löscht, könnte gerade benötigte Unterlagen vernichten. Klein.Buch löscht
+deshalb nie selbst. Nach Fristablauf entscheidet der Inhaber — mit klarer
+Grenze (Korrektur Lauf F2c): Die Anonymisierung eines Kontakts entfernt nur
+seine Stammdaten, den Empfänger-Snapshot verworfener Entwürfe und nie
+ausgestellter, zurückgezogener Angebote sowie Bezeichnung und Notiz seiner
+Abo-Vorlagen. Der Empfänger-Snapshot festgeschriebener Rechnungen, Stornos und
+Angebote, deren PDF- und XML-Dateien im write-once-Archiv, `email_log.to_email`
+und Audit-Details (etwa die Empfängeradresse bei `invoice.sent`) bleiben —
+durch Trigger und `0o400` unveränderlich — bis zur Stilllegung der Instanz
+(Volume und Backups beim Betreiber). Eine Beleg-Pseudonymisierung nach
+Fristablauf ist eine Post-v1.0-Aufgabe (ADR 0039 Nr. 126 (9)). Das Handbuch
+sagt das in „Aufbewahrung 10 Jahre“ und „DSGVO-Auskunft und Anonymisierung“.
+
+### 6.1 Abgeschlossene Jahre und Festschreibungs-Snapshot (Lauf F, KB-0031)
+
+Der Abschluss hält die EÜR-Eckwerte im unveränderlichen
+`fiscal_year_locks` fest (Einnahmen, Ausgaben, AfA, Überschuss). Auswertungen
+und Exporte eines abgeschlossenen Jahres rechnen weiter aus den Einzelbuchungen
+— nur daraus entstehen Einzelaufstellung, DATEV-Stapel und Belege — und
+gleichen die Eckwerte mit dem Snapshot ab (`fiscal_year::snapshot`). Eine
+Abweichung bedeutet: Der Bestand eines festgeschriebenen Jahres hat sich
+verändert (Eingriff von außen, Fehler) oder die Rechenregel einer neueren
+Version rechnet anders. Beides muss sichtbar sein (GoBD Rz. 107 ff.
+Unveränderbarkeit, Rz. 145 ff. Nachvollziehbarkeit); blockiert wird nichts,
+denn gerade dann braucht der Steuerberater die Unterlagen.
+
+- EÜR-Paket (`snapshotCheck`) und Geschäftsjahres-Übersicht
+  (`snapshotMatches`) zeigen den Abgleich; die Anzeige schreibt nichts.
+- Jeder Export trägt den Status ins Audit; bei einer Abweichung zusätzlich
+  `euer.snapshot_mismatch` (Eckwerte beider Seiten, abweichende Felder, Version
+  des Abschlusses) und ein dringender Hinweis, einmal je Jahr
+  (`euer_snapshot_mismatch:<Jahr>`).
+- Das Steuerberater-Paket stellt den LIESMICH einen Block voran: beide
+  Eckwerte nebeneinander, maßgeblich für die abgegebene Erklärung ist der
+  festgeschriebene Stand.
+
+Aus dem Snapshot gerechnet wird bewusst nicht: er enthält nur Summen, und eine
+EÜR, deren Summen nicht zu ihren Einzelposten passen, wäre selbst nicht
+nachvollziehbar.
+
+### 6.2 Abschluss gegen parallele Buchungen (Lauf F, R2-S2-GJLOCK, W14-034)
+
+Zwischen der Prüfung „Jahr offen“ und dem Schreiben einer Buchung darf kein
+Abschluss liegen, sonst stünde eine Buchung im geschlossenen Jahr, die im
+Snapshot fehlt. `fiscal_year::guard::ensure_year_open` liefert deshalb eine
+Buchungserlaubnis, die jede buchende Stelle bis nach dem Schreiben hält
+(Rechnung anlegen und festschreiben — auch im Abo-Lauf —, Zahlung, Storno,
+Kosten, Kosten-Abo, Anlage, Abgang, Privatbewegung, Angebot festschreiben,
+Vertrag zum Angebot, AfA buchen und zurücksetzen). Der Abschluss nimmt die
+exklusive Gegenseite: er beginnt erst, wenn keine Buchung mehr läuft, und
+solange er läuft, wartet jede neue Buchung und prüft danach erneut (ADR 0040
+Nr. 48). AfA-Buchungen prüfen das Jahr zusätzlich in ihrer Schreib-Transaktion.
+Festschreiben der AfA und Anlagen, Snapshot, Protokoll und Audit laufen in
+**einer** Transaktion; ein Abbruch hinterlässt keine festgeschriebene AfA ohne
+Abschluss. Offene Entwürfe des Jahres blockieren den Abschluss nicht (sie sind
+nicht Teil der EÜR und lassen sich danach verwerfen, §5.5); die Übersicht
+meldet sie vorab, Antwort und Audit `fiscal_year.close` nennen sie zusammen mit
+den Belegzahlen (Rechnungen, Stornos, Kosten, Privatbewegungen).
 
 ---
 
@@ -405,8 +586,12 @@ SQLCipher-CLI und der Passphrase (die er kennt) und versucht einen Beleg zu
 - **Audit-Append-only.** Eine direkte Manipulation der Audit-Tabelle scheitert
   am `trg_audit_no_update`/`_no_delete`. Wer die Trigger löscht, hinterlässt eine
   Abweichung vom Schema der Migrationen; Klein.Buch prüft beim Entsperren die
-  Schema-Version und die Prüfsummen der angewendeten Migrationen, nicht aber
-  den Bestand der Trigger.
+  Schema-Version, die Prüfsummen der angewendeten Migrationen und die
+  Fremdschlüssel der ganzen DB (`PRAGMA foreign_key_check`, R1-012 — ein
+  verwaister Verweis blockiert das Entsperren mit 409 `db_integrity_failed`;
+  stehen Migrationen an, schon **vor** der Umstellung und vor dem
+  Pflicht-Backup, damit die DB auf dem alten Schema bleibt und das vorige Image
+  sie öffnet, Lauf F2c), nicht aber den Bestand der Trigger.
 - **Passphrase = DB-Schlüssel.** Ohne Passphrase kein Pool-Open. Die DB ist per
   SQLCipher verschlüsselt; Offline-Zugriff ohne Passphrase ergibt keine
   lesbaren Daten.
@@ -429,7 +614,15 @@ Unit-Tests in den Modulen):
 - **Lock- und No-Delete-Trigger:** `tests/migration_0028_test.rs` (Rechnung:
   geschützte Felder einzeln, Unlock-Schutz, erlaubte Übergänge, `DELETE` auf
   Entwurf und Beleg; Angebot, Kosten, Privatbewegung, Anlage, AfA-Buchung;
-  Storno-Paar atomar), `tests/invoice_lock_pipeline_test.rs`
+  Storno-Paar atomar), `tests/migration_0032_test.rs` (Positionen
+  festgeschriebener/verworfener Belege, Archiv ohne `DELETE`, höchstens ein
+  festgeschriebener Storno je Original samt Abbruch der Migration bei
+  Bestandsduplikaten, Storno-Paar endgültig und idempotent, ein
+  Standard-Zahlungskonto, Anlagen-Abgang endgültig, Verwerfen von Entwürfen,
+  Integritäts-Historie, Fremdschlüssel-Prüfung vor und nach der Umstellung;
+  F2c: Anonymisierung verworfener Entwürfe, Spaltenliste des Triggers,
+  Umwandlung zurücknehmen, Angebot zurückziehen, halbes Storno-Paar,
+  veräußerte Anlage, AfA-Nachholen beim Abgang), `tests/invoice_lock_pipeline_test.rs`
   (`gobd_trigger_blocks_core_field_update_after_lock`),
   `tests/quotes_repo_test.rs` (`locked_quote_core_fields_are_immutable`),
   `tests/expenses_repo_test.rs` (`locked_expense_core_fields_are_immutable`),
@@ -441,8 +634,8 @@ Unit-Tests in den Modulen):
   `tests/email_log_test.rs` (`append_only_rejects_update_and_delete`),
   `tests/fiscal_year_lock_test.rs` (`protocol_is_immutable_and_lock_for_year_idempotent`),
   `tests/legal_documents_repo_test.rs` (`core_fields_immutable_and_no_delete`).
-  Für `audit_log` und `package_revisions` gibt es keinen eigenen Trigger-Test;
-  die Trigger stehen in `0001_init.sql` bzw. `0019_packages.sql`.
+  `tests/migration_0032_test.rs` (`audit_log_is_append_only`,
+  `package_revisions_are_immutable_and_append_only` — W13-TRIGGER-TESTS).
 - **Archiv:** Unit-Tests in `src/archive/store.rs` (Schreiben mit `0o400`,
   idempotent, Waise beiseitelegen, neue Dateiversion, anderer Inhalt abgelehnt,
   Tamper beim Lesen, Pfadtrenner im Namen) und `src/archive/integrity_check.rs`
@@ -462,7 +655,12 @@ Unit-Tests in den Modulen):
 - **Geschäftsjahr:** `tests/fiscal_year_lock_test.rs`
   (`close_year_books_locks_and_blocks_reposting`,
   `close_year_requires_unlocked_session`), `tests/fiscal_year_from_date_test.rs`
-  (GJ aus dem Belegdatum in Europe/Berlin, Client-GJ ignoriert).
+  (GJ aus dem Belegdatum in Europe/Berlin, Client-GJ ignoriert),
+  `tests/fiscal_year_guard_test.rs` (Lauf F: alle buchenden Commands nach dem
+  Abschluss — KB-0032 —, Abschluss wartet auf Buchungen, Buchung wartet auf den
+  Abschluss und prüft erneut, Audit mit Belegzahlen und offenen Entwürfen),
+  `tests/audit_export_test.rs` (Audit jedes Exports, Snapshot-Abweichung),
+  Unit-Tests in `src/fiscal_year/guard.rs` und `src/fiscal_year/snapshot.rs`.
 - **Kein Factory Reset im Server:** `tests/server_startup_test.rs`
   (`factory_reset_marker_is_refused_not_applied`).
 
@@ -470,10 +668,12 @@ Unit-Tests in den Modulen):
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13; Schema v31). Quellen:
+Stand: 2026-10-25 (Lauf F, Blöcke F2a/F2b/F2c; Schema v32). Quellen:
 `src-tauri/migrations/0001_init.sql`, `0006_legal_documents.sql`,
 `0011_depreciation.sql`, `0013_fiscal_year_locks.sql`, `0015_email_log.sql`,
-`0019_packages.sql`, `0026_backup_log.sql`, `0028_append_only_hardening.sql`;
+`0019_packages.sql`, `0026_backup_log.sql`, `0028_append_only_hardening.sql`,
+`0032_gobd_hardening.sql`; `src/commands/invoices.rs` (`void_draft_core`);
 `src/archive/store.rs`, `src/archive/integrity_check.rs`, `src/db/mod.rs`
-(`prepare_filesystem`), `src/locks.rs`; Testliste per Verzeichnis-Listing von
+(`prepare_filesystem`), `src/locks.rs`, `src/db/repo/audit_log.rs`,
+`src/fiscal_year/{guard,lock,snapshot}.rs`, `src/commands/euer.rs`; Testliste per Verzeichnis-Listing von
 `src-tauri/tests/` und den Test-Namen geprüft.

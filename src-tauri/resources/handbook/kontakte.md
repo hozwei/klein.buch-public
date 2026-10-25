@@ -85,8 +85,10 @@ laut GoBD und nicht abschaltbar. Eine Funktion, die alle Daten auf
 einmal löscht, gibt es in Klein.Buch nicht.
 
 Klein.Buch lässt eine Anonymisierung nur zu, wenn keine offenen
-Entwurfs-Belege zu dem Kontakt existieren. Schließe oder lösche
-diese Entwürfe vorher.
+Entwurfs-Belege zu dem Kontakt existieren. Schreibe diese Entwürfe
+vorher fest oder verwirf sie (Rechnungs-Entwurf "Verwerfen",
+Angebots-Entwurf "Zurückziehen"). Verworfene Entwürfe bleiben mit ihrer
+Nummer erhalten und stehen der Anonymisierung nicht im Weg.
 
 ---
 

@@ -84,17 +84,6 @@ pub async fn get_enabled_by_type(
     Ok(row)
 }
 
-/// Holt die (erste) Regel eines Typs, egal ob aktiv. `None`, wenn keine existiert.
-pub async fn get_by_type(pool: &SqlitePool, rule_type: &str) -> Result<Option<NotificationRule>> {
-    let row = sqlx::query_as::<_, NotificationRule>(
-        "SELECT * FROM notification_rules WHERE rule_type = ? ORDER BY id ASC LIMIT 1",
-    )
-    .bind(rule_type)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row)
-}
-
 pub async fn set_enabled(pool: &SqlitePool, id: &str, enabled: bool) -> Result<()> {
     sqlx::query("UPDATE notification_rules SET enabled = ? WHERE id = ?")
         .bind(i64::from(enabled))

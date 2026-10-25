@@ -51,8 +51,9 @@ pub fn anonymization_blocker(open_invoice_drafts: i64, open_quote_drafts: i64) -
     }
     Some(format!(
         "Anonymisierung nicht möglich: {}. Bitte diese Belege zuerst festschreiben \
-         (ausstellen/versenden) oder löschen. Festgeschriebene Belege bleiben über ihren \
-         Empfänger-Snapshot erhalten.",
+         (ausstellen/versenden) oder verwerfen (Rechnungs-Entwurf) bzw. zurückziehen \
+         (Angebot). Festgeschriebene Belege bleiben mit ihrem Empfänger-Snapshot \
+         erhalten; verworfene Entwürfe verlieren ihn bei der Anonymisierung.",
         parts.join(" und ")
     ))
 }

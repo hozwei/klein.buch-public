@@ -57,10 +57,11 @@ fn registry_matches_frontend_api() {
     let mut api = api_ts_commands();
     assert_eq!(
         api.len(),
-        176,
-        "api.ts ruft 176 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
+        177,
+        "api.ts ruft 177 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
          +Pause ×2, −payment_accounts_ensure_defaults, +Tages-Backup-Uhrzeit, \
-         +Nummernkreise ×2, F1d: +vorgemerkte Entwürfe ×2, +Restore-Prüfung der Abos)"
+         +Nummernkreise ×2, F1d: +vorgemerkte Entwürfe ×2, +Restore-Prüfung der Abos, \
+         F2a: +Entwurf verwerfen)"
     );
     // seit W7 über GET /files/archive/{id} bzw. entfallen (Explorer)
     for name in [

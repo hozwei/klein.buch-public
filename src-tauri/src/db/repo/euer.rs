@@ -29,6 +29,7 @@ use crate::euer::aggregate::{
 };
 use crate::euer::detail::{
     AveeurItem, DisposalItem, ExpenseItem, IncomeItem, PrivateMovementItem, StornoItem,
+    UnissuedNumberItem,
 };
 use crate::euer::elster_csv::AfaSplit;
 
@@ -45,7 +46,7 @@ fn parse_date(s: &str) -> Result<NaiveDate> {
 /// Teilzahlungen aus `payment_history_json` werden je Zahlung als eigener
 /// [`PaymentView`] geliefert. Fehlt die Historie (ältere Daten), greift der
 /// Fallback `paid_amount_cents` @ `paid_at`.
-pub async fn income_payments(pool: &SqlitePool) -> Result<Vec<PaymentView>> {
+pub async fn income_payments<'e, E: sqlx::SqliteExecutor<'e>>(pool: E) -> Result<Vec<PaymentView>> {
     // R2-008: defensiver Lock-Guard. Drafts dürfen niemals als Einnahme
     // gezählt werden. **NICHT** zusätzlich `status != 'canceled'` filtern —
     // eine später stornierte Rechnung war zum Zahlungs-Datum eingenommen
@@ -94,7 +95,9 @@ pub async fn income_payments(pool: &SqlitePool) -> Result<Vec<PaymentView>> {
 
 /// Storno-Erstattungen: der auf dem Original tatsächlich gezahlte Betrag,
 /// erfasst zum Datum des Storno-Belegs.
-pub async fn storno_reversals(pool: &SqlitePool) -> Result<Vec<StornoReversalView>> {
+pub async fn storno_reversals<'e, E: sqlx::SqliteExecutor<'e>>(
+    pool: E,
+) -> Result<Vec<StornoReversalView>> {
     // R2-007: Storno-Beleg nur einrechnen, wenn er **gelockt** ist. Im
     // Crash-Window zwischen `create_draft(storno)` und dem atomaren
     // `lock_with_pair_cancel` (R1-003) kann sonst ein Draft-Storno hängen
@@ -123,7 +126,9 @@ pub async fn storno_reversals(pool: &SqlitePool) -> Result<Vec<StornoReversalVie
 }
 
 /// Bezahlte, nicht stornierte Kosten (brutto) — am Zahlungsausgang.
-pub async fn expense_payments(pool: &SqlitePool) -> Result<Vec<ExpenseView>> {
+pub async fn expense_payments<'e, E: sqlx::SqliteExecutor<'e>>(
+    pool: E,
+) -> Result<Vec<ExpenseView>> {
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT paid_date, category, gross_amount_cents
            FROM expenses
@@ -145,7 +150,9 @@ pub async fn expense_payments(pool: &SqlitePool) -> Result<Vec<ExpenseView>> {
 }
 
 /// Alle AfA-Buchungen (Periodenzuordnung über `fiscal_year` im Core).
-pub async fn depreciation_views(pool: &SqlitePool) -> Result<Vec<DepreciationView>> {
+pub async fn depreciation_views<'e, E: sqlx::SqliteExecutor<'e>>(
+    pool: E,
+) -> Result<Vec<DepreciationView>> {
     let rows: Vec<(i64, i64)> =
         sqlx::query_as("SELECT fiscal_year, depreciation_amount_cents FROM depreciation_entries")
             .fetch_all(pool)
@@ -493,6 +500,48 @@ pub async fn invoice_archives_for_year(
     Ok(rows)
 }
 
+/// Rechnungs- und Storno-Nummern eines GJ, die nie festgeschrieben wurden
+/// (Lauf F2c): verworfene Entwürfe mit Zeitpunkt (Europe/Berlin) und Grund und
+/// noch offene Entwürfe — für die Steuerberater-Übergabe, die sonst nur die
+/// festgeschriebenen Belege enthält und Lücken nicht erklärt.
+pub async fn unissued_numbers_for_year(
+    pool: &SqlitePool,
+    year: i32,
+) -> Result<Vec<UnissuedNumberItem>> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, bool, String, Option<String>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT invoice_number, is_storno_for IS NOT NULL, invoice_date, voided_at,
+                void_reason, gross_amount_cents
+           FROM invoices
+          WHERE direction = 'issued'
+            AND fiscal_year = ?
+            AND locked_at IS NULL
+          ORDER BY invoice_number",
+    )
+    .bind(year as i64)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(number, is_storno, invoice_date, voided_at, void_reason, gross_cents)| {
+                UnissuedNumberItem {
+                    number,
+                    is_storno,
+                    invoice_date,
+                    voided_at: voided_at.map(|ts| {
+                        crate::clock::db_utc_to_berlin(&ts)
+                            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or(ts)
+                    }),
+                    void_reason,
+                    gross_cents,
+                }
+            },
+        )
+        .collect())
+}
+
 /// Original-Beleg-Archive für alle festgeschriebenen Kostenbelege eines GJ
 /// (R2-014). Tuple = (`expense_number`, `receipt_archive_id`). Stornierte
 /// Belege bleiben drin — der Steuerberater muss den Vorgang prüfen können.
@@ -535,7 +584,7 @@ pub async fn afa_pending_count(pool: &SqlitePool, year: i32) -> Result<i64> {
 }
 
 /// Veräußerte Anlagen mit Erlös + Restbuchwert-Abgang.
-pub async fn disposals(pool: &SqlitePool) -> Result<Vec<DisposalView>> {
+pub async fn disposals<'e, E: sqlx::SqliteExecutor<'e>>(pool: E) -> Result<Vec<DisposalView>> {
     let rows: Vec<(String, Option<i64>, Option<i64>)> = sqlx::query_as(
         "SELECT disposal_date, disposal_proceeds_cents, disposal_residual_book_value_cents
            FROM assets
@@ -592,12 +641,20 @@ pub async fn available_years(pool: &SqlitePool) -> Result<Vec<i32>> {
 
 /// Lädt alle Eingaben für die EÜR-Aggregation in einem Rutsch.
 pub async fn load_inputs(pool: &SqlitePool) -> Result<EuerInputs> {
+    let mut conn = pool.acquire().await?;
+    load_inputs_in(&mut conn).await
+}
+
+/// Wie [`load_inputs`], auf einer Verbindung bzw. in einer laufenden
+/// Transaktion (Jahresabschluss: Snapshot und Protokoll in derselben
+/// Transaktion, Lauf F).
+pub async fn load_inputs_in(conn: &mut sqlx::SqliteConnection) -> Result<EuerInputs> {
     Ok(EuerInputs {
-        payments: income_payments(pool).await?,
-        storno_reversals: storno_reversals(pool).await?,
-        expenses: expense_payments(pool).await?,
-        depreciation: depreciation_views(pool).await?,
-        disposals: disposals(pool).await?,
+        payments: income_payments(&mut *conn).await?,
+        storno_reversals: storno_reversals(&mut *conn).await?,
+        expenses: expense_payments(&mut *conn).await?,
+        depreciation: depreciation_views(&mut *conn).await?,
+        disposals: disposals(&mut *conn).await?,
     })
 }
 

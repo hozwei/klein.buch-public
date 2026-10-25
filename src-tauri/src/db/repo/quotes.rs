@@ -356,15 +356,41 @@ pub async fn reject(pool: &SqlitePool, id: &str) -> Result<()> {
 
 /// Zurückziehen (GoBD-konform, kein Löschen): `status → 'canceled'`,
 /// `canceled_at`, `canceled_reason`. Nicht für bereits konvertierte Angebote.
+/// Eigene Transaktion; der Command [`crate::commands::quotes::quotes_cancel`]
+/// nutzt [`cancel_in`] mit dem Audit in derselben Transaktion.
 pub async fn cancel(pool: &SqlitePool, id: &str, reason: &str) -> Result<()> {
-    let status = current_status(pool, id).await?;
-    if status == "canceled" {
-        return Err(Error::Domain(format!("Angebot {id} ist bereits storniert")));
-    }
-    if status == "converted" {
-        return Err(Error::Domain(format!(
-            "Angebot {id} wurde bereits in eine Rechnung konvertiert — Storno der Rechnung erfolgt über den Rechnungs-Storno"
-        )));
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    cancel_in(&mut tx, id, reason).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Kern von [`cancel`] auf einer Verbindung in einer Schreib-Transaktion
+/// (Lauf F2c): Status geprüft und im UPDATE erneut bedingt
+/// (`status NOT IN ('canceled','converted')`), sodass eine parallele Umwandlung
+/// oder ein zweites Zurückziehen nicht durchgreift. Liefert die Angebotsnummer.
+pub async fn cancel_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    reason: &str,
+) -> Result<String> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT quote_number, status FROM quotes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let (number, status) =
+        row.ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
+    let already = |status: &str| match status {
+        "canceled" => Some(format!("Angebot {number} ist bereits zurückgezogen.")),
+        "converted" => Some(format!(
+            "Angebot {number} wurde bereits in eine Rechnung umgewandelt — die Rechnung \
+             korrigiert ein Storno bzw. das Verwerfen ihres Entwurfs."
+        )),
+        _ => None,
+    };
+    if let Some(msg) = already(&status) {
+        return Err(Error::Domain(msg));
     }
     let res = sqlx::query(
         "UPDATE quotes SET
@@ -372,18 +398,22 @@ pub async fn cancel(pool: &SqlitePool, id: &str, reason: &str) -> Result<()> {
             canceled_at = datetime('now','utc'),
             canceled_reason = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ?",
+         WHERE id = ? AND status NOT IN ('canceled', 'converted')",
     )
     .bind(reason)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!(
-            "cancel: Angebot {id} nicht gefunden"
-        )));
+        let now: String = sqlx::query_scalar("SELECT status FROM quotes WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+        return Err(Error::Domain(already(&now).unwrap_or_else(|| {
+            format!("Angebot {number} wurde nicht zurückgezogen (Status {now}).")
+        })));
     }
-    Ok(())
+    Ok(number)
 }
 
 /// Konvertierung in eine Rechnung abschließen (Block 7): `status='accepted'

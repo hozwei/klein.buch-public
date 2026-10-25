@@ -67,27 +67,30 @@ pub async fn run(job: &JobCtx<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let report =
-        match accrue_yearly::accrue_for_year(pool, paths, session, target_year, today).await {
-            Ok(r) => r,
-            Err(e) => {
-                backoff::record_failure(pool, BACKOFF_KEY, job.now()).await?;
-                let body = failure_text(target_year, &e);
-                notify::emit(
-                    pool,
-                    NewNotification {
-                        title: "Abschreibung fehlgeschlagen",
-                        body: &body,
-                        severity: "warning",
-                        action_url: Some("/assets"),
-                        dedup_key: Some(&format!("afa_auto_failed:{target_year}")),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-                return Err(e);
-            }
-        };
+    // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss während der Buchung.
+    let fy = crate::fiscal_year::guard::booking_permit().await;
+    let accrued = accrue_yearly::accrue_for_year(pool, paths, session, target_year, today).await;
+    drop(fy);
+    let report = match accrued {
+        Ok(r) => r,
+        Err(e) => {
+            backoff::record_failure(pool, BACKOFF_KEY, job.now()).await?;
+            let body = failure_text(target_year, &e);
+            notify::emit(
+                pool,
+                NewNotification {
+                    title: "Abschreibung fehlgeschlagen",
+                    body: &body,
+                    severity: "warning",
+                    action_url: Some("/assets"),
+                    dedup_key: Some(&format!("afa_auto_failed:{target_year}")),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            return Err(e);
+        }
+    };
     backoff::clear(pool, BACKOFF_KEY).await?;
     if report.skipped_locked {
         return Ok(());

@@ -188,13 +188,15 @@ pub async fn update(
         ));
     }
 
-    sqlx::query(
+    // Guard auch im UPDATE (Lauf F2c): ein paralleles Veräußern oder
+    // Festschreiben zwischen Prüfung und Schreiben greift nicht durch.
+    let res = sqlx::query(
         "UPDATE assets SET
             label = ?, acquisition_date = ?, acquisition_cost_cents = ?,
             expense_id = ?, vendor_contact_id = ?, depreciation_method = ?,
             useful_life_years = ?, afa_category = ?, business_share_percent = ?,
             book_value_cents = ?, notes = ?, updated_at = datetime('now','utc')
-          WHERE id = ?",
+          WHERE id = ? AND disposed = 0 AND locked_at IS NULL",
     )
     .bind(input.label.trim())
     .bind(input.acquisition_date.to_string())
@@ -210,6 +212,13 @@ pub async fn update(
     .bind(id)
     .execute(pool)
     .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Anlage wurde inzwischen veräußert oder festgeschrieben — keine \
+             Stammdaten-Änderung möglich."
+                .into(),
+        ));
+    }
 
     get(pool, id)
         .await?
@@ -274,7 +283,10 @@ pub async fn set_book_value_in(
 /// Veräußert/verschrottet eine Anlage. `residual_book_value_cents` ist der
 /// Restbuchwert-Snapshot zum Disposal. Disposal-Felder stehen NICHT in der
 /// Immutability-Whitelist — auch eine festgeschriebene Anlage darf veräußert
-/// werden. Doppel-Disposal wird verhindert.
+/// werden. Doppel-Disposal wird verhindert: Vorab-Prüfung, `AND disposed = 0`
+/// im UPDATE (zwei gleichzeitige Aufrufe) und DB-seitig
+/// `trg_assets_disposal_final` (Migration 0032) — nach der Veräußerung sind die
+/// Abgangsfelder unveränderlich.
 pub async fn dispose(
     pool: &SqlitePool,
     id: &str,
@@ -290,12 +302,12 @@ pub async fn dispose(
         return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
     }
 
-    sqlx::query(
+    let res = sqlx::query(
         "UPDATE assets SET
             disposed = 1, disposal_date = ?, disposal_type = ?,
             disposal_proceeds_cents = ?, disposal_residual_book_value_cents = ?,
             updated_at = datetime('now','utc')
-          WHERE id = ?",
+          WHERE id = ? AND disposed = 0",
     )
     .bind(disposal_date)
     .bind(disposal_type_db)
@@ -304,6 +316,9 @@ pub async fn dispose(
     .bind(id)
     .execute(pool)
     .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+    }
 
     get(pool, id)
         .await?

@@ -610,6 +610,36 @@ async fn reminder_mode_creates_one_notice_per_due_date() {
     assert_eq!(notices(&env.pool, "recurring_due:").await, 1);
 }
 
+/// Lauf F2a: Migration 0032 seedet `rule_recurring_due`; der Hinweis trägt die
+/// Regel, und eine abgeschaltete Regel erzeugt keinen Hinweis.
+#[tokio::test]
+async fn reminder_mode_follows_the_seeded_rule() {
+    let env = setup().await;
+    recurring::create(&env.pool, &sub_input("Domain", 1, d(2026, 5, 1), false))
+        .await
+        .unwrap();
+    klein_buch_lib::notify::rules::set_enabled(&env.pool, "rule_recurring_due", false)
+        .await
+        .unwrap();
+    scheduler::reminders::run(&env.pool, d(2026, 5, 20), Path::new("/backup-targets"))
+        .await
+        .unwrap();
+    assert_eq!(notices(&env.pool, "recurring_due:").await, 0, "Regel aus");
+    klein_buch_lib::notify::rules::set_enabled(&env.pool, "rule_recurring_due", true)
+        .await
+        .unwrap();
+    scheduler::reminders::run(&env.pool, d(2026, 5, 20), Path::new("/backup-targets"))
+        .await
+        .unwrap();
+    let rule: Option<String> = sqlx::query_scalar(
+        "SELECT rule_id FROM notifications WHERE dedup_key LIKE 'recurring_due:%'",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(rule.as_deref(), Some("rule_recurring_due"));
+}
+
 // ---- Tick: Job-Isolation (KB-0045) -----------------------------------------
 
 #[tokio::test]

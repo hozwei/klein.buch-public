@@ -155,13 +155,7 @@ pub async fn mail_account_create(
         "mail_account.create",
         "mail_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","auth_type":"{}","from_email":"{}","has_password":{}}}"#,
-            escape(&row.label),
-            escape(&row.auth_type),
-            escape(&row.from_email),
-            password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
-        )),
+        Some(serde_json::json!({ "label": &row.label, "auth_type": &row.auth_type, "from_email": &row.from_email, "has_password": password.as_deref().map(|p| !p.is_empty()).unwrap_or(false) })),
     )
     .await?;
 
@@ -243,12 +237,7 @@ pub async fn mail_account_update(
         "mail_account.update",
         "mail_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","from_email":"{}","password_changed":{}}}"#,
-            escape(&row.label),
-            escape(&row.from_email),
-            password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
-        )),
+        Some(serde_json::json!({ "label": &row.label, "from_email": &row.from_email, "password_changed": password.as_deref().map(|p| !p.is_empty()).unwrap_or(false) })),
     )
     .await?;
 
@@ -283,7 +272,7 @@ pub async fn mail_account_delete(ctx: &Arc<AppCtx>, args: MailAccountDeleteArgs)
         "mail_account.delete",
         "mail_account",
         &id,
-        Some(&format!(r#"{{"label":"{}"}}"#, escape(&account.label))),
+        Some(serde_json::json!({ "label": &account.label })),
     )
     .await?;
 
@@ -560,11 +549,7 @@ pub async fn mail_oauth_connect(
         "mail_account.oauth_connect",
         "mail_account",
         &account_id,
-        Some(&format!(
-            r#"{{"email":"{}","scopes":"{}"}}"#,
-            escape(email.as_deref().unwrap_or("")),
-            escape(&scopes)
-        )),
+        Some(serde_json::json!({ "email": email.as_deref().unwrap_or(""), "scopes": &scopes })),
     )
     .await?;
 
@@ -782,7 +767,7 @@ pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result
         "mail_account.test_send",
         "mail_account",
         &account_id,
-        Some(&format!(r#"{{"to":"{}"}}"#, escape(recipient))),
+        Some(serde_json::json!({ "to": recipient })),
     )
     .await?;
 
@@ -947,12 +932,7 @@ pub async fn send_invoice_core(
         "invoice.sent",
         "invoice",
         invoice_id,
-        Some(&format!(
-            r#"{{"account":"{}","to":"{}","subject":"{}","attachments":1}}"#,
-            escape(account_id),
-            escape(&recipient),
-            escape(&subject)
-        )),
+        Some(serde_json::json!({ "account": account_id, "to": &recipient, "subject": &subject, "attachments": 1 })),
     )
     .await?;
 
@@ -1062,25 +1042,23 @@ pub async fn send_quote_core(
     //    'sent'). Audit-Log mit den gebundenen Legal-Versionen (Nachweis,
     //    welche Fassung an wen ging). Account-Nutzung tracken.
     mail_accounts::touch_last_used(pool, account_id).await.ok();
-    let legal_audit = dispatch
+    let legal_audit: serde_json::Map<String, serde_json::Value> = dispatch
         .legal
         .iter()
-        .map(|l| format!(r#""{}":{}"#, escape(&l.doc_type), l.version))
-        .collect::<Vec<_>>()
-        .join(",");
+        .map(|l| (l.doc_type.clone(), serde_json::Value::from(l.version)))
+        .collect();
     audit_log::append(
         pool,
         "quote.sent",
         "quote",
         quote_id,
-        Some(&format!(
-            r#"{{"account":"{}","to":"{}","subject":"{}","attachments":{},"legal":{{{}}}}}"#,
-            escape(account_id),
-            escape(&recipient),
-            escape(&subject),
-            attachment_count,
-            legal_audit
-        )),
+        Some(serde_json::json!({
+            "account": account_id,
+            "to": &recipient,
+            "subject": &subject,
+            "attachments": attachment_count,
+            "legal": legal_audit,
+        })),
     )
     .await?;
 
@@ -1336,10 +1314,6 @@ async fn render_invoice_mail_from(
         None => templates::load_template(&paths.inputs_dir, "invoice-de")?,
     };
     templates::render(&source, &ctx)
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

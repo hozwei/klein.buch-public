@@ -234,9 +234,7 @@ pub async fn export_all(
             "migration.export.tamper_detected",
             "archive",
             rel,
-            Some(&format!(
-                r#"{{"expected":"{expected}","actual":"{actual}"}}"#
-            )),
+            Some(serde_json::json!({ "expected": expected, "actual": actual })),
         )
         .await?;
     }

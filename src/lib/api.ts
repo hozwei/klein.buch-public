@@ -343,6 +343,15 @@ export function invoicesCancel(args: CancelArgs): Promise<CancelResponse> {
   return invoke<CancelResponse>("invoices_cancel", { args });
 }
 
+/**
+ * Verwirft einen nummerierten Rechnungs- oder Storno-Entwurf (Re-Auth, Lauf F
+ * W14-032). Kein Löschen: Zeitpunkt und Grund (mindestens 10 Zeichen) stehen am
+ * Beleg, die Nummer bleibt verbraucht. Die Schaltfläche gestaltet der UI/UX-Lauf.
+ */
+export function invoicesVoidDraft(args: { id: string; reason: string }): Promise<Invoice> {
+  return invoke<Invoice>("invoices_void_draft", args);
+}
+
 
 // ---- Mail (Block 5) --------------------------------------------------------
 

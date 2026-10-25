@@ -104,13 +104,7 @@ pub async fn legal_documents_upload(
         "legal_document.upload",
         "legal_document",
         &row.id,
-        Some(&format!(
-            r#"{{"doc_type":"{}","version":{},"title":"{}","archive":"{}"}}"#,
-            escape(&doc_type),
-            row.version,
-            escape(&title),
-            stored.archive_id
-        )),
+        Some(serde_json::json!({ "doc_type": &doc_type, "version": row.version, "title": &title, "archive": stored.archive_id })),
     )
     .await?;
     ctx.uploads.consume(&upload_id);
@@ -189,10 +183,6 @@ fn sanitize_filename(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

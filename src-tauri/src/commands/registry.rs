@@ -139,7 +139,10 @@ fn auth_of(name: &str) -> Auth {
         | "numbering_raise"
         // Lauf F (F1d): Freigabe eines wiederhergestellten Entwurfs, dessen
         // Nummer vor dem Restore schon festgeschrieben war.
-        | "numbering_restored_draft_confirm" => Auth::Reauth,
+        | "numbering_restored_draft_confirm"
+        // Lauf F (F2a, W14-032): Verwerfen eines nummerierten Rechnungs-
+        // Entwurfs — unumkehrbar, die Nummer bleibt verbraucht.
+        | "invoices_void_draft" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -363,6 +366,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("invoices_lock_and_issue", h::invoices_lock_and_issue),
     ("invoices_record_payment", h::invoices_record_payment),
     ("invoices_cancel", h::invoices_cancel),
+    ("invoices_void_draft", h::invoices_void_draft),
     ("legal_documents_list", h::legal_documents_list),
     ("legal_documents_upload", h::legal_documents_upload),
     ("legal_documents_activate", h::legal_documents_activate),
@@ -1207,6 +1211,15 @@ mod h {
             let args: crate::commands::invoices::InvoicesCancelArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_void_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesVoidDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_void_draft(&ctx, args).await?,
             )?)
         })
     }

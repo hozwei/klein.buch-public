@@ -24,6 +24,7 @@ use super::idempotency::{self, Begin, Completer, StoredResponse};
 use super::limits::ADMISSION_WAIT;
 use super::state::ServerState;
 use crate::commands::registry::{self, Auth, CommandSpec, Cost, Kind};
+use crate::db::repo::audit_log;
 
 /// Pflicht-Header jeder ändernden API-Anfrage (Plan W5.11; W6 ergänzt die
 /// Origin-/Host-Prüfung).
@@ -167,7 +168,14 @@ async fn execute(
             }
             return stored;
         }
-        let stored = to_stored((spec.handler)(runner.ctx.clone(), args).await);
+        // Akteur aller Audit-Einträge des Commands: der Inhaber (Lauf F).
+        let stored = to_stored(
+            audit_log::with_actor(
+                audit_log::ACTOR_OWNER,
+                (spec.handler)(runner.ctx.clone(), args),
+            )
+            .await,
+        );
         if let Some(c) = completer {
             c.complete(stored.clone());
         }
@@ -235,7 +243,9 @@ fn start_job(
             Err(ApiError::restarting())
         } else {
             let ctx = runner.ctx.clone();
-            let inner = tokio::spawn(async move { (spec.handler)(ctx, args).await });
+            let inner = tokio::spawn(audit_log::with_actor(audit_log::ACTOR_OWNER, async move {
+                (spec.handler)(ctx, args).await
+            }));
             match inner.await {
                 Ok(Ok(value)) => Ok(value),
                 Ok(Err(err)) => Err(ApiError::from_error(&err)),

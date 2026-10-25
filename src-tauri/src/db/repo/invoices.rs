@@ -16,7 +16,13 @@
 //!   Kernfelder gesperrt.
 //! - **Storno** wird als **neue** Rechnung mit `is_storno_for = original_id`
 //!   angelegt; die Original-Rechnung bekommt `status='canceled'`,
-//!   `canceled_at`, `canceled_by_storno_id`.
+//!   `canceled_at`, `canceled_by_storno_id` — genau einmal
+//!   (`trg_invoices_canceled_final`, höchstens ein festgeschriebener Storno je
+//!   Original über `ux_invoices_one_locked_storno`, Migration 0032).
+//! - **Verwerfen** eines Entwurfs ([`void_draft_in`], Migration 0032): kein
+//!   DELETE — `voided_at` + `void_reason` werden gesetzt, die Nummer bleibt
+//!   verbraucht und der Entwurf ist danach unveränderlich
+//!   (`trg_invoices_voided_final`).
 
 use crate::db::models::{InvoiceDetail, InvoiceItemRow, InvoiceListItem, InvoiceRow};
 use crate::domain::invoice::{InvoiceInput, Totals};
@@ -86,8 +92,8 @@ pub struct ListFilter {
 /// Vergibt `invoice_number` über `db::numbering::next_number` — das
 /// "verbraucht" eine Nummer schon im Draft. Das ist Absicht: lückenlose
 /// Buchhaltung bedeutet, dass Drafts dieselbe Sequenz teilen wie
-/// gelockte Rechnungen. Wenn ein Draft gelöscht wird, bleibt die Lücke;
-/// das ist GoBD-dokumentierbar.
+/// gelockte Rechnungen. Ein Entwurf wird nie gelöscht; ein nicht benötigter
+/// wird verworfen ([`void_draft_in`]) und dokumentiert so die Nummer.
 pub async fn create_draft(
     pool: &SqlitePool,
     payload: &DraftCreatePayload,
@@ -282,7 +288,7 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<InvoiceL
         "SELECT i.id, i.invoice_number, i.fiscal_year, i.invoice_date, i.due_date,
                 i.contact_id, c.name AS contact_name,
                 i.gross_amount_cents, i.paid_amount_cents, i.currency_code, i.status,
-                i.is_storno_for
+                i.is_storno_for, i.voided_at
            FROM invoices i
            JOIN contacts c ON c.id = i.contact_id
           WHERE 1=1",
@@ -389,7 +395,7 @@ pub async fn lock_with_pair_cancel(
             pdf_archive_id = ?,
             xml_archive_id = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL",
     )
     .bind(update.validation_status)
     .bind(update.validation_report)
@@ -401,7 +407,7 @@ pub async fn lock_with_pair_cancel(
 
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
-            "lock: invoice {id} nicht gefunden oder bereits gelockt (Race)"
+            "lock: invoice {id} nicht gefunden, bereits gelockt oder verworfen (Race)"
         )));
     }
 
@@ -423,7 +429,7 @@ pub async fn lock_with_pair_cancel(
         .await?;
         if res.rows_affected() == 0 {
             return Err(Error::Domain(format!(
-                "mark_canceled: invoice {} nicht gefunden oder bereits storniert",
+                "Storno-Paar: Rechnung {} nicht gefunden oder bereits storniert",
                 pair.original_id
             )));
         }
@@ -542,39 +548,6 @@ pub struct PaymentEntry {
     pub recorded_at: String,
 }
 
-// ---- CANCEL ----------------------------------------------------------------
-
-/// Markiert eine Original-Rechnung als storniert. Erlaubt durch
-/// `trg_invoices_immutable`, weil `canceled_at` + `canceled_by_storno_id`
-/// nicht in der Trigger-Whitelist sind (siehe Migration 0001).
-pub async fn mark_canceled(
-    pool: &SqlitePool,
-    original_id: &str,
-    storno_id: &str,
-    reason: Option<&str>,
-) -> Result<()> {
-    let res = sqlx::query(
-        "UPDATE invoices SET
-            status = 'canceled',
-            canceled_at = datetime('now','utc'),
-            canceled_by_storno_id = ?,
-            cancel_reason = COALESCE(?, cancel_reason),
-            updated_at = datetime('now','utc')
-         WHERE id = ?",
-    )
-    .bind(storno_id)
-    .bind(reason)
-    .bind(original_id)
-    .execute(pool)
-    .await?;
-    if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!(
-            "mark_canceled: invoice {original_id} nicht gefunden"
-        )));
-    }
-    Ok(())
-}
-
 // ---- SEND ------------------------------------------------------------------
 
 /// Markiert eine gelockte Rechnung als versendet. Setzt `sent_at`
@@ -618,8 +591,22 @@ pub async fn open_storno_draft(
 ) -> Result<Option<(String, String, i64)>> {
     Ok(sqlx::query_as(
         "SELECT id, invoice_number, fiscal_year FROM invoices
-          WHERE is_storno_for = ? AND locked_at IS NULL
+          WHERE is_storno_for = ? AND locked_at IS NULL AND voided_at IS NULL
           ORDER BY created_at, invoice_number LIMIT 1",
+    )
+    .bind(original_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Der festgeschriebene Storno-Beleg zu einer Rechnung, falls es einen gibt
+/// (höchstens einen, `ux_invoices_one_locked_storno`). Lauf F2c: erkennt das
+/// halbe Storno-Paar aus dem Altbestand (Storno fest, Original nicht storniert).
+pub async fn locked_storno_for(pool: &SqlitePool, original_id: &str) -> Result<Option<InvoiceRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM invoices
+          WHERE is_storno_for = ? AND locked_at IS NOT NULL
+          ORDER BY locked_at, invoice_number LIMIT 1",
     )
     .bind(original_id)
     .fetch_optional(pool)
@@ -639,7 +626,8 @@ pub async fn refresh_storno_draft(
         "UPDATE invoices
             SET invoice_date = ?, delivery_date = ?, cancel_reason = ?, notes = ?,
                 updated_at = datetime('now','utc')
-          WHERE id = ? AND locked_at IS NULL AND is_storno_for IS NOT NULL",
+          WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL
+            AND is_storno_for IS NOT NULL",
     )
     .bind(&date)
     .bind(&date)
@@ -654,6 +642,92 @@ pub async fn refresh_storno_draft(
         )));
     }
     Ok(())
+}
+
+// ---- VOID (Entwurf verwerfen, kein Löschen) ---------------------------------
+
+/// Ergebnis von [`void_draft_in`].
+#[derive(Debug, Clone)]
+pub struct Voided {
+    pub invoice_number: String,
+    pub fiscal_year: i64,
+    pub gross_amount_cents: i64,
+    pub is_storno_for: Option<String>,
+}
+
+/// Verwirft einen offenen Rechnungs-Entwurf in einer laufenden Transaktion
+/// (W14-032, Migration 0032): setzt `voided_at` (UTC, aus der Uhr des
+/// Aufrufers) und `void_reason`. Kein DELETE — die Nummer bleibt verbraucht und
+/// am Beleg nachvollziehbar; danach ist der Entwurf unveränderlich
+/// (`trg_invoices_voided_final`). Festgeschriebene Rechnungen korrigiert nur
+/// ein Storno. Audit schreibt der Aufrufer in derselben Transaktion.
+pub async fn void_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    reason: &str,
+    voided_at_db_utc: &str,
+) -> Result<Voided> {
+    #[derive(sqlx::FromRow)]
+    struct Current {
+        invoice_number: String,
+        fiscal_year: i64,
+        gross_amount_cents: i64,
+        is_storno_for: Option<String>,
+        locked_at: Option<String>,
+        voided_at: Option<String>,
+    }
+    let current: Option<Current> = sqlx::query_as(
+        "SELECT invoice_number, fiscal_year, gross_amount_cents, is_storno_for,
+                locked_at, voided_at
+           FROM invoices WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(Current {
+        invoice_number,
+        fiscal_year,
+        gross_amount_cents,
+        is_storno_for,
+        locked_at,
+        voided_at: voided,
+    }) = current
+    else {
+        return Err(Error::Domain(format!("Rechnung nicht gefunden: {id}")));
+    };
+    if locked_at.is_some() {
+        return Err(Error::Domain(format!(
+            "Rechnung {invoice_number} ist festgeschrieben — verwerfen lassen sich nur Entwürfe. \
+             Eine festgeschriebene Rechnung korrigiert ein Storno."
+        )));
+    }
+    if voided.is_some() {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {invoice_number} ist bereits verworfen."
+        )));
+    }
+    let res = sqlx::query(
+        "UPDATE invoices
+            SET voided_at = ?, void_reason = ?, updated_at = ?
+          WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL",
+    )
+    .bind(voided_at_db_utc)
+    .bind(reason)
+    .bind(voided_at_db_utc)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() != 1 {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {invoice_number} ist nicht mehr offen."
+        )));
+    }
+    Ok(Voided {
+        invoice_number,
+        fiscal_year,
+        gross_amount_cents,
+        is_storno_for,
+    })
 }
 
 #[cfg(test)]

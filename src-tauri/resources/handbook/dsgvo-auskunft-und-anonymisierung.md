@@ -26,7 +26,20 @@ mit:
 3. Allen Original-Belegen aus dem Archiv, sofern dem Kontakt
    zuordenbar
 4. Den Roh-Daten als JSON (maschinenlesbar)
-5. Einer Inhalts-Übersicht
+5. Dem Versandprotokoll: alle Mails zu ihren Belegen, Katalog-Mails an
+   sie und Mails an ihre aktuelle oder eine frühere Adresse aus ihren
+   Belegen, gleich in welcher Groß- und Kleinschreibung
+6. Ihren wiederkehrenden Rechnungen (Abo-Vorlagen mit Positionen,
+   Rhythmus und Laufzeit) sowie Kosten-Abos und Anlagen, bei denen sie
+   Lieferant ist
+7. Den Audit-Log-Einträgen zu ihr, ihren Belegen, Abo-Vorlagen,
+   Kosten-Abos und Anlagen (Zeitpunkt und Aktion, ohne technische
+   Details)
+8. Einer Inhalts-Übersicht
+
+Ein verworfener Rechnungs-Entwurf steht in der Auskunft als
+"verworfen (nie ausgestellt)" mit Zeitpunkt und Grund, nicht als
+offener Entwurf.
 
 Dein Browser speichert das ZIP in seinem Download-Ordner. Es ist
 nicht verschlüsselt, weil es an die anfragende Person geht.
@@ -62,11 +75,24 @@ Bestätige. Die App ersetzt den Namen durch einen Platzhalter
 (`Anonymisiert #2E3F4A5B` — die Hex-Folge ist je Kontakt anders)
 und leert alle weiteren persönlichen Felder am Kontakt.
 
-Bereits ausgestellte Rechnungen, die zum Zeitpunkt der
-Festschreibung die Kunden-Adresse als Kopie in den Beleg
-geschrieben hatten, bleiben mit dieser alten Adresse erhalten. Das
-ist gesetzliche Pflicht laut §147 AO und der GoBD. Klein.Buch
-kann diese Daten nicht löschen, ohne Deine Buchführung zu zerstören.
+Im selben Schritt entfernt Klein.Buch den Empfänger (Name, Anschrift,
+USt-IdNr., E-Mail) und die interne Notiz aus den verworfenen
+Rechnungs-Entwürfen und den nie ausgestellten, zurückgezogenen Angeboten
+dieses Kontakts. Diese Belege wurden nie ausgestellt; sie sind weder
+Buchungsbeleg noch Geschäftsbrief und müssen deshalb nicht aufbewahrt
+werden. Nummer, Datum, Betrag, Positionen und der Grund des Verwerfens
+bleiben: Sie erklären die Lücke im Nummernkreis. Schreib deshalb keine
+Namen in den Grund. Seine Abo-Vorlagen werden angehalten und verlieren
+Bezeichnung und Notiz.
+
+Bereits ausgestellte Rechnungen, Stornos und Angebote, die zum
+Zeitpunkt der Festschreibung die Kunden-Adresse als Kopie in den Beleg
+geschrieben hatten, bleiben mit dieser alten Adresse erhalten, ebenso
+ihre PDF- und XML-Dateien im Archiv, das Versandprotokoll und das
+Audit-Protokoll. Das ist gesetzliche Pflicht laut §147 AO und der GoBD.
+Klein.Buch kann diese Daten nicht löschen, ohne Deine Buchführung zu
+zerstören, auch nicht nach Ablauf der Aufbewahrungsfrist (Kapitel
+"Aufbewahrung 10 Jahre").
 
 Eine Funktion, die alle Daten auf einmal löscht, gibt es in
 Klein.Buch nicht. Eine vollständige Löschung beträfe ohnehin die
@@ -76,8 +102,11 @@ die gesetzlichen Aufbewahrungsfristen gebunden.
 ## Anonymisierung verweigern
 
 Klein.Buch blockiert die Anonymisierung, wenn zu dem Kontakt offene
-Entwurfs-Belege existieren. Schließe die Entwürfe vorher
-(festschreiben oder verwerfen) und versuche erneut.
+Entwurfs-Belege existieren. Schließe die Entwürfe vorher ab
+(festschreiben, einen Rechnungs-Entwurf verwerfen, einen
+Angebots-Entwurf zurückziehen) und versuche erneut. Ein verworfener
+Entwurf wird nicht gelöscht: Er bleibt mit seiner Nummer und dem Grund
+als Nachweis erhalten; den Empfänger entfernt die Anonymisierung.
 
 Die App lässt eine bereits anonymisierte Person nicht ein zweites
 Mal anonymisieren; die Knöpfe "DSGVO-Auskunft" und "Anonymisieren
@@ -93,4 +122,4 @@ die das Gesetz selbst ausdrücklich vorsieht.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

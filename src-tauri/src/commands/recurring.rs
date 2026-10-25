@@ -86,12 +86,7 @@ pub async fn recurring_create(
         "recurring.create",
         "recurring",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","frequency":"{}","auto":{}}}"#,
-            esc(&row.label),
-            esc(&row.frequency),
-            row.auto_create_expense == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "frequency": &row.frequency, "auto": row.auto_create_expense == 1 })),
     )
     .await?;
     Ok(row)
@@ -123,12 +118,7 @@ pub async fn recurring_update(
         "recurring.update",
         "recurring",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","frequency":"{}","auto":{}}}"#,
-            esc(&row.label),
-            esc(&row.frequency),
-            row.auto_create_expense == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "frequency": &row.frequency, "auto": row.auto_create_expense == 1 })),
     )
     .await?;
     Ok(row)
@@ -189,9 +179,7 @@ pub async fn recurring_set_active(
         },
         "recurring",
         &id,
-        applied
-            .map(|m| serde_json::json!({ "resume_mode": m }).to_string())
-            .as_deref(),
+        applied.map(|m| serde_json::json!({ "resume_mode": m })),
     )
     .await?;
     recurring::get(&pool, &id)
@@ -334,10 +322,6 @@ fn validate(input: &RecurringInput) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

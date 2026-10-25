@@ -14,7 +14,7 @@
 use crate::error::{Error, Result};
 use sqlx::{Row, SqlitePool};
 
-pub const EXPECTED_SCHEMA_VERSION: i32 = 31;
+pub const EXPECTED_SCHEMA_VERSION: i32 = 32;
 
 /// Älteste Schema-Version, die ein Restore annimmt (ADR 0039 E15/E17):
 /// ältere Backups stammen aus der Desktop-Fassung vor v2026.5.

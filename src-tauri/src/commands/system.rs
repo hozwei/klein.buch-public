@@ -211,16 +211,13 @@ pub async fn numbering_raise(
         "numbering.raised",
         "numbering",
         &format!("{doc_type}:{fiscal_year}"),
-        Some(
-            &serde_json::json!({
-                "doc_type": raised.doc_type,
-                "fiscal_year": raised.fiscal_year,
-                "from": raised.from,
-                "to": raised.to,
-                "reason": reason,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "doc_type": raised.doc_type,
+            "fiscal_year": raised.fiscal_year,
+            "from": raised.from,
+            "to": raised.to,
+            "reason": reason,
+        })),
     )
     .await?;
     tx.commit().await?;
@@ -319,6 +316,13 @@ pub struct IntegrityCheckRow {
     pub files_passed: i64,
     pub files_failed: i64,
     pub failed_archive_ids_json: Option<String>,
+    /// Teilmenge von `files_failed`: fehlende Dateien. `None` = Lauf vor
+    /// Migration 0032 (nicht erfasst).
+    pub files_missing: Option<i64>,
+    /// Vorhanden, aber nicht lesbar (kein Manipulationsbefund). `None` = vor 0032.
+    pub files_unreadable: Option<i64>,
+    pub missing_archive_ids_json: Option<String>,
+    pub unreadable_archive_ids_json: Option<String>,
 }
 
 /// Argumente von [`archive_integrity_history`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -339,7 +343,8 @@ pub async fn archive_integrity_history(
     let limit = limit.unwrap_or(50).clamp(1, 500);
     let rows = sqlx::query_as::<_, IntegrityCheckRow>(
         "SELECT id, started_at, finished_at, files_checked, files_passed,
-                files_failed, failed_archive_ids_json
+                files_failed, failed_archive_ids_json, files_missing, files_unreadable,
+                missing_archive_ids_json, unreadable_archive_ids_json
            FROM archive_integrity_checks
           ORDER BY id DESC LIMIT ?",
     )

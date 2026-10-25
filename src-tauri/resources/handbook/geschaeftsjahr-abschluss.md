@@ -27,7 +27,9 @@ abgegebenen Erklärung abweichen lassen.
 Bevor Du abschließt, gehe diese Liste durch:
 
 1. Alle Rechnungen des Jahres sind festgeschrieben (keine Entwürfe
-   mehr offen).
+   mehr offen). Offene Entwürfe blockieren den Abschluss nicht, weil sie
+   nicht zur EÜR gehören. Nach dem Abschluss lassen sie sich aber nicht
+   mehr festschreiben, sondern nur noch verwerfen (Kapitel "Rechnungen").
 2. Alle bis dahin eingegangenen Zahlungen sind erfasst.
 3. Alle Kosten des Jahres sind erfasst, einschließlich Beleg-
    Anhang.
@@ -61,6 +63,38 @@ Auslöser `fiscal_year.close` (damit Du genau diesen Stand jederzeit
 zurückspielen kannst) und sperrt alle Tabellen für das
 abgeschlossene Geschäftsjahr.
 
+Läuft beim Klick gerade eine Buchung (etwa ein Abo-Lauf oder eine
+Zahlung in einem zweiten Browser-Tab), wartet der Abschluss, bis sie
+fertig ist; sie steht dann vollständig im abgeschlossenen Jahr.
+Umgekehrt wartet eine Buchung, die während des Abschlusses ankommt,
+und wird danach erneut geprüft. In ein gerade abgeschlossenes Jahr
+rutscht so nichts unbemerkt hinein.
+
+Im Audit-Log steht der Abschluss mit den EÜR-Eckwerten, der Zahl der
+festgeschriebenen Rechnungen, Stornos, Kosten und Privatbewegungen
+und der Zahl der noch offenen Entwürfe.
+
+## Wenn die EÜR später vom Abschluss abweicht
+
+Beim Abschluss merkt sich Klein.Buch die Eckwerte der EÜR
+(Einnahmen, Ausgaben, AfA, Überschuss) unveränderlich. Bei jeder
+Anzeige und jedem Export eines abgeschlossenen Jahres rechnet es die
+EÜR neu aus den einzelnen Buchungen und vergleicht. Weicht das
+Ergebnis ab, hat sich entweder der Datenbestand des Jahres verändert
+(zum Beispiel durch einen Eingriff direkt in die Datenbank) oder eine
+neuere Version von Klein.Buch rechnet anders. Dann gilt:
+
+1. Klein.Buch blockiert nichts. Exporte bleiben möglich.
+2. Unter "Hinweise" erscheint einmal je Jahr der dringende Hinweis
+   "EÜR weicht vom Jahresabschluss ab".
+3. Jeder Export vermerkt die Abweichung im Audit-Log und in der Datei:
+   im EÜR-PDF als Kasten, in der ELSTER-Ausfüllhilfe als
+   Kommentarzeile, in der Einzelaufstellung als Begleitdatei und im
+   Steuerberater-Paket am Anfang der `LIESMICH.txt`, jeweils mit beiden
+   Werten. Der DATEV-Buchungsstapel bleibt im festen DATEV-Format.
+4. Maßgeblich für die abgegebene Erklärung ist der festgeschriebene
+   Stand. Klär die Ursache mit Deinem Steuerberater.
+
 ## Storno aus geschlossenem Jahr
 
 Wenn nach dem Abschluss ein Fehler einer alten Rechnung auffällt,
@@ -82,4 +116,4 @@ gedacht.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

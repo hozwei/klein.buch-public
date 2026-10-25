@@ -51,12 +51,7 @@ pub async fn payment_accounts_create(
         "payment_account.create",
         "payment_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","type":"{}","default":{}}}"#,
-            escape(&row.label),
-            escape(&row.account_type),
-            row.is_default == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "type": &row.account_type, "default": row.is_default == 1 })),
     )
     .await?;
     Ok(row)
@@ -84,12 +79,7 @@ pub async fn payment_accounts_update(
         "payment_account.update",
         "payment_account",
         &id,
-        Some(&format!(
-            r#"{{"label":"{}","type":"{}","default":{}}}"#,
-            escape(&row.label),
-            escape(&row.account_type),
-            row.is_default == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "type": &row.account_type, "default": row.is_default == 1 })),
     )
     .await?;
     Ok(row)
@@ -125,10 +115,6 @@ pub async fn payment_accounts_set_active(
     )
     .await?;
     Ok(())
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

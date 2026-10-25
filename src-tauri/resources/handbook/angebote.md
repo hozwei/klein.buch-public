@@ -68,6 +68,16 @@ Wenn der Kunde ablehnt, klick auf **"Ablehnen"**. Du kannst
 Datum und Grund eintragen. Beide Status sind Notizen ohne direkte
 buchhalterische Wirkung.
 
+## Angebot zurückziehen
+
+Mit **"Stornieren"** ziehst Du ein Angebot zurück, das nicht mehr gilt,
+auch einen Entwurf, den Du nicht mehr brauchst. Klein.Buch verlangt einen
+Grund mit mindestens zehn Zeichen und löscht nichts: Das Angebot behält
+seine Nummer und steht danach als "Storniert" mit Zeitpunkt und Grund in
+der Liste und im Protokoll. Zurückziehen ist endgültig. Ein Angebot, das
+schon in eine Rechnung umgewandelt wurde, ziehst Du nicht mehr zurück;
+dort korrigierst Du die Rechnung.
+
 ## In Rechnung umwandeln
 
 Bei einem angenommenen Angebot kannst Du auf **"In Rechnung
@@ -78,6 +88,9 @@ anpassen.
 
 Das ursprüngliche Angebot bleibt unverändert sichtbar. Klein.Buch
 zeigt am Angebot, in welche Rechnung es gewandelt wurde.
+Verwirfst Du den Rechnungs-Entwurf, der aus dem Angebot entstanden ist,
+steht das Angebot wieder auf "Angenommen" und lässt sich erneut
+umwandeln. Klein.Buch vermerkt das im Protokoll.
 
 ## Pflichtangaben
 
@@ -89,4 +102,4 @@ Klein.Buch zur Klarheit auch im Angebot den Hinweis auf §19 UStG.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

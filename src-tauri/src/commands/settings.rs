@@ -478,9 +478,7 @@ pub async fn travel_settings_set(ctx: &Arc<AppCtx>, args: TravelSettingsSetArgs)
         "settings.travel.update",
         "settings",
         "travel",
-        Some(&format!(
-            r#"{{"cost_per_km_cents":{cost_per_km_cents},"round_trip_default":{round_trip_default}}}"#
-        )),
+        Some(serde_json::json!({ "cost_per_km_cents": cost_per_km_cents, "round_trip_default": round_trip_default })),
     )
     .await
     {

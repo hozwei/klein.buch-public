@@ -582,10 +582,346 @@ async fn pre_migration_backup_on_unlock() {
     assert_eq!(m.schema_version, old);
 }
 
-/// Plan W7/W8: `.kbk` mit Schema 30 → Restore → beim Entsperren
-/// Pflicht-Backup (Schema 30) → Vorwärtsmigration (0031).
+/// Lauf F2c (S1): Ein Altfehler (verwaister Verweis) in einer älteren
+/// Datenbank lehnt das Entsperren **vor** dem Pflicht-Backup und vor jeder
+/// Migration ab — die Datenbank bleibt auf dem alten Schema, das vorige Image
+/// öffnet sie weiter, und die Meldung „nichts verändert“ stimmt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_key_violation_before_migration_refuses_unlock_without_changes() {
+    let srv = test_server();
+    let _cookie = setup(&srv).await;
+    srv.state.ctx.take_pool().unwrap().close().await;
+    srv.state.ctx.session.clear();
+    let db = srv.state.ctx.paths.db_file.clone();
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = db.as_os_str().to_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+    let old = EXPECTED_SCHEMA_VERSION - 1;
+    {
+        let _serial = kdf_serial().await;
+        let pool = klein_buch_lib::db::open_pool(&db, Some(PASS))
+            .await
+            .unwrap();
+        migrator_without_last().run(&pool).await.unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO notifications (id, rule_id, title, body, severity)
+             VALUES ('n-alt', 'rule_gibt_es_nicht', 'T', 'B', 'info')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+        pool.close().await;
+    }
+    let kbk_count = || {
+        std::fs::read_dir(&srv.state.ctx.paths.backups_dir)
+            .map(|it| {
+                it.filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "kbk"))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let backups_before = kbk_count();
+    let r = login(&srv, PASS).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.text());
+    assert_eq!(r.json()["code"], "db_integrity_failed", "{}", r.text());
+    assert!(
+        r.text().contains("nicht verändert"),
+        "Datenbank ist unverändert: {}",
+        r.text()
+    );
+    assert!(!srv.state.ctx.is_unlocked(), "bleibt gesperrt");
+    assert_eq!(
+        kbk_count(),
+        backups_before,
+        "kein Pflicht-Backup vor der Ablehnung"
+    );
+    {
+        let _serial = kdf_serial().await;
+        let pool = klein_buch_lib::db::open_pool(&db, Some(PASS))
+            .await
+            .unwrap();
+        let v: String =
+            sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'schema_version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(v, old.to_string(), "nicht migriert");
+        pool.close().await;
+    }
+}
+
+/// Macht Migration 0032 auf einer Datenbank rückgängig (Testhilfe für ein
+/// Backup mit Schema 31): alle in 0032 angelegten Trigger und Indizes — die
+/// Namen kommen aus der Migrationsdatei, damit ein neuer nicht vergessen wird
+/// (Lauf F2c) —, die Spalten und der Seed.
+async fn roll_back_0032(pool: &sqlx::SqlitePool) {
+    const SQL: &str = include_str!("../migrations/0032_gobd_hardening.sql");
+    let mut stmts: Vec<String> = Vec::new();
+    for line in SQL.lines() {
+        for (prefix, kind) in [
+            ("CREATE TRIGGER ", "TRIGGER"),
+            ("CREATE UNIQUE INDEX ", "INDEX"),
+            ("CREATE INDEX ", "INDEX"),
+        ] {
+            if let Some(rest) = line.trim_start().strip_prefix(prefix) {
+                let name = rest.split_whitespace().next().unwrap();
+                stmts.push(format!("DROP {kind} {name}"));
+            }
+        }
+    }
+    assert!(
+        stmts
+            .iter()
+            .any(|s| s == "DROP TRIGGER trg_invoices_voided_final")
+            && stmts
+                .iter()
+                .any(|s| s == "DROP INDEX uq_payment_accounts_default"),
+        "{stmts:?}"
+    );
+    stmts.extend(
+        [
+            "ALTER TABLE invoices DROP COLUMN voided_at",
+            "ALTER TABLE invoices DROP COLUMN void_reason",
+            "ALTER TABLE archive_integrity_checks DROP COLUMN files_missing",
+            "ALTER TABLE archive_integrity_checks DROP COLUMN files_unreadable",
+            "ALTER TABLE archive_integrity_checks DROP COLUMN missing_archive_ids_json",
+            "ALTER TABLE archive_integrity_checks DROP COLUMN unreadable_archive_ids_json",
+            "DELETE FROM notification_rules WHERE id = 'rule_recurring_due'",
+        ]
+        .map(str::to_string),
+    );
+    for sql in &stmts {
+        sqlx::query(sql)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+}
+
+/// Setzt die Datenbank einer laufenden Test-Instanz auf Schema `target`
+/// zurück (31: ohne 0032; 30: zusätzlich ohne 0031 = Tabelle `secrets`).
+async fn roll_back_to(pool: &sqlx::SqlitePool, target: i32) {
+    let migrations = &klein_buch_lib::db::MIGRATOR.migrations;
+    let last = migrations.last().unwrap();
+    assert!(
+        last.description.contains("gobd hardening"),
+        "Test setzt 0032 zurück: {}",
+        last.description
+    );
+    roll_back_0032(pool).await;
+    if target <= 30 {
+        let prev = &migrations[migrations.len() - 2];
+        assert!(prev.description.contains("secrets"), "{}", prev.description);
+        sqlx::query("DROP TABLE secrets")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version > ?")
+        .bind(match target {
+            31 => migrations[migrations.len() - 2].version,
+            _ => migrations[migrations.len() - 3].version,
+        })
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE app_settings SET value = ? WHERE key = 'schema_version'")
+        .bind(target.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Lauf F2c: `.kbk` mit Schema 30 (Mindeststand, v2026.5 — der Umstiegsweg
+/// der Bestandsnutzer) → Restore → beim Entsperren Vorab-Prüfung,
+/// Pflicht-Backup (Schema 30), zwei Migrationen in Folge (0031, 0032) und
+/// Fremdschlüssel-Prüfung. Bestandsdaten gehen durch: zwei Standardkonten
+/// (0032 bereinigt mit Audit) und eine Rechnung mit festgeschriebenem Storno.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schema_30_backup_is_restored_and_migrated_forward() {
+    assert_eq!(MIN_RESTORE_SCHEMA_VERSION, 30);
+    let a = test_server();
+    let cookie_a = setup(&a).await;
+    let defaults_before: i64;
+    {
+        let pool = a.state.ctx.pool().unwrap();
+        roll_back_to(&pool, 30).await;
+        // Bestandsdaten wie aus der Desktop-Fassung
+        for (id, label) in [
+            ("01928300-0000-7000-8000-0000000000a1", "Bank Altbestand 1"),
+            ("01928300-0000-7000-8000-0000000000a2", "Bank Altbestand 2"),
+        ] {
+            sqlx::query(
+                "INSERT INTO payment_accounts (id, label, \"type\", is_default, active)
+                 VALUES (?, ?, 'bank', 1, 1)",
+            )
+            .bind(id)
+            .bind(label)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        defaults_before = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM payment_accounts WHERE is_default = 1 AND active = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(defaults_before >= 2);
+        sqlx::query(
+            "INSERT INTO contacts (id, contact_type, name, email, country_code)
+             VALUES ('c-alt', 'customer', 'Kunde Altbestand', 'kunde@example.org', 'DE')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, number, storno_for) in [
+            ("inv-alt", "RE-2026-0901", None),
+            ("st-alt", "ST-2026-0901", Some("inv-alt")),
+        ] {
+            sqlx::query(
+                "INSERT INTO invoices (
+                    id, invoice_number, fiscal_year, direction, invoice_date, contact_id,
+                    seller_name, seller_street, seller_postal_code, seller_city,
+                    net_amount_cents, gross_amount_cents, status, locked_at, is_storno_for,
+                    buyer_name, buyer_country_code
+                 ) VALUES (?, ?, 2026, 'issued', '2026-05-20', 'c-alt',
+                    'Verkäufer', 'Beispielweg 1', '84028', 'Landshut',
+                    10000, 10000, 'issued', '2026-05-20 10:00:00', ?, 'Kunde Altbestand', 'DE')",
+            )
+            .bind(id)
+            .bind(number)
+            .bind(storno_for)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "UPDATE invoices SET status = 'canceled', canceled_at = '2026-05-20 10:00:00',
+                    canceled_by_storno_id = 'st-alt' WHERE id = 'inv-alt'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let kbk = backup_bytes(&a, &cookie_a).await;
+    let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
+    assert_eq!(m.schema_version, 30, "Backup trägt Schema 30");
+
+    // Instanz B stellt es wieder her
+    let b = test_server();
+    let cookie_b = setup(&b).await;
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
+    let r = restore_upload(&b, &cookie_b, &kbk, PASS).await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    assert_eq!(r.json()["result"]["schemaVersion"], 30, "{}", r.text());
+    let b = restart(b).await;
+    let r = login(&b, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'schema_version'"
+        )
+        .await,
+        EXPECTED_SCHEMA_VERSION as i64
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'secrets'"
+        )
+        .await,
+        1,
+        "0031 angewendet"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE name IN ('ux_invoices_one_locked_storno', 'trg_invoices_voided_final',
+                             'trg_quotes_converted_final', 'uq_payment_accounts_default')"
+        )
+        .await,
+        4,
+        "0032 angewendet"
+    );
+    // Bestand: genau ein Standardkonto, je bereinigtes Konto ein Audit
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM payment_accounts WHERE is_default = 1"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'payment_account.default_cleared'
+               AND json_extract(details_json, '$.migration') = 32"
+        )
+        .await,
+        defaults_before - 1
+    );
+    // Storno-Paar unverändert und durch den Index geschützt
+    assert_eq!(
+        scalar_text(
+            &b,
+            "SELECT status || '|' || canceled_by_storno_id FROM invoices WHERE id = 'inv-alt'"
+        )
+        .await
+        .as_deref(),
+        Some("canceled|st-alt")
+    );
+    // Pflicht-Backup mit Schema 30 und Audit 30 → 32
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT db_schema_version FROM backup_history WHERE trigger_reason = 'manual'
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        )
+        .await,
+        30
+    );
+    let details: String = {
+        let pool = b.state.ctx.pool().unwrap();
+        sqlx::query_scalar(
+            "SELECT details_json FROM audit_log WHERE action = 'backup.pre_migration'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert!(
+        details.contains("\"from\":30")
+            && details.contains(&format!("\"to\":{EXPECTED_SCHEMA_VERSION}")),
+        "{details}"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'backup.restore.applied'"
+        )
+        .await,
+        1
+    );
+}
+
+/// Plan W7/W8 + Lauf F2a: `.kbk` mit Schema 31 → Restore → beim Entsperren
+/// Pflicht-Backup (Schema 31) → Vorwärtsmigration (0032).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_31_backup_is_restored_and_migrated_forward() {
     let old = EXPECTED_SCHEMA_VERSION - 1;
     assert!(old >= MIN_RESTORE_SCHEMA_VERSION);
     // Instanz A auf den Stand vor der letzten Migration zurücksetzen
@@ -593,26 +929,7 @@ async fn schema_30_backup_is_restored_and_migrated_forward() {
     let cookie_a = setup(&a).await;
     {
         let pool = a.state.ctx.pool().unwrap();
-        let last = klein_buch_lib::db::MIGRATOR.migrations.last().unwrap();
-        assert!(
-            last.description.contains("secrets"),
-            "Test setzt 0031 zurück: {}",
-            last.description
-        );
-        sqlx::query("DROP TABLE secrets")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?")
-            .bind(last.version)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE app_settings SET value = ? WHERE key = 'schema_version'")
-            .bind(old.to_string())
-            .execute(&pool)
-            .await
-            .unwrap();
+        roll_back_to(&pool, old).await;
     }
     let kbk = backup_bytes(&a, &cookie_a).await;
     let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
@@ -640,11 +957,31 @@ async fn schema_30_backup_is_restored_and_migrated_forward() {
     assert_eq!(
         scalar_i64(
             &b,
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'secrets'"
+            "SELECT COUNT(*) FROM pragma_table_info('invoices') WHERE name = 'voided_at'"
         )
         .await,
         1,
-        "0031 angewendet"
+        "0032 angewendet (Spalte)"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE name IN ('ux_invoices_one_locked_storno', 'trg_invoice_items_frozen_update',
+                             'trg_archive_no_delete', 'uq_payment_accounts_default')"
+        )
+        .await,
+        4,
+        "0032 angewendet (Index, Trigger)"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM notification_rules WHERE id = 'rule_recurring_due'"
+        )
+        .await,
+        1,
+        "0032 angewendet (Regel)"
     );
     assert_eq!(
         scalar_i64(
@@ -702,6 +1039,39 @@ async fn foreign_archive_paths_are_rejected() {
         1,
         "Pre-Restore-Backup entstand (Prüfung erst nach dem Entpacken)"
     );
+}
+
+/// Lauf F2a: Ein Backup, das das Entsperren nach dem Tausch verweigern würde
+/// (verletzter Fremdschlüssel, R1-012; zwei festgeschriebene Stornos zu einem
+/// Original, Vorab-Prüfung 0032), lehnt schon Phase A ab — die Instanz bleibt
+/// nutzbar.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backups_the_unlock_would_refuse_are_rejected_in_phase_a() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    {
+        let pool = srv.state.ctx.pool().unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO notifications (id, rule_id, title, body, severity)
+             VALUES ('n-fk', 'rule_gibt_es_nicht', 'T', 'B', 'info')",
+        )
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+    }
+    let kbk = backup_bytes(&srv, &cookie).await;
+    assert_rejected(&srv, &cookie, &kbk, "verwaiste Verweise").await;
+    assert!(srv.state.ctx.is_unlocked(), "Instanz bleibt entsperrt");
 }
 
 /// Gegenprüfung W7: Der Audit des angewendeten Restores übersteht einen

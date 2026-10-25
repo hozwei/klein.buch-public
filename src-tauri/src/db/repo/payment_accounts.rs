@@ -273,7 +273,7 @@ pub async fn seed_defaults_once(pool: &SqlitePool) -> Result<bool> {
             "payment_account.seed_defaults",
             "payment_account",
             "-",
-            Some(r#"{"created":["Hauptkonto","Bargeld"]}"#),
+            Some(serde_json::json!({"created":["Hauptkonto","Bargeld"]})),
         )
         .await?;
     }

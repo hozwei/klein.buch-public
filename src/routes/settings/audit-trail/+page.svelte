@@ -66,10 +66,20 @@
     "invoice.lock": "Rechnung festgeschrieben",
     "invoice.payment_recorded": "Zahlung erfasst",
     "invoice.cancel": "Rechnung storniert",
+    "invoice.draft_voided": "Rechnungs-Entwurf verworfen",
+    "payment_account.default_cleared": "Standardkonto bereinigt (Migration)",
     "quote.sent": "Angebot versendet",
     "quote.converted": "Angebot in Rechnung umgewandelt",
     "expense.import_einvoice": "E-Rechnung importiert",
     "fiscal_year.close": "Geschäftsjahr abgeschlossen",
+    "euer.pdf_export": "EÜR als PDF exportiert",
+    "euer.datev_export": "DATEV-Buchungsstapel exportiert",
+    "euer.elster_export": "ELSTER-Ausfüllhilfe exportiert",
+    "euer.detail_export": "Einzelaufstellung exportiert",
+    "euer.stb_export": "Steuerberater-Paket exportiert",
+    "euer.snapshot_mismatch": "EÜR weicht vom Jahresabschluss ab",
+    "dsgvo.export": "DSGVO-Auskunft erstellt",
+    "migration.export": "Migrations-Export erstellt",
     "archive.store": "Datei archiviert",
     "archive.integrity_pass": "Integrität geprüft (ok)",
     "archive.integrity_fail": "Integrität gestört",
@@ -117,6 +127,7 @@
             <th class="num">geprüft</th>
             <th class="num">ok</th>
             <th class="num">Fehler</th>
+            <th class="num">nicht lesbar</th>
           </tr>
         </thead>
         <tbody>
@@ -126,6 +137,7 @@
               <td class="num" data-label="Geprüft">{h.filesChecked}</td>
               <td class="num" data-label="Ok">{h.filesPassed}</td>
               <td class="num" data-label="Fehler">{h.filesFailed}</td>
+              <td class="num" data-label="Nicht lesbar">{h.filesUnreadable ?? "–"}</td>
             </tr>
           {/each}
         </tbody>

@@ -128,7 +128,7 @@ ADRs: 0008, 0018, 0030.
 
 | Datei | Schicht | Verantwortung |
 |---|---|---|
-| `archive::store` | Shell | `store_bytes`: SHA-256 berechnen, in eine Temp-Datei schreiben (`fsync`), schreibschützen (`0o400`), ohne Überschreiben an den Zielpfad `<archive_dir>/<fiscal_year>/<kind>/<file_name>` bringen (im Container unter `/data/archive`), Eintrag in `archive_entries` (Pfad `UNIQUE`), Audit `archive.store`. `read_and_verify` (Re-Hash, Audit `archive.read`) und `read_and_verify_silent` (Re-Hash ohne Audit, D-72). |
+| `archive::store` | Shell | `store_bytes`: SHA-256 berechnen, in eine Temp-Datei schreiben (`fsync`), zurücklesen und gegen den Hash prüfen (Lauf F, KB-0040), schreibschützen (`0o400`), ohne Überschreiben (`hard_link`, sonst `renameat2` mit `RENAME_NOREPLACE`) an den Zielpfad `<archive_dir>/<fiscal_year>/<kind>/<file_name>` bringen (im Container unter `/data/archive`), Eintrag in `archive_entries` (Pfad `UNIQUE`), Audit `archive.store`. `read_and_verify` (Re-Hash, Audit `archive.read`) und `read_and_verify_silent` (Re-Hash ohne Audit, D-72). |
 | `archive::audit` | Shell | Typisierte Audit-Events: `archive.store`, `archive.read`, `archive.integrity_pass`, `archive.integrity_fail`, `archive.integrity_missing`, `archive.integrity_unreadable`. |
 | `archive::integrity_check` | Shell | `verify_one`, `run_full_scan`: Re-Hash aller Archiv-Dateien; manipuliert, fehlt und nicht lesbar getrennt (G1-HARDEN.4), Aggregat in `archive_integrity_checks`. |
 
@@ -157,7 +157,7 @@ ADRs: 0006.
 | `db::mod` | Shell | `open_pool(db_file, key)` (SQLCipher-Pool, `PRAGMA key`), `open_and_init`, `begin_immediate` (Schreib-Transaktion, W2), `prepare_filesystem` (vor jedem Pool-Open: Seed von `/inputs`, vorgemerkter Factory Reset → Start-Abbruch (E7), Restore-Staging aufräumen, vorgemerkten Restore anwenden), `run_migrations` (`sqlx::migrate!` aus `migrations/`, Schema-Check, Restore-Audit), `rekey_db_file` (Passphrase-Wechsel, W6), `db_file_is_plaintext` |
 | `db::models` | Shell | sqlx-Row-Typen (DB-nahe), nicht zu verwechseln mit Domain-Typen — Mapping in den Repos |
 | `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq`; `snapshot` und `raise_in` (nur aufwärts) für Restore und `numbering_raise` (Lauf F, D-24) |
-| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (31), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
+| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (32), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
 | `db::triggers` | Shell-Stub | Dokumentiert die in den Migrations-SQLs definierten Trigger (Code-Stub, die Wahrheit lebt in `migrations/*.sql`) |
 | `db::repo::*` | Shell | Repo pro Domäne (21 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
 
@@ -166,7 +166,9 @@ ADRs: 0006.
 `packages`, `legal_documents`, `attachments`, `contacts`, `seller_profile`,
 `audit_log`, `email_log`, `backup_log`, `mail_accounts`, `euer`, `dsgvo`,
 `app_settings`. Zugangsdaten liegen nicht in einem Repo, sondern in
-`crate::secrets` (§16).
+`crate::secrets` (§16). `audit_log::append`/`append_in` nehmen die Details nur
+als `serde_json::Value` und setzen den Akteur aus dem Task-Kontext
+(`with_actor`: `owner`/`scheduler`, sonst `system`; Lauf F, ADR 0039 Nr. 125).
 
 **Locked-Belege-Pattern.** Repos haben getrennte Funktionen für „Draft-Update"
 (erlaubt Kernfeld-Änderungen) und „State-Transition" (erlaubt nur die in
@@ -325,16 +327,19 @@ ADRs: 0027, 0034, 0039.
 
 | Datei | Schicht | Verantwortung |
 |---|---|---|
-| `fiscal_year::lock` | Shell | `close_year(year)` — nur abgelaufene Jahre, nur entsperrt: AfA buchen, Anlagen + Abschreibung sperren, EÜR-Snapshot ins `fiscal_year_locks` (append-only), Audit, Auto-Backup; `get`, `list_closed` |
+| `fiscal_year::lock` | Shell | `close_year(year)` — nur abgelaufene Jahre, nur entsperrt, exklusiv gegen Buchungen (`guard::closing`): AfA buchen; in **einer** Transaktion Anlagen + Abschreibung sperren, EÜR-Snapshot ins `fiscal_year_locks` (append-only), Audit mit Belegzahlen und offenen Entwürfen; danach Auto-Backup; `open_drafts`, `get`, `list_closed` (Lauf F) |
+| `fiscal_year::snapshot` | Core + Shell | Abgleich abgeschlossener Jahre mit dem Festschreibungs-Snapshot: `compare` (pure), `check`, `report_mismatch` (Audit `euer.snapshot_mismatch`, Hinweis je Jahr), `readme_block` (Lauf F, KB-0031) |
 | `fiscal_year::transition` | Shell | GJ-Übergang: `open_receivables` (offene Forderungen, die der Abschluss-Dialog anzeigt); Nummernkreise starten lazy je GJ |
-| `fiscal_year::guard` | Shell | `ensure_year_open(year)`-Guard in den Command-Kernen, `is_closed`. Ein Storno zu einer Rechnung aus einem abgeschlossenen Jahr bleibt möglich; er entsteht im (offenen) Jahr seines Storno-Datums (ADR 0039 Nr. 122). |
+| `fiscal_year::guard` | Shell | `ensure_year_open(year)`-Guard in den Command-Kernen, `is_closed`. Liefert eine `BookingPermit`, die bis nach dem Schreiben gehalten wird; `closing()` ist die exklusive Gegenseite des Abschlusses (Lauf F, ADR 0040 Nr. 48). Ein Storno zu einer Rechnung aus einem abgeschlossenen Jahr bleibt möglich; er entsteht im (offenen) Jahr seines Storno-Datums (ADR 0039 Nr. 122). |
 
 **Hardline (ADR 0027).** `close_year` ist **unumkehrbar**. Versuche, danach
 Belege im geschlossenen Jahr zu ändern, scheitern am Guard auf Command-Ebene
 und am Trigger auf DB-Ebene.
 
 **Tests.** `close_year` lehnt nicht-abgelaufene Jahre ab; setzt `fiscal_year_locks`
-und blockiert Folge-Edits; Storno bleibt zugelassen.
+und blockiert Folge-Edits; Storno bleibt zugelassen. `tests/fiscal_year_guard_test.rs`
+deckt alle buchenden Commands nach dem Abschluss und die Sperre gegen parallele
+Buchungen ab, `tests/audit_export_test.rs` den Snapshot-Abgleich.
 
 ADRs: 0027.
 

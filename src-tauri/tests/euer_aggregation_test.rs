@@ -341,9 +341,18 @@ async fn storno_reverses_in_storno_year_without_touching_prior_year() {
         Some(orig.clone()),
     )
     .await;
-    invoices::mark_canceled(&pool, &orig, &storno, Some("Rückabwicklung"))
-        .await
-        .unwrap();
+    // Original als storniert markieren (wie das Storno-Paar in
+    // `lock_with_pair_cancel`; die Repo-Funktion `mark_canceled` ist entfernt).
+    sqlx::query(
+        "UPDATE invoices SET status = 'canceled', canceled_at = datetime('now','utc'),
+                canceled_by_storno_id = ?, cancel_reason = 'Rückabwicklung'
+          WHERE id = ? AND status != 'canceled'",
+    )
+    .bind(&storno)
+    .bind(&orig)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let inputs = euer_repo::load_inputs(&pool).await.unwrap();
 

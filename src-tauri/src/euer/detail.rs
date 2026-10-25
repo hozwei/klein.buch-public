@@ -100,6 +100,23 @@ pub struct AveeurItem {
     pub disposal_proceeds_cents: Option<i64>,
 }
 
+/// Eine Rechnungs- oder Storno-Nummer des Geschäftsjahres, die nie
+/// festgeschrieben wurde (Lauf F2c): verworfener Entwurf (W14-032) oder noch
+/// offener Entwurf. Erklärt dem Steuerberater die Lücken in der Nummernfolge
+/// der beigelegten Belege (GoBD Rz. 58 ff.: Lücken dokumentiert).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnissuedNumberItem {
+    pub number: String,
+    pub is_storno: bool,
+    pub invoice_date: String,
+    /// Zeitpunkt des Verwerfens (Europe/Berlin, `YYYY-MM-DD HH:MM`); `None` =
+    /// offener Entwurf.
+    pub voided_at: Option<String>,
+    pub void_reason: Option<String>,
+    pub gross_cents: i64,
+}
+
 // ============================================================================
 // CSV-Helfer (deutsche Notation, BOM für Excel)
 // ============================================================================
@@ -182,6 +199,29 @@ pub fn category_label(code: &str) -> &'static str {
 // CSV-Builder
 // ============================================================================
 
+/// Nicht festgeschriebene Nummern als CSV
+/// (`Nummer;Art;Belegdatum;Status;Verworfen am;Grund;Betrag`, Lauf F2c).
+pub fn unissued_numbers_csv(items: &[UnissuedNumberItem]) -> String {
+    let mut out = String::from("\u{FEFF}Nummer;Art;Belegdatum;Status;Verworfen am;Grund;Betrag\n");
+    for it in items {
+        out.push_str(&format!(
+            "{};{};{};{};{};{};{}\n",
+            field(&it.number),
+            if it.is_storno { "Storno" } else { "Rechnung" },
+            field(&it.invoice_date),
+            if it.voided_at.is_some() {
+                "verworfen (nie ausgestellt)"
+            } else {
+                "offener Entwurf"
+            },
+            field(it.voided_at.as_deref().unwrap_or("")),
+            field(it.void_reason.as_deref().unwrap_or("")),
+            field(&eur_de(it.gross_cents)),
+        ));
+    }
+    out
+}
+
 /// Einnahmen-Einzelaufstellung als CSV
 /// (`Datum;Rechnungsnr.;Kunde;Beschreibung;Betrag`).
 pub fn income_csv(items: &[IncomeItem]) -> String {
@@ -255,6 +295,43 @@ pub fn aveeur_csv(items: &[AveeurItem], fiscal_year: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F2c: verworfene und offene Nummern mit Status, Zeitpunkt, Grund.
+    #[test]
+    fn unissued_numbers_csv_lists_voided_and_open_drafts() {
+        let csv = unissued_numbers_csv(&[
+            UnissuedNumberItem {
+                number: "R-2026-0007".into(),
+                is_storno: false,
+                invoice_date: "2026-03-01".into(),
+                voided_at: Some("2026-03-02 09:15".into()),
+                void_reason: Some("Kunde hat abgesagt; neu angelegt".into()),
+                gross_cents: 12_345,
+            },
+            UnissuedNumberItem {
+                number: "ST-2026-0002".into(),
+                is_storno: true,
+                invoice_date: "2026-04-01".into(),
+                voided_at: None,
+                void_reason: None,
+                gross_cents: -500,
+            },
+        ]);
+        let lines: Vec<&str> = csv.trim_start_matches('\u{FEFF}').lines().collect();
+        assert_eq!(
+            lines[0],
+            "Nummer;Art;Belegdatum;Status;Verworfen am;Grund;Betrag"
+        );
+        assert_eq!(
+            lines[1],
+            "R-2026-0007;Rechnung;2026-03-01;verworfen (nie ausgestellt);2026-03-02 09:15;\
+             \"Kunde hat abgesagt; neu angelegt\";123,45"
+        );
+        assert_eq!(
+            lines[2],
+            "ST-2026-0002;Storno;2026-04-01;offener Entwurf;;;-5,00"
+        );
+    }
 
     #[test]
     fn eur_de_german_decimals() {

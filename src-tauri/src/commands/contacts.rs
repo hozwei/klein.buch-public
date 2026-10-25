@@ -7,7 +7,7 @@
 
 use crate::app_ctx::AppCtx;
 use crate::db::models::ContactRow;
-use crate::db::repo::{audit_log, contacts};
+use crate::db::repo::contacts;
 use crate::domain::contact::ContactInput;
 use crate::error::{Error, Result};
 use serde::Serialize;
@@ -182,33 +182,15 @@ pub async fn contacts_anonymize_check(
 }
 
 /// Testbarer Kern der Anonymisierung (analog `dsgvo::export_core`): überschreibt
-/// die Stammdaten via [`contacts::anonymize`] und schreibt genau EINEN
-/// `contact.anonymize`-Audit-Eintrag mit NUR Zählwerten — keine
-/// personenbezogenen Inhalte. Der Audit-Eintrag wird nur bei erfolgreicher
-/// Anonymisierung geschrieben (Guard/Already-Fehler ⇒ kein Audit).
+/// die Stammdaten via [`contacts::anonymize_with_pauses`], die in **derselben
+/// Transaktion** genau EINEN `contact.anonymize`-Audit-Eintrag mit NUR
+/// Zählwerten und Belegnummern schreibt — keine personenbezogenen Inhalte
+/// (Lauf F2c; vorher nach dem Commit). Guard/Already-Fehler ⇒ kein Audit.
+/// W14-031: Vorlagen und Kosten-Abos dieses Kontakts werden mit pausiert;
+/// F2c: verworfene Entwürfe und zurückgezogene, nie ausgestellte Angebote
+/// verlieren ihren Empfänger-Snapshot.
 pub async fn anonymize_core(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
-    // Vor dem Überschreiben zählen, was erhalten bleibt (fürs Audit-Detail).
-    let (locked_invoices, locked_quotes) = contacts::count_locked_documents(pool, id).await?;
-    // W14-031: Vorlagen und Kosten-Abos dieses Kontakts werden mit pausiert.
-    let (row, paused_templates, paused_subscriptions) =
-        contacts::anonymize_with_pauses(pool, id).await?;
-    audit_log::append(
-        pool,
-        "contact.anonymize",
-        "contact",
-        id,
-        Some(
-            &serde_json::json!({
-                "retainedInvoices": locked_invoices,
-                "retainedQuotes": locked_quotes,
-                "pausedRecurringInvoices": paused_templates,
-                "pausedRecurringSubscriptions": paused_subscriptions,
-            })
-            .to_string(),
-        ),
-    )
-    .await?;
-    Ok(row)
+    Ok(contacts::anonymize_with_pauses(pool, id).await?.contact)
 }
 
 /// Argumente von [`contacts_anonymize`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

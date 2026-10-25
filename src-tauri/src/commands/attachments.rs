@@ -180,12 +180,7 @@ pub async fn attachments_add(
         "attachment.add",
         &args.parent_type,
         &args.parent_id,
-        Some(&format!(
-            r#"{{"attachment":"{}","archive":"{}","file":"{}"}}"#,
-            attachment_id,
-            stored.archive_id,
-            escape(&sanitized)
-        )),
+        Some(serde_json::json!({ "attachment": attachment_id, "archive": stored.archive_id, "file": &sanitized })),
     )
     .await?;
 
@@ -216,10 +211,6 @@ pub(crate) fn sanitize_filename(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-pub(crate) fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

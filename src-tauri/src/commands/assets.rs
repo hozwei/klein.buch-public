@@ -170,7 +170,7 @@ pub async fn assets_create(ctx: &Arc<AppCtx>, args: AssetsCreateArgs) -> Result<
     // R2-022 (GJ-Guard): Anlage darf nicht in ein festgeschriebenes GJ
     // eingebucht werden — sonst würde die AfA dieses Jahres nachträglich
     // den Lock-Snapshot verbiegen.
-    guard::ensure_year_open(pool, fiscal_year).await?;
+    let _fy = guard::ensure_year_open(pool, fiscal_year).await?;
 
     let asset_number = numbering::next_number(pool, DocType::Asset, fiscal_year as i32).await?;
 
@@ -195,14 +195,7 @@ pub async fn assets_create(ctx: &Arc<AppCtx>, args: AssetsCreateArgs) -> Result<
         "asset.create",
         "asset",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","cost":{},"method":"{}","business_share":{},"book_value":{}}}"#,
-            esc(&asset_number),
-            row.acquisition_cost_cents,
-            esc(&method_db),
-            row.business_share_percent,
-            book_value
-        )),
+        Some(serde_json::json!({ "number": &asset_number, "cost": row.acquisition_cost_cents, "method": &method_db, "business_share": row.business_share_percent, "book_value": book_value })),
     )
     .await?;
 
@@ -245,6 +238,18 @@ pub async fn assets_update(ctx: &Arc<AppCtx>, args: AssetsUpdateArgs) -> Result<
         )));
     }
 
+    // Lauf F2c: Eine veräußerte Anlage ist abgeschlossen — vor der Prüfung der
+    // AfA-Buchungen, damit die Meldung nicht zum Zurücksetzen rät (DB-Backstop
+    // `trg_assets_disposal_final`).
+    let existing = assets::get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {id}")))?;
+    if existing.disposed == 1 {
+        return Err(Error::Domain(
+            "Anlage ist bereits veräußert — keine Stammdaten-Änderung möglich.".into(),
+        ));
+    }
+
     // Solange AfA gebucht ist, sind die Stammdaten nicht änderbar (sonst würden die
     // Buchungen inkonsistent). Erst die Abschreibung des offenen GJ zurücksetzen.
     if depreciation_repo::count_for_asset(pool, &id).await? > 0 {
@@ -258,11 +263,8 @@ pub async fn assets_update(ctx: &Arc<AppCtx>, args: AssetsUpdateArgs) -> Result<
     // R2-022 (GJ-Guard): existierender Anschaffungs-GJ und neu gewähltes
     // Anschaffungs-Jahr müssen offen sein — sonst lässt sich rückwirkend
     // in ein festgeschriebenes GJ schreiben.
-    let existing = assets::get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {id}")))?;
-    guard::ensure_year_open(pool, existing.acquisition_fiscal_year).await?;
-    guard::ensure_year_open(pool, input.acquisition_date.year() as i64).await?;
+    let fy = guard::ensure_year_open(pool, existing.acquisition_fiscal_year).await?;
+    guard::check_open(pool, &fy, input.acquisition_date.year() as i64).await?;
 
     let (method_db, useful_life) = resolve_method(&input)?;
     let book_value =
@@ -275,13 +277,7 @@ pub async fn assets_update(ctx: &Arc<AppCtx>, args: AssetsUpdateArgs) -> Result<
         "asset.update",
         "asset",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","cost":{},"method":"{}","business_share":{}}}"#,
-            esc(&row.asset_number),
-            row.acquisition_cost_cents,
-            esc(&method_db),
-            row.business_share_percent
-        )),
+        Some(serde_json::json!({ "number": &row.asset_number, "cost": row.acquisition_cost_cents, "method": &method_db, "business_share": row.business_share_percent })),
     )
     .await?;
 
@@ -344,7 +340,7 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
     // R2-023 (GJ-Guard): Disposal-Datum muss in einem offenen GJ liegen —
     // die Veräußerungs-Buchung kippt sonst rückwirkend Restbuchwert und
     // Erlös ins festgeschriebene Jahr.
-    guard::ensure_year_open(pool, args.disposal_date.year() as i64).await?;
+    let _fy = guard::ensure_year_open(pool, args.disposal_date.year() as i64).await?;
 
     // R2-021 (Pro-rata-AfA im Veräußerungsjahr, R 7.4 Abs. 7 EStR / §7 Abs. 1
     // Satz 4 EStG). Wenn für (Anlage, Disposal-Jahr) noch keine AfA-Zeile
@@ -354,6 +350,30 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
     // gebucht (z. B. nach manuellem `depreciation_accrue_year`), bleibt sein
     // Wert vorrangig.
     let disposal_year = args.disposal_date.year() as i64;
+    // Lauf F2c (neuer Fund): Vorjahre ohne gebuchte AfA zuerst nachholen. Nach
+    // dem Abgang bucht der AfA-Lauf die Anlage nicht mehr; die AfA der
+    // Vorjahre fehlte sonst endgültig, und die anteilige AfA des Abgangsjahres
+    // rechnete vom zu hohen Restbuchwert. Abgeschlossene Jahre sind gebucht
+    // (der Abschluss bucht vorher) und bleiben unberührt.
+    let existing = if disposal_year > existing.acquisition_fiscal_year {
+        let caught_up = crate::depreciation::accrue_yearly::accrue_asset_through(
+            pool,
+            &existing,
+            disposal_year - 1,
+        )
+        .await?;
+        if caught_up > 0 {
+            tracing::info!(
+                "Anlage {}: {caught_up} AfA-Jahr(e) vor dem Abgang nachgebucht",
+                existing.asset_number
+            );
+        }
+        assets::get(pool, &args.asset_id)
+            .await?
+            .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {}", args.asset_id)))?
+    } else {
+        existing
+    };
     let residual = match depreciation_repo::get_for_asset_year(pool, &args.asset_id, disposal_year)
         .await?
     {
@@ -408,13 +428,7 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
                     "depreciation.disposal_partial",
                     "asset",
                     &args.asset_id,
-                    Some(&format!(
-                        r#"{{"fiscal_year":{},"months":{},"amount":{},"book_value_after":{}}}"#,
-                        disposal_year,
-                        calc.months_in_year,
-                        calc.depreciation_amount_cents,
-                        calc.book_value_after_cents
-                    )),
+                    Some(serde_json::json!({ "fiscal_year": disposal_year, "months": calc.months_in_year, "amount": calc.depreciation_amount_cents, "book_value_after": calc.book_value_after_cents })),
                 )
                 .await?;
             }
@@ -437,14 +451,7 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
         "asset.dispose",
         "asset",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","type":"{}","date":"{}","proceeds":{},"residual_book_value":{}}}"#,
-            esc(&row.asset_number),
-            dtype.as_db(),
-            args.disposal_date,
-            proceeds,
-            residual
-        )),
+        Some(serde_json::json!({ "number": &row.asset_number, "type": dtype.as_db(), "date": args.disposal_date, "proceeds": proceeds, "residual_book_value": residual })),
     )
     .await?;
 
@@ -479,10 +486,6 @@ fn resolve_method(input: &AssetInput) -> Result<(String, Option<f64>)> {
 /// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
-}
-
-fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

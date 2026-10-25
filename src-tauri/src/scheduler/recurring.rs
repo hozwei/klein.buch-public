@@ -224,15 +224,12 @@ pub async fn apply_resume_mode(
                 "recurring.backlog_skipped",
                 "recurring",
                 &sub.id,
-                Some(
-                    &serde_json::json!({
-                        "from": sub.next_due_date,
-                        "to": target.to_string(),
-                        "skipped": skipped,
-                        "after_restore": review,
-                    })
-                    .to_string(),
-                ),
+                Some(serde_json::json!({
+                    "from": sub.next_due_date,
+                    "to": target.to_string(),
+                    "skipped": skipped,
+                    "after_restore": review,
+                })),
             )
             .await?;
             tx.commit().await?;
@@ -255,7 +252,7 @@ pub async fn apply_resume_mode(
                 "recurring.backlog_confirmed",
                 "recurring",
                 &sub.id,
-                Some(&serde_json::json!({ "from": sub.next_due_date, "due": due }).to_string()),
+                Some(serde_json::json!({ "from": sub.next_due_date, "due": due })),
             )
             .await?;
         }
@@ -434,7 +431,7 @@ async fn book_occurrence(
 
     let fiscal_year = occurrence.year() as i64;
     // R2-005 (GJ-Guard): nie in ein festgeschriebenes GJ buchen.
-    guard::ensure_year_open(pool, fiscal_year).await?;
+    let _fy = guard::ensure_year_open(pool, fiscal_year).await?;
 
     let mut tx = crate::db::begin_immediate(pool).await?;
     let expense_number =
@@ -453,16 +450,13 @@ async fn book_occurrence(
         "expense.create",
         "expense",
         &expense_id,
-        Some(
-            &serde_json::json!({
-                "number": expense_number,
-                "gross": input.gross_amount_cents,
-                "category": input.category,
-                "source": "recurring",
-                "subscription": sub.id,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "number": expense_number,
+            "gross": input.gross_amount_cents,
+            "category": input.category,
+            "source": "recurring",
+            "subscription": sub.id,
+        })),
     )
     .await?;
     audit_log::append_in(
@@ -470,15 +464,12 @@ async fn book_occurrence(
         action,
         "recurring",
         &sub.id,
-        Some(
-            &serde_json::json!({
-                "label": sub.label,
-                "occurrence": occurrence.to_string(),
-                "expense_id": expense_id,
-                "expense_number": expense_number,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "label": sub.label,
+            "occurrence": occurrence.to_string(),
+            "expense_id": expense_id,
+            "expense_number": expense_number,
+        })),
     )
     .await?;
     recurring::advance_in(
@@ -516,14 +507,11 @@ async fn skip_closed_year_period(
         "recurring.period_skipped",
         "recurring",
         &sub.id,
-        Some(
-            &serde_json::json!({
-                "occurrence": occurrence.to_string(),
-                "reason": "fiscal_year_closed",
-                "fiscal_year": occurrence.year(),
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "occurrence": occurrence.to_string(),
+            "reason": "fiscal_year_closed",
+            "fiscal_year": occurrence.year(),
+        })),
     )
     .await?;
     tx.commit().await?;

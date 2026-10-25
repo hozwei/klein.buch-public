@@ -165,7 +165,7 @@ pub async fn setup_passphrase(
         "backup.passphrase.setup",
         "backup",
         "passphrase",
-        Some(r#"{"verifier":"stored"}"#),
+        Some(serde_json::json!({"verifier":"stored"})),
     )
     .await?;
     Ok(())
@@ -488,7 +488,7 @@ pub async fn rescan_floor(
             "backup.history_rescanned",
             "backup",
             "floor",
-            Some(&serde_json::json!({ "added": added, "removed": removed }).to_string()),
+            Some(serde_json::json!({ "added": added, "removed": removed })),
         )
         .await?;
     }
@@ -683,9 +683,7 @@ pub async fn create_with(
         "backup.created",
         "backup",
         &history_id,
-        Some(&format!(
-            r#"{{"trigger":"{trigger_reason}","tag":"{retention_tag}","size":{size_bytes}}}"#
-        )),
+        Some(serde_json::json!({ "trigger": trigger_reason, "tag": retention_tag, "size": size_bytes })),
     )
     .await
     .ok();
@@ -732,14 +730,11 @@ pub async fn create_with(
             "backup.mirror.skipped",
             "backup",
             &history_id,
-            Some(
-                &serde_json::json!({
-                    "reason": "restore_hold",
-                    "targets": targets.len(),
-                    "trigger": trigger_reason,
-                })
-                .to_string(),
-            ),
+            Some(serde_json::json!({
+                "reason": "restore_hold",
+                "targets": targets.len(),
+                "trigger": trigger_reason,
+            })),
         )
         .await
         .ok();
@@ -832,10 +827,7 @@ pub async fn create_with(
                         "backup.mirror.ok",
                         "backup",
                         &mirror_id,
-                        Some(
-                            &serde_json::json!({ "target": entry.id, "location": offsite_path })
-                                .to_string(),
-                        ),
+                        Some(serde_json::json!({ "target": entry.id, "location": offsite_path })),
                     )
                     .await
                     .ok();
@@ -879,10 +871,7 @@ pub async fn create_with(
                         "backup.mirror.failed",
                         "backup",
                         &history_id,
-                        Some(
-                            &serde_json::json!({ "target": entry.id, "error": e.to_string() })
-                                .to_string(),
-                        ),
+                        Some(serde_json::json!({ "target": entry.id, "error": e.to_string() })),
                     )
                     .await
                     .ok();
@@ -1028,7 +1017,7 @@ pub async fn auto_backup_at(
             "backup.skipped_locked",
             "backup",
             "auto",
-            Some(&serde_json::json!({ "event": event }).to_string()),
+            Some(serde_json::json!({ "event": event })),
         )
         .await
         .ok();
@@ -1055,7 +1044,7 @@ pub async fn auto_backup_at(
                 "backup.failed",
                 "backup",
                 "auto",
-                Some(&serde_json::json!({ "event": event, "error": e.to_string() }).to_string()),
+                Some(serde_json::json!({ "event": event, "error": e.to_string() })),
             )
             .await
             .ok();

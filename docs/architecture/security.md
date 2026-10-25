@@ -71,7 +71,7 @@ nicht (E1).
 | | TOTP vor der KDF; Wartezeit je Client-IP ab 5 Fehlversuchen (1 min, verdoppelnd bis 1 h, kein Dauer-Lockout); Gerätecookie gegen fremd ausgelöste Wartezeiten | umgesetzt (W6; IPv6 je /64, globales Budget ohne Gerätecookie; W14: Gerätecookie gleitend erneuert, Einmal-Code-Login nicht im globalen Budget) |
 | Überlast durch langsame Körper | Körper kleiner Anfragen höchstens 10 s, höchstens 16 gleichzeitige POSTs je Client-Adresse | umgesetzt (W14) |
 | | höchstens eine Passphrase-Ableitung gleichzeitig (Semaphore `KDF` = 1) | umgesetzt (W2) |
-| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel, Zahlungsdaten/§19-Status, Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung beendet andere Sitzungen | umgesetzt (W6; W14 Rotation und erweiterte Liste) |
+| Sitzungsdiebstahl | Cookie `__Host-…`, HttpOnly, Secure, SameSite=Strict; ID 256 bit, serverseitig nur als SHA-256; Idle 30 min, absolut 12 h; Re-Auth (5 min) für Restore, Ziele, Mailkonten, Exporte, Passphrase-Wechsel, Zahlungsdaten/§19-Status, Anonymisieren, GJ-Abschluss, Freigabe angehaltener Abo-Läufe (ADR 0040), Anheben von Nummernkreisen, Freigabe vorgemerkter Entwürfe, Verwerfen von Rechnungs-Entwürfen (Lauf F); Re-Auth rotiert die Sitzungs-ID; TOTP-/Einmal-Code-Erneuerung beendet andere Sitzungen | umgesetzt (W6; W14 Rotation und erweiterte Liste) |
 | CSRF, Clickjacking | Pflicht-Header `X-KleinBuch-Request` + Origin/Host-Prüfung; CSP mit Script-Hashes und `frame-ancestors 'none'`; kein CORS | umgesetzt (W5/W6) |
 | Gefälschte Proxy-Header | `KLEIN_BUCH_PUBLIC_URL` Pflicht; `X-Forwarded-*` nur von `KLEIN_BUCH_TRUSTED_PROXIES`; Login nur über HTTPS-Proxy oder Loopback | umgesetzt (W6) |
 | Überlast durch teure Arbeit | Typst, Argon2id und ZIP außerhalb der async-Runtime; Semaphoren `RENDER` 2, `JVM` 2, `KDF` 1 (`limits.rs`) | umgesetzt (W2); seit W5 laufen Kerne als eigene Tasks — ein Abbruch des Requests bricht sie nicht mehr ab |
@@ -513,7 +513,9 @@ Browser-Sitzungen sind davon getrennt (umgesetzt W5/W6).
    Verifier (§2.3) schreiben, Instanz-Marker und `totp.json`, erstes Backup.
 3. **Anmelden = Entsperren** (Zustand `locked`): TOTP vor der KDF, Pool mit der
    Passphrase öffnen + Probe-Read, Archivpfad-Stichprobe, bei älterem Schema
-   Pflicht-Backup vor der Migration, Migrationen + Schema-Check, dann
+   Fremdschlüssel- und Storno-Vorabprüfung vor der Umstellung (Lauf F2c),
+   Pflicht-Backup vor der Migration, Migrationen + Schema-Check +
+   Fremdschlüssel-Prüfung (R1-012; Treffer → 409 `db_integrity_failed`), dann
    `activate_unlocked`: Passphrase in die `BackupSession` (Prozessspeicher),
    zuerst das Pflicht-Audit (scheitert es, bleibt die Instanz gesperrt, D-21),
    dann Passphrase in die `BackupSession` (Prozessspeicher), Pool in den
@@ -553,7 +555,9 @@ abgeschaltet und entfernt (E7).
   Platz prüfen, gehärtet ins Staging `restore-staging/` entpacken (Allowlist,
   nur normale Pfadbestandteile, Größen- und Verhältnisgrenzen, keine Symlinks),
   gestagte DB mit der Backup-Passphrase öffnen (Schema, Archivpfade,
-  Migrations-Prüfsummen), Marker per `rename`. Der Tausch beim Neustart legt
+  Migrations-Prüfsummen, Fremdschlüssel, höchstens ein festgeschriebener Storno
+  je Original — was das Entsperren nach dem Tausch verweigern würde, lehnt
+  schon Phase A ab, Lauf F2a), Marker per `rename`. Der Tausch beim Neustart legt
   `RESTORE_APPLIED.json` an; das erste Entsperren schreibt
   `backup.restore.applied` und trägt das Pre-Restore-Backup in die Historie ein.
 
@@ -610,8 +614,8 @@ Code seit W11 entfernt).
 Wiederherstellung ohne Zustandsdatei löscht nie); `tests/server_restore_test.rs`
 (Disaster Recovery mit anderer Passphrase, abgelehnte Backups hinterlassen
 nichts, Restore aus der Historie nur lokal, Pflicht-Backup vor Migration,
-Schema-30-Backup mit Vorwärtsmigration, fremde Archivpfade, Audit über
-Neustarts); `tests/server_jobs_test.rs`
+Backup eine Schema-Version älter mit Vorwärtsmigration, fremde Archivpfade,
+Backups mit verletzten Fremdschlüsseln, Audit über Neustarts); `tests/server_jobs_test.rs`
 (`restart_after_restore_blocks_writes_and_shuts_down`); nach Backup → Restore
 hat keine Datei unter `archive/` ein Schreibbit.
 

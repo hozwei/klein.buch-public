@@ -13,10 +13,16 @@
 //!    WHERE doc_type = ? AND fiscal_year = ? RETURNING last_value`
 //!    inkrementiert atomar und liefert den frischen Counter.
 //!
-//! SQLite garantiert über die Transaktion + den PRIMARY KEY (doc_type,
-//! fiscal_year) Lückenlosigkeit und Eindeutigkeit ohne Race-Condition. WAL
-//! reicht; kein expliziter `BEGIN IMMEDIATE` nötig, weil sqlx-Pool die
-//! Connection für die Dauer der Transaktion exklusiv hält.
+//! Die Garantie (lückenlos, eindeutig) kommt aus dem **atomaren**
+//! `UPDATE … RETURNING` in einer Schreib-Transaktion (`BEGIN IMMEDIATE` über
+//! `db::begin_immediate` bzw. die Transaktion des Aufrufers) und dem
+//! **Single-Writer**-Modell von SQLite: Es gibt höchstens einen Schreiber
+//! gleichzeitig, weitere Verbindungen des Pools warten bis zum
+//! `busy_timeout` (WAL-Modus). Dass der Pool eine Verbindung während einer
+//! Transaktion exklusiv hält, reicht dafür nicht — im Server laufen Anfragen
+//! parallel über mehrere Verbindungen (KB-0005). Der Test
+//! `parallel_allocations_over_several_connections_stay_gapless` prüft das
+//! gegen eine Datei-DB mit mehreren Verbindungen.
 //!
 //! ## GoBD
 //!
@@ -297,6 +303,54 @@ mod tests {
         got.sort_unstable();
         let expected: Vec<u32> = (1..=50).collect();
         assert_eq!(got, expected, "parallele Allokation hat Lücken/Duplikate");
+    }
+
+    /// KB-0005: wie im Server — Datei-DB im WAL-Modus, mehrere Verbindungen,
+    /// `busy_timeout`; parallele Allokationen über verschiedene Verbindungen
+    /// ergeben je Nummernkreis eine lückenlose, eindeutige Folge.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_allocations_over_several_connections_stay_gapless() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::db::open_pool(&dir.path().join("n.sqlite"), None)
+            .await
+            .unwrap();
+        assert!(
+            pool.options().get_max_connections() > 1,
+            "mehrere Verbindungen"
+        );
+        sqlx::query(
+            "CREATE TABLE doc_number_counters (
+                doc_type    TEXT NOT NULL,
+                fiscal_year INTEGER NOT NULL,
+                last_value  INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (doc_type, fiscal_year)
+            ) STRICT",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..60 {
+            let p = pool.clone();
+            let dt = if i % 3 == 0 {
+                DocType::StornoInvoice
+            } else {
+                DocType::Invoice
+            };
+            set.spawn(async move { (dt, next_seq(&p, dt, 2026).await.unwrap()) });
+        }
+        let mut invoices = Vec::new();
+        let mut stornos = Vec::new();
+        while let Some(r) = set.join_next().await {
+            match r.unwrap() {
+                (DocType::Invoice, n) => invoices.push(n),
+                (_, n) => stornos.push(n),
+            }
+        }
+        invoices.sort_unstable();
+        stornos.sort_unstable();
+        assert_eq!(invoices, (1..=40).collect::<Vec<u32>>());
+        assert_eq!(stornos, (1..=20).collect::<Vec<u32>>());
     }
 
     /// D-24: Anheben nur aufwärts, nächste Nummer = Stand + 1.

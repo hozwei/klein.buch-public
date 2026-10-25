@@ -155,7 +155,11 @@ und vom Steuerberater zu prüfen.
 
 Unter **Geschäftsjahr** schließt du ein **abgelaufenes** Jahr ab: AfA buchen,
 Jahr prüfungssicher festschreiben (§146 AO), Backup. Der Abschluss ist
-unumkehrbar; Korrekturen danach nur per Storno-Beleg. Die automatische AfA zum
+unumkehrbar; Korrekturen danach nur per Storno-Beleg. Er wartet auf gerade
+laufende Buchungen; offene Entwürfe des Jahres blockieren ihn nicht, lassen sich
+danach aber nur noch verwerfen. Weicht die EÜR eines abgeschlossenen Jahres
+später vom festgeschriebenen Stand ab, meldet Klein.Buch das als Hinweis und in
+jedem Export (Handbuch „Geschäftsjahr-Abschluss“). Die automatische AfA zum
 Jahreswechsel ist standardmäßig aktiv und dort abschaltbar.
 
 **Hinweise** erinnern an Fälliges (überfällige Rechnungen, Backups, fehlende oder

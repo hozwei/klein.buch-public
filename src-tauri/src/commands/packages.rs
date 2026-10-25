@@ -196,7 +196,7 @@ pub async fn packages_create(ctx: &Arc<AppCtx>, args: PackagesCreateArgs) -> Res
         "package.create",
         "package",
         &row.id,
-        Some(&format!(r#"{{"name":"{}"}}"#, escape(name.trim()))),
+        Some(serde_json::json!({ "name": name.trim() })),
     )
     .await
     .ok();
@@ -239,10 +239,7 @@ pub async fn packages_update_as_new_revision(
         "package.new_revision",
         "package",
         &id,
-        Some(&format!(
-            r#"{{"revision":{}}}"#,
-            row.current_revision.unwrap_or(0)
-        )),
+        Some(serde_json::json!({ "revision": row.current_revision.unwrap_or(0) })),
     )
     .await
     .ok();
@@ -348,11 +345,7 @@ pub async fn package_revisions_rollback(
         "package.rollback",
         "package",
         &package_id,
-        Some(&format!(
-            r#"{{"to_revision":{},"new_revision":{}}}"#,
-            to_revision,
-            row.current_revision.unwrap_or(0)
-        )),
+        Some(serde_json::json!({ "to_revision": to_revision, "new_revision": row.current_revision.unwrap_or(0) })),
     )
     .await
     .ok();
@@ -684,7 +677,7 @@ pub async fn package_catalog_render(
         "package_catalog.render",
         "package_catalog",
         "catalog",
-        Some(&format!(r#"{{"packages":{}}}"#, package_ids.len())),
+        Some(serde_json::json!({ "packages": package_ids.len() })),
     )
     .await
     .ok();
@@ -778,14 +771,16 @@ pub async fn send_catalog_core(
         }],
     };
 
-    // Versand + append-only Protokoll-Eintrag (kein Beleg-Bezug → related_id None).
+    // Versand + append-only Protokoll-Eintrag. Kein Beleg-Bezug; `related_id`
+    // ist der Kontakt (Lauf F, KB-0049: die DSGVO-Auskunft findet den Versand
+    // auch, wenn sich die Adresse später ändert).
     crate::commands::mail::send_and_log(
         pool,
         &account,
         &mail,
         crate::commands::mail::SendContext {
             related_kind: "package_catalog",
-            related_id: None,
+            related_id: Some(&contact.id),
             related_number: None,
         },
     )
@@ -799,12 +794,7 @@ pub async fn send_catalog_core(
         "package_catalog.sent",
         "package_catalog",
         "catalog",
-        Some(&format!(
-            r#"{{"account":"{}","to":"{}","packages":{}}}"#,
-            escape(&args.account_id),
-            escape(&recipient),
-            package_count
-        )),
+        Some(serde_json::json!({ "account": &args.account_id, "to": &recipient, "packages": package_count })),
     )
     .await
     .ok();
@@ -822,10 +812,6 @@ fn fmt_eur(cents: i64) -> String {
     let euros = cents / 100;
     let rem = (cents % 100).abs();
     format!("{euros},{rem:02} €")
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

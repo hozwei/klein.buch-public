@@ -45,6 +45,9 @@ impl Default for KeyedLocks {
 pub static ARCHIVE_PATHS: KeyedLocks = KeyedLocks::new();
 /// Belege: Festschreiben/Ausstellen einer Rechnung läuft je Rechnung am Stück.
 pub static INVOICES: KeyedLocks = KeyedLocks::new();
+/// Angebote: Zurückziehen, Umwandeln in eine Rechnung und das Zurücknehmen
+/// der Umwandlung (Verwerfen des Entwurfs) je Angebot nacheinander (Lauf F2c).
+pub static QUOTES: KeyedLocks = KeyedLocks::new();
 /// Abo-Vorlagen: Tick und „Jetzt erstellen“ nie gleichzeitig (Plan W1.4);
 /// Bearbeiten und Pausieren nehmen dieselbe Sperre (Lauf F, W14-031).
 pub static RECURRING_TEMPLATES: KeyedLocks = KeyedLocks::new();

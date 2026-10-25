@@ -60,6 +60,8 @@ es nicht. Die Regeln sind:
 6. "Backup-Ergebnis": Hinweis nach einem erfolgreichen manuellen Backup
    und wenn die lokale Kopie eines Backups nicht geschrieben werden
    konnte
+7. "Kosten-Abo fällig": Hinweis am Stichtag eines Kosten-Abos im Modus
+   "Erinnerung" (Kapitel "Kosten")
 
 ## Hinweise, die sich nicht abschalten lassen
 

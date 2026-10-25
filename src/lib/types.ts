@@ -215,6 +215,9 @@ export interface Invoice {
   derivedFromQuoteId: Uuid | null;
   // Zahlungs-Eingangs-Konto (Migration 0007, Block 9). Additiv.
   paidToAccountId: Uuid | null;
+  /** Verworfener Entwurf (Migration 0032): Zeitpunkt (UTC) und Grund; die Nummer bleibt verbraucht. */
+  voidedAt: Iso8601 | null;
+  voidReason: string | null;
 }
 
 export interface InvoiceItem {
@@ -254,6 +257,8 @@ export interface InvoiceListItem {
   currencyCode: string;
   status: InvoiceStatus;
   isStornoFor: Uuid | null;
+  /** Verworfener Entwurf (Migration 0032). */
+  voidedAt: Iso8601 | null;
 }
 
 export interface InvoiceListFilter {
@@ -1367,6 +1372,7 @@ export interface ElsterExportResult {
   download: DownloadTicket;
   lineCount: number;
   entryCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- Einzelaufstellung + Anlageverzeichnis (Block 14a) ---------------------
@@ -1425,6 +1431,29 @@ export interface AveeurItem {
   disposalProceedsCents: Cents | null;
 }
 
+/** EÜR-Eckwerte in Cent (`fiscal_year::snapshot::Figures`). */
+export interface SnapshotFigures {
+  incomeCents: Cents;
+  expenseCents: Cents;
+  afaCents: Cents;
+  surplusCents: Cents;
+}
+
+/**
+ * Abgleich eines abgeschlossenen Jahres mit dem Festschreibungs-Snapshot
+ * (`fiscal_year::snapshot::SnapshotCheck`, Lauf F, KB-0031).
+ */
+export interface SnapshotCheck {
+  fiscalYear: number;
+  closedAt: Iso8601;
+  closedWithVersion: string;
+  snapshot: SnapshotFigures;
+  live: SnapshotFigures;
+  matches: boolean;
+  /** `income` | `expenses` | `afa` | `surplus` */
+  differences: string[];
+}
+
 /** Komplettes EÜR-Paket eines GJ (`commands::euer::EuerPackage`). */
 export interface EuerPackage {
   form: ElsterForm;
@@ -1433,6 +1462,8 @@ export interface EuerPackage {
   expenses: EuerExpenseItem[];
   disposals: EuerDisposalItem[];
   assets: AveeurItem[];
+  /** Nur abgeschlossene Jahre (Lauf F). */
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Ergebnis des Einzelaufstellung-ZIP-Exports (`commands::euer::EuerDetailExport`). */
@@ -1441,6 +1472,7 @@ export interface EuerDetailExport {
   incomeCount: number;
   expenseCount: number;
   assetCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Offene AfA-Buchungen eines GJ (`commands::euer::AfaPending`). */
@@ -1453,18 +1485,21 @@ export interface AfaPending {
 export interface EuerPdfExport {
   download: DownloadTicket;
   sizeBytes: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Ergebnis des DATEV-Buchungsstapel-Exports (`commands::euer::DatevExport`). */
 export interface DatevExport {
   download: DownloadTicket;
   bookingCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Ergebnis des Steuerberater-Paket-Exports (`commands::euer::StbExport`). */
 export interface StbExport {
   download: DownloadTicket;
   fileCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- Block 15: Notifications / Hinweise ------------------------------------
@@ -1511,6 +1546,16 @@ export interface FiscalYearStatus {
   surplusCents: Cents;
   closable: boolean;
   afaPending: number;
+  /** Offene Entwürfe des Jahres (Lauf F): Warnhinweis vor dem Abschluss. */
+  openDrafts: OpenDrafts;
+  /** Nur abgeschlossene Jahre: Snapshot und Live-Rechnung stimmen überein. */
+  snapshotMatches: boolean | null;
+}
+
+/** Offene Entwürfe eines Jahres (`fiscal_year::lock::OpenDrafts`). */
+export interface OpenDrafts {
+  invoices: number;
+  quotes: number;
 }
 
 /** Offene Forderung (Carry-over, `fiscal_year::transition::OpenReceivable`). */
@@ -1544,6 +1589,8 @@ export interface FiscalYearLock {
   appVersion: string;
   schemaVersion: number;
   notes: string | null;
+  /** Nur in der Antwort des Abschlusses (Lauf F). */
+  openDrafts?: OpenDrafts;
 }
 
 // ---- Block 15: System / Audit-Trail / Integrity ----------------------------
@@ -1580,6 +1627,12 @@ export interface IntegrityCheckRow {
   filesPassed: number;
   filesFailed: number;
   failedArchiveIdsJson: string | null;
+  /** Teilmenge von filesFailed: fehlende Dateien; null = Lauf vor Migration 0032. */
+  filesMissing: number | null;
+  /** Vorhanden, aber nicht lesbar (kein Manipulationsbefund); null = vor 0032. */
+  filesUnreadable: number | null;
+  missingArchiveIdsJson: string | null;
+  unreadableArchiveIdsJson: string | null;
 }
 
 /** Statische App-Metadaten für den „Über"-Dialog (`commands::system::AppInfo`). */

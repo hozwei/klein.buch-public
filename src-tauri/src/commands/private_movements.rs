@@ -122,7 +122,7 @@ pub async fn create_core(
     ));
     // GJ-Festschreibung (Block 15): keine neue Privatbewegung mit Datum in einem
     // abgeschlossenen Geschäftsjahr.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let _fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     let movement_number =
         numbering::next_number(pool, DocType::PrivateMovement, fiscal_year as i32).await?;
 
@@ -160,10 +160,7 @@ pub async fn create_core(
         "private_movement.create",
         "private_movement",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","type":"{}","amount":{}}}"#,
-            row.movement_number, row.movement_type, row.amount_cents
-        )),
+        Some(serde_json::json!({ "number": row.movement_number, "type": row.movement_type, "amount": row.amount_cents })),
     )
     .await?;
 

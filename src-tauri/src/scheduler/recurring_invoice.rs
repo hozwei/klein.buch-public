@@ -302,16 +302,13 @@ pub async fn apply_resume_mode(
                 "recurring_invoice.backlog_skipped",
                 "recurring_invoice",
                 &tmpl.id,
-                Some(
-                    &serde_json::json!({
-                        "from": tmpl.next_due_date,
-                        "to": target.to_string(),
-                        "skipped": skipped,
-                        "ends": end.is_some_and(|e| target > e),
-                        "after_restore": review,
-                    })
-                    .to_string(),
-                ),
+                Some(serde_json::json!({
+                    "from": tmpl.next_due_date,
+                    "to": target.to_string(),
+                    "skipped": skipped,
+                    "ends": end.is_some_and(|e| target > e),
+                    "after_restore": review,
+                })),
             )
             .await?;
             tx.commit().await?;
@@ -334,7 +331,7 @@ pub async fn apply_resume_mode(
                 "recurring_invoice.backlog_confirmed",
                 "recurring_invoice",
                 &tmpl.id,
-                Some(&serde_json::json!({ "from": tmpl.next_due_date, "due": due }).to_string()),
+                Some(serde_json::json!({ "from": tmpl.next_due_date, "due": due })),
             )
             .await?;
         }
@@ -591,17 +588,14 @@ async fn create_occurrence(
         "recurring_invoice.run",
         "recurring_invoice",
         &tmpl.id,
-        Some(
-            &serde_json::json!({
-                "template": tmpl.id,
-                "invoice_id": invoice_id,
-                "number": number,
-                "occurrence": occurrence.to_string(),
-                "mode": mode.as_db(),
-                "template_mode": tmpl.auto_mode,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "template": tmpl.id,
+            "invoice_id": invoice_id,
+            "number": number,
+            "occurrence": occurrence.to_string(),
+            "mode": mode.as_db(),
+            "template_mode": tmpl.auto_mode,
+        })),
     )
     .await?;
     recurring_invoice::advance_in(
@@ -671,6 +665,14 @@ async fn post_process(
                     return;
                 }
             };
+            // W14-032: Ein vom Inhaber verworfener Entwurf wird nicht mehr
+            // festgeschrieben (das Verwerfen entfernt den Marker selbst; hier
+            // nur der Fall, dass es zwischen Marker-Lesen und Festschreiben lag).
+            if invoice.voided_at.is_some() {
+                tracing::info!("Abo-Rechnung {number}: Entwurf verworfen — nicht fortgesetzt");
+                clear_pending(pool, template_id).await;
+                return;
+            }
             if invoice.locked_at.is_none() {
                 // R2-006 (GJ-Guard): nie automatisch in ein abgeschlossenes GJ.
                 if guard::is_closed(pool, invoice.fiscal_year)
@@ -2180,6 +2182,68 @@ mod pipeline_tests {
             app_settings::get(&pool, &marker).await.unwrap().as_deref(),
             Some("inv-frueher|2026-04-01|issue"),
             "Marker unverändert"
+        );
+    }
+
+    /// W14-032 (Lauf F2a): Ein Fortsetzungs-Marker, der auf einen inzwischen
+    /// verworfenen Entwurf zeigt, wird ohne Festschreiben und ohne
+    /// Fehlerhinweis entfernt.
+    #[tokio::test]
+    async fn pending_marker_on_voided_draft_is_dropped() {
+        let (pool, dir) = setup_pool().await;
+        let paths = paths_for(dir.path());
+        mk_seller(&pool).await;
+        let contact_id = mk_contact(&pool).await;
+        let session = unlocked();
+        let clock = noon(d(2026, 5, 20));
+        let detail =
+            recurring_invoice::create(&pool, &ri_tmpl(&contact_id, d(2026, 5, 1), "issue"))
+                .await
+                .unwrap();
+        let id = detail.template.id.clone();
+        let items = recurring_invoice::items_for(&pool, &id).await.unwrap();
+        let job = JobCtx::new(&pool, &paths, &session, &clock);
+        let (invoice_id, _number) = create_occurrence(
+            &job,
+            &detail.template,
+            &items,
+            d(2026, 5, 1),
+            d(2026, 5, 20),
+            AutoMode::Draft,
+        )
+        .await
+        .unwrap()
+        .expect("Entwurf");
+        crate::commands::invoices::void_draft_core(
+            &pool,
+            &invoice_id,
+            "Termin doppelt angelegt",
+            clock.now_utc(),
+        )
+        .await
+        .unwrap();
+        // Marker wie vor dem Verwerfen gelesen (Race-Fall)
+        let marker = format!("{PENDING_PREFIX}{id}");
+        app_settings::set(&pool, &marker, &format!("{invoice_id}|2026-05-01|issue"))
+            .await
+            .unwrap();
+        resume_pending(&job).await.unwrap();
+        assert!(app_settings::get(&pool, &marker).await.unwrap().is_none());
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM invoices WHERE locked_at IS NOT NULL"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT COUNT(*) FROM notifications WHERE title LIKE '%fehlgeschlagen%'"
+            )
+            .await,
+            0
         );
     }
 }

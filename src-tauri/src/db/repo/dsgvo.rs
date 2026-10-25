@@ -3,7 +3,8 @@
 //! Schicht: **Imperative Shell** — nur SELECTs, keine Mutation, keine Migration.
 //! Trägt zu **genau einem Kontakt** alle personenbezogenen Datenbestände
 //! zusammen: Rechnungen (beide Richtungen) + Positionen, Angebote + Positionen,
-//! Kosten (Kontakt als Lieferant), archivierte Dokumente (PDF/XML/Belege/
+//! Kosten, Kosten-Abos und Anlagen (Kontakt als Lieferant), Abo-Rechnungs-
+//! Vorlagen samt Positionen (Lauf F2c), archivierte Dokumente (PDF/XML/Belege/
 //! Anhänge — Metadaten), Versandprotokoll-Bezüge und Audit-Log-Bezüge.
 //!
 //! Bewusst **nicht** enthalten: `private_movements` — die Tabelle hat keinen
@@ -13,12 +14,13 @@
 //! [`crate::domain::dsgvo`].
 
 use crate::db::models::{
-    ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow, QuoteRow,
+    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow,
+    QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
 };
 use crate::domain::dsgvo::{RawAudit, RawDocument};
 use crate::error::Result;
 use sqlx::{Row, SqlitePool};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Alles, was zu einem Kontakt gesammelt wurde. Owned — der Command baut daraus
 /// die Borrow-Sicht [`crate::domain::dsgvo::RawData`].
@@ -27,13 +29,35 @@ pub struct Gathered {
     pub invoices: Vec<(InvoiceRow, Vec<InvoiceItemRow>)>,
     pub quotes: Vec<(QuoteRow, Vec<QuoteItemRow>)>,
     pub expenses: Vec<ExpenseRow>,
+    /// Abo-Rechnungs-Vorlagen an den Kontakt samt Positionen (Lauf F2c).
+    pub recurring_invoices: Vec<(RecurringInvoiceRow, Vec<RecurringInvoiceItemRow>)>,
+    /// Kosten-Abos mit dem Kontakt als Lieferant (Lauf F2c).
+    pub subscriptions: Vec<RecurringSubscriptionRow>,
+    /// Anlagen mit dem Kontakt als Lieferant (Lauf F2c).
+    pub assets: Vec<AssetRow>,
     pub documents: Vec<RawDocument>,
     pub emails: Vec<EmailLogRow>,
     pub audit: Vec<RawAudit>,
 }
 
+/// JSON-Array der Werte als **ein** Bind-Parameter (`json_each(?)`): keine
+/// Obergrenze der SQLite-Variablen, keine Abfrage je Element (Lauf F,
+/// R1-S2-NPLUS1).
+fn json_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    serde_json::Value::from(values.into_iter().collect::<Vec<_>>()).to_string()
+}
+
+/// Normalform einer Adresse für den Abgleich: getrimmt, ASCII-Kleinbuchstaben
+/// — dieselbe Faltung wie SQLites `lower()` (die Domain ist ohnehin
+/// unabhängig von der Schreibweise; Abweichungen im lokalen Teil gelten bei
+/// gängigen Anbietern als dieselbe Adresse).
+fn normalize_email(e: &str) -> String {
+    e.trim().to_ascii_lowercase()
+}
+
 /// Sammelt alle kontaktbezogenen Daten. `Ok(None)`, wenn der Kontakt nicht
-/// existiert.
+/// existiert. Eine feste Zahl von Abfragen, unabhängig von der Zahl der Belege
+/// (Lauf F, R1-S2-NPLUS1).
 pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gathered>> {
     let contact: Option<ContactRow> = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
         .bind(contact_id)
@@ -50,16 +74,29 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
     .bind(contact_id)
     .fetch_all(pool)
     .await?;
-    let mut invoices = Vec::with_capacity(invoice_rows.len());
-    for inv in invoice_rows {
-        let items: Vec<InvoiceItemRow> = sqlx::query_as(
-            "SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY position ASC",
-        )
-        .bind(&inv.id)
-        .fetch_all(pool)
-        .await?;
-        invoices.push((inv, items));
+    let invoice_items: Vec<InvoiceItemRow> = sqlx::query_as(
+        "SELECT ii.* FROM invoice_items ii
+           JOIN invoices i ON i.id = ii.invoice_id
+          WHERE i.contact_id = ?
+          ORDER BY ii.invoice_id, ii.position ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let mut items_by_invoice: HashMap<String, Vec<InvoiceItemRow>> = HashMap::new();
+    for it in invoice_items {
+        items_by_invoice
+            .entry(it.invoice_id.clone())
+            .or_default()
+            .push(it);
     }
+    let invoices: Vec<(InvoiceRow, Vec<InvoiceItemRow>)> = invoice_rows
+        .into_iter()
+        .map(|inv| {
+            let items = items_by_invoice.remove(&inv.id).unwrap_or_default();
+            (inv, items)
+        })
+        .collect();
 
     // ---- Angebote + Positionen ----
     let quote_rows: Vec<QuoteRow> = sqlx::query_as(
@@ -68,19 +105,82 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
     .bind(contact_id)
     .fetch_all(pool)
     .await?;
-    let mut quotes = Vec::with_capacity(quote_rows.len());
-    for q in quote_rows {
-        let items: Vec<QuoteItemRow> =
-            sqlx::query_as("SELECT * FROM quote_items WHERE quote_id = ? ORDER BY position ASC")
-                .bind(&q.id)
-                .fetch_all(pool)
-                .await?;
-        quotes.push((q, items));
+    let quote_items: Vec<QuoteItemRow> = sqlx::query_as(
+        "SELECT qi.* FROM quote_items qi
+           JOIN quotes q ON q.id = qi.quote_id
+          WHERE q.contact_id = ?
+          ORDER BY qi.quote_id, qi.position ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let mut items_by_quote: HashMap<String, Vec<QuoteItemRow>> = HashMap::new();
+    for it in quote_items {
+        items_by_quote
+            .entry(it.quote_id.clone())
+            .or_default()
+            .push(it);
     }
+    let quotes: Vec<(QuoteRow, Vec<QuoteItemRow>)> = quote_rows
+        .into_iter()
+        .map(|q| {
+            let items = items_by_quote.remove(&q.id).unwrap_or_default();
+            (q, items)
+        })
+        .collect();
 
     // ---- Kosten, bei denen der Kontakt Lieferant ist ----
     let expenses: Vec<ExpenseRow> = sqlx::query_as(
         "SELECT * FROM expenses WHERE vendor_contact_id = ? ORDER BY expense_date ASC, expense_number ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+
+    // ---- Abo-Rechnungs-Vorlagen an den Kontakt + Positionen (Lauf F2c) ----
+    // Eine Vorlage hält Leistungen, Beträge, Rhythmus und Laufzeit einer
+    // Vertragsbeziehung mit der Person — eigene Verarbeitung (Art. 15 Abs. 1).
+    let template_rows: Vec<RecurringInvoiceRow> = sqlx::query_as(
+        "SELECT * FROM recurring_invoices WHERE contact_id = ? ORDER BY created_at ASC, id ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let template_items: Vec<RecurringInvoiceItemRow> = sqlx::query_as(
+        "SELECT ri.* FROM recurring_invoice_items ri
+           JOIN recurring_invoices r ON r.id = ri.recurring_invoice_id
+          WHERE r.contact_id = ?
+          ORDER BY ri.recurring_invoice_id, ri.position ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let mut items_by_template: HashMap<String, Vec<RecurringInvoiceItemRow>> = HashMap::new();
+    for it in template_items {
+        items_by_template
+            .entry(it.recurring_invoice_id.clone())
+            .or_default()
+            .push(it);
+    }
+    let recurring_invoices: Vec<(RecurringInvoiceRow, Vec<RecurringInvoiceItemRow>)> =
+        template_rows
+            .into_iter()
+            .map(|t| {
+                let items = items_by_template.remove(&t.id).unwrap_or_default();
+                (t, items)
+            })
+            .collect();
+
+    // ---- Kosten-Abos und Anlagen mit dem Kontakt als Lieferant (Lauf F2c) ----
+    let subscriptions: Vec<RecurringSubscriptionRow> = sqlx::query_as(
+        "SELECT * FROM recurring_subscriptions WHERE vendor_contact_id = ?
+          ORDER BY created_at ASC, id ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let assets: Vec<AssetRow> = sqlx::query_as(
+        "SELECT * FROM assets WHERE vendor_contact_id = ? ORDER BY asset_number ASC",
     )
     .bind(contact_id)
     .fetch_all(pool)
@@ -122,48 +222,84 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
             ));
         }
     }
-    // Anhänge (direkt am Kontakt + an seinen Belegen).
-    let mut attach_parents: Vec<(&str, String, String)> = Vec::new(); // (parent_type, parent_id, label)
-    attach_parents.push(("contact", contact.id.clone(), contact.name.clone()));
+
+    // Anhänge (direkt am Kontakt + an seinen Belegen) in einer Abfrage; die
+    // Beschriftung kommt aus dem jeweiligen Eltern-Beleg.
+    let mut parent_labels: HashMap<(&str, &str), &str> = HashMap::new();
+    parent_labels.insert(("contact", contact.id.as_str()), contact.name.as_str());
     for (inv, _) in &invoices {
-        attach_parents.push(("invoice", inv.id.clone(), inv.invoice_number.clone()));
+        parent_labels.insert(("invoice", inv.id.as_str()), inv.invoice_number.as_str());
     }
     for (q, _) in &quotes {
-        attach_parents.push(("quote", q.id.clone(), q.quote_number.clone()));
+        parent_labels.insert(("quote", q.id.as_str()), q.quote_number.as_str());
     }
     for e in &expenses {
-        attach_parents.push(("expense", e.id.clone(), e.expense_number.clone()));
+        parent_labels.insert(("expense", e.id.as_str()), e.expense_number.as_str());
     }
-    for (ptype, pid, label) in &attach_parents {
-        let atts = crate::db::repo::attachments::list_for_parent(pool, ptype, pid.as_str()).await?;
-        for a in atts {
-            let kind = match a.label.as_deref().filter(|s| !s.is_empty()) {
-                Some(l) => format!("Anhang ({l})"),
-                None => "Anhang".to_string(),
-            };
-            doc_refs.push((kind, Some(label.clone()), a.archive_entry_id));
-        }
+    for s in &subscriptions {
+        parent_labels.insert(("recurring", s.id.as_str()), s.label.as_str());
+    }
+    for a in &assets {
+        parent_labels.insert(("asset", a.id.as_str()), a.asset_number.as_str());
+    }
+    let attachments: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT parent_type, parent_id, archive_entry_id, label FROM attachments
+          WHERE (parent_type = 'contact' AND parent_id = ?1)
+             OR (parent_type = 'invoice'
+                 AND parent_id IN (SELECT id FROM invoices WHERE contact_id = ?1))
+             OR (parent_type = 'quote'
+                 AND parent_id IN (SELECT id FROM quotes WHERE contact_id = ?1))
+             OR (parent_type = 'expense'
+                 AND parent_id IN (SELECT id FROM expenses WHERE vendor_contact_id = ?1))
+             OR (parent_type = 'recurring'
+                 AND parent_id IN (SELECT id FROM recurring_subscriptions
+                                    WHERE vendor_contact_id = ?1))
+             OR (parent_type = 'asset'
+                 AND parent_id IN (SELECT id FROM assets WHERE vendor_contact_id = ?1))
+          ORDER BY CASE parent_type WHEN 'contact' THEN 0 WHEN 'invoice' THEN 1
+                                    WHEN 'quote' THEN 2 WHEN 'expense' THEN 3
+                                    WHEN 'recurring' THEN 4 ELSE 5 END,
+                   parent_id, sort_order ASC, created_at ASC",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    for (ptype, pid, archive_id, label) in attachments {
+        let kind = match label.as_deref().filter(|s| !s.is_empty()) {
+            Some(l) => format!("Anhang ({l})"),
+            None => "Anhang".to_string(),
+        };
+        let parent = parent_labels
+            .get(&(ptype.as_str(), pid.as_str()))
+            .map(|l| l.to_string());
+        doc_refs.push((kind, parent, archive_id));
     }
 
-    // Metadaten je Archive-Eintrag nachladen, nach archive_id deduplizieren.
+    // Metadaten aller Archive-Einträge in einer Abfrage, nach archive_id
+    // dedupliziert (Reihenfolge wie die Referenzen).
+    let mut seen_archive: HashSet<&str> = HashSet::new();
+    let unique_refs: Vec<&(String, Option<String>, String)> = doc_refs
+        .iter()
+        .filter(|(_, _, id)| seen_archive.insert(id.as_str()))
+        .collect();
+    let meta_rows = sqlx::query(
+        "SELECT id, file_name, mime_type, file_size_bytes, file_hash_sha256, received_at
+           FROM archive_entries WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(json_list(unique_refs.iter().map(|(_, _, id)| id.as_str())))
+    .fetch_all(pool)
+    .await?;
+    let mut meta: HashMap<String, sqlx::sqlite::SqliteRow> = HashMap::new();
+    for row in meta_rows {
+        meta.insert(row.try_get("id")?, row);
+    }
     let mut documents: Vec<RawDocument> = Vec::new();
-    let mut seen_archive: HashSet<String> = HashSet::new();
-    for (kind, label, archive_id) in doc_refs {
-        if !seen_archive.insert(archive_id.clone()) {
-            continue;
-        }
-        let meta = sqlx::query(
-            "SELECT file_name, mime_type, file_size_bytes, file_hash_sha256, received_at
-             FROM archive_entries WHERE id = ?",
-        )
-        .bind(&archive_id)
-        .fetch_optional(pool)
-        .await?;
-        if let Some(row) = meta {
+    for (kind, label, archive_id) in unique_refs {
+        if let Some(row) = meta.get(archive_id) {
             documents.push(RawDocument {
-                kind,
-                related_label: label,
-                archive_id,
+                kind: kind.clone(),
+                related_label: label.clone(),
+                archive_id: archive_id.clone(),
                 file_name: row.try_get("file_name")?,
                 mime_type: row.try_get("mime_type")?,
                 size_bytes: row.try_get("file_size_bytes")?,
@@ -173,91 +309,117 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
         }
     }
 
-    // ---- Beleg-IDs für E-Mail-/Audit-Filter ----
-    let mut doc_ids: Vec<String> = Vec::new();
-    for (inv, _) in &invoices {
-        doc_ids.push(inv.id.clone());
+    // ---- Versandprotokoll (email_log) ----
+    // Bezug über Beleg-ID (Rechnung/Angebot), über den Kontakt selbst
+    // (Katalogversand) oder über die Empfängeradresse — die aktuelle des
+    // Kontakts und jede frühere aus den Empfänger-Snapshots seiner Belege,
+    // ohne Rücksicht auf Groß-/Kleinschreibung (Lauf F, KB-0049).
+    let mut related_ids: Vec<&str> = vec![contact.id.as_str()];
+    related_ids.extend(invoices.iter().map(|(inv, _)| inv.id.as_str()));
+    related_ids.extend(quotes.iter().map(|(q, _)| q.id.as_str()));
+    let mut addresses: BTreeSet<String> = BTreeSet::new();
+    let snapshot_emails = invoices
+        .iter()
+        .filter_map(|(inv, _)| inv.buyer_email.as_deref())
+        .chain(quotes.iter().filter_map(|(q, _)| q.buyer_email.as_deref()));
+    for e in contact.email.as_deref().into_iter().chain(snapshot_emails) {
+        let n = normalize_email(e);
+        if !n.is_empty() {
+            addresses.insert(n);
+        }
     }
-    for (q, _) in &quotes {
-        doc_ids.push(q.id.clone());
-    }
+    let emails = gather_emails(pool, &related_ids, &addresses).await?;
 
-    // ---- Versandprotokoll (email_log): Bezug über Beleg-ID oder Empfänger ----
-    let emails = gather_emails(pool, &doc_ids, contact.email.as_deref()).await?;
-
-    // ---- Audit-Log-Bezüge: Kontakt + seine Belege ----
-    let mut audit_ids: Vec<String> = doc_ids.clone();
-    for e in &expenses {
-        audit_ids.push(e.id.clone());
-    }
-    audit_ids.push(contact.id.clone());
-    let audit = gather_audit(pool, &audit_ids).await?;
+    // ---- Audit-Log-Bezüge: Kontakt + seine Belege, je mit Entitätstyp ----
+    let audit = gather_audit(
+        pool,
+        &AuditScope {
+            contact_id: &contact.id,
+            invoices: invoices.iter().map(|(i, _)| i.id.as_str()).collect(),
+            quotes: quotes.iter().map(|(q, _)| q.id.as_str()).collect(),
+            expenses: expenses.iter().map(|e| e.id.as_str()).collect(),
+            templates: recurring_invoices
+                .iter()
+                .map(|(t, _)| t.id.as_str())
+                .collect(),
+            subscriptions: subscriptions.iter().map(|s| s.id.as_str()).collect(),
+            assets: assets.iter().map(|a| a.id.as_str()).collect(),
+        },
+    )
+    .await?;
 
     Ok(Some(Gathered {
         contact,
         invoices,
         quotes,
         expenses,
+        recurring_invoices,
+        subscriptions,
+        assets,
         documents,
         emails,
         audit,
     }))
 }
 
-fn placeholders(n: usize) -> String {
-    std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
-}
-
 async fn gather_emails(
     pool: &SqlitePool,
-    doc_ids: &[String],
-    email: Option<&str>,
+    related_ids: &[&str],
+    addresses: &BTreeSet<String>,
 ) -> Result<Vec<EmailLogRow>> {
-    if doc_ids.is_empty() && email.is_none() {
-        return Ok(vec![]);
-    }
-    let mut sql = String::from("SELECT * FROM email_log WHERE 0 = 1");
-    if !doc_ids.is_empty() {
-        sql.push_str(&format!(
-            " OR related_id IN ({})",
-            placeholders(doc_ids.len())
-        ));
-    }
-    if email.is_some() {
-        sql.push_str(" OR to_email = ?");
-    }
-    sql.push_str(" ORDER BY created_at ASC");
-
-    let mut q = sqlx::query_as::<_, EmailLogRow>(&sql);
-    for id in doc_ids {
-        q = q.bind(id);
-    }
-    if let Some(e) = email {
-        q = q.bind(e);
-    }
-    let mut rows = q.fetch_all(pool).await?;
-
-    // Dedup nach id (ein per Beleg-ID gefundener Eintrag kann via to_email
-    // erneut matchen).
-    let mut seen = HashSet::new();
-    rows.retain(|r| seen.insert(r.id.clone()));
+    let rows: Vec<EmailLogRow> = sqlx::query_as(
+        "SELECT * FROM email_log
+          WHERE related_id IN (SELECT value FROM json_each(?1))
+             OR lower(trim(to_email)) IN (SELECT value FROM json_each(?2))
+          ORDER BY created_at ASC, id ASC",
+    )
+    .bind(json_list(related_ids.iter().copied()))
+    .bind(json_list(addresses.iter().map(String::as_str)))
+    .fetch_all(pool)
+    .await?;
     Ok(rows)
 }
 
-async fn gather_audit(pool: &SqlitePool, entity_ids: &[String]) -> Result<Vec<RawAudit>> {
-    if entity_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    let sql = format!(
+/// IDs je Entitätstyp, auf die sich Audit-Einträge der Auskunft beziehen.
+struct AuditScope<'a> {
+    contact_id: &'a str,
+    invoices: Vec<&'a str>,
+    quotes: Vec<&'a str>,
+    expenses: Vec<&'a str>,
+    /// Abo-Rechnungs-Vorlagen (`entity_type = 'recurring_invoice'`).
+    templates: Vec<&'a str>,
+    /// Kosten-Abos (`entity_type = 'recurring'`).
+    subscriptions: Vec<&'a str>,
+    assets: Vec<&'a str>,
+}
+
+/// Audit-Einträge zum Kontakt und zu seinen Belegen, Vorlagen, Kosten-Abos und
+/// Anlagen — gefiltert über Entitätstyp **und** ID (Lauf F, R2-S2-DSGVO; F2c
+/// um Vorlagen, Kosten-Abos und Anlagen ergänzt): ein Eintrag zählt nur, wenn
+/// er sich ausdrücklich auf eines dieser Objekte bezieht.
+async fn gather_audit(pool: &SqlitePool, scope: &AuditScope<'_>) -> Result<Vec<RawAudit>> {
+    let rows = sqlx::query(
         "SELECT timestamp_utc, action, entity_type, entity_id
-         FROM audit_log WHERE entity_id IN ({}) ORDER BY id ASC",
-        placeholders(entity_ids.len())
-    );
-    let mut q = sqlx::query(&sql);
-    for id in entity_ids {
-        q = q.bind(id);
-    }
-    let rows = q.fetch_all(pool).await?;
+           FROM audit_log
+          WHERE (entity_type = 'contact' AND entity_id = ?1)
+             OR (entity_type = 'invoice' AND entity_id IN (SELECT value FROM json_each(?2)))
+             OR (entity_type = 'quote' AND entity_id IN (SELECT value FROM json_each(?3)))
+             OR (entity_type = 'expense' AND entity_id IN (SELECT value FROM json_each(?4)))
+             OR (entity_type = 'recurring_invoice'
+                 AND entity_id IN (SELECT value FROM json_each(?5)))
+             OR (entity_type = 'recurring' AND entity_id IN (SELECT value FROM json_each(?6)))
+             OR (entity_type = 'asset' AND entity_id IN (SELECT value FROM json_each(?7)))
+          ORDER BY id ASC",
+    )
+    .bind(scope.contact_id)
+    .bind(json_list(scope.invoices.iter().copied()))
+    .bind(json_list(scope.quotes.iter().copied()))
+    .bind(json_list(scope.expenses.iter().copied()))
+    .bind(json_list(scope.templates.iter().copied()))
+    .bind(json_list(scope.subscriptions.iter().copied()))
+    .bind(json_list(scope.assets.iter().copied()))
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|r| RawAudit {

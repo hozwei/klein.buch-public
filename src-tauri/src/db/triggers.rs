@@ -1,15 +1,33 @@
 //! Stub-Dokumentation der GoBD-Triggers.
 //!
-//! Die Triggers werden in den Migrations-SQL-Files definiert (forward-only):
+//! Die Triggers werden in den Migrations-SQL-Files definiert (forward-only);
+//! die vollständige Liste mit Wirkung steht in
+//! `docs/architecture/data-model.md` §3 und `docs/architecture/gobd.md` §2.
 //!
 //! - `trg_audit_no_update` / `trg_audit_no_delete`: audit_log ist append-only.
-//! - `trg_invoices_immutable`: locked invoices erlauben keine Updates auf
-//!   Kernfelder (invoice_number, date, beträge, contact_id, fiscal_year,
-//!   is_kleinunternehmer, direction). Erlaubt sind State-Transitions
-//!   (status, paid_*, sent_*, canceled_*, validation_*, notes, archive_ids).
-//! - `trg_archive_no_update`: archive_entries.hash/path/size sind immutable.
+//! - `trg_invoices_immutable` / `trg_quotes_immutable` / … (0001, Whitelist
+//!   seit 0028): festgeschriebene Belege erlauben keine Updates auf Kern- und
+//!   Snapshot-Felder; erlaubt sind die Status-Übergänge. `*_no_delete` (0028):
+//!   kein DELETE auf Belegen.
+//! - `trg_archive_no_update` (0001) / `trg_archive_no_delete` (0032):
+//!   archive_entries sind write-once.
+//! - Migration 0032 (Lauf F, F2a): Positionen festgeschriebener bzw.
+//!   verworfener Belege (`trg_invoice_items_frozen_*`,
+//!   `trg_quote_items_frozen_*`), verworfene Entwürfe
+//!   (`trg_invoices_voided_final`, `trg_invoices_void_draft_only`,
+//!   `trg_invoices_void_not_on_insert`), Storno endgültig
+//!   (`trg_invoices_canceled_final`, `trg_quotes_canceled_final`),
+//!   Anlagen-Abgang endgültig (`trg_assets_disposal_final`, seit F2c samt
+//!   Stammdaten und Restbuchwert; `trg_depreciation_entries_no_delete_disposed`),
+//!   Umwandlung eines Angebots endgültig außer beim Verwerfen des Entwurfs
+//!   (`trg_quotes_converted_final`, F2c); dazu die Indizes
+//!   `ux_invoices_one_locked_storno` und `uq_payment_accounts_default`.
+//!   `trg_invoices_voided_final` lässt als einzige Änderung die Anonymisierung
+//!   des Empfänger-Snapshots zu (F2c, ADR 0039 Nr. 124 (3)).
 //!
-//! Tests, die diese Triggers verifizieren, leben in `tests/triggers_test.rs`.
+//! Tests, die diese Triggers verifizieren: `tests/migration_0028_test.rs`,
+//! `tests/migration_0032_test.rs` sowie die Repo-Tests je Beleg-Art
+//! (Übersicht in `gobd.md` §9).
 
 #[cfg(test)]
 mod tests {

@@ -194,23 +194,76 @@ pub fn prepare_filesystem(ctx: &crate::app_ctx::AppCtx) -> Result<()> {
     Ok(())
 }
 
-/// Migrationen anwenden (forward-only) + Schema-Version verifizieren + einen
-/// ggf. gepufferten Restore abschließen ([`finish_restore`]). Setzt einen
-/// offenen Pool voraus (für die verschlüsselte DB nach erfolgreichem
-/// `PRAGMA key`).
+/// Migrationen anwenden (forward-only) + Schema-Version verifizieren +
+/// Fremdschlüssel prüfen + einen ggf. gepufferten Restore abschließen
+/// ([`finish_restore`]). Setzt einen offenen Pool voraus (für die
+/// verschlüsselte DB nach erfolgreichem `PRAGMA key`).
+///
+/// Prüfungen (R1-012, Lauf F2c): Stehen Migrationen an, prüft
+/// [`precheck_before_migration`] die Datenbank **vor** der Umstellung —
+/// ein Altfehler lehnt ab, solange die Datenbank noch auf dem alten Schema
+/// steht (das vorige Image öffnet sie weiter). Nach den Migrationen prüft
+/// [`foreign_key_violations`] erneut; ein Treffer dort lehnt ebenfalls ab, die
+/// Meldung sagt dann ehrlich, dass die Umstellung schon gespeichert ist.
 pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> Result<()> {
-    // Down-Migration-Schutz (Schema-Hardline, Lauf F D-17/D-18): Eine neuere
-    // Datenbank gar nicht erst dem Migrations-Runner geben — der meldete nur
-    // „Migration fehlt“ —, sondern mit dem Hinweis auf das passende Image
-    // ablehnen. Die Instanz bleibt gesperrt.
-    if schema_version::read(pool)
-        .await?
-        .is_some_and(|v| v > schema_version::EXPECTED_SCHEMA_VERSION)
-    {
-        return schema_version::check_compatible(pool).await;
+    let pending = pending_migration_from(pool).await?;
+    if let Some(from) = pending {
+        precheck_before_migration(pool, from).await?;
     }
-    MIGRATOR.run(pool).await?;
+    run_migrations_prechecked(ctx, pool, pending).await
+}
+
+/// Schema-Version einer Datenbank, auf der Migrationen anstehen (`None`: frische
+/// oder aktuelle Datenbank). Eine **neuere** Datenbank lehnt sie ab
+/// (Down-Migration-Schutz, Schema-Hardline, Lauf F D-17/D-18): sie geht gar
+/// nicht erst an den Migrations-Runner, der nur „Migration fehlt“ meldete,
+/// sondern scheitert mit dem Hinweis auf das passende Image.
+pub async fn pending_migration_from(pool: &SqlitePool) -> Result<Option<i32>> {
+    match schema_version::read(pool).await? {
+        Some(v) if v > schema_version::EXPECTED_SCHEMA_VERSION => {
+            schema_version::check_compatible(pool).await?;
+            // check_compatible lehnt eine neuere Version immer ab.
+            Err(Error::Config(format!(
+                "Schema-Version {v} ist neuer als {}",
+                schema_version::EXPECTED_SCHEMA_VERSION
+            )))
+        }
+        Some(v) if v < schema_version::EXPECTED_SCHEMA_VERSION => Ok(Some(v)),
+        _ => Ok(None),
+    }
+}
+
+/// Wie [`run_migrations`], wenn der Aufrufer [`precheck_before_migration`]
+/// schon ausgeführt hat (`commands::backup::migrate_with_backup`: vor dem
+/// Pflicht-Backup). `pending` = Schema vor der Umstellung (`None`: keine
+/// Migration offen) — steuert nur die Meldung der Prüfung danach.
+pub async fn run_migrations_prechecked(
+    ctx: &crate::app_ctx::AppCtx,
+    pool: &SqlitePool,
+    pending: Option<i32>,
+) -> Result<()> {
+    if let Err(e) = MIGRATOR.run(pool).await {
+        // Vorab-Prüfung einer Migration (benannter CHECK „Migration 00NN
+        // abgebrochen: …“, z. B. 0032): die Transaktion dieser Migration ist
+        // zurückgerollt — klare Meldung statt Fehlertext des Runners
+        // (ADR 0039 Nr. 124). Die Rust-Vorabprüfung fängt den Fall für 0032
+        // schon vor der ersten Migration ab; das hier ist die zweite Linie.
+        let text = e.to_string();
+        if let Some(pos) = text.find("CHECK constraint failed: Migration ") {
+            let reason = &text[pos + "CHECK constraint failed: ".len()..];
+            tracing::error!("{INTEGRITY_REFUSED}: {reason}");
+            return Err(Error::Config(format!("{INTEGRITY_REFUSED}: {reason}")));
+        }
+        return Err(e.into());
+    }
     schema_version::check_compatible(pool).await?;
+    let violations = foreign_key_violations(pool).await?;
+    if !violations.is_empty() {
+        let msg = integrity_message_after(pending, &violations);
+        log_foreign_key_violations("Entsperren", &violations);
+        tracing::error!("{msg}");
+        return Err(Error::Config(msg));
+    }
 
     {
         let holder = &ctx.pending_restore;
@@ -243,6 +296,150 @@ pub async fn run_migrations(ctx: &crate::app_ctx::AppCtx, pool: &SqlitePool) -> 
         tracing::warn!("Standard-Zahlungskonten nicht angelegt: {e}");
     }
     Ok(())
+}
+
+/// Anfang der Meldung, mit der das Entsperren wegen einer Prüfung der
+/// Datenbank abbricht: verletzte Fremdschlüssel (R1-012) oder eine
+/// gescheiterte Vorab-Prüfung einer Migration (0032). Das Entsperren
+/// antwortet damit 409 `db_integrity_failed` (`server::auth`). Nur für das
+/// Entsperren — die Restore-Prüfung (Phase A) meldet mit eigenem Kontext.
+pub const INTEGRITY_REFUSED: &str = "Datenbank-Prüfung beim Entsperren fehlgeschlagen";
+
+/// Kennzeichen in der Meldung, wenn die Prüfung erst **nach** einer schon
+/// gespeicherten Umstellung anschlägt (Lauf F2c): Dann stimmt „nichts
+/// verändert“ nicht mehr, `server::auth` antwortet mit anderem Text.
+pub const INTEGRITY_AFTER_MIGRATION: &str = "nach der Umstellung";
+
+/// Ein verletzter Fremdschlüssel aus `PRAGMA foreign_key_check`: Tabelle,
+/// rowid und Zieltabelle — keine Inhalte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKeyViolation {
+    pub table: String,
+    pub rowid: Option<i64>,
+    pub parent: String,
+}
+
+impl std::fmt::Display for ForeignKeyViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.rowid {
+            Some(r) => write!(f, "{} (rowid {r}) → {}", self.table, self.parent),
+            None => write!(f, "{} (rowid -) → {}", self.table, self.parent),
+        }
+    }
+}
+
+/// Prüft die referenzielle Integrität der ganzen Datenbank
+/// (`PRAGMA foreign_key_check`, R1-012) und liefert die Befunde — ohne zu
+/// loggen oder zu urteilen; die Aufrufer (Entsperren vor und nach der
+/// Umstellung, Restore Phase A) melden mit ihrem Kontext (Lauf F2c). Die
+/// Migrationen 0002 und 0003 bauten Tabellen um (0003 mit
+/// `PRAGMA foreign_keys = OFF`); ein dabei, in einem eingespielten Backup oder
+/// durch eine Bearbeitung von außen entstandener verwaister Verweis fiele sonst
+/// erst bei einem späteren Schreibzugriff (oder nie) auf.
+pub async fn foreign_key_violations(pool: &SqlitePool) -> Result<Vec<ForeignKeyViolation>> {
+    use sqlx::Row;
+    let rows = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(ForeignKeyViolation {
+                table: row.try_get(0)?,
+                rowid: row.try_get(1)?,
+                parent: row.try_get(2)?,
+            })
+        })
+        .collect()
+}
+
+/// Schreibt höchstens 20 Befunde ins Log, mit dem Kontext der Prüfung
+/// (z. B. „Entsperren“, „Restore-Prüfung“).
+pub fn log_foreign_key_violations(context: &str, violations: &[ForeignKeyViolation]) {
+    for v in violations.iter().take(20) {
+        tracing::error!(
+            "Verletzter Fremdschlüssel ({context}): Tabelle {}, rowid {}, Verweis auf {}",
+            v.table,
+            v.rowid.map_or_else(|| "-".to_string(), |r| r.to_string()),
+            v.parent
+        );
+    }
+}
+
+/// Prüfung vor einer Umstellung (Lauf F2c): verletzte Fremdschlüssel und —
+/// für die Umstellung auf Schema 32 — mehrere festgeschriebene Stornos zu
+/// einem Original (dieselbe Bedingung wie der benannte CHECK in 0032). Ein
+/// Befund lehnt ab, **bevor** eine Migration etwas speichert: die Datenbank
+/// bleibt auf Schema `from`, das vorige Image öffnet sie weiter, ein Restore
+/// bleibt möglich. Billig gegenüber dem Pflicht-Backup, das danach entsteht.
+pub async fn precheck_before_migration(pool: &SqlitePool, from: i32) -> Result<()> {
+    let violations = foreign_key_violations(pool).await?;
+    if !violations.is_empty() {
+        log_foreign_key_violations(
+            &format!("vor der Umstellung von Schema {from}"),
+            &violations,
+        );
+        let msg = format!(
+            "{INTEGRITY_REFUSED}: {} verletzte(r) Fremdschlüssel vor der Umstellung, z. B. {}. \
+             Die Datenbank steht unverändert auf Schema {from}; es wurde nichts umgestellt \
+             (Rückweg: Image der vorigen Version; Handbuch: Fehlersuche im Container).",
+            violations.len(),
+            violations[0]
+        );
+        tracing::error!("{msg}");
+        return Err(Error::Config(msg));
+    }
+    if from < 32 && duplicate_locked_stornos(pool).await? > 0 {
+        let msg = format!(
+            "{INTEGRITY_REFUSED}: Migration 0032 abgebrochen: Zu mindestens einer Rechnung gibt \
+             es mehr als einen festgeschriebenen Storno-Beleg. Die Datenbank steht unverändert \
+             auf Schema {from}; es wurde nichts umgestellt (Handbuch: Fehlersuche im Container)."
+        );
+        tracing::error!("{msg}");
+        return Err(Error::Config(msg));
+    }
+    Ok(())
+}
+
+/// Meldung für verletzte Fremdschlüssel **nach** den Migrationen. Mit
+/// `pending = Some(from)` ist die Umstellung schon gespeichert (das sagt die
+/// Meldung, samt Rückweg über das Backup davor); ohne Umstellung wurden die
+/// Daten nicht angefasst.
+pub fn integrity_message_after(pending: Option<i32>, violations: &[ForeignKeyViolation]) -> String {
+    let first = violations
+        .first()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    match pending {
+        Some(from) => format!(
+            "{INTEGRITY_REFUSED}: {} verletzte(r) Fremdschlüssel {INTEGRITY_AFTER_MIGRATION} von \
+             Schema {from} auf {}, z. B. {first}. Die Umstellung ist gespeichert; das Backup davor \
+             (Schema {from}) liegt im Backup-Ordner. Rückweg: neue Instanz mit dem vorigen Image \
+             und dieses Backup einspielen (Handbuch: Fehlersuche im Container).",
+            violations.len(),
+            schema_version::EXPECTED_SCHEMA_VERSION
+        ),
+        None => format!(
+            "{INTEGRITY_REFUSED}: {} verletzte(r) Fremdschlüssel, z. B. {first}. Die Daten wurden \
+             nicht angefasst (Handbuch: Fehlersuche im Container).",
+            violations.len()
+        ),
+    }
+}
+
+/// Zahl der Rechnungen mit mehr als einem festgeschriebenen Storno-Beleg —
+/// dieselbe Bedingung wie die Vorab-Prüfung der Migration 0032 (dort in SQL).
+/// Phase A eines Restores lehnt solche Backups ab, statt die Instanz nach dem
+/// Tausch gesperrt zu lassen (ADR 0039 Nr. 124).
+pub async fn duplicate_locked_stornos(pool: &SqlitePool) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM (
+            SELECT is_storno_for FROM invoices
+             WHERE is_storno_for IS NOT NULL AND locked_at IS NOT NULL
+             GROUP BY is_storno_for HAVING COUNT(*) > 1
+         )",
+    )
+    .fetch_one(pool)
+    .await?)
 }
 
 /// Schließt einen beim Serverstart angewendeten Restore im ersten Entsperren
@@ -282,18 +479,15 @@ async fn finish_restore(
         "backup.restore.applied",
         "backup",
         "restore",
-        Some(
-            &serde_json::json!({
-                "source": info.source,
-                "staged_at": info.staged_at,
-                "branding_restored": info.branding_restored,
-                "pre_restore_backup": info.pre_restore_backup,
-                "schema": info.schema_version,
-                "backup_created_at": info.backup_created_at,
-                "counters_raised": raised.len(),
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "source": info.source,
+            "staged_at": info.staged_at,
+            "branding_restored": info.branding_restored,
+            "pre_restore_backup": info.pre_restore_backup,
+            "schema": info.schema_version,
+            "backup_created_at": info.backup_created_at,
+            "counters_raised": raised.len(),
+        })),
     )
     .await?;
     for r in &raised {
@@ -302,15 +496,12 @@ async fn finish_restore(
             "numbering.raised_after_restore",
             "numbering",
             &format!("{}:{}", r.doc_type, r.fiscal_year),
-            Some(
-                &serde_json::json!({
-                    "doc_type": r.doc_type,
-                    "fiscal_year": r.fiscal_year,
-                    "from": r.from,
-                    "to": r.to,
-                })
-                .to_string(),
-            ),
+            Some(serde_json::json!({
+                "doc_type": r.doc_type,
+                "fiscal_year": r.fiscal_year,
+                "from": r.from,
+                "to": r.to,
+            })),
         )
         .await?;
     }
@@ -494,12 +685,16 @@ fn with_db_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(s)
 }
 
-/// Entfernt eine Datei, falls vorhanden (No-op sonst).
-fn remove_file_if_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        std::fs::remove_file(path)?;
+/// Entfernt eine Datei, falls vorhanden (No-op sonst). Ohne vorherige
+/// `exists()`-Prüfung (Lauf F, LE-CI-FLAKE): SQLite löscht `-wal`/`-shm` beim
+/// Schließen der letzten Verbindung selbst, und das Schließen kann nachlaufen —
+/// zwischen Prüfung und Löschen verschwand die Datei, `remove_file` meldete
+/// `NotFound` (Bestands-Migration, Passphrase-Wechsel).
+pub(crate) fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => Ok(other?),
     }
-    Ok(())
 }
 
 /// G1-ENC Schritt 3 — **Kern** der Bestands-Migration ohne Orchestrierung.
@@ -648,6 +843,35 @@ async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F (LE-CI-FLAKE): fehlende Datei ist kein Fehler; eine Datei, die
+    /// ein paralleler Schreiber anlegt und wieder entfernt, auch nicht.
+    #[test]
+    fn remove_file_if_exists_tolerates_vanished_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("x.sqlite-wal");
+        remove_file_if_exists(&f).unwrap();
+        std::fs::write(&f, b"x").unwrap();
+        remove_file_if_exists(&f).unwrap();
+        assert!(!f.exists());
+        let racer = {
+            let f = f.clone();
+            std::thread::spawn(move || {
+                for _ in 0..500 {
+                    let _ = std::fs::write(&f, b"x");
+                    let _ = std::fs::remove_file(&f);
+                }
+            })
+        };
+        for _ in 0..500 {
+            remove_file_if_exists(&f).unwrap();
+        }
+        racer.join().unwrap();
+        // Ein Verzeichnis ist kein „fehlt“: der Fehler kommt durch.
+        let d = dir.path().join("dir");
+        std::fs::create_dir(&d).unwrap();
+        assert!(remove_file_if_exists(&d).is_err());
+    }
     use sqlx::Row;
 
     /// G1-ENC.1-Akzeptanz: Eine mit Passphrase angelegte DB ist ohne (bzw. mit

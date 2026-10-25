@@ -160,7 +160,7 @@ pub async fn save_targets(pool: &SqlitePool, targets: &[TargetEntry]) -> Result<
         "backup.targets.set",
         "backup",
         "targets",
-        Some(&serde_json::json!({ "targets": summary }).to_string()),
+        Some(serde_json::json!({ "targets": summary })),
     )
     .await?;
     Ok(())

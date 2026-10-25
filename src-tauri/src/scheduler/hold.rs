@@ -163,7 +163,7 @@ pub async fn set(pool: &SqlitePool, reason: &str, now: DateTime<Utc>) -> Result<
         "scheduler.hold_set",
         "scheduler",
         "hold",
-        Some(&serde_json::json!({ "reason": reason, "since": since }).to_string()),
+        Some(serde_json::json!({ "reason": reason, "since": since })),
     )
     .await?;
     let hold = Hold {
@@ -189,7 +189,7 @@ pub async fn set_restore_in(conn: &mut sqlx::SqliteConnection, now: DateTime<Utc
         "scheduler.hold_set",
         "scheduler",
         "hold",
-        Some(&serde_json::json!({ "reason": REASON_RESTORE, "since": since }).to_string()),
+        Some(serde_json::json!({ "reason": REASON_RESTORE, "since": since })),
     )
     .await?;
     Ok(Hold {
@@ -241,14 +241,11 @@ pub async fn release(pool: &SqlitePool, now: DateTime<Utc>) -> Result<Option<Hol
             "scheduler.hold_released",
             "scheduler",
             "hold",
-            Some(
-                &serde_json::json!({
-                    "reason": h.reason,
-                    "since": h.since,
-                    "released_at": clock::to_db_utc(now),
-                })
-                .to_string(),
-            ),
+            Some(serde_json::json!({
+                "reason": h.reason,
+                "since": h.since,
+                "released_at": clock::to_db_utc(now),
+            })),
         )
         .await?;
     }

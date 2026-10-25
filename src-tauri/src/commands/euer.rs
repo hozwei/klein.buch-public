@@ -1,12 +1,15 @@
 //! Commands für die EÜR-Auswertung (Block 13).
 //!
-//! Reine **Lese**-Auswertung (Cash-Basis, §4 Abs. 3 EStG): keine DB-Mutation,
-//! kein Lock, kein Backup-Hook, kein Audit-Eintrag. Die Periodenzuordnung +
-//! Summierung liegt im Functional Core [`crate::euer::aggregate`]; hier wird nur
-//! geladen ([`crate::db::repo::euer`]) und durchgereicht.
+//! **Lese**-Auswertung (Cash-Basis, §4 Abs. 3 EStG): keine Buchung, kein Lock,
+//! kein Backup-Hook. Die Periodenzuordnung + Summierung liegt im Functional
+//! Core [`crate::euer::aggregate`]; hier wird nur geladen
+//! ([`crate::db::repo::euer`]) und durchgereicht.
 //!
-//! Export (DATEV-CSV + Steuerberater-ZIP) folgt in Block 14b/14c; die
-//! ELSTER-Ausfüllhilfe (Block 14a) liegt unten.
+//! **Exporte** (PDF, DATEV, ELSTER, Einzelaufstellung, Steuerberater-Paket)
+//! schreiben je einen Pflicht-Audit-Eintrag (Lauf F, R2-016 / ASVS 8.3.5:
+//! Geschäftsjahr, Dateiname, Zählwerte, keine Inhalte). Für abgeschlossene
+//! Jahre gleichen Anzeige und Exporte die Eckwerte mit dem
+//! Festschreibungs-Snapshot ab ([`crate::fiscal_year::snapshot`], KB-0031).
 
 use crate::app_ctx::AppCtx;
 use chrono::Datelike;
@@ -25,6 +28,7 @@ use crate::euer::aggregate::{self, EuerReport};
 use crate::euer::datev_csv::{self, DatevHeader, Skr};
 use crate::euer::detail::{self, AveeurItem, DisposalItem, ExpenseItem, IncomeItem, StornoItem};
 use crate::euer::elster_csv::{self, ElsterForm};
+use crate::fiscal_year::snapshot::{self, SnapshotCheck};
 use crate::pdf::{templates, typst_render};
 use sha2::{Digest, Sha256};
 
@@ -50,6 +54,33 @@ fn klein_status_from_profile(profile: Option<&SellerProfileRow>) -> Kleinunterne
 
 fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bool {
     kleinunternehmer::is_active_for_year(&klein_status_from_profile(profile), fiscal_year)
+}
+
+/// Pflicht-Audit eines Exports (Lauf F, R2-016 / ASVS 8.3.5): Geschäftsjahr,
+/// Dateiname und Zählwerte — keine Inhalte, keine personenbezogenen Daten —
+/// sowie der Snapshot-Status (`open`/`match`/`mismatch`). Eine Abweichung
+/// meldet zusätzlich [`snapshot::report_mismatch`].
+async fn audit_export(
+    pool: &SqlitePool,
+    action: &str,
+    fiscal_year: i64,
+    mut details: serde_json::Value,
+    check: Option<&SnapshotCheck>,
+) -> Result<()> {
+    details["fiscal_year"] = serde_json::Value::from(fiscal_year);
+    details["snapshot"] = serde_json::Value::from(snapshot::audit_status(check));
+    audit_log::append(
+        pool,
+        action,
+        "euer",
+        &fiscal_year.to_string(),
+        Some(details),
+    )
+    .await?;
+    if let Some(check) = check {
+        snapshot::report_mismatch(pool, check, action).await?;
+    }
+    Ok(())
 }
 
 /// Argumente von [`euer_compute_report`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -113,6 +144,8 @@ pub struct ElsterExportResult {
     pub line_count: usize,
     /// Anzahl der ins ELSTER-Formular einzutragenden Positionen.
     pub entry_count: usize,
+    /// Abgleich mit dem Festschreibungs-Snapshot (nur abgeschlossene Jahre).
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Baut die ELSTER-Ausfüllhilfe für ein Geschäftsjahr: EÜR-Report aggregieren,
@@ -140,6 +173,9 @@ pub struct EuerPackage {
     pub expenses: Vec<ExpenseItem>,
     pub disposals: Vec<DisposalItem>,
     pub assets: Vec<AveeurItem>,
+    /// Abgleich mit dem Festschreibungs-Snapshot (nur abgeschlossene Jahre,
+    /// KB-0031) — die Anzeige warnt bei `matches = false`.
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Argumente von [`euer_package`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -162,6 +198,7 @@ pub async fn euer_package(ctx: &Arc<AppCtx>, args: EuerPackageArgs) -> Result<Eu
         expenses: euer_repo::expense_detail(pool, y).await?,
         disposals: euer_repo::disposal_detail(pool, y).await?,
         assets: euer_repo::aveeur_items(pool, y).await?,
+        snapshot_check: snapshot::check(pool, fiscal_year).await?,
     })
 }
 
@@ -174,6 +211,7 @@ pub struct EuerDetailExport {
     pub income_count: usize,
     pub expense_count: usize,
     pub asset_count: usize,
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Argumente von [`euer_export_detail_zip`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -184,7 +222,8 @@ pub struct EuerExportDetailZipArgs {
 }
 
 /// Schreibt die Einzelaufstellung als ZIP (einnahmen.csv, ausgaben.csv,
-/// anlageverzeichnis.csv) in den Download-Ordner (Plan W7). Read-only.
+/// anlageverzeichnis.csv) in den Download-Ordner (Plan W7). Keine Buchung;
+/// Pflicht-Audit `euer.detail_export` (Lauf F).
 pub async fn euer_export_detail_zip(
     ctx: &Arc<AppCtx>,
     args: EuerExportDetailZipArgs,
@@ -216,7 +255,27 @@ pub async fn euer_export_detail_zip(
     zw.write_all(detail::expenses_csv(&expenses).as_bytes())?;
     zw.start_file("anlageverzeichnis.csv", opts)?;
     zw.write_all(detail::aveeur_csv(&assets, y).as_bytes())?;
+    // Lauf F2c (KB-0031): Abweichung vom Jahresabschluss als Begleitdatei.
+    let check = snapshot::check(pool, fiscal_year).await?;
+    if let Some(c) = check.as_ref().filter(|c| !c.matches) {
+        zw.start_file(SNAPSHOT_NOTE_FILE, opts)?;
+        zw.write_all(snapshot::readme_block(c).as_bytes())?;
+    }
     zw.finish()?;
+
+    audit_export(
+        pool,
+        "euer.detail_export",
+        fiscal_year,
+        json!({
+            "file_name": format!("EUER-{fiscal_year}-Einzelaufstellung.zip"),
+            "income": income.len(),
+            "expenses": expenses.len(),
+            "assets": assets.len(),
+        }),
+        check.as_ref(),
+    )
+    .await?;
 
     Ok(EuerDetailExport {
         download: ctx.downloads.register(
@@ -227,6 +286,7 @@ pub async fn euer_export_detail_zip(
         income_count: income.len(),
         expense_count: expenses.len(),
         asset_count: assets.len(),
+        snapshot_check: check,
     })
 }
 
@@ -237,8 +297,8 @@ pub struct EuerExportElsterArgs {
     pub fiscal_year: i64,
 }
 
-/// Schreibt die ELSTER-Ausfüllhilfe als CSV in den Download-Ordner (Plan W7). Read-only
-/// (kein Lock/Backup/Audit — eine reine Auswertung).
+/// Schreibt die ELSTER-Ausfüllhilfe als CSV in den Download-Ordner (Plan W7).
+/// Keine Buchung; Pflicht-Audit `euer.elster_export` (Lauf F).
 pub async fn euer_export_elster(
     ctx: &Arc<AppCtx>,
     args: EuerExportElsterArgs,
@@ -247,7 +307,9 @@ pub async fn euer_export_elster(
     let pool = ctx.pool()?;
 
     let form = build_form_for_year(&pool, fiscal_year as i32).await?;
-    let csv = elster_csv::to_csv(&form);
+    // Lauf F2c: Abweichung vom Jahresabschluss als Kommentarzeile in der Datei.
+    let check = snapshot::check(&pool, fiscal_year).await?;
+    let csv = elster_csv::to_csv_with_notes(&form, &snapshot::csv_note_lines(check.as_ref()));
 
     // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
     let (download_id, download_path) = ctx
@@ -255,6 +317,18 @@ pub async fn euer_export_elster(
         .prepare(&format!("EUER-{fiscal_year}-ELSTER.csv"))?;
     let path = download_path.as_path();
     std::fs::write(path, csv.as_bytes())?;
+
+    audit_export(
+        &pool,
+        "euer.elster_export",
+        fiscal_year,
+        json!({
+            "file_name": format!("EUER-{fiscal_year}-ELSTER.csv"),
+            "lines": form.lines.len(),
+        }),
+        check.as_ref(),
+    )
+    .await?;
 
     Ok(ElsterExportResult {
         download: ctx.downloads.register(
@@ -264,6 +338,7 @@ pub async fn euer_export_elster(
         )?,
         line_count: form.lines.len(),
         entry_count: form.lines.iter().filter(|l| l.is_entry).count(),
+        snapshot_check: check,
     })
 }
 
@@ -274,6 +349,7 @@ pub struct EuerPdfExport {
     /// Abruf über `GET /files/download/{id}` (Plan W7).
     pub download: crate::downloads::DownloadTicket,
     pub size_bytes: i64,
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Baut das vollständige EÜR-PDF (Anlage EÜR + Anlageverzeichnis +
@@ -283,6 +359,7 @@ async fn build_euer_pdf_bytes(
     paths: &Paths,
     pool: &SqlitePool,
     fiscal_year: i64,
+    check: Option<&SnapshotCheck>,
 ) -> Result<Vec<u8>> {
     let y = fiscal_year as i32;
 
@@ -301,6 +378,8 @@ async fn build_euer_pdf_bytes(
 
     let data = json!({
         "year": fiscal_year,
+        // Lauf F2c (KB-0031): Hinweiskasten bei Abweichung vom Jahresabschluss.
+        "snapshotMismatch": snapshot::pdf_block(check),
         "generatedAt": crate::clock::today_berlin().to_string(),
         "isKleinunternehmer": is_klein,
         "kleinunternehmerHinweis": if is_klein { Some(HINWEIS_TEXT) } else { None },
@@ -392,17 +471,29 @@ pub struct EuerExportPdfArgs {
     pub fiscal_year: i64,
 }
 
-/// Erzeugt das vollständige EÜR-Dokument als PDF und schreibt es an den gewählten
-/// Pfad. Read-only.
+/// Erzeugt das vollständige EÜR-Dokument als PDF im Download-Ordner. Keine
+/// Buchung; Pflicht-Audit `euer.pdf_export` (Lauf F).
 pub async fn euer_export_pdf(ctx: &Arc<AppCtx>, args: EuerExportPdfArgs) -> Result<EuerPdfExport> {
     let EuerExportPdfArgs { fiscal_year } = args;
     let pool = ctx.pool()?;
 
-    let pdf_bytes = build_euer_pdf_bytes(&ctx.paths, &pool, fiscal_year).await?;
+    let check = snapshot::check(&pool, fiscal_year).await?;
+    let pdf_bytes = build_euer_pdf_bytes(&ctx.paths, &pool, fiscal_year, check.as_ref()).await?;
     // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
     let (download_id, download_path) = ctx.downloads.prepare(&format!("EUER-{fiscal_year}.pdf"))?;
     let path = download_path.as_path();
     std::fs::write(path, &pdf_bytes)?;
+    audit_export(
+        &pool,
+        "euer.pdf_export",
+        fiscal_year,
+        json!({
+            "file_name": format!("EUER-{fiscal_year}.pdf"),
+            "bytes": pdf_bytes.len(),
+        }),
+        check.as_ref(),
+    )
+    .await?;
     Ok(EuerPdfExport {
         download: ctx.downloads.register(
             download_id,
@@ -410,6 +501,7 @@ pub async fn euer_export_pdf(ctx: &Arc<AppCtx>, args: EuerExportPdfArgs) -> Resu
             crate::downloads::DownloadKind::Export,
         )?,
         size_bytes: pdf_bytes.len() as i64,
+        snapshot_check: check,
     })
 }
 
@@ -420,6 +512,7 @@ pub struct DatevExport {
     /// Abruf über `GET /files/download/{id}` (Plan W7).
     pub download: crate::downloads::DownloadTicket,
     pub booking_count: usize,
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Argumente von [`euer_export_datev`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -432,7 +525,8 @@ pub struct EuerExportDatevArgs {
 
 /// Erzeugt den DATEV-Buchungsstapel (EXTF) eines Geschäftsjahres für die
 /// Steuerberater-Übergabe und schreibt ihn in den Download-Ordner (Plan W7). `skr` =
-/// "SKR03" (Default) oder "SKR04". Read-only.
+/// "SKR03" (Default) oder "SKR04". Keine Buchung; Pflicht-Audit
+/// `euer.datev_export` (Lauf F).
 pub async fn euer_export_datev(
     ctx: &Arc<AppCtx>,
     args: EuerExportDatevArgs,
@@ -479,6 +573,20 @@ pub async fn euer_export_datev(
     let path = download_path.as_path();
     std::fs::write(path, &bytes)?;
 
+    let check = snapshot::check(pool, fiscal_year).await?;
+    audit_export(
+        pool,
+        "euer.datev_export",
+        fiscal_year,
+        json!({
+            "file_name": format!("DATEV-{fiscal_year}-{skr}.csv"),
+            "skr": skr_enum.code(),
+            "bookings": bookings.len(),
+        }),
+        check.as_ref(),
+    )
+    .await?;
+
     Ok(DatevExport {
         download: ctx.downloads.register(
             download_id,
@@ -486,6 +594,7 @@ pub async fn euer_export_datev(
             crate::downloads::DownloadKind::Export,
         )?,
         booking_count: bookings.len(),
+        snapshot_check: check,
     })
 }
 
@@ -496,6 +605,7 @@ pub struct StbExport {
     /// Abruf über `GET /files/download/{id}` (Plan W7).
     pub download: crate::downloads::DownloadTicket,
     pub file_count: usize,
+    pub snapshot_check: Option<SnapshotCheck>,
 }
 
 /// Argumente von [`euer_export_stb_zip`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -510,8 +620,9 @@ pub struct EuerExportStbZipArgs {
 /// EÜR-PDF, DATEV-Buchungsstapel, ELSTER-Ausfüllhilfe, Einzelaufstellungs-CSVs,
 /// Anlageverzeichnis, Mandanten-Stammdaten, Original-Belege (PDF/XML aus dem
 /// write-once-Archiv), SHA-256-Manifest und LIESMICH.txt mit §19-Klausel und
-/// Disclaimer. `skr` = "SKR03" (Default) / "SKR04". Read-only — schreibt
-/// genau einen `euer.stb_export`-Audit-Eintrag.
+/// Disclaimer. `skr` = "SKR03" (Default) / "SKR04". Keine Buchung — schreibt
+/// genau einen `euer.stb_export`-Audit-Eintrag (bei einer Abweichung vom
+/// Snapshot zusätzlich `euer.snapshot_mismatch`).
 ///
 /// Alle Dateien liegen unter dem ZIP-Top-Level-Ordner `EUER-{year}/` (R2-018).
 pub async fn euer_export_stb_zip(
@@ -524,8 +635,10 @@ pub async fn euer_export_stb_zip(
     let pool = &pool;
     let y = fiscal_year as i32;
 
+    // KB-0031: Abgleich mit dem Festschreibungs-Snapshot (LIESMICH, PDF, ELSTER).
+    let check = snapshot::check(pool, fiscal_year).await?;
     // EÜR-PDF (gemeinsamer Helfer).
-    let euer_pdf = build_euer_pdf_bytes(&ctx.paths, pool, fiscal_year).await?;
+    let euer_pdf = build_euer_pdf_bytes(&ctx.paths, pool, fiscal_year, check.as_ref()).await?;
 
     // Bewegungen + Profil laden (für DATEV, Detail-CSVs, Deckblatt, Stammdaten).
     let form = build_form_for_year(pool, y).await?;
@@ -562,7 +675,9 @@ pub async fn euer_export_stb_zip(
     let datev_bytes = datev_csv::to_datev(&datev_header, &bookings);
 
     // ELSTER-Ausfüllhilfe (R2-015).
-    let elster_csv_bytes = elster_csv::to_csv(&form).into_bytes();
+    let elster_csv_bytes =
+        elster_csv::to_csv_with_notes(&form, &snapshot::csv_note_lines(check.as_ref()))
+            .into_bytes();
 
     // Einzelaufstellungs-CSVs.
     let income_csv = detail::income_csv(&income);
@@ -615,7 +730,8 @@ pub async fn euer_export_stb_zip(
             format!("datev-buchungsstapel.csv — DATEV-Buchungsstapel ({})", skr_enum.code()),
             "elster-ausfuellhilfe.csv — ELSTER-Anlage-EÜR-Felder (Eintipphilfe)",
             "einnahmen.csv / ausgaben.csv / anlageverzeichnis.csv — Einzelaufstellung",
-            "stammdaten.json — Mandanten-Stammdaten",
+            format!("{UNISSUED_NUMBERS_FILE} — Rechnungs- und Storno-Nummern ohne festgeschriebenen Beleg (verworfen oder offen)"),
+            "stammdaten.json — Mandanten-Stammdaten".to_string(),
             "belege/rechnungen/ — Originale (PDF + XRechnung-XML) der festgeschriebenen Rechnungen",
             "belege/kosten/ — Originale der festgeschriebenen Kostenbelege",
             "manifest.json — SHA-256-Hash über jede Datei (Tamper-Detection beim Steuerberater)",
@@ -635,8 +751,13 @@ pub async fn euer_export_stb_zip(
         .compile_async()
         .await?;
 
-    // LIESMICH.txt (R2-019).
-    let liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum);
+    // LIESMICH.txt (R2-019); KB-0031: Abweichung vom Snapshot vorangestellt;
+    // F2c: nicht festgeschriebene Nummern des Jahres.
+    let unissued = euer_repo::unissued_numbers_for_year(pool, y).await?;
+    let mut liesmich = build_stb_readme(fiscal_year, is_klein, skr_enum, &unissued);
+    if let Some(c) = check.as_ref().filter(|c| !c.matches) {
+        liesmich = format!("{}{liesmich}", snapshot::readme_block(c));
+    }
 
     // ZIP zusammenstellen.
     // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
@@ -682,6 +803,11 @@ pub async fn euer_export_stb_zip(
         add(&mut zw, "einnahmen.csv", income_csv.as_bytes())?;
         add(&mut zw, "ausgaben.csv", expenses_csv.as_bytes())?;
         add(&mut zw, "anlageverzeichnis.csv", aveeur_csv.as_bytes())?;
+        add(
+            &mut zw,
+            UNISSUED_NUMBERS_FILE,
+            detail::unissued_numbers_csv(&unissued).as_bytes(),
+        )?;
         add(&mut zw, "stammdaten.json", stammdaten_json.as_bytes())?;
 
         // R2-014: Original-Belege aus dem write-once-Archiv.
@@ -747,15 +873,16 @@ pub async fn euer_export_stb_zip(
 
     // R2-016 — Audit-Eintrag (DSGVO Art. 5(2) Rechenschaftspflicht +
     // GoBD-Audit-Trail über Daten-Auslieferungen).
-    audit_log::append(
+    audit_export(
         pool,
         "euer.stb_export",
-        "euer",
-        &format!("{y}"),
-        Some(&format!(
-            r#"{{"fiscal_year":{y},"skr":"{}","file_count":{file_count}}}"#,
-            skr_enum.code()
-        )),
+        fiscal_year,
+        json!({
+            "file_name": format!("Steuerberater-{fiscal_year}.zip"),
+            "skr": skr_enum.code(),
+            "file_count": file_count,
+        }),
+        check.as_ref(),
     )
     .await?;
 
@@ -766,13 +893,27 @@ pub async fn euer_export_stb_zip(
             crate::downloads::DownloadKind::Export,
         )?,
         file_count,
+        snapshot_check: check,
     })
 }
 
 /// LIESMICH-Inhalt für den STB-Export (R2-019). §19-Klausel + Disclaimer +
 /// Datei-Inhalts-Übersicht. Plain-ASCII (UTF-8), damit auch ältere Editoren
 /// auf STB-Seite das problemlos öffnen.
-fn build_stb_readme(fiscal_year: i64, is_klein: bool, skr: Skr) -> String {
+/// Begleitdatei der Einzelaufstellung bei einer Abweichung vom
+/// Jahresabschluss (Lauf F2c, KB-0031).
+const SNAPSHOT_NOTE_FILE: &str = "HINWEIS-ABWEICHUNG-JAHRESABSCHLUSS.txt";
+
+/// Liste der nie festgeschriebenen Rechnungs-/Storno-Nummern im
+/// Steuerberater-Paket (Lauf F2c).
+const UNISSUED_NUMBERS_FILE: &str = "nicht-festgeschriebene-nummern.csv";
+
+fn build_stb_readme(
+    fiscal_year: i64,
+    is_klein: bool,
+    skr: Skr,
+    unissued: &[detail::UnissuedNumberItem],
+) -> String {
     let mut s = String::new();
     s.push_str(&format!(
         "Klein.Buch — Steuerberater-Paket für das Geschäftsjahr {fiscal_year}\n"
@@ -802,6 +943,9 @@ fn build_stb_readme(fiscal_year: i64, is_klein: bool, skr: Skr) -> String {
     s.push_str("    einnahmen.csv             — Einzelne Zahlungseingänge (Cash-Basis)\n");
     s.push_str("    ausgaben.csv              — Einzelne Kostenbelege\n");
     s.push_str("    anlageverzeichnis.csv    — AVEÜR (Anlagen + AfA)\n");
+    s.push_str(&format!(
+        "    {UNISSUED_NUMBERS_FILE} — Nummern ohne festgeschriebenen Beleg\n"
+    ));
     s.push_str("    stammdaten.json           — Mandanten-Stammdaten\n");
     s.push_str("    belege/rechnungen/        — Original-Rechnungen (PDF + XRechnung-XML)\n");
     s.push_str("    belege/kosten/            — Original-Kostenbelege\n");
@@ -810,7 +954,31 @@ fn build_stb_readme(fiscal_year: i64, is_klein: bool, skr: Skr) -> String {
     s.push_str("    manifest.json enthält pro Datei den SHA-256-Hash zum\n");
     s.push_str("    Zeitpunkt des Exports. Beim Empfang kann der Steuerberater\n");
     s.push_str("    jede Datei gegen ihren Hash prüfen (z. B. mit `sha256sum`),\n");
-    s.push_str("    um eine Manipulation auf dem Transportweg auszuschließen.\n");
+    s.push_str("    um eine Manipulation auf dem Transportweg auszuschließen.\n\n");
+    // Lauf F2c: Lücken in der Nummernfolge der beigelegten Belege erklären
+    // (GoBD Rz. 58 ff.: eine Lücke ist zulässig, wenn sie dokumentiert ist).
+    s.push_str("Nummernfolge der Rechnungen und Stornos:\n");
+    let voided = unissued.iter().filter(|u| u.voided_at.is_some()).count();
+    let open = unissued.len() - voided;
+    if unissued.is_empty() {
+        s.push_str("    Jede vergebene Rechnungs- und Storno-Nummer dieses Jahres gehört\n");
+        s.push_str("    zu einem festgeschriebenen Beleg in belege/rechnungen/.\n");
+    } else {
+        s.push_str(&format!(
+            "    {} Nummer(n) dieses Jahres haben keinen festgeschriebenen Beleg:\n",
+            unissued.len()
+        ));
+        s.push_str(&format!(
+            "    {voided} verworfene(r) Entwurf/Entwürfe (nie ausgestellt, mit Zeitpunkt\n"
+        ));
+        s.push_str(&format!(
+            "    und Grund des Verwerfens) und {open} noch offene(r) Entwurf/Entwürfe.\n"
+        ));
+        s.push_str(&format!(
+            "    Einzelheiten: {UNISSUED_NUMBERS_FILE}. Verworfene Nummern werden nie\n"
+        ));
+        s.push_str("    neu vergeben; die Lücke ist im Audit-Protokoll dokumentiert.\n");
+    }
     s
 }
 

@@ -82,6 +82,19 @@ betrieben wurde. Einen Umzug von der Desktop-Fassung in den Server gibt
 es nicht. Wer die Desktop-Fassung produktiv genutzt hat, bewahrt den
 Bestand mit dieser Fassung auf.
 
+## "verwaiste Verweise" oder "mehr als einen festgeschriebenen Storno-Beleg"
+
+Klein.Buch prüft die Datenbank im Backup so, wie es sie später beim
+Entsperren prüft. "Die Datenbank im Backup enthält verwaiste Verweise"
+heißt: Ein Eintrag verweist auf einen Datensatz, den es im Backup nicht
+gibt, etwa nach einer Bearbeitung der Datenbank von Hand. "… mehr als
+einen festgeschriebenen Storno-Beleg" heißt: Zu einer Rechnung gibt es
+zwei festgeschriebene Stornos; diese Version könnte die Datenbank nicht
+mehr entsperren. In beiden Fällen lehnt Klein.Buch das Backup ab, bevor
+es etwas austauscht; Deine Instanz bleibt, wie sie ist. Nimm ein anderes
+Backup; die Einzelheiten stehen im Server-Log unter "Restore-Prüfung eines
+Backups" (nicht unter "Entsperren").
+
 ## Backup zu groß oder zu wenig Platz
 
 "Backup zu groß für den Restore" heißt: Der entpackte Inhalt ist größer
@@ -161,4 +174,4 @@ der Passphrase verschlüsselt, die vor der Wiederherstellung galt.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

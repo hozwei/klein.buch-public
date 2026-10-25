@@ -68,12 +68,36 @@ Bestätigung gilt fünf Minuten. Klein.Buch packt:
 7. alle ausgestellten Rechnungen als PDF inklusive
    XRechnung-XML
 8. alle Kosten-Belege
-9. ein `manifest.json` mit einem SHA-256-Prüfwert pro Datei
+9. die Liste `nicht-festgeschriebene-nummern.csv`: jede Rechnungs-
+   und Storno-Nummer des Jahres ohne ausgestellten Beleg, also
+   verworfene Entwürfe (mit Zeitpunkt und Grund) und noch offene
+   Entwürfe. Damit kann der Steuerberater jede Lücke in der
+   Nummernfolge der Belege nachvollziehen; die `LIESMICH.txt` nennt
+   die Anzahl.
+10. ein `manifest.json` mit einem SHA-256-Prüfwert pro Datei
 
 Der Steuerberater kann das Manifest gegen die ausgelieferten
 Dateien prüfen, um sicherzustellen, dass nichts unterwegs verändert
 wurde. Klein.Buch importiert das Paket nicht zurück — es ist ein
 Einbahn-Export.
+
+## Protokoll und abgeschlossene Jahre
+
+Jeder Export steht im Audit-Log, mit Geschäftsjahr, Dateiname und
+Anzahl der Positionen, aber ohne Inhalte. So ist nachvollziehbar,
+wann welche Auswertung das Haus verlassen hat.
+
+Ist das Geschäftsjahr schon abgeschlossen, vergleicht Klein.Buch beim
+Export die EÜR mit dem beim Abschluss festgeschriebenen Stand. Weicht
+sie ab, vermerkt Klein.Buch das im Audit-Log und unter "Hinweise" und in
+der exportierten Datei selbst: Das EÜR-PDF zeigt oben einen roten Kasten
+mit festgeschriebenen und heutigen Werten, die ELSTER-Ausfüllhilfe eine
+Kommentarzeile `# ACHTUNG: …` unter dem Titel, die Einzelaufstellung
+eine zusätzliche Datei `HINWEIS-ABWEICHUNG-JAHRESABSCHLUSS.txt`, und das
+Steuerberater-Paket nennt beide Werte am Anfang der `LIESMICH.txt`
+(Kapitel "Geschäftsjahr-Abschluss"). Nur der DATEV-Buchungsstapel bleibt
+unverändert, weil sein Format keine Zusatzzeilen zulässt; die Abweichung
+steht dann im Audit-Log und unter "Hinweise".
 
 ## Empfehlung
 
@@ -92,4 +116,4 @@ ausgespart.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*

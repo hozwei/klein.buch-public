@@ -18,7 +18,8 @@ und stornierst sie bei Fehlern. Die Erst-Anlage steht im Kapitel
 Die Hauptansicht zeigt Rechnungsnummer, Datum, Kunde, Brutto-Betrag
 und Status. Die Status-Werte sind:
 
-1. **Entwurf** — noch nicht ausgestellt, alles editierbar.
+1. **Entwurf** — noch nicht ausgestellt. Ein verworfener Entwurf trägt
+   zusätzlich den Vermerk "verworfen".
 2. **Ausgestellt** — festgeschrieben, PDF und XRechnung-XML im
    Archiv, nichts mehr änderbar (außer Versand und Zahlung).
 3. **Versendet** — die Rechnung wurde per Klein.Buch-Mail
@@ -31,12 +32,24 @@ und Status. Die Status-Werte sind:
 Über der Tabelle filterst Du nach Geschäftsjahr und Status und
 blendest mit der Checkbox "Stornos anzeigen" die Storno-Belege ein.
 
-## Entwurf bearbeiten
+## Entwurf prüfen und verwerfen
 
-Solange eine Rechnung den Status "Entwurf" hat, kannst Du alle
-Felder ändern: Kunde, Datum, Positionen, Preise. Klick auf die
-Zeile in der Liste, ändere im Formular und speichere. Solange Du
-nicht "Rechnung ausstellen" klickst, bleibt sie Entwurf.
+Ein Entwurf bekommt seine Rechnungsnummer schon beim Anlegen. In der
+Detail-Ansicht prüft Klein.Buch die Pflichtangaben; solange Du nicht
+"Rechnung ausstellen" klickst, bleibt die Rechnung Entwurf. Einen
+gespeicherten Entwurf änderst Du nicht nachträglich: Stimmt etwas nicht,
+verwirf ihn und leg einen neuen an.
+
+**Verwerfen** braucht eine Bestätigung mit Deinem Passwort und einen
+Grund (mindestens zehn Zeichen). Klein.Buch löscht den Entwurf nicht,
+sondern vermerkt Zeitpunkt und Grund daran und im Protokoll. Die Nummer
+bleibt vergeben und wird nie ein zweites Mal benutzt. So ist die Lücke
+im Nummernkreis erklärt, wie es die GoBD verlangen. Ein verworfener
+Entwurf lässt sich danach nicht mehr ändern und nicht ausstellen.
+Stammt der Entwurf aus einem Angebot, steht das Angebot danach wieder
+auf "Angenommen" und lässt sich erneut in eine Rechnung wandeln.
+Eine bereits ausgestellte Rechnung verwirfst Du nicht, sondern
+stornierst sie.
 
 ## Ausstellen (Festschreiben)
 
@@ -100,4 +113,4 @@ Rechnungen"** und legst dort eine Vorlage an. Mehr dazu im Kapitel
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
