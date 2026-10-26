@@ -83,7 +83,8 @@
   }
 
   function rhythm(s: RecurringInvoiceRow): string {
-    return `${frequencyLabel(s.frequency)} · zum ${s.dayOfPeriod}.`;
+    // U3: geschütztes Leerzeichen, damit „zum“ und der Tag nicht getrennt umbrechen.
+    return `${frequencyLabel(s.frequency)} · zum\u00a0${s.dayOfPeriod}.`;
   }
 
   function modeBadge(s: RecurringInvoiceRow): { label: string; tone: Tone } {
@@ -317,7 +318,7 @@
   .empty p { margin: 0 0 1rem; }
   .muted { color: var(--text-muted); }
   /* W10: In der Karten-Ansicht dürfen die Aktions-Buttons umbrechen. */
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td.actions { white-space: normal; }
     .act-row { min-width: 0; }
   }

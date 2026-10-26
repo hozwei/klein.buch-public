@@ -401,7 +401,7 @@
               <td class="wrap" data-label="Bezeichnung">{a.label}{#if a.disposedInYear}<span class="tag">Abgang {date(a.disposalDate)}</span>{/if}</td>
               <td data-label="Anschaffung">{date(a.acquisitionDate)}</td>
               <td class="num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
-              <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted"> · {percent(a.businessSharePercent)} betrieblich</span>{/if}</td>
+              <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted">{" "}· {percent(a.businessSharePercent)} betrieblich</span>{/if}</td>
               <td class="num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
               <td class="num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
             </tr>
@@ -514,14 +514,14 @@
 
 <style>
   .tbl-scroll { overflow-x: auto; max-width: 100%; }
-  @media (max-width: 820px) { .tbl-scroll { overflow: visible; } }
+  @media screen and (max-width: 820px) { .tbl-scroll { overflow: visible; } }
   .year { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); align-self: center; }
   .year-select { width: auto; }
   /* .card / .card h2 / .lead / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
   table { width: 100%; border-collapse: collapse; }
   td { vertical-align: top; }
   .z { width: 5.5rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td.z { width: auto; }
     /* Karten: Summentext steht im data-label der Betragszelle; leere Platzhalter weg. */
     tr.sum td.sum-label, td.no-card { display: none; }

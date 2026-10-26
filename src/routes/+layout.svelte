@@ -1,7 +1,7 @@
 <script lang="ts">
   import "#lib/styles/tokens.css";
   import { untrack } from "svelte";
-  import { goto, onNavigate } from "$app/navigation";
+  import { afterNavigate, goto, onNavigate } from "$app/navigation";
   import { page } from "$app/state";
   import BackupGate from "#lib/BackupGate.svelte";
   import ToastHost from "#lib/ToastHost.svelte";
@@ -75,6 +75,16 @@
       navClosedByRoute = false;
       trap.destroy();
     };
+  });
+
+  // U3: Am Desktop scrollt <main> selbst (nicht das Fenster). SvelteKit setzt beim
+  // Seitenwechsel nur das Fenster nach oben — ohne diesen Schritt öffnete z. B. die
+  // Rechnung aus einer weit gescrollten Liste mitten auf der Seite. Sprungziele
+  // (#anker) und Wechsel innerhalb derselben Adresse bleiben unberührt.
+  afterNavigate(({ from, to, type }) => {
+    if (type === "enter" || !to || to.url.hash) return;
+    if (from && from.url.pathname === to.url.pathname && from.url.search === to.url.search) return;
+    mainEl?.scrollTo({ top: 0 });
   });
 
   function skipToContent(e: MouseEvent) {
@@ -335,7 +345,14 @@
   <!-- R5-014: `inert` solange ein Modal offen ist — Tab kann nicht aus dem
        Modal in die Sidebar springen. `|| undefined` weil Svelte `inert=false`
        sonst als String-Attribut rendert, was die a11y-Semantik invertiert. -->
-  <a class="skip-link" href="#main-content" onclick={skipToContent}>Zum Inhalt</a>
+  <!-- U3: Bei offenem Dialog gehört auch der Sprunglink zum gesperrten Hintergrund
+       (sonst einziges Tab-Ziel außerhalb eines Dialogs, z. B. nach dem PDF-iframe). -->
+  <a
+    class="skip-link"
+    href="#main-content"
+    onclick={skipToContent}
+    inert={modalStack.count > 0 || drawerOpen || undefined}>Zum Inhalt</a
+  >
   <header class="mobilebar" inert={modalStack.count > 0 || drawerOpen || undefined}>
     <button
       type="button"
@@ -677,7 +694,7 @@
   .mobilebar {
     display: none;
   }
-  @media (max-width: 900px), (pointer: coarse) {
+  @media screen and (max-width: 900px), screen and (pointer: coarse) {
     :global(body) {
       display: block;
     }

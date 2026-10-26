@@ -569,7 +569,7 @@
   /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im
      data-label der Betragszelle; Paket-Kopf und -Beschreibung bilden eine Karte.
      Leere Aktionszellen (eine einzige Position) erscheinen nicht als Kartenzeile. */
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td.sum-label { display: none; }
     td.c-qty, td.c-unit, td.c-price, td.c-rate { width: auto; }
     tr.pkg-row { margin-bottom: 0; border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; }

@@ -192,10 +192,31 @@ export function focusTrap(node: HTMLElement, options: FocusTrapOptions = {}) {
     if (t instanceof Node && !node.contains(t)) focusInitial(trap);
   }
 
+  // U3 (Firefox, PDF-Vorschau): Tasten im iframe sieht diese Falle nicht. Verlässt
+  // der Fokus das iframe mit Tab ins Leere (<body>, kein `focusin`), meldet das
+  // Fenster nur `focus` — dann zurück in den Dialog. Nach einem Klick nicht (Klick
+  // auf Text im Dialog setzt den Fokus bewusst auf <body>).
+  let lastPointer = 0;
+  function onPointerDown(): void {
+    lastPointer = Date.now();
+  }
+  function onWindowFocus(): void {
+    if (!isTop(trap)) return;
+    setTimeout(() => {
+      if (!node.isConnected || !isTop(trap) || Date.now() - lastPointer < 400) return;
+      const a = document.activeElement;
+      if (!a || a === document.body || a === document.documentElement) focusInitial(trap);
+    }, 0);
+  }
+
   stack.push(trap);
   if (options.lockScroll !== false) lockScroll();
   document.addEventListener("keydown", onKeydown, true);
   document.addEventListener("focusin", onFocusIn);
+  document.addEventListener("pointerdown", onPointerDown, true);
+  // Fenster über das Dokument holen (im Unit-Test-DOM gibt es kein globales `window`).
+  const win = document.defaultView;
+  win?.addEventListener("focus", onWindowFocus);
   // Erst nach dem Rendern des Inhalts fokussieren.
   queueMicrotask(() => {
     if (node.isConnected && isTop(trap) && !node.contains(document.activeElement)) focusInitial(trap);
@@ -208,6 +229,8 @@ export function focusTrap(node: HTMLElement, options: FocusTrapOptions = {}) {
     destroy() {
       document.removeEventListener("keydown", onKeydown, true);
       document.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      win?.removeEventListener("focus", onWindowFocus);
       const i = stack.indexOf(trap);
       if (i !== -1) stack.splice(i, 1);
       if (trap.opts.lockScroll !== false) unlockScroll();

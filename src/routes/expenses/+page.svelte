@@ -166,7 +166,7 @@
           <th>Beschreibung</th>
           <th class="kb-col-opt1">Kategorie</th>
           <th class="num">Brutto</th>
-          <th>Bezahlt</th>
+          <th>Bezahlt am</th>
           <th>Status</th>
           <th><span class="kb-visually-hidden">Aktion</span></th>
         </tr>
@@ -176,7 +176,7 @@
           <tr class={e.status === "canceled" ? "canceled" : ""}>
             <td data-label="Beleg-Nr."><a class="doc-no" href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
             <td class="kb-col-opt2" data-label="Datum">{date(e.expenseDate)}</td>
-            <td class="wrap" data-label="Lieferant">{e.vendorNameSnapshot}</td>
+            <td class="wrap vendor" data-label="Lieferant">{e.vendorNameSnapshot}</td>
             <td class="desc wrap cards-full" data-label="Beschreibung">{e.description}</td>
             <td class="kb-col-opt1" data-label="Kategorie">
               <span class="cat">
@@ -186,7 +186,7 @@
               </span>
             </td>
             <td class="num kb-num" data-label="Brutto">{euro(e.grossAmountCents)}</td>
-            <td data-label="Bezahlt">{e.paidDate ? date(e.paidDate) : "offen"}</td>
+            <td data-label="Bezahlt am">{e.paidDate ? date(e.paidDate) : "offen"}</td>
             <td data-label="Status">
               <span class="badges">
                 {#if e.status === "canceled"}
@@ -225,8 +225,11 @@
   /* U2 (U1-063): nicht mitten im Wort trennen („Arbeitsplatzrec/hner“) — `anywhere` lässt
      die Spalte im Tabellenmodus unter die Wortbreite schrumpfen; Silbentrennung (lang="de"). */
   td.wrap { overflow-wrap: break-word; hyphens: auto; }
+  /* U3: Firmennamen nur an Leerzeichen umbrechen („Sys-teme GmbH“ las sich wie ein Tippfehler);
+     ein Wort, das breiter als die Spalte ist, bricht trotzdem (break-word). */
+  td.vendor { hyphens: manual; }
   td.right { text-align: right; }
-  @media (max-width: 820px) { td.desc { max-width: none; } }
+  @media screen and (max-width: 820px) { td.desc { max-width: none; } }
   /* Belegnummer als Link: Trefferfläche ≥ --target, monospace (design.md §7). */
   a.doc-no {
     display: inline-flex; align-items: center; min-height: var(--target);

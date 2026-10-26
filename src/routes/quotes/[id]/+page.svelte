@@ -668,7 +668,7 @@
   .hist-note { font-size: var(--fs-sm); margin-top: 0.4rem; }
   /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
      Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td.sum-label { display: none; }
     td { overflow-wrap: anywhere; }
   }

@@ -660,6 +660,11 @@
   th, td { text-align: left; font-size: var(--fs-sm); }
   tr.editing td { background: var(--surface-hover); }
   .wrap { overflow-wrap: anywhere; }
+  /* U3: Im Tabellenmodus Adressen und Host:Port nicht mitten im Wort trennen („…e.org/>“,
+     „127.0.0.1:/2525“) — `break-word` lässt die Spalte nicht unter die Wortbreite schrumpfen. */
+  @media screen and (min-width: 821px) {
+    .wrap { overflow-wrap: break-word; }
+  }
   .status-warn { color: var(--status-warning-fg); }
   .testmail { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   .testmail-h { font-size: var(--fs-md); margin: 0 0 0.5rem; }
@@ -672,7 +677,7 @@
   .default-toggle { display: flex; flex-direction: column; gap: 0.25rem; }
   .row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
   .muted { color: var(--text-muted); }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td { overflow-wrap: anywhere; }
   }
 </style>

@@ -37,7 +37,8 @@
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
-    const mq = matchMedia("(max-width: 600px)");
+    // Breite und Höhe: unter 600 px Breite oder 500 px Höhe klebt die Leiste nicht.
+    const mq = matchMedia("(max-width: 600px), (max-height: 500px)");
     mq.addEventListener("change", update);
     return () => {
       ro.disconnect();
@@ -71,11 +72,21 @@
     /* bündig oben (main hat kein Top-Padding); volle Breite über das seitliche
        main-Padding hinweg, damit Inhalt sauber darunter durchscrollt. */
     margin: 0 calc(var(--main-pad) * -1) 1.25rem;
-    padding: 0.7rem var(--main-pad);
+    /* U3: Fläche über die volle Breite, Aktionen aber bündig mit der Inhaltsbreite
+       (--content-max aus tokens.css; 100 % = Inhaltsbreite von <main>). */
+    padding: 0.7rem calc(var(--main-pad) + max(0px, 100% - var(--content-max, 100%))) 0.7rem
+      var(--main-pad);
     border-bottom: 1px solid var(--line);
   }
   /* Plan W10: Auf dem Handy klebt nur die Kopfleiste; eine klebende PageBar
      mit umbrechenden Aktionen würde ein Viertel des Bildschirms belegen. */
+  /* U3: Niedrige Fenster (Zoom 200 %, Handy quer) ebenso — Kopfleiste und eine
+     mehrzeilige PageBar belegten bei 400 px Höhe bis zu 80 % des Bildschirms und
+     verdeckten fokussierte Felder (2.4.11). Die Hauptaktion wiederholt dann das
+     Formularende (.kb-form-end, tokens.css). */
+  @media (max-height: 500px) {
+    .pagebar { position: static; }
+  }
   @media (max-width: 600px) {
     .pagebar { position: static; }
     /* Langer Titel (z. B. „Entwurf RE-2026-0001 bearbeiten“) bekommt eine eigene

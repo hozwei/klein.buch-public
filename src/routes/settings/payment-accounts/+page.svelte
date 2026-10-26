@@ -262,66 +262,78 @@
     <tbody>
       {#each accounts as a (a.id)}
         {#if editId === a.id}
+          <!-- U3: Bearbeiten als Formularzeile über alle Spalten mit sichtbaren Labels
+               (vorher je Spalte ein schmales Feld: Bezeichnung abgeschnitten, IBAN und BIC
+               ohne sichtbare Bezeichnung untereinander). -->
           <tr class="edit-row">
-            <td class="cards-full" data-label="Bezeichnung">
-              <input
-                id="pa-edit-label-{a.id}"
-                type="text"
-                autocomplete="off"
-                bind:value={editForm.label}
-                aria-label="Bezeichnung, Konto {a.label}"
-                aria-required="true"
-                aria-invalid={editLabelError ? "true" : undefined}
-                aria-describedby={editLabelError ? `pa-edit-err-${a.id}` : undefined}
-              />
-              {#if editLabelError}<span id="pa-edit-err-{a.id}" class="err">{editLabelError}</span>{/if}
-            </td>
-            <td class="cards-full" data-label="Typ">
-              <select bind:value={editForm.accountType} aria-label="Typ, Konto {a.label}">
-                {#each TYPES as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
-              </select>
-            </td>
-            <td class="cards-full" data-label="IBAN / BIC">
-              <input
-                type="text"
-                bind:value={editForm.iban}
-                aria-label="IBAN, Konto {a.label}"
-                autocomplete="off"
-                inputmode="text"
-                autocapitalize="characters"
-                spellcheck="false"
-              />
-              <input
-                class="bic"
-                type="text"
-                bind:value={editForm.bic}
-                aria-label="BIC, Konto {a.label}"
-                autocomplete="off"
-                inputmode="text"
-                autocapitalize="characters"
-                spellcheck="false"
-              />
-            </td>
-            <td class="cards-full" data-label="Details">
-              <input type="text" autocomplete="off" bind:value={editForm.details} aria-label="Zahlungs-Details, Konto {a.label}" />
-            </td>
-            <td data-label="Auf Beleg">
-              <label class="cell-chk">
-                <input type="checkbox" bind:checked={editForm.showOnInvoice} />
-                <span class="kb-visually-hidden">Auf Beleg anzeigen, Konto {a.label}</span>
-              </label>
-            </td>
-            <td data-label="Standard">
-              <label class="cell-chk">
-                <input type="checkbox" bind:checked={editForm.isDefault} />
-                <span class="kb-visually-hidden">Standard-Konto, Konto {a.label}</span>
-              </label>
-            </td>
-            <td class="muted" data-label="Status">{a.active === 1 ? "aktiv" : "inaktiv"}</td>
-            <td>
-              <div class="row-actions">
-                <Button onclick={saveEdit} disabled={busy} ariaLabel="Speichern, Konto {a.label}">Speichern</Button>
-                <Button variant="secondary" onclick={() => (editId = null)} ariaLabel="Abbrechen, Konto {a.label}">Abbrechen</Button>
+            <td colspan="8" class="cards-full edit-cell">
+              <div class="grid edit-grid" role="group" aria-label="Konto {a.label} bearbeiten">
+                <div class="f">
+                  <label for="pa-edit-label-{a.id}">Bezeichnung<span class="req" aria-hidden="true">*</span></label>
+                  <input
+                    id="pa-edit-label-{a.id}"
+                    type="text"
+                    autocomplete="off"
+                    bind:value={editForm.label}
+                    aria-label="Bezeichnung, Konto {a.label}"
+                    aria-required="true"
+                    aria-invalid={editLabelError ? "true" : undefined}
+                    aria-describedby={editLabelError ? `pa-edit-err-${a.id}` : undefined}
+                  />
+                  {#if editLabelError}<span id="pa-edit-err-{a.id}" class="err">{editLabelError}</span>{/if}
+                </div>
+                <div class="f">
+                  <label for="pa-edit-type-{a.id}">Typ</label>
+                  <select id="pa-edit-type-{a.id}" bind:value={editForm.accountType} aria-label="Typ, Konto {a.label}">
+                    {#each TYPES as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
+                  </select>
+                </div>
+                <div class="f">
+                  <label for="pa-edit-iban-{a.id}">IBAN</label>
+                  <input
+                    id="pa-edit-iban-{a.id}"
+                    type="text"
+                    bind:value={editForm.iban}
+                    aria-label="IBAN, Konto {a.label}"
+                    autocomplete="off"
+                    inputmode="text"
+                    autocapitalize="characters"
+                    spellcheck="false"
+                  />
+                </div>
+                <div class="f">
+                  <label for="pa-edit-bic-{a.id}">BIC</label>
+                  <input
+                    id="pa-edit-bic-{a.id}"
+                    class="bic"
+                    type="text"
+                    bind:value={editForm.bic}
+                    aria-label="BIC, Konto {a.label}"
+                    autocomplete="off"
+                    inputmode="text"
+                    autocapitalize="characters"
+                    spellcheck="false"
+                  />
+                </div>
+                <div class="f wide">
+                  <label for="pa-edit-details-{a.id}">Zahlungs-Details</label>
+                  <input id="pa-edit-details-{a.id}" type="text" autocomplete="off" bind:value={editForm.details} aria-label="Zahlungs-Details, Konto {a.label}" />
+                </div>
+                <div class="f edit-checks">
+                  <label class="chk cell-chk">
+                    <input type="checkbox" bind:checked={editForm.showOnInvoice} />
+                    Auf Beleg anzeigen<span class="kb-visually-hidden">, Konto {a.label}</span>
+                  </label>
+                  <label class="chk cell-chk">
+                    <input type="checkbox" bind:checked={editForm.isDefault} />
+                    Standard-Konto<span class="kb-visually-hidden">, Konto {a.label}</span>
+                  </label>
+                </div>
+                <p class="muted edit-status">Status: {a.active === 1 ? "aktiv" : "inaktiv"}</p>
+                <div class="row-actions edit-actions">
+                  <Button onclick={saveEdit} disabled={busy} ariaLabel="Speichern, Konto {a.label}">Speichern</Button>
+                  <Button variant="secondary" onclick={() => (editId = null)} ariaLabel="Abbrechen, Konto {a.label}">Abbrechen</Button>
+                </div>
               </div>
             </td>
           </tr>
@@ -372,7 +384,12 @@
   th, td { text-align: left; font-size: var(--fs-sm); }
   tr.inactive td { color: var(--text-muted); }
   .edit-row input:not([type="checkbox"]), .edit-row select { width: 100%; }
-  .edit-row input.bic { margin-top: 0.35rem; }
+  .edit-cell { text-align: left; }
+  .edit-grid { margin: 0.25rem 0; }
+  .edit-checks { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; align-self: end; }
+  .edit-checks .cell-chk { justify-content: flex-start; }
+  .edit-status { margin: 0; align-self: end; min-height: var(--target); display: flex; align-items: center; }
+  .edit-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .cell-chk { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-width: var(--target); min-height: var(--target); }
   .mono { font-family: var(--font-mono); white-space: nowrap; }
   .bic-show { display: block; font-size: var(--fs-xs); }
@@ -385,7 +402,7 @@
     .grid { grid-template-columns: 1fr; }
     .grid .wide { grid-column: auto; }
   }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td { overflow-wrap: anywhere; }
     .mono { white-space: normal; overflow-wrap: anywhere; }
   }

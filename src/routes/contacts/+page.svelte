@@ -19,12 +19,19 @@
     try {
       contacts = query.trim()
         ? await contactsSearch(query, includeArchived)
-        : await contactsList(includeArchived);
+        : sortByName(await contactsList(includeArchived));
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  // U3: Der Server sortiert mit NOCASE (nur ASCII) — „Ärztehaus“ und „Öko-…“ standen
+  // hinter „Zahnrad“. Anzeige nach deutscher Sortierung (design.md §6, Intl.Collator).
+  const byName = new Intl.Collator("de", { sensitivity: "base", numeric: true });
+  function sortByName(list: Contact[]): Contact[] {
+    return [...list].sort((a, b) => byName.compare(a.name, b.name));
   }
 
   onMount(load);
@@ -129,7 +136,7 @@
   .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; }
   .empty p { margin: 0; }
   td.right { text-align: right; }
-  @media (max-width: 820px) { td { overflow-wrap: anywhere; } }
+  @media screen and (max-width: 820px) { td { overflow-wrap: anywhere; } }
   tr.archived td { color: var(--c-text-subtle); }
   .muted { color: var(--c-text-muted); }
 </style>

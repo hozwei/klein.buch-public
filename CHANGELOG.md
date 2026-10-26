@@ -61,6 +61,16 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   scrollen auf Touch-Geräten in sich statt die Seite zu verbreitern. Das Handbuch scrollt mit der
   Seite, Kapitelliste und Suche bleiben stehen; eine unbekannte Handbuchseite führt zurück ins
   Handbuch. Erklärungen stehen sichtbar statt nur im Tooltip.
+- **Desktop:** Auf breiten Bildschirmen bleiben Listen, Formulare und Text lesbar breit; Listen
+  sind dichter, die Zeile unter der Maus ist leicht getönt, ab 1280 px sind alle Spalten sichtbar.
+  Das Handbuch ist eine durchgehende Seite mit stehender Kapitelliste. Beim Seitenwechsel beginnt
+  die neue Seite oben. Kontakte sind nach deutscher Schreibweise sortiert; Zahlungskonten werden in
+  einer beschrifteten Formularzeile bearbeitet.
+- **Zoom und Tastatur:** Bei 200 % und 400 % Zoom scrollen Dialoge als Ganzes, die obere Leiste
+  klebt bei geringer Höhe nicht mehr und verdeckt den Fokus nicht; Datums- und Uhrzeitfelder zeigen
+  den Fokusrahmen; der Fokus bleibt im PDF-Vorschau-Dialog.
+- **Drucken:** Rechnungsliste, Rechnung und EÜR drucken ohne Menü, Leisten und Knöpfe, als echte
+  Tabelle ohne abgeschnittene Spalten.
 - **Behoben:** Bestätigungsdialoge warfen beim Schließen einen Skriptfehler; eine abgebrochene
   Seitenübergangs-Animation erschien als unbehandelter Fehler; auf `/expenses/new` und in Tabellen
   mit versteckten Spaltenköpfen lief die Seite im Querformat seitlich über; die Statusliste der

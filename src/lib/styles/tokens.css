@@ -56,6 +56,7 @@
   --surface-card:    var(--c-surface);
   --surface-sunken:  var(--c-surface-2);
   --surface-hover:   var(--c-primary-50);
+  --surface-row-hover: #edf4f7; /* Tabellenzeile unter dem Zeiger (U3), auf Weiß und --c-bg sichtbar */
   --surface-inverse: var(--c-primary-800); /* Seitenleiste, mobile Kopfleiste */
   --overlay:         rgba(16, 36, 44, 0.55); /* Abdunklung hinter Dialogen, ohne Weichzeichner */
 
@@ -138,7 +139,7 @@
 
 /* Drawer-Band (Plan §8.2): schmale Fenster und jedes Touch-Gerät.
  * Gleiche Bedingung wie in +layout.svelte (CSS und matchMedia). */
-@media (max-width: 900px), (pointer: coarse) {
+@media screen and (max-width: 900px), screen and (pointer: coarse) {
   :root {
     --target: var(--target-touch);
     --main-pad: 1rem;
@@ -178,6 +179,11 @@ h3 { letter-spacing: -.012em; }
  * Ein deutlicher Ring überall; Felder bekommen ihn auch dann, wenn eine
  * Seite lokal `outline: none` setzt (darum !important). */
 :focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+/* Felder mit Texteingabe zeigen den Ring bei jedem Fokus (auch per Maus, wie Browser es für
+   Textfelder tun). Datums- und Uhrzeitfelder setzen in Chromium `:focus-visible` nicht
+   zuverlässig, weil der Fokus in ihre Teilfelder wandert (U3, FOCUS-VISIBLE). */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):focus,
+select:focus, textarea:focus, .kb-input:focus,
 input:not([type="checkbox"]):not([type="radio"]):focus-visible,
 select:focus-visible, textarea:focus-visible, .kb-input:focus-visible {
   outline: var(--focus-width) solid var(--focus-ring) !important;
@@ -366,9 +372,7 @@ th {
   padding: 10px 12px !important; border-bottom: 1px solid var(--line) !important;
 }
 td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !important; }
-@media (hover: hover) {
-  tbody tr:hover td { background: var(--surface-sunken); }
-}
+/* Zeilen-Hover: siehe Abschnitt „Desktop (U3)“ weiter unten. */
 
 /* ---- Globale Status-Pills (DS-2): einheitlich wie die Badge-Komponente ---- */
 .status {
@@ -436,7 +440,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   font-size: var(--fs-base);
   line-height: 1.55;
   margin: 0 0 1rem;
-  max-width: 56rem;
+  max-width: 72ch; /* U3: wie Fließtext (vorher 56rem ≈ 110 Zeichen je Zeile) */
 }
 
 /* ---- Banner-Boxen (Inline-Hinweise) ---- */
@@ -520,7 +524,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   .kb-dialog-close:hover { background: var(--surface-hover); color: var(--accent-on-soft); }
 }
 @keyframes kb-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@media (max-width: 600px) {
+@media screen and (max-width: 600px) {
   .kb-backdrop { padding: 0; place-items: stretch; }
   .kb-dialog {
     width: 100%;
@@ -535,6 +539,29 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   .kb-dialog-head { padding-top: calc(var(--sp-3) + env(safe-area-inset-top, 0px)); padding-left: var(--sp-4); padding-right: var(--sp-3); }
   .kb-dialog-body { padding-left: var(--sp-4); padding-right: var(--sp-4); }
   .kb-dialog-foot { padding-bottom: calc(var(--sp-3) + env(safe-area-inset-bottom, 0px)); padding-left: var(--sp-4); padding-right: var(--sp-4); }
+}
+/* Niedrige Fenster (U3: Zoom 200/400 %, Handy quer; ≤ 420 px Höhe): Kopf und Fuß
+ * kleben nicht, sondern scrollen mit; der ganze Dialog ist der Scrollbereich und passt
+ * in 100dvh. Sonst blieben bei 200 px Höhe für den Inhalt 0 px (Kopf + Fuß), und
+ * der Rest wäre ohne Scrollen abgeschnitten (1.4.10, DLG-FIT). Kopf und Fuß kompakt. */
+@media screen and (max-height: 420px) {
+  .kb-dialog {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .kb-dialog > * { flex-shrink: 0; }
+  .kb-dialog-body { flex: 0 0 auto; min-height: auto; overflow: visible; }
+  .kb-dialog-head { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+  .kb-dialog-head h2 { font-size: var(--fs-md); }
+  .kb-dialog-foot { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+}
+@media screen and (max-height: 420px) and (max-width: 600px) {
+  .kb-dialog-head { padding-top: calc(var(--sp-2) + env(safe-area-inset-top, 0px)); }
+  .kb-dialog-foot { padding-bottom: calc(var(--sp-2) + env(safe-area-inset-bottom, 0px)); }
+}
+@media screen and (max-height: 420px) and (min-width: 601px) {
+  .kb-backdrop { padding: var(--sp-2); }
+  .kb-dialog { max-height: calc(100vh - 2 * var(--sp-2)); max-height: calc(100dvh - 2 * var(--sp-2)); }
 }
 
 /* ---- Page-Transitions (View-Transitions-API) --------------------------------
@@ -580,13 +607,24 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
  * ausgeblendeten Angaben stehen in der Detailansicht und in der Kartenansicht
  * (≤ 820 px) vollständig. Tabellen mit Eingabefeldern (Bearbeiten in der Zeile)
  * zeigen immer alle Spalten, damit kein Feld verschwindet.
- *   .kb-col-opt1  unter 64rem Inhaltsbreite ausgeblendet (zuerst)
+ *   .kb-col-opt1  unter 64rem Inhaltsbreite ausgeblendet (zuerst); Maus/Touchpad
+ *                 erst unter 61rem (U3: Desktop 1280 px hat 63rem, mit klassischer
+ *                 Bildlaufleiste unter Windows rund 62rem — dort alle Spalten,
+ *                 dank dichterer Zellen; iPad quer 1024 px mit 62rem behält U2)
  *   .kb-col-opt2  unter 56rem
- *   .kb-col-opt3  unter 50rem (zuletzt) */
-@media (min-width: 821px) {
+ *   .kb-col-opt3  unter 50rem (zuletzt)
+ * Nur am Bildschirm: Der Druck zeigt immer alle Spalten (U3). */
+@media screen and (min-width: 821px) and (pointer: coarse) {
   @container kb-main (width < 64rem) {
     table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt1 { display: none; }
   }
+}
+@media screen and (min-width: 821px) and (pointer: fine), screen and (min-width: 821px) and (pointer: none) {
+  @container kb-main (width < 61rem) {
+    table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt1 { display: none; }
+  }
+}
+@media screen and (min-width: 821px) {
   @container kb-main (width < 56rem) {
     table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt2 { display: none; }
   }
@@ -595,11 +633,62 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   }
 }
 
+/* ---- Desktop (U3, Plan §5 „Desktop ist dichter“) ------------------------------
+ * Inhaltsbreite: Listen und Details höchstens --content-max (100rem), Seiten mit
+ * einem Formular als Hauptinhalt höchstens --form-max (72rem), Fließtext höchstens
+ * 72ch — keine endlos breiten Zeilen bei 1920/2560 px. Linksbündig an der
+ * Seitenleiste; die PageBar richtet ihre Aktionen an derselben Breite aus
+ * (PageBar.svelte). :where() hält die Spezifität bei 0, schmalere Grenzen einzelner
+ * Seiten (Firmendaten 64rem, Kontaktformular) gewinnen. Filterleisten zählen nicht
+ * als Formularseite. Auf Handy und Tablet wirkungslos (schmaler als die Grenzen). */
+:where(#main-content) {
+  --content-max: 100rem;
+  --form-max: 72rem;
+}
+:where(#main-content:has(> form:not(.toolbar, .filterbar, .cat-add))) {
+  --content-max: var(--form-max);
+}
+:where(#main-content) > :where(:not(.pagebar)) { max-width: var(--content-max); }
+:where(#main-content p) { max-width: 72ch; }
+
+/* Spaltenköpfe linksbündig wie der Inhalt (der Browser zentriert `th`); Seiten
+ * setzen Betragsspalten weiter mit .num/.right rechtsbündig. */
+:where(th) { text-align: left; }
+/* Summenzeilen abgesetzt: Linie über der ersten Fußzeile (Tabellenmodus und Druck;
+ * Karten unter 820 px haben eigene Rahmen), tabellarische Ziffern. */
+@media print, screen and (min-width: 821px) {
+  tfoot tr:first-child > td { border-top: 1px solid var(--line-control); }
+}
+tfoot td { font-variant-numeric: tabular-nums; }
+
+/* Dichte mit Maus/Touchpad ab 901 px: niedrigere Zeilen (Text 38 px, mit Knopf
+ * 54 px statt 44/60 px), schmalere Zellränder; Trefferflächen bleiben ≥ 24 px
+ * (Knöpfe ändern ihre Größe nicht, Manuel-Vorgabe 2026-05-26). */
+@media screen and (min-width: 901px) and (pointer: fine) {
+  th { padding: 8px 10px !important; }
+  td { padding: 8px 10px !important; }
+}
+
+/* Positions-Editoren (Rechnung, Angebot, Umwandlung, Abo-Vorlage; `table.items`):
+ * Titel und Beschreibung füllen ihre Spalte statt der Standardbreite eines Textfelds
+ * (~20 Zeichen) — vorher blieb zwischen Beschreibung und Menge eine große Lücke. */
+@media screen and (min-width: 821px) {
+  table.items td.cards-full > input[type="text"] { width: 100%; min-width: 12rem; box-sizing: border-box; }
+}
+
+/* Hover (nur mit Zeigegerät, Plan §5): Tabellenzeilen dezent getönt, damit das Auge
+ * der Zeile folgt; Fokus bleibt der Ring (2 px), Hover ändert nur die Fläche —
+ * beides ist unterscheidbar und kann gleichzeitig auftreten. */
+@media (hover: hover) {
+  tbody tr:hover > td { background: var(--surface-row-hover); }
+}
+
 /* Formular-Ende (U1-Sichtprüfung, Plan §5 „Hauptaktion mit dem Daumen“): Bis 600 px
- * klebt die PageBar nicht; lange Formulare wiederholen die Hauptaktion deshalb am Ende.
- * Breiter steht sie in der klebenden PageBar, die Wiederholung bleibt dort aus. */
+ * Breite und bis 500 px Höhe (U3: Zoom 200 %, Handy quer) klebt die PageBar nicht;
+ * lange Formulare wiederholen die Hauptaktion deshalb am Ende. Sonst steht sie in
+ * der klebenden PageBar, die Wiederholung bleibt dort aus. */
 .kb-form-end { display: none; }
-@media (max-width: 600px) {
+@media screen and (max-width: 600px), screen and (max-height: 500px) {
   .kb-form-end {
     display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2);
     margin: var(--sp-4) 0 var(--sp-2);
@@ -611,7 +700,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
  * schmalere Ränder, Eingaben in 16 px (kein Auto-Zoom auf iOS), Felder und
  * Aktionen mit 44-px-Trefferfläche. !important, weil Seiten eigene
  * Schriftgrößen für Felder setzen. */
-@media (max-width: 900px), (pointer: coarse) {
+@media screen and (max-width: 900px), screen and (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), select, textarea {
     font-size: 16px !important;
   }
@@ -622,10 +711,10 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
 /* 821–900 px (Plan §8.2) und Touch-Geräte darüber (Tablet, U2): Tabellen statt Karten,
    scrollen in sich; position: relative hält absolut positionierte Kinder (Captions,
    versteckte Labels) im Scroll-Container. */
-@media (max-width: 900px), (pointer: coarse) {
+@media screen and (max-width: 900px), screen and (pointer: coarse) {
   table:not(.card table) { display: block; overflow-x: auto; max-width: 100%; position: relative; }
 }
-@media (max-width: 900px) {
+@media screen and (max-width: 900px) {
   input, select, textarea { max-width: 100%; }
   /* Grid-/Flex-Spalten dürfen schmaler werden als lange Auswahltexte oder
      Datei-Eingaben (sonst bestimmt deren Mindestbreite die Spalte). */
@@ -639,7 +728,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
  * an jeder `<td>`. Unter 820 px wird jede Zeile eine Karte, jede Zelle eine
  * Zeile „LABEL … Wert“. Zellen ohne data-label (Aktionen) stehen rechtsbündig;
  * `td.cards-full` bekommt die volle Breite mit dem Label darüber. */
-@media (max-width: 820px) {
+@media screen and (max-width: 820px) {
   table.cards, table.cards:not(.card table) { display: block; overflow: visible; }
   table.cards thead { display: none; }
   table.cards tbody, table.cards tfoot { display: block; }
@@ -685,7 +774,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
  * (iPad hoch 768/820 px); jede Karte sieht aus wie auf dem Handy. Lesereihenfolge
  * bleibt zeilenweise wie im DOM. Mit Eingabefeldern (Bearbeiten in der Zeile)
  * bleibt es einspaltig. Handy (≤ 600 px) unverändert. */
-@media (min-width: 601px) and (max-width: 820px) {
+@media screen and (min-width: 601px) and (max-width: 820px) {
   table.cards.kb-card-grid:not(:has(input, select, textarea)) tbody {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
@@ -706,4 +795,123 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---- Druckansicht (U3, Plan §8.2: Rechnungsliste, Rechnungsdetail, EÜR) -----
+ * Gedruckt wird nur der Inhalt: ohne Seitenleiste, Kopfleiste, PageBar-Aktionen,
+ * Toasts, Drawer, Dialoge, Sprunglink, Filterleisten und Knöpfe; der Seitentitel
+ * (h1 der PageBar) bleibt. Tabellen sind immer echte Tabellen mit allen Spalten —
+ * Kartenansicht, Spaltenauswahl und Drawer-Band gelten nur am Bildschirm
+ * (`screen and …`, sonst griffe die Kartenansicht, weil eine A4-Seite rund 700 CSS-px
+ * breit ist). Keine Scroll-Container, die Spalten abschneiden; Schrift schwarz auf
+ * Weiß, graue Lineatur, Links ohne Unterstreichung; Seitenumbruch nie mitten in
+ * einer Tabellenzeile; der Tabellenkopf wiederholt sich auf jeder Seite, die
+ * Summenzeilen stehen nur einmal am Ende. */
+@media print {
+  @page { margin: 14mm 12mm; }
+  :root {
+    --fs-xs: 7.5pt; --fs-sm: 8.5pt; --fs-base: 9.5pt; --fs-md: 10.5pt;
+    --fs-lg: 12pt; --fs-xl: 14pt; --fs-2xl: 16pt; --fs-3xl: 18pt;
+    --line: #b3bcc2; --line-control: #6b7a83;
+    --main-pad: 0px; --pagebar-h: 0px; --toast-h: 0px; --sticky-top: 0px;
+  }
+  html, body { height: auto !important; background: #fff !important; }
+  body { display: block !important; }
+  body *:not(input):not(select):not(textarea) {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* Rahmen der App, Bedienelemente und Hinweise auf Zeit */
+  .skip-link, .sidebar, .mobilebar, .nav-backdrop, .kb-backdrop, .toast-stack,
+  .pagebar .pb-back, .kb-form-end, .help-anchor,
+  form.toolbar, form.filterbar, .filters, .toolbar,
+  button, .btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger,
+  .link, .link-a, .link-btn, .back, input[type="file"] {
+    display: none !important;
+  }
+  /* Aktionen in der PageBar: dort setzt eine eigene Regel `.pb-right .btn …` die Anzeige mit
+     !important — höhere Spezifität nötig (U4, Druckprüfung). Auswahlfelder bleiben als Text. */
+  html body .pagebar .pb-back,
+  html body .pagebar :is(a, button):is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .help-anchor),
+  html body .pagebar button {
+    display: none !important;
+  }
+  /* Tabellen passen auf A4 (≈ 718 CSS-px Satzbreite): schmalere Zellränder, Umbruch erlaubt —
+     Belegnummern bleiben ungebrochen (U4, PRINT-CLIP). */
+  html body table th, html body table td { padding: 3pt 4pt !important; white-space: normal !important; }
+  html body table :is(.doc-no, .docno, .kb-docno, .num, .kb-num) { white-space: nowrap !important; }
+  html body table { width: 100% !important; table-layout: auto !important; }
+  /* Spalte „Aktion(en)“ (Kopf nur für Screenreader) samt ihren Zellen */
+  table:has(> thead > tr > th:last-child > .kb-visually-hidden:only-child)
+    > :is(thead, tbody) > tr > :last-child:not([colspan]) {
+    display: none !important;
+  }
+
+  /* Auswahlfelder, die den Inhalt bestimmen (z. B. Geschäftsjahr der EÜR in der PageBar),
+     bleiben als Text stehen; die Knöpfe daneben fallen weg (oben). */
+  select, input:not([type="checkbox"]):not([type="radio"]) {
+    appearance: none !important;
+    border: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    background: none !important;
+    color: #000 !important;
+    font: inherit !important;
+    width: auto !important;
+  }
+
+  /* Seitentitel statt klebender Leiste */
+  .pagebar {
+    position: static !important;
+    margin: 0 0 8pt !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+
+  /* Inhalt über die ganze Seitenbreite, nichts scrollt in sich */
+  #main-content {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    container-type: normal !important;
+  }
+  #main-content > *, #main-content p { max-width: none !important; }
+  .card, .table-wrap, .tbl-scroll, [role="region"] { overflow: visible !important; }
+  .card {
+    border: 0.5pt solid var(--line) !important;
+    border-radius: 0 !important;
+    padding: 6pt 8pt !important;
+    margin: 0 0 8pt !important;
+  }
+  .card:not(:has(table)), .kb-metric, dl > div { break-inside: avoid; }
+  .table-wrap { border: 0 !important; border-radius: 0 !important; }
+  h1, h2, h3, h4 { break-after: avoid; }
+
+  table {
+    display: table;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse;
+  }
+  thead { display: table-header-group; }
+  tbody, tfoot { display: table-row-group; }
+  tr { break-inside: avoid; }
+  th, td {
+    padding: 3pt 5pt !important;
+    overflow-wrap: break-word;
+  }
+  th { font-size: var(--fs-xs) !important; }
+
+  /* Status bleibt als Text mit feinem Rahmen erkennbar (Farbe fällt weg). */
+  body .status, body .badge {
+    color: #000 !important;
+    background: transparent !important;
+    border: 0.5pt solid #555 !important;
+  }
+  a { color: #000 !important; text-decoration: none !important; }
 }

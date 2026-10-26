@@ -228,7 +228,7 @@
   .resp .msg { display: block; }
   .resp .rid { display: block; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
   .resp .errtext { color: var(--status-danger-fg); }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     .subj { max-width: none; }
   }
 </style>

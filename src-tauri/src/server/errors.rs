@@ -139,8 +139,8 @@ impl ApiError {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "timeout",
-            "Zeitüberschreitung. Eine begonnene Aktion läuft im Hintergrund zu Ende; \
-             mit demselben Idempotenz-Schlüssel liefert eine Wiederholung ihr Ergebnis.",
+            "Der Server braucht gerade länger als üblich. Eine begonnene Aktion läuft im \
+             Hintergrund zu Ende — bitte in einem Moment noch einmal versuchen.",
         )
         .with_retry_after(5)
     }

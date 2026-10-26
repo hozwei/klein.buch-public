@@ -97,6 +97,17 @@
   .mobile-open {
     display: none;
   }
+  /* Niedrige Fenster (U3, Zoom 200 %): Der ganze Dialog scrollt (tokens.css);
+     das PDF behält eine nutzbare Mindesthöhe statt auf 0 px zu schrumpfen. */
+  @media screen and (max-height: 420px) and (min-width: 601px) {
+    .pdf {
+      height: calc(100vh - 2 * var(--sp-2));
+      height: calc(100dvh - 2 * var(--sp-2));
+    }
+    .body {
+      min-height: 12rem;
+    }
+  }
   /* Mobile Browser zeigen PDFs im iframe nicht (Android) oder nur die erste
      Seite (iOS) — dort öffnet die PDF-Ansicht des Browsers. */
   @media (max-width: 600px) {

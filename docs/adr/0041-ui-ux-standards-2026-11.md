@@ -201,6 +201,38 @@ geprüft. Änderungen am Design laufen über Tokens und Bausteine
     Einstellungen selten nacheinander besucht werden.
 47. **Keine Information nur per Hover (U2).** Erklärende `title`-Tooltips werden zu sichtbaren
     Hinweisen mit `aria-describedby`; reine Wiederholungen des Namens dürfen bleiben.
+48. **Dialoge bei geringer Höhe (U3, 1.4.10).** Bei ≤ 420 px Höhe (Zoom 400 %, Handy quer) ist der
+    ganze Dialog der Scrollbereich; Kopf und Fuß sind kompakt und scrollen mit, sonst bliebe für den
+    Inhalt kein Platz.
+49. **PageBar klebt nicht bei geringer Höhe (U3, 2.4.11).** Bei ≤ 500 px Höhe klebt die PageBar
+    nicht; `.kb-form-end` wiederholt dort die Hauptaktion (ergänzt Nr. 35). Vorher belegten
+    Kopfleiste und PageBar bei 200 % Zoom bis zu 79 % der Höhe.
+50. **Inhaltsbreiten (U3).** Listen und Details höchstens 100rem, Formularseiten 72rem, Fließtext und
+    Lead 72ch, linksbündig; PageBar-Aktionen bündig mit der Inhaltsbreite. Regeln mit `:where`
+    (Spezifität 0), engere Grenzen einzelner Seiten gewinnen.
+51. **Hilfe am Desktop wie im Drawer-Band (U3, erweitert Nr. 45).** Text fließt mit `<main>`,
+    Textspalte höchstens 48rem, Kapitelnavigation und Inhaltsverzeichnis kleben.
+52. **Desktop-Dichte und Hover (U3).** Mit Maus ab 901 px kleinere Zellränder (Knöpfe bleiben gleich
+    groß); Zeilen-Hover nur bei `(hover: hover)`, Hover ändert die Fläche, Fokus bleibt der Ring;
+    Spaltenköpfe linksbündig, Linie über der Summenzeile.
+53. **Spaltenpriorität nach Zeigerart (U3, präzisiert Nr. 42).** Mit Maus blendet `.kb-col-opt1`
+    erst unter 61rem aus (1280 px ergeben rund 62–63rem Inhalt), damit am Desktop ab 1280 px alle
+    Spalten sichtbar sind; Touch bleibt bei 64rem.
+54. **Druckansicht zentral (U3).** `@media print` in tokens.css: ohne Navigation, Leisten, Toasts,
+    Knöpfe und Aktionsspalte; echte Tabellen statt Karten (Karten, Drawer-Band, Spaltenauswahl und
+    Dialog-Blatt gelten nur für `screen`, A4 hat rund 700 CSS-px); Auswahlfelder als Text; keine
+    Zeilenumbrüche mitten in Tabellenzeilen.
+55. **Scrollposition beim Seitenwechsel (U3).** `<main>` wird nach der Navigation nach oben gesetzt
+    (außer bei Ankern), weil SvelteKit nur das Fenster zurücksetzt.
+56. **Fokus aus einem iframe (U3).** Der Sprunglink ist bei offenem Dialog `inert`; `focusTrap`
+    holt den Fokus zurück, wenn er aus dem PDF-iframe auf `<body>` fällt.
+57. **Sortierung mit deutscher Kollation (U3).** Listen sortieren in der Anzeige mit
+    `Intl.Collator('de')`, solange der Server mit `NOCASE` sortiert.
+58. **Inline-Bearbeitung mit mehreren Feldern (U3, 3.3.2).** Eine Formularzeile über alle Spalten
+    mit sichtbaren Labels statt eines Felds je Tabellenspalte.
+59. **axe „target-size“ bei teilweiser Verdeckung (U3).** Ein Ziel, das selbst mindestens 24 × 24 px
+    groß ist und an einer Scrollposition nur teilweise unter der klebenden PageBar liegt, verletzt
+    2.5.8 nicht; das Harness misst axe am Seitenanfang.
 
 ## Konsequenzen
 

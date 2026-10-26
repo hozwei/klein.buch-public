@@ -343,7 +343,7 @@
   .aff li { margin-bottom: 0.25rem; }
   .aff .mono { display: block; font-size: var(--fs-xs); }
   .aff-kind { font-weight: 600; }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td.none { display: none; }
   }
 </style>

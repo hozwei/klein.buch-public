@@ -258,10 +258,9 @@
     {/if}
   </aside>
 
-  <!-- Der Text scrollt am Desktop in sich: per Tastatur erreichbar und benannt
-       (axe scrollable-region-focusable, 2.1.1). -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-  <article class="help-content" tabindex="0" aria-label="Handbuchtext">
+  <!-- U3: Der Text scrollt nirgends mehr in sich (er fließt mit der Seite), daher
+       kein eigener Tab-Halt mehr für einen Scrollbereich. -->
+  <article class="help-content" aria-label="Handbuchtext">
     {@render children?.()}
   </article>
 
@@ -282,21 +281,21 @@
 </div>
 
 <style>
+  /* U3: Der Text fließt mit der Seite (am Desktop scrollt <main>, im Drawer-Band das
+     Dokument); Kapitel-Navigation und Inhaltsverzeichnis kleben daneben (unten).
+     Text höchstens 48rem breit, Absätze höchstens 72ch (tokens.css) — keine Zeilen
+     über die ganze Breite bei 1920/2560 px. */
   .help-shell {
     display: grid;
-    grid-template-columns: 240px 1fr 220px;
+    grid-template-columns: 240px minmax(0, 48rem) 220px;
     gap: 1.5rem;
     align-items: start;
-    /* Wir scrollen die Spalten unabhängig; die äußere `main` scrollt nicht
-       mit. Höhe = Viewport minus den Top-Pad, den die App-Shell setzt. */
-    height: calc(100vh - var(--main-pad) - var(--sticky-top));
-    height: calc(100dvh - var(--main-pad) - var(--sticky-top));
   }
 
   /* Schmaler werdende Fenster: TOC-Spalte fällt weg, Sidebar wird schmaler. */
   @media (max-width: 1100px) {
     .help-shell {
-      grid-template-columns: 220px 1fr;
+      grid-template-columns: 220px minmax(0, 48rem);
     }
     .help-toc {
       display: none;
@@ -310,7 +309,6 @@
     box-shadow: var(--sh-sm);
     padding: 1rem 0.75rem 1.25rem;
     overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
   }
 
@@ -564,8 +562,6 @@
     border-radius: var(--r-lg);
     box-shadow: var(--sh-sm);
     padding: 1.5rem 1.75rem;
-    overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
     min-width: 0; /* verhindert, dass <pre>-Inhalt das Grid sprengt */
   }
@@ -578,7 +574,6 @@
     color: var(--c-text-muted);
     font-size: var(--fs-sm);
     overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
   }
   .toc-stub,
@@ -658,17 +653,13 @@
     }
   }
 
-  /* Tablet (U2): Im Drawer-Band (≤ 900 px oder Touch) scrollt das Dokument unter
-     der klebenden Kopfleiste, nicht <main>. Statt zweier getrennt scrollender
-     Spalten mit fester Höhe fließt der Text mit der Seite; Kapitel-Navigation
-     und Inhaltsverzeichnis kleben daneben und scrollen nur selbst, wenn sie höher
-     als der Bildschirm sind. „Zur App“ und das Suchfeld bleiben dabei oben in
-     der Navigation stehen. Handy (≤ 760 px, niedrige Höhe) und Desktop unverändert. */
-  @media (min-width: 761px) and (min-height: 521px) and (max-width: 900px),
-    (min-width: 761px) and (min-height: 521px) and (pointer: coarse) {
-    .help-shell {
-      height: auto;
-    }
+  /* Tablet (U2) und Desktop (U3): Statt getrennt scrollender Spalten mit fester Höhe
+     fließt der Text mit der Seite (Drawer-Band: das Dokument unter der klebenden
+     Kopfleiste; Desktop: <main>). Kapitel-Navigation und Inhaltsverzeichnis kleben
+     daneben und scrollen nur selbst, wenn sie höher als der Bildschirm sind. „Zur App“
+     und das Suchfeld bleiben dabei oben in der Navigation stehen. Handy (≤ 760 px) und
+     niedrige Fenster (≤ 520 px) einspaltig, siehe oben. */
+  @media (min-width: 761px) and (min-height: 521px) {
     .help-sidebar,
     .help-toc {
       position: sticky;

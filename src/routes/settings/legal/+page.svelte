@@ -222,7 +222,7 @@
   @media (max-width: 600px) {
     .upload { grid-template-columns: 1fr; }
   }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     td { overflow-wrap: anywhere; }
   }
 </style>

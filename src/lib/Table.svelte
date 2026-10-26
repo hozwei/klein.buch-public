@@ -58,7 +58,7 @@
     font-weight: 600;
     padding: var(--sp-3) var(--sp-3) 0;
   }
-  @media (max-width: 820px) {
+  @media screen and (max-width: 820px) {
     /* Als Karten: kein umgebender Kasten, die Zeilen sind selbst Karten. */
     .table-wrap.as-cards {
       background: transparent;

@@ -135,4 +135,9 @@
     background: var(--surface-card);
   }
   .body:focus-visible { outline-offset: -2px; }
+  /* Niedrige Fenster (U3, Zoom 400 %): Der ganze Dialog scrollt (tokens.css); der
+     XML-Text behält eine Mindesthöhe und scrollt in sich weiter. */
+  @media screen and (max-height: 420px) {
+    .body { min-height: min(12rem, 60dvh); }
+  }
 </style>
