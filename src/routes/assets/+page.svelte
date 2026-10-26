@@ -215,14 +215,14 @@
       <Button variant="secondary" onclick={resetFilters}>Filter zurücksetzen</Button>
     </div>
   {:else}
-    <Table caption="Anschaffungen" cards>
+    <Table caption="Anschaffungen" cards cardGrid>
       <thead>
         <tr>
           <th>Nr.</th>
           <th>Bezeichnung</th>
-          <th>Angeschafft</th>
+          <th class="kb-col-opt2">Angeschafft</th>
           <th class="num">Anschaffung</th>
-          <th>Abschreibung</th>
+          <th class="kb-col-opt1">Abschreibung</th>
           <th class="num">Restbuchwert</th>
           <th>Status</th>
           <th><span class="kb-visually-hidden">Aktion</span></th>
@@ -234,9 +234,9 @@
           <tr class={a.disposed === 1 ? "disposed" : ""}>
             <td data-label="Nr."><a class="doc-no" href={`/assets/${a.id}`}>{a.assetNumber}</a></td>
             <td class="wrap" data-label="Bezeichnung">{a.label}</td>
-            <td data-label="Angeschafft">{date(a.acquisitionDate)}</td>
+            <td class="kb-col-opt2" data-label="Angeschafft">{date(a.acquisitionDate)}</td>
             <td class="num kb-num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
-            <td data-label="Abschreibung">
+            <td class="kb-col-opt1" data-label="Abschreibung">
               <span class="cat">
                 {depreciationMethodShort(a.depreciationMethod)}
                 {#if a.businessSharePercent < 100}<Badge tone="info">{percent(a.businessSharePercent)} betrieblich</Badge>{/if}
@@ -271,7 +271,9 @@
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.right { text-align: right; }
-  td.wrap { overflow-wrap: anywhere; }
+  /* U2 (U1-063): nicht mitten im Wort trennen („Arbeitsplatzrec/hner“) — `anywhere` lässt
+     die Spalte im Tabellenmodus unter die Wortbreite schrumpfen; Silbentrennung (lang="de"). */
+  td.wrap { overflow-wrap: break-word; hyphens: auto; }
   a.doc-no {
     display: inline-flex; align-items: center; min-height: var(--target);
     font-family: var(--font-mono); white-space: nowrap; text-decoration: underline;

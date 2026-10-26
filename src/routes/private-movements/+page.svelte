@@ -52,7 +52,7 @@
     <Button variant="primary" href="/private-movements/new">Erste Privat-Buchung erfassen</Button>
   </div>
 {:else}
-  <Table caption="Privatentnahmen und -einlagen" cards>
+  <Table caption="Privatentnahmen und -einlagen" cards cardGrid>
     <thead>
       <tr><th>Beleg-Nr.</th><th>Datum</th><th>Art</th><th>Konto</th><th>Beschreibung</th><th class="num">Betrag</th></tr>
     </thead>

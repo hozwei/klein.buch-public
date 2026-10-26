@@ -191,8 +191,10 @@
 {#if loading}
   <p aria-busy="true">Lädt …</p>
 {:else}
-  <form id="seller-form" onsubmit={handleSubmit} novalidate>
-    <p class="legend-req"><span class="req" aria-hidden="true">*</span> Pflichtfeld</p>
+  <!-- U2: ab rund 37rem Breite zwei Spalten (Firma | Adresse, Steuer über die volle Breite,
+       Kontakt | Standard-Einstellungen; tokens.css .kb-form-grid). -->
+  <form id="seller-form" class="kb-form-grid kb-sections" onsubmit={handleSubmit} novalidate>
+    <p class="legend-req kb-span-all"><span class="req" aria-hidden="true">*</span> Pflichtfeld</p>
     <fieldset>
       <legend>Firma</legend>
       <div class="f">
@@ -250,23 +252,25 @@
       </div>
     </fieldset>
 
-    <fieldset>
+    <fieldset class="kb-span-all">
       <legend>Steuer</legend>
-      <div class="f">
-        <label for="seller-taxno">Steuernummer</label>
-        <input id="seller-taxno" type="text" bind:value={input.taxNumber} autocomplete="off" inputmode="text"
-          autocapitalize="characters" spellcheck="false" aria-describedby="seller-taxno-hint" />
-        <small id="seller-taxno-hint" class="hint-inline">
-          Format wie vom Finanzamt, z. B. 132/456/7890. Steht auf jeder Rechnung. Noch keine
-          vom Finanzamt? Dann leer lassen — du kannst die Firmendaten trotzdem speichern.
-          Rechnungen schreiben geht erst, wenn hier eine Steuernummer oder eine USt-IdNr. steht.
-        </small>
-      </div>
-      <div class="f">
-        <label for="seller-vatid">USt-IdNr.</label>
-        <input id="seller-vatid" type="text" bind:value={input.vatId} autocomplete="off" inputmode="text"
-          autocapitalize="characters" spellcheck="false" aria-describedby="seller-vatid-hint" />
-        <small id="seller-vatid-hint" class="hint-inline">In Deutschland „DE“ und 9 Ziffern, z. B. DE123456789.</small>
+      <div class="kb-form-grid">
+        <div class="f">
+          <label for="seller-taxno">Steuernummer</label>
+          <input id="seller-taxno" type="text" bind:value={input.taxNumber} autocomplete="off" inputmode="text"
+            autocapitalize="characters" spellcheck="false" aria-describedby="seller-taxno-hint" />
+          <small id="seller-taxno-hint" class="hint-inline">
+            Format wie vom Finanzamt, z. B. 132/456/7890. Steht auf jeder Rechnung. Noch keine
+            vom Finanzamt? Dann leer lassen — du kannst die Firmendaten trotzdem speichern.
+            Rechnungen schreiben geht erst, wenn hier eine Steuernummer oder eine USt-IdNr. steht.
+          </small>
+        </div>
+        <div class="f">
+          <label for="seller-vatid">USt-IdNr.</label>
+          <input id="seller-vatid" type="text" bind:value={input.vatId} autocomplete="off" inputmode="text"
+            autocapitalize="characters" spellcheck="false" aria-describedby="seller-vatid-hint" />
+          <small id="seller-vatid-hint" class="hint-inline">In Deutschland „DE“ und 9 Ziffern, z. B. DE123456789.</small>
+        </div>
       </div>
 
       <div class="paragraph19">
@@ -356,7 +360,7 @@
     </fieldset>
 
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-    <div class="kb-form-end"><button type="submit" class="btn-primary">Speichern</button></div>
+    <div class="kb-form-end kb-span-all"><button type="submit" class="btn-primary">Speichern</button></div>
   </form>
 {/if}
 
@@ -432,7 +436,7 @@
 
 <style>
   /* .lead / .caveat / .kb-dialog* — globale Definitionen aus tokens.css. */
-  form { max-width: 720px; }
+  form { max-width: 64rem; }
   fieldset {
     border: 1px solid var(--line);
     border-radius: var(--r-md);
@@ -458,6 +462,7 @@
   .country { flex: 0 0 7rem; }
   .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr)); gap: 0 0.75rem; }
   .paragraph19 {
+    max-width: 48rem; /* U2: lesbare Zeilenlänge im breiten Steuer-Kasten */
     margin-top: 1rem;
     padding: 0.75rem;
     background: var(--surface-sunken);

@@ -645,57 +645,60 @@
       Benutzer das Ziel entfernen und neu anlegen.
     </p>
 
-    <div class="f">
-      <label for="sftp-label">Bezeichnung</label>
-      <input id="sftp-label" type="text" bind:value={sftpLabel} autocomplete="off" placeholder="z. B. Server bei Hoster" />
-    </div>
-    <div class="f">
-      <label for="sftp-host">Server (Host)</label>
-      <input
-        id="sftp-host"
-        type="text"
-        bind:value={sftpHost}
-        autocomplete="off"
-        autocapitalize="off"
-        spellcheck="false"
-        inputmode="url"
-        placeholder="z. B. backup.example.org"
-        aria-invalid={sftpHostError ? "true" : undefined}
-        aria-describedby={sftpHostError ? "sftp-host-err" : "sftp-host-hint"}
-      />
-      {#if sftpHostError}
-        <span id="sftp-host-err" class="err">{sftpHostError}</span>
-      {:else}
-        <span id="sftp-host-hint" class="sub">Hostname oder IP-Adresse, ohne Port und ohne „sftp://“.</span>
-      {/if}
-    </div>
-    <div class="row">
-      <div class="port">
-        <QuantityInput
-          bind:this={sftpPortInput}
-          bind:value={sftpPort}
-          label="Port"
-          integer
-          grouping={false}
-          max={65535}
-          noun="Port"
-          hint="Meist 22."
-          error={sftpPortError || undefined}
+    <!-- U2: ab rund 37rem zwei Spalten (Bezeichnung | Server, Port + Benutzer | Zielordner). -->
+    <div class="kb-form-grid">
+      <div class="f">
+        <label for="sftp-label">Bezeichnung</label>
+        <input id="sftp-label" type="text" bind:value={sftpLabel} autocomplete="off" placeholder="z. B. Server bei Hoster" />
+      </div>
+      <div class="f">
+        <label for="sftp-host">Server (Host)</label>
+        <input
+          id="sftp-host"
+          type="text"
+          bind:value={sftpHost}
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          inputmode="url"
+          placeholder="z. B. backup.example.org"
+          aria-invalid={sftpHostError ? "true" : undefined}
+          aria-describedby={sftpHostError ? "sftp-host-err" : "sftp-host-hint"}
         />
+        {#if sftpHostError}
+          <span id="sftp-host-err" class="err">{sftpHostError}</span>
+        {:else}
+          <span id="sftp-host-hint" class="sub">Hostname oder IP-Adresse, ohne Port und ohne „sftp://“.</span>
+        {/if}
       </div>
-      <div class="f grow">
-        <label for="sftp-user">Benutzer</label>
-        <input id="sftp-user" type="text" bind:value={sftpUser} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="z. B. klein-buch" />
+      <div class="row">
+        <div class="port">
+          <QuantityInput
+            bind:this={sftpPortInput}
+            bind:value={sftpPort}
+            label="Port"
+            integer
+            grouping={false}
+            max={65535}
+            noun="Port"
+            hint="Meist 22."
+            error={sftpPortError || undefined}
+          />
+        </div>
+        <div class="f grow">
+          <label for="sftp-user">Benutzer</label>
+          <input id="sftp-user" type="text" bind:value={sftpUser} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="z. B. klein-buch" />
+        </div>
       </div>
-    </div>
-    <div class="f">
-      <label for="sftp-dir">Zielordner auf dem Server</label>
-      <input id="sftp-dir" type="text" bind:value={sftpRemoteDir} autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="sftp-dir-hint" />
-      <span id="sftp-dir-hint" class="sub">z. B. klein-buch; leer = Home-Verzeichnis</span>
-    </div>
-    <div class="f">
-      <label for="sftp-pass">Passwort</label>
-      <input id="sftp-pass" type="password" bind:value={sftpPassword} autocomplete="new-password" autocapitalize="off" spellcheck="false" />
+      <div class="f">
+        <label for="sftp-dir">Zielordner auf dem Server</label>
+        <input id="sftp-dir" type="text" bind:value={sftpRemoteDir} autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="sftp-dir-hint" />
+        <span id="sftp-dir-hint" class="sub">z. B. klein-buch; leer = Home-Verzeichnis</span>
+      </div>
+      <div class="f">
+        <label for="sftp-pass">Passwort</label>
+        <input id="sftp-pass" type="password" bind:value={sftpPassword} autocomplete="new-password" autocapitalize="off" spellcheck="false" />
+      </div>
     </div>
 
     <div class="btnrow">
@@ -1008,6 +1011,9 @@
   .row > .f { flex: 1 1 12rem; }
   .row > .port { flex: 0 0 9rem; margin-top: 0.7rem; }
   .row > .grow { flex: 1 1 14rem; }
+  /* U2: Port und Benutzer bleiben auch in der halben Breite des Formular-Rasters nebeneinander
+     (nur ab Tablet; auf dem Handy bleibt der Umbruch wie bisher). */
+  @media (min-width: 601px) { .row > .grow { flex-basis: 10rem; } }
   .row.daily { align-items: flex-end; }
   .row.daily > .f { flex: 0 1 12rem; }
   .btnrow { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }

@@ -113,32 +113,35 @@
   <div class="editor">
     <section class="card">
       <p class="legend"><span aria-hidden="true">*</span> Pflichtfeld</p>
-      <div class="field">
-        <label for="pkg-name">Paket-Name (intern)<span class="req" aria-hidden="true">*</span></label>
-        <input
-          id="pkg-name"
-          class="kb-input"
-          type="text"
-          autocomplete="off"
-          required
-          aria-required="true"
-          aria-invalid={errors.name ? "true" : undefined}
-          aria-describedby={errors.name ? "pkg-name-err" : undefined}
-          bind:this={nameEl}
-          bind:value={name}
-          oninput={() => errors.name && (errors = { ...errors, name: undefined })}
-          placeholder="z. B. Hochzeit klein"
-        />
-        {#if errors.name}<p id="pkg-name-err" class="err">{errors.name}</p>{/if}
-      </div>
-      <div class="field">
-        <label for="pkg-cat">Kategorie</label>
-        <select id="pkg-cat" class="kb-input" bind:value={categoryId}>
-          <option value="">Ohne Kategorie</option>
-          {#each categories as c (c.id)}
-            <option value={c.id}>{c.name}</option>
-          {/each}
-        </select>
+      <!-- U2: Name und Kategorie ab rund 37rem nebeneinander (tokens.css .kb-form-grid). -->
+      <div class="kb-form-grid">
+        <div class="field">
+          <label for="pkg-name">Paket-Name (intern)<span class="req" aria-hidden="true">*</span></label>
+          <input
+            id="pkg-name"
+            class="kb-input"
+            type="text"
+            autocomplete="off"
+            required
+            aria-required="true"
+            aria-invalid={errors.name ? "true" : undefined}
+            aria-describedby={errors.name ? "pkg-name-err" : undefined}
+            bind:this={nameEl}
+            bind:value={name}
+            oninput={() => errors.name && (errors = { ...errors, name: undefined })}
+            placeholder="z. B. Hochzeit klein"
+          />
+          {#if errors.name}<p id="pkg-name-err" class="err">{errors.name}</p>{/if}
+        </div>
+        <div class="field">
+          <label for="pkg-cat">Kategorie</label>
+          <select id="pkg-cat" class="kb-input" bind:value={categoryId}>
+            <option value="">Ohne Kategorie</option>
+            {#each categories as c (c.id)}
+              <option value={c.id}>{c.name}</option>
+            {/each}
+          </select>
+        </div>
       </div>
       <div class="field">
         <label for="pkg-title">Positions-Titel (auf dem Beleg)<span class="req" aria-hidden="true">*</span></label>

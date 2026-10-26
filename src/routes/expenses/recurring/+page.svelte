@@ -201,7 +201,7 @@
     <p id="rec-bookall-hint" class="toolbar-hint">Sonst bucht der Hintergrund-Lauf fällige Auto-Abos von selbst.</p>
   {/if}
 
-  <Table caption="Wiederkehrende Abos" cards>
+  <Table caption="Wiederkehrende Abos" cards cardGrid>
     <thead>
       <tr>
         <th>Abo</th>
@@ -280,7 +280,8 @@
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .actions-col { text-align: right; }
-  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  /* U2: nicht mitten im Wort trennen („Betriebshaftpfli/cht“), Silbentrennung (lang="de"). */
+  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: break-word; hyphens: auto; }
   .abo-meta { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
   .muted-cell { color: var(--text-muted); }

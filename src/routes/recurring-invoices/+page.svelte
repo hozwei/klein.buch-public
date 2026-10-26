@@ -221,14 +221,19 @@
       <input type="checkbox" bind:checked={includeInactive} onchange={load} /> pausierte anzeigen
     </label>
     {#if dueCount > 0}
+      <!-- U2 (Touch ohne Hover): Erklärung sichtbar statt nur als `title`-Tooltip,
+           wie bei den Kosten-Abos. -->
       <Button variant="secondary" size="sm" onclick={createAllDue} disabled={checking}
-        title="Erstellt jetzt alle fälligen Abo-Rechnungen (sonst erledigt das der Hintergrund-Scheduler)">
+        ariaDescribedby="ri-createall-hint">
         {checking ? "Erstelle …" : `${dueCount} fällige jetzt erstellen`}
       </Button>
     {/if}
   </div>
+  {#if dueCount > 0}
+    <p id="ri-createall-hint" class="toolbar-hint">Sonst erstellt der Hintergrund-Lauf fällige Abo-Rechnungen von selbst.</p>
+  {/if}
 
-  <table class="kb-table cards">
+  <table class="kb-table cards kb-card-grid">
     <caption class="kb-visually-hidden">Vorlagen für wiederkehrende Rechnungen</caption>
     <thead>
       <tr>
@@ -294,10 +299,12 @@
   .due-txt { color: var(--status-warning-fg); }
   .legend { font-size: 0.82rem; color: var(--text-muted); background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-md); padding: 0.5rem 0.75rem; margin: 0.9rem 0; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
   .toolbar { display: flex; align-items: center; gap: 1rem; margin: 0.5rem 0 0.75rem; flex-wrap: wrap; }
+  .toolbar-hint { font-size: var(--fs-sm); color: var(--text-muted); margin: -0.25rem 0 0.75rem; }
   .chk { display: inline-flex; align-items: center; gap: 0.35rem; min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); }
   table { width: 100%; }
   .actions-col { text-align: right; }
-  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  /* U2: nicht mitten im Wort trennen („Betriebshaftpfli/cht“), Silbentrennung (lang="de"). */
+  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: break-word; hyphens: auto; }
   .abo-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .muted-cell { color: var(--text-muted); }

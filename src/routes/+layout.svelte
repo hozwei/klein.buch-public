@@ -638,6 +638,11 @@
   main {
     flex: 1;
     min-width: 0;
+    /* U2: Container für Breitenabfragen der Seiten (tokens.css: Spaltenauswahl
+       breiter Listen) — misst den Inhaltsbereich ohne Seitenleiste statt des
+       Viewports. Alle Dialoge und Toasts liegen außerhalb von <main> bzw. hängen
+       per `portal` an <body>. */
+    container: kb-main / inline-size;
     /* Ziel der View-Transition; die Seitenleiste bleibt ruhig stehen. */
     view-transition-name: page-content;
     /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt.

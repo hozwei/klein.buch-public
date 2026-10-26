@@ -826,6 +826,22 @@
   .t-sub { color: var(--c-text-muted); font-size: 0.85rem; }
 
   /* ----- Zwei-Spalten -------------------------------------------------------- */
+  /* U2-Sichtprüfung: keine einzelne Kachel allein in der letzten Zeile (Tablet hoch:
+     „Kontakt anlegen“ allein, quer: „Backup“ allein). Feste Spaltenzahlen nach der
+     Breite des Inhaltsbereichs (<main>, Container „kb-main“); unter 30rem
+     (Handy) bleibt es beim einspaltigen auto-fit wie bisher. */
+  @container kb-main (width >= 30rem) {
+    .quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @container kb-main (width >= 36rem) {
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @container kb-main (width >= 44rem) {
+    .quick { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+  @container kb-main (width >= 66rem) {
+    .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  }
   .cols {
     display: grid;
     grid-template-columns: 1fr 1fr;

@@ -83,14 +83,14 @@
     {/if}
   </div>
 {:else}
-  <table class="kb-table cards">
+  <table class="kb-table cards kb-card-grid">
     <caption class="kb-visually-hidden">Kontakte</caption>
     <thead>
       <tr>
         <th>Name</th>
         <th>Typ</th>
         <th>Ort</th>
-        <th>USt-IdNr.</th>
+        <th class="kb-col-opt2">USt-IdNr.</th>
         <th>E-Mail</th>
         <th><span class="kb-visually-hidden">Aktion</span></th>
       </tr>
@@ -104,7 +104,7 @@
           </td>
           <td data-label="Typ">{typeLabel(c.contactType)}</td>
           <td data-label="Ort">{[c.postalCode, c.city].filter(Boolean).join(" ") || "—"}</td>
-          <td data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
+          <td class="kb-col-opt2" data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
           <td data-label="E-Mail">{c.email ?? "—"}</td>
           <td class="right"><Button variant="secondary" href={`/contacts/${c.id}`} ariaLabel={`${c.name} öffnen`}>Öffnen</Button></td>
         </tr>

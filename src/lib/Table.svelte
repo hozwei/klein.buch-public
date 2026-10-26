@@ -6,17 +6,21 @@
   // - `caption`: Überschrift für Screenreader (sichtbar nur, wenn `captionVisible`).
   // - `cards`: unter 820 px als Karten (tokens.css `table.cards`); dann braucht
   //   jede <td> ein `data-label` (Aufgabe der Seite).
+  // - `cardGrid` (U2): Listen mit Detailseite stellen die Karten auf dem Tablet hoch
+  //   (601–820 px) zweispaltig (tokens.css `.kb-card-grid`).
   import type { Snippet } from "svelte";
 
   let {
     caption,
     captionVisible = false,
     cards = false,
+    cardGrid = false,
     children,
   }: {
     caption?: string;
     captionVisible?: boolean;
     cards?: boolean;
+    cardGrid?: boolean;
     children?: Snippet;
   } = $props();
 </script>
@@ -31,7 +35,7 @@
   aria-label={caption}
   tabindex={caption ? 0 : undefined}
 >
-  <table class="kb-table" class:cards>
+  <table class="kb-table" class:cards class:kb-card-grid={cards && cardGrid}>
     {#if caption}
       <caption class:kb-visually-hidden={!captionVisible}>{caption}</caption>
     {/if}

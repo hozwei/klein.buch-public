@@ -658,6 +658,67 @@
     }
   }
 
+  /* Tablet (U2): Im Drawer-Band (≤ 900 px oder Touch) scrollt das Dokument unter
+     der klebenden Kopfleiste, nicht <main>. Statt zweier getrennt scrollender
+     Spalten mit fester Höhe fließt der Text mit der Seite; Kapitel-Navigation
+     und Inhaltsverzeichnis kleben daneben und scrollen nur selbst, wenn sie höher
+     als der Bildschirm sind. „Zur App“ und das Suchfeld bleiben dabei oben in
+     der Navigation stehen. Handy (≤ 760 px, niedrige Höhe) und Desktop unverändert. */
+  @media (min-width: 761px) and (min-height: 521px) and (max-width: 900px),
+    (min-width: 761px) and (min-height: 521px) and (pointer: coarse) {
+    .help-shell {
+      height: auto;
+    }
+    .help-sidebar,
+    .help-toc {
+      position: sticky;
+      top: calc(var(--sticky-top) + var(--sp-3));
+      height: auto;
+      max-height: calc(100vh - var(--sticky-top) - 2 * var(--sp-3));
+      max-height: calc(100dvh - var(--sticky-top) - 2 * var(--sp-3));
+    }
+    .help-sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-bottom: 0;
+    }
+    .help-sidebar > :is(nav, .results) {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      /* Platz für den Fokusring (2 px + 2 px Abstand), den der Scroll-Container sonst
+         an den Seiten abschneidet. */
+      margin: 0 -0.25rem;
+      padding: 0.25rem 0.25rem 1.25rem;
+    }
+    .help-content {
+      height: auto;
+      overflow-y: visible;
+    }
+  }
+
+  /* Suchtreffer in schmaler Navigation (U2-Sichtprüfung, Tablet hoch): Kapitel
+     unter den Titel statt daneben, sonst bricht der Titel Wort für Wort um. */
+  .help-sidebar {
+    container-type: inline-size;
+  }
+  @container (max-width: 20rem) {
+    .result {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .result-cat {
+      grid-column: 1;
+      grid-row: 2;
+      justify-self: start;
+      margin-top: 0.15rem;
+    }
+    .result-snippet {
+      grid-row: 3;
+    }
+  }
+
   /* --- Druck (G2-DOC.3.4) ------------------------------------------- */
   @media print {
     .help-shell {

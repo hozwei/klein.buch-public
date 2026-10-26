@@ -55,6 +55,12 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   Desktop-Reste, mit Alter der letzten externen Kopie; Hinweise zu SMTP-/SFTP-Host; Sitzungsliste
   mit Kurzkennung passend zum Server-Log; Audit-Protokoll mit Spalte „Ausgelöst von“ und betroffener
   Datei bei Prüfsummenfehlern.
+- **Tablet:** Formulare (Kontakt, Firmendaten, SFTP-Ziel, Paket) zweispaltig, wo Platz ist;
+  Listen im Hochformat in zwei Kartenspalten; im Querformat und am Desktop weichen Nebenspalten, damit
+  Nummer, Partner, Betrag, Status und „Öffnen“ ohne Seitwärts-Scrollen sichtbar sind; Tabellen
+  scrollen auf Touch-Geräten in sich statt die Seite zu verbreitern. Das Handbuch scrollt mit der
+  Seite, Kapitelliste und Suche bleiben stehen; eine unbekannte Handbuchseite führt zurück ins
+  Handbuch. Erklärungen stehen sichtbar statt nur im Tooltip.
 - **Behoben:** Bestätigungsdialoge warfen beim Schließen einen Skriptfehler; eine abgebrochene
   Seitenübergangs-Animation erschien als unbehandelter Fehler; auf `/expenses/new` und in Tabellen
   mit versteckten Spaltenköpfen lief die Seite im Querformat seitlich über; die Statusliste der

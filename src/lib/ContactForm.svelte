@@ -94,8 +94,8 @@
   }
 </script>
 
-<form id={formId} onsubmit={handle} novalidate bind:this={formEl}>
-  <p class="legend-req">Felder mit <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
+<form id={formId} class="kb-form-grid kb-sections" onsubmit={handle} novalidate bind:this={formEl}>
+  <p class="legend-req kb-span-all">Felder mit <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
   <fieldset>
     <legend>Allgemein</legend>
     <label>
@@ -279,17 +279,20 @@
   </fieldset>
 
   {#if showSubmit}
-    <button type="submit" class="btn-primary" disabled={busy} aria-busy={busy}>
+    <button type="submit" class="btn-primary kb-span-all" disabled={busy} aria-busy={busy}>
       {busy ? "Speichert …" : submitLabel}
     </button>
   {:else}
     <!-- U1: Hauptaktion auch am Formularende (Handy; oben steht sie in der PageBar). -->
-    <div class="kb-form-end"><button type="submit" class="btn-primary" disabled={busy} aria-busy={busy}>{busy ? "Speichert …" : submitLabel}</button></div>
+    <div class="kb-form-end kb-span-all"><button type="submit" class="btn-primary" disabled={busy} aria-busy={busy}>{busy ? "Speichert …" : submitLabel}</button></div>
   {/if}
 </form>
 
 <style>
-  form { max-width: 720px; }
+  /* U2: ab rund 37rem Breite zwei Spalten aus Fieldsets (Allgemein | Adresse, Steuer | Kontakt,
+     Bank | Sonstiges; tokens.css .kb-form-grid), darunter einspaltig wie bisher. */
+  form { max-width: 64rem; }
+  form > button[type="submit"] { justify-self: start; }
   fieldset {
     border: 1px solid var(--line);
     border-radius: var(--r-md);

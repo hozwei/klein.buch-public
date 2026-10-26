@@ -625,7 +625,7 @@
   .grid :global(.ri-field label) { color: var(--text-muted); margin-bottom: 4px; }
   .modepick { border: 1px solid var(--line); min-width: 0; }
   .modepick legend { font-size: var(--fs-base); color: var(--text); font-weight: 600; padding: 0 0.35rem; }
-  label.radio { flex-direction: row; align-items: flex-start; gap: 0.6rem; padding: 0.6rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); cursor: pointer; margin-top: 0.5rem; font-weight: 400; }
+  label.radio { flex-direction: row; align-items: flex-start; gap: 0.6rem; padding: 0.6rem; min-height: var(--target-touch); border: 1px solid var(--line-control); border-radius: var(--r-sm); cursor: pointer; margin-top: 0.5rem; font-weight: 400; }
   label.radio span { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.45; }
   label.radio strong { color: var(--text); }
   label.radio em { font-style: normal; font-weight: 600; color: var(--accent-on-soft); }

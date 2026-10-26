@@ -101,15 +101,15 @@
     <Button variant="primary" href="/invoices/new">Neue Rechnung anlegen</Button>
   </div>
 {:else}
-  <table class="kb-table cards">
+  <table class="kb-table cards kb-card-grid">
     <caption class="kb-visually-hidden">Rechnungen</caption>
     <thead>
       <tr>
         <th>Nummer</th>
-        <th>Datum</th>
+        <th class="kb-col-opt2">Datum</th>
         <th>Empfänger</th>
         <th class="right">Brutto</th>
-        <th class="right">Bezahlt</th>
+        <th class="right kb-col-opt1">Bezahlt</th>
         <th>Status</th>
         <th>Fällig</th>
         <th><span class="kb-visually-hidden">Aktionen</span></th>
@@ -122,10 +122,10 @@
             <a class="doc-no" href={`/invoices/${r.id}`}>{r.invoiceNumber}</a>
             {#if r.isStornoFor}<Badge tone="warning">Storno</Badge>{/if}
           </td>
-          <td data-label="Datum">{date(r.invoiceDate)}</td>
+          <td class="kb-col-opt2" data-label="Datum">{date(r.invoiceDate)}</td>
           <td data-label="Empfänger">{r.contactName}</td>
           <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
-          <td class="right" data-label="Bezahlt">{euro(r.paidAmountCents)}</td>
+          <td class="right kb-col-opt1" data-label="Bezahlt">{euro(r.paidAmountCents)}</td>
           <td data-label="Status">
             {#if r.voidedAt}
               <Badge tone="neutral" strike>Verworfen</Badge>

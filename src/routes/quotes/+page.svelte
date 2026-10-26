@@ -100,12 +100,12 @@
     <Button variant="primary" href="/quotes/new">Neues Angebot anlegen</Button>
   </div>
 {:else}
-  <table class="kb-table cards">
+  <table class="kb-table cards kb-card-grid">
     <caption class="kb-visually-hidden">Angebote</caption>
     <thead>
       <tr>
         <th>Nummer</th>
-        <th>Datum</th>
+        <th class="kb-col-opt2">Datum</th>
         <th>Gültig bis</th>
         <th>Empfänger</th>
         <th class="right">Brutto</th>
@@ -117,7 +117,7 @@
       {#each rows as r (r.id)}
         <tr class:canceled={r.status === "canceled" || r.status === "rejected"}>
           <td data-label="Nummer"><a class="doc-no" href={`/quotes/${r.id}`}>{r.quoteNumber}</a></td>
-          <td data-label="Datum">{date(r.quoteDate)}</td>
+          <td class="kb-col-opt2" data-label="Datum">{date(r.quoteDate)}</td>
           <td data-label="Gültig bis">{date(r.validUntil)}</td>
           <td data-label="Empfänger">{r.contactName}</td>
           <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>

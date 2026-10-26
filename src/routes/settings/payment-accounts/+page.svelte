@@ -254,10 +254,10 @@
 {:else if accounts.length === 0}
   <p class="muted">Noch keine Konten. Lege oben unter „Neues Konto“ dein erstes an.</p>
 {:else}
-  <table class="cards">
+  <table class="cards kb-card-grid">
     <caption class="kb-visually-hidden">Deine Konten</caption>
     <thead>
-      <tr><th>Bezeichnung</th><th>Typ</th><th>IBAN / BIC</th><th>Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th><span class="kb-visually-hidden">Aktionen</span></th></tr>
+      <tr><th>Bezeichnung</th><th class="kb-col-opt2">Typ</th><th>IBAN / BIC</th><th class="kb-col-opt1">Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th><span class="kb-visually-hidden">Aktionen</span></th></tr>
     </thead>
     <tbody>
       {#each accounts as a (a.id)}
@@ -328,14 +328,14 @@
         {:else}
           <tr class:inactive={a.active !== 1}>
             <td data-label="Bezeichnung"><strong>{a.label}</strong></td>
-            <td data-label="Typ">{typeLabel(a.accountType)}</td>
+            <td class="kb-col-opt2" data-label="Typ">{typeLabel(a.accountType)}</td>
             <td class="muted" data-label="IBAN / BIC">
               {#if a.iban || a.bic}
                 {#if a.iban}<span class="mono">{fmtIban(a.iban)}</span>{/if}
                 {#if a.bic}<span class="mono bic-show">{a.bic}</span>{/if}
               {:else}—{/if}
             </td>
-            <td class="muted" data-label="Details">{a.details ?? "—"}</td>
+            <td class="muted kb-col-opt1" data-label="Details">{a.details ?? "—"}</td>
             <td data-label="Auf Beleg">{#if a.showOnInvoice === 1}<Badge tone="success">ja</Badge>{:else}nein{/if}</td>
             <td data-label="Standard">{#if a.isDefault === 1}<Badge tone="primary">Standard</Badge>{:else}—{/if}</td>
             <td data-label="Status">{#if a.active === 1}<Badge tone="success">aktiv</Badge>{:else}<Badge>inaktiv</Badge>{/if}</td>

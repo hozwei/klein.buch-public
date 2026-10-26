@@ -555,6 +555,46 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   animation: kb-page-in var(--t-base) var(--ease-apple) both;
 }
 
+/* ---- Formular-Raster (U2, Plan §5 „Tablet nutzt die Fläche“) ----------------
+ * Höchstens zwei Spalten, jede mindestens 18rem: unter 37rem eigener Breite
+ * (Handy, schmale Karten) einspaltig, darüber zwei Spalten — nie drei. Das Raster
+ * misst seine eigene Breite statt des Viewports, damit Seitenleiste (Desktop ab
+ * 901 px), Karten-Innenabstände und max-width mitzählen.
+ * `.kb-span-all`: Textfelder, Editoren, Schalter mit Erklärung, Hinweise über die
+ * volle Breite. `.kb-sections`: Raster aus Fieldsets, gleich hohe Kästen je Zeile. */
+.kb-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(18rem, calc((100% - var(--sp-4)) / 2))), 1fr));
+  column-gap: var(--sp-4);
+  align-items: start;
+}
+.kb-form-grid > * { min-width: 0; }
+.kb-form-grid > .kb-span-all { grid-column: 1 / -1; }
+.kb-form-grid.kb-sections { align-items: stretch; }
+
+/* ---- Spaltenauswahl breiter Listen (U2, U1-063) ------------------------------
+ * Im Tabellenmodus (> 820 px) blenden Listen weniger wichtige Spalten aus, wenn
+ * der Inhaltsbereich schmal ist. Gemessen wird <main> (Container „kb-main“,
+ * +layout.svelte), also ohne Seitenleiste und Ränder — nicht der Viewport.
+ * Wichtig zuerst: Nummer, Partner, Betrag, Status und Aktion bleiben immer; die
+ * ausgeblendeten Angaben stehen in der Detailansicht und in der Kartenansicht
+ * (≤ 820 px) vollständig. Tabellen mit Eingabefeldern (Bearbeiten in der Zeile)
+ * zeigen immer alle Spalten, damit kein Feld verschwindet.
+ *   .kb-col-opt1  unter 64rem Inhaltsbreite ausgeblendet (zuerst)
+ *   .kb-col-opt2  unter 56rem
+ *   .kb-col-opt3  unter 50rem (zuletzt) */
+@media (min-width: 821px) {
+  @container kb-main (width < 64rem) {
+    table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt1 { display: none; }
+  }
+  @container kb-main (width < 56rem) {
+    table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt2 { display: none; }
+  }
+  @container kb-main (width < 50rem) {
+    table:not(:has(input, select, textarea)) :is(th, td).kb-col-opt3 { display: none; }
+  }
+}
+
 /* Formular-Ende (U1-Sichtprüfung, Plan §5 „Hauptaktion mit dem Daumen“): Bis 600 px
  * klebt die PageBar nicht; lange Formulare wiederholen die Hauptaktion deshalb am Ende.
  * Breiter steht sie in der klebenden PageBar, die Wiederholung bleibt dort aus. */
@@ -579,11 +619,13 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
     min-height: var(--target-touch);
   }
 }
-@media (max-width: 900px) {
-  /* 821–900 px (Plan §8.2): Tabellen statt Karten, scrollen in sich; position:
-     relative hält absolut positionierte Kinder (Captions, versteckte Labels) im
-     Scroll-Container. */
+/* 821–900 px (Plan §8.2) und Touch-Geräte darüber (Tablet, U2): Tabellen statt Karten,
+   scrollen in sich; position: relative hält absolut positionierte Kinder (Captions,
+   versteckte Labels) im Scroll-Container. */
+@media (max-width: 900px), (pointer: coarse) {
   table:not(.card table) { display: block; overflow-x: auto; max-width: 100%; position: relative; }
+}
+@media (max-width: 900px) {
   input, select, textarea { max-width: 100%; }
   /* Grid-/Flex-Spalten dürfen schmaler werden als lange Auswahltexte oder
      Datei-Eingaben (sonst bestimmt deren Mindestbreite die Spalte). */
@@ -637,6 +679,19 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   table.cards td.cards-full input:not([type="checkbox"]):not([type="radio"]),
   table.cards td.cards-full select, table.cards td.cards-full textarea { width: 100%; max-width: 100%; }
   table.cards tbody tr:hover td { background: transparent; }
+}
+/* Tablet hoch (U2, Plan §5 „Tablet nutzt die Fläche“): Listen mit `.kb-card-grid`
+ * stellen ihre Karten zweispaltig, sobald zwei Karten à 20rem nebeneinander passen
+ * (iPad hoch 768/820 px); jede Karte sieht aus wie auf dem Handy. Lesereihenfolge
+ * bleibt zeilenweise wie im DOM. Mit Eingabefeldern (Bearbeiten in der Zeile)
+ * bleibt es einspaltig. Handy (≤ 600 px) unverändert. */
+@media (min-width: 601px) and (max-width: 820px) {
+  table.cards.kb-card-grid:not(:has(input, select, textarea)) tbody {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+    gap: 0.75rem;
+  }
+  table.cards.kb-card-grid:not(:has(input, select, textarea)) tbody tr { margin: 0; }
 }
 
 /* Bewegung reduzieren: Übergänge und Animationen aus. */

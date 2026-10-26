@@ -157,14 +157,14 @@
       <Button variant="secondary" onclick={resetFilters}>Filter zurücksetzen</Button>
     </div>
   {:else}
-    <Table caption="Kosten" cards>
+    <Table caption="Kosten" cards cardGrid>
       <thead>
         <tr>
           <th>Beleg-Nr.</th>
-          <th>Datum</th>
+          <th class="kb-col-opt2">Datum</th>
           <th>Lieferant</th>
           <th>Beschreibung</th>
-          <th>Kategorie</th>
+          <th class="kb-col-opt1">Kategorie</th>
           <th class="num">Brutto</th>
           <th>Bezahlt</th>
           <th>Status</th>
@@ -175,10 +175,10 @@
         {#each items as e (e.id)}
           <tr class={e.status === "canceled" ? "canceled" : ""}>
             <td data-label="Beleg-Nr."><a class="doc-no" href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
-            <td data-label="Datum">{date(e.expenseDate)}</td>
+            <td class="kb-col-opt2" data-label="Datum">{date(e.expenseDate)}</td>
             <td class="wrap" data-label="Lieferant">{e.vendorNameSnapshot}</td>
             <td class="desc wrap cards-full" data-label="Beschreibung">{e.description}</td>
-            <td data-label="Kategorie">
+            <td class="kb-col-opt1" data-label="Kategorie">
               <span class="cat">
                 {expenseCategoryLabel(e.category)}
                 {#if e.recurringSubscriptionId}<Badge tone="info">Abo</Badge>{/if}
@@ -222,7 +222,9 @@
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.desc { max-width: 18rem; }
-  td.wrap { overflow-wrap: anywhere; }
+  /* U2 (U1-063): nicht mitten im Wort trennen („Arbeitsplatzrec/hner“) — `anywhere` lässt
+     die Spalte im Tabellenmodus unter die Wortbreite schrumpfen; Silbentrennung (lang="de"). */
+  td.wrap { overflow-wrap: break-word; hyphens: auto; }
   td.right { text-align: right; }
   @media (max-width: 820px) { td.desc { max-width: none; } }
   /* Belegnummer als Link: Trefferfläche ≥ --target, monospace (design.md §7). */

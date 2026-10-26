@@ -177,6 +177,30 @@ geprüft. Änderungen am Design laufen über Tokens und Bausteine
 38. **Kontaktformular mit Feldfehlern (U1).** Wie Nr. 22: Fehler am Feld statt Toast.
 39. **Leerzeichen am Rand von Svelte-Blöcken (Konvention, U1).** Svelte 5 entfernt Leerzeichen am
     Rand von `{#if}`-Blöcken; nötige Leerzeichen werden ausdrücklich als `{" "}` geschrieben.
+40. **`<main>` als Container (U2).** `<main>` ist der Container `kb-main`; Seiten fragen die
+    Inhaltsbreite ohne Seitenleiste ab (Container Queries), nicht den Viewport — ab 901 px ist der
+    Inhalt am Desktop schmaler als im Drawer-Band. Fixe Elemente bleiben am Viewport; Dialoge und
+    Toasts liegen ohnehin außerhalb von `<main>`.
+41. **Formular-Raster (U2).** `.kb-form-grid`: höchstens zwei Spalten, ab 37rem eigener Breite (misst
+    sich selbst, damit Innenabstände und `max-width` zählen); Handy einspaltig; Textfelder, Editoren
+    und Hinweise über die volle Breite (`.kb-span-all`). Zusammengehörige Felder stehen nebeneinander
+    (PLZ und Ort, Steuernummer und USt-IdNr., Name und Kategorie).
+42. **Spaltenpriorität (U2, U1-063).** `.kb-col-opt1..3` blenden Nebenspalten unter 64/56/50rem
+    Inhaltsbreite aus — nur im Tabellenmodus über 820 px, nur in Listen mit Detailseite und nur in
+    Tabellen ohne Eingabefelder. Nummer, Partner, Betrag, Status und Aktion bleiben immer sichtbar;
+    Protokolle blenden nichts aus (sie scrollen in sich, Nr. 32).
+43. **Kartenraster (U2).** Listen mit Detailseite zeigen bei 601–820 px zwei Kartenspalten
+    (`.kb-card-grid`, Opt-in über `Table cardGrid`); die Lesereihenfolge bleibt die des DOM.
+44. **Umbruch in Zellen (U2).** Namen und Beschreibungen brechen mit `break-word` und Silbentrennung;
+    `anywhere` bleibt für Pfade und Kennungen.
+45. **Hilfe ohne verschachtelte Scrollbereiche (U2).** Im Drawer-Band fließt der Handbuchtext mit der
+    Seite, Kapitelnavigation und Inhaltsverzeichnis kleben; Fehler (unbekannte Seite) erscheinen im
+    Handbuch-Layout mit Weg zurück.
+46. **Liste + Detail nur in der Hilfe (U2).** Einstellungen-Hub und Belegliste bleiben getrennte
+    Seiten: ein Umbau über viele Seiten mit eigener PageBar und Zurück-Logik bringt dort wenig, weil
+    Einstellungen selten nacheinander besucht werden.
+47. **Keine Information nur per Hover (U2).** Erklärende `title`-Tooltips werden zu sichtbaren
+    Hinweisen mit `aria-describedby`; reine Wiederholungen des Namens dürfen bleiben.
 
 ## Konsequenzen
 
