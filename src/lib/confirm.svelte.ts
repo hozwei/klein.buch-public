@@ -45,7 +45,8 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
 
 /**
  * Dialog mit bis zu drei Knöpfen (Abbrechen, `altLabel`, `confirmLabel`).
- * Escape und Klick auf den Hintergrund brechen ab (null) — nie die zweite Wahl.
+ * Escape und (nur ohne `danger`) Klick auf den Hintergrund brechen ab (null) —
+ * nie die zweite Wahl.
  */
 export function chooseDialog(opts: ConfirmOptions): Promise<ConfirmChoice> {
   // Ein bereits offener Dialog wird abgebrochen, bevor ein neuer erscheint.

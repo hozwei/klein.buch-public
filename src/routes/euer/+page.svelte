@@ -57,12 +57,10 @@
 <PageBar title="Steuer-Übersicht (EÜR)">
   {#snippet actions()}
     {#if years.length > 0 && selectedYear != null}
-      <label class="year">
-        Geschäftsjahr
-        <select bind:value={selectedYear}>
-          {#each years as y}<option value={y}>{y}</option>{/each}
-        </select>
-      </label>
+      <label class="year" for="euer-year">Geschäftsjahr</label>
+      <select id="euer-year" class="kb-input year-select" bind:value={selectedYear}>
+        {#each years as y}<option value={y}>{y}</option>{/each}
+      </select>
     {/if}
     <HelpAnchor slug="euer-cash-basis" />
   {/snippet}
@@ -76,13 +74,13 @@
 </p>
 
 <p class="actions">
-  <a class="export-link" href="/euer/export">Für die Steuererklärung exportieren →</a>
+  <a class="btn-secondary" href="/euer/export">Für die Steuererklärung exportieren <span aria-hidden="true">→</span></a>
 </p>
 
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if report}
   {#if isEmpty}
     <Banner kind="info">
@@ -92,76 +90,71 @@
   {/if}
 
   <div class="grid">
-    <!-- Einnahmen -->
-    <section class="card">
-      <h2>Betriebseinnahmen</h2>
-      <table>
-        <tbody>
-          <tr>
-            <td>Bezahlte Rechnungen</td>
-            <td class="num">{euro(report.invoiceIncomeCents)}</td>
-          </tr>
-          {#if report.stornoRefundsCents !== 0}
-            <tr class="reduce">
-              <td>abzgl. Erstattungen aus Stornos</td>
-              <td class="num">−{euro(report.stornoRefundsCents)}</td>
-            </tr>
-          {/if}
-          {#if report.disposalProceedsCents !== 0}
-            <tr>
-              <td>Verkauf von Anschaffungen</td>
-              <td class="num">{euro(report.disposalProceedsCents)}</td>
-            </tr>
-          {/if}
-        </tbody>
-        <tfoot>
-          <tr class="sum">
-            <td>Summe Einnahmen</td>
-            <td class="num">{euro(report.totalIncomeCents)}</td>
-          </tr>
-        </tfoot>
-      </table>
+    <!-- Einnahmen: Schlüssel-Wert-Liste statt Tabelle (zwei Spalten, auch bei 320 px lesbar) -->
+    <section class="card" aria-labelledby="euer-income-h">
+      <h2 id="euer-income-h">Betriebseinnahmen</h2>
+      <dl class="ledger">
+        <div>
+          <dt>Bezahlte Rechnungen</dt>
+          <dd>{euro(report.invoiceIncomeCents)}</dd>
+        </div>
+        {#if report.stornoRefundsCents !== 0}
+          <div class="reduce">
+            <dt>abzgl. Erstattungen aus Stornos</dt>
+            <dd>−{euro(report.stornoRefundsCents)}</dd>
+          </div>
+        {/if}
+        {#if report.disposalProceedsCents !== 0}
+          <div>
+            <dt>Verkauf von Anschaffungen</dt>
+            <dd>{euro(report.disposalProceedsCents)}</dd>
+          </div>
+        {/if}
+        <div class="sum">
+          <dt>Summe Einnahmen</dt>
+          <dd>{euro(report.totalIncomeCents)}</dd>
+        </div>
+      </dl>
     </section>
 
     <!-- Ausgaben -->
-    <section class="card">
-      <h2>Betriebsausgaben</h2>
-      <table>
-        <tbody>
-          {#if report.expensesByCategory.length === 0 && report.depreciationTotalCents === 0 && report.disposalBookValueCents === 0}
-            <tr><td colspan="2" class="muted">Keine Ausgaben erfasst.</td></tr>
-          {/if}
-          {#each report.expensesByCategory as c (c.category)}
-            <tr>
-              <td>{expenseCategoryLabel(c.category)}</td>
-              <td class="num">{euro(c.amountCents)}</td>
-            </tr>
-          {/each}
-          {#if report.depreciationTotalCents !== 0}
-            <tr>
-              <td>Abschreibungen (AfA)</td>
-              <td class="num">{euro(report.depreciationTotalCents)}</td>
-            </tr>
-          {/if}
-          {#if report.disposalBookValueCents !== 0}
-            <tr>
-              <td>Restwert verkaufter/entsorgter Anschaffungen</td>
-              <td class="num">{euro(report.disposalBookValueCents)}</td>
-            </tr>
-          {/if}
-        </tbody>
-        <tfoot>
-          <tr class="sum">
-            <td>Summe Ausgaben</td>
-            <td class="num">{euro(report.totalExpensesCents)}</td>
-          </tr>
-        </tfoot>
-      </table>
+    <section class="card" aria-labelledby="euer-exp-h">
+      <h2 id="euer-exp-h">Betriebsausgaben</h2>
+      <dl class="ledger">
+        {#if report.expensesByCategory.length === 0 && report.depreciationTotalCents === 0 && report.disposalBookValueCents === 0}
+          <div class="none">
+            <dt class="muted">Keine Ausgaben erfasst.</dt>
+            <dd><a class="inline-link" href="/expenses/new">Kosten erfassen</a></dd>
+          </div>
+        {/if}
+        {#each report.expensesByCategory as c (c.category)}
+          <div>
+            <dt>{expenseCategoryLabel(c.category)}</dt>
+            <dd>{euro(c.amountCents)}</dd>
+          </div>
+        {/each}
+        {#if report.depreciationTotalCents !== 0}
+          <div>
+            <dt>Abschreibungen (AfA)</dt>
+            <dd>{euro(report.depreciationTotalCents)}</dd>
+          </div>
+        {/if}
+        {#if report.disposalBookValueCents !== 0}
+          <div>
+            <dt>Restwert verkaufter/entsorgter Anschaffungen</dt>
+            <dd>{euro(report.disposalBookValueCents)}</dd>
+          </div>
+        {/if}
+        <div class="sum">
+          <dt>Summe Ausgaben</dt>
+          <dd>{euro(report.totalExpensesCents)}</dd>
+        </div>
+      </dl>
     </section>
   </div>
 
   <!-- Ergebnis -->
-  <section class="result" class:profit={isProfit} class:loss={!isProfit}>
+  <section class="result" class:profit={isProfit} class:loss={!isProfit} aria-label="Ergebnis {report.fiscalYear}">
     <span class="result-label">
       {isProfit ? "Überschuss (Gewinn)" : "Verlust"} {report.fiscalYear}
     </span>
@@ -188,117 +181,47 @@
 {/if}
 
 <style>
-  .year {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.85rem;
-    color: #4b5563;
-  }
-  .year select {
-    padding: 0.4rem 0.5rem;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    font-size: 0.95rem;
-    font-family: inherit;
-  }
-  /* .intro / .card / .card h2 entfernt — globale .lead, .card aus tokens.css. */
+  .year { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); align-self: center; }
+  .year-select { width: auto; }
+  /* .card / .card h2 / .lead / .kb-input: globale Definitionen aus tokens.css. */
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
-    gap: 1rem;
-    margin: 1rem 0;
+    gap: var(--sp-4);
+    margin: var(--sp-4) 0;
   }
-  table {
-    width: 100%;
-    border-collapse: collapse;
+  /* Kontorbuch-Lineatur: feine Linie je Zeile, doppelte Linie über der Summe. */
+  .ledger { margin: 0; }
+  .ledger > div {
+    display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4);
+    padding: var(--sp-2) 0; border-bottom: 1px solid var(--line);
   }
-  td {
-    padding: 0.4rem 0;
-    border-bottom: 1px solid #f3f4f6;
-    font-size: 0.9rem;
-    overflow-wrap: anywhere;
+  .ledger dt { overflow-wrap: anywhere; min-width: 0; }
+  .ledger dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ledger > div.reduce { color: var(--status-danger-fg); }
+  .ledger > div.sum {
+    border-top: 3px double var(--line-control); border-bottom: none;
+    padding-top: var(--sp-3); font-weight: 600;
   }
-  .num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-  tr.reduce td {
-    color: #b91c1c;
-  }
-  tfoot tr.sum td {
-    border-top: 2px solid #e5e7eb;
-    border-bottom: none;
-    padding-top: 0.6rem;
-    font-weight: 600;
-    font-size: 0.95rem;
-  }
+  .ledger > div.none { flex-wrap: wrap; }
   .result {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 1rem;
-    padding: 1rem 1.25rem;
-    border-radius: 8px;
-    margin-top: 0.5rem;
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+    gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md);
+    margin-top: var(--sp-2); border: 1px solid;
   }
-  .result.profit {
-    background: #ecfdf5;
-    border: 1px solid #a7f3d0;
-  }
-  .result.loss {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-  }
-  .result-label {
-    font-weight: 600;
-  }
-  .result-value {
-    font-size: 1.4rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
-  .result.profit .result-value {
-    color: #047857;
-  }
-  .result.loss .result-value {
-    color: #b91c1c;
-  }
-  .note {
-    max-width: 44rem;
-    line-height: 1.5;
-    margin-top: 0.75rem;
-  }
+  .result.profit { background: var(--status-success-bg); border-color: var(--status-success-line); }
+  .result.loss { background: var(--status-danger-bg); border-color: var(--status-danger-line); }
+  .result-label { font-weight: 600; }
+  .result-value { font-size: var(--fs-xl); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .result.profit .result-value { color: var(--status-success-fg); }
+  .result.loss .result-value { color: var(--status-danger-fg); }
+  .note { max-width: 44rem; line-height: 1.5; margin-top: var(--sp-3); }
   .disclaimer {
-    max-width: 44rem;
-    line-height: 1.5;
-    font-size: 0.8rem;
-    margin-top: 1.25rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid #f3f4f6;
+    max-width: 44rem; line-height: 1.5; font-size: var(--fs-sm);
+    margin-top: var(--sp-5); padding-top: var(--sp-3); border-top: 1px solid var(--line);
   }
-  .muted {
-    color: #6b7280;
-  }
-  .actions {
-    margin: 0 0 0.5rem;
-  }
-  .export-link {
-    display: inline-block;
-    padding: 0.45rem 0.85rem;
-    background: var(--c-surface);
-    border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md);
-    color: var(--c-primary-700);
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 600;
-  }
-  .export-link:hover {
-    background: var(--c-primary-50);
-    border-color: var(--c-primary-300);
-    text-decoration: none;
-  }
+  .muted { color: var(--text-muted); }
+  /* U1 (2.5.8): steht allein in der Zeile (kein Fließtext) → volle Trefferfläche. */
+  .inline-link { text-decoration: underline; display: inline-flex; align-items: center; min-height: var(--target); }
+  .actions { margin: 0 0 var(--sp-2); }
 </style>

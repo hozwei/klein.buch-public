@@ -5,33 +5,18 @@
 
   import { xmlViewerStore, closeXmlViewer } from "#lib/xmlViewerModal.svelte.ts";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { copyText } from "#lib/browser.ts";
 
-  let closeBtn = $state<HTMLButtonElement | null>(null);
-  let triggerEl: HTMLElement | null = null;
-
+  // Modal-Stack (App-Shell `inert`); Fokus, Escape und Rücksprung über
+  // `focusTrap` (U1).
   $effect(() => {
     if (xmlViewerStore.visible) {
-      triggerEl =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       pushModal();
-      queueMicrotask(() => closeBtn?.focus());
-      return () => {
-        popModal();
-        triggerEl?.focus();
-        triggerEl = null;
-      };
+      return () => popModal();
     }
   });
-
-  function onKeydown(e: KeyboardEvent): void {
-    if (!xmlViewerStore.visible) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeXmlViewer();
-    }
-  }
 
   async function copyXml(): Promise<void> {
     const payload = xmlViewerStore.payload;
@@ -67,32 +52,30 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
 {#if xmlViewerStore.visible && xmlViewerStore.payload}
   {@const payload = xmlViewerStore.payload}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
-    class="backdrop"
+    class="kb-backdrop"
     role="presentation"
     onclick={(e) => {
       if (e.target === e.currentTarget) closeXmlViewer();
     }}
   >
     <div
-      class="dialog"
+      class="kb-dialog xml"
       role="dialog"
       aria-modal="true"
       aria-labelledby="rawxml-title"
+      use:focusTrap={{ onEscape: closeXmlViewer, initialFocus: ".kb-dialog-close" }}
     >
-      <header>
+      <header class="kb-dialog-head">
         <h2 id="rawxml-title">Roh-XML der E-Rechnung</h2>
         <button
-          bind:this={closeBtn}
           type="button"
-          class="close"
+          class="kb-dialog-close"
           aria-label="Dialog schließen"
-          onclick={closeXmlViewer}>×</button
+          onclick={closeXmlViewer}><span aria-hidden="true">×</span></button
         >
       </header>
       <div class="meta">
@@ -100,8 +83,9 @@
         <span><strong>SHA-256:</strong> <code>{payload.sha256Hex}</code></span>
         <span><strong>Größe:</strong> {formatBytes(payload.byteSize)}</span>
       </div>
-      <pre class="body">{payload.xml}</pre>
-      <footer>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre class="body" tabindex="0" aria-label="XML-Inhalt">{payload.xml}</pre>
+      <footer class="kb-dialog-foot">
         <button type="button" class="btn-secondary btn-sm" onclick={copyXml}>
           XML kopieren
         </button>
@@ -114,97 +98,41 @@
 {/if}
 
 <style>
-  /* Sheet-Look analog AboutDialog. */
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(16, 40, 50, 0.32);
-    -webkit-backdrop-filter: blur(6px) saturate(140%);
-    backdrop-filter: blur(6px) saturate(140%);
-    display: grid;
-    place-items: center;
-    z-index: 1000;
-    padding: 2rem;
-    box-sizing: border-box;
-  }
-  .dialog {
-    background: var(--c-surface);
-    border-radius: var(--r-xl);
-    box-shadow: var(--sh-xl);
-    width: min(900px, 100%);
-    max-height: calc(100vh - 4rem);
-    max-height: calc(100dvh - 4rem);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.25rem 0.85rem;
-    border-bottom: 1px solid rgba(16, 36, 44, 0.08);
-  }
-  header h2 {
-    margin: 0;
-    font-size: var(--fs-lg);
-    color: var(--c-text);
-  }
-  .close {
-    background: transparent;
-    border: 0;
-    font-size: 1.5rem;
-    line-height: 1;
-    padding: 0.15rem 0.55rem;
-    border-radius: var(--r-md);
-    cursor: pointer;
-    color: var(--c-text-muted);
-  }
-  .close:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-  }
+  /* Rahmen aus tokens.css (.kb-dialog). */
+  .xml { --dialog-w: 900px; }
   .meta {
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem 1.5rem;
     padding: 0.65rem 1.25rem;
-    background: var(--c-surface-2);
-    border-bottom: 1px solid var(--c-border);
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--line);
     font-size: var(--fs-xs);
-    color: var(--c-text-muted);
+    color: var(--text-muted);
+    flex: none;
   }
   .meta code {
-    background: var(--c-surface);
+    background: var(--surface-card);
     padding: 0.05em 0.4em;
     border-radius: var(--r-sm);
     font-size: 0.9em;
     word-break: break-all;
   }
+  /* Der XML-Text scrollt in sich (auch waagerecht), nie die Seite. */
   .body {
     flex: 1;
+    min-height: 0;
     margin: 0;
     padding: 1rem 1.25rem;
     overflow: auto;
+    overscroll-behavior: contain;
     white-space: pre;
-    font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+    overflow-wrap: normal;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     line-height: 1.5;
-    color: var(--c-text);
-    background: var(--c-surface);
+    color: var(--text);
+    background: var(--surface-card);
   }
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem;
-    border-top: 1px solid var(--c-border);
-    background: var(--c-surface-2);
-  }
-  /* Plan W10: auf dem Handy fast randlos */
-  @media (max-width: 600px) {
-    .backdrop {
-      padding: 0.5rem;
-    }
-  }
+  .body:focus-visible { outline-offset: -2px; }
 </style>

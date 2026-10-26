@@ -112,6 +112,10 @@
           "(Name durch Platzhalter ersetzt, alle übrigen Felder gelöscht) und der Kontakt archiviert. " +
           `Gesetzlich aufbewahrungspflichtige Belege bleiben erhalten: ${check.lockedInvoices} Rechnung(en) ` +
           `und ${check.lockedQuotes} Angebot(e) behalten ihren damaligen Empfänger-Stand (§147 AO, 10 Jahre). ` +
+          "Ebenfalls ersetzt werden: der Empfänger in verworfenen Rechnungs-Entwürfen und in " +
+          "zurückgezogenen Angebots-Entwürfen (Nummer, Datum, Betrag und Positionen bleiben), " +
+          "Bezeichnung und Notiz der Abo-Vorlagen an diesen Kontakt sowie die Bezeichnung seiner " +
+          "Kosten-Abos; diese Abos werden pausiert. " +
           "Keine Rechtsberatung.",
         confirmLabel: "Anonymisieren",
         danger: true,
@@ -181,7 +185,7 @@
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if contact}

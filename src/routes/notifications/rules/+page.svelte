@@ -4,6 +4,7 @@
   import { flash } from "#lib/toast.svelte.ts";
   import Banner from "#lib/Banner.svelte";
   import Toggle from "#lib/Toggle.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let rules = $state<NotificationRule[]>([]);
   let loading = $state(true);
@@ -38,7 +39,7 @@
 
   function describe(rule: NotificationRule): string {
     if (rule.id === "rule_backup_result")
-      return "Hinweis in der Hinweis-Liste nach jeder Sicherung: bei fehlgeschlagener externer Spiegelung (immer) und bei erfolgreichem manuellem Backup.";
+      return "Hinweis in der Hinweis-Liste nach einer Sicherung: immer, wenn eine lokale oder externe Sicherung fehlschlägt, und nach einem erfolgreichen manuellen Backup.";
     switch (rule.ruleType) {
       case "monthly_doc_check":
         return "Monatliche Erinnerung, alle Belege und Kosten des Vormonats zu erfassen.";
@@ -59,10 +60,7 @@
 
 </script>
 
-<header class="hdr">
-  <h1>Erinnerungen einstellen</h1>
-  <a class="back" href="/notifications">← Zu den Hinweisen</a>
-</header>
+<PageBar back="/notifications" backLabel="Hinweise" title="Erinnerungen einstellen" />
 
 <p class="lead">
   Lege fest, woran Klein.Buch dich automatisch erinnert. Erinnerungen erscheinen
@@ -72,7 +70,7 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status" aria-busy="true">Lädt …</p>
 {:else}
   <ul class="list">
     {#each rules as rule (rule.id)}
@@ -87,7 +85,7 @@
             ariaLabel={rule.label}
             onchange={(next) => toggle(rule, next)}
           />
-          <span class="state">{rule.enabled === 1 ? "An" : "Aus"}</span>
+          <span class="state" aria-hidden="true">{rule.enabled === 1 ? "An" : "Aus"}</span>
         </span>
       </li>
     {/each}
@@ -95,22 +93,7 @@
 {/if}
 
 <style>
-  .hdr {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  h1 {
-    margin: 0;
-  }
-  .back {
-    color: #2563eb;
-    text-decoration: none;
-    font-size: 0.9rem;
-  }
-  /* .intro entfernt — globale .lead aus tokens.css. */
+  /* .intro entfernt — globale .lead aus tokens.css. U1: PageBar statt eigenem Kopf. */
   .muted {
     color: var(--c-text-muted);
   }
@@ -127,15 +110,15 @@
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    background: var(--surface-card);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
     padding: 0.85rem 1rem;
   }
   .text {
     margin: 0.3rem 0;
     font-size: 0.9rem;
-    color: #374151;
+    color: var(--text);
     line-height: 1.45;
     max-width: 40rem;
   }
@@ -147,11 +130,17 @@
   }
   .switch .state {
     font-size: 0.85rem;
-    color: #4b5563;
+    color: var(--text-muted);
     min-width: 2.4rem;
   }
   .body {
     min-width: 0;
+    flex: 1 1 auto;
     overflow-wrap: anywhere;
+  }
+  /* U1-Sichtprüfung: Auf dem Handy steht der Schalter unter dem Text, sonst bleibt
+     für die Beschreibung bei 320 px nur eine Spalte von ~120 px. */
+  @media (max-width: 600px) {
+    .item { flex-direction: column; align-items: flex-start; gap: var(--sp-1); }
   }
 </style>

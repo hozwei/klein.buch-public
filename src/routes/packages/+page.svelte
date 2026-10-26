@@ -1,7 +1,6 @@
 <script lang="ts">
   // Block P2b — Paket-Katalog: Liste, nach Kategorie gruppiert.
   import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
   import PageBar from "#lib/PageBar.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
@@ -21,6 +20,9 @@
   let loadError = $state<string | null>(null);
   let newCategory = $state("");
   let busy = $state(false);
+  // U1: Fehler am Feld statt Toast.
+  let categoryError = $state("");
+  let categoryEl: HTMLInputElement | undefined = $state();
 
   async function reloadPackages() {
     packages = await packagesList();
@@ -48,20 +50,29 @@
     if (orphans.length) g.push({ name: "Ohne Kategorie", items: orphans });
     return g;
   });
+  // Kategorien ohne Pakete stehen am Ende (Anzeige, U1): Sie sind angelegt
+  // und in „Neues Paket“ wählbar, auch wenn sie noch leer sind.
+  let emptyCategories = $derived(
+    categories.filter((c) => !packages.some((p) => p.categoryId === c.id)),
+  );
 
-  async function addCategory() {
+  async function addCategory(e?: Event) {
+    e?.preventDefault();
     if (!newCategory.trim()) {
-      flash("Bitte einen Kategorie-Namen eingeben.", "error");
+      categoryError = "Bitte einen Kategorie-Namen eingeben.";
+      categoryEl?.focus();
       return;
     }
+    categoryError = "";
     busy = true;
     try {
       await packageCategoryCreate(newCategory.trim());
       newCategory = "";
       categories = await packageCategoriesList();
       flash("Kategorie angelegt.");
-    } catch (e) {
-      flash(e instanceof Error ? e.message : String(e), "error");
+    } catch (err) {
+      categoryError = err instanceof Error ? err.message : String(err);
+      categoryEl?.focus();
     } finally {
       busy = false;
     }
@@ -88,8 +99,8 @@
 
 <PageBar title="Pakete">
   {#snippet actions()}
-    <Button variant="secondary" onclick={() => goto("/packages/brochure")}>Broschüre</Button>
-    <Button variant="primary" onclick={() => goto("/packages/new")}>Neues Paket</Button>
+    <Button variant="secondary" href="/packages/brochure">Broschüre</Button>
+    <Button variant="primary" href="/packages/new">Neues Paket</Button>
   {/snippet}
 </PageBar>
 
@@ -100,26 +111,35 @@
 </p>
 
 {#if loading}
-  <p class="muted">Lädt …</p>
+  <p class="muted" role="status" aria-busy="true">Lädt …</p>
 {:else if loadError}
-  <div class="error-card">Konnte Pakete nicht laden: {loadError}</div>
+  <div class="error-card" role="alert">Konnte Pakete nicht laden: {loadError}</div>
 {:else}
-  <section class="cat-add">
-    <input
-      type="text"
-      placeholder="Neue Kategorie (z. B. Hochzeit, Porträt)"
-      bind:value={newCategory}
-      onkeydown={(e) => e.key === "Enter" && addCategory()}
-    />
-    <Button variant="secondary" disabled={busy} onclick={addCategory}>
-      Kategorie anlegen
-    </Button>
-  </section>
+  <form class="cat-add" onsubmit={addCategory} novalidate>
+    <label for="cat-new">Neue Kategorie</label>
+    <div class="cat-row">
+      <input
+        id="cat-new"
+        class="kb-input"
+        type="text"
+        autocomplete="off"
+        enterkeyhint="done"
+        placeholder="z. B. Hochzeit, Porträt"
+        aria-invalid={categoryError ? "true" : undefined}
+        aria-describedby={categoryError ? "cat-new-err" : undefined}
+        bind:this={categoryEl}
+        bind:value={newCategory}
+        oninput={() => (categoryError = "")}
+      />
+      <Button type="submit" variant="secondary" disabled={busy}>Kategorie anlegen</Button>
+    </div>
+    {#if categoryError}<p id="cat-new-err" class="err">{categoryError}</p>{/if}
+  </form>
 
   {#if packages.length === 0}
     <div class="empty">
-      Noch keine Pakete. Lege oben eine Kategorie an und dann dein erstes Paket über
-      „Neues Paket".
+      <p>Noch keine Pakete. Leg bei Bedarf oben eine Kategorie an und dann dein erstes Paket.</p>
+      <Button variant="primary" href="/packages/new">Neues Paket</Button>
     </div>
   {/if}
 
@@ -140,10 +160,15 @@
             {p.currentRevision ? `Version ${p.currentRevision}` : "noch keine Version"}
           </div>
           <div class="pkg-foot">
-            <Button variant="ghost" onclick={() => goto(`/packages/${p.id}`)}>
+            <Button variant="secondary" href={`/packages/${p.id}`} ariaLabel={`${p.name} bearbeiten`}>
               Bearbeiten
             </Button>
-            <Button variant="ghost" disabled={busy} onclick={() => toggleArchive(p)}>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onclick={() => toggleArchive(p)}
+              ariaLabel={`${p.name} ${p.status === "archived" ? "reaktivieren" : "archivieren"}`}
+            >
               {p.status === "archived" ? "Reaktivieren" : "Archivieren"}
             </Button>
           </div>
@@ -151,6 +176,13 @@
       {/each}
     </div>
   {/each}
+
+  {#if emptyCategories.length}
+    <h2 class="cat-h">Kategorien ohne Pakete</h2>
+    <ul class="cat-empty">
+      {#each emptyCategories as c (c.id)}<li>{c.name}</li>{/each}
+    </ul>
+  {/if}
 {/if}
 
 <style>
@@ -166,18 +198,19 @@
     padding: 1rem 1.2rem;
     max-width: 46rem;
   }
-  .cat-add {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
-    flex-wrap: wrap;
-  }
-  .cat-add input {
-    flex: 1;
-    min-width: 16rem;
-    padding: 8px 12px;
-    border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md);
+  .cat-add { margin-bottom: 1.5rem; max-width: 46rem; }
+  .cat-add label { display: block; margin-bottom: 5px; font-size: var(--fs-sm); font-weight: 600; }
+  .cat-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .cat-row input { flex: 1 1 14rem; min-width: 0; width: auto; scroll-margin-block: var(--sp-6); }
+  .err { margin: 4px 0 0; font-size: var(--fs-sm); font-weight: 600; color: var(--status-danger-fg); }
+  .cat-empty { display: flex; flex-wrap: wrap; gap: 0.4rem; list-style: none; padding: 0; margin: 0; }
+  .cat-empty li {
+    padding: 0.2rem 0.7rem;
+    border: 1px solid var(--line-control);
+    border-radius: var(--r-pill);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
   }
   .empty {
     color: var(--c-text-muted);
@@ -186,7 +219,12 @@
     border-radius: var(--r-lg);
     padding: 1.5rem;
     max-width: 46rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.7rem;
   }
+  .empty p { margin: 0; }
   .cat-h {
     font-size: var(--fs-lg);
     margin: 1.5rem 0 0.8rem;
@@ -206,8 +244,10 @@
     padding: 1rem 1.2rem;
     box-shadow: var(--sh-sm);
   }
+  /* Archiviert: gestrichelter Rahmen und Badge statt Transparenz (Kontrast 1.4.3). */
   .pkg.archived {
-    opacity: 0.65;
+    border-style: dashed;
+    background: var(--surface-page);
   }
   .pkg-head {
     display: flex;
@@ -216,12 +256,17 @@
     gap: 0.5rem;
   }
   .pkg-name {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    min-width: 0;
+    overflow-wrap: anywhere;
     font-weight: 600;
     color: var(--c-primary-700);
     text-decoration: none;
   }
-  .pkg-name:hover {
-    text-decoration: underline;
+  @media (hover: hover) {
+    .pkg-name:hover { text-decoration: underline; }
   }
   .pkg-meta {
     font-size: var(--fs-sm);
@@ -229,6 +274,7 @@
   }
   .pkg-foot {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.4rem;
     margin-top: 0.3rem;
   }

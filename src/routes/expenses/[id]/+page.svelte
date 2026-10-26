@@ -1,6 +1,6 @@
 <script lang="ts">
   import { todayBerlin } from "#lib/date.ts";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import {
     expensesGet,
@@ -27,6 +27,8 @@
   let busy = $state(false);
   let showCancel = $state(false);
   let cancelReason = $state("");
+  let cancelError = $state("");
+  let cancelReasonEl: HTMLInputElement | undefined = $state();
   let showPay = $state(false);
   let payDate = $state(todayBerlin());
   let payAccountId = $state<string>("");
@@ -109,6 +111,11 @@
     showPay = true;
   }
 
+  // Übergabe F5 (R1-019): Zahldatum vor dem Belegdatum ist erlaubt, aber auffällig.
+  const payBeforeExpense = $derived(
+    !!payDate && !!detail?.expense.expenseDate && payDate < detail.expense.expenseDate,
+  );
+
   async function markPaid() {
     busy = true;
     try {
@@ -140,11 +147,20 @@
     }
   }
 
+  async function openCancel() {
+    showCancel = true;
+    cancelError = "";
+    await tick();
+    cancelReasonEl?.focus();
+  }
+
   async function doCancel() {
     if (!cancelReason.trim()) {
-      flash("Storno-Grund ist erforderlich.", "error");
+      cancelError = "Bitte einen Grund für das Storno angeben.";
+      cancelReasonEl?.focus();
       return;
     }
+    cancelError = "";
     busy = true;
     try {
       await expensesCancel({ expenseId: id, reason: cancelReason.trim() });
@@ -176,7 +192,8 @@
         type="button"
         class="btn-secondary btn-sm"
         onclick={openRawXml}
-        disabled={xmlLoading}
+        aria-disabled={xmlLoading ? "true" : undefined}
+        aria-busy={xmlLoading}
       >
         {xmlLoading ? "Lade Roh-XML …" : "Roh-XML anzeigen"}
       </button>
@@ -185,7 +202,7 @@
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if detail}
@@ -207,17 +224,17 @@
 
   <section class="card">
     <dl>
-      <div><dt>Lieferant</dt><dd>{e.vendorNameSnapshot}{#if detail.vendor} <span class="muted">(Kontakt verknüpft)</span>{/if}</dd></div>
+      <div><dt>Lieferant</dt><dd>{e.vendorNameSnapshot}{#if detail.vendor}{" "}<span class="muted">(Kontakt verknüpft)</span>{/if}</dd></div>
       <div><dt>Beleg-Datum</dt><dd>{date(e.expenseDate)}</dd></div>
       <div><dt>Bezahlt am</dt><dd>{e.paidDate ? date(e.paidDate) : "noch offen"}</dd></div>
       <div><dt>Kategorie</dt><dd>{expenseCategoryLabel(e.category)}</dd></div>
       <div><dt>Rechnungs-Nr. (Lieferant)</dt><dd>{e.vendorInvoiceNumber ?? "—"}</dd></div>
       <div><dt>Beschreibung</dt><dd>{e.description}</dd></div>
-      <div><dt>Netto</dt><dd>{euro(e.netAmountCents)}</dd></div>
-      <div><dt>USt</dt><dd>{euro(e.taxAmountCents)}</dd></div>
-      <div><dt>Brutto (zählt fürs Finanzamt)</dt><dd><strong>{euro(e.grossAmountCents)}</strong></dd></div>
+      <div><dt>Netto</dt><dd class="amt">{euro(e.netAmountCents)}</dd></div>
+      <div><dt>USt</dt><dd class="amt">{euro(e.taxAmountCents)}</dd></div>
+      <div><dt>Brutto (zählt fürs Finanzamt)</dt><dd class="amt"><strong>{euro(e.grossAmountCents)}</strong></dd></div>
       <div><dt>§13b Reverse-Charge</dt><dd>{e.reverseCharge13b === 1 ? "ja" : "nein"}</dd></div>
-      {#if e.notes}<div><dt>Notiz</dt><dd>{e.notes}</dd></div>{/if}
+      {#if e.notes}<div><dt>Notiz</dt><dd class="pre">{e.notes}</dd></div>{/if}
     </dl>
   </section>
 
@@ -226,33 +243,48 @@
       <h2>Zahlung</h2>
       {#if showPay}
         <div class="pay-grid">
-          <label>
-            Bezahlt am
-            <input type="date" bind:value={payDate} max={todayBerlin()} />
-          </label>
-          <label>
-            Konto
-            <select bind:value={payAccountId}>
+          <div class="field">
+            <label for="pay-date">Bezahlt am<span class="req" aria-hidden="true">*</span></label>
+            <input
+              id="pay-date"
+              class="kb-input"
+              type="date"
+              bind:value={payDate}
+              max={todayBerlin()}
+              required
+              aria-required="true"
+              aria-describedby={payBeforeExpense ? "pay-date-note" : undefined}
+            />
+          </div>
+          <div class="field">
+            <label for="pay-account">Zahlungs-Konto</label>
+            <select id="pay-account" class="kb-input" bind:value={payAccountId}>
               <option value="">— keines —</option>
               {#each accounts.filter((a) => a.active === 1 || a.id === payAccountId) as a (a.id)}
                 <option value={a.id}>{a.label}</option>
               {/each}
             </select>
-          </label>
-          <div class="row">
-            <button class="btn-primary btn-sm" onclick={markPaid} disabled={busy || !payDate}>Speichern</button>
-            <button class="btn-secondary btn-sm" onclick={() => (showPay = false)}>Abbrechen</button>
           </div>
+          <div class="row">
+            <button type="button" class="btn-primary btn-sm" onclick={markPaid} disabled={busy || !payDate}>Zahlung speichern</button>
+            <button type="button" class="btn-secondary btn-sm" onclick={() => (showPay = false)}>Abbrechen</button>
+          </div>
+          {#if payBeforeExpense}
+            <p id="pay-date-note" class="note">
+              Das Zahldatum liegt vor dem Belegdatum ({date(e.expenseDate)}), z. B. bei Vorkasse.
+              Das ist erlaubt — prüfe nur kurz, ob beide Daten stimmen.
+            </p>
+          {/if}
         </div>
       {:else if e.paidDate}
         <p>Bezahlt am <strong>{date(e.paidDate)}</strong> · Konto: {accountLabel(e.paidFromAccountId)}</p>
         <div class="row">
-          <button class="btn-secondary btn-sm" onclick={startPay} disabled={busy}>Zahlung korrigieren</button>
-          <button class="btn-secondary btn-sm" onclick={setUnpaid} disabled={busy}>Als unbezahlt markieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={startPay} disabled={busy}>Zahlung korrigieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={setUnpaid} disabled={busy}>Als unbezahlt markieren</button>
         </div>
       {:else}
         <p class="muted">Noch nicht als bezahlt markiert (zählt erst mit dem Zahldatum für die Steuer).</p>
-        <button class="btn-primary btn-sm" onclick={startPay} disabled={busy}>Als bezahlt markieren</button>
+        <button type="button" class="btn-primary btn-sm" onclick={startPay} disabled={busy}>Als bezahlt markieren</button>
       {/if}
     </section>
   {/if}
@@ -261,10 +293,10 @@
     <h2>Beleg</h2>
     {#if e.receiptArchiveId}
       <div class="row">
-        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
+        <button type="button" class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
       </div>
     {:else}
-      <p class="muted">Kein primärer Beleg hinterlegt.</p>
+      <p class="muted">Kein primärer Beleg hinterlegt. Unter „Zusätzliche Anhänge“ kannst du ein Foto oder PDF ergänzen.</p>
     {/if}
   </section>
 
@@ -274,7 +306,7 @@
       {#if e.capitalizedAsAssetId}
         <p>
           Aus dieser Position wurde eine Anlage aktiviert.
-          <a href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anlage →</a>
+          <a class="inline-link" href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anlage <span aria-hidden="true">→</span></a>
         </p>
       {:else}
         <p class="muted">
@@ -305,13 +337,35 @@
         es das Gesetz. Für eine Korrektur danach einfach neue Kosten erfassen.
       </p>
       {#if showCancel}
-        <div class="row">
-          <input type="text" bind:value={cancelReason} placeholder="Storno-Grund" />
-          <button class="btn-danger btn-sm" onclick={doCancel} disabled={busy}>Storno bestätigen</button>
-          <button class="btn-secondary btn-sm" onclick={() => (showCancel = false)}>Abbrechen</button>
+        <div class="cancel-form">
+          <div class="field grow">
+            <label for="cancel-reason">Storno-Grund<span class="req" aria-hidden="true">*</span></label>
+            <input
+              id="cancel-reason"
+              class="kb-input"
+              type="text"
+              autocomplete="off"
+              bind:this={cancelReasonEl}
+              bind:value={cancelReason}
+              oninput={() => (cancelError = "")}
+              required
+              aria-required="true"
+              aria-invalid={cancelError ? "true" : undefined}
+              aria-describedby={cancelError ? "cancel-reason-err" : "cancel-reason-hint"}
+            />
+            {#if cancelError}
+              <p id="cancel-reason-err" class="msg err">{cancelError}</p>
+            {:else}
+              <p id="cancel-reason-hint" class="msg hint">z. B. „doppelt erfasst“ oder „falscher Betrag“</p>
+            {/if}
+          </div>
+          <div class="row">
+            <button type="button" class="btn-secondary btn-sm" onclick={() => (showCancel = false)}>Abbrechen</button>
+            <button type="button" class="btn-danger btn-sm" onclick={doCancel} disabled={busy}>Storno bestätigen</button>
+          </div>
         </div>
       {:else}
-        <button class="btn-danger btn-sm" onclick={() => (showCancel = true)}>Kosten stornieren</button>
+        <button type="button" class="btn-danger btn-sm" onclick={openCancel}>Kosten stornieren</button>
       {/if}
     </section>
   {/if}
@@ -319,19 +373,29 @@
 
 <style>
   .sub { margin: 0 0 1rem; }
-  /* .card / .card.danger entfernt — globale Definitionen aus tokens.css. */
-  dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin: 0; }
-  dl div { display: flex; flex-direction: column; }
-  dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  /* .card / .card.danger / .caveat / .kb-input: globale Definitionen aus tokens.css. */
+  dl { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2) var(--sp-5); margin: 0; }
+  dl div { display: flex; flex-direction: column; min-width: 0; }
+  dt { font-size: var(--fs-xs); color: var(--text-muted); }
+  dd { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+  dd.amt { font-variant-numeric: tabular-nums; }
+  dd.pre { white-space: pre-wrap; }
   @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; max-width: 100%; }
-  .pay-grid { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
-  .pay-grid label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
-  .pay-grid input, .pay-grid select { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
-  /* .caveat entfernt — globale Definition aus tokens.css greift. */
-  /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .muted { color: #6b7280; }
+  .row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+  .pay-grid { display: flex; gap: var(--sp-4); align-items: end; flex-wrap: wrap; }
+  .cancel-form { display: flex; gap: var(--sp-3); align-items: end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+  .field.grow { flex: 1 1 16rem; }
+  .field > label { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+  .req { color: var(--status-danger-fg); margin-left: 2px; }
+  .msg { font-size: var(--fs-sm); margin: 0; line-height: 1.4; }
+  .msg.err { color: var(--status-danger-fg); font-weight: 600; }
+  .msg.hint { color: var(--text-muted); }
+  .note {
+    flex-basis: 100%; margin: 0; font-size: var(--fs-sm);
+    color: var(--status-warning-fg); background: var(--status-warning-bg);
+    border-left: 3px solid var(--status-warning-line); padding: var(--sp-1) var(--sp-2);
+  }
+  .inline-link { text-decoration: underline; text-underline-offset: 2px; }
+  .muted { color: var(--text-muted); }
 </style>

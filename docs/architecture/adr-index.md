@@ -5,11 +5,11 @@
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0040-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0041-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** alle 40 ADRs sind **akzeptiert** (Stand 2026-10-24);
+**Status-Konvention:** die ADRs 0001–0040 sind **akzeptiert** (Stand 2026-10-24), ADR 0041 ist **in Arbeit** (Lauf 2026.11);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -62,6 +62,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 | 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
+| 0041 | UI/UX-Standards (2026.11): WCAG 2.2 AA als Ziel, Prüf-Harness mit Abdeckungsbericht, Design über Tokens und Bausteine, deutsche Formate (in Arbeit) | UX / Frontend | `design.md` |
 
 ---
 
@@ -96,7 +97,7 @@ Plus AfA: 0025.
 
 **DSGVO:** 0032.
 
-**UX/Design:** 0021, 0029.
+**UX/Design:** 0021, 0029, 0041.
 
 **Scheduler/Notifications:** 0023, 0027, 0037 (Drop-Folder als sechster
 Tick-Job, Inbox-only-Regeln; im Server-Betrieb entfällt der Drop-Folder-Job,
@@ -223,7 +224,7 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 **Für Security-Audit:** 0039, 0009, 0011, 0013, 0028, 0034, 0035, 0036.
 
-**Für UX-/Frontend-Arbeit:** 0021, 0029, 0030.
+**Für UX-/Frontend-Arbeit:** 0041, 0021, 0029, 0030.
 
 ---
 

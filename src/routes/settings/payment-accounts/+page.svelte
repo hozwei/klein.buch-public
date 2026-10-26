@@ -9,7 +9,10 @@
     paymentAccountsSetActive,
   } from "#lib/api.ts";
   import type { PaymentAccount, PaymentAccountInput, PaymentAccountType } from "#lib/types.ts";
+  import Badge from "#lib/Badge.svelte";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import { iban as fmtIban } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
 
   let accounts = $state<PaymentAccount[]>([]);
@@ -73,9 +76,15 @@
     accounts = await paymentAccountsList(showInactive);
   }
 
+  let labelError = $state("");
+  let labelInput: HTMLInputElement | undefined = $state();
+  let editLabelError = $state("");
+
   async function create() {
+    labelError = "";
     if (!form.label.trim()) {
-      flash("Bezeichnung fehlt.", "error");
+      labelError = "Bitte gib eine Bezeichnung ein, z. B. „Geschäftskonto“.";
+      labelInput?.focus();
       return;
     }
     busy = true;
@@ -106,6 +115,7 @@
 
   function startEdit(a: PaymentAccount) {
     editId = a.id;
+    editLabelError = "";
     editForm = {
       label: a.label,
       accountType: a.accountType as PaymentAccountType,
@@ -119,6 +129,12 @@
 
   async function saveEdit() {
     if (!editId) return;
+    editLabelError = "";
+    if (!editForm.label.trim()) {
+      editLabelError = "Bitte gib eine Bezeichnung ein.";
+      document.getElementById(`pa-edit-label-${editId}`)?.focus();
+      return;
+    }
     busy = true;
     try {
       await paymentAccountsUpdate(editId, {
@@ -152,45 +168,79 @@
 </script>
 
 <PageBar back="/settings" backLabel="Einstellungen" title="Konten (Bank & Bargeld)" />
-<p class="muted">
+<p class="lead">
   Deine Konten für Zahlungen — Bankkonto, Bargeld, PayPal und so weiter. Du wählst
   sie bei Kosten und Privat-Buchungen aus. Konten werden nicht gelöscht, sondern
   deaktiviert. Genau ein Konto ist der <strong>Standard</strong>. Konten mit
-  <strong>„Auf Beleg anzeigen"</strong> erscheinen auf Angeboten und Rechnungen
+  <strong>„Auf Beleg anzeigen“</strong> erscheinen auf Angeboten und Rechnungen
   (mehrere möglich) — Bankkonten zusätzlich als Überweisungsweg in der XRechnung.
 </p>
 
-<section class="card">
-  <h2>Neues Konto</h2>
-  <div class="grid">
-    <label>
-      Bezeichnung
-      <input type="text" bind:value={form.label} placeholder="z. B. Geschäftskonto Sparkasse" />
-    </label>
-    <label>
-      Typ
-      <select bind:value={form.accountType}>
-        {#each TYPES as t}<option value={t.value}>{t.label}</option>{/each}
+<section class="card" aria-labelledby="pa-new-h">
+  <h2 id="pa-new-h">Neues Konto</h2>
+  <form class="grid" novalidate onsubmit={(e) => { e.preventDefault(); create(); }}>
+    <div class="f">
+      <label for="pa-label">Bezeichnung<span class="req" aria-hidden="true">*</span> <span class="kb-visually-hidden">(Pflicht)</span></label>
+      <input
+        id="pa-label"
+        bind:this={labelInput}
+        type="text"
+        autocomplete="off"
+        bind:value={form.label}
+        required
+        aria-required="true"
+        aria-invalid={labelError ? "true" : undefined}
+        aria-describedby={labelError ? "pa-label-err" : undefined}
+        placeholder="z. B. Geschäftskonto Sparkasse"
+      />
+      {#if labelError}<span id="pa-label-err" class="err">{labelError}</span>{/if}
+    </div>
+    <div class="f">
+      <label for="pa-type">Typ</label>
+      <select id="pa-type" bind:value={form.accountType}>
+        {#each TYPES as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
       </select>
-    </label>
-    <label>
-      IBAN (optional)
-      <input type="text" bind:value={form.iban} placeholder="DE…" />
-    </label>
-    <label>
-      BIC (optional)
-      <input type="text" bind:value={form.bic} />
-    </label>
-    <label>
-      Zahlungs-Details (optional)
-      <input type="text" bind:value={form.details} placeholder="z. B. paypal.me/…" />
-    </label>
+    </div>
+    <div class="f">
+      <label for="pa-iban">IBAN (optional)</label>
+      <input
+        id="pa-iban"
+        type="text"
+        bind:value={form.iban}
+        autocomplete="off"
+        inputmode="text"
+        autocapitalize="characters"
+        spellcheck="false"
+        aria-describedby="pa-iban-hint"
+      />
+      <span id="pa-iban-hint" class="hint">z. B. DE89 3704 0044 0532 0130 00 – Leerzeichen sind erlaubt</span>
+    </div>
+    <div class="f">
+      <label for="pa-bic">BIC (optional)</label>
+      <input
+        id="pa-bic"
+        type="text"
+        bind:value={form.bic}
+        autocomplete="off"
+        inputmode="text"
+        autocapitalize="characters"
+        spellcheck="false"
+        aria-describedby="pa-bic-hint"
+      />
+      <span id="pa-bic-hint" class="hint">8 oder 11 Zeichen, z. B. COBADEFFXXX</span>
+    </div>
+    <div class="f wide">
+      <label for="pa-details">Zahlungs-Details (optional)</label>
+      <input id="pa-details" type="text" autocomplete="off" bind:value={form.details} aria-describedby="pa-details-hint" />
+      <span id="pa-details-hint" class="hint">z. B. paypal.me/deinname</span>
+    </div>
     <Toggle bind:checked={form.isDefault} label="Als Standard-Konto" />
     <Toggle bind:checked={form.showOnInvoice} label="Auf Beleg anzeigen" />
-    <button class="btn-primary" onclick={create} disabled={busy || !form.label.trim()}>
-      {busy ? "…" : "Anlegen"}
-    </button>
-  </div>
+    <div class="submit">
+      <Button type="submit" disabled={busy}>{busy ? "Lege an …" : "Anlegen"}</Button>
+    </div>
+  </form>
+
 </section>
 
 <label class="chk show-inactive">
@@ -198,50 +248,104 @@
 </label>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if accounts.length === 0}
-  <p class="muted">Keine Konten.</p>
+  <p class="muted">Noch keine Konten. Lege oben unter „Neues Konto“ dein erstes an.</p>
 {:else}
   <table class="cards">
+    <caption class="kb-visually-hidden">Deine Konten</caption>
     <thead>
-      <tr><th>Bezeichnung</th><th>Typ</th><th>IBAN</th><th>Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th></th></tr>
+      <tr><th>Bezeichnung</th><th>Typ</th><th>IBAN / BIC</th><th>Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th><span class="kb-visually-hidden">Aktionen</span></th></tr>
     </thead>
     <tbody>
       {#each accounts as a (a.id)}
         {#if editId === a.id}
           <tr class="edit-row">
-            <td data-label="Bezeichnung"><input type="text" bind:value={editForm.label} /></td>
-            <td data-label="Typ">
-              <select bind:value={editForm.accountType}>
-                {#each TYPES as t}<option value={t.value}>{t.label}</option>{/each}
+            <td class="cards-full" data-label="Bezeichnung">
+              <input
+                id="pa-edit-label-{a.id}"
+                type="text"
+                autocomplete="off"
+                bind:value={editForm.label}
+                aria-label="Bezeichnung, Konto {a.label}"
+                aria-required="true"
+                aria-invalid={editLabelError ? "true" : undefined}
+                aria-describedby={editLabelError ? `pa-edit-err-${a.id}` : undefined}
+              />
+              {#if editLabelError}<span id="pa-edit-err-{a.id}" class="err">{editLabelError}</span>{/if}
+            </td>
+            <td class="cards-full" data-label="Typ">
+              <select bind:value={editForm.accountType} aria-label="Typ, Konto {a.label}">
+                {#each TYPES as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
               </select>
             </td>
-            <td data-label="IBAN"><input type="text" bind:value={editForm.iban} placeholder="IBAN" /></td>
-            <td class="cards-full" data-label="Details"><input type="text" bind:value={editForm.details} placeholder="z. B. PayPal-Link" /></td>
-            <td data-label="Auf Beleg"><input type="checkbox" bind:checked={editForm.showOnInvoice} /></td>
-            <td data-label="Standard"><input type="checkbox" bind:checked={editForm.isDefault} /></td>
+            <td class="cards-full" data-label="IBAN / BIC">
+              <input
+                type="text"
+                bind:value={editForm.iban}
+                aria-label="IBAN, Konto {a.label}"
+                autocomplete="off"
+                inputmode="text"
+                autocapitalize="characters"
+                spellcheck="false"
+              />
+              <input
+                class="bic"
+                type="text"
+                bind:value={editForm.bic}
+                aria-label="BIC, Konto {a.label}"
+                autocomplete="off"
+                inputmode="text"
+                autocapitalize="characters"
+                spellcheck="false"
+              />
+            </td>
+            <td class="cards-full" data-label="Details">
+              <input type="text" autocomplete="off" bind:value={editForm.details} aria-label="Zahlungs-Details, Konto {a.label}" />
+            </td>
+            <td data-label="Auf Beleg">
+              <label class="cell-chk">
+                <input type="checkbox" bind:checked={editForm.showOnInvoice} />
+                <span class="kb-visually-hidden">Auf Beleg anzeigen, Konto {a.label}</span>
+              </label>
+            </td>
+            <td data-label="Standard">
+              <label class="cell-chk">
+                <input type="checkbox" bind:checked={editForm.isDefault} />
+                <span class="kb-visually-hidden">Standard-Konto, Konto {a.label}</span>
+              </label>
+            </td>
             <td class="muted" data-label="Status">{a.active === 1 ? "aktiv" : "inaktiv"}</td>
-            <td class="row-actions">
-              <button class="btn-primary btn-sm" onclick={saveEdit} disabled={busy}>Speichern</button>
-              <button class="btn-secondary btn-sm" onclick={() => (editId = null)}>Abbrechen</button>
+            <td>
+              <div class="row-actions">
+                <Button onclick={saveEdit} disabled={busy} ariaLabel="Speichern, Konto {a.label}">Speichern</Button>
+                <Button variant="secondary" onclick={() => (editId = null)} ariaLabel="Abbrechen, Konto {a.label}">Abbrechen</Button>
+              </div>
             </td>
           </tr>
         {:else}
-          <tr class={a.active !== 1 ? "inactive" : ""}>
-            <td data-label="Bezeichnung">{a.label}</td>
+          <tr class:inactive={a.active !== 1}>
+            <td data-label="Bezeichnung"><strong>{a.label}</strong></td>
             <td data-label="Typ">{typeLabel(a.accountType)}</td>
-            <td class="muted" data-label="IBAN">{a.iban ?? "—"}</td>
-            <td class="muted cards-full" data-label="Details">{a.details ?? "—"}</td>
-            <td data-label="Auf Beleg">{#if a.showOnInvoice === 1}<span class="badge ok">✓</span>{:else}—{/if}</td>
-            <td data-label="Standard">{#if a.isDefault === 1}<span class="badge ok">Standard</span>{/if}</td>
-            <td data-label="Status">{#if a.active === 1}<span class="badge ok">aktiv</span>{:else}<span class="badge muted-badge">inaktiv</span>{/if}</td>
-            <td class="row-actions">
-              <button class="btn-secondary btn-sm" onclick={() => startEdit(a)} disabled={busy}>Bearbeiten</button>
-              <button class="btn-secondary btn-sm" onclick={() => toggleActive(a)} disabled={busy}>
-                {a.active === 1 ? "Deaktivieren" : "Aktivieren"}
-              </button>
+            <td class="muted" data-label="IBAN / BIC">
+              {#if a.iban || a.bic}
+                {#if a.iban}<span class="mono">{fmtIban(a.iban)}</span>{/if}
+                {#if a.bic}<span class="mono bic-show">{a.bic}</span>{/if}
+              {:else}—{/if}
+            </td>
+            <td class="muted" data-label="Details">{a.details ?? "—"}</td>
+            <td data-label="Auf Beleg">{#if a.showOnInvoice === 1}<Badge tone="success">ja</Badge>{:else}nein{/if}</td>
+            <td data-label="Standard">{#if a.isDefault === 1}<Badge tone="primary">Standard</Badge>{:else}—{/if}</td>
+            <td data-label="Status">{#if a.active === 1}<Badge tone="success">aktiv</Badge>{:else}<Badge>inaktiv</Badge>{/if}</td>
+            <td>
+              <div class="row-actions">
+                <Button variant="secondary" onclick={() => startEdit(a)} disabled={busy} ariaLabel="Bearbeiten, Konto {a.label}">Bearbeiten</Button>
+                <Button variant="secondary" onclick={() => toggleActive(a)} disabled={busy} ariaLabel="{a.active === 1 ? 'Deaktivieren' : 'Aktivieren'}, Konto {a.label}">
+                  {a.active === 1 ? "Deaktivieren" : "Aktivieren"}
+                </Button>
+              </div>
             </td>
           </tr>
         {/if}
@@ -251,31 +355,38 @@
 {/if}
 
 <style>
-  /* .card entfernt — globale Definition aus tokens.css. */
-  .grid { display: grid; grid-template-columns: 2fr 1fr 1.5fr 1fr; gap: 0.75rem; align-items: end; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
-  label.chk { flex-direction: row; align-items: center; gap: 0.4rem; }
-  .show-inactive { margin: 0.5rem 0; font-size: 0.85rem; }
-  input, select { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
-  table { width: 100%; border-collapse: collapse; background: #fff; }
-  th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
-  th { background: #f3f4f6; font-weight: 600; font-size: 0.8rem; }
-  tr.inactive { opacity: 0.55; }
+  /* .card / .lead — globale Definitionen aus tokens.css. */
+  .grid { display: grid; grid-template-columns: 2fr 1fr 1.5fr 1fr; gap: 0.75rem; align-items: start; }
+  .grid .wide { grid-column: span 2; }
+  .f { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .f > label { font-weight: 600; }
+  .grid .submit { display: flex; align-items: flex-end; }
+  label { display: flex; flex-direction: column; font-size: var(--fs-sm); font-weight: 600; color: var(--text); gap: 0.25rem; min-width: 0; }
+  label.chk { flex-direction: row; align-items: center; gap: 0.6rem; font-weight: 400; }
+  .show-inactive { margin: 0.5rem 0; min-height: var(--target); width: fit-content; }
+  .req { color: var(--status-danger-fg); margin-left: 2px; }
+  .hint { font-weight: 400; color: var(--text-muted); font-size: var(--fs-xs); }
+  .err { font-weight: 600; color: var(--status-danger-fg); font-size: var(--fs-sm); display: block; }
+  input:not([type="checkbox"]), select { padding: 0.4rem 0.5rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); font: inherit; font-weight: 400; min-height: var(--target); background: var(--surface-card); }
+  table { width: 100%; border-collapse: collapse; background: var(--surface-card); }
+  th, td { text-align: left; font-size: var(--fs-sm); }
+  tr.inactive td { color: var(--text-muted); }
+  .edit-row input:not([type="checkbox"]), .edit-row select { width: 100%; }
+  .edit-row input.bic { margin-top: 0.35rem; }
+  .cell-chk { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-width: var(--target); min-height: var(--target); }
+  .mono { font-family: var(--font-mono); white-space: nowrap; }
+  .bic-show { display: block; font-size: var(--fs-xs); }
   .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
-  .badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
-  .badge.ok { background: #d1fae5; color: #065f46; }
-  .muted-badge { background: #e5e7eb; color: #374151; }
-  /* R5-003: button/btn-Override-Selektor entfernt — schlug globale tokens.css-
-     `.btn-primary`/`.btn-secondary` und Manuel-Hardline „alle Buttons app-weit
-     gleich groß" (2026-05-26). Edit-Row-Actions erben jetzt korrekt 9px 16px
-     aus tokens.css statt 8px 16px (Border 0 statt 1px). */
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .muted { color: #6b7280; }
+  .muted { color: var(--text-muted); }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr 1fr; }
+  }
   @media (max-width: 600px) {
     .grid { grid-template-columns: 1fr; }
+    .grid .wide { grid-column: auto; }
   }
   @media (max-width: 820px) {
-    td input[type="checkbox"] { width: auto; flex: none; }
     td { overflow-wrap: anywhere; }
+    .mono { white-space: normal; overflow-wrap: anywhere; }
   }
 </style>

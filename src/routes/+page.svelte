@@ -372,10 +372,12 @@
       class="btn-secondary btn-sm"
       onclick={() => void loadAll()}
       disabled={isRefreshing}
-      aria-label="Daten aktualisieren"
+      aria-busy={isRefreshing}
     >
       {isRefreshing ? "Wird geladen …" : "Aktualisieren"}
     </button>
+    <!-- Hauptaktion der Startseite, auf Mobil ganz oben erreichbar (U1, §8.5). -->
+    <a class="btn-primary" href="/invoices/new">Rechnung schreiben</a>
   {/snippet}
 </PageBar>
 
@@ -394,7 +396,7 @@
     {heroDate}
     {#if fyOverview}
       <span class="hero-sep">·</span>
-      GJ {fyOverview.currentYear}{#if showFyDay} — Tag {fyDay} von {fyDaysInYear}{:else} offen{/if}
+      GJ {fyOverview.currentYear}{#if showFyDay}{` — Tag ${fyDay} von ${fyDaysInYear}`}{:else}{" offen"}{/if}
     {:else if fyErr}
       <span class="hero-sep">·</span>
       <span class="hero-err">GJ konnte nicht geladen werden</span>
@@ -688,10 +690,11 @@
   .hero {
     margin: 0 0 1.5rem;
     padding: 1.6rem 1.75rem;
-    background: linear-gradient(135deg, var(--c-primary-50) 0%, var(--c-surface) 70%);
-    border: 1px solid var(--c-primary-100);
-    border-radius: var(--r-xl);
-    box-shadow: var(--sh-md);
+    /* U1: flache Fläche statt Farbverlauf (Anti-Muster Designleitlinie §5). */
+    background: var(--surface-card);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--r-lg);
   }
   .hero-greet {
     margin: 0 0 0.4rem;
@@ -737,7 +740,7 @@
   .kpi {
     background: var(--c-surface);
     /* Hairline-Border statt solid grey — Schatten trägt die Card, nicht der Strich. */
-    border: 1px solid rgba(16, 36, 44, 0.06);
+    border: 1px solid var(--line);
     border-radius: var(--r-xl);
     padding: 1.1rem 1.25rem;
     box-shadow: var(--sh-md);
@@ -755,11 +758,13 @@
       transform var(--t-base) var(--ease-apple);
     will-change: transform;
   }
-  .kpi-link:hover {
-    box-shadow: var(--sh-lg);
-    transform: translateY(-1px);
+  @media (hover: hover) {
+    .kpi-link:hover {
+      box-shadow: var(--sh-lg);
+      transform: translateY(-1px);
+    }
+    .kpi-link:active { transform: translateY(0); box-shadow: var(--sh-md); }
   }
-  .kpi-link:active { transform: translateY(0); box-shadow: var(--sh-md); }
   .kpi[data-tone="success"] .kpi-val { color: var(--c-success-700); }
   .kpi[data-tone="danger"] .kpi-val { color: var(--c-danger-700); }
   .kpi[data-tone="warning"] .kpi-val { color: var(--c-warning-700); }
@@ -803,7 +808,7 @@
   .tile {
     display: flex; flex-direction: column; gap: 0.3rem;
     background: var(--c-surface);
-    border: 1px solid rgba(16, 36, 44, 0.06);
+    border: 1px solid var(--line);
     border-radius: var(--r-xl);
     padding: 1.15rem 1.25rem;
     text-decoration: none;
@@ -813,8 +818,10 @@
       transform var(--t-base) var(--ease-apple);
     will-change: transform;
   }
-  .tile:hover { box-shadow: var(--sh-lg); transform: translateY(-1px); }
-  .tile:active { transform: translateY(0); box-shadow: var(--sh-md); }
+  @media (hover: hover) {
+    .tile:hover { box-shadow: var(--sh-lg); transform: translateY(-1px); }
+    .tile:active { transform: translateY(0); box-shadow: var(--sh-md); }
+  }
   .t-title { font-weight: 600; color: var(--c-text); font-size: 1rem; }
   .t-sub { color: var(--c-text-muted); font-size: 0.85rem; }
 
@@ -827,6 +834,9 @@
   @media (max-width: 1023px) {
     .cols { grid-template-columns: 1fr; }
   }
+  /* Zeilen richten sich nach der Breite der Karte, nicht des Fensters (U1):
+     Auf dem Desktop sind die Spalten schmal genug für das gestapelte Layout. */
+  .col { container-type: inline-size; min-width: 0; }
   /* R5-011: lokale `.card`-Re-Definition entfernt — globale aus tokens.css
      greift (Memory `feedback_sweep_local_overrides`: svelte-check meldet
      solche Doppelungen NICHT, daher manueller Sweep nötig). */
@@ -835,7 +845,7 @@
     justify-content: space-between;
     align-items: baseline;
     /* Hairline rgba — innerer Trenner statt harter grauer Strich. */
-    border-bottom: 1px solid rgba(16, 36, 44, 0.08);
+    border-bottom: 1px solid var(--line);
     padding-bottom: 0.65rem;
     margin-bottom: 0.7rem;
   }
@@ -859,17 +869,28 @@
   /* ----- Tasks --------------------------------------------------------------- */
   .tasks { list-style: none; padding: 0; margin: 0; }
   /* Hairlines zwischen Items — macOS-Settings-Look. */
-  .task + .task { border-top: 1px solid rgba(16, 36, 44, 0.08); }
+  .task + .task { border-top: 1px solid var(--line); }
   .task-row {
     display: grid;
     grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: 0.7rem;
     padding: 0.6rem 0.2rem;
+    /* Trefferfläche ganze Zeile ≥ --target (44 px im Drawer-Band, U1). */
+    min-height: var(--target);
     text-decoration: none;
     color: var(--c-text);
   }
-  a.task-row:hover { background: var(--c-surface-2); }
+  @media (hover: hover) {
+    a.task-row:hover { background: var(--c-surface-2); }
+  }
+  /* Schmale Spalte: Badge und Zusatz über bzw. unter den Text, damit der Text
+     umbrechen kann statt abgeschnitten zu werden (1.4.12). */
+  @container (max-width: 30rem) {
+    .task-row { grid-template-columns: auto 1fr; }
+    .task-text { grid-column: 1 / -1; }
+    .task-meta, .task-row > .btn-secondary { grid-column: 1 / -1; justify-self: start; }
+  }
   .task-badge {
     font-size: 0.72rem;
     font-weight: 600;
@@ -882,23 +903,27 @@
   .tb-danger { background: var(--c-danger-50); color: var(--c-danger-700); }
   .tb-warning { background: var(--c-warning-50); color: var(--c-warning-700); }
   .tb-info { background: var(--c-primary-50); color: var(--c-primary-700); }
-  .task-text { font-size: 0.92rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Umbrechen statt abschneiden (1.4.12 Textabstände, U1). */
+  .task-text { font-size: 0.92rem; min-width: 0; overflow-wrap: anywhere; }
   .task-meta { font-size: 0.82rem; color: var(--c-text-muted); white-space: nowrap; }
 
   /* ----- Recent-Belege ------------------------------------------------------- */
   .recents { list-style: none; padding: 0; margin: 0; }
-  .recent + .recent { border-top: 1px solid rgba(16, 36, 44, 0.08); }
+  .recent + .recent { border-top: 1px solid var(--line); }
   .recent-row {
     display: grid;
     grid-template-columns: auto auto 1fr 1fr auto auto;
     align-items: center;
     gap: 0.6rem;
     padding: 0.55rem 0.2rem;
+    min-height: var(--target);
     text-decoration: none;
     color: var(--c-text);
     font-size: 0.92rem;
   }
-  .recent-row:hover { background: var(--c-surface-2); }
+  @media (hover: hover) {
+    .recent-row:hover { background: var(--c-surface-2); }
+  }
   .recent-date { font-size: 0.82rem; color: var(--c-text-muted); white-space: nowrap; min-width: 5.5rem; }
   .recent-badge {
     font-size: 0.7rem;
@@ -913,11 +938,12 @@
   .rb-st { background: var(--c-danger-50); color: var(--c-danger-700); }
   .rb-k { background: var(--c-warning-50); color: var(--c-warning-700); }
   .recent-num { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .recent-party { color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .recent-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  /* Umbrechen statt abschneiden (1.4.12 Textabstände, U1). */
+  .recent-party { color: var(--c-text-muted); overflow-wrap: anywhere; min-width: 0; }
+  .recent-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; text-align: right; }
   .recent-status { font-size: 0.8rem; color: var(--c-text-muted); display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 
-  @media (max-width: 720px) {
+  @container (max-width: 36rem) {
     .recent-row { grid-template-columns: 1fr auto; row-gap: 0.2rem; }
     .recent-date { grid-column: 1; }
     .recent-badge { grid-column: 2; justify-self: end; }

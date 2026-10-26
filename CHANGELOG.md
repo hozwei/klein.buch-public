@@ -6,7 +6,59 @@ Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach C
 ## [Unreleased]
 
 Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E) sowie Funktion und Technik vor
-dem UI/UX-Lauf (Lauf F); erscheint mit 2026.11.0.
+dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und Desktop
+(Lauf 2026.11); erscheint mit 2026.11.0.
+
+### Lauf 2026.11 — Oberfläche (UI/UX)
+
+- Version 2026.11.0 (ADR 0041 Nr. 1).
+- Neue Entscheidungsgrundlage ADR 0041 „UI/UX-Standards (2026.11)“ und Designleitlinie
+  `docs/architecture/design.md`: Die Oberfläche orientiert sich an WCAG 2.2 AA und wird mit
+  axe-core und eigenen Messungen auf Smartphone, Tablet und Desktop geprüft.
+- **Beträge und Mengen deutsch eingeben:** Alle Betrags- und Mengenfelder nehmen „1.234,56“ an
+  (Leseregel in ADR 0041 Nr. 15), zeigen nach dem Verlassen den erkannten Wert im deutschen Format
+  und melden zu viele Nachkommastellen oder ein Minuszeichen am Feld, statt still zu runden. Kein
+  Scrollrad-Effekt mehr. Beträge erscheinen mit geschütztem Leerzeichen vor „€“, Prozent als
+  „19 %“, IBAN in Vierergruppen.
+- **Fehler am Feld:** Pflicht- und Formatfehler stehen direkt am Feld (für Screenreader verknüpft),
+  der Fokus springt zum ersten fehlerhaften Feld; Server-Ablehnungen mit mehreren Gründen stehen als
+  Hinweis über dem Formular statt als kurze Meldung.
+- **Smartphone und Tablet:** Navigation auf Touch-Geräten immer als Schublade (auch Tablet quer),
+  Tippflächen mindestens 44 × 44 px, Eingaben in 16 px (kein Auto-Zoom auf iOS), Dialoge auf kleinen
+  Bildschirmen bildschirmfüllend, Tabellen bis 820 px als Karten, im Querformat in sich scrollend.
+- **Lesbarkeit und Kontrast:** dunklere Hinweistexte, Feldrahmen, Checkboxen und Schalter;
+  deutlicher Fokusrahmen (auch auf der Seitenleiste); Kopfleiste und Dialoge ohne Milchglas.
+- **Tastatur und Screenreader:** Dialoge halten den Fokus, schließen mit Escape und geben den Fokus
+  zurück; Gefahr-Dialoge starten auf „Abbrechen“; Sprunglink „Zum Inhalt“; alle Felder,
+  Auswahllisten und Symbolknöpfe tragen einen Namen; die klebende Kopfleiste verdeckt den Fokus
+  nicht mehr.
+- **Meldungen:** erscheinen unten; Fehlermeldungen bleiben stehen, bis sie geschlossen werden,
+  Erfolgsmeldungen pausieren bei Zeiger oder Fokus.
+- **Anmelden und Passwort:** Knopf „Anzeigen“ an Passwortfeldern, Stärke-Hinweis bei neuer
+  Passphrase (nur Hinweis), Autofill-Angaben für Passwortmanager.
+- **Formulare:** Verkäuferprofil mit Autofill-Angaben; Kontakte ohne Autofill (Daten Dritter);
+  Leistungsdatum mit dem Rechnungsdatum vorbelegt; PDF-Vorlage als Auswahl; betrieblicher Anteil
+  einer Anlage als Zahl statt Schieberegler; Belegfoto: Datei-Feld mit Galerie und Dateien plus
+  eigener Knopf „Foto aufnehmen“.
+- **Belege:** Entwürfe heißen einheitlich „Verwerfen“; Stornos zeigen Nummer, Datum und Link des
+  Originals (auch beim Versand, Titel „Stornorechnung versenden“); das Storno-Datum nennt den
+  frühesten zulässigen Tag; der Versand kündigt die Bestätigung bei abweichendem Empfänger vorab an;
+  Zahlungs-Konto mit Standardkennzeichnung.
+- **Kosten und Import:** bei §13b sind USt-Satz und -Betrag gesperrt (0) mit Erklärung; Fehler
+  „§13b mit USt“ am Feld; Hinweis, wenn das Zahldatum vor dem Belegdatum liegt.
+- **EÜR, Geschäftsjahr, Anlagen:** Export-Vorschau mit deutschen Daten und dem Hinweis, dass jede
+  Datei nur einmal abrufbar ist; Warnung bei Abweichung vom Jahresabschluss; Abschluss-Dialog warnt
+  vor offenen Entwürfen; Anschaffungskosten aus Kosten mit Erklärung brutto/netto; Entnahmewert bei
+  Privatentnahme als Pflichtfeld.
+- **Einstellungen:** Übersicht in drei Gruppen mit Links zu Protokollen und Regeln; §19-Dialog
+  erklärt auch den Wegfall durch die 100.000-€-Grenze (ohne 5-Jahres-Bindung); Backup-Seite ohne
+  Desktop-Reste, mit Alter der letzten externen Kopie; Hinweise zu SMTP-/SFTP-Host; Sitzungsliste
+  mit Kurzkennung passend zum Server-Log; Audit-Protokoll mit Spalte „Ausgelöst von“ und betroffener
+  Datei bei Prüfsummenfehlern.
+- **Behoben:** Bestätigungsdialoge warfen beim Schließen einen Skriptfehler; eine abgebrochene
+  Seitenübergangs-Animation erschien als unbehandelter Fehler; auf `/expenses/new` und in Tabellen
+  mit versteckten Spaltenköpfen lief die Seite im Querformat seitlich über; die Statusliste der
+  Backup-Seite stand in einer Zeile (Klassenkonflikt mit den Status-Pillen).
 
 ### Hinweise für Betreiber (Update von 2026.10)
 

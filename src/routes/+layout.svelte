@@ -1,5 +1,6 @@
 <script lang="ts">
   import "#lib/styles/tokens.css";
+  import { untrack } from "svelte";
   import { goto, onNavigate } from "$app/navigation";
   import { page } from "$app/state";
   import BackupGate from "#lib/BackupGate.svelte";
@@ -13,6 +14,7 @@
   import { flash } from "#lib/toast.svelte.ts";
   import { appState } from "#lib/stores.svelte.ts";
   import { modalStack } from "#lib/modalStack.svelte.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
   import {
     notificationsUnreadCount,
     appInfo,
@@ -27,13 +29,59 @@
   import { formatVersionDisplay } from "#lib/version.ts";
   let { children } = $props();
 
-  // Plan W10: Unter 900 px ist die Navigation ein Drawer (Menü-Knopf in der
-  // oberen Leiste); er schließt sich bei jedem Seitenwechsel und mit Escape.
+  // Plan W10 / U1: Im Drawer-Band (≤ 900 px oder Touch-Gerät, Plan §8.2) ist
+  // die Navigation ein Drawer (Menü-Knopf in der Kopfleiste). Dieselbe
+  // Bedingung steht in den Media Queries unten und in tokens.css.
+  // Offen: Fokusfalle im Drawer, Hintergrund `inert`, Escape/Tippen daneben/
+  // „Menü schließen“ schließen, der Fokus kehrt zum Menü-Knopf zurück
+  // (nach einem Seitenwechsel nicht — dann gehört er der neuen Seite).
+  const DRAWER_MQ = "(max-width: 900px), (pointer: coarse)";
   let navOpen = $state(false);
+  let drawerMode = $state(false);
+  let navEl = $state<HTMLElement | null>(null);
+  let menuToggleEl = $state<HTMLButtonElement | null>(null);
+  let mainEl = $state<HTMLElement | null>(null);
+  let navClosedByRoute = false;
+
   $effect(() => {
-    page.url.pathname;
-    navOpen = false;
+    const mq = matchMedia(DRAWER_MQ);
+    const update = () => {
+      drawerMode = mq.matches;
+      if (!mq.matches) navOpen = false;
+    };
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
   });
+
+  $effect(() => {
+    void page.url.pathname;
+    untrack(() => {
+      if (navOpen) navClosedByRoute = true;
+      navOpen = false;
+    });
+  });
+
+  const drawerOpen = $derived(navOpen && drawerMode);
+  $effect(() => {
+    const el = navEl;
+    if (!drawerOpen || !el) return;
+    // returnTo: Der Menü-Knopf wird beim Öffnen `inert` (Kopfleiste) und
+    // verliert in Chromium dabei den Fokus — ausdrücklich dorthin zurück.
+    const opts = { onEscape: () => (navOpen = false), returnTo: menuToggleEl };
+    const trap = focusTrap(el, opts);
+    return () => {
+      trap.update({ ...opts, returnFocus: !navClosedByRoute });
+      navClosedByRoute = false;
+      trap.destroy();
+    };
+  });
+
+  function skipToContent(e: MouseEvent) {
+    e.preventDefault();
+    mainEl?.focus();
+    mainEl?.scrollIntoView({ block: "start" });
+  }
 
   // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
   let unread = $state(0);
@@ -127,12 +175,23 @@
     return new Promise((resolve) => {
       // TS-Cast: startViewTransition ist in lib.dom (.experimental) deklariert,
       // aber nicht in jedem TS-Target. Feature-Check oben schützt zur Laufzeit.
-      (document as Document & {
-        startViewTransition: (cb: () => Promise<void>) => unknown;
+      const vt = (document as Document & {
+        startViewTransition: (cb: () => Promise<void>) => {
+          ready?: Promise<unknown>;
+          finished?: Promise<unknown>;
+          updateCallbackDone?: Promise<unknown>;
+        };
       }).startViewTransition(async () => {
         resolve();
         await navigation.complete;
       });
+      // Ein Übergang, den der Browser abbricht (Viewport-Änderung, schnelle
+      // zweite Navigation), lehnt diese Promises ab — kein Fehler der App,
+      // daher abfangen statt als unbehandelte Ablehnung zu melden.
+      const ignore = () => {};
+      vt?.ready?.catch(ignore);
+      vt?.finished?.catch(ignore);
+      vt?.updateCallbackDone?.catch(ignore);
     });
   });
 
@@ -240,7 +299,9 @@
     return false;
   }
   function onWindowKeydown(ev: KeyboardEvent): void {
-    if (ev.key === "Escape" && navOpen) {
+    // Escape im offenen Drawer übernimmt die Fokusfalle; Rückfallebene, falls
+    // die Taste sie nicht erreicht hat (kein Dialog darüber).
+    if (ev.key === "Escape" && drawerOpen && modalStack.count === 0 && !ev.defaultPrevented) {
       navOpen = false;
       return;
     }
@@ -274,11 +335,14 @@
   <!-- R5-014: `inert` solange ein Modal offen ist — Tab kann nicht aus dem
        Modal in die Sidebar springen. `|| undefined` weil Svelte `inert=false`
        sonst als String-Attribut rendert, was die a11y-Semantik invertiert. -->
-  <header class="mobilebar" inert={modalStack.count > 0 || undefined}>
+  <a class="skip-link" href="#main-content" onclick={skipToContent}>Zum Inhalt</a>
+  <header class="mobilebar" inert={modalStack.count > 0 || drawerOpen || undefined}>
     <button
       type="button"
+      bind:this={menuToggleEl}
       class="menu-toggle"
-      aria-label={navOpen ? "Menü schließen" : "Menü öffnen"}
+      aria-label={(navOpen ? "Menü schließen" : "Menü öffnen") +
+        (unread > 0 ? `, ${unread} ${unread === 1 ? "ungelesener Hinweis" : "ungelesene Hinweise"}` : "")}
       aria-expanded={navOpen}
       aria-controls="app-nav"
       onclick={() => (navOpen = !navOpen)}
@@ -292,11 +356,11 @@
         aria-hidden="true"
         ><path d="M4 7h16M4 12h16M4 17h16" /></svg
       >
-      {#if unread > 0}<span class="nav-badge menu-badge">{unread}</span>{/if}
+      {#if unread > 0}<span class="nav-badge menu-badge" aria-hidden="true">{unread}</span>{/if}
     </button>
     <a class="mobile-brand" href="/">Klein.Buch</a>
   </header>
-  {#if navOpen}
+  {#if drawerOpen}
     <!-- Schließt den Drawer per Tipp daneben (Tastatur: Escape). -->
     <button
       type="button"
@@ -306,11 +370,21 @@
       onclick={() => (navOpen = false)}
     ></button>
   {/if}
-  <nav id="app-nav" class="sidebar" class:open={navOpen} inert={modalStack.count > 0 || undefined}>
+  <nav
+    id="app-nav"
+    class="sidebar"
+    class:open={navOpen}
+    aria-label="Hauptnavigation"
+    bind:this={navEl}
+    inert={modalStack.count > 0 || (drawerMode && !navOpen) || undefined}
+  >
+    <button type="button" class="nav-close" onclick={() => (navOpen = false)}>
+      <span aria-hidden="true">×</span> Menü schließen
+    </button>
     <ul>
       {#each nav as item}
         <li class:active={isActive(page.url.pathname, item.href)}>
-          <a href={item.href}>
+          <a href={item.href} aria-current={isActive(page.url.pathname, item.href) ? "page" : undefined}>
             <svg
               class="nav-icon"
               viewBox="0 0 24 24"
@@ -322,7 +396,7 @@
               aria-hidden="true">{@html ICONS[item.icon]}</svg>
             <span class="nav-label">{item.label}</span>
             {#if item.href === "/notifications" && unread > 0}
-              <span class="nav-badge">{unread}</span>
+              <span class="nav-badge">{unread}<span class="kb-visually-hidden"> ungelesen</span></span>
             {/if}
           </a>
         </li>
@@ -388,7 +462,12 @@
     </footer>
   </nav>
 
-  <main inert={modalStack.count > 0 || undefined}>
+  <main
+    id="main-content"
+    tabindex="-1"
+    bind:this={mainEl}
+    inert={modalStack.count > 0 || drawerOpen || undefined}
+  >
     {#if hold?.held}
       <Banner kind="warning">
         <strong>Automatische Abo-Läufe angehalten.</strong>
@@ -417,19 +496,42 @@
   :global(body) {
     display: flex;
   }
+  /* Sprunglink „Zum Inhalt“: erst bei Tastaturfokus sichtbar. */
+  .skip-link {
+    position: fixed;
+    left: calc(var(--sp-2) + env(safe-area-inset-left, 0px));
+    top: calc(var(--sp-2) + env(safe-area-inset-top, 0px));
+    z-index: 3000;
+    padding: var(--sp-2) var(--sp-4);
+    min-height: var(--target);
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface-card);
+    color: var(--accent-on-soft);
+    font-weight: 600;
+    border: 1px solid var(--line-control);
+    border-radius: var(--r-md);
+    box-shadow: var(--sh-lg);
+    transform: translateY(calc(-100% - 2 * var(--sp-2) - env(safe-area-inset-top, 0px)));
+  }
+  .skip-link:focus,
+  .skip-link:focus-visible {
+    transform: none;
+  }
   .sidebar {
     width: 208px;
-    background: var(--c-primary-800);
-    color: #cfe0e6;
+    background: var(--surface-inverse);
+    color: var(--text-inverse-muted);
     /* Padding-top etwas großzügiger, weil der frühere h1-Marken-Header
        weggefallen ist und der erste Nav-Eintrag sonst direkt am
        Fensterrand kleben würde. */
     padding: 1.5rem 0.75rem 1rem;
     box-sizing: border-box;
     height: 100vh;
+    height: 100dvh;
     overflow-y: auto;
-    /* G4.1-Fix: flex-column, damit der Versions-Footer per
-       `margin-top: auto` an den unteren Sidebar-Rand gepinnt wird. */
+    overscroll-behavior: contain;
+    /* flex-column, damit der Versions-Footer per `margin-top: auto` unten sitzt. */
     display: flex;
     flex-direction: column;
   }
@@ -443,29 +545,42 @@
   }
   .sidebar a,
   .sidebar .nav-button {
-    color: #bcd4dc;
+    color: var(--text-inverse-muted);
     text-decoration: none;
     display: flex;
     align-items: center;
     gap: 0.7rem;
+    min-height: max(var(--target), 36px);
     padding: 0.5rem 0.6rem;
     border-radius: var(--r-md);
     font-size: 0.9rem;
     font-weight: 500;
   }
-  .sidebar a:hover,
-  .sidebar .nav-button:hover {
-    background: rgba(255, 255, 255, 0.07);
-    color: #fff;
-    text-decoration: none;
+  @media (hover: hover) {
+    .sidebar a:hover,
+    .sidebar .nav-button:hover {
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text-inverse);
+      text-decoration: none;
+    }
+    .sidebar a:hover .nav-icon,
+    .sidebar .nav-button:hover .nav-icon {
+      opacity: 1;
+    }
   }
   .sidebar li.active a {
     background: rgba(255, 255, 255, 0.13);
-    color: #fff;
+    color: var(--text-inverse);
   }
-  /* Pro-Eintrag-Icon (Manuel 2026-05-26). Etwas gedimmt im Ruhezustand,
-     volle Deckkraft bei Hover/Active — gibt der Sidebar visuelle Tiefe
-     ohne von den Labels abzulenken. */
+  /* Fokus auf Petrol: heller Ring (Weiß, 11,1:1 gegen --surface-inverse). */
+  .sidebar a:focus-visible,
+  .sidebar button:focus-visible,
+  .mobilebar a:focus-visible,
+  .mobilebar button:focus-visible {
+    outline: var(--focus-width) solid var(--focus-ring-inverse);
+    outline-offset: 1px;
+  }
+  /* Icon gedimmt im Ruhezustand, voll bei Hover/Aktiv. */
   .sidebar .nav-icon {
     width: 18px;
     height: 18px;
@@ -473,8 +588,6 @@
     opacity: 0.78;
     transition: opacity var(--t-fast) var(--ease-apple);
   }
-  .sidebar a:hover .nav-icon,
-  .sidebar .nav-button:hover .nav-icon,
   .sidebar li.active .nav-icon {
     opacity: 1;
   }
@@ -482,8 +595,7 @@
     flex: 1 1 auto;
     min-width: 0;
   }
-  /* Sidebar-„Über"-Eintrag (G2-DOC.3.5): visuell wie ein Nav-Link, technisch
-     Button — Modal hat keine eigene Route, also keinen `href`. */
+  /* „Über"-Eintrag: visuell wie ein Nav-Link, technisch Button (Modal, keine Route). */
   .sidebar .nav-button {
     width: 100%;
     background: transparent;
@@ -492,9 +604,14 @@
     text-align: left;
     font-family: inherit;
   }
+  /* „Menü schließen“ nur im Drawer. */
+  .nav-close {
+    display: none;
+  }
+  /* Zähler: Weiß auf --danger-solid (7,38:1). */
   .nav-badge {
-    background: var(--c-danger-500);
-    color: #fff;
+    background: var(--danger-solid);
+    color: var(--text-on-accent);
     font-size: 0.7rem;
     font-weight: 700;
     line-height: 1;
@@ -504,12 +621,11 @@
     text-align: center;
   }
   .sidebar footer {
-    color: #7fa3ae;
+    color: var(--text-inverse-muted);
     font-size: 0.75rem;
-    /* G4.1-Fix: an den unteren Rand pinnen (sidebar ist flex-column). */
     margin-top: auto;
     padding: 0.75rem 0.5rem 0.25rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
   }
   /* Reine Versions-Anzeige, nicht klickbar (G4.1-Fix). */
   .sidebar .version-label {
@@ -521,18 +637,24 @@
   }
   main {
     flex: 1;
-    /* G2-UX.3.1b: Ziel der View-Transition. Sidebar (<nav> nebenan) hat
-       absichtlich KEINEN Namen — sie bleibt beim Seitenwechsel ruhig stehen.
-       Keyframes liegen in tokens.css unter „Page-Transitions". */
+    min-width: 0;
+    /* Ziel der View-Transition; die Seitenleiste bleibt ruhig stehen. */
     view-transition-name: page-content;
-    /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt
-       (kein Streifen, in dem Inhalt darüber durchscrollt). Seiten ohne PageBar
-       bekommen den oberen Abstand über die :first-child-Regel unten zurück. */
+    /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt.
+       Seiten ohne PageBar bekommen den oberen Abstand über :first-child zurück. */
     padding: 0 var(--main-pad) var(--main-pad);
     overflow-y: auto;
     height: 100vh;
+    height: 100dvh;
     box-sizing: border-box;
-    background: var(--c-bg);
+    background: var(--surface-page);
+    /* Desktop: <main> scrollt selbst — 2.4.11 wie in tokens.css für <html>. */
+    scroll-padding-top: calc(var(--pagebar-h) + var(--sp-2));
+    scroll-padding-bottom: calc(var(--toast-h) + var(--sp-2));
+  }
+  /* Programmatischer Fokus (Sprunglink) ohne Ring um die ganze Seite. */
+  main:focus {
+    outline: none;
   }
   /* Erster Inhalt einer Seite bekommt oben Luft … */
   main > :global(:first-child) {
@@ -543,13 +665,14 @@
     margin-top: 0;
   }
 
-  /* --- Mobil / schmale Fenster (Plan W10) --------------------------------
-     Unter 900 px: obere Leiste mit Menü-Knopf, Navigation als Drawer von
-     links, Inhalt scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). */
+  /* --- Drawer-Band: ≤ 900 px oder Touch (Plan W10, §8.2) ------------------
+     Kopfleiste mit Menü-Knopf, Navigation als Drawer von links, Inhalt
+     scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). Wegen
+     viewport-fit=cover (app.html) mit Safe-Area-Abständen. */
   .mobilebar {
     display: none;
   }
-  @media (max-width: 900px) {
+  @media (max-width: 900px), (pointer: coarse) {
     :global(body) {
       display: block;
     }
@@ -560,15 +683,16 @@
       position: sticky;
       top: 0;
       z-index: 40;
-      height: var(--mobilebar-h);
-      padding: 0 0.5rem;
-      background: var(--c-primary-800);
-      color: #fff;
+      height: var(--sticky-top);
+      padding: env(safe-area-inset-top, 0px) max(0.5rem, env(safe-area-inset-right, 0px)) 0
+        max(0.5rem, env(safe-area-inset-left, 0px));
+      background: var(--surface-inverse);
+      color: var(--text-inverse);
     }
     .menu-toggle {
       position: relative;
-      width: 44px;
-      height: 44px;
+      width: var(--target-touch);
+      height: var(--target-touch);
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -588,7 +712,11 @@
       right: 2px;
     }
     .mobile-brand {
-      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--target-touch);
+      padding: 0 var(--sp-2);
+      color: var(--text-inverse);
       font-weight: 700;
       text-decoration: none;
     }
@@ -598,7 +726,7 @@
       z-index: 45;
       border: 0;
       padding: 0;
-      background: rgba(10, 25, 32, 0.4);
+      background: var(--overlay);
     }
     .sidebar {
       position: fixed;
@@ -606,7 +734,10 @@
       left: 0;
       z-index: 50;
       width: min(280px, 85vw);
+      height: 100vh;
       height: 100dvh;
+      padding: calc(0.75rem + env(safe-area-inset-top, 0px)) 0.75rem
+        calc(1rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
       transform: translateX(-100%);
       visibility: hidden;
       transition:
@@ -619,27 +750,50 @@
       box-shadow: var(--sh-xl);
       transition: transform var(--t-base) var(--ease-apple);
     }
+    .nav-close {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-2);
+      align-self: flex-start;
+      min-height: var(--target-touch);
+      margin: 0 0 var(--sp-2);
+      padding: 0 var(--sp-3);
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-radius: var(--r-md);
+      color: var(--text-inverse);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .nav-close span {
+      font-size: 1.25rem;
+      line-height: 1;
+    }
     .sidebar a,
     .sidebar .nav-button {
-      min-height: 44px;
+      min-height: var(--target-touch);
     }
     main {
       height: auto;
-      min-height: calc(100dvh - var(--mobilebar-h));
+      min-height: calc(100vh - var(--sticky-top));
+      min-height: calc(100dvh - var(--sticky-top));
       overflow: visible;
+      padding-left: calc(var(--main-pad) + env(safe-area-inset-left, 0px));
+      padding-right: calc(var(--main-pad) + env(safe-area-inset-right, 0px));
+      padding-bottom: calc(var(--main-pad) + env(safe-area-inset-bottom, 0px));
     }
   }
 
-  /* --- Druck (G2-DOC.3.4) -----------------------------------------------
-     Beim Drucken aus einem Handbuch-Kapitel (oder einer beliebigen Seite)
-     fallen die App-Nav und das overflow-Scroll-Verhalten weg. Sonst würde
-     der Browser entweder die Sidebar mitdrucken oder nur den sichtbaren
-     Viewport-Ausschnitt aufs Papier bringen. */
+  /* --- Druck -------------------------------------------------------------
+     Beim Drucken fallen Navigation, Kopfleiste und das Scroll-Verhalten weg. */
   @media print {
     :global(body) {
       display: block;
     }
-    .sidebar {
+    .sidebar,
+    .mobilebar,
+    .skip-link {
       display: none;
     }
     main {
@@ -653,6 +807,7 @@
   }
   .hold-release {
     margin-left: 0.5rem;
+    min-height: var(--target);
     border: 1px solid currentColor;
     background: transparent;
     color: inherit;

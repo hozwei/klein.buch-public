@@ -1,20 +1,24 @@
 <script lang="ts">
   // Block P1: Anfahrtspauschale — Kilometersatz pflegen.
+  // U1: Betrag über MoneyInput (Integer-Cent, deutsche Leseregel, ADR 0041 Nr. 15/16).
   import { onMount } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import MoneyInput from "#lib/MoneyInput.svelte";
   import Toggle from "#lib/Toggle.svelte";
   import { travelSettingsGet, travelSettingsSet } from "#lib/api.ts";
   import { flash } from "#lib/toast.svelte.ts";
 
   let loading = $state(true);
   let saving = $state(false);
-  let rateEuro = $state(0); // €/km im Eingabefeld
+  let rateCents = $state<number | null>(0); // Cent je km
   let roundTripDefault = $state(false);
+  let rateInput: MoneyInput | undefined = $state();
+  let rateError = $state("");
 
   onMount(async () => {
     try {
       const s = await travelSettingsGet();
-      rateEuro = s.costPerKmCents / 100;
+      rateCents = s.costPerKmCents;
       roundTripDefault = s.roundTripDefault;
     } catch (e) {
       flash(String(e), "error");
@@ -24,14 +28,19 @@
   });
 
   async function save() {
-    const cents = Math.round(rateEuro * 100);
-    if (cents < 0) {
-      flash("Der Satz darf nicht negativ sein.", "error");
+    rateError = "";
+    if (rateInput && !rateInput.validate()) {
+      rateInput.focus();
+      return;
+    }
+    if (rateCents == null) {
+      rateError = "Bitte gib einen Satz ein (0 für keine Pauschale).";
+      rateInput?.focus();
       return;
     }
     saving = true;
     try {
-      await travelSettingsSet(cents, roundTripDefault);
+      await travelSettingsSet(rateCents, roundTripDefault);
       flash("Gespeichert.");
     } catch (e) {
       flash(String(e), "error");
@@ -50,24 +59,29 @@
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else}
   <form id="travel-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
     <section class="card">
       <h2>Kilometersatz</h2>
       <p class="muted">
         Lege fest, was ein gefahrener Kilometer kostet. In Angeboten und Rechnungen
-        kannst du dann „Anfahrt" wählen und die Kilometer eingeben — der Betrag wird
+        kannst du dann „Anfahrt“ wählen und die Kilometer eingeben — der Betrag wird
         automatisch als Position eingetragen.
       </p>
       <div class="grid">
-        <label>
-          Preis pro Kilometer (€)
-          <input type="number" step="0.01" min="0" bind:value={rateEuro} />
-        </label>
+        <MoneyInput
+          bind:this={rateInput}
+          bind:cents={rateCents}
+          label="Preis pro Kilometer"
+          hint="Betrag in Euro je km, z. B. 0,30"
+          error={rateError || undefined}
+          required
+          enterkeyhint="done"
+        />
         <Toggle
           bind:checked={roundTripDefault}
-          label="Standardmäßig Hin &amp; Rück (×2) vorschlagen"
+          label="Standardmäßig Hin & Rück (×2) vorschlagen"
         />
       </div>
     </section>
@@ -76,8 +90,6 @@
 
 <style>
   /* .card entfernt — globale Definition aus tokens.css. */
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: end; margin-top: 0.5rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
-  input { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }
-  .muted { color: #6b7280; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; margin-top: 0.5rem; }
+  .muted { color: var(--text-muted); }
 </style>

@@ -54,4 +54,7 @@
     color: var(--c-primary-700);
     text-decoration: underline;
   }
+  @media (pointer: coarse) {
+    .source-notice a { display: inline-flex; align-items: center; min-height: var(--target); }
+  }
 </style>

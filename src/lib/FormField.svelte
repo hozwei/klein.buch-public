@@ -68,8 +68,10 @@
 <style>
   .field { margin-bottom: 14px; }
   label { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: 5px; }
-  .req { color: var(--c-danger-500); margin-left: 2px; }
-  .msg { font-size: var(--fs-xs); margin-top: 4px; }
-  .hint { color: var(--c-text-subtle); }
-  .err { color: var(--c-danger-700); }
+  .req { color: var(--status-danger-fg); margin-left: 2px; }
+  .msg { font-size: var(--fs-sm); margin-top: 4px; line-height: 1.4; }
+  .hint { color: var(--text-muted); }
+  .err { color: var(--status-danger-fg); font-weight: 600; }
+  /* Bildschirmtastatur/klebende Leisten: Feld beim Fokus nicht verdecken. */
+  .field :global(input), .field :global(select), .field :global(textarea) { scroll-margin-block: var(--sp-6); }
 </style>

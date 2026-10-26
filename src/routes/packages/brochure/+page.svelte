@@ -6,6 +6,7 @@
   import PageBar from "#lib/PageBar.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
+  import Banner from "#lib/Banner.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import {
     packagesList,
@@ -35,6 +36,11 @@
   let contactId = $state("");
   let subject = $state("");
   let body = $state("");
+  // U1: Warnung des Versands (z. B. Versandprotokoll unvollständig) als Banner
+  // statt Fehler-Toast; Empfänger-Fehler am Feld.
+  let sendWarning = $state<string | null>(null);
+  let contactError = $state("");
+  let contactEl: HTMLSelectElement | undefined = $state();
 
   onMount(async () => {
     try {
@@ -110,9 +116,12 @@
       return;
     }
     if (!contactId) {
-      flash("Bitte einen Empfänger (Kontakt) wählen.", "error");
+      contactError = "Bitte einen Empfänger (Kontakt) wählen.";
+      contactEl?.focus();
       return;
     }
+    contactError = "";
+    sendWarning = null;
     sending = true;
     try {
       const res = await packageCatalogSend({
@@ -123,7 +132,7 @@
         body: body.trim() || null,
       });
       flash(`Broschüre an ${res.to} gesendet (${res.packageCount} Pakete).`);
-      if (res.warning) flash(res.warning, "error");
+      if (res.warning) sendWarning = res.warning;
     } catch (e) {
       flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
@@ -152,13 +161,13 @@
 </p>
 
 {#if loading}
-  <p class="muted">Lädt …</p>
+  <p class="muted" role="status" aria-busy="true">Lädt …</p>
 {:else if loadError}
-  <div class="error-card">Konnte Daten nicht laden: {loadError}</div>
+  <div class="error-card" role="alert">Konnte Daten nicht laden: {loadError}</div>
 {:else if usable.length === 0}
   <div class="empty">
-    Es gibt noch keine aktiven Pakete mit veröffentlichter Version. Lege zuerst unter
-    „Pakete" ein Paket an.
+    <p>Es gibt noch keine aktiven Pakete mit veröffentlichter Version. Leg zuerst ein Paket an.</p>
+    <Button variant="primary" href="/packages/new">Neues Paket</Button>
   </div>
 {:else}
   <section class="select-head">
@@ -166,7 +175,7 @@
       <input type="checkbox" checked={allSelected} onchange={toggleAll} />
       Alle auswählen
     </label>
-    <span class="muted">{selectedIds.length} von {usable.length} ausgewählt</span>
+    <span class="muted" id="brochure-count" aria-live="polite">{selectedIds.length} von {usable.length} ausgewählt</span>
   </section>
 
   {#each groups as group (group.name)}
@@ -207,32 +216,50 @@
           </select>
         </label>
         <label class="field">
-          <span>Empfänger (Kontakt)</span>
-          <select class="kb-input" bind:value={contactId}>
+          <span>Empfänger (Kontakt)<span class="req" aria-hidden="true">*</span></span>
+          <select
+            class="kb-input"
+            required
+            aria-required="true"
+            aria-invalid={contactError ? "true" : undefined}
+            aria-describedby={contactError ? "brochure-contact-err" : undefined}
+            bind:this={contactEl}
+            bind:value={contactId}
+            onchange={() => (contactError = "")}
+          >
             <option value="" disabled>— Kontakt wählen —</option>
             {#each emailContacts as c (c.id)}
               <option value={c.id}>{c.name} ({c.email})</option>
             {/each}
           </select>
+          {#if contactError}<span id="brochure-contact-err" class="err">{contactError}</span>{/if}
         </label>
       </div>
       <label class="field">
         <span>Betreff (optional)</span>
-        <input class="kb-input" type="text" placeholder="Unsere Leistungspakete" bind:value={subject} />
+        <input class="kb-input" type="text" autocomplete="off" placeholder="Unsere Leistungspakete" bind:value={subject} />
       </label>
       <label class="field">
         <span>Nachricht (optional)</span>
-        <textarea class="kb-input" rows="4" placeholder="Wird automatisch erzeugt, wenn leer." bind:value={body}></textarea>
+        <textarea class="kb-input" rows="4" aria-describedby="brochure-body-hint" bind:value={body}></textarea>
+        <span id="brochure-body-hint" class="hint">Leer lassen, dann wird ein Standardtext erzeugt.</span>
       </label>
       <div class="send-actions">
         <Button
           variant="primary"
-          disabled={sending || selectedIds.length === 0 || !contactId}
+          disabled={sending || selectedIds.length === 0}
           onclick={sendBrochure}
+          ariaDescribedby={selectedIds.length === 0 ? "brochure-send-why" : undefined}
         >
           {sending ? "Sende …" : "Broschüre senden"}
         </Button>
+        {#if selectedIds.length === 0}
+          <span id="brochure-send-why" class="hint">Wähl oben mindestens ein Paket aus.</span>
+        {/if}
       </div>
+      {#if sendWarning}
+        <Banner kind="warning">{sendWarning}</Banner>
+      {/if}
     {/if}
   </section>
 {/if}
@@ -257,7 +284,12 @@
     border-radius: var(--r-lg);
     padding: 1.5rem;
     max-width: 46rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.7rem;
   }
+  .empty p { margin: 0; }
   .select-head {
     display: flex;
     align-items: center;
@@ -269,6 +301,7 @@
   .check {
     display: inline-flex;
     align-items: center;
+    min-height: var(--target);
     gap: 0.5rem;
     font-weight: 600;
     cursor: pointer;
@@ -293,6 +326,7 @@
     box-shadow: var(--sh-sm);
     cursor: pointer;
   }
+  .pkg-name { overflow-wrap: anywhere; }
   .pkg.sel {
     border-color: var(--c-primary-300);
     background: var(--c-primary-50);
@@ -344,6 +378,14 @@
     color: var(--c-text);
   }
   .send-actions {
-    margin-top: 0.5rem;
+    margin: 0.5rem 0 0.75rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
   }
+  .hint { font-size: var(--fs-sm); color: var(--text-muted); }
+  .err { font-size: var(--fs-sm); font-weight: 600; color: var(--status-danger-fg); }
+  .req { color: var(--status-danger-fg); margin-left: 2px; }
+  .field select, .field input, .field textarea { scroll-margin-block: var(--sp-6); }
 </style>

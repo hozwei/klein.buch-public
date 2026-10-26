@@ -18,6 +18,7 @@
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
 
   let subs = $state<RecurringSubscription[]>([]);
@@ -166,17 +167,17 @@
 <p class="sub">
   Vorlagen für regelmäßige Kosten — Miete, Software, Versicherungen.
   {#if !loading && subs.length > 0}
-    <span class="counts">{activeCount} aktiv{#if dueCount > 0} · <strong class="due-txt">{dueCount} fällig</strong>{/if}</span>
+    <span class="counts">{activeCount} aktiv{#if dueCount > 0}{" · "}<strong class="due-txt">{dueCount} fällig</strong>{/if}</span>
   {/if}
 </p>
 
 <p class="legend">
-  <Badge tone="info">Automatisch</Badge> = wird am Stichtag selbst als Kosten gebucht.
-  <Badge tone="primary">Erinnerung</Badge> = am Stichtag ein Hinweis „Abo fällig“, du buchst per Knopf.
+  <span><Badge tone="info">Automatisch</Badge> wird am Stichtag selbst als Kosten gebucht.</span>
+  <span><Badge tone="primary">Erinnerung</Badge> am Stichtag ein Hinweis „Abo fällig“, du buchst per Knopf.</span>
 </p>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if subs.length === 0}
@@ -191,13 +192,16 @@
     </label>
     {#if autoDueCount > 0}
       <Button variant="secondary" size="sm" onclick={bookAllDue} disabled={checking}
-        title="Bucht jetzt alle fälligen Auto-Abos (sonst erledigt das der Hintergrund-Scheduler von selbst)">
+        ariaDescribedby="rec-bookall-hint">
         {checking ? "Buche …" : `${autoDueCount} fällige Auto-Abos jetzt buchen`}
       </Button>
     {/if}
   </div>
+  {#if autoDueCount > 0}
+    <p id="rec-bookall-hint" class="toolbar-hint">Sonst bucht der Hintergrund-Lauf fällige Auto-Abos von selbst.</p>
+  {/if}
 
-  <table class="kb-table cards">
+  <Table caption="Wiederkehrende Abos" cards>
     <thead>
       <tr>
         <th>Abo</th>
@@ -205,7 +209,7 @@
         <th>Nächste Fälligkeit</th>
         <th class="num">Betrag</th>
         <th>Modus</th>
-        <th class="actions-col"></th>
+        <th class="actions-col"><span class="kb-visually-hidden">Aktionen</span></th>
       </tr>
     </thead>
     <tbody>
@@ -231,7 +235,7 @@
               <span class="muted-cell">—</span>
             {/if}
           </td>
-          <td class="num" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
+          <td class="num kb-num" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
           <td data-label="Modus">
             {#if s.autoCreateExpense === 1}
               <Badge tone="info">Automatisch</Badge>
@@ -244,46 +248,48 @@
               {#if s.active === 1}
                 {#if isDue(s)}
                   <Button variant="primary" size="sm" onclick={() => bookNow(s)} disabled={busyId === s.id}
-                    title="Eine Kostenposition für den fälligen Stichtag jetzt buchen">Buchen</Button>
+                    ariaLabel={`${s.label}: Buchen (fälliger Stichtag)`}>Buchen</Button>
                 {/if}
                 {#if hasBacklog(s)}
                   <Button variant="secondary" size="sm" onclick={() => resolveBacklog(s)} disabled={busyId === s.id}
-                    title="Verpasste Termine nachholen oder ab heute fortsetzen">Rückstand …</Button>
+                    ariaLabel={`${s.label}: Rückstand … (nachholen oder ab heute fortsetzen)`}>Rückstand …</Button>
                 {/if}
-                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`}>Bearbeiten</Button>
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Pausieren</Button>
+                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`} ariaLabel={`${s.label}: Bearbeiten`}>Bearbeiten</Button>
+                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`${s.label}: Pausieren`}>Pausieren</Button>
               {:else}
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Fortsetzen</Button>
-                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`}>Bearbeiten</Button>
+                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`${s.label}: Fortsetzen`}>Fortsetzen</Button>
+                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`} ariaLabel={`${s.label}: Bearbeiten`}>Bearbeiten</Button>
               {/if}
             </div>
           </td>
         </tr>
       {/each}
     </tbody>
-  </table>
+  </Table>
 {/if}
 
 <style>
-  .sub { margin: 0 0 0.5rem; color: var(--c-text-muted); font-size: 0.9rem; }
-  .counts { margin-left: 0.25rem; }
-  .due-txt { color: var(--c-warning-700); }
-  .legend { font-size: 0.82rem; color: var(--c-text-muted); background: var(--c-surface-2); border: 1px solid var(--c-border); border-radius: var(--r-md); padding: 0.5rem 0.75rem; margin: 0.9rem 0; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
-  .toolbar { display: flex; align-items: center; gap: 1rem; margin: 0.5rem 0 0.75rem; flex-wrap: wrap; }
-  .chk { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--c-text-muted); }
-  table { width: 100%; }
+  .sub { margin: 0 0 var(--sp-2); color: var(--text-muted); }
+  .counts { margin-left: var(--sp-1); }
+  .due-txt { color: var(--status-warning-fg); }
+  .legend { font-size: var(--fs-sm); color: var(--text-muted); background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3); margin: var(--sp-3) 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+  .legend span { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+  .toolbar { display: flex; align-items: center; gap: var(--sp-4); margin: var(--sp-2) 0 var(--sp-1); flex-wrap: wrap; }
+  .toolbar-hint { font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 var(--sp-3); }
+  .chk { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--target); color: var(--text-muted); }
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .actions-col { text-align: right; }
-  .abo-name { font-weight: 600; color: var(--c-text); }
-  .abo-meta { font-size: 0.78rem; color: var(--c-text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
-  .due-cell { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .muted-cell { color: var(--c-text-muted); }
-  tr.paused { opacity: 0.6; }
-  tr.is-due td { background: var(--c-warning-50); }
-  td.actions { text-align: right; white-space: nowrap; }
-  .act-row { display: inline-flex; gap: 0.4rem; justify-content: flex-end; flex-wrap: wrap; }
-  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--c-text-muted); background: var(--c-surface); border: 1px dashed var(--c-border-strong); border-radius: var(--r-lg); }
+  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  .abo-meta { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+  .due-cell { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+  .muted-cell { color: var(--text-muted); }
+  /* Pausiert: Badge „pausiert“ trägt den Zustand; keine Deckkraft-Absenkung (Kontrast 1.4.3). */
+  tr.paused .abo-name { font-weight: 500; }
+  tr.is-due td { background: var(--status-warning-bg); }
+  td.actions { text-align: right; }
+  .act-row { display: inline-flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; }
+  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--surface-card); border: 1px dashed var(--line-control); border-radius: var(--r-lg); }
   .empty p { margin: 0 0 1rem; }
-  .muted { color: var(--c-text-muted); }
+  .muted { color: var(--text-muted); }
 </style>

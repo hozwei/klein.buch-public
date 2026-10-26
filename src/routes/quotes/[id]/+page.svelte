@@ -1,7 +1,8 @@
 <script lang="ts">
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
+  import { pdfTemplateLabel } from "#lib/labels.ts";
   import { todayBerlin } from "#lib/date.ts";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import {
     quotesGet,
@@ -25,8 +26,10 @@
     ValidationIssueDto,
     EmailLogEntry,
   } from "#lib/types.ts";
-  import { euro, date, dateTime } from "#lib/format.ts";
+  import { euro, date, dateTime, percent } from "#lib/format.ts";
+  import { formatQuantity } from "#lib/money.ts";
   import Banner from "#lib/Banner.svelte";
+  import Badge from "#lib/Badge.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
@@ -51,11 +54,19 @@
   let rejectReason = $state("");
   let showCancel = $state(false);
   let cancelReason = $state("");
+  // Feldfehler am Grund (statt Toast).
+  let cancelError = $state("");
+  let cancelReasonEl: HTMLTextAreaElement | undefined = $state();
+  // Annahmedatum: nicht vor dem Angebotsdatum, nicht in der Zukunft (domain::quote).
+  const today = todayBerlin();
+  let acceptError = $state("");
 
   function closePanels() {
     showAccept = false;
     showReject = false;
     showCancel = false;
+    cancelError = "";
+    acceptError = "";
   }
 
   let id = $derived(page.params.id ?? "");
@@ -155,6 +166,18 @@
 
   async function accept() {
     if (!detail) return;
+    const qd = detail.quote.quoteDate.slice(0, 10);
+    acceptError =
+      acceptedDate && acceptedDate < qd
+        ? "Das Annahmedatum darf nicht vor dem Angebotsdatum liegen."
+        : acceptedDate && acceptedDate > today
+          ? "Das Annahmedatum darf nicht in der Zukunft liegen."
+          : "";
+    if (acceptError) {
+      await tick();
+      document.getElementById("accept-date")?.focus();
+      return;
+    }
     await run(async () => {
       const signedContractUploadId = signedContractFile
         ? (await uploadFile("vertrag", signedContractFile)).uploadId
@@ -182,10 +205,17 @@
   async function cancel() {
     if (!detail) return;
     if (cancelReason.trim().length < 10) {
-      flash("Bitte einen Grund angeben (mindestens 10 Zeichen).", "error");
+      cancelError = "Bitte einen Grund angeben (mindestens 10 Zeichen).";
+      await tick();
+      cancelReasonEl?.focus();
       return;
     }
-    await run(() => quotesCancel({ quoteId: detail!.quote.id, reason: cancelReason.trim() }), "Angebot storniert.");
+    cancelError = "";
+    const wasDraft = !detail.quote.lockedAt;
+    await run(
+      () => quotesCancel({ quoteId: detail!.quote.id, reason: cancelReason.trim() }),
+      wasDraft ? "Angebots-Entwurf verworfen." : "Angebot storniert.",
+    );
     cancelReason = "";
   }
 
@@ -203,15 +233,28 @@
     }
   }
 
-  function statusLabel(s: string): string {
+  // F2: Ein nie fertiggestelltes Angebot wird nicht storniert, sondern verworfen.
+  function statusLabel(s: string, locked: boolean): string {
     switch (s) {
       case "draft":     return "Entwurf";
       case "sent":      return "Versendet";
       case "accepted":  return "Angenommen";
       case "rejected":  return "Abgelehnt";
-      case "canceled":  return "Storniert";
+      case "canceled":  return locked ? "Storniert" : "Verworfen";
       case "converted": return "Umgewandelt";
       default:          return s;
+    }
+  }
+
+  type Tone = "neutral" | "primary" | "info" | "success" | "warning" | "danger";
+  function statusTone(s: string): Tone {
+    switch (s) {
+      case "sent":      return "info";
+      case "accepted":  return "success";
+      case "rejected":  return "danger";
+      case "canceled":  return "danger";
+      case "converted": return "primary";
+      default:          return "neutral";
     }
   }
 
@@ -232,25 +275,27 @@
     {#if detail}
       {@const q = detail.quote}
       {#if !q.lockedAt}
-        <button class="btn-secondary" onclick={runValidation} disabled={validating}>{validating ? "Prüfe …" : "Prüfen"}</button>
-        <button class="btn-primary" onclick={issue} disabled={busy}>{busy ? "…" : "Fertigstellen"}</button>
+        <button type="button" class="btn-secondary" onclick={runValidation} disabled={validating}>{validating ? "Prüfe …" : "Prüfen"}</button>
+        <button type="button" class="btn-primary" onclick={issue} disabled={busy}>{busy ? "…" : "Fertigstellen"}</button>
       {:else if q.status === "sent"}
-        <button class="btn-primary" onclick={() => { closePanels(); showAccept = true; }} disabled={busy}>Annehmen</button>
-        <button class="btn-secondary" onclick={() => { closePanels(); showReject = true; }} disabled={busy}>Ablehnen</button>
+        <button type="button" class="btn-primary" onclick={() => { closePanels(); showAccept = true; }} disabled={busy}>Annehmen</button>
+        <button type="button" class="btn-secondary" onclick={() => { closePanels(); showReject = true; }} disabled={busy}>Ablehnen</button>
       {:else if q.status === "accepted"}
         <a href={`/quotes/${q.id}/convert`} class="btn-primary">In Rechnung umwandeln</a>
       {:else if q.status === "converted" && q.convertedInvoiceId}
         <a href={`/invoices/${q.convertedInvoiceId}`} class="btn-secondary">Zur Rechnung →</a>
       {/if}
       {#if q.lockedAt}
-        <button class="btn-secondary" onclick={openQuotePdf} disabled={busy}>PDF anzeigen</button>
-        <button class="btn-secondary" onclick={openBundle} disabled={busy}>Druck-PDF (mit AGB)</button>
+        <button type="button" class="btn-secondary" onclick={openQuotePdf} disabled={busy}>PDF anzeigen</button>
+        <button type="button" class="btn-secondary" onclick={openBundle} disabled={busy}>Druck-PDF (mit AGB)</button>
         {#if q.status !== "canceled" && q.status !== "rejected"}
           <a href={`/quotes/${q.id}/send`} class="btn-secondary">Versenden</a>
         {/if}
       {/if}
       {#if q.status === "draft" || q.status === "sent" || q.status === "accepted"}
-        <button class="btn-ghost-danger" onclick={() => { closePanels(); showCancel = true; }} disabled={busy}>Stornieren</button>
+        <button type="button" class="btn-ghost-danger" onclick={() => { closePanels(); showCancel = true; }} disabled={busy}>
+          {q.lockedAt ? "Stornieren" : "Entwurf verwerfen"}
+        </button>
       {/if}
     {/if}
   {/snippet}
@@ -264,7 +309,7 @@
   {@const q = detail.quote}
   <p class="sub">
     {date(q.quoteDate)} ·
-    <span class={`status status-${q.status}`}>{statusLabel(q.status)}</span>
+    <Badge tone={statusTone(q.status)} strike={q.status === "canceled"}>{statusLabel(q.status, !!q.lockedAt)}</Badge>
     · gültig bis {date(q.validUntil)}
   </p>
 
@@ -278,7 +323,16 @@
       <div class="grid">
         <label>
           Annahmedatum
-          <input type="date" bind:value={acceptedDate} />
+          <input
+            id="accept-date"
+            type="date"
+            bind:value={acceptedDate}
+            min={q.quoteDate.slice(0, 10)}
+            max={today}
+            aria-invalid={acceptError ? "true" : undefined}
+            aria-describedby={acceptError ? "accept-date-err" : undefined}
+          />
+          {#if acceptError}<span id="accept-date-err" class="field-err">{acceptError}</span>{/if}
         </label>
         <label>
           Unterschriebener Vertrag (PDF/Bild)
@@ -293,12 +347,13 @@
         </label>
         <label>
           Bezeichnung (optional)
-          <input type="text" bind:value={attachmentLabel} placeholder="Unterschriebener Vertrag" />
+          <input type="text" bind:value={attachmentLabel} autocomplete="off" aria-describedby="att-label-hint" />
+          <span id="att-label-hint" class="field-hint">Ohne Angabe: „Unterschriebener Vertrag“ bzw. der Dateiname.</span>
         </label>
       </div>
       <div class="actions">
-        <button class="btn-secondary" onclick={() => (showAccept = false)} disabled={busy}>Abbrechen</button>
-        <button class="btn-primary" onclick={accept} disabled={busy}>
+        <button type="button" class="btn-secondary" onclick={() => { showAccept = false; acceptError = ""; }} disabled={busy}>Abbrechen</button>
+        <button type="button" class="btn-primary" onclick={accept} disabled={busy}>
           {busy ? "Speichere …" : "Annahme speichern"}
         </button>
       </div>
@@ -310,11 +365,12 @@
       <h2>Angebot ablehnen</h2>
       <label class="block">
         Ablehnungsgrund (optional)
-        <textarea rows="2" bind:value={rejectReason} placeholder="z. B. Kunde hat sich für einen Mitbewerber entschieden"></textarea>
+        <textarea rows="2" bind:value={rejectReason} aria-describedby="reject-hint"></textarea>
+        <span id="reject-hint" class="field-hint">Zum Beispiel: Kunde hat sich für einen Mitbewerber entschieden.</span>
       </label>
       <div class="actions">
-        <button class="btn-secondary" onclick={() => (showReject = false)} disabled={busy}>Abbrechen</button>
-        <button class="btn-primary" onclick={reject} disabled={busy}>
+        <button type="button" class="btn-secondary" onclick={() => (showReject = false)} disabled={busy}>Abbrechen</button>
+        <button type="button" class="btn-primary" onclick={reject} disabled={busy}>
           {busy ? "…" : "Als abgelehnt markieren"}
         </button>
       </div>
@@ -323,16 +379,35 @@
 
   {#if showCancel}
     <section class="card cancel-panel">
-      <h2>Angebot stornieren</h2>
-      <p class="muted">Das Angebot wird nicht gelöscht, sondern als storniert markiert (so verlangt es das Gesetz).</p>
+      {#if q.lockedAt}
+        <h2>Angebot stornieren</h2>
+        <p class="muted">Das Angebot wird nicht gelöscht, sondern als storniert markiert; Grund und Zeitpunkt bleiben nachvollziehbar.</p>
+      {:else}
+        <h2>Angebots-Entwurf verwerfen</h2>
+        <p class="muted">Der Entwurf wird nicht gelöscht, sondern als verworfen markiert; Grund und Zeitpunkt bleiben nachvollziehbar. Danach lässt er sich nicht mehr ändern.</p>
+      {/if}
       <label class="block">
-        Storno-Grund *
-        <textarea rows="2" bind:value={cancelReason} placeholder="Pflichtangabe, mindestens 10 Zeichen"></textarea>
+        <span>Grund <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></span>
+        <textarea
+          rows="2"
+          bind:this={cancelReasonEl}
+          bind:value={cancelReason}
+          oninput={() => { if (cancelError && cancelReason.trim().length >= 10) cancelError = ""; }}
+          required
+          aria-required="true"
+          aria-invalid={cancelError ? "true" : undefined}
+          aria-describedby={cancelError ? "cancel-reason-err" : "cancel-reason-hint"}
+        ></textarea>
+        {#if cancelError}
+          <span id="cancel-reason-err" class="field-err">{cancelError}</span>
+        {:else}
+          <span id="cancel-reason-hint" class="field-hint">Mindestens 10 Zeichen.</span>
+        {/if}
       </label>
       <div class="actions">
-        <button class="btn-secondary" onclick={() => (showCancel = false)} disabled={busy}>Abbrechen</button>
-        <button class="btn-danger" onclick={cancel} disabled={busy}>
-          {busy ? "…" : "Stornieren"}
+        <button type="button" class="btn-secondary" onclick={() => { showCancel = false; cancelError = ""; }} disabled={busy}>Abbrechen</button>
+        <button type="button" class="btn-danger" onclick={cancel} disabled={busy}>
+          {busy ? "…" : q.lockedAt ? "Stornieren" : "Entwurf verwerfen"}
         </button>
       </div>
     </section>
@@ -394,7 +469,7 @@
       <dl>
         <dt>Jahr</dt><dd>{q.fiscalYear}</dd>
         <dt>Gültig bis</dt><dd>{date(q.validUntil)}</dd>
-        <dt>Layout</dt><dd>{q.pdfTemplate}</dd>
+        <dt>PDF-Vorlage</dt><dd>{pdfTemplateLabel(q.pdfTemplate)}</dd>
         {#if q.lockedAt}<dt>Fertiggestellt</dt><dd>{date(q.lockedAt)}</dd>{/if}
         {#if q.acceptedAt}<dt>Angenommen</dt><dd>{date(q.acceptedAt)}</dd>{/if}
         {#if q.rejectedAt}<dt>Abgelehnt</dt><dd>{date(q.rejectedAt)}</dd>{/if}
@@ -403,7 +478,7 @@
           <dd>
             {date(q.convertedAt)}
             {#if q.convertedInvoiceId}
-              · <a href={`/invoices/${q.convertedInvoiceId}`}>zur Rechnung</a>
+              · <a class="txt-link tgt" href={`/invoices/${q.convertedInvoiceId}`}>zur Rechnung</a>
             {/if}
           </dd>
         {/if}
@@ -414,6 +489,7 @@
   <section class="card">
     <h2>Positionen</h2>
     <table class="cards">
+      <caption class="kb-visually-hidden">Positionen des Angebots {q.quoteNumber}</caption>
       <thead>
         <tr>
           <th>#</th>
@@ -433,11 +509,11 @@
           <tr>
             <td data-label="Pos.">{it.position}</td>
             <td class="cards-full" data-label="Beschreibung">{it.description}</td>
-            <td class="right" data-label="Menge">{it.quantity}</td>
+            <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
             <td data-label="Einheit">{it.unitCode}</td>
             <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
             {#if q.isKleinunternehmer === 0}
-              <td class="right" data-label="USt %">{it.taxRatePercent}</td>
+              <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
               <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
             <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
@@ -471,7 +547,7 @@
               <span class="muted">— {a.fileName} · {fmtBytes(a.fileSizeBytes)} · {date(a.createdAt)}</span>
             </div>
             <div class="att-actions">
-              <button class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Herunterladen</button>
+              <button type="button" class="btn-secondary btn-sm" onclick={() => openAttachment(a.archiveEntryId)}>Herunterladen</button>
             </div>
           </li>
         {/each}
@@ -497,7 +573,7 @@
                 <span class="muted">— {b.title} · gebunden {date(b.boundAt)}</span>
               </div>
               <div class="att-actions">
-                <button class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Herunterladen</button>
+                <button type="button" class="btn-secondary btn-sm" onclick={() => openAttachment(b.archiveEntryId)}>Herunterladen</button>
               </div>
             </li>
           {/each}
@@ -510,6 +586,7 @@
     <section class="card">
       <h2>Versand-Historie</h2>
       <table class="cards">
+        <caption class="kb-visually-hidden">Versand-Historie</caption>
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -547,51 +624,48 @@
   {/if}
 
   {#if q.canceledReason}
-    <section class="card"><h2>Storno-Grund</h2><p>{q.canceledReason}</p></section>
+    <section class="card"><h2>{q.lockedAt ? "Storno-Grund" : "Grund für das Verwerfen"}</h2><p>{q.canceledReason}</p></section>
   {/if}
 {/if}
 
 <style>
-  .sub { color: var(--c-text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .hint { color: #6b7280; font-size: 0.85rem; font-style: italic; }
+  .sub { color: var(--text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
   /* .card entfernt — globale Definition aus tokens.css. */
-  .accept-panel { border-left: 4px solid #2563eb; }
-  .cancel-panel { border-left: 4px solid #ef4444; }
+  .accept-panel { border-left: 4px solid var(--status-info-line); }
+  .cancel-panel { border-left: 4px solid var(--status-danger-line); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; min-width: 0; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); min-width: 0; }
   label.block { width: 100%; }
-  input, textarea { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem; font-family: inherit; }
+  input:not([type="file"]), textarea { padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md); font: inherit; font-weight: 400; color: var(--text); }
+  .req { color: var(--status-danger-fg); }
+  .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
+  .field-hint { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
+  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
+  .tgt { display: inline-flex; align-items: center; min-height: var(--target); }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
   .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
   dl { display: grid; grid-template-columns: 7rem 1fr; gap: 0.25rem 0.75rem; }
-  dt { color: #6b7280; font-size: 0.85rem; }
+  dt { color: var(--text-muted); font-size: var(--fs-sm); }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
-  th { background: #f3f4f6; font-weight: 600; font-size: 0.85rem; }
+  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.grand td { border-top: 2px solid #1a1a1a; }
-  .klein-note { color: #1e40af; font-size: 0.85rem; }
+  tr.grand td { border-top: 2px solid var(--text); }
+  .klein-note { color: var(--status-info-fg); font-size: var(--fs-sm); }
   .att { list-style: none; padding: 0; margin: 0; }
-  .att li { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.4rem 0; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
+  .att li { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   .att-info { min-width: 0; overflow-wrap: anywhere; }
   .att-actions { display: flex; gap: 0.4rem; }
   /* .btn-sm entfernt — Buttons app-weit gleich groß (Manuel-Hardline 2026-05-26). */
-  .status { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
-  .status-draft      { background: #e5e7eb; color: #374151; }
-  .status-sent       { background: #dbeafe; color: #1e40af; }
-  .status-accepted   { background: #d1fae5; color: #065f46; }
-  .status-rejected   { background: #fee2e2; color: #991b1b; }
-  .status-canceled   { background: #fee2e2; color: #991b1b; }
-  .status-converted  { background: #ede9fe; color: #5b21b6; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .issues { padding-left: 1.25rem; }
-  .issues li { color: #b91c1c; margin-bottom: 0.25rem; }
-  .ok { color: #065f46; }
-  .muted { color: #6b7280; }
-  .err { color: #b91c1c; }
-  .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
+  .issues li { color: var(--status-danger-fg); margin-bottom: 0.25rem; }
+  .ok { color: var(--status-success-fg); }
+  .muted { color: var(--text-muted); }
+  .err { color: var(--status-danger-fg); }
+  .hist-note { font-size: var(--fs-sm); margin-top: 0.4rem; }
   /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
      Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */
   @media (max-width: 820px) {

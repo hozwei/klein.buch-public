@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Flächen-Container (DS-1): weiße Karte mit Rahmen, Radius und weichem Schatten.
+  // Flächen-Container (DS-1): weiße Karte mit Hairline-Rahmen, --r-lg und
+  // flachem Schatten (U1: kein weicher Halo mehr). Look aus tokens.css (.card).
   import type { Snippet } from "svelte";
 
   let {

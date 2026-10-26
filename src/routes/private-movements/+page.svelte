@@ -8,6 +8,7 @@
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
 
   let items = $state<PrivateMovementListItem[]>([]);
   let loading = $state(true);
@@ -42,20 +43,23 @@
 </p>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if items.length === 0}
-  <p class="muted">Noch keine Privatbewegungen erfasst.</p>
+  <div class="empty">
+    <p class="muted">Noch keine Privatbewegungen erfasst.</p>
+    <Button variant="primary" href="/private-movements/new">Erste Privat-Buchung erfassen</Button>
+  </div>
 {:else}
-  <table class="kb-table cards">
+  <Table caption="Privatentnahmen und -einlagen" cards>
     <thead>
       <tr><th>Beleg-Nr.</th><th>Datum</th><th>Art</th><th>Konto</th><th>Beschreibung</th><th class="num">Betrag</th></tr>
     </thead>
     <tbody>
       {#each items as m (m.id)}
         <tr>
-          <td data-label="Beleg-Nr.">{m.movementNumber}</td>
+          <td data-label="Beleg-Nr."><span class="doc-no">{m.movementNumber}</span></td>
           <td data-label="Datum">{date(m.movementDate)}</td>
           <td data-label="Art">
             <Badge tone={m.movementType === "entnahme" ? "danger" : "success"}>
@@ -63,21 +67,24 @@
             </Badge>
           </td>
           <td data-label="Konto">{m.accountLabel ?? "—"}</td>
-          <td class="cards-full" data-label="Beschreibung">{m.description}</td>
-          <td class="num {m.movementType === 'entnahme' ? 'neg' : 'pos'}" data-label="Betrag">
+          <td class="cards-full wrap" data-label="Beschreibung">{m.description}</td>
+          <td class="num kb-num {m.movementType === 'entnahme' ? 'neg' : 'pos'}" data-label="Betrag">
             {m.movementType === "entnahme" ? "−" : "+"}{euro(m.amountCents)}
           </td>
         </tr>
       {/each}
     </tbody>
-  </table>
+  </Table>
 {/if}
 
 <style>
-  table { width: 100%; }
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.neg { color: var(--c-danger-700); }
-  td.pos { color: var(--c-success-700); }
-  .muted { color: var(--c-text-muted); }
+  td.neg { color: var(--status-danger-fg); }
+  td.pos { color: var(--status-success-fg); }
+  td.wrap { overflow-wrap: anywhere; }
+  .doc-no { font-family: var(--font-mono); white-space: nowrap; }
+  .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
+  .empty p { margin: 0; }
+  .muted { color: var(--text-muted); }
 </style>

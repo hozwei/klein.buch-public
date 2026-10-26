@@ -8,6 +8,7 @@
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
+  import Table from "#lib/Table.svelte";
   import PageBar from "#lib/PageBar.svelte";
 
   // Anzahl aktuell fälliger Abos — als Hinweis oben in der Kosten-Übersicht.
@@ -98,47 +99,65 @@
 
 {#if dueAbos > 0}
   <a class="due-banner" href="/expenses/recurring">
-    <span class="due-dot"></span>
+    <span class="due-dot" aria-hidden="true"></span>
     {dueAbos} {dueAbos === 1 ? "wiederkehrendes Abo ist" : "wiederkehrende Abos sind"} fällig
-    <span class="due-cta">→ ansehen &amp; buchen</span>
+    <span class="due-cta">ansehen und buchen <span aria-hidden="true">→</span></span>
   </a>
 {/if}
 
-<div class="filters">
-  <input
-    type="search"
-    class="kb-input search"
-    placeholder="Suche: Beleg-Nr., Lieferant, Beschreibung …"
-    bind:value={search}
-  />
-  <select class="kb-input" bind:value={yearFilter}>
-    <option value="">Alle Jahre</option>
-    {#each years as y}<option value={y}>{y}</option>{/each}
-  </select>
-  <select class="kb-input" bind:value={categoryFilter}>
-    <option value="">Alle Kategorien</option>
-    {#each EXPENSE_CATEGORIES as c}<option value={c.value}>{c.label}</option>{/each}
-  </select>
-  <label class="chk">
-    <input type="checkbox" bind:checked={includeCanceled} /> Stornierte
+<div class="filters" role="search" aria-label="Kosten filtern">
+  <div class="f-search">
+    <label class="kb-visually-hidden" for="exp-search">Kosten durchsuchen</label>
+    <input
+      id="exp-search"
+      type="search"
+      class="kb-input"
+      placeholder="Beleg-Nr., Lieferant, Beschreibung …"
+      enterkeyhint="search"
+      autocomplete="off"
+      bind:value={search}
+    />
+  </div>
+  <label class="f-sel">
+    <span class="kb-visually-hidden">Geschäftsjahr</span>
+    <select class="kb-input" bind:value={yearFilter}>
+      <option value="">Alle Jahre</option>
+      {#each years as y}<option value={y}>{y}</option>{/each}
+    </select>
   </label>
-  <Button variant="secondary" size="sm" onclick={resetFilters}>Zurücksetzen</Button>
+  <label class="f-sel">
+    <span class="kb-visually-hidden">Kategorie</span>
+    <select class="kb-input" bind:value={categoryFilter}>
+      <option value="">Alle Kategorien</option>
+      {#each EXPENSE_CATEGORIES as c}<option value={c.value}>{c.label}</option>{/each}
+    </select>
+  </label>
+  <label class="chk">
+    <input type="checkbox" bind:checked={includeCanceled} /> Stornierte zeigen
+  </label>
+  <Button variant="secondary" size="sm" onclick={resetFilters}>Filter zurücksetzen</Button>
 </div>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if all.length === 0}
-  <p class="muted">Noch keine Kosten erfasst.</p>
+  <div class="empty">
+    <p class="muted">Noch keine Kosten erfasst.</p>
+    <Button variant="primary" href="/expenses/new">Erste Kosten erfassen</Button>
+  </div>
 {:else}
-  <p class="result-info">
-    {items.length} {items.length === 1 ? "Eintrag" : "Einträge"} · Summe (ohne Storno): <strong>{euro(sum)}</strong>
+  <p class="result-info" role="status">
+    {items.length} {items.length === 1 ? "Eintrag" : "Einträge"} · Summe (ohne Storno): <strong class="kb-num">{euro(sum)}</strong>
   </p>
   {#if items.length === 0}
-    <p class="muted">Keine Kosten passen zu den Filtern.</p>
+    <div class="empty">
+      <p class="muted">Keine Kosten passen zu den Filtern.</p>
+      <Button variant="secondary" onclick={resetFilters}>Filter zurücksetzen</Button>
+    </div>
   {:else}
-    <table class="kb-table cards">
+    <Table caption="Kosten" cards>
       <thead>
         <tr>
           <th>Beleg-Nr.</th>
@@ -149,16 +168,16 @@
           <th class="num">Brutto</th>
           <th>Bezahlt</th>
           <th>Status</th>
-          <th></th>
+          <th><span class="kb-visually-hidden">Aktion</span></th>
         </tr>
       </thead>
       <tbody>
         {#each items as e (e.id)}
           <tr class={e.status === "canceled" ? "canceled" : ""}>
-            <td data-label="Beleg-Nr."><a href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
+            <td data-label="Beleg-Nr."><a class="doc-no" href={`/expenses/${e.id}`}>{e.expenseNumber}</a></td>
             <td data-label="Datum">{date(e.expenseDate)}</td>
-            <td data-label="Lieferant">{e.vendorNameSnapshot}</td>
-            <td class="desc cards-full" data-label="Beschreibung">{e.description}</td>
+            <td class="wrap" data-label="Lieferant">{e.vendorNameSnapshot}</td>
+            <td class="desc wrap cards-full" data-label="Beschreibung">{e.description}</td>
             <td data-label="Kategorie">
               <span class="cat">
                 {expenseCategoryLabel(e.category)}
@@ -166,7 +185,7 @@
                 {#if e.reverseCharge13b === 1}<Badge tone="primary">§13b</Badge>{/if}
               </span>
             </td>
-            <td class="num" data-label="Brutto">{euro(e.grossAmountCents)}</td>
+            <td class="num kb-num" data-label="Brutto">{euro(e.grossAmountCents)}</td>
             <td data-label="Bezahlt">{e.paidDate ? date(e.paidDate) : "offen"}</td>
             <td data-label="Status">
               <span class="badges">
@@ -180,32 +199,52 @@
                 {/if}
               </span>
             </td>
-            <td class="right"><Button variant="secondary" size="sm" href={`/expenses/${e.id}`}>Öffnen</Button></td>
+            <td class="right">
+              <Button variant="secondary" size="sm" href={`/expenses/${e.id}`} ariaLabel={`Kosten ${e.expenseNumber} öffnen`}>Öffnen</Button>
+            </td>
           </tr>
         {/each}
       </tbody>
-    </table>
+    </Table>
   {/if}
 {/if}
 
 <style>
-  .filters { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0.75rem 0; }
-  .filters .kb-input { width: auto; font-size: 0.9rem; }
-  .search { flex: 1 1 18rem; }
-  .chk { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--c-text-muted); }
-  .result-info { color: var(--c-text-muted); font-size: 0.85rem; margin: 0.25rem 0 0.5rem; }
-  table { width: 100%; }
+  .filters { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; margin: var(--sp-3) 0; }
+  .filters .kb-input { width: auto; max-width: 100%; }
+  .f-search { flex: 1 1 18rem; min-width: 0; }
+  .f-search .kb-input { width: 100%; }
+  .f-sel { display: inline-flex; min-width: 0; max-width: 100%; }
+  .chk { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--target); color: var(--text-muted); }
+  .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); }
+  .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
+  .empty p { margin: 0; }
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.desc { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.desc { max-width: 18rem; }
+  td.wrap { overflow-wrap: anywhere; }
   td.right { text-align: right; }
-  @media (max-width: 820px) { td.desc { max-width: none; white-space: normal; overflow-wrap: anywhere; } }
-  .cat { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
-  .badges { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
-  tr.canceled td a { color: var(--c-text-subtle); }
-  .due-banner { display: flex; align-items: center; gap: 0.5rem; background: var(--c-warning-50); border: 1px solid #f3dcae; color: var(--c-warning-700); padding: 0.6rem 0.85rem; border-radius: var(--r-md); text-decoration: none; font-size: 0.9rem; margin: 0.75rem 0; }
-  .due-banner:hover { background: #fbe9c8; }
-  .due-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--c-warning-500); flex: none; }
-  .due-cta { margin-left: auto; font-weight: 600; }
-  .muted { color: var(--c-text-muted); }
+  @media (max-width: 820px) { td.desc { max-width: none; } }
+  /* Belegnummer als Link: Trefferfläche ≥ --target, monospace (design.md §7). */
+  a.doc-no {
+    display: inline-flex; align-items: center; min-height: var(--target);
+    font-family: var(--font-mono); white-space: nowrap; text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .cat { display: inline-flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+  .badges { display: inline-flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+  tr.canceled td a.doc-no { color: var(--text-muted); }
+  .due-banner {
+    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+    min-height: var(--target);
+    background: var(--status-warning-bg); border: 1px solid var(--status-warning-line);
+    color: var(--status-warning-fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
+    text-decoration: none; margin: var(--sp-3) 0;
+  }
+  @media (hover: hover) {
+    .due-banner:hover { background: var(--surface-hover); text-decoration: none; }
+  }
+  .due-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--status-warning-line); flex: none; }
+  .due-cta { margin-left: auto; font-weight: 600; text-decoration: underline; }
+  .muted { color: var(--text-muted); }
 </style>

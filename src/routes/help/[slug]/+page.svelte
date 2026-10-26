@@ -23,6 +23,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/state";
   import type { HandbookEntry } from "#lib/handbook/index.ts";
+  import { HANDBOOK_CATEGORY_LABELS } from "#lib/handbook/categories.ts";
   import type { TocEntry } from "#lib/handbook/render.ts";
 
   let {
@@ -86,9 +87,8 @@
 
 <header class="entry-header">
   <h1>{data.entry.title}</h1>
-  <p class="meta">
-    Kategorie:&nbsp;{data.entry.category} · Reihenfolge:&nbsp;{data.entry.order}
-  </p>
+  <!-- U1: Kapitelname statt interner Kennung und Sortierzahl. -->
+  <p class="meta">{HANDBOOK_CATEGORY_LABELS[data.entry.category] ?? data.entry.category}</p>
 </header>
 
 {#if data.entry.category === "recht-und-steuern"}
@@ -109,12 +109,13 @@
   }
   .entry-header h1 {
     font-size: var(--fs-2xl);
+    overflow-wrap: anywhere;
     margin: 0 0 0.5rem;
     letter-spacing: -0.01em;
   }
   .meta {
     margin: 0;
-    color: var(--c-text-subtle);
+    color: var(--text-muted);
     font-size: var(--fs-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -125,9 +126,9 @@
      Erscheint zwischen Header und Prose, damit niemand das Kapitel liest,
      ohne den Hinweis gesehen zu haben. */
   .legal-banner {
-    background: var(--c-warning-50, #fdf6e3);
-    border: 1px solid var(--c-warning-200, #f0d68c);
-    color: var(--c-warning-800, #7a5a14);
+    background: var(--status-warning-bg);
+    border: 1px solid var(--status-warning-line);
+    color: var(--status-warning-fg);
     border-radius: var(--r-md);
     padding: 0.65rem 0.9rem;
     margin: 0 0 1.25rem;
@@ -173,8 +174,15 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  .prose :global(a:hover) {
-    color: var(--c-primary-800);
+  @media (hover: hover) {
+    .prose :global(a:hover) {
+      color: var(--c-primary-800);
+    }
+  }
+  /* Lange Wörter, URLs und Pfade umbrechen statt die Seite zu verbreitern (1.4.10). */
+  .prose {
+    overflow-wrap: anywhere;
+    min-width: 0;
   }
   .prose :global(strong) {
     font-weight: 700;
@@ -195,7 +203,10 @@
     border: 1px solid var(--c-border);
     border-radius: var(--r-md);
     padding: 0.85rem 1rem;
-    overflow-x: auto;
+    /* Umbrechen statt waagerecht scrollen: kein nicht fokussierbarer
+       Scrollbereich (axe scrollable-region-focusable), Reflow bei 320 px. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     margin: 0 0 0.85rem;
     font-size: var(--fs-sm);
   }
@@ -225,6 +236,7 @@
     padding: 0.4rem 0.6rem;
     text-align: left;
     vertical-align: top;
+    overflow-wrap: anywhere;
   }
   .prose :global(th) {
     background: var(--c-surface-2);
@@ -263,6 +275,9 @@
   .prose :global(details.faq > summary) {
     cursor: pointer;
     padding: 0.6rem 0.9rem;
+    /* Trefferfläche ≥ --target (44 px im Drawer-Band, U1). */
+    min-height: var(--target);
+    box-sizing: border-box;
     font-weight: 600;
     color: var(--c-text);
     line-height: 1.4;
@@ -287,8 +302,10 @@
   .prose :global(details.faq[open] > summary::before) {
     transform: rotate(90deg);
   }
-  .prose :global(details.faq > summary:hover) {
-    background: var(--c-primary-50);
+  @media (hover: hover) {
+    .prose :global(details.faq > summary:hover) {
+      background: var(--c-primary-50);
+    }
   }
   .prose :global(details.faq .faq-q) {
     flex: 1;

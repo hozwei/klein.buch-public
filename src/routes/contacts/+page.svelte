@@ -51,11 +51,15 @@
   {/snippet}
 </PageBar>
 
-<form class="toolbar" onsubmit={onSubmit} novalidate>
+<form class="toolbar" role="search" onsubmit={onSubmit} novalidate>
+  <label class="kb-visually-hidden" for="contacts-search">Kontakte durchsuchen</label>
   <input
+    id="contacts-search"
     class="kb-input search"
     type="search"
-    placeholder="Suche (Name, E-Mail, USt-IdNr., Stadt, PLZ)"
+    enterkeyhint="search"
+    autocomplete="off"
+    placeholder="Name, E-Mail, USt-IdNr., Ort oder PLZ"
     bind:value={query}
   />
   <label class="chk">
@@ -66,13 +70,21 @@
 </form>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>Fehler: {error}</Banner>
 {:else if contacts.length === 0}
-  <p class="muted">Keine Kontakte gefunden.</p>
+  <div class="empty">
+    {#if query.trim()}
+      <p class="muted">Keine Kontakte zu „{query.trim()}“ gefunden.</p>
+    {:else}
+      <p class="muted">Noch keine Kontakte. Leg Kunden und Lieferanten hier an.</p>
+      <Button variant="primary" href="/contacts/new">Kontakt anlegen</Button>
+    {/if}
+  </div>
 {:else}
   <table class="kb-table cards">
+    <caption class="kb-visually-hidden">Kontakte</caption>
     <thead>
       <tr>
         <th>Name</th>
@@ -80,21 +92,21 @@
         <th>Ort</th>
         <th>USt-IdNr.</th>
         <th>E-Mail</th>
-        <th></th>
+        <th><span class="kb-visually-hidden">Aktion</span></th>
       </tr>
     </thead>
     <tbody>
       {#each contacts as c (c.id)}
         <tr class:archived={c.archived === 1}>
           <td data-label="Name">
-            <a href={`/contacts/${c.id}`}>{c.name}</a>
+            <a class="name" href={`/contacts/${c.id}`}>{c.name}</a>
             {#if c.archived === 1}<Badge tone="warning">archiviert</Badge>{/if}
           </td>
           <td data-label="Typ">{typeLabel(c.contactType)}</td>
-          <td data-label="Ort">{c.postalCode ?? ""} {c.city ?? ""}</td>
+          <td data-label="Ort">{[c.postalCode, c.city].filter(Boolean).join(" ") || "—"}</td>
           <td data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
           <td data-label="E-Mail">{c.email ?? "—"}</td>
-          <td class="right"><Button variant="secondary" size="sm" href={`/contacts/${c.id}`}>Öffnen</Button></td>
+          <td class="right"><Button variant="secondary" href={`/contacts/${c.id}`} ariaLabel={`${c.name} öffnen`}>Öffnen</Button></td>
         </tr>
       {/each}
     </tbody>
@@ -110,7 +122,12 @@
     flex-wrap: wrap;
   }
   .search { flex: 1; min-width: 14rem; max-width: 100%; }
-  .chk { display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; color: var(--c-text-muted); }
+  /* Ganze Beschriftung ist Trefferfläche (U1). */
+  .chk { display: flex; align-items: center; gap: 0.5rem; min-height: var(--target); color: var(--c-text-muted); cursor: pointer; }
+  /* Name als Kartentitel: Trefferfläche ≥ --target (U1, 2.5.8). */
+  a.name { display: inline-flex; align-items: center; min-height: var(--target); overflow-wrap: anywhere; }
+  .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; }
+  .empty p { margin: 0; }
   td.right { text-align: right; }
   @media (max-width: 820px) { td { overflow-wrap: anywhere; } }
   tr.archived td { color: var(--c-text-subtle); }

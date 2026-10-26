@@ -6,9 +6,10 @@
 // Kalenderdaten (`YYYY-MM-DD`) bleiben der Tag, der sie sind.
 
 import { APP_TIME_ZONE, isIsoDate, parseTimestamp } from "./date";
+import { formatEuro } from "./money";
 
-const NUMBER_DE = new Intl.NumberFormat("de-DE", {
-  minimumFractionDigits: 2,
+const PERCENT_DE = new Intl.NumberFormat("de-DE", {
+  minimumFractionDigits: 0,
   maximumFractionDigits: 2,
 });
 
@@ -29,8 +30,29 @@ const DATETIME_DE_BERLIN = new Intl.DateTimeFormat("de-DE", {
   timeZone: APP_TIME_ZONE,
 });
 
+/**
+ * Cent → `1.234,56 €` (DIN 5008, geschütztes Leerzeichen U+00A0 vor `€`;
+ * Ganzzahl-Rechnung über `money.ts`, Lauf 2026.11 U1).
+ */
 export function euro(cents: number): string {
-  return `${NUMBER_DE.format(cents / 100)} €`;
+  return formatEuro(cents);
+}
+
+/** Prozentsatz → `19 %`, `7,5 %` (geschütztes Leerzeichen vor `%`, höchstens 2 Nachkommastellen). */
+export function percent(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  return `${PERCENT_DE.format(value === 0 ? 0 : value)} %`;
+}
+
+/**
+ * IBAN in Vierergruppen (`DE89 3704 0044 0532 0130 00`), Großbuchstaben;
+ * vorhandene Leerzeichen werden neu gesetzt. Leer: „—“. Keine Prüfung der
+ * Prüfziffer (Anzeige, keine Validierung).
+ */
+export function iban(value: string | null | undefined): string {
+  const s = (value ?? "").replace(/[\s ]+/g, "").toUpperCase();
+  if (!s) return "—";
+  return s.replace(/(.{4})(?=.)/g, "$1 ");
 }
 
 /**
@@ -58,4 +80,26 @@ export function dateTime(value: string | null | undefined, empty = "—"): strin
   const d = parseTimestamp(s);
   if (!d) return s;
   return (isIsoDate(s) ? DATE_DE_CALENDAR : DATETIME_DE_BERLIN).format(d);
+}
+
+/** Datum und Uhrzeit ohne Sekunden in Berliner Ortszeit. */
+const DATETIME_SHORT_DE_BERLIN = new Intl.DateTimeFormat("de-DE", {
+  ...DAY_PARTS,
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: APP_TIME_ZONE,
+});
+
+/**
+ * Datum und Uhrzeit `TT.MM.JJJJ, HH:MM` in Berliner Ortszeit — wie
+ * `dateTime()`, aber ohne Sekunden (Tabellen und Listen, DIN 5008; Lauf
+ * 2026.11 U1). Ein reines Datum erscheint ohne Uhrzeit, leer: `empty`,
+ * unbekanntes Format als Rohwert.
+ */
+export function dateTimeShort(value: string | null | undefined, empty = "—"): string {
+  const s = (value ?? "").trim();
+  if (!s) return empty;
+  const d = parseTimestamp(s);
+  if (!d) return s;
+  return (isIsoDate(s) ? DATE_DE_CALENDAR : DATETIME_SHORT_DE_BERLIN).format(d);
 }

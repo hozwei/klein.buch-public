@@ -3,11 +3,13 @@
   import { page } from "$app/state";
   import { assetsGet, depreciationResetAsset } from "#lib/api.ts";
   import type { AssetDetail } from "#lib/types.ts";
-  import { euro, date } from "#lib/format.ts";
+  import { euro, date, percent } from "#lib/format.ts";
+  import { formatQuantity } from "#lib/money.ts";
   import { depreciationMethodLabel, disposalTypeLabel } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import Badge from "#lib/Badge.svelte";
+  import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
 
@@ -76,7 +78,7 @@
         <a class="btn-secondary btn-sm" href={`/assets/new?id=${detail.asset.id}`}>Bearbeiten</a>
       {/if}
       {#if hasUnlockedAfa && detail.asset.disposed === 0}
-        <button class="btn-ghost-danger btn-sm" onclick={resetAfa} disabled={busy}>Abschreibung zurücksetzen</button>
+        <button type="button" class="btn-ghost-danger btn-sm" onclick={resetAfa} disabled={busy}>Abschreibung zurücksetzen</button>
       {/if}
       {#if detail.asset.disposed === 0}
         <a class="btn-ghost-danger btn-sm" href={`/assets/${detail.asset.id}/dispose`}>Veräußern / Entsorgen</a>
@@ -86,7 +88,7 @@
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if detail}
@@ -108,7 +110,7 @@
   {#if hasUnlockedAfa && a.disposed === 0}
     <p class="edit-hint">
       Es ist bereits eine Abschreibung gebucht. Zum Korrigieren der Stammdaten erst
-      „Abschreibung zurücksetzen" — möglich, solange das Geschäftsjahr nicht
+      „Abschreibung zurücksetzen“ — möglich, solange das Geschäftsjahr nicht
       abgeschlossen ist.
     </p>
   {/if}
@@ -117,17 +119,26 @@
     <dl>
       <div><dt>Bezeichnung</dt><dd>{a.label}</dd></div>
       <div><dt>Anschaffungsdatum</dt><dd>{date(a.acquisitionDate)}</dd></div>
-      <div><dt>Anschaffungskosten (netto)</dt><dd>{euro(a.acquisitionCostCents)}</dd></div>
+      <div><dt>Anschaffungskosten</dt><dd class="amt">{euro(a.acquisitionCostCents)}</dd></div>
       <div><dt>Abschreibung</dt><dd>{depreciationMethodLabel(a.depreciationMethod)}</dd></div>
-      {#if a.usefulLifeYears}<div><dt>Nutzungsdauer</dt><dd>{a.usefulLifeYears} Jahre</dd></div>{/if}
-      <div><dt>Betrieblicher Anteil</dt><dd>{a.businessSharePercent}%</dd></div>
-      <div><dt>Restbuchwert</dt><dd><strong>{euro(a.bookValueCents)}</strong></dd></div>
+      {#if a.usefulLifeYears}<div><dt>Nutzungsdauer</dt><dd>{formatQuantity(a.usefulLifeYears, 2)} Jahre</dd></div>{/if}
+      <div><dt>Betrieblicher Anteil</dt><dd>{percent(a.businessSharePercent)}</dd></div>
+      <div><dt>Restbuchwert</dt><dd class="amt"><strong>{euro(a.bookValueCents)}</strong></dd></div>
       {#if a.lastDepreciationYear}<div><dt>Zuletzt gebucht</dt><dd>AfA {a.lastDepreciationYear}</dd></div>{/if}
       <div><dt>Lieferant</dt><dd>{detail.vendor ? detail.vendor.name : "—"}</dd></div>
       {#if detail.sourceExpenseNumber}
-        <div><dt>Aus Kosten-Beleg</dt><dd>{detail.sourceExpenseNumber}</dd></div>
+        <div>
+          <dt>Aus Kosten-Beleg</dt>
+          <dd>
+            {#if a.expenseId}
+              <a class="inline-link doc-no kb-target" href={`/expenses/${a.expenseId}`}>{detail.sourceExpenseNumber}</a>
+            {:else}
+              {detail.sourceExpenseNumber}
+            {/if}
+          </dd>
+        </div>
       {/if}
-      {#if a.notes}<div class="span2"><dt>Notiz</dt><dd>{a.notes}</dd></div>{/if}
+      {#if a.notes}<div class="span2"><dt>Notiz</dt><dd class="pre">{a.notes}</dd></div>{/if}
     </dl>
   </section>
 
@@ -138,11 +149,11 @@
       <dl>
         <div><dt>Datum</dt><dd>{date(a.disposalDate)}</dd></div>
         <div><dt>Art</dt><dd>{disposalTypeLabel(a.disposalType)}</dd></div>
-        <div><dt>Erlös</dt><dd>{euro(a.disposalProceedsCents ?? 0)}</dd></div>
-        <div><dt>Restbuchwert bei Veräußerung</dt><dd>{euro(a.disposalResidualBookValueCents ?? 0)}</dd></div>
+        <div><dt>{a.disposalType === "given_away" ? "Entnahmewert" : "Erlös"}</dt><dd class="amt">{euro(a.disposalProceedsCents ?? 0)}</dd></div>
+        <div><dt>Restbuchwert bei Veräußerung</dt><dd class="amt">{euro(a.disposalResidualBookValueCents ?? 0)}</dd></div>
         <div>
           <dt>{gl >= 0 ? "Gewinn" : "Verlust"}</dt>
-          <dd class={gl >= 0 ? "gain" : "loss"}>{euro(gl)}</dd>
+          <dd class="amt {gl >= 0 ? 'gain' : 'loss'}">{euro(gl)}</dd>
         </div>
       </dl>
       <p class="muted small">
@@ -156,11 +167,11 @@
     <h2>Abschreibungs-Verlauf</h2>
     {#if detail.depreciationEntries.length === 0}
       <p class="muted">
-        Noch keine Abschreibung gebucht. Buche sie über „Abschreibung buchen" in der
-        Anschaffungs-Übersicht.
+        Noch keine Abschreibung gebucht. Buche sie über „Abschreibung buchen“ in der
+        <a class="inline-link" href="/assets">Anschaffungs-Übersicht</a>.
       </p>
     {:else}
-      <table class="cards">
+      <Table caption="Abschreibungs-Verlauf" cards>
         <thead>
           <tr>
             <th>Jahr</th>
@@ -173,7 +184,7 @@
         <tbody>
           {#each detail.depreciationEntries as e (e.id)}
             <tr>
-              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}<span class="badge ok">Sofort</span>{/if}</td>
+              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}{" "}<Badge tone="success">Sofort</Badge>{/if}</td>
               <td class="num" data-label="Monate">{e.monthsInYear}</td>
               <td class="num" data-label="Restbuchwert davor">{euro(e.bookValueBeforeCents)}</td>
               <td class="num" data-label="Abschreibung">{euro(e.depreciationAmountCents)}</td>
@@ -181,31 +192,28 @@
             </tr>
           {/each}
         </tbody>
-      </table>
+      </Table>
     {/if}
   </section>
 {/if}
 
 <style>
   .sub { margin: 0 0 1rem; }
-  /* .card / .card h2 entfernt — globale Definition aus tokens.css. */
-  dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin: 0; }
-  dl div { display: flex; flex-direction: column; }
+  /* .card / .card h2: globale Definition aus tokens.css. */
+  dl { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2) var(--sp-5); margin: 0; }
+  dl div { display: flex; flex-direction: column; min-width: 0; }
   .span2 { grid-column: 1 / -1; }
-  dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  dt { font-size: var(--fs-xs); color: var(--text-muted); }
+  dd { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+  dd.amt { font-variant-numeric: tabular-nums; }
+  dd.pre { white-space: pre-wrap; }
   @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
-  dd.gain { color: #065f46; font-weight: 600; }
-  dd.loss { color: #b91c1c; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.45rem 0.5rem; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 0.9rem; }
-  th { background: #f3f4f6; font-weight: 600; font-size: 0.8rem; }
+  dd.gain { color: var(--status-success-fg); font-weight: 600; }
+  dd.loss { color: var(--status-danger-fg); font-weight: 600; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .badge { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.72rem; margin-left: 0.35rem; }
-  .badge.ok { background: #d1fae5; color: #065f46; }
-  .muted { color: #6b7280; }
-  .small { font-size: 0.82rem; }
-  /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .edit-hint { color: #6b7280; font-size: 0.82rem; margin: 0 0 0.5rem; max-width: 46rem; }
+  .inline-link { text-decoration: underline; text-underline-offset: 2px; }
+  .doc-no { font-family: var(--font-mono); }
+  .muted { color: var(--text-muted); }
+  .small { font-size: var(--fs-sm); }
+  .edit-hint { color: var(--text-muted); font-size: var(--fs-sm); margin: 0 0 var(--sp-2); max-width: 46rem; }
 </style>

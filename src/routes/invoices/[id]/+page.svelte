@@ -1,6 +1,7 @@
 <script lang="ts">
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
-  import { onMount } from "svelte";
+  import { pdfTemplateLabel } from "#lib/labels.ts";
+  import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import {
@@ -12,9 +13,11 @@
     saveArchiveFile,
     emailLogFor,
   } from "#lib/api.ts";
-  import type { InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "#lib/types.ts";
-  import { euro, date, dateTime } from "#lib/format.ts";
+  import type { Invoice, InvoiceDetail, ValidationIssueDto, EmailLogEntry } from "#lib/types.ts";
+  import { euro, date, dateTime, percent } from "#lib/format.ts";
+  import { formatQuantity } from "#lib/money.ts";
   import Banner from "#lib/Banner.svelte";
+  import Badge from "#lib/Badge.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
@@ -32,6 +35,12 @@
   let showVoid = $state(false);
   let voidReason = $state("");
   let voiding = $state(false);
+  // Feldfehler am Grund (statt Toast), erst nach dem ersten Versuch.
+  let voidError = $state("");
+  let voidReasonEl: HTMLTextAreaElement | undefined = $state();
+  // Storno-Bezug: Original bzw. aufhebender Storno-Beleg (Nummer, Datum, Link).
+  let relatedOriginal = $state<Invoice | null>(null);
+  let relatedStorno = $state<Invoice | null>(null);
 
   let id = $derived(page.params.id ?? "");
 
@@ -41,6 +50,7 @@
     try {
       detail = await invoicesGet(id);
       if (!detail) error = "Rechnung nicht gefunden.";
+      else await loadRelated(detail);
       try {
         sendLog = await emailLogFor("invoice", id);
       } catch {
@@ -53,6 +63,17 @@
     }
   }
 
+  // Nur zur Anzeige; fehlt der Bezug, bleibt der Hinweis ohne Nummer.
+  async function loadRelated(d: InvoiceDetail) {
+    relatedOriginal = null;
+    relatedStorno = null;
+    try {
+      if (d.invoice.isStornoFor) relatedOriginal = (await invoicesGet(d.invoice.isStornoFor))?.invoice ?? null;
+      if (d.invoice.canceledByStornoId) relatedStorno = (await invoicesGet(d.invoice.canceledByStornoId))?.invoice ?? null;
+    } catch {
+      // Bezug ist Zusatzinformation — Fehler hier nicht hochziehen.
+    }
+  }
 
   onMount(load);
 
@@ -113,8 +134,10 @@
   async function voidDraft() {
     if (!detail) return;
     const problem = voidReasonError(voidReason);
+    voidError = problem ?? "";
     if (problem) {
-      flash(problem, "error");
+      await tick();
+      voidReasonEl?.focus();
       return;
     }
     voiding = true;
@@ -123,6 +146,7 @@
       flash("Entwurf verworfen — die Nummer bleibt vergeben.");
       showVoid = false;
       voidReason = "";
+      voidError = "";
       await load();
     } catch (e) {
       flash(String(e), "error");
@@ -143,6 +167,18 @@
     }
   }
 
+  type Tone = "neutral" | "primary" | "info" | "success" | "warning" | "danger";
+  function statusTone(s: string): Tone {
+    switch (s) {
+      case "issued":          return "primary";
+      case "sent":            return "info";
+      case "partially_paid":  return "warning";
+      case "paid":            return "success";
+      case "canceled":        return "danger";
+      default:                return "neutral";
+    }
+  }
+
   function valLabel(s: string | null): string {
     switch (s) {
       case "passed":  return "in Ordnung";
@@ -150,6 +186,9 @@
       case "failed":  return "Fehler";
       default:        return "—";
     }
+  }
+  function valTone(s: string | null): Tone {
+    return s === "passed" ? "success" : s === "warning" ? "warning" : s === "failed" ? "danger" : "neutral";
   }
 </script>
 
@@ -163,23 +202,33 @@
           <!-- Neuer Fund F2a (Lauf F5): Entwurf bearbeiten; die Nummer bleibt. -->
           <a class="btn-secondary" href={`/invoices/new?edit=${detail.invoice.id}`}>Bearbeiten</a>
         {/if}
-        <button class="btn-secondary" onclick={runValidation} disabled={validating}>
+        <button type="button" class="btn-secondary" onclick={runValidation} disabled={validating}>
           {validating ? "Prüfe …" : "Prüfen"}
         </button>
-        <input type="text" bind:value={buyerReference} placeholder="Referenz (nur Behörden)" class="ref-inline" />
-        <button class="btn-primary" onclick={lockAndIssue} disabled={issuing}>
+        <!-- U1: sichtbare Bezeichnung statt nur aria-label/title (§8.5 Eingabefelder). -->
+        <label class="ref-wrap">
+          <span class="ref-lbl">Leitweg-ID <span class="kb-visually-hidden">(Referenz für die E-Rechnung, nur bei Behörden; sonst N/A)</span></span>
+          <input
+            type="text"
+            bind:value={buyerReference}
+            class="ref-inline"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
+        <button type="button" class="btn-primary" onclick={lockAndIssue} disabled={issuing}>
           {issuing ? "Stelle aus …" : "Rechnung ausstellen"}
         </button>
-        <button class="btn-ghost-danger" onclick={() => (showVoid = true)} disabled={voiding || issuing}>
-          Verwerfen
+        <button type="button" class="btn-ghost-danger" onclick={() => (showVoid = true)} disabled={voiding || issuing}>
+          Entwurf verwerfen
         </button>
       {:else}
         {#if detail.invoice.status !== "canceled" && !detail.invoice.isStornoFor}
           <a class="btn-primary" href={`/invoices/${detail.invoice.id}/payment`}>+ Zahlung</a>
         {/if}
         {#if detail.invoice.pdfArchiveId}
-          <button class="btn-secondary" onclick={openPdf}>PDF öffnen</button>
-          <button class="btn-secondary" onclick={downloadPdf}>PDF herunterladen</button>
+          <button type="button" class="btn-secondary" onclick={openPdf}>PDF öffnen</button>
+          <button type="button" class="btn-secondary" onclick={downloadPdf}>PDF herunterladen</button>
           {#if detail.invoice.status !== "canceled"}
             <a class="btn-secondary" href={`/invoices/${detail.invoice.id}/send`}>Senden</a>
           {/if}
@@ -200,17 +249,41 @@
   {@const inv = detail.invoice}
   <p class="sub">
     {date(inv.invoiceDate)} ·
-    <span class={`status status-${inv.status}`}>{statusLabel(inv.status)}</span>
+    {#if inv.voidedAt}
+      <Badge tone="neutral" strike>Verworfen</Badge>
+    {:else}
+      <Badge tone={statusTone(inv.status)} strike={inv.status === "canceled"}>{statusLabel(inv.status)}</Badge>
+    {/if}
     {#if inv.isStornoFor}
-      <span class="badge badge-storno">Storno-Beleg</span>
+      <Badge tone="warning">Storno-Beleg</Badge>
     {/if}
     {#if inv.canceledByStornoId}
-      <span class="badge badge-canceled">durch Storno aufgehoben</span>
-    {/if}
-    {#if inv.voidedAt}
-      <span class="badge badge-canceled">verworfen</span>
+      <Badge tone="danger">durch Storno aufgehoben</Badge>
     {/if}
   </p>
+
+  {#if inv.isStornoFor}
+    <Banner kind="info">
+      Dieser Beleg storniert
+      {#if relatedOriginal}
+        die Rechnung <a class="txt-link doc-no" href={`/invoices/${inv.isStornoFor}`}>{relatedOriginal.invoiceNumber}</a>
+        vom {date(relatedOriginal.invoiceDate)}.
+      {:else}
+        <a class="txt-link" href={`/invoices/${inv.isStornoFor}`}>die ursprüngliche Rechnung</a>.
+      {/if}
+    </Banner>
+  {/if}
+  {#if inv.canceledByStornoId}
+    <Banner kind="warning">
+      Diese Rechnung ist aufgehoben durch
+      {#if relatedStorno}
+        den Storno-Beleg <a class="txt-link doc-no" href={`/invoices/${inv.canceledByStornoId}`}>{relatedStorno.invoiceNumber}</a>
+        vom {date(relatedStorno.invoiceDate)}.
+      {:else}
+        <a class="txt-link" href={`/invoices/${inv.canceledByStornoId}`}>einen Storno-Beleg</a>.
+      {/if}
+    </Banner>
+  {/if}
 
   {#if inv.voidedAt}
     <section class="card">
@@ -229,14 +302,30 @@
         Nummer {inv.invoiceNumber} bleibt vergeben. Danach lässt er sich weder ändern noch
         ausstellen. Klein.Buch fragt zur Bestätigung Daten-Passwort und App-Code ab.
       </p>
-      <label class="void-reason">
-        Grund *
-        <textarea rows="2" bind:value={voidReason} placeholder="Pflichtangabe, mindestens 10 Zeichen, keine Namen"></textarea>
+      <label class="void-reason" for="void-reason">
+        <span>Grund <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></span>
       </label>
+      <textarea
+        id="void-reason"
+        class="void-text"
+        rows="3"
+        bind:this={voidReasonEl}
+        bind:value={voidReason}
+        oninput={() => { if (voidError && !voidReasonError(voidReason)) voidError = ""; }}
+        required
+        aria-required="true"
+        aria-invalid={voidError ? "true" : undefined}
+        aria-describedby={voidError ? "void-reason-err" : "void-reason-hint"}
+      ></textarea>
+      {#if voidError}
+        <p id="void-reason-err" class="field-err">{voidError}</p>
+      {:else}
+        <p id="void-reason-hint" class="field-hint">Mindestens 10 Zeichen, ohne Namen von Personen.</p>
+      {/if}
       <div class="void-actions">
-        <button class="btn-secondary" onclick={() => (showVoid = false)} disabled={voiding}>Abbrechen</button>
-        <button class="btn-danger" onclick={voidDraft} disabled={voiding}>
-          {voiding ? "…" : "Verwerfen"}
+        <button type="button" class="btn-secondary" onclick={() => { showVoid = false; voidError = ""; }} disabled={voiding}>Abbrechen</button>
+        <button type="button" class="btn-danger" onclick={voidDraft} disabled={voiding}>
+          {voiding ? "Verwerfe …" : "Entwurf verwerfen"}
         </button>
       </div>
     </section>
@@ -299,14 +388,12 @@
         <dt>Jahr</dt><dd>{inv.fiscalYear}</dd>
         <dt>Leistung</dt><dd>{date(inv.deliveryDate)}</dd>
         <dt>Fällig</dt><dd>{date(inv.dueDate)}</dd>
-        <dt>Layout</dt><dd>{inv.pdfTemplate}</dd>
+        <dt>PDF-Vorlage</dt><dd>{pdfTemplateLabel(inv.pdfTemplate)}</dd>
         {#if inv.lockedAt}
           <dt>Ausgestellt am</dt><dd>{date(inv.lockedAt)}</dd>
           <dt>Prüfung</dt>
           <dd>
-            <span class={`status status-${inv.validationStatus ?? "?"}`}>
-              {valLabel(inv.validationStatus)}
-            </span>
+            <Badge tone={valTone(inv.validationStatus)}>{valLabel(inv.validationStatus)}</Badge>
           </dd>
         {/if}
       </dl>
@@ -316,6 +403,7 @@
   <section class="card">
     <h2>Positionen</h2>
     <table class="cards">
+      <caption class="kb-visually-hidden">Positionen der Rechnung {inv.invoiceNumber}</caption>
       <thead>
         <tr>
           <th>#</th>
@@ -335,11 +423,11 @@
           <tr>
             <td data-label="Pos.">{it.position}</td>
             <td class="cards-full" data-label="Beschreibung">{it.description}</td>
-            <td class="right" data-label="Menge">{it.quantity}</td>
+            <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
             <td data-label="Einheit">{it.unitCode}</td>
             <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
             {#if inv.isKleinunternehmer === 0}
-              <td class="right" data-label="USt %">{it.taxRatePercent}</td>
+              <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
               <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
             <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
@@ -370,6 +458,7 @@
     <section class="card">
       <h2>Versand-Historie</h2>
       <table class="cards">
+        <caption class="kb-visually-hidden">Versand-Historie</caption>
         <thead>
           <tr>
             <th>Zeitpunkt</th>
@@ -418,37 +507,38 @@
 {/if}
 
 <style>
-  .sub { color: var(--c-text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .ref-inline { padding: 0.4rem 0.5rem; border: 1px solid var(--c-border-strong); border-radius: var(--r-md); width: 10rem; max-width: 100%; font: inherit; }
+  .sub { color: var(--text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .ref-inline { padding: 0.4rem 0.6rem; border: 1px solid var(--line-control); border-radius: var(--r-md); width: 10rem; max-width: 100%; font: inherit; min-height: var(--target); }
+  .ref-wrap { display: inline-flex; align-items: center; gap: var(--sp-2); }
+  .ref-lbl { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); white-space: nowrap; }
   .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
   /* .card entfernt — globale Definition aus tokens.css. */
   dl { display: grid; grid-template-columns: 6rem 1fr; gap: 0.25rem 0.75rem; }
-  dt { color: #6b7280; font-size: 0.85rem; }
+  dt { color: var(--text-muted); font-size: var(--fs-sm); }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
-  th { background: #f3f4f6; font-weight: 600; font-size: 0.85rem; }
+  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.grand td { border-top: 2px solid #1a1a1a; }
-  .klein-note { color: #1e40af; font-size: 0.85rem; }
-  .badge { padding: 0.05rem 0.4rem; border-radius: 4px; font-size: 0.7rem; margin-left: 0.4rem; }
-  .badge-storno   { background: #fbbf24; color: #78350f; }
-  .badge-canceled { background: #fee2e2; color: #991b1b; }
-  .status { padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
-  .status-draft           { background: #e5e7eb; color: #374151; }
-  .status-issued, .status-sent, .status-passed { background: #dbeafe; color: #1e40af; }
-  .status-partially_paid, .status-warning  { background: #fef3c7; color: #92400e; }
-  .status-paid            { background: #d1fae5; color: #065f46; }
-  .status-canceled, .status-failed  { background: #fee2e2; color: #991b1b; }
+  tr.grand td { border-top: 2px solid var(--text); }
+  .klein-note { color: var(--status-info-fg); font-size: var(--fs-sm); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .issues { padding-left: 1.25rem; }
-  .issues li { color: #b91c1c; margin-bottom: 0.25rem; }
-  .ok { color: #065f46; }
-  .muted { color: #6b7280; }
-  .err { color: #b91c1c; }
-  .hist-note { font-size: 0.8rem; margin-top: 0.4rem; }
-  .void-reason { display: flex; flex-direction: column; gap: 0.25rem; }
-  .void-reason textarea { font: inherit; width: 100%; }
+  .issues li { color: var(--status-danger-fg); margin-bottom: 0.25rem; }
+  .ok { color: var(--status-success-fg); }
+  .muted { color: var(--text-muted); }
+  .err { color: var(--status-danger-fg); }
+  .hist-note { font-size: var(--fs-sm); margin-top: 0.4rem; }
+  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
+  .doc-no { font-family: var(--font-mono); }
+  .req { color: var(--status-danger-fg); }
+  .field-err { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--status-danger-fg); }
+  .field-hint { margin: 4px 0 0; font-size: var(--fs-xs); color: var(--text-muted); }
+  .void-reason { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+  .void-text {
+    font: inherit; width: 100%; box-sizing: border-box; resize: vertical;
+    padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
+  }
   .void-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 0.5rem; flex-wrap: wrap; }
   /* W10: Karten-Ansicht — Summenzeilen zeigen das Label per data-label an der
      Betragszelle, die colspan-Beschriftung entfällt; lange Werte brechen um. */

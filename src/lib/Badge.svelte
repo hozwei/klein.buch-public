@@ -39,10 +39,11 @@
   .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
   .badge.strike { text-decoration: line-through; }
 
-  .neutral { background: #eef1f3; color: #51616b; }
+  /* Rollen-Tokens; Text auf Fläche jeweils ≥ 4,5:1 (design.md §3.2). */
+  .neutral { background: var(--status-neutral-bg); color: var(--status-neutral-fg); }
   .primary { background: var(--c-primary-100); color: var(--c-primary-800); }
-  .info    { background: var(--c-info-50); color: var(--c-info-700); }
-  .success { background: var(--c-success-50); color: var(--c-success-700); }
-  .warning { background: var(--c-warning-50); color: var(--c-warning-700); }
-  .danger  { background: var(--c-danger-50); color: var(--c-danger-700); }
+  .info    { background: var(--status-info-bg); color: var(--status-info-fg); }
+  .success { background: var(--status-success-bg); color: var(--status-success-fg); }
+  .warning { background: var(--status-warning-bg); color: var(--status-warning-fg); }
+  .danger  { background: var(--status-danger-bg); color: var(--status-danger-fg); }
 </style>

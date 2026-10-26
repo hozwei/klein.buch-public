@@ -6,6 +6,7 @@
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
   import Toggle from "#lib/Toggle.svelte";
+  import Banner from "#lib/Banner.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import {
     pdfTemplatesList,
@@ -190,62 +191,64 @@
 </p>
 
 {#if loading}
-  <p class="muted">Lädt …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if loadError}
-  <div class="error-card">Konnte Vorlagen nicht laden: {loadError}</div>
+  <Banner>Konnte Vorlagen nicht laden: {loadError}</Banner>
 {:else}
-  <section class="branding">
+  <section class="branding" aria-label="Logo und Unterschrift">
     <div class="brand-block">
-      <h3>Logo</h3>
-      <p class="brand-hint">Erscheint im Kopf deiner Rechnungen und Angebote. PNG, JPG oder SVG, max. 2 MB.</p>
+      <h2 class="brand-h">Logo</h2>
+      <p class="brand-hint" id="logo-hint">Erscheint im Kopf deiner Rechnungen und Angebote. PNG, JPG, SVG, WebP oder GIF, max. 2 MB.</p>
       <div class="logo-row">
         {#if logoUrl}
-          <img class="logo-preview" src={logoUrl} alt="Firmenlogo" />
+          <img class="logo-preview" src={logoUrl} alt="Dein Firmenlogo" />
         {:else}
           <div class="logo-empty">Kein Logo</div>
         {/if}
         <div class="logo-actions">
-          <label class="logo-btn">
-            {logoBusy ? "…" : logoUrl ? "Logo ersetzen" : "Logo hochladen"}
+          <label class="logo-btn" class:busy={logoBusy}>
+            {logoBusy ? "Lädt hoch …" : logoUrl ? "Logo ersetzen" : "Logo hochladen"}
             <input
               type="file"
               accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+              aria-describedby="logo-hint"
               onchange={onLogoFile}
               disabled={logoBusy}
             />
           </label>
           {#if logoUrl}
-            <button type="button" class="brand-remove" onclick={removeLogo} disabled={logoBusy}>Entfernen</button>
+            <Button variant="secondary" onclick={removeLogo} disabled={logoBusy} ariaLabel="Logo entfernen">Entfernen</Button>
           {/if}
         </div>
       </div>
     </div>
 
     <div class="brand-block">
-      <h3>Unterschrift (nur Angebote)</h3>
-      <p class="brand-hint">
+      <h2 class="brand-h">Unterschrift (nur Angebote)</h2>
+      <p class="brand-hint" id="sig-hint">
         Optionales Unterschrift-Bild (PNG/JPG, max. 2 MB). Erscheint auf Angeboten
         über deiner Unterschriftslinie — Ort und Datum werden automatisch ergänzt.
         Nie auf Rechnungen.
       </p>
       <div class="logo-row">
         {#if signatureUrl}
-          <img class="logo-preview" src={signatureUrl} alt="Unterschrift" />
+          <img class="logo-preview" src={signatureUrl} alt="Deine Unterschrift" />
         {:else}
           <div class="logo-empty">Keine Unterschrift</div>
         {/if}
         <div class="logo-actions">
-          <label class="logo-btn">
-            {signatureBusy ? "…" : signatureUrl ? "Unterschrift ersetzen" : "Unterschrift hochladen"}
+          <label class="logo-btn" class:busy={signatureBusy}>
+            {signatureBusy ? "Lädt hoch …" : signatureUrl ? "Unterschrift ersetzen" : "Unterschrift hochladen"}
             <input
               type="file"
               accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+              aria-describedby="sig-hint"
               onchange={onSignatureFile}
               disabled={signatureBusy}
             />
           </label>
           {#if signatureUrl}
-            <button type="button" class="brand-remove" onclick={removeSignature} disabled={signatureBusy}>Entfernen</button>
+            <Button variant="secondary" onclick={removeSignature} disabled={signatureBusy} ariaLabel="Unterschrift entfernen">Entfernen</Button>
           {/if}
         </div>
       </div>
@@ -260,10 +263,10 @@
 
   </section>
 
-  <h2 class="section-h">Vorlage</h2>
-  <div class="grid">
+  <h2 class="section-h" id="tpl-h">Vorlage</h2>
+  <ul class="grid" aria-labelledby="tpl-h">
     {#each templates as t (t.name)}
-      <div
+      <li
         class="tpl"
         class:active={t.name === selected}
         class:disabled={blocked(t)}
@@ -291,7 +294,7 @@
         </div>
 
         {#if blocked(t)}
-          <p class="hint">
+          <p class="hint" id="tpl-blocked-{t.name}">
             Diese Vorlage rendert die Kleinunternehmer-Klausel nicht und kann
             nicht gewählt werden, solange du Kleinunternehmer (§19) bist.
           </p>
@@ -300,9 +303,9 @@
         <div class="tpl-foot">
           <Button
             variant="ghost"
-            size="sm"
             disabled={previewing === t.name}
             onclick={() => preview(t)}
+            ariaLabel={`Vorschau, Vorlage ${label(t.name)}`}
           >
             {previewing === t.name ? "Öffnet …" : "Vorschau"}
           </Button>
@@ -311,17 +314,18 @@
           {:else}
             <Button
               variant="secondary"
-              size="sm"
               disabled={busy || blocked(t)}
               onclick={() => choose(t)}
+              ariaLabel={`Als Standard wählen, Vorlage ${label(t.name)}`}
+              ariaDescribedby={blocked(t) ? `tpl-blocked-${t.name}` : undefined}
             >
               Als Standard wählen
             </Button>
           {/if}
         </div>
-      </div>
+      </li>
     {/each}
-  </div>
+  </ul>
 
   <p class="note">
     Eigene Vorlagen kannst du als <code>.typ</code>-Datei in
@@ -333,26 +337,27 @@
 {/if}
 
 <style>
-  /* .intro entfernt — globale .lead aus tokens.css. */
+  /* .lead — global aus tokens.css. */
   .branding {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
     gap: 1rem;
     margin-bottom: 1.5rem;
   }
   .brand-block {
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
+    background: var(--surface-card);
+    border: 1px solid var(--line);
     border-radius: var(--r-lg);
     padding: 1.1rem 1.2rem;
     box-shadow: var(--sh-sm);
+    min-width: 0;
   }
-  .brand-block h3 {
+  .brand-h {
     margin: 0 0 0.3rem;
     font-size: var(--fs-lg);
   }
   .brand-hint {
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     font-size: var(--fs-sm);
     line-height: 1.5;
     margin: 0 0 0.8rem;
@@ -365,10 +370,10 @@
   }
   .logo-preview {
     max-height: 64px;
-    max-width: 220px;
+    max-width: min(220px, 100%);
     object-fit: contain;
-    background: #fff;
-    border: 1px solid var(--c-border);
+    background: var(--surface-card);
+    border: 1px solid var(--line);
     border-radius: var(--r-md);
     padding: 4px;
   }
@@ -378,8 +383,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--c-text-subtle);
-    border: 1px dashed var(--c-border-strong);
+    color: var(--text-muted);
+    border: 1px dashed var(--line-control);
     border-radius: var(--r-md);
     font-size: var(--fs-sm);
   }
@@ -389,38 +394,42 @@
     gap: 0.5rem;
     flex-wrap: wrap;
   }
+  /* Datei-Knopf: das native Feld bleibt fokussierbar (nur unsichtbar), der
+     Fokusring liegt auf dem Label. */
   .logo-btn {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 6px;
     cursor: pointer;
     font-weight: 600;
     font-size: var(--fs-sm);
-    color: var(--c-primary-700);
-    background: var(--c-surface);
-    border: 1px solid var(--c-border-strong);
+    color: var(--accent-on-soft);
+    background: var(--surface-card);
+    border: 1px solid var(--line-control);
     border-radius: var(--r-md);
     padding: 9px 14px;
+    min-height: var(--target);
   }
-  .logo-btn:hover {
-    background: var(--c-primary-50);
-    border-color: var(--c-primary-300);
+  .logo-btn.busy { cursor: progress; }
+  .logo-btn:focus-within {
+    outline: var(--focus-width) solid var(--focus-ring);
+    outline-offset: var(--focus-offset);
+  }
+  @media (hover: hover) {
+    .logo-btn:hover {
+      background: var(--surface-hover);
+      border-color: var(--c-primary-300);
+    }
   }
   .logo-btn input {
-    display: none;
-  }
-  .brand-remove {
-    background: var(--c-surface);
-    color: var(--c-text);
-    border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md);
-    padding: 8px 13px;
-    font-size: var(--fs-sm);
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    opacity: 0;
     cursor: pointer;
-  }
-  .brand-remove:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
   }
   .sig-toggle {
     margin-top: 0.9rem;
@@ -430,19 +439,14 @@
     margin: 0 0 0.8rem;
   }
   .muted {
-    color: var(--c-text-muted);
-  }
-  .error-card {
-    color: var(--c-danger-700);
-    background: var(--c-danger-50);
-    border: 1px solid var(--c-danger-500);
-    border-radius: var(--r-lg);
-    padding: 1rem 1.2rem;
-    max-width: 46rem;
+    color: var(--text-muted);
   }
   .grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
     gap: 1rem;
     align-items: stretch;
   }
@@ -450,32 +454,35 @@
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-    background: var(--c-surface);
-    border: 1px solid var(--c-border);
+    background: var(--surface-card);
+    border: 1px solid var(--line);
     border-radius: var(--r-lg);
     padding: 1.1rem 1.2rem;
     box-shadow: var(--sh-sm);
+    min-width: 0;
   }
   .tpl.active {
     border-color: var(--c-primary-500);
     box-shadow: 0 0 0 1px var(--c-primary-500) inset, var(--sh-sm);
   }
   .tpl.disabled {
-    opacity: 0.7;
+    background: var(--surface-sunken);
   }
   .tpl-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 0.5rem;
   }
   .tpl-head h3 {
     margin: 0;
     font-size: var(--fs-lg);
+    overflow-wrap: anywhere;
   }
   .tpl-desc {
     margin: 0;
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     line-height: 1.5;
     flex: 1;
   }
@@ -487,7 +494,7 @@
   .hint {
     margin: 0;
     font-size: var(--fs-sm);
-    color: var(--c-danger-700);
+    color: var(--status-danger-fg);
     line-height: 1.45;
   }
   .tpl-foot {
@@ -500,20 +507,21 @@
   .current {
     font-size: var(--fs-sm);
     font-weight: 600;
-    color: var(--c-primary-700);
+    color: var(--accent-on-soft);
   }
   .note {
     margin-top: 1.5rem;
     max-width: 46rem;
     font-size: var(--fs-sm);
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     line-height: 1.55;
   }
   code {
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-mono);
     font-size: 0.85em;
-    background: var(--c-surface-2, #eef1f3);
+    background: var(--surface-sunken);
     padding: 1px 5px;
     border-radius: var(--r-sm);
+    overflow-wrap: anywhere;
   }
 </style>

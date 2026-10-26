@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import {
@@ -27,6 +27,20 @@
   let subject = $state("");
   let body = $state("");
   let sending = $state(false);
+  // Nach dem ersten Sende-Versuch zeigen die Felder ihre Meldungen.
+  let submitted = $state(false);
+  // Versand gelungen, aber Protokolleintrag fehlt (R4-S2-EMAILLOG): Hinweis
+  // auf der Seite statt Fehler-Toast, kein automatischer Rücksprung.
+  let sendWarning = $state<string | null>(null);
+
+  // Hinterlegte Adresse wie im Server (commands::mail): die des Kontakts. Ein
+  // anderer Empfänger verlangt beim Senden eine Bestätigung (Daten-Passwort + App-Code).
+  let storedRecipient = $derived((detail?.buyer?.email ?? "").trim());
+  let recipientDiffers = $derived(
+    !!to.trim() && to.trim().toLowerCase() !== storedRecipient.toLowerCase(),
+  );
+  let errAccount = $derived(accountId ? "" : "Bitte ein Postfach wählen.");
+  let errTo = $derived(to.trim() ? "" : "Bitte einen Empfänger angeben.");
 
   let hasAgb = $state(false);
   let hasPrivacy = $state(false);
@@ -73,12 +87,10 @@
   onMount(load);
 
   async function send() {
-    if (!accountId) {
-      flash("Bitte ein Postfach wählen (oder unter Einstellungen einrichten).", "error");
-      return;
-    }
-    if (!to.trim()) {
-      flash("Bitte einen Empfänger angeben.", "error");
+    submitted = true;
+    if (errAccount || errTo) {
+      await tick();
+      document.querySelector<HTMLElement>('#send-form [aria-invalid="true"]')?.focus();
       return;
     }
     if (!legalReady) {
@@ -95,8 +107,8 @@
         body: body || null,
       });
       flash(`Gesendet an ${res.to} (${res.attachmentCount} Anhänge).`, "ok");
-      if (res.warning) flash(res.warning, "error");
-      setTimeout(() => goto(`/quotes/${id}`), 900);
+      if (res.warning) sendWarning = res.warning;
+      else setTimeout(() => goto(`/quotes/${id}`), 900);
     } catch (e) {
       flash("Versand fehlgeschlagen: " + String(e), "error");
     } finally {
@@ -109,7 +121,7 @@
   {#snippet actions()}
     {#if detail && !error}
       <a class="btn-secondary" href={`/quotes/${id}`}>Abbrechen</a>
-      <button class="btn-primary" onclick={send} disabled={sending || accounts.length === 0 || !legalReady}>
+      <button type="submit" form="send-form" class="btn-primary" disabled={sending || accounts.length === 0 || !legalReady}>
         {sending ? "Sende …" : "Angebot senden"}
       </button>
     {/if}
@@ -120,12 +132,19 @@
   <p class="muted">Lade …</p>
 {:else if error}
   <Banner>{error}</Banner>
-  <p><a href={`/quotes/${id}`}>zurück</a></p>
+  <p><a class="btn-secondary" href={`/quotes/${id}`}>Zurück zum Angebot</a></p>
 {:else if detail}
   {@const q = detail.quote}
+  {#if sendWarning}
+    <Banner kind="warning">
+      {sendWarning}
+      <a class="txt-link" href="/settings/mail-log">Versandprotokoll öffnen</a> ·
+      <a class="txt-link" href={`/quotes/${id}`}>zum Angebot</a>
+    </Banner>
+  {/if}
   <section class="card summary">
     <div>
-      <strong>{q.quoteNumber}</strong> · {date(q.quoteDate)} · {euro(q.grossAmountCents)}
+      <strong class="doc-no">{q.quoteNumber}</strong> · {date(q.quoteDate)} · <span class="num">{euro(q.grossAmountCents)}</span>
     </div>
     <div class="muted">
       Angehängt werden: <code>{q.quoteNumber}.pdf</code> · <code>AGB.pdf</code> · <code>Datenschutz.pdf</code>
@@ -135,31 +154,59 @@
   {#if !legalReady}
     <Banner kind="warning">
       Versand nicht möglich: Es fehlt
-      {#if !hasAgb}eine aktive AGB-Version{/if}{#if !hasAgb && !hasPrivacy} und {/if}{#if !hasPrivacy}eine aktive Datenschutz-Version{/if}.
-      Bitte unter <a href="/settings/legal">Einstellungen → AGB &amp; Datenschutz</a> hochladen und aktivieren.
+      {#if !hasAgb}eine aktive AGB-Version{/if}{#if !hasAgb && !hasPrivacy}{" und "}{/if}{#if !hasPrivacy}eine aktive Datenschutz-Version{/if}.
+      Bitte unter <a class="txt-link" href="/settings/legal">Einstellungen → AGB &amp; Datenschutz</a> hochladen und aktivieren.
     </Banner>
   {/if}
 
   {#if accounts.length === 0}
     <Banner kind="warning">
       Noch kein Postfach eingerichtet. Bitte zuerst unter
-      <a href="/settings/mail">Einstellungen → E-Mail-Versand</a> einrichten.
+      <a class="txt-link" href="/settings/mail">Einstellungen → E-Mail-Versand</a> einrichten.
     </Banner>
   {/if}
 
-  <section class="card">
+  <form id="send-form" class="card" onsubmit={(e) => { e.preventDefault(); send(); }} novalidate>
     <div class="grid">
       <label>
-        Postfach
-        <select bind:value={accountId}>
+        <span>Postfach <span class="req" aria-hidden="true">*</span></span>
+        <select
+          bind:value={accountId}
+          required
+          aria-invalid={submitted && errAccount ? "true" : undefined}
+          aria-describedby={submitted && errAccount ? "send-account-err" : undefined}
+        >
           {#each accounts as a (a.id)}
-            <option value={a.id}>{a.label} — {a.fromEmail}{a.isDefault === 1 ? " ★" : ""}</option>
+            <option value={a.id}>{a.label} — {a.fromEmail}{a.isDefault === 1 ? " (Standard)" : ""}</option>
           {/each}
         </select>
+        {#if submitted && errAccount}<span id="send-account-err" class="field-err">{errAccount}</span>{/if}
       </label>
       <label>
-        Empfänger
-        <input type="email" bind:value={to} placeholder="kunde@example.com" />
+        <span>Empfänger <span class="req" aria-hidden="true">*</span></span>
+        <input
+          type="email"
+          inputmode="email"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          bind:value={to}
+          required
+          aria-invalid={submitted && errTo ? "true" : undefined}
+          aria-describedby={submitted && errTo ? "send-to-err" : recipientDiffers ? "send-to-differs" : undefined}
+        />
+        {#if submitted && errTo}
+          <span id="send-to-err" class="field-err">{errTo}</span>
+        {:else if recipientDiffers}
+          <span id="send-to-differs" class="field-warn">
+            {#if storedRecipient}
+              Weicht von der hinterlegten Adresse {storedRecipient} ab.
+            {:else}
+              Beim Kontakt ist keine E-Mail-Adresse hinterlegt.
+            {/if}
+            Beim Senden fragt Klein.Buch zur Bestätigung Daten-Passwort und App-Code ab.
+          </span>
+        {/if}
       </label>
     </div>
     <label class="full">
@@ -170,22 +217,31 @@
       Nachricht (kannst du anpassen)
       <textarea rows="14" bind:value={body}></textarea>
     </label>
-
-  </section>
+  </form>
 {/if}
 
 <style>
   /* .card entfernt — globale Definition aus tokens.css. */
   .summary { display: flex; flex-direction: column; gap: 0.25rem; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem 1rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #374151; gap: 0.25rem; margin-bottom: 0.75rem; min-width: 0; }
+  label { display: flex; flex-direction: column; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); gap: 0.25rem; margin-bottom: 0.75rem; min-width: 0; }
   label.full { width: 100%; }
   input, select, textarea {
-    padding: 0.45rem 0.55rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.95rem;
-    font-family: inherit;
+    padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
+    font: inherit; font-weight: 400; color: var(--text);
   }
   textarea { resize: vertical; }
+  .req { color: var(--status-danger-fg); }
+  .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
+  .field-warn {
+    font-size: var(--fs-xs); font-weight: 400; color: var(--status-warning-fg);
+    background: var(--status-warning-bg); border-left: 3px solid var(--status-warning-line);
+    padding: 4px 8px; border-radius: var(--r-sm); overflow-wrap: anywhere;
+  }
+  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
+  .doc-no { font-family: var(--font-mono); }
+  .num { font-variant-numeric: tabular-nums; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
-  code { background: #f3f4f6; padding: 0.05rem 0.3rem; border-radius: 3px; }
-  .muted { color: #6b7280; }
+  code { background: var(--surface-sunken); padding: 0.05rem 0.3rem; border-radius: 3px; overflow-wrap: anywhere; }
+  .muted { color: var(--text-muted); }
 </style>

@@ -3,6 +3,13 @@
   import type { AttachmentView } from "#lib/types.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import Button from "#lib/Button.svelte";
+  import { randomId } from "#lib/browser.ts";
+
+  // Zulässige Typen wie im Server (uploads.rs, UploadKind::Attachment = DOCS).
+  // Bewusst ohne `capture`: so bietet das Handy Kamera, Galerie und Dateien an.
+  const ACCEPT =
+    "application/pdf,.pdf,image/png,image/jpeg,image/webp,image/gif,image/tiff,.tif,.tiff,application/xml,text/xml,.xml";
+  const uid = randomId();
 
   let {
     parentType,
@@ -74,13 +81,30 @@
   {/if}
 
   <div class="row">
-    <input
-      bind:this={fileInput}
-      type="file"
-      onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
-    />
-    <input class="kb-input label-in" type="text" bind:value={label} placeholder="Bezeichnung (optional)" />
-    <Button variant="secondary" size="sm" onclick={upload} disabled={busy || !file}>
+    <div class="fld file">
+      <label for="att-file-{uid}">Datei</label>
+      <input
+        id="att-file-{uid}"
+        bind:this={fileInput}
+        type="file"
+        accept={ACCEPT}
+        aria-describedby="att-hint-{uid}"
+        onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+      />
+      <small id="att-hint-{uid}" class="kb-muted hint">PDF, Bild (PNG, JPEG, WebP, GIF, TIFF) oder XML, höchstens 20 MB.</small>
+    </div>
+    <div class="fld name">
+      <label for="att-label-{uid}">Bezeichnung (optional)</label>
+      <input
+        id="att-label-{uid}"
+        class="kb-input"
+        type="text"
+        bind:value={label}
+        autocomplete="off"
+        enterkeyhint="done"
+      />
+    </div>
+    <Button variant="secondary" size="sm" onclick={upload} disabled={busy || !file} ariaLabel={busy ? "Wird angehängt" : undefined}>
       {busy ? "…" : "Anhängen"}
     </Button>
   </div>
@@ -96,6 +120,10 @@
   }
   .fname { font-weight: 500; }
   .meta { font-size: 0.85rem; }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .label-in { width: auto; flex: 1; min-width: 12rem; }
+  .row { display: flex; gap: var(--sp-3); align-items: flex-end; flex-wrap: wrap; }
+  .fld { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+  .fld label { font-size: var(--fs-sm); font-weight: 600; }
+  .fld.file { flex: 1 1 16rem; }
+  .fld.name { flex: 1 1 12rem; }
+  .hint { font-size: var(--fs-xs); }
 </style>

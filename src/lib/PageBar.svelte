@@ -3,6 +3,10 @@
   // Hauptbereichs stehen: links Zurück + Titel, rechts die Hauptaktionen.
   // Spannt über das Padding des Hauptbereichs (--main-pad), damit es wie eine
   // durchgehende Leiste wirkt; Inhalt scrollt darunter durch.
+  //
+  // 2.4.11 (U1): Solange die Leiste klebt, meldet sie ihre Höhe als
+  // `--pagebar-h` an <html>; `scroll-padding-top` (tokens.css, +layout.svelte)
+  // hält fokussierte Elemente darunter sichtbar.
   import type { Snippet } from "svelte";
 
   let {
@@ -16,11 +20,36 @@
     title?: string;
     actions?: Snippet;
   } = $props();
+
+  let bar = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    const el = bar;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    const update = () => {
+      const sticky = getComputedStyle(el).position === "sticky";
+      root.style.setProperty(
+        "--pagebar-h",
+        sticky ? `${Math.ceil(el.getBoundingClientRect().height)}px` : "0px",
+      );
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    const mq = matchMedia("(max-width: 600px)");
+    mq.addEventListener("change", update);
+    return () => {
+      ro.disconnect();
+      mq.removeEventListener("change", update);
+      root.style.removeProperty("--pagebar-h");
+    };
+  });
 </script>
 
-<div class="pagebar">
+<div class="pagebar" bind:this={bar}>
   <div class="pb-left">
-    {#if back}<a class="pb-back" href={back}>← {backLabel}</a>{/if}
+    {#if back}<a class="pb-back" href={back}><span aria-hidden="true">←</span> {backLabel}</a>{/if}
     {#if title}<h1 class="pb-title">{title}</h1>{/if}
   </div>
   {#if actions}<div class="pb-right">{@render actions()}</div>{/if}
@@ -29,72 +58,68 @@
 <style>
   .pagebar {
     position: sticky;
-    /* unter der mobilen Menüleiste (Plan W10), sonst bündig oben */
+    /* unter der mobilen Kopfleiste (Drawer-Band), sonst bündig oben */
     top: var(--sticky-top, 0);
     z-index: 30;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0.5rem 1rem;
     flex-wrap: wrap;
-    /* G2-UX.3.2 — Frosted-Glass-Vibrancy: halbtransparenter Hintergrund über dem
-       darunter scrollenden Inhalt. Beim Scrollen entsteht der typische macOS-
-       Toolbar-Effekt (Content schimmert weich durch). Fallback ohne
-       backdrop-filter: blickdichtes --c-bg, gleiches Layout. */
-    background: rgba(244, 247, 249, 0.78);
-    -webkit-backdrop-filter: blur(14px) saturate(180%);
-    backdrop-filter: blur(14px) saturate(180%);
+    /* U1: deckende Fläche statt Glas-Effekt (Designleitlinie §7). */
+    background: var(--surface-page);
     /* bündig oben (main hat kein Top-Padding); volle Breite über das seitliche
        main-Padding hinweg, damit Inhalt sauber darunter durchscrollt. */
     margin: 0 calc(var(--main-pad) * -1) 1.25rem;
     padding: 0.7rem var(--main-pad);
-    /* Hairline statt 1 px solid — wirkt dezenter, betont das Glas-Gefühl. */
-    border-bottom: 1px solid rgba(16, 36, 44, 0.08);
+    border-bottom: 1px solid var(--line);
   }
-  /* Fallback für (sehr alte) Browser ohne backdrop-filter — Chromium hat die API
-     seit Version 76 (2019), Safari seit 9 (mit Präfix), deshalb in der Praxis selten. */
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .pagebar { background: var(--c-bg); }
-  }
-  /* Plan W10: Auf dem Handy klebt nur die Menüleiste; eine klebende PageBar
+  /* Plan W10: Auf dem Handy klebt nur die Kopfleiste; eine klebende PageBar
      mit umbrechenden Aktionen würde ein Viertel des Bildschirms belegen. */
   @media (max-width: 600px) {
     .pagebar { position: static; }
+    /* Langer Titel (z. B. „Entwurf RE-2026-0001 bearbeiten“) bekommt eine eigene
+       Zeile statt drei schmaler Zeilen neben dem Zurück-Knopf (U1-Sichtprüfung). */
+    .pb-left { flex-wrap: wrap; row-gap: 0.5rem; }
   }
-  .pb-left { display: flex; align-items: center; gap: 0.85rem; min-width: 0; }
-  /* Zurück-Pille — IDENTISCH zu allen .pb-right-Buttons (Manuel-Hardline
+  .pb-left { display: flex; align-items: center; gap: 0.85rem; min-width: 0; flex: 1 1 auto; }
+  /* Zurück-Pille — identisch zu allen .pb-right-Buttons (Manuel-Hardline
      2026-05-26: oben links = oben rechts = pixelgenau gleich). */
   .pb-back {
+    /* nie schmaler als die Beschriftung (U1: Text lief bei 320 px über den Rahmen) */
+    flex: none;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
     gap: 8px !important;
     white-space: nowrap;
     padding: 9px 16px !important;
+    min-height: var(--target);
+    min-width: var(--target);
     font: inherit !important;
     font-weight: 600 !important;
     line-height: 1.2 !important;
     border-width: 1px !important;
     border-style: solid !important;
-    border-color: var(--c-border-strong);
+    border-color: var(--line-control);
     border-radius: var(--r-md) !important;
     box-sizing: border-box !important;
-    background: var(--c-surface);
-    color: var(--c-primary-700);
+    background: var(--surface-card);
+    color: var(--accent-on-soft);
     text-decoration: none;
   }
-  .pb-back:hover { background: var(--c-primary-50); border-color: var(--c-primary-300); }
+  @media (hover: hover) {
+    .pb-back:hover { background: var(--surface-hover); border-color: var(--c-primary-300); }
+  }
+  /* Titel bricht um statt abgeschnitten zu werden (1.4.12 Textabstände). */
   .pb-title {
     font-size: var(--fs-xl); font-weight: 700; margin: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0; overflow-wrap: anywhere; line-height: 1.25;
   }
   .pb-right { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; }
-  /* PageBar-Forcing — ALLE Buttons in .pb-right werden hart auf identische
+  /* PageBar-Forcing — ALLE Buttons in .pb-right werden auf identische
      Specs gezwungen, egal aus welchem Ökosystem (Button.svelte = .btn /
-     tokens.css = .btn-primary/.btn-secondary/.btn-ghost/.btn-danger/.link*).
-     Erzwingt alle layouted-Eigenschaften, die Höhe und Schrift bestimmen.
-     Manuel-Hardline 2026-05-26: Liste-PageBar und Unterseite-PageBar
-     pixelgenau identisch. */
+     tokens.css = .btn-primary/… /.link*). Manuel-Hardline 2026-05-26. */
   :global(.pb-right .btn),
   :global(.pb-right .btn-primary),
   :global(.pb-right .btn-secondary),
@@ -105,6 +130,7 @@
   :global(.pb-right .link-a),
   :global(.pb-right .link-btn) {
     padding: 9px 16px !important;
+    min-height: var(--target);
     font: inherit !important;
     font-weight: 600 !important;
     line-height: 1.2 !important;

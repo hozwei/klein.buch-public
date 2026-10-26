@@ -172,14 +172,12 @@
     <h2 class="help-title">Handbuch</h2>
 
     <div class="search">
-      <label class="visually-hidden" for="handbook-search">
-        Im Handbuch suchen
-      </label>
+      <label class="search-label" for="handbook-search">Im Handbuch suchen</label>
       <input
         id="handbook-search"
         type="search"
         class="search-input"
-        placeholder="Suchen …"
+        enterkeyhint="search"
         autocomplete="off"
         spellcheck="false"
         bind:value={query}
@@ -191,7 +189,7 @@
           type="button"
           class="search-clear"
           aria-label="Suche leeren"
-          onclick={clearQuery}>×</button
+          onclick={clearQuery}><span aria-hidden="true">×</span></button
         >
       {/if}
     </div>
@@ -260,7 +258,10 @@
     {/if}
   </aside>
 
-  <article class="help-content">
+  <!-- Der Text scrollt am Desktop in sich: per Tastatur erreichbar und benannt
+       (axe scrollable-region-focusable, 2.1.1). -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <article class="help-content" tabindex="0" aria-label="Handbuchtext">
     {@render children?.()}
   </article>
 
@@ -288,7 +289,8 @@
     align-items: start;
     /* Wir scrollen die Spalten unabhängig; die äußere `main` scrollt nicht
        mit. Höhe = Viewport minus den Top-Pad, den die App-Shell setzt. */
-    height: calc(100vh - var(--main-pad));
+    height: calc(100vh - var(--main-pad) - var(--sticky-top));
+    height: calc(100dvh - var(--main-pad) - var(--sticky-top));
   }
 
   /* Schmaler werdende Fenster: TOC-Spalte fällt weg, Sidebar wird schmaler. */
@@ -314,35 +316,28 @@
 
   /* --- Suche ----------------------------------------------------------- */
 
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
   .search {
     position: relative;
     margin: 0 0.4rem 0.85rem;
   }
+  .search-label {
+    display: block;
+    margin: 0 0 var(--sp-1);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  /* Rahmen ≥ 3:1 (--line-control), Fokusring global aus tokens.css. */
   .search-input {
     width: 100%;
     box-sizing: border-box;
-    padding: 0.4rem 1.8rem 0.4rem 0.6rem;
+    min-height: max(var(--target), 32px);
+    padding: 0.4rem calc(max(var(--target), 28px) + 0.25rem) 0.4rem 0.6rem;
     font-size: var(--fs-sm);
-    border: 1px solid var(--c-border);
+    border: 1px solid var(--line-control);
     border-radius: var(--r-md);
-    background: var(--c-surface-2);
-    color: var(--c-text);
-  }
-  .search-input:focus {
-    outline: 2px solid var(--c-primary-300);
-    outline-offset: 1px;
-    border-color: var(--c-primary-400);
+    background: var(--surface-card);
+    color: var(--text);
   }
   /* WebKit blendet das eingebaute „×" beim type=search ein — wir setzen
      unseren eigenen Clear-Button, also nehmen wir das native weg. */
@@ -350,23 +345,30 @@
     -webkit-appearance: none;
     appearance: none;
   }
+  /* Sitzt im Feld rechts unten (Label steht darüber), Trefferfläche ≥ --target. */
   .search-clear {
     position: absolute;
-    top: 50%;
-    right: 0.35rem;
-    transform: translateY(-50%);
+    bottom: 0;
+    right: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: max(var(--target), 28px);
+    height: max(var(--target), 32px);
     border: 0;
     background: transparent;
     cursor: pointer;
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     font-size: 1.1rem;
     line-height: 1;
-    padding: 0.1rem 0.35rem;
-    border-radius: var(--r-sm);
+    padding: 0;
+    border-radius: var(--r-md);
   }
-  .search-clear:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
+  @media (hover: hover) {
+    .search-clear:hover {
+      background: var(--surface-hover);
+      color: var(--accent-on-soft);
+    }
   }
 
   /* --- Trefferliste ---------------------------------------------------- */
@@ -412,9 +414,11 @@
     color: var(--c-text);
     font-family: inherit;
   }
-  .result:hover {
-    background: var(--c-primary-50);
-    border-color: var(--c-primary-100);
+  @media (hover: hover) {
+    .result:hover {
+      background: var(--c-primary-50);
+      border-color: var(--c-primary-100);
+    }
   }
   .result.active {
     background: var(--c-primary-100);
@@ -448,6 +452,9 @@
     color: var(--c-text-muted);
     word-break: break-word;
   }
+  /* U1 (axe color-contrast): Auf dem getönten Aktiv-Hintergrund reicht
+     --c-text-muted nicht (4,27:1) — dort volle Textfarbe. */
+  .result.active .result-snippet { color: var(--c-text); }
   /* Highlight aus `buildSnippet()` — Treffer-Terme stehen in `<mark>`. */
   .result-snippet :global(mark) {
     background: var(--c-primary-100);
@@ -493,9 +500,11 @@
     letter-spacing: 0.05em;
     font-weight: 700;
   }
-  .cat-header:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
+  @media (hover: hover) {
+    .cat-header:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+    }
   }
   .cat-arrow {
     display: inline-block;
@@ -536,10 +545,12 @@
     text-decoration: none;
     line-height: 1.35;
   }
-  .cat a:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-    text-decoration: none;
+  @media (hover: hover) {
+    .cat a:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+      text-decoration: none;
+    }
   }
   .cat li.active a {
     background: var(--c-primary-100);
@@ -599,19 +610,37 @@
     text-decoration: none;
     line-height: 1.35;
   }
-  .toc-list a:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-    text-decoration: none;
+  @media (hover: hover) {
+    .toc-list a:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+      text-decoration: none;
+    }
   }
   .toc-list .toc-level-3 a {
     padding-left: 1.2rem;
     font-size: var(--fs-xs);
   }
 
+  /* Trefferflächen im Drawer-Band/Touch (U1): Kategorien, Kapitel und
+     Inhaltsverzeichnis mindestens --target hoch. */
+  .cat-header,
+  .cat a,
+  .toc-list a,
+  .result {
+    min-height: var(--target);
+  }
+  .cat a,
+  .toc-list a {
+    display: flex;
+    align-items: center;
+  }
+
   /* Handy/schmale Tablets (Plan W10): Inhaltsverzeichnis und Text
-     untereinander; die Seite scrollt als Ganzes statt der Spalten. */
-  @media (max-width: 760px) {
+     untereinander; die Seite scrollt als Ganzes statt der Spalten. U1: auch
+     bei niedriger Höhe (Handy quer, 844×390), sonst bleiben für zwei in sich
+     scrollende Spalten nur wenige Zeilen. */
+  @media (max-width: 760px), (max-height: 520px) {
     .help-shell {
       grid-template-columns: 1fr;
       gap: 1rem;
@@ -620,6 +649,7 @@
     .help-sidebar {
       height: auto;
       max-height: 50vh;
+      max-height: 50dvh;
     }
     .help-content {
       height: auto;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { todayBerlin } from "#lib/date.ts";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { invoicesGet, invoicesCancel } from "#lib/api.ts";
@@ -17,6 +17,9 @@
   let error = $state<string | null>(null);
   let reason = $state("");
   let stornoDate = $state(todayBerlin());
+  const today = todayBerlin();
+  // Nach dem ersten Absende-Versuch zeigen die Felder ihre Meldungen.
+  let submitted = $state(false);
 
   let id = $derived(page.params.id ?? "");
   let canCancel = $derived(
@@ -62,14 +65,24 @@
 
   onMount(load);
 
+  // Lauf F8: Meldung am Datumsfeld statt Toast; der Server prüft dasselbe.
+  let errDate = $derived(
+    !stornoDate
+      ? "Bitte das Storno-Datum angeben."
+      : minStornoDate && stornoDate < minStornoDate
+        ? `Das Storno-Datum liegt frühestens am ${date(minStornoDate)} — am Rechnungsdatum bzw. am letzten Zahlungseingang.`
+        : stornoDate > today
+          ? "Das Storno-Datum darf nicht in der Zukunft liegen."
+          : "",
+  );
+  let errReason = $derived(reason.trim() ? "" : "Bitte einen Grund angeben — er ist gesetzlich vorgeschrieben und steht auf dem Storno-Beleg.");
+
   async function submit() {
     if (!detail) return;
-    if (!stornoDate) {
-      flash("Storno-Datum ist Pflicht.", "error");
-      return;
-    }
-    if (!reason.trim()) {
-      flash("Bitte gib einen Grund an — das ist gesetzlich vorgeschrieben.", "error");
+    submitted = true;
+    if (errDate || errReason) {
+      await tick();
+      document.querySelector<HTMLElement>('#cancel-form [aria-invalid="true"]')?.focus();
       return;
     }
     submitting = true;
@@ -111,16 +124,19 @@
   {#if inv.status === "canceled"}
     <Banner kind="warning">Diese Rechnung ist bereits storniert.</Banner>
   {:else if !inv.lockedAt}
-    <Banner kind="warning">Entwürfe kann man nicht stornieren — lösch ihn einfach direkt.</Banner>
+    <Banner kind="warning">
+      Einen Entwurf stornierst du nicht: Du kannst ihn bearbeiten oder auf der
+      <a class="txt-link" href={`/invoices/${id}`}>Rechnungsseite</a> mit Grund verwerfen.
+    </Banner>
   {:else if inv.isStornoFor}
     <Banner kind="warning">Eine Storno-Rechnung lässt sich nicht noch einmal stornieren.</Banner>
   {:else}
     <section class="card">
       <h2>Original-Rechnung</h2>
       <dl>
-        <dt>Nummer</dt><dd>{inv.invoiceNumber}</dd>
+        <dt>Nummer</dt><dd class="doc-no">{inv.invoiceNumber}</dd>
         <dt>Datum</dt><dd>{date(inv.invoiceDate)}</dd>
-        <dt>Brutto</dt><dd>{euro(inv.grossAmountCents)}</dd>
+        <dt>Brutto</dt><dd class="kb-num-l">{euro(inv.grossAmountCents)}</dd>
         <dt>Empfänger</dt><dd>{detail.buyer?.name ?? "—"}</dd>
       </dl>
     </section>
@@ -134,24 +150,39 @@
         verlangt es das Gesetz.
       </p>
       <form id="cancel-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
+        <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
         <label>
-          Storno-Datum *
+          <span>Storno-Datum <span class="req" aria-hidden="true">*</span></span>
           <input
             type="date"
             bind:value={stornoDate}
             min={minStornoDate}
-            max={todayBerlin()}
+            max={today}
             required
+            aria-invalid={submitted && errDate ? "true" : undefined}
+            aria-describedby={submitted && errDate ? "storno-date-err" : "storno-date-hint"}
           />
+          {#if submitted && errDate}
+            <span id="storno-date-err" class="field-err">{errDate}</span>
+          {:else}
+            <span id="storno-date-hint" class="field-hint">Frühestens am {date(minStornoDate)} (Rechnungsdatum bzw. letzter Zahlungseingang), spätestens heute.</span>
+          {/if}
         </label>
         <label>
-          Grund * (steht später auf dem Storno-Beleg)
+          <span>Grund <span class="req" aria-hidden="true">*</span> (steht später auf dem Storno-Beleg)</span>
           <textarea
             rows="4"
             bind:value={reason}
             required
-            placeholder="z. B. Falscher Empfänger / Rechnung doppelt ausgestellt / Konditionen neu vereinbart"
+            aria-required="true"
+            aria-invalid={submitted && errReason ? "true" : undefined}
+            aria-describedby={submitted && errReason ? "storno-reason-err" : "storno-reason-hint"}
           ></textarea>
+          {#if submitted && errReason}
+            <span id="storno-reason-err" class="field-err">{errReason}</span>
+          {:else}
+            <span id="storno-reason-hint" class="field-hint">Zum Beispiel: falscher Empfänger, Rechnung doppelt ausgestellt, Konditionen neu vereinbart.</span>
+          {/if}
         </label>
       </form>
     </section>
@@ -161,14 +192,22 @@
 <style>
   /* .card entfernt — globale Definition aus tokens.css. */
   dl { display: grid; grid-template-columns: 8rem 1fr; gap: 0.25rem 0.75rem; }
-  dt { color: #6b7280; font-size: 0.85rem; }
-  label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; margin-bottom: 1rem; }
+  dt { color: var(--text-muted); font-size: var(--fs-sm); }
+  dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .doc-no { font-family: var(--font-mono); }
+  .kb-num-l { font-variant-numeric: tabular-nums; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin-bottom: 1rem; }
   input, textarea {
-    padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px;
-    font-size: 0.95rem; font-family: inherit;
+    padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
+    font: inherit; font-weight: 400; color: var(--text);
   }
   textarea { resize: vertical; }
-  .info { background: #fef3c7; padding: 0.75rem 1rem; border-left: 4px solid #f59e0b; border-radius: 4px; font-size: 0.9rem; }
+  .req-legend { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
+  .req { color: var(--status-danger-fg); }
+  .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
+  .field-hint { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
+  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
+  .info { background: var(--status-warning-bg); color: var(--text); padding: 0.75rem 1rem; border-left: 4px solid var(--status-warning-line); border-radius: var(--r-sm); font-size: var(--fs-base); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
-  .muted { color: #6b7280; }
+  .muted { color: var(--text-muted); }
 </style>

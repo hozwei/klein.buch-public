@@ -197,7 +197,7 @@
 <p class="sub">
   Vorlagen für regelmäßige Rechnungen an Kunden — z. B. monatliche Server-Wartung.
   {#if !loading && rows.length > 0}
-    <span class="counts">{activeCount} aktiv{#if dueCount > 0} · <strong class="due-txt">{dueCount} fällig</strong>{/if}</span>
+    <span class="counts">{activeCount} aktiv{#if dueCount > 0}{" · "}<strong class="due-txt">{dueCount} fällig</strong>{/if}</span>
   {/if}
 </p>
 
@@ -229,13 +229,14 @@
   </div>
 
   <table class="kb-table cards">
+    <caption class="kb-visually-hidden">Vorlagen für wiederkehrende Rechnungen</caption>
     <thead>
       <tr>
         <th>Vorlage</th>
         <th>Rhythmus</th>
         <th>Nächste Fälligkeit</th>
         <th>Modus</th>
-        <th class="actions-col"></th>
+        <th class="actions-col"><span class="kb-visually-hidden">Aktionen</span></th>
       </tr>
     </thead>
     <tbody>
@@ -267,17 +268,17 @@
               {#if s.active === 1}
                 {#if isDue(s)}
                   <Button variant="primary" size="sm" onclick={() => createNow(s)} disabled={busyId === s.id}
-                    title="Rechnung für den fälligen Stichtag jetzt erstellen">Jetzt erstellen</Button>
+                    title="Rechnung für den fälligen Stichtag jetzt erstellen" ariaLabel={`Rechnung für „${s.label}“ jetzt erstellen`}>Jetzt erstellen</Button>
                 {/if}
                 {#if hasBacklog(s)}
                   <Button variant="secondary" size="sm" onclick={() => resolveBacklog(s)} disabled={busyId === s.id}
-                    title="Verpasste Termine nachholen oder ab heute fortsetzen">Rückstand …</Button>
+                    title="Verpasste Termine nachholen oder ab heute fortsetzen" ariaLabel={`Rückstand von „${s.label}“ klären`}>Rückstand …</Button>
                 {/if}
-                <Button variant="secondary" size="sm" href={`/recurring-invoices/new?id=${s.id}`}>Bearbeiten</Button>
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Pausieren</Button>
+                <Button variant="secondary" size="sm" href={`/recurring-invoices/new?id=${s.id}`} ariaLabel={`„${s.label}“ bearbeiten`}>Bearbeiten</Button>
+                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`„${s.label}“ pausieren`}>Pausieren</Button>
               {:else}
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id}>Fortsetzen</Button>
-                <Button variant="secondary" size="sm" href={`/recurring-invoices/new?id=${s.id}`}>Bearbeiten</Button>
+                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`„${s.label}“ fortsetzen`}>Fortsetzen</Button>
+                <Button variant="secondary" size="sm" href={`/recurring-invoices/new?id=${s.id}`} ariaLabel={`„${s.label}“ bearbeiten`}>Bearbeiten</Button>
               {/if}
             </div>
           </td>
@@ -288,25 +289,26 @@
 {/if}
 
 <style>
-  .sub { margin: 0 0 0.5rem; color: var(--c-text-muted); font-size: 0.9rem; }
+  .sub { margin: 0 0 0.5rem; color: var(--text-muted); font-size: 0.9rem; }
   .counts { margin-left: 0.25rem; }
-  .due-txt { color: var(--c-warning-700); }
-  .legend { font-size: 0.82rem; color: var(--c-text-muted); background: var(--c-surface-2); border: 1px solid var(--c-border); border-radius: var(--r-md); padding: 0.5rem 0.75rem; margin: 0.9rem 0; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+  .due-txt { color: var(--status-warning-fg); }
+  .legend { font-size: 0.82rem; color: var(--text-muted); background: var(--surface-sunken); border: 1px solid var(--line); border-radius: var(--r-md); padding: 0.5rem 0.75rem; margin: 0.9rem 0; display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
   .toolbar { display: flex; align-items: center; gap: 1rem; margin: 0.5rem 0 0.75rem; flex-wrap: wrap; }
-  .chk { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--c-text-muted); }
+  .chk { display: inline-flex; align-items: center; gap: 0.35rem; min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); }
   table { width: 100%; }
   .actions-col { text-align: right; }
-  .abo-name { font-weight: 600; color: var(--c-text); }
-  .abo-meta { font-size: 0.78rem; color: var(--c-text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+  .abo-name { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+  .abo-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .muted-cell { color: var(--c-text-muted); }
-  tr.paused { opacity: 0.6; }
-  tr.is-due td { background: var(--c-warning-50); }
+  .muted-cell { color: var(--text-muted); }
+  /* Pausiert: gedämpft über die Textfarbe statt Deckkraft (Kontrast 1.4.3). */
+  tr.paused td { color: var(--text-muted); background: var(--surface-sunken); }
+  tr.is-due td { background: var(--status-warning-bg); }
   td.actions { text-align: right; white-space: nowrap; }
   .act-row { display: inline-flex; gap: 0.4rem; justify-content: flex-end; flex-wrap: wrap; }
-  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--c-text-muted); background: var(--c-surface); border: 1px dashed var(--c-border-strong); border-radius: var(--r-lg); }
+  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--surface-card); border: 1px dashed var(--line-control); border-radius: var(--r-lg); }
   .empty p { margin: 0 0 1rem; }
-  .muted { color: var(--c-text-muted); }
+  .muted { color: var(--text-muted); }
   /* W10: In der Karten-Ansicht dürfen die Aktions-Buttons umbrechen. */
   @media (max-width: 820px) {
     td.actions { white-space: normal; }

@@ -29,19 +29,21 @@
     margin: 0.5rem 0 1rem;
     line-height: 1.45;
   }
+  /* Rollen-Tokens; Kante links betont, Status nie nur über Farbe (Text trägt ihn). */
+  .banner { border-left-width: 4px; overflow-wrap: anywhere; }
   .banner.error {
-    background: var(--c-danger-50);
-    color: var(--c-danger-700);
-    border-color: #efc6c9;
+    background: var(--status-danger-bg);
+    color: var(--status-danger-fg);
+    border-color: var(--status-danger-line);
   }
   .banner.warning {
-    background: var(--c-warning-50);
-    color: var(--c-warning-700);
-    border-color: #f3dcae;
+    background: var(--status-warning-bg);
+    color: var(--status-warning-fg);
+    border-color: var(--status-warning-line);
   }
   .banner.info {
-    background: var(--c-info-50);
-    color: var(--c-info-700);
-    border-color: #cfe0e6;
+    background: var(--status-info-bg);
+    color: var(--status-info-fg);
+    border-color: var(--status-info-line);
   }
 </style>

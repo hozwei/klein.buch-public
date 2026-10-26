@@ -122,3 +122,96 @@ export function validationStatusLabel(value: string | null): string {
       return "nicht geprüft";
   }
 }
+
+// ---- Audit-Protokoll (Lauf 2026.11 U1) -------------------------------------
+
+/**
+ * Anzeige-Labels für Audit-Aktionen, die der Server schreibt, die aber in der
+ * Label-Tabelle der Seite Einstellungen → Audit-Protokoll
+ * (`routes/settings/audit-trail/+page.svelte`, `ACTION_LABELS`) fehlen —
+ * Stand 26.10.2026, ermittelt aus den Aufrufen von `audit_log::append(_in)`.
+ * Die Seite übernimmt sie mit `{ ...ACTION_LABELS, ...AUDIT_ACTION_LABELS_ADDITIONAL }`
+ * (Übergabe an den Eigentümer der Seite). Die Labels `archive.read`,
+ * `archive.integrity_missing` und `archive.integrity_unreadable` (Übergabe
+ * Lauf F, W13-HASH-UI-LABELS) stehen dort bereits.
+ */
+export const AUDIT_ACTION_LABELS_ADDITIONAL: Record<string, string> = {
+  "asset.update": "Anlage geändert",
+  "attachment.add": "Anhang hinzugefügt",
+  "backup.daily_time_set": "Uhrzeit des Tages-Backups geändert",
+  "backup.history_rescanned": "Backup-Verlauf neu eingelesen",
+  "backup.mirror.ok": "Backup extern gespiegelt",
+  "backup.mirror.failed": "Externe Spiegelung fehlgeschlagen",
+  "backup.mirror.skipped": "Externe Spiegelung ausgesetzt",
+  "backup.passphrase.setup": "Daten-Passwort eingerichtet",
+  "backup.requested": "Backup angefordert",
+  "backup.rotation.prune": "Alte Backups aufgeräumt",
+  "backup.skipped_locked": "Backup übersprungen (gesperrt)",
+  "backup.targets.set": "Backup-Ziele geändert",
+  "backup.unlock.ok": "Datenbank entsperrt",
+  "depreciation.disposal_partial": "Abschreibung im Abgangsjahr gebucht",
+  "depreciation.reset_for_disposal": "Abschreibung für Abgang zurückgesetzt",
+  "expense.payment_set": "Zahlung der Kosten erfasst",
+  "fiscal_year.lock_restored_after_restore": "Jahresabschluss nach Wiederherstellung übernommen",
+  "invoice.cancel_pair_completed": "Storno abgeschlossen",
+  "invoice.lock.backup_pending": "Festgeschrieben, Backup ausstehend",
+  "legal_document.activate": "Rechtstext aktiviert",
+  "legal_document.deactivate": "Rechtstext deaktiviert",
+  "legal_document.upload": "Rechtstext hochgeladen",
+  "mail.log_failed": "Versandprotokoll unvollständig",
+  "mail_account.create": "Postfach angelegt",
+  "mail_account.delete": "Postfach gelöscht",
+  "mail_account.test_send": "Test-Mail gesendet",
+  "mail_account.update": "Postfach geändert",
+  "migration.export.tamper_detected": "Migrations-Export: Manipulation erkannt",
+  "numbering.raised_after_restore": "Nummernkreis nach Wiederherstellung angehoben",
+  "numbering.restored_draft_confirmed": "Vorgemerkter Entwurf bestätigt",
+  "numbering.restored_draft_flagged": "Entwurf nach Wiederherstellung vorgemerkt",
+  "numbering.restored_draft_reflagged": "Entwurf erneut vorgemerkt",
+  "package.archive": "Paket archiviert",
+  "package.create": "Paket angelegt",
+  "package.new_revision": "Neue Paket-Version",
+  "package.reactivate": "Paket reaktiviert",
+  "package.rollback": "Paket auf ältere Version zurückgesetzt",
+  "package_catalog.render": "Paket-Broschüre erstellt",
+  "package_catalog.sent": "Paket-Broschüre versendet",
+  "package_category.create": "Paket-Kategorie angelegt",
+  "package_category.update": "Paket-Kategorie geändert",
+  "payment_account.activate": "Zahlungskonto aktiviert",
+  "payment_account.create": "Zahlungskonto angelegt",
+  "payment_account.deactivate": "Zahlungskonto deaktiviert",
+  "payment_account.seed_defaults": "Standard-Zahlungskonten angelegt",
+  "payment_account.update": "Zahlungskonto geändert",
+  "quote.attachment_added": "Anhang zum Angebot hinzugefügt",
+  "quote.bundle_opened": "Angebots-Paket geöffnet",
+  "quote.conversion_reverted": "Umwandlung in Rechnung zurückgenommen",
+  "quote.pdf_generated": "Angebots-PDF erzeugt",
+  "recurring.activate": "Kosten-Abo aktiviert",
+  "recurring.backlog_confirmed": "Kosten-Abo: Rückstand nachgebucht",
+  "recurring.backlog_skipped": "Kosten-Abo: Rückstand übersprungen",
+  "recurring.create": "Kosten-Abo angelegt",
+  "recurring.deactivate": "Kosten-Abo pausiert",
+  "recurring.markers_cleared_after_restore": "Abo-Termine nach Wiederherstellung zurückgesetzt",
+  "recurring.period_skipped": "Kosten-Abo: Termin übersprungen",
+  "recurring.update": "Kosten-Abo geändert",
+  "recurring_invoice.activate": "Abo-Vorlage aktiviert",
+  "recurring_invoice.backlog_confirmed": "Abo-Rechnungen: Rückstand erstellt",
+  "recurring_invoice.backlog_skipped": "Abo-Rechnungen: Rückstand übersprungen",
+  "recurring_invoice.create": "Abo-Vorlage angelegt",
+  "recurring_invoice.deactivate": "Abo-Vorlage pausiert",
+  "recurring_invoice.run": "Abo-Rechnung erstellt",
+  "recurring_invoice.update": "Abo-Vorlage geändert",
+  "settings.travel.update": "Kilometersatz geändert",
+};
+
+/** Anzeigename einer PDF-Vorlage (U1: Detailseiten zeigten „default“). */
+const PDF_TEMPLATE_LABELS: Record<string, string> = {
+  default: "Standard",
+  modern: "Modern",
+  klassisch: "Klassisch",
+  minimal: "Minimal",
+};
+export function pdfTemplateLabel(name: string | null | undefined): string {
+  if (!name) return "—";
+  return PDF_TEMPLATE_LABELS[name] ?? name;
+}

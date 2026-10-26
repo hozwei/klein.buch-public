@@ -11,11 +11,19 @@
   // Meldet der Server später 401/423 (Sitzung abgelaufen, Neustart, DB
   // gesperrt), erscheint die Maske erneut. Solange sie offen ist, rendert das
   // Layout die App-Seiten nicht (appState.ready).
+  //
+  // U1 (Lauf 2026.11): Rahmen als Dialog-Blatt (tokens.css `.kb-dialog`,
+  // ≤ 600 px Vollbild), Fokusfalle ohne Escape (die Maske lässt sich nicht
+  // wegklicken), Anzeigen/Verbergen für Passwortfelder (ASVS V2.1.12) und
+  // eine Stärke-Schätzung bei neuem Passwort (V2.1.8, nur Hinweis — ob das
+  // Passwort angenommen wird, entscheidet der Server). Einfügen und
+  // Passwortmanager bleiben erlaubt (3.3.8).
   import { onMount } from "svelte";
   import { appState } from "#lib/stores.svelte.ts";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import SourceNotice from "#lib/SourceNotice.svelte";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { onAuthRequired } from "#lib/transport.ts";
   import {
@@ -41,19 +49,52 @@
   let codesNoted = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
-  let firstInput = $state<HTMLInputElement | null>(null);
+  let showPass = $state(false);
+  let showConfirm = $state(false);
+
+  // Stärke-Schätzung (Heuristik aus Länge, Wortzahl, Wiederholungen). Die
+  // verbindlichen Regeln (Mindestlänge, Sperrliste, Muster) prüft der Server.
+  type Strength = { level: 0 | 1 | 2 | 3; text: string };
+  function estimateStrength(p: string): Strength | null {
+    if (!p) return null;
+    const len = [...p].length;
+    const words = p.trim().split(/[\s\-_.,;:+\/]+/).filter((w) => w.length >= 3).length;
+    const unique = new Set(p.toLowerCase()).size;
+    if (len < 16) return { level: 0, text: `Zu kurz: ${len} von mindestens 16 Zeichen.` };
+    if (unique < 6) return { level: 1, text: "Schwach: viele Wiederholungen. Nimm 3–4 zufällige Wörter." };
+    if (len >= 28 || words >= 4) return { level: 3, text: "Stark." };
+    if (len >= 20 || words >= 3) return { level: 2, text: "Gut." };
+    return { level: 1, text: "Ausreichend. Länger ist besser, z. B. mit einem weiteren Wort." };
+  }
+  const strength = $derived(status === "setup" ? estimateStrength(pass) : null);
 
   $effect(() => {
     appState.ready = status === "ready";
   });
 
-  // R5-014/R5-015: Modal-Stack (App-Shell `inert`) + Auto-Focus.
+  // R5-014: Modal-Stack (App-Shell `inert`). Startfokus über `focusTrap`
+  // (erstes Feld des jeweiligen Schritts, `data-initial-focus`).
   $effect(() => {
     if (status === "setup" || status === "totp_setup" || status === "login") {
       pushModal();
-      queueMicrotask(() => firstInput?.focus());
       return () => popModal();
     }
+  });
+
+  // Schrittwechsel (Token → QR → Einmal-Codes, Anmelden ↔ Einrichten): das
+  // fokussierte Element verschwindet; Fokus auf das erste Feld des neuen Schritts.
+  let gateEl = $state<HTMLDivElement | null>(null);
+  $effect(() => {
+    void step;
+    void status;
+    void offer;
+    const el = gateEl;
+    if (!el) return;
+    queueMicrotask(() => {
+      const a = document.activeElement;
+      if (a && a !== document.body && el.contains(a)) return;
+      el.querySelector<HTMLElement>("[data-initial-focus]")?.focus();
+    });
   });
 
   onMount(() => {
@@ -77,6 +118,8 @@
     pass = "";
     confirm = "";
     code = "";
+    showPass = false;
+    showConfirm = false;
   }
 
   async function refresh() {
@@ -194,9 +237,21 @@
   }
 </script>
 
+{#snippet errorText()}
+  {#if error}<p id="gate-err" class="err" role="alert">{error}</p>{/if}
+{/snippet}
+
 {#if status === "setup" || status === "totp_setup" || status === "login"}
-  <div class="overlay" role="dialog" aria-modal="true" aria-labelledby="backup-gate-title">
-    <div class="modal-card">
+  <div class="kb-backdrop gate-backdrop" role="presentation">
+    <div
+      class="kb-dialog gate"
+      bind:this={gateEl}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="backup-gate-title"
+      use:focusTrap={{ returnFocus: false }}
+    >
+      <div class="kb-dialog-body">
       {#if insecureHttp}
         <p class="insecure" role="alert">
           Unverschlüsselte Verbindung erlaubt (KLEIN_BUCH_INSECURE_HTTP) — nur für Tests.
@@ -216,31 +271,50 @@
             doLogin();
           }}
         >
-          <label>
-            Daten-Passwort
+          <label for="gate-pass">Daten-Passwort</label>
+          <div class="pw">
             <input
-              bind:this={firstInput}
-              type="password"
+              id="gate-pass"
+              data-initial-focus
+              type={showPass ? "text" : "password"}
               bind:value={pass}
               autocomplete="current-password"
+              autocapitalize="off"
+              spellcheck="false"
+              enterkeyhint="next"
+              aria-invalid={error ? "true" : undefined}
+              aria-describedby={error ? "gate-err" : undefined}
               disabled={busy}
             />
-          </label>
-          <label>
+            <button
+              type="button"
+              class="pw-toggle"
+              aria-controls="gate-pass"
+              aria-label={showPass ? "Passwort verbergen" : "Passwort anzeigen"}
+              onclick={() => (showPass = !showPass)}
+            >{showPass ? "Verbergen" : "Anzeigen"}</button>
+          </div>
+          <label for="gate-code">
             {useRecovery ? "Einmal-Code" : "Code aus der Authenticator-App"}
-            <input
-              type="text"
-              bind:value={code}
-              inputmode={useRecovery ? "text" : "numeric"}
-              autocomplete="one-time-code"
-              disabled={busy}
-            />
           </label>
-          <button type="button" class="link" onclick={() => (useRecovery = !useRecovery)}>
+          <input
+            id="gate-code"
+            type="text"
+            bind:value={code}
+            inputmode={useRecovery ? "text" : "numeric"}
+            autocomplete="one-time-code"
+            autocapitalize="off"
+            spellcheck="false"
+            enterkeyhint="go"
+            aria-invalid={error ? "true" : undefined}
+            aria-describedby={error ? "gate-err" : undefined}
+            disabled={busy}
+          />
+          <button type="button" class="link switch" onclick={() => (useRecovery = !useRecovery)}>
             {useRecovery ? "Code aus der App verwenden" : "Gerät verloren? Einmal-Code verwenden"}
           </button>
-          {#if error}<p class="err">{error}</p>{/if}
-          <button type="submit" class="primary" disabled={busy}>
+          {@render errorText()}
+          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
             {busy ? "Melde an …" : "Anmelden"}
           </button>
         </form>
@@ -255,7 +329,7 @@
           {#each recoveryCodes as c (c)}<li><code>{c}</code></li>{/each}
         </ul>
         <label class="check">
-          <input type="checkbox" bind:checked={codesNoted} />
+          <input type="checkbox" bind:checked={codesNoted} data-initial-focus />
           Ich habe die Codes sicher notiert.
         </label>
         <button type="button" class="primary" disabled={!codesNoted} onclick={done}>Weiter</button>
@@ -265,7 +339,7 @@
           Scanne den QR-Code mit deiner Authenticator-App (z. B. Aegis, 2FAS, Google
           Authenticator) und gib den angezeigten Code ein.
         </p>
-        <div class="qr">{@html offer.qrSvg}</div>
+        <div class="qr" role="img" aria-label="QR-Code für die Authenticator-App">{@html offer.qrSvg}</div>
         <p class="secret">Schlüssel zum Abtippen: <code>{offer.secret}</code></p>
         <form
           novalidate
@@ -274,19 +348,23 @@
             finishSetup();
           }}
         >
-          <label>
-            Code aus der App
-            <input
-              bind:this={firstInput}
-              type="text"
-              bind:value={code}
-              inputmode="numeric"
-              autocomplete="one-time-code"
-              disabled={busy}
-            />
-          </label>
-          {#if error}<p class="err">{error}</p>{/if}
-          <button type="submit" class="primary" disabled={busy}>
+          <label for="gate-totp">Code aus der App</label>
+          <input
+            id="gate-totp"
+            data-initial-focus
+            type="text"
+            bind:value={code}
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            autocapitalize="off"
+            spellcheck="false"
+            enterkeyhint="done"
+            aria-invalid={error ? "true" : undefined}
+            aria-describedby={error ? "gate-err" : undefined}
+            disabled={busy}
+          />
+          {@render errorText()}
+          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
             {busy
               ? "Richte ein …"
               : status === "setup"
@@ -323,41 +401,80 @@
             requestOffer();
           }}
         >
-          <label>
-            Setup-Token (aus dem Container-Log)
-            <input
-              bind:this={firstInput}
-              type="text"
-              bind:value={token}
-              autocomplete="off"
-              spellcheck="false"
-              disabled={busy}
-            />
-          </label>
-          <label>
+          <label for="gate-token">Setup-Token (aus dem Container-Log)</label>
+          <input
+            id="gate-token"
+            data-initial-focus
+            type="text"
+            bind:value={token}
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            enterkeyhint="next"
+            disabled={busy}
+          />
+          <label for="gate-pass">
             {status === "setup"
               ? "Passwort (mindestens 16 Zeichen — am besten 3–4 Wörter)"
               : "Daten-Passwort"}
+          </label>
+          <div class="pw">
             <input
-              type="password"
+              id="gate-pass"
+              type={showPass ? "text" : "password"}
               bind:value={pass}
               autocomplete={status === "setup" ? "new-password" : "current-password"}
+              autocapitalize="off"
+              spellcheck="false"
+              enterkeyhint="next"
+              aria-invalid={error ? "true" : undefined}
+              aria-describedby={[error ? "gate-err" : "", strength ? "gate-strength" : ""]
+                .filter(Boolean)
+                .join(" ") || undefined}
               disabled={busy}
             />
-          </label>
+            <button
+              type="button"
+              class="pw-toggle"
+              aria-controls="gate-pass"
+              aria-label={showPass ? "Passwort verbergen" : "Passwort anzeigen"}
+              onclick={() => (showPass = !showPass)}
+            >{showPass ? "Verbergen" : "Anzeigen"}</button>
+          </div>
+          {#if strength}
+            <div class="strength" data-level={strength.level}>
+              <span class="bar" aria-hidden="true"><span></span><span></span><span></span></span>
+              <span id="gate-strength" class="strength-text">
+                Stärke (Schätzung): {strength.text}
+              </span>
+            </div>
+          {/if}
           {#if status === "setup"}
-            <label>
-              Passwort wiederholen
+            <label for="gate-confirm">Passwort wiederholen</label>
+            <div class="pw">
               <input
-                type="password"
+                id="gate-confirm"
+                type={showConfirm ? "text" : "password"}
                 bind:value={confirm}
                 autocomplete="new-password"
+                autocapitalize="off"
+                spellcheck="false"
+                enterkeyhint="go"
+                aria-invalid={error ? "true" : undefined}
+                aria-describedby={error ? "gate-err" : undefined}
                 disabled={busy}
               />
-            </label>
+              <button
+                type="button"
+                class="pw-toggle"
+                aria-controls="gate-confirm"
+                aria-label={showConfirm ? "Wiederholung verbergen" : "Wiederholung anzeigen"}
+                onclick={() => (showConfirm = !showConfirm)}
+              >{showConfirm ? "Verbergen" : "Anzeigen"}</button>
+            </div>
           {/if}
-          {#if error}<p class="err">{error}</p>{/if}
-          <button type="submit" class="primary" disabled={busy}>
+          {@render errorText()}
+          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
             {busy ? "Prüfe …" : "Weiter zum QR-Code"}
           </button>
         </form>
@@ -365,51 +482,35 @@
 
       <!-- AGPL §13 (Plan W12): Version und Quellstand auch vor der Anmeldung -->
       <SourceNotice />
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(17, 24, 39, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2000;
-  }
-  /* Modal-Karte (Overlay): bewusst eigener Stil, nicht globale .card. */
-  .modal-card {
-    background: var(--c-surface);
-    border-radius: var(--r-xl);
-    padding: 1.75rem;
-    width: 32rem;
-    max-width: calc(100vw - 2rem);
-    max-height: calc(100vh - 2rem);
-    max-height: calc(100dvh - 2rem);
-    overflow-y: auto;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  }
-  .modal-card h2 {
+  .gate-backdrop { z-index: 2000; }
+  .gate { --dialog-w: 32rem; }
+  .gate h2 {
     margin: 0 0 0.75rem;
+    font-size: var(--fs-xl);
   }
-  .modal-card p {
-    color: var(--c-text);
-    font-size: 0.92rem;
+  .gate p {
+    color: var(--text);
+    font-size: var(--fs-base);
     line-height: 1.5;
   }
   label {
     display: block;
-    margin: 0.9rem 0 0.2rem;
-    font-size: 0.85rem;
+    margin: 0.9rem 0 0.3rem;
+    font-size: var(--fs-sm);
     font-weight: 600;
-    color: #374151;
+    color: var(--text);
   }
   label.check {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.75rem;
     align-items: center;
+    min-height: var(--target);
     font-weight: 500;
   }
   input[type="password"],
@@ -417,18 +518,65 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.55rem 0.7rem;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
-    font-size: 1rem;
+    border: 1px solid var(--line-control);
+    border-radius: var(--r-md);
+    font: inherit;
+    font-size: var(--fs-md);
+    background: var(--surface-card);
+    color: var(--text);
   }
+  .pw {
+    display: flex;
+    gap: var(--sp-2);
+    align-items: stretch;
+  }
+  .pw input { flex: 1 1 auto; min-width: 0; }
+  .pw-toggle {
+    flex: none;
+    min-width: var(--target);
+    min-height: var(--target);
+    padding: 0 var(--sp-3);
+    border: 1px solid var(--line-control);
+    border-radius: var(--r-md);
+    background: var(--surface-card);
+    color: var(--accent-on-soft);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .strength {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+  }
+  .strength .bar {
+    display: inline-flex;
+    gap: 3px;
+    flex: none;
+  }
+  .strength .bar span {
+    width: 22px;
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: var(--line);
+  }
+  .strength[data-level="0"] .bar span:nth-child(-n + 1) { background: var(--status-danger-line); }
+  .strength[data-level="1"] .bar span:nth-child(-n + 1) { background: var(--status-warning-line); }
+  .strength[data-level="2"] .bar span:nth-child(-n + 2) { background: var(--status-success-line); }
+  .strength[data-level="3"] .bar span { background: var(--status-success-fg); }
   .err {
-    color: #991b1b;
+    color: var(--status-danger-fg);
     font-weight: 600;
   }
   .insecure {
-    background: #fef3c7;
-    border: 1px solid #f59e0b;
-    border-radius: 6px;
+    background: var(--status-warning-bg);
+    border: 1px solid var(--status-warning-line);
+    color: var(--status-warning-fg);
+    border-radius: var(--r-md);
     padding: 0.5rem 0.75rem;
     font-weight: 600;
   }
@@ -438,8 +586,9 @@
     margin: 0.5rem 0;
   }
   .qr :global(svg) {
-    width: 220px;
-    height: 220px;
+    width: min(220px, 100%);
+    height: auto;
+    aspect-ratio: 1;
   }
   .secret code {
     word-break: break-all;
@@ -447,30 +596,32 @@
   .codes {
     columns: 2;
     padding-left: 1.2rem;
-    font-size: 1rem;
+    font-size: var(--fs-md);
   }
-  button.link {
-    background: none;
-    border: none;
-    padding: 0.3rem 0;
-    color: var(--c-primary-700);
-    cursor: pointer;
-    font-size: 0.85rem;
-    text-decoration: underline;
+  .codes li { white-space: nowrap; }
+  /* U1: einspaltig bis 420 px, Codes nie an den Bindestrichen umbrechen. */
+  @media (max-width: 420px) {
+    .codes { columns: 1; }
   }
+  .switch { margin-top: var(--sp-3); }
   button.primary {
     margin-top: 1rem;
     width: 100%;
+    min-height: max(var(--target), 40px);
     padding: 0.6rem;
-    background: var(--c-primary-600);
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    font: inherit;
+    font-size: var(--fs-md);
+    font-weight: 600;
     cursor: pointer;
   }
-  button.primary:hover:not(:disabled) {
-    background: var(--c-primary-700);
+  @media (hover: hover) {
+    button.primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
   }
   button.primary:disabled {
     opacity: 0.6;

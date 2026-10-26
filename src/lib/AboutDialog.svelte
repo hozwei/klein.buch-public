@@ -17,6 +17,7 @@
   import { publicInfo, type PublicInfo } from "#lib/transport.ts";
   import { formatVersionDisplay } from "#lib/version.ts";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
   import { DEV_SOURCE_TEXT, safeSourceLink, shortCommit, sourceLabel } from "#lib/sourceInfo.ts";
   import type { AppInfo } from "#lib/types.ts";
 
@@ -40,8 +41,6 @@
         : null),
   );
   const sourceLink = $derived(safeSourceLink(effectiveSource));
-  let closeBtn = $state<HTMLButtonElement | null>(null);
-  let triggerEl: HTMLElement | null = null;
 
   // App-Info beim ersten Öffnen einmal laden — die Werte sind Compile-Time-
   // konstant, ein Abruf pro App-Lauf reicht. Seit Plan W5 braucht `app_info`
@@ -67,32 +66,14 @@
       });
   });
 
-  // Beim Öffnen: aktuell fokussiertes Element merken, Close-Button fokussieren,
-  // Modal-Stack pushen (R5-014: macht App-Shell `inert`).
-  // Beim Schließen: Stack poppen, Fokus zurück auf den Trigger.
+  // Modal-Stack (R5-014: App-Shell `inert`). Fokus, Escape und Rücksprung
+  // zum Auslöser übernimmt `focusTrap` (U1); Startfokus „Dialog schließen“.
   $effect(() => {
     if (aboutModalStore.visible) {
-      triggerEl = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
       pushModal();
-      // Im nächsten Tick fokussieren — `closeBtn` ist erst nach dem Render gesetzt.
-      queueMicrotask(() => closeBtn?.focus());
-      return () => {
-        popModal();
-        triggerEl?.focus();
-        triggerEl = null;
-      };
+      return () => popModal();
     }
   });
-
-  function onKeydown(e: KeyboardEvent): void {
-    if (!aboutModalStore.visible) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeAboutDialog();
-    }
-  }
 
   // Drittanbieter-Hauptliste fest verdrahtet (Spec: sichtbar im Dialog selbst,
   // kein Verstecken hinter einem zusätzlichen Klick). Reihenfolge entspricht
@@ -173,35 +154,33 @@
   ];
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
 {#if aboutModalStore.visible}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
   <div
-    class="backdrop"
+    class="kb-backdrop"
     role="presentation"
     onclick={(e) => {
       if (e.target === e.currentTarget) closeAboutDialog();
     }}
   >
     <div
-      class="dialog"
+      class="kb-dialog about"
       role="dialog"
       aria-modal="true"
       aria-labelledby="about-title"
+      use:focusTrap={{ onEscape: closeAboutDialog, initialFocus: ".kb-dialog-close" }}
     >
-      <header>
+      <header class="kb-dialog-head">
         <h2 id="about-title">Über Klein.Buch</h2>
         <button
-          bind:this={closeBtn}
           type="button"
-          class="close"
+          class="kb-dialog-close"
           aria-label="Dialog schließen"
-          onclick={closeAboutDialog}>×</button
+          onclick={closeAboutDialog}><span aria-hidden="true">×</span></button
         >
       </header>
 
-      <div class="body">
+      <div class="kb-dialog-body body">
         <!-- Hersteller / Kontakt — festverdrahtet, kein Settings-Lookup -->
         <section class="block">
           <h3>Hersteller</h3>
@@ -361,7 +340,7 @@
         </p>
       </div>
 
-      <footer>
+      <footer class="kb-dialog-foot">
         <button type="button" class="btn-primary" onclick={closeAboutDialog}>
           Schließen
         </button>
@@ -371,75 +350,9 @@
 {/if}
 
 <style>
-  /* G2-UX.3.2 — macOS-Sheet-Look (parallel zu ConfirmDialog): gedimmter Backdrop
-     mit weichem Blur, großzügiger Radius (--r-xl), zweilagiger XL-Schatten,
-     Sheet-Drift mit Apple-Easing. Header-Trennlinie als Hairline (rgba). */
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(16, 40, 50, 0.32);
-    -webkit-backdrop-filter: blur(6px) saturate(140%);
-    backdrop-filter: blur(6px) saturate(140%);
-    display: grid;
-    place-items: center;
-    z-index: 1000;
-    padding: 2rem;
-    box-sizing: border-box;
-    animation: about-fade-in var(--t-base) var(--ease-apple);
-  }
-  .dialog {
-    background: var(--c-surface);
-    border-radius: var(--r-xl);
-    box-shadow: var(--sh-xl);
-    width: min(640px, 100%);
-    max-height: calc(100vh - 4rem);
-    max-height: calc(100dvh - 4rem);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    animation: about-sheet-in var(--t-slow) var(--ease-apple);
-  }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.25rem 0.85rem;
-    border-bottom: 1px solid rgba(16, 36, 44, 0.08);
-  }
-  @keyframes about-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  @keyframes about-sheet-in {
-    from { transform: translateY(16px) scale(0.97); opacity: 0; }
-    to { transform: translateY(0) scale(1); opacity: 1; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .backdrop, .dialog { animation: none; }
-  }
-  header h2 {
-    margin: 0;
-    font-size: var(--fs-lg);
-    color: var(--c-text);
-  }
-  .close {
-    background: transparent;
-    border: 0;
-    font-size: 1.5rem;
-    line-height: 1;
-    padding: 0.15rem 0.55rem;
-    border-radius: var(--r-md);
-    cursor: pointer;
-    color: var(--c-text-muted);
-  }
-  .close:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-  }
+  .about { --dialog-w: 640px; }
   .body {
-    padding: 1rem 1.25rem 0.75rem;
-    overflow-y: auto;
-    color: var(--c-text);
+    color: var(--text);
     font-size: var(--fs-sm);
     line-height: 1.5;
   }
@@ -472,7 +385,11 @@
     color: var(--c-text-subtle);
     margin: 0 0.45rem;
   }
+  /* Trefferfläche ≥ --target, ohne die Zeile optisch zu sprengen. */
   .linklike {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
     background: transparent;
     border: 0;
     padding: 0;
@@ -481,8 +398,10 @@
     cursor: pointer;
     font: inherit;
   }
-  .linklike:hover {
-    color: var(--c-primary-800);
+  @media (hover: hover) {
+    .linklike:hover {
+      color: var(--c-primary-800);
+    }
   }
   dl {
     display: grid;
@@ -541,7 +460,7 @@
     margin: 0.25rem 0;
   }
   .error {
-    color: var(--c-danger-700, #b91c1c);
+    color: var(--status-danger-fg);
     margin: 0.25rem 0;
   }
   .footer-disclaimer {
@@ -550,19 +469,5 @@
     color: var(--c-text-subtle);
     font-size: var(--fs-xs);
     font-style: italic;
-  }
-  footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    padding: 0.75rem 1.25rem;
-    border-top: 1px solid var(--c-border);
-    background: var(--c-surface-2);
-  }
-  /* Plan W10: auf dem Handy fast randlos */
-  @media (max-width: 600px) {
-    .backdrop {
-      padding: 0.5rem;
-    }
   }
 </style>

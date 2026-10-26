@@ -3,13 +3,32 @@
   // KEIN schwergewichtiges WYSIWYG — die Buttons fügen nur die Markdown-Zeichen
   // an der Cursor-/Auswahl-Position ein. Die exakte Darstellung liefert die
   // Live-Vorschau daneben + die PDF-Vorschau.
+  //
+  // U1: sichtbares Label (Standard „Beschreibung (Markdown)“, per `label`
+  // änderbar oder mit `labelHidden` nur für Screenreader), Werkzeugleiste
+  // als benannte Gruppe mit Trefferflächen ≥ --target, Rahmen ≥ 3:1 und
+  // sichtbarer Fokusring im Textfeld.
   import { tick } from "svelte";
+  import { randomId } from "#lib/browser.ts";
 
   let {
     value = $bindable(""),
     rows = 14,
     placeholder = "",
-  }: { value?: string; rows?: number; placeholder?: string } = $props();
+    label = "Beschreibung (Markdown)",
+    labelHidden = false,
+    id,
+  }: {
+    value?: string;
+    rows?: number;
+    placeholder?: string;
+    label?: string;
+    labelHidden?: boolean;
+    id?: string;
+  } = $props();
+
+  const uid = randomId();
+  const fieldId = $derived(id ?? `md-${uid}`);
 
   let el: HTMLTextAreaElement;
 
@@ -51,70 +70,89 @@
 
 </script>
 
+<div class="md-wrap">
+<label class="md-label" class:kb-visually-hidden={labelHidden} for={fieldId}>{label}</label>
 <div class="md-editor">
-  <div class="md-toolbar">
-    <button type="button" title="Überschrift" onclick={() => prefixLines("# ", "Überschrift")}>H1</button>
-    <button type="button" title="Unterüberschrift" onclick={() => prefixLines("## ", "Überschrift")}>H2</button>
-    <span class="sep"></span>
-    <button type="button" title="Fett" class="b" onclick={() => wrap("**", "fett")}>F</button>
-    <button type="button" title="Kursiv" class="i" onclick={() => wrap("*", "kursiv")}>K</button>
-    <span class="sep"></span>
-    <button type="button" title="Aufzählung" onclick={() => prefixLines("- ", "Punkt")}>• Liste</button>
+  <div class="md-toolbar" role="group" aria-label="Formatierung">
+    <button type="button" title="Überschrift" onclick={() => prefixLines("# ", "Überschrift")}>H1<span class="kb-visually-hidden"> Überschrift</span></button>
+    <button type="button" title="Unterüberschrift" onclick={() => prefixLines("## ", "Überschrift")}>H2<span class="kb-visually-hidden"> Unterüberschrift</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" title="Fett" class="b" onclick={() => wrap("**", "fett")}>F<span class="kb-visually-hidden"> (fett)</span></button>
+    <button type="button" title="Kursiv" class="i" onclick={() => wrap("*", "kursiv")}>K<span class="kb-visually-hidden"> (kursiv)</span></button>
+    <span class="sep" aria-hidden="true"></span>
+    <button type="button" title="Aufzählung" onclick={() => prefixLines("- ", "Punkt")}><span aria-hidden="true">•</span> Liste</button>
     <button type="button" title="Nummerierte Liste" onclick={() => prefixLines("1. ", "Punkt")}>1. Liste</button>
   </div>
-  <textarea bind:this={el} bind:value {rows} {placeholder}></textarea>
+  <textarea id={fieldId} bind:this={el} bind:value {rows} {placeholder} spellcheck="true"></textarea>
+</div>
 </div>
 
 <style>
+  .md-wrap { min-width: 0; }
+  .md-label {
+    display: block;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    margin: 0 0 var(--sp-1);
+  }
   .md-editor {
-    border: 1px solid var(--c-border-strong);
+    border: 1px solid var(--line-control);
     border-radius: var(--r-md);
     overflow: hidden;
-    background: var(--c-surface);
+    background: var(--surface-card);
   }
   .md-toolbar {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: var(--sp-1);
     flex-wrap: wrap;
-    padding: 5px 6px;
-    background: var(--c-surface-2, #eef1f3);
-    border-bottom: 1px solid var(--c-border);
+    padding: var(--sp-1);
+    background: var(--surface-sunken);
   }
   .md-toolbar button {
-    font-size: 0.8rem;
-    padding: 3px 9px;
-    border: 1px solid var(--c-border-strong);
+    min-width: var(--target);
+    min-height: max(var(--target), 28px);
+    font: inherit;
+    font-size: var(--fs-sm);
+    padding: 0 var(--sp-2);
+    border: 1px solid var(--line-control);
     border-radius: var(--r-sm);
-    background: var(--c-surface);
-    color: var(--c-text);
+    background: var(--surface-card);
+    color: var(--text);
     cursor: pointer;
   }
-  .md-toolbar button:hover {
-    background: var(--c-primary-50);
-    border-color: var(--c-primary-300);
+  @media (hover: hover) {
+    .md-toolbar button:hover {
+      background: var(--surface-hover);
+      border-color: var(--c-primary-300);
+    }
   }
   .md-toolbar button.b { font-weight: 700; }
   .md-toolbar button.i { font-style: italic; }
   .md-toolbar .sep {
     width: 1px;
     align-self: stretch;
-    background: var(--c-border);
+    background: var(--line);
     margin: 2px 3px;
   }
+  /* Obere Kante = Grenze zur Werkzeugleiste (≥ 3:1); Fokusring nach innen,
+     weil .md-editor überstehende Ringe abschneidet. */
   textarea {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    border: none;
+    border: 0;
+    border-top: 1px solid var(--line-control);
+    border-radius: 0;
     padding: 10px 12px;
     resize: vertical;
     font-family: var(--font-mono, monospace);
-    font-size: 0.9rem;
-    background: var(--c-surface);
-    color: var(--c-text);
+    font-size: var(--fs-base);
+    background: var(--surface-card);
+    color: var(--text);
   }
-  textarea:focus {
-    outline: none;
+  .md-editor textarea:focus-visible {
+    outline: var(--focus-width) solid var(--focus-ring) !important;
+    outline-offset: -3px !important;
   }
 </style>

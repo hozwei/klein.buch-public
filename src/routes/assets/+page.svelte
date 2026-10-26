@@ -3,13 +3,14 @@
   import { onMount } from "svelte";
   import { assetsList, depreciationAccrueYear } from "#lib/api.ts";
   import type { AssetListItem } from "#lib/types.ts";
-  import { euro, date } from "#lib/format.ts";
+  import { euro, date, percent } from "#lib/format.ts";
   import { depreciationMethodShort } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
 
@@ -137,66 +138,84 @@
   Größere Anschaffungen (Laptop, Werkzeug, Möbel, Fahrzeug) setzt du nicht auf
   einmal ab, sondern <strong>verteilt über die Nutzungsdauer</strong> (Abschreibung
   / AfA). Klein.Buch rechnet die jährlichen Beträge aus — einmal im Jahr buchst du
-  sie mit „Abschreibung buchen".
+  sie mit „Abschreibung buchen“.
 </p>
 
 {#if showAccrue}
-  <section class="accrue card">
-    <h2>Abschreibung buchen</h2>
+  <section class="accrue card" aria-labelledby="accrue-h">
+    <h2 id="accrue-h">Abschreibung buchen</h2>
     <p class="muted">
       Bucht die Jahres-Abschreibung aller Anlagen bis zum gewählten Jahr. Für die
       Erstanwendung wählst du z. B. {currentYear} — Vorjahre werden automatisch
       mitgebucht.
     </p>
     <div class="row">
-      <label>
-        Geschäftsjahr
-        <select class="kb-input" bind:value={accrueYear}>
+      <div class="field">
+        <label for="accrue-year">Geschäftsjahr</label>
+        <select id="accrue-year" class="kb-input" bind:value={accrueYear}>
           {#each accrueYearOptions as y}<option value={y}>{y}</option>{/each}
         </select>
-      </label>
+      </div>
+      <Button variant="secondary" size="sm" onclick={() => (showAccrue = false)}>Schließen</Button>
       <Button variant="primary" size="sm" onclick={runAccrue} disabled={busy}>
         {busy ? "Buche …" : `AfA ${accrueYear} buchen`}
       </Button>
-      <Button variant="secondary" size="sm" onclick={() => (showAccrue = false)}>Schließen</Button>
     </div>
   </section>
 {/if}
 
-<div class="filters">
-  <input
-    type="search"
-    class="kb-input search"
-    placeholder="Suche: Nr. oder Bezeichnung …"
-    bind:value={search}
-  />
-  <select class="kb-input" bind:value={yearFilter}>
-    <option value="">Alle Anschaffungsjahre</option>
-    {#each years as y}<option value={y}>{y}</option>{/each}
-  </select>
-  <select class="kb-input" bind:value={statusFilter}>
-    <option value="active">Aktive</option>
-    <option value="disposed">Veräußerte</option>
-    <option value="">Alle</option>
-  </select>
-  <Button variant="secondary" size="sm" onclick={resetFilters}>Zurücksetzen</Button>
+<div class="filters" role="search" aria-label="Anschaffungen filtern">
+  <div class="f-search">
+    <label class="kb-visually-hidden" for="asset-search">Anschaffungen durchsuchen</label>
+    <input
+      id="asset-search"
+      type="search"
+      class="kb-input"
+      placeholder="Nr. oder Bezeichnung …"
+      enterkeyhint="search"
+      autocomplete="off"
+      bind:value={search}
+    />
+  </div>
+  <label class="f-sel">
+    <span class="kb-visually-hidden">Anschaffungsjahr</span>
+    <select class="kb-input" bind:value={yearFilter}>
+      <option value="">Alle Anschaffungsjahre</option>
+      {#each years as y}<option value={y}>{y}</option>{/each}
+    </select>
+  </label>
+  <label class="f-sel">
+    <span class="kb-visually-hidden">Status</span>
+    <select class="kb-input" bind:value={statusFilter}>
+      <option value="active">Aktive</option>
+      <option value="disposed">Veräußerte</option>
+      <option value="">Alle</option>
+    </select>
+  </label>
+  <Button variant="secondary" size="sm" onclick={resetFilters}>Filter zurücksetzen</Button>
 </div>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" aria-busy="true">Lädt …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if all.length === 0}
-  <p class="muted">Noch keine Anschaffungen erfasst.</p>
+  <div class="empty">
+    <p class="muted">Noch keine Anschaffungen erfasst.</p>
+    <Button variant="primary" href="/assets/new">Erste Anschaffung erfassen</Button>
+  </div>
 {:else}
-  <p class="result-info">
+  <p class="result-info" role="status">
     {items.length} {items.length === 1 ? "Anlage" : "Anlagen"} · Restbuchwert (aktiv):
-    <strong>{euro(bookValueSum)}</strong>
+    <strong class="kb-num">{euro(bookValueSum)}</strong>
   </p>
   {#if items.length === 0}
-    <p class="muted">Keine Anlagen passen zu den Filtern.</p>
+    <div class="empty">
+      <p class="muted">Keine Anlagen passen zu den Filtern.</p>
+      <Button variant="secondary" onclick={resetFilters}>Filter zurücksetzen</Button>
+    </div>
   {:else}
-    <table class="kb-table cards">
+    <Table caption="Anschaffungen" cards>
       <thead>
         <tr>
           <th>Nr.</th>
@@ -206,47 +225,59 @@
           <th>Abschreibung</th>
           <th class="num">Restbuchwert</th>
           <th>Status</th>
-          <th></th>
+          <th><span class="kb-visually-hidden">Aktion</span></th>
         </tr>
       </thead>
       <tbody>
         {#each items as a (a.id)}
           {@const b = statusBadge(a)}
           <tr class={a.disposed === 1 ? "disposed" : ""}>
-            <td data-label="Nr."><a href={`/assets/${a.id}`}>{a.assetNumber}</a></td>
-            <td data-label="Bezeichnung">{a.label}</td>
+            <td data-label="Nr."><a class="doc-no" href={`/assets/${a.id}`}>{a.assetNumber}</a></td>
+            <td class="wrap" data-label="Bezeichnung">{a.label}</td>
             <td data-label="Angeschafft">{date(a.acquisitionDate)}</td>
-            <td class="num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
+            <td class="num kb-num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
             <td data-label="Abschreibung">
               <span class="cat">
                 {depreciationMethodShort(a.depreciationMethod)}
-                {#if a.businessSharePercent < 100}<Badge tone="info">{a.businessSharePercent}%</Badge>{/if}
+                {#if a.businessSharePercent < 100}<Badge tone="info">{percent(a.businessSharePercent)} betrieblich</Badge>{/if}
               </span>
             </td>
-            <td class="num" data-label="Restbuchwert">{euro(a.bookValueCents)}</td>
+            <td class="num kb-num" data-label="Restbuchwert">{euro(a.bookValueCents)}</td>
             <td data-label="Status"><Badge tone={b.tone}>{b.text}</Badge></td>
-            <td class="right"><Button variant="secondary" size="sm" href={`/assets/${a.id}`}>Öffnen</Button></td>
+            <td class="right">
+              <Button variant="secondary" size="sm" href={`/assets/${a.id}`} ariaLabel={`Anlage ${a.assetNumber} öffnen`}>Öffnen</Button>
+            </td>
           </tr>
         {/each}
       </tbody>
-    </table>
+    </Table>
   {/if}
 {/if}
 
 <style>
-  /* .card entfernt — globale Definition aus tokens.css. */
-  .accrue h2 { margin-top: 0; font-size: 1rem; }
-  .accrue .row { display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; }
-  .accrue label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--c-text-muted); gap: 0.25rem; }
-  .filters { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0.75rem 0; }
-  .filters .kb-input { width: auto; font-size: 0.9rem; }
-  .search { flex: 1 1 18rem; }
-  .result-info { color: var(--c-text-muted); font-size: 0.85rem; margin: 0.25rem 0 0.5rem; }
-  table { width: 100%; }
+  /* .card / .kb-input: globale Definitionen aus tokens.css. */
+  .accrue h2 { margin-top: 0; font-size: var(--fs-md); }
+  .accrue .row { display: flex; gap: var(--sp-3); align-items: end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .field label { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+  .filters { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; margin: var(--sp-3) 0; }
+  .filters .kb-input { width: auto; max-width: 100%; }
+  .f-search { flex: 1 1 18rem; min-width: 0; }
+  .f-search .kb-input { width: 100%; }
+  .f-sel { display: inline-flex; min-width: 0; max-width: 100%; }
+  .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); }
+  .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
+  .empty p { margin: 0; }
   .num { text-align: right; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.right { text-align: right; }
-  .cat { display: inline-flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
-  tr.disposed td a { color: var(--c-text-subtle); }
-  .muted { color: var(--c-text-muted); max-width: 46rem; line-height: 1.5; }
+  td.wrap { overflow-wrap: anywhere; }
+  a.doc-no {
+    display: inline-flex; align-items: center; min-height: var(--target);
+    font-family: var(--font-mono); white-space: nowrap; text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .cat { display: inline-flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+  tr.disposed td a.doc-no { color: var(--text-muted); }
+  .muted { color: var(--text-muted); max-width: 46rem; line-height: 1.5; }
 </style>

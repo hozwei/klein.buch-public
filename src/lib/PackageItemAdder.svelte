@@ -6,6 +6,9 @@
   import { packagesList, packageCategoriesList, packageMaterializeItem } from "#lib/api.ts";
   import type { Package, PackageCategory, MaterializedPackageItem } from "#lib/types.ts";
   import { flash } from "#lib/toast.svelte.ts";
+  import { randomId } from "#lib/browser.ts";
+
+  const selId = `pkg-sel-${randomId()}`;
 
   let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
 
@@ -71,8 +74,8 @@
 
 {#if loaded && active.length > 0}
   <div class="pkg">
-    <span class="lbl">Paket</span>
-    <select bind:value={selected} class="sel">
+    <label class="lbl" for={selId}>Paket</label>
+    <select id={selId} bind:value={selected} class="sel">
       <option value="">— Paket wählen —</option>
       {#each groups as g (g.label)}
         <optgroup label={g.label}>
@@ -98,8 +101,15 @@
 <style>
   .pkg { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; }
   .lbl { font-weight: 600; font-size: 0.9rem; }
-  .sel { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; min-width: 16rem; }
-  .hint { color: #6b7280; font-size: 0.9rem; }
+  .sel {
+    padding: 0.4rem 0.5rem; border: 1px solid var(--line-control); border-radius: var(--r-sm);
+    font: inherit; min-width: min(16rem, 100%); max-width: 100%; min-height: var(--target);
+    background: var(--surface-card); color: var(--text);
+  }
+  .hint { color: var(--text-muted); font-size: 0.9rem; }
+  /* Link im Hinweistext: Trefferfläche ≥ --target ohne Zeilensprung. */
+  /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31), keine 44-px-Zeile (U1-Sichtprüfung). */
+  .hint a { text-decoration: underline; }
   /* Lokale btn-Defs entfernt — globale aus tokens.css greifen
      (Manuel-Hardline 2026-05-26: alle Buttons app-weit gleich groß). */
 </style>
