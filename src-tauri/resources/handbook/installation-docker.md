@@ -3,7 +3,7 @@ slug: installation-docker
 title: Installation mit Docker Compose
 category: betrieb
 order: 10
-keywords: [installation, docker, compose, container, image, setup-token, einrichtung, betrieb, server, volume]
+keywords: [installation, docker, compose, container, image, setup-token, einrichtung, betrieb, server, volume, startbildschirm, web-app-manifest, handy]
 ---
 
 # Installation mit Docker Compose
@@ -81,7 +81,7 @@ services:
 ## Was die Zeilen bedeuten
 
 `image` nennt das Image samt Version. Ersetze `VERSION` durch die
-Nummer einer Veröffentlichung, zum Beispiel `2026.10.0`. Die
+Nummer einer Veröffentlichung, zum Beispiel `2026.11.0`. Die
 Versionen findest Du unter "Releases" im öffentlichen Projekt. Ein
 Image mit dem Namen `latest` gibt es absichtlich nicht: Ein
 wandernder Name würde bei jedem Herunterladen unbemerkt eine neue
@@ -232,8 +232,9 @@ In der Oberfläche von Klein.Buch erscheint er nie.
 3. Klick auf **"Weiter zum QR-Code"**, scanne den QR-Code mit Deiner
    Authenticator-App und gib den angezeigten Code ein.
 4. Klick auf **"Einrichten & erstes Backup erstellen"**.
-5. Notiere die zehn Einmal-Codes, hake "Ich habe die Codes sicher
-   notiert." an und klick auf "Weiter".
+5. Notiere die zehn Einmal-Codes (oder sichere sie mit "Als
+   Textdatei speichern" an einem Ort außerhalb dieses Servers), hake
+   "Ich habe die Codes sicher notiert." an und klick auf "Weiter".
 
 Danach richtest Du Deine Firmendaten und ein Off-Site-Backup ein
 (Kapitel "Off-Site-Backup einrichten"). Solange es kein externes Ziel
@@ -244,6 +245,28 @@ Containers ist Klein.Buch gesperrt, bis Du Dich im Browser anmeldest.
 Erst dann laufen Tages-Backup und andere geplante Aufgaben weiter.
 Warum das so ist, steht im Kapitel "Fehlersuche im Container".
 
+## Auf dem Startbildschirm von Handy und Tablet
+
+Klein.Buch bringt ein Web-App-Manifest mit, eine kleine Datei mit
+Name, Symbol und Farben der Anwendung. Damit lässt sich Klein.Buch
+über das Menü des Browsers auf den Startbildschirm legen (je nach
+Browser etwa "Zum Home-Bildschirm" oder "App installieren") und
+öffnet sich dann in einem eigenen Fenster ohne Adressleiste. Am
+Reverse-Proxy musst Du dafür nichts einstellen; Klein.Buch liefert die
+Datei selbst aus.
+
+Eine Offline-Funktion gibt es nicht. Klein.Buch hat keinen Service
+Worker (das Hilfsprogramm, mit dem Web-Apps Seiten für unterwegs
+zwischenspeichern) und lädt jede Seite vom Server. Ohne Verbindung zu
+Deiner Instanz geht also auch die Startbildschirm-App nicht; nach
+einem Update zeigt sie dafür gleich die neue Version. Auf iPhone und
+iPad hat die Startbildschirm-App eigene Cookies, getrennt vom
+Browser: Du meldest Dich dort einmal gesondert mit Daten-Passwort und
+App-Code an, und sie erscheint als eigene Sitzung unter "Einstellungen
+→ Sicherheit & Anmeldung". Eine Zurück-Taste des Browsers hat sie
+nicht; zurück geht es über die Zurück-Links der Seiten und die
+Navigation.
+
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -134,8 +134,8 @@
       Status
       <select bind:value={statusF} onchange={load}>
         <option value="all">Alle</option>
-        <option value="ok">gesichert</option>
-        <option value="failed">fehlgeschlagen</option>
+        <option value="ok">Gesichert</option>
+        <option value="failed">Fehlgeschlagen</option>
       </select>
     </label>
     <label>

@@ -26,7 +26,7 @@ Stapelverarbeitung importiert. Stand: Lauf F5b, 25.10.2026 (ADR 0039 Nr. 135).
   (positionsbasiert): Umsatz (ohne S/H-Kz), Soll/Haben-Kennzeichen, WKZ Umsatz,
   Kurs, Basis-Umsatz, WKZ Basis-Umsatz, Konto, Gegenkonto, BU-Schlüssel,
   Belegdatum, Belegfeld 1, Belegfeld 2, Skonto, Buchungstext.
-- **Kodierung:** Windows-1252 mit vollständiger Tabelle (27 belegte Zeichen in
+- **Kodierung:** CP1252 (Codepage 1252) mit vollständiger Tabelle (27 belegte Zeichen in
   0x80–0x9F nach WHATWG „windows-1252“); C1-Steuerzeichen und nicht darstellbare
   Zeichen werden `?`. CRLF-Zeilenenden, Dezimal-**Komma**, kein Tausendertrenner.
   Belegdatum **TTMM**, Umsatz immer positiv (Richtung über Konto/Gegenkonto +

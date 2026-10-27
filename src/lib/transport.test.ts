@@ -4,6 +4,8 @@ import {
   REQUEST_HEADER,
   PassphraseChangeUnclear,
   REAUTH_CANCELED,
+  RETRY_503_MS,
+  TIMEOUT_UNCLEAR,
   authChangePassphrase,
   authLogin,
   authRevokeOtherSessions,
@@ -103,6 +105,16 @@ describe("transport.invoke", () => {
     expect(out.id).toBe("c1");
     expect(calls).toHaveLength(2);
     expect(header(calls[0], IDEMPOTENCY_HEADER)).toBe(header(calls[1], IDEMPOTENCY_HEADER));
+  });
+
+  // U7 (R1-07): nach Ablauf der Wiederholungen kein „bitte noch einmal versuchen“.
+  it("rät nach dauerhaftem 503 timeout zum Prüfen statt zum Wiederholen", async () => {
+    const t0 = Date.now();
+    let calls = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => (calls++ === 0 ? t0 : t0 + RETRY_503_MS + 1));
+    mockFetch([json(503, { code: "timeout", message: "… bitte in einem Moment noch einmal versuchen." })]);
+    await expect(invoke("expenses_create", {})).rejects.toBe(TIMEOUT_UNCLEAR);
+    now.mockRestore();
   });
 
   it("wiederholt 503 restarting nicht", async () => {

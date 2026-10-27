@@ -39,7 +39,8 @@
 
   function describe(rule: NotificationRule): string {
     if (rule.id === "rule_backup_result")
-      return "Hinweis in der Hinweis-Liste nach einer Sicherung: immer, wenn eine lokale oder externe Sicherung fehlschlägt, und nach einem erfolgreichen manuellen Backup.";
+      // U6-012: Fehler externer Ziele meldet der Server unabhängig von dieser Regel.
+      return "Hinweis nach einer Sicherung: wenn die lokale Sicherung fehlschlägt oder unvollständig ist, und nach einem erfolgreichen manuellen Backup. Fehler bei externen Zielen meldet Klein.Buch immer, auch wenn diese Erinnerung aus ist.";
     switch (rule.ruleType) {
       case "monthly_doc_check":
         return "Monatliche Erinnerung, alle Belege und Kosten des Vormonats zu erfassen.";

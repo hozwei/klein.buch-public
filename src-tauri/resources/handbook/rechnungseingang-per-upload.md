@@ -27,14 +27,19 @@ Größe begrenzt und vor der Übernahme auf ihren Typ geprüft.
    gerade sitzt. Auf dem Handy geht das meist über "Teilen" oder
    "In Dateien sichern".
 2. Klick im Hauptmenü auf "Kosten" und dort oben auf **"E-Rechnung
-   importieren"**.
+   importieren"** (auf dem Handy im Menü "Mehr").
 3. Wähle im Feld "Datei (XRechnung-XML oder ZUGFeRD-PDF)" die
    gespeicherte Datei aus.
-4. Klick auf **"Einlesen & prüfen"**. Klein.Buch lädt die Datei hoch,
-   liest die Angaben aus und prüft die Rechnung.
+4. Klick auf **"Einlesen und prüfen"**. Klein.Buch lädt die Datei hoch,
+   liest die Angaben aus und prüft die Rechnung. Hast Du noch keine
+   Datei gewählt oder kann Klein.Buch sie nicht lesen, steht die
+   Meldung direkt am Datei-Feld.
 5. Prüfe die vorausgefüllten Felder und ergänze, was fehlt (siehe
    unten).
-6. Klick auf **"Als Kosten festschreiben"**.
+6. Klick auf **"Kosten festschreiben"**. Klein.Buch fragt nach und
+   nennt die Eckwerte (Belegdatum, Lieferant, Brutto, Zahlung). Mit
+   "Festschreiben" wird die Position angelegt und geöffnet,
+   "Abbrechen" ändert nichts.
 
 Hast Du die falsche Datei erwischt, gehst Du mit "Andere Datei"
 zurück zur Auswahl. "Abbrechen" bringt Dich ohne Änderung zurück zur
@@ -50,9 +55,9 @@ farbigen Kasten:
 
 1. "Formal gültige E-Rechnung (keine Beanstandungen)": alles in
    Ordnung.
-2. "Gültig, mit Hinweisen": die Rechnung ist gültig, KoSIT hat aber
-   Kleinigkeiten angemerkt.
-3. "Die Rechnung hat formale Mängel": der Absender hat Fehler in der
+2. "Gültig, mit … Hinweisen" (mit der Anzahl): die Rechnung ist
+   gültig, KoSIT hat aber Kleinigkeiten angemerkt.
+3. "Die Rechnung hat formale Mängel (… Fehler)": der Absender hat Fehler in der
    Datei. Du kannst sie trotzdem erfassen. Der Befund wird mit
    gespeichert.
 4. "Die formale Prüfung (KoSIT) war nicht möglich": der Prüfdienst
@@ -78,12 +83,15 @@ die Datei nicht wissen kann, ergänzt Du:
    Steuer-Aufstellung: Einnahmen minus Ausgaben. Sie zählt eine
    Ausgabe erst am Tag der Zahlung. Hast Du schon bezahlt, nimm den
    Haken weg und trag das Datum ein. Sonst holst Du das später in der
-   Kosten-Position über "Als bezahlt markieren" nach.
+   Kosten-Position über "Als bezahlt markieren" nach. Liegt das
+   Zahldatum vor dem Beleg-Datum, weist Klein.Buch darauf hin;
+   erlaubt ist es.
 2. **Kategorie (EÜR).** Klein.Buch setzt zunächst "Sonstiges". Wähle
    die passende Kategorie, zum Beispiel "Software / Lizenzen".
 3. **Lieferant (Kontakt).** Stimmt die USt-IdNr. der Rechnung mit
    einem Deiner Lieferanten-Kontakte überein, wählt Klein.Buch ihn
-   selbst aus. Sonst bleibt der Name als Freitext stehen.
+   selbst aus. Sonst bleibt der Name als Freitext im Feld
+   "Lieferanten-Name" stehen.
 4. **Zahlungs-Konto.** Vorbelegt ist Dein Standard-Konto.
 
 Stimmen Netto oder Umsatzsteuer nicht mit dem Beleg überein,
@@ -91,9 +99,22 @@ korrigierst Du sie direkt. Der Brutto-Betrag rechnet sich dann neu.
 Als Kleinunternehmer buchst Du immer den Brutto-Betrag als Ausgabe,
 weil Du keine Vorsteuer abziehen darfst.
 
+Weist die Rechnung aus, dass Du die Steuer schuldest (§13b, ohne
+Umsatzsteuer), setzt Klein.Buch den Haken bei "§13b Reverse-Charge"
+schon selbst; der USt-Betrag ist dann auf 0 gesperrt. Was Du bei
+§13b sonst tun musst, steht im Kapitel "Kosten erfassen".
+
+Erkennt Klein.Buch in der Rechnung die Steuerkategorie K
+(innergemeinschaftliche Lieferung aus dem EU-Ausland, ohne
+Umsatzsteuer), erscheint ein Hinweis: Auch mit §19 kann für Dich
+Erwerbsteuer anfallen, abhängig von der Erwerbsschwelle und davon, ob
+Du Deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das prüfst
+Du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung und ändert
+wegen des Hinweises nichts an Beträgen oder §13b-Haken.
+
 ## Nach dem Festschreiben
 
-Mit "Als Kosten festschreiben" wird die Kosten-Position sofort
+Mit "Kosten festschreiben" wird die Kosten-Position sofort
 unveränderlich. Die hochgeladene Original-Datei legt Klein.Buch
 unverändert im Archiv ab, wo sie die gesetzlichen 10 Jahre
 aufbewahrt wird. Danach läuft automatisch ein Backup. Hast Du Dich
@@ -128,8 +149,8 @@ an.
 ## Wenn etwas nicht klappt
 
 Die typischen Fehlermeldungen und was Du dagegen tust, stehen im
-Kapitel "Probleme beim Rechnungseingang" unter "Troubleshooting".
+Kapitel "Probleme beim Rechnungseingang" unter "Fehlerbehebung".
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

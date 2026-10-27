@@ -3,7 +3,7 @@ slug: anlagen-und-afa
 title: Anschaffungen und AfA
 category: bedienen
 order: 170
-keywords: [anschaffung, anlage, afa, abschreibung, nutzungsdauer, anlagevermögen, gwg, computer]
+keywords: [anschaffung, anlage, afa, abschreibung, nutzungsdauer, anlagevermögen, gwg, computer, abgang, restbuchwert, §13b]
 ---
 
 # Anschaffungen und AfA
@@ -45,42 +45,54 @@ oder sofort absetzbar, frag Deinen Steuerberater.
 ## Anschaffung anlegen
 
 Klick im Hauptmenü auf "Anschaffungen" und dann auf **"+ Neue
-Anschaffung"**. Trage ein:
+Anschaffung"**. Pflichtfelder sind mit einem Stern markiert. Trage ein:
 
 1. **Bezeichnung** (zum Beispiel "Notebook ThinkPad X1")
-2. **Anschaffungs-Datum**
-3. **Anschaffungskosten** (€) — als §19-Kleinunternehmer der
+2. **Anschaffungsdatum**
+3. **Anschaffungskosten** (€): als §19-Kleinunternehmer der
    Brutto-Wert, bei Regelbesteuerung der Netto-Wert
-4. **AfA-Kategorie** — Vorschlag aus der amtlichen Tabelle des
-   Bundesfinanzministeriums
-5. **Nutzungsdauer** in Jahren (Vorschlag aus der AfA-Kategorie)
-6. **AfA-Methode**, siehe nächster Abschnitt
-7. **Betrieblicher Anteil** (0–100 %) — bei Misch-Nutzung
-   (z. B. Kfz mit privatem Anteil) gibst Du hier den
-   geschäftlichen Anteil ein. Klein.Buch rechnet die AfA-Basis
-   entsprechend
-8. **Lieferant** — optional ein bestehender Kontakt
-9. **Notiz** — optional
+4. **Lieferant (Kontakt, optional)**: ein bestehender Kontakt
+5. **AfA-Kategorie (optional)**: Auswahl aus der amtlichen Tabelle des
+   Bundesfinanzministeriums; sie setzt Methode und Nutzungsdauer passend
+6. **Abschreibungsmethode**, siehe Abschnitt "AfA-Methoden"
+7. **Nutzungsdauer** in Jahren, nur bei linearer Abschreibung (bei
+   den Sofort-Methoden entfällt sie)
+8. **Betrieblicher Anteil** als Zahl von 0 bis 100 %: Bei Misch-Nutzung
+   (z. B. Kfz mit privatem Anteil) gibst Du hier den geschäftlichen
+   Anteil ein. Unter dem Feld zeigt Klein.Buch die Abschreibungsbasis,
+   also den Teil der Anschaffungskosten, der abgeschrieben wird
+9. **Notiz (optional)**
 
-Speichere. Klein.Buch berechnet die Jahres-AfA und legt die
-Buchungen für jedes Jahr der Nutzungsdauer als Vormerkung an.
+Mit **"Methode vorschlagen"** schlägt Klein.Buch Methode und
+Nutzungsdauer passend zu Betrag und Kategorie vor; die Begründung steht
+als "Vorschlag: …" im Formular. Fehlt eine Pflichtangabe, steht die
+Meldung am Feld, und der Cursor springt zum ersten fehlerhaften Feld.
+
+Klick auf **"Anschaffung anlegen"**. Klein.Buch vergibt die Nummer
+(AV-Jahr-laufende Nummer, zum Beispiel AV-2026-0001), meldet
+"Anschaffung angelegt: …" und öffnet die Anschaffung. Abschreibungen
+bucht Klein.Buch erst mit dem AfA-Lauf (siehe "AfA-Lauf"); bis dahin
+steht die Anschaffung auf "Noch keine AfA".
 
 ### Aus Kosten aktivieren
 
 Hast Du den Kauf schon als Kosten erfasst, öffne die Kosten und klick
-auf **"Als Anlage übernehmen"**. Klein.Buch übernimmt Bezeichnung,
-Lieferant, das Belegdatum als Anschaffungsdatum und die
-Anschaffungskosten: als §19-Kleinunternehmer den Brutto-Betrag, bei
+in der Karte "Anlagevermögen" auf **"Als Anlage übernehmen"**. Klein.Buch
+übernimmt Bezeichnung, Lieferant, das Belegdatum als Anschaffungsdatum
+und die Anschaffungskosten: als §19-Kleinunternehmer den Brutto-Betrag, bei
 Regelbesteuerung den Netto-Betrag (maßgeblich ist Dein Status bei
 Leistungsbezug, also im Jahr des Belegdatums der Kosten, nicht im Jahr
-der Zahlung). Den Methoden-Vorschlag prüft Klein.Buch am Netto-Betrag
-der Kosten gegen die GWG-Grenze. Ab dann zählen die Kosten nicht mehr
+der Zahlung). Das Feld "Anschaffungskosten" ist dann schreibgeschützt;
+der Hinweis darunter sagt, ob der Betrag brutto (Kleinunternehmer) oder
+netto (Regelbesteuerung) aus den Kosten kommt. Den Methoden-Vorschlag
+prüft Klein.Buch am Netto-Betrag der Kosten gegen die GWG-Grenze. Ab dann zählen die Kosten nicht mehr
 selbst in der EÜR; die Anschaffung wirkt nur noch über die AfA. Bei
 Regelbesteuerung bleibt die gezahlte Vorsteuer eine Ausgabe im Jahr der
 Zahlung (Vorsteuer-Zeile der Ausfüllhilfe, im DATEV-Stapel auf dem
 Vorsteuerkonto); abgeschrieben wird nur der Netto-Betrag.
 
-Klein.Buch lehnt das Aktivieren ab, wenn
+Klein.Buch lehnt das Aktivieren ab und nennt den Grund oben auf der
+Seite, wenn
 
 - das Geschäftsjahr des Belegs oder der Zahlung schon abgeschlossen ist
   — dort stecken die Kosten bereits in der EÜR,
@@ -116,6 +128,31 @@ einmal ab. Trag die Steuer auf die Anlage nicht zusätzlich als normale
 Kosten ein. Einen höheren Betrag an der Rechnungsposition lehnt
 Klein.Buch mit diesem Hinweis ab.
 
+So führt Dich Klein.Buch dabei:
+
+1. Öffne die Anschaffung aus der Lieferantenrechnung (die
+   Hauptanschaffung). Sie zeigt die Karte "Selbst geschuldete Steuer
+   (§13b)" mit dem Knopf **"Steuer als Kosten erfassen"**.
+2. Der Knopf öffnet "Neue Kosten erfassen", vorbelegt mit dem Lieferanten
+   "Finanzamt", einer Beschreibung mit der Nummer der Hauptanschaffung
+   und dem USt-Satz 0 %, ohne §13b-Schalter. Trag den Betrag ein (nur
+   den Anteil dieser Anschaffung) und klick auf "Kosten festschreiben".
+3. Nach der Rückfrage öffnet Klein.Buch direkt "Neue Anschaffung" für
+   diese Kosten. In der Auswahl "Selbst geschuldete Steuer (§13b) zu
+   Anschaffung" ist die Hauptanschaffung schon gewählt; Anschaffungsdatum,
+   Abschreibungsmethode, Nutzungsdauer, AfA-Kategorie und betrieblicher
+   Anteil kommen von ihr. Prüfe die Werte und klick auf "Anschaffung
+   anlegen".
+
+Die Auswahl erscheint auch, wenn Du solche Kosten später über "Als
+Anlage übernehmen" aktivierst; angeboten werden nicht veräußerte
+Anschaffungen aus §13b-Kosten als Kleinunternehmer. Ist die
+Hauptanschaffung kein geringwertiges Wirtschaftsgut, schlägt Klein.Buch
+auch für die Steuer keine Sofortabschreibung vor und weist am Feld
+"Abschreibungsmethode" darauf hin, wenn Du sie von Hand wählst. Die
+Auswahl belegt nur die Felder vor; Klein.Buch speichert keine
+Verknüpfung zwischen den beiden Anschaffungen.
+
 **Steuerstatus und Zahldatum.** Ob Brutto oder Netto, richtet sich nach
 Deinem Steuerstatus bei Leistungsbezug (§15 Abs. 1 UStG): Hast Du das
 Notebook im Dezember noch als Kleinunternehmer bekommen und zahlst es
@@ -134,19 +171,21 @@ nichts; es bestimmt nur, in welchem Jahr die Ausgabe (bei
 Regelbesteuerung die Vorsteuer) in der EÜR steht.
 
 **Nach einem Wechsel des Steuerstatus.** Ein Verzicht auf §19 gilt ab
-Beginn des Kalenderjahres. Hast Du in diesem Jahr schon Kosten als
+Beginn des Kalenderjahres, ebenso der Wegfall, weil Dein Vorjahresumsatz
+über 25.000 € lag. Hast Du in diesem Jahr schon Kosten als
 Anlage übernommen (brutto), passen deren Anschaffungskosten danach nicht
 mehr (netto wäre richtig). Klein.Buch blockiert den Wechsel nicht, legt
-aber einen Hinweis in die Inbox, der jede betroffene Anlage mit dem
+aber unter "Hinweise" einen Hinweis an, der jede betroffene Anlage mit dem
 richtigen Betrag nennt; die EÜR-Ausfüllhilfe zeigt sie ebenfalls. Öffne
-die Anlage und korrigiere die Anschaffungskosten — ist schon AfA
-gebucht, setzt Du die Abschreibung des offenen Geschäftsjahres vorher
-zurück. Ist für die Anlage AfA in einem abgeschlossenen Jahr
+die Anschaffung, wähle "Bearbeiten" und korrigiere die
+Anschaffungskosten. Ist schon AfA gebucht, setzt Du die Abschreibung des
+offenen Geschäftsjahres vorher zurück (siehe "Korrektur"). Ist für die Anlage AfA in einem abgeschlossenen Jahr
 festgeschrieben oder die Anlage schon abgegangen, klärst Du die
 Korrektur mit Deiner Steuerberatung, ebenso wenn das Anschaffungsdatum
 in einem Jahr mit anderem Steuerstatus als das Belegdatum liegt. Eine
 Vorsteuerberichtigung nach §15a UStG für Anlagen aus früheren Jahren
-berechnet Klein.Buch nicht.
+(der Wechsel gilt dort als Änderung der Verhältnisse) berechnet
+Klein.Buch nicht; klär sie mit Deiner Steuerberatung.
 
 **Wegfall von §19 beim Überschreiten der 100.000-€-Grenze.** Überschreitet
 Dein Umsatz im laufenden Jahr 100.000 €, endet §19 mitten im Jahr (§19
@@ -167,6 +206,23 @@ Aktivierte Kosten lassen sich nicht mehr stornieren. Gibst Du den
 Gegenstand zurück, erfasst Du das als Abgang der Anlage (Art
 "Verkauf", Erlös = Erstattung).
 
+## Liste und Status
+
+Die Liste "Anschaffungen" zeigt je Anschaffung Nummer, Bezeichnung,
+Anschaffungsdatum, Anschaffungskosten, Abschreibungsmethode (mit dem
+betrieblichen Anteil, wenn er unter 100 % liegt), Restbuchwert und
+Status. Du filterst nach Nummer oder Bezeichnung, nach Anschaffungsjahr
+und nach "Aktive", "Veräußerte" oder "Alle"; über der Tabelle steht der
+Restbuchwert der angezeigten aktiven Anschaffungen. Der Status bedeutet:
+
+- **Noch keine AfA:** angelegt, noch keine Abschreibung gebucht. Du
+  kannst die Anschaffung noch bearbeiten.
+- **In Abschreibung:** mindestens eine Abschreibung ist gebucht.
+- **Festgeschrieben:** das Anschaffungsjahr ist abgeschlossen (Kapitel
+  "Geschäftsjahr-Abschluss").
+- **Abgeschrieben:** der Restbuchwert ist 0.
+- **Veräußert:** der Abgang ist gebucht.
+
 ## AfA-Methoden
 
 Klein.Buch v1.0 unterstützt drei AfA-Methoden:
@@ -184,26 +240,51 @@ ist das eine Sofortabschreibung.
 
 ## AfA-Lauf
 
-Bei eingeschaltetem Automatik-Schalter (Standard, in "Geschäftsjahr"
-einstellbar) erzeugt Klein.Buch die AfA-Buchungen zum 1. Januar
+Bei eingeschaltetem Automatik-Schalter (Standard, im Bereich
+"Geschäftsjahr" unter "Abschreibungen (AfA) zur Jahreswende automatisch
+buchen") erzeugt Klein.Buch die AfA-Buchungen zum 1. Januar
 jedes Geschäftsjahres automatisch. Du siehst die Buchung in der
-Anschaffungs-Detail-Ansicht und in der EÜR als Ausgabe.
+Anschaffung unter "Abschreibungs-Verlauf" und in der EÜR als Ausgabe.
 
-Wenn der automatische Lauf abgeschaltet ist, klickst Du auf der
-Anschaffungen-Liste auf **"Abschreibung buchen"** in der eigenen
-Karte unterhalb der Tabelle. Tu das spätestens vor dem
-Geschäftsjahr-Abschluss.
+Wenn der automatische Lauf abgeschaltet ist, klickst Du in der Liste
+"Anschaffungen" oben auf **"Abschreibung buchen"** (auf schmalen
+Bildschirmen im Menü "Mehr"). Über der Tabelle öffnet sich der Bereich
+"Abschreibung buchen": Wähle das Geschäftsjahr; darunter siehst Du, was
+für dieses Jahr schon gebucht ist. Klick auf "AfA … buchen" (mit dem
+gewählten Jahr) und bestätige die Rückfrage mit "Jetzt buchen".
+Klein.Buch bucht die Jahres-Abschreibung aller Anschaffungen und holt
+noch nicht gebuchte Vorjahre ab dem Anschaffungsjahr nach. Tu das
+spätestens vor dem Geschäftsjahr-Abschluss. Fehlt beim EÜR-Export noch
+AfA, weist die Export-Seite darauf hin und bietet "AfA für … jetzt
+buchen" an.
 
 ## Anschaffung verkaufen oder verschrotten
 
 Wenn Du eine Anschaffung vor Ablauf der Nutzungsdauer ausscheidest
-(Verkauf, Verschrottung, Diebstahl), öffne die Detail-Ansicht und
-klick auf **"Veräußern / Entsorgen"**. Trage Datum, Art (Verkauf,
-Verschrottung oder Privatentnahme / Geschenk) und gegebenenfalls den
-Veräußerungs-Erlös bzw. Entnahmewert ein.
-Bestätige mit "Veräußerung bestätigen". Klein.Buch beendet die
+(Verkauf, Verschrottung, Diebstahl), öffne die Anschaffung und wähle im
+Menü "Mehr" **"Veräußern / Entsorgen"**. Trage ein:
+
+1. **Datum des Abgangs**
+2. **Art des Abgangs:** "Verkauf", "Verschrottung / Entsorgung" oder
+   "Privatentnahme / Geschenk"
+3. bei einem Verkauf den **Verkaufserlös** (0, wenn Du nichts erlöst
+   hast), bei einer Privatentnahme oder einem Geschenk den
+   **Entnahmewert** (Pflichtfeld, siehe unten)
+
+Die Karte "Vorschau" rechnet zum gewählten Datum vom Server vor, was der
+Abgang bucht: den Restbuchwert heute, schon gebuchte AfA, die der Abgang
+ersetzt (mit "+", sie kommt zum Restbuchwert hinzu), nachgeholte AfA
+(mit "−"), die AfA des Abgangsjahres bis zum Abgang und
+den Restbuchwert zum Abgang. Beim Verkauf steht daneben der
+Veräußerungsgewinn oder -verlust. Ist ein Abgang zu diesem Datum nicht
+möglich, steht der Grund sofort am Datumsfeld.
+Klick auf **"Abgang bestätigen"**. Eine Rückfrage ("Abgang von … buchen?")
+nennt Datum, Art, Erlös bzw. Entnahmewert, den Restbuchwert zum Abgang
+und den Gewinn oder Verlust; der Abgang lässt sich nicht rückgängig
+machen. Erst **"Abgang buchen"** darin bucht ihn. Klein.Buch beendet die
 laufende AfA, verbucht den Rest-Buchwert als Ausgabe und legt den
-Verkaufs-Erlös als Einnahme an.
+Verkaufs-Erlös als Einnahme an. Die Anschaffung steht danach auf
+"Veräußert" und zeigt die Karte "Veräußerung".
 
 **Privatentnahme / Geschenk.** Nimmst Du die Anschaffung in Dein
 Privatvermögen (zum Beispiel das alte Notebook für die Familie),
@@ -225,25 +306,32 @@ Jahres-AfA oder für spätere Jahre bereits AfA gebucht, ersetzt Klein.Buch
 diese Buchungen dabei durch die anteilige AfA; das Protokoll hält die
 alten Werte fest. Liegt das Datum vor der Anschaffung oder ist ein
 späteres Geschäftsjahr schon abgeschlossen, in dem die Anlage noch im
-Bestand steht, lehnt Klein.Buch den Abgang ab; eine solche Korrektur
-klärst Du mit Deiner Steuerberatung. Eine veräußerte Anlage
+Bestand steht, lehnt Klein.Buch den Abgang ab (der Grund steht schon vor
+dem Bestätigen am Datumsfeld); eine solche Korrektur
+klärst Du mit Deiner Steuerberatung. Eine veräußerte Anschaffung
 ist abgeschlossen: Ihre Daten, ihre AfA-Buchungen und ihr Rest-Buchwert
 lassen sich nicht mehr ändern oder zurücksetzen, auch solange das
 Geschäftsjahr noch offen ist.
-Prüf die Angaben deshalb vor dem Bestätigen.
+Prüf die Angaben und die Vorschau deshalb vor dem Bestätigen.
 
 Bei einem Verkauf an einen anderen Unternehmer brauchst Du
 zusätzlich eine Verkaufsrechnung. Die legst Du normal im Bereich
-"Rechnungen" an.
+"Rechnungen" an. Beachte dabei den Hinweis der Steuer-Übersicht (EÜR):
+Erfasst Du den Verkauf zusätzlich als bezahlte Rechnung, zählt der Erlös
+in der EÜR doppelt. Wie Du die Rechnung in diesem Fall erfasst, klärst
+Du am besten mit Deiner Steuerberatung.
 
 ## Korrektur
 
 Vor dem ersten AfA-Lauf kannst Du die Anschaffungs-Daten frei
-korrigieren. Sobald die erste AfA-Buchung steht, sind die
-Kern-Felder gesperrt. Wenn Du dennoch korrigieren musst, gibt es
-in der Detail-Ansicht den Knopf **"Abschreibung zurücksetzen"** —
-das funktioniert nur, solange das Geschäftsjahr nicht abgeschlossen
-ist und die Anlage nicht veräußert wurde. Nach dem
+korrigieren: Öffne die Anschaffung, klick auf **"Bearbeiten"**, ändere
+die Angaben und speichere mit "Änderungen speichern". Sobald die erste
+AfA-Buchung steht, gibt es "Bearbeiten" nicht mehr. Wenn Du dennoch
+korrigieren musst, wählst Du in der Anschaffung im Menü "Mehr"
+**"Abschreibung zurücksetzen"** und bestätigst die Rückfrage mit
+"Zurücksetzen"; danach kannst Du die Anschaffung wieder bearbeiten.
+Das funktioniert nur, solange das Geschäftsjahr nicht abgeschlossen
+ist und die Anschaffung nicht veräußert wurde. Nach dem
 Geschäftsjahr-Abschluss sind die AfA-Werte für das
 abgeschlossene Jahr endgültig fest.
 
@@ -257,4 +345,4 @@ reinen Cash-Basis und steht ausdrücklich in §4 Abs. 3 Satz 3 EStG.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

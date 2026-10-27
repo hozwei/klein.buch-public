@@ -76,7 +76,8 @@
         {#each years as y}<option value={y}>{y}</option>{/each}
       </select>
     {/if}
-    <HelpAnchor slug="euer-cash-basis" />
+    <!-- U6-011: Hilfe-Knopf und F1 (routeHelp.ts) öffnen dasselbe Kapitel. -->
+    <HelpAnchor slug="euer" />
   {/snippet}
 </PageBar>
 
@@ -84,7 +85,8 @@
   Deine <strong>Einnahmen-Überschuss-Rechnung</strong> für ein Jahr: was reingekommen
   ist minus was du ausgegeben hast. Maßgeblich ist, <strong>wann das Geld geflossen
   ist</strong> (nicht das Rechnungsdatum) — so will es das Finanzamt
-  (§&nbsp;4&nbsp;Abs.&nbsp;3, §&nbsp;11&nbsp;EStG).
+  (§&nbsp;4&nbsp;Abs.&nbsp;3, §&nbsp;11&nbsp;EStG; Handbuch-Kapitel
+  <a class="kb-link" href="/help/euer-cash-basis">EÜR und Cash-Basis</a>).
 </p>
 
 <p class="actions">
@@ -200,11 +202,14 @@
   {#if hasDisposal}
     <p class="muted note">
       Darin enthalten — Anschaffungs-Verkauf:
+      <!-- U7 (R1-06): Betrag ohne Vorzeichen, das Wort sagt Gewinn oder Verlust. -->
       {report.disposalGainLossCents >= 0 ? "Gewinn" : "Verlust"} von
-      <strong>{euro(report.disposalGainLossCents)}</strong>
+      <strong>{euro(Math.abs(report.disposalGainLossCents))}</strong>
       (Erlös {euro(report.disposalProceedsCents)} − Restwert
-      {euro(report.disposalBookValueCents)}). Tipp: einen Anschaffungs-Verkauf
-      hier nicht zusätzlich als Rechnung erfassen, sonst zählt der Erlös doppelt.
+      {euro(report.disposalBookValueCents)}). Der Erlös zählt hier schon als Einnahme.
+      Stellst du für den Verkauf eine Rechnung aus (an ein Unternehmen ist sie Pflicht),
+      zählt ihre Zahlung den Erlös ein zweites Mal — wie du sie erfasst, klärst du mit
+      deiner Steuerberatung.
     </p>
   {/if}
 

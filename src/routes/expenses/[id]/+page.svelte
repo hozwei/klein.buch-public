@@ -365,7 +365,13 @@
         <button type="button" class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
       </div>
     {:else}
-      <p class="muted">Kein primärer Beleg hinterlegt. Unter „Zusätzliche Anhänge“ kannst du ein Foto oder PDF ergänzen.</p>
+      <!-- U6-012: Ein Anhang ersetzt den beim Erfassen fehlenden Beleg; die Liste kennt
+           Anhänge nicht und zeigt weiter „Kein Beleg“ (eigenes Lesefeld nötig). -->
+      {#if detail.attachments.length > 0}
+        <p class="muted">Beim Erfassen wurde kein Beleg hochgeladen; deine Anhänge stehen unter „Zusätzliche Anhänge“.</p>
+      {:else}
+        <p class="muted">Kein primärer Beleg hinterlegt. Unter „Zusätzliche Anhänge“ kannst du ein Foto oder PDF ergänzen.</p>
+      {/if}
     {/if}
   </section>
 

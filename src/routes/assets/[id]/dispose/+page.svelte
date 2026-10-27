@@ -6,7 +6,8 @@
   import { assetsGet, assetsDispose, assetsDisposalPreview } from "#lib/api.ts";
   import type { AssetDetail, AssetDisposalPreview, DisposalType } from "#lib/types.ts";
   import { euro, date } from "#lib/format.ts";
-  import { DISPOSAL_TYPES } from "#lib/labels.ts";
+  import { DISPOSAL_TYPES, disposalTypeLabel } from "#lib/labels.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Banner from "#lib/Banner.svelte";
   import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
@@ -131,6 +132,31 @@
     if (busy) return;
     saveError = "";
     if (!(await validate())) return;
+    // U7 (R1-05, design.md §5): Der Abgang ist nicht umkehrbar (GoBD) — Rückfrage mit den
+    // Eckwerten wie beim Festschreiben von Kosten und beim Storno.
+    const bullets = [
+      `Datum des Abgangs: ${date(disposalDate)}`,
+      `Art: ${disposalTypeLabel(disposalType)}`,
+    ];
+    if (isSale) bullets.push(`Verkaufserlös: ${euro(proceedsCents)}`);
+    if (isWithdrawal) bullets.push(`Entnahmewert: ${euro(proceedsCents)}`);
+    if (current) {
+      bullets.push(`Restbuchwert zum Abgang: ${euro(current.residualBookValueCents)}`);
+      bullets.push(`${gainLoss >= 0 ? "Gewinn" : "Verlust"}: ${euro(Math.abs(gainLoss))}`);
+    } else {
+      bullets.push("Restbuchwert zum Abgang: rechnet Klein.Buch beim Buchen");
+    }
+    const ok = await confirmDialog({
+      title: `Abgang von ${detail?.asset.assetNumber ?? "der Anschaffung"} buchen?`,
+      body:
+        "Klein.Buch bucht die AfA bis zum Abgang und den Restbuchwert als Ausgabe. " +
+        "Das lässt sich nicht rückgängig machen.",
+      bullets,
+      confirmLabel: "Abgang buchen",
+      cancelLabel: "Abbrechen",
+      danger: true,
+    });
+    if (!ok) return;
     busy = true;
     try {
       await assetsDispose({
@@ -279,14 +305,15 @@
         </div>
         {#if current.replacedDepreciationCents !== 0}
           <div>
+            <!-- U7 (R1-06): Vorzeichen ausdrücklich — die ersetzte AfA kommt zum Restbuchwert hinzu. -->
             <dt>Gebuchte AfA {current.replacedYears.join(", ")}, die der Abgang ersetzt</dt>
-            <dd>{euro(current.replacedDepreciationCents)}</dd>
+            <dd>+{euro(current.replacedDepreciationCents)}</dd>
           </div>
         {/if}
         {#if current.catchUpDepreciationCents !== 0}
           <div>
             <dt>Nachgeholte AfA {current.catchUpYears.join(", ")}</dt>
-            <dd>{euro(current.catchUpDepreciationCents)}</dd>
+            <dd>−{euro(current.catchUpDepreciationCents)}</dd>
           </div>
         {/if}
         <div>

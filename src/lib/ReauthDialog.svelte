@@ -52,6 +52,22 @@
   async function confirm() {
     if (busy) return;
     error = null;
+    // U7 (R3-03): Enter im Passwortfeld schickte die Bestätigung mit leerem Code ab
+    // (Fehlversuch beim Server, Eingaben weg). Leere Felder ohne Anfrage abfangen.
+    if (!pass) {
+      error = "Gib dein Daten-Passwort ein.";
+      await tick();
+      passEl?.focus();
+      return;
+    }
+    if (!code.trim()) {
+      if (document.activeElement !== passEl) {
+        error = useRecovery ? "Gib einen noch unbenutzten Einmal-Code ein." : "Gib den aktuellen Code aus der Authenticator-App ein.";
+      }
+      await tick();
+      document.getElementById("reauth-code")?.focus();
+      return;
+    }
     busy = true;
     let failed = false;
     try {

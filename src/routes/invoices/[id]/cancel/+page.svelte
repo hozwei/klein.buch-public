@@ -168,7 +168,8 @@
         negativer Betrag, er gleicht die Original-Rechnung aus. Die Original-Rechnung wird
         <strong>nicht gelöscht</strong> — sie bleibt erhalten und gilt ab jetzt als storniert. So
         verlangt es das Gesetz. Das Stornieren lässt sich nicht rückgängig machen; schick den
-        Storno-Beleg danach an den Kunden.
+        Storno-Beleg danach an den Kunden. Hat die Rechnung eine Leitweg-ID (Rechnung an eine
+        Behörde), trägt der Storno-Beleg dieselbe.
       </p>
       <form id="cancel-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
         <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>

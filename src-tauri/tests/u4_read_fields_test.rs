@@ -516,4 +516,24 @@ async fn backup_settings_report_offsite_copy_age() {
     let neu = s.targets.iter().find(|t| t.id == "c").unwrap();
     assert_eq!(neu.last_copy_at, None);
     assert_eq!((s.offsite_last_copy_at, s.offsite_age_days), (None, None));
+
+    // U7 (R2-03): Ein Ziel mit derselben Bezeichnung an einem anderen Ort
+    // übernimmt die Kopien von „NAS“ nicht.
+    klein_buch_lib::backup::set_setting(
+        &pool,
+        "backup_targets",
+        r#"[{"id":"d","label":"NAS","kind":"directory","path":"nas/anders"}]"#,
+    )
+    .await
+    .unwrap();
+    klein_buch_lib::backup::set_setting(
+        &pool,
+        "backup_offsite_results",
+        r#"{"d":{"ok":false,"at":"2026-06-09T02:30:00+02:00","error":"offline"}}"#,
+    )
+    .await
+    .unwrap();
+    let s = settings(&ctx).await;
+    assert_eq!(s.targets[0].last_copy_at, None);
+    assert_eq!((s.offsite_last_copy_at, s.offsite_age_days), (None, None));
 }

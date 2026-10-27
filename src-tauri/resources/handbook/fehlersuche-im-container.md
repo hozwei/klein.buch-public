@@ -35,13 +35,26 @@ Jeder Aufruf der Oberfläche hinterlässt eine Zeile im Bereich
 
 `ip` ist die Adresse des Browsers, `sess` eine Kurzkennung der
 Sitzung. Dieselbe Kurzkennung siehst Du unter Einstellungen →
-Sicherheit bei "Angemeldete Sitzungen". `req` ist die Kennung des
+Sicherheit & Anmeldung im Abschnitt "Angemeldete Sitzungen". `req` ist die Kennung des
 Aufrufs. Meldet die Oberfläche "Interner Fehler (Ref …)", ist die Ref
 genau diese Kennung. Mit
 `docker compose logs klein-buch | grep <Ref>` findest Du die
 Zugriffszeile und den eigentlichen Fehler. Die IP-Adressen bleiben nur
 so lange im Log, wie die Log-Rotation der Compose-Datei es zulässt
 (`max-size` und `max-file`, im Beispiel 5 Dateien zu 10 MB).
+
+Fachliche Ablehnungen, die Du im Browser liest, schreibt Klein.Buch
+nicht ins Log; dort steht nur die Zugriffszeile mit dem Status, etwa
+422 oder 409. Ins Log gelangen solche Meldungen bei geplanten Läufen,
+zum Beispiel als "Abo-Rechnung …: automatisches Festschreiben
+fehlgeschlagen: …" mit dem Grund dahinter. Seit 2026.11 sind diese
+Meldungen in der Sprache der Oberfläche geschrieben: mit festen
+Vorsätzen wie "Die Rechnung kann nicht ausgestellt werden: …" statt
+"Validation failed (… Fehler): …", mit Daten im Format TT.MM.JJJJ und
+ohne die Regel-Kennungen der XRechnung (etwa BR-DE-6), die im
+Prüfbericht stehen. Überwachst oder filterst Du das Log auf den alten
+Wortlaut, passe das an. Zugriffszeilen und die Zeilen zu
+Fehlversuchen (siehe unten) bleiben, wie sie sind.
 
 Ob Klein.Buch läuft, prüft Docker alle 30 Sekunden selbst. Das Ergebnis
 zeigt `docker ps` in der Spalte "STATUS" (`healthy` oder `unhealthy`).
@@ -258,4 +271,4 @@ Firewall nicht. Bei iptables gehört sie dann in die Kette `DOCKER-USER`
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

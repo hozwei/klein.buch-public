@@ -42,10 +42,25 @@ jedes Backup zusätzlich an jedes externe Ziel, das Du eingerichtet hast
 steht im Kapitel "[Off-Site-Backup einrichten](/help/backup-ziel-einrichten)".
 
 Alles rund ums Backup findest Du im Hauptmenü unter "Einstellungen" und
-dort unter "Backups". Oben siehst Du den Status, darunter die externen
-Ziele, den Knopf für ein sofortiges Backup, den Backup-Verlauf und ganz
-unten die Wiederherstellung. Oben rechts führt "Backup-Protokoll" zum
-lückenlosen Nachweis aller Sicherungen.
+dort unter "Backups". Die Seite hat die Karten "Status", "Backup jetzt
+erstellen", "Externe Ziele", "SFTP-Ziel hinzufügen (für
+Fortgeschrittene)", "Backup-Verlauf", "Wiederherstellen" und
+"Nummernkreise". Auf einem breiten Bildschirm stehen je zwei Karten
+nebeneinander, auf schmalen Bildschirmen untereinander. Oben rechts führt
+"Backup-Protokoll" zum lückenlosen Nachweis aller Sicherungen.
+
+Die Karte "Status" nennt, ob das Backup-Passwort eingerichtet ist, wann
+die letzte lokale Sicherung entstand, ab welcher Uhrzeit das tägliche
+Backup läuft und wie viele externe Ziele es gibt. Unter "Stand extern"
+siehst Du, wie alt Deine externen Kopien sind: Klein.Buch nimmt je Ziel
+die jüngste Kopie und zeigt die älteste davon mit Datum und Alter
+("heute", "gestern", "vor 3 Tagen"). Hat ein Ziel noch keine Kopie,
+steht dort "noch nicht auf jedem Ziel eine Kopie". Dasselbe Alter zeigt
+die Startseite in der Kennzahl "Backup". Fehlt ein externes Ziel, ist
+eines beim letzten Backup gescheitert oder ist eine Kopie älter als die
+Frist der Regel "Backup überfällig" (sieben Tage), steht auf der
+Startseite unter "Anstehende Aufgaben" ein Eintrag mit einem Knopf zur
+Seite "Backups".
 
 ## Der Backup-Verlauf
 
@@ -53,8 +68,8 @@ Die Tabelle "Backup-Verlauf" zeigt die Sicherungen, die Du zurückspielen
 kannst, die neueste zuerst. Jede Zeile nennt, wann das Backup erstellt
 wurde, den Grund ("Nach dem Festschreiben", "Automatisch (täglich)",
 "Manuell" oder "Vor einer Wiederherstellung"), den Ort ("Lokal",
-"Off-Site" oder "Off-Site (SFTP)"), die Aufbewahrungs-Klasse und die
-Größe.
+"Off-Site" oder "Off-Site (SFTP)"), die Aufbewahrung ("Täglich",
+"Monatlich", "Jährlich" oder "Bleibt erhalten") und die Größe.
 
 Der Verlauf zeigt nur Sicherungen, die geklappt haben. Fehlgeschlagene
 Versuche, etwa eine externe Kopie, die nicht geschrieben werden konnte,
@@ -103,7 +118,8 @@ die Sicherheits-Backups vor einer Wiederherstellung. Dasselbe gilt für
 die Backups, die Klein.Buch vor einer Datenbank-Umstellung nach einem
 Update und nach einem Wechsel des Daten-Passworts anlegt, und für Backups,
 die es nach einer Wiederherstellung im lokalen Ordner vorfindet (siehe
-unten). Sie erscheinen im Verlauf als "Manuell". Diese Backups sammeln
+unten). Sie erscheinen im Verlauf als "Manuell"; in der Spalte
+"Aufbewahrung" steht bei allen diesen Backups "Bleibt erhalten". Diese Backups sammeln
 sich mit der Zeit an. Plane den Platz dafür ein (siehe "[Speicher und
 Ressourcen](/help/speicherbedarf)").
 
@@ -120,10 +136,25 @@ Klein.Buch nichts aus.
 ## Manuelles Backup auslösen
 
 In der Karte "Backup jetzt erstellen" klickst Du auf "Jetzt sichern".
-Klein.Buch erzeugt sofort ein Backup, schreibt es lokal und auf alle
-externen Ziele und meldet das Ergebnis: Dateiname und Größe, dazu je
-externes Ziel, ob die Kopie geklappt hat. Der Knopf funktioniert nur,
+Klein.Buch erzeugt sofort ein Backup und schreibt es lokal und auf alle
+externen Ziele. Solange das läuft, heißt der Knopf "Sichert …", und
+darunter steht "Backup wird erstellt …". Danach erscheint eine Meldung,
+die mit "Backup erstellt:" beginnt und die Größe nennt. Hat ein externes
+Ziel nicht geklappt oder war es ausgesetzt, ist die Meldung eine Warnung
+und nennt die Zahl der betroffenen Ziele. Der Knopf funktioniert nur,
 wenn Klein.Buch entsperrt ist.
+
+Das Ergebnis bleibt in der Karte stehen, bis Du die Seite verlässt:
+"Zuletzt gesichert:" mit Dateiname und Größe, darunter je externes Ziel
+"Gespeichert", "Ausgesetzt" oder "Fehlgeschlagen", bei den beiden
+letzten mit dem Grund. "Ausgesetzt" ist kein Fehler des Ziels: Nach
+einer Wiederherstellung schreibt Klein.Buch bis zur Freigabe nur in den
+lokalen Ordner (siehe unten).
+
+Darunter stellst Du unter "Tägliches Backup" im Feld "Uhrzeit
+(Europe/Berlin)" ein, ab wann das tägliche Backup läuft, und klickst auf
+"Uhrzeit speichern". Das Backup entsteht einmal je Kalendertag ab dieser
+Uhrzeit oder beim ersten Lauf danach, etwa nach einer Sperre.
 
 Ein manuelles Backup lohnt sich vor größeren Änderungen, zum Beispiel
 bevor Du Deine Firmendaten umbaust oder bevor der Betreiber ein Update
@@ -147,19 +178,32 @@ SFTP-Server") direkt vom Server — und lade sie dann hoch.
 So läuft es ab:
 
 1. Öffne "Einstellungen" und "Backups". Klick im "Backup-Verlauf" neben
-   dem gewünschten Backup auf "Auswählen". Oder wähle unten in der Karte
-   "Wiederherstellen" im Feld "Backup-Datei" eine `.kbk`-Datei von
+   dem gewünschten Backup auf "Auswählen"; die Karte "Wiederherstellen"
+   zeigt dann "Ausgewählt: Backup vom …". Oder wähle in der Karte
+   "Wiederherstellen" im Feld "Backup-Datei (.kbk)" eine `.kbk`-Datei von
    Deinem Gerät.
 2. Gib im Feld "Backup-Passwort" die Passphrase ein, die galt, als dieses
-   Backup erstellt wurde.
-3. Klick auf "Wiederherstellen" und bestätige die Rückfrage "Backup
-   wiederherstellen?". Liegt Deine letzte Bestätigung länger als fünf
-   Minuten zurück, fragt Klein.Buch im Fenster "Aktion bestätigen" noch
-   einmal nach Daten-Passwort und Code aus der Authenticator-App.
-4. Bei einer hochgeladenen Datei siehst Du den Fortschritt ("Hochladen …").
-   Danach prüft Klein.Buch das Backup: stimmt die Passphrase, ist die
-   Datei vollständig, passt die Version. Erst dann legt es das
-   Sicherheits-Backup an und bereitet die Wiederherstellung vor.
+   Backup erstellt wurde. Das Feld erscheint, sobald ein Backup gewählt
+   ist.
+3. Klick auf "Wiederherstellen". Ist das Feld "Backup-Passwort" leer,
+   steht der Hinweis direkt am Feld. Die Rückfrage "Backup
+   wiederherstellen?" zählt den weiteren Ablauf auf: zuerst ein
+   Sicherheits-Backup, dann Deine Bestätigung mit Daten-Passwort und
+   App-Code, der Neustart des Servers, die Anmeldung mit dem Passwort
+   dieses Backups und die Pause von Abo-Läufen, automatischem Versand und
+   externen Backups bis "Prüfen und freigeben". Bestätige mit
+   "Wiederherstellen". Liegt Deine letzte Bestätigung länger als fünf
+   Minuten zurück, fragt Klein.Buch im Fenster "Aktion bestätigen: Backup
+   wiederherstellen" noch einmal nach Daten-Passwort und Code aus der
+   Authenticator-App. Brichst Du dort ab, ändert sich nichts ("Abgebrochen
+   – nichts geändert.").
+4. Bei einer hochgeladenen Datei siehst Du den Fortschritt ("Hochladen …"
+   mit Prozentangabe). Danach prüft Klein.Buch das Backup: stimmt die
+   Passphrase, ist die Datei vollständig, passt die Version. Erst dann
+   legt es das Sicherheits-Backup an und bereitet die Wiederherstellung
+   vor. Stimmt das Backup-Passwort nicht, steht die Meldung am Feld
+   "Backup-Passwort"; eine hochgeladene Datei musst Du für den nächsten
+   Versuch nicht noch einmal hochladen.
 5. Klein.Buch meldet "Wiederherstellung vorbereitet" mit dem Namen des
    Sicherheits-Backups. Der Server startet jetzt neu und spielt das
    Backup beim Neustart ein. Bis dahin nimmt er keine Änderungen an. Warte,
@@ -194,7 +238,11 @@ von der Desktop-Fassung in den Server gibt es nicht.
 ## Nach der Wiederherstellung
 
 Nach dem Einspielen hält Klein.Buch an, bis Du ausdrücklich freigibst.
-Oben erscheint dann der Hinweis "Automatische Abo-Läufe angehalten":
+Oben auf jeder Seite erscheint dann der Hinweis "Automatische Abo-Läufe
+angehalten." mit einer kurzen Erklärung, einer Zeile "Prüfen:" mit Links
+zu Rechnungen, Kosten, Nummernkreisen und vorgemerkten Entwürfen,
+Abo-Rechnungen, Kosten-Abos und dem Hinweis "Abo-Termine nach der
+Wiederherstellung" sowie dem Knopf "Prüfen und freigeben":
 
 - Es entstehen keine Abo-Rechnungen, keine Abo-Kosten und keine
   automatischen Abschreibungen, und nichts wird automatisch versendet.
@@ -204,14 +252,22 @@ Oben erscheint dann der Hinweis "Automatische Abo-Läufe angehalten":
   externen Ziele schreibt Klein.Buch erst nach der Freigabe. Sonst lägen
   dort neue Dateien mit einem alten Datenstand neben Deinen echten
   Backups — wer später "das neueste Backup" nimmt, verlöre alles danach.
+  Nach "Jetzt sichern" stehen die externen Ziele deshalb als
+  "Ausgesetzt", nicht als "Fehlgeschlagen". Weil keine neue externe
+  Kopie entsteht, melden Seite "Backups" und Startseite, sobald die
+  letzte externe Kopie älter als sieben Tage ist, dass sie nicht mehr
+  aktuell ist.
 - Die Rotation ruht (kein Backup wird aussortiert).
 
 Prüfe vor der Freigabe Rechnungen, Kosten, Nummernkreise sowie Deine
 Abo-Vorlagen und Abo-Kosten mit ihren nächsten Terminen. Freigeben
-kannst Du mit "Prüfen und freigeben" im Hinweis oben; Klein.Buch fragt,
-ob dies die produktive Instanz ist, und verlangt eine Bestätigung mit
-Daten-Passwort und Authenticator-Code. Eine Probe-Instanz (zum Beispiel
-zum Testen eines Backups) gibst Du nie frei.
+kannst Du mit "Prüfen und freigeben" im Hinweis oben. Die Rückfrage "Ist
+dies die produktive Instanz?" nennt noch einmal, was Du vorher prüfen
+solltest; Du bestätigst mit "Ja, produktiv — freigeben". Danach verlangt
+Klein.Buch im Fenster "Aktion bestätigen: Automatische Abo-Läufe
+freigeben" Daten-Passwort und Authenticator-Code, falls Deine letzte
+Bestätigung länger als fünf Minuten zurückliegt. Eine Probe-Instanz (zum
+Beispiel zum Testen eines Backups) gibst Du nie frei.
 
 **Nummernkreise:** Eine Rechnungsnummer darf nur einmal vergeben werden
 (§14 Abs. 4 Nr. 4 UStG). Spielst Du ein älteres Backup in dieselbe
@@ -237,10 +293,12 @@ dessen Nummer Du danach festgeschrieben und verschickt hast, ist er ein
 älterer Stand dieser Rechnung. Klein.Buch merkt ihn vor und nennt ihn im
 Hinweis "Nummernkreise nach der Wiederherstellung". Festschreiben lässt er
 sich erst, wenn Du ihn an die verschickte Rechnung angepasst und das unter
-"Einstellungen" → "Backups" → "Nummernkreise" mit "Abgleich bestätigen …"
-bestätigt hast (mit Begründung, Daten-Passwort und Authenticator-Code). So
-steht die verschickte Rechnung unter ihrer Nummer genau einmal in Deinen
-Büchern. Dasselbe gilt für Storno-Entwürfe und Angebote. Änderst Du den
+"Einstellungen" → "Backups" → "Nummernkreise" bestätigt hast: Klick
+neben der Nummer auf "Abgleich bestätigen …", trag im Feld "Begründung
+(Audit-Log)" mindestens 10 Zeichen ein und klick auf "Abgleich
+bestätigen"; danach fragt Klein.Buch nach Daten-Passwort und
+Authenticator-Code. So steht die verschickte Rechnung unter ihrer Nummer
+genau einmal in Deinen Büchern. Dasselbe gilt für Storno-Entwürfe und Angebote. Änderst Du den
 Entwurf nach der Bestätigung noch einmal, merkt Klein.Buch ihn wieder vor:
 Die Bestätigung galt dem Stand, der der verschickten Rechnung entsprach.
 
@@ -307,4 +365,4 @@ Anmeldung.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

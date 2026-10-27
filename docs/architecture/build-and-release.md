@@ -153,7 +153,7 @@ mehr), `cargo clippy` erzeugt keinen Code und ist davon kaum betroffen.
    Ablehnung einer manipulierten XRechnung; Lizenz- und Quelldateien,
    `/legal/` (Prüfliste der JS-Pakete), `/api/public/info` mit dem Build-Commit;
    das Rechnungs-PDF geht nach `SMOKE_PDF_OUT`.
-5. PDF/A-3b mit veraPDF (R3-018, Lauf F7a): veraPDF 1.30.3 (Installer per SHA-256,
+5. PDF/A-3b mit veraPDF (R3-018, Lauf F7a): veraPDF 1.30.3 (Installationspaket per SHA-256 geprüft,
    Java 21 des Runners) prüft das Rechnungs-PDF mit `--flavour 3b`; nicht konform
    bricht ab, der Bericht kommt ins Artefakt. Nur im Trockenlauf.
 6. SBOM mit syft (SPDX-JSON).

@@ -479,8 +479,9 @@
         </p>
         {#if intraCommunity}
           <div class="caveat span2" role="note">
-            <strong>Steuerkategorie K (innergemeinschaftliche Lieferung):</strong>
-            Der Lieferant aus dem EU-Ausland stellt ohne Umsatzsteuer in Rechnung. Für dich
+            <strong>Steuerkategorie K (für dich ein innergemeinschaftlicher Erwerb):</strong>
+            Der Lieferant aus dem EU-Ausland berechnet seine innergemeinschaftliche Lieferung ohne
+            Umsatzsteuer. Für dich
             kann auch mit §19 Erwerbsteuer anfallen — abhängig von der Erwerbsschwelle und
             davon, ob du deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das prüfst
             du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung.

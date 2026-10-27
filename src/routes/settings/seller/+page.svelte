@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+  import { page } from "$app/state";
+  import { safeNextPath } from "#lib/nextPath.ts";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import RequiredLegend from "#lib/RequiredLegend.svelte";
@@ -45,6 +48,9 @@
   let invoiceDueDays = $state<number | null>(14);
   let quoteDaysInput: QuantityInput | undefined = $state();
   let dueDaysInput: QuantityInput | undefined = $state();
+  // U6-005 (V1-10): Rücksprung nach dem Speichern, z. B. zum Rechnungs-Editor
+  // (`?next=/invoices/new`); nur Pfade innerhalb der App (`safeNextPath`).
+  const nextPath = $derived(safeNextPath(page.url.searchParams.get("next")));
 
   // U1: Pflichtfelder mit Fehlermeldung am Feld statt Toast (3.3.1).
   type FieldKey = "name" | "street" | "postalCode" | "city" | "countryCode" | "email";
@@ -170,6 +176,7 @@
   async function save(payload: SellerProfileInput) {
     if (saving) return;
     saving = true;
+    let saved = false;
     try {
       profile = await sellerProfileUpsert(payload);
       await sellerOwnerSet(ownerName);
@@ -189,11 +196,14 @@
       } else {
         flash("Firmendaten gespeichert.");
       }
+      saved = true;
     } catch (e) {
       flash(`Firmendaten speichern fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       saving = false;
     }
+    // Rücksprung erst nach dem Speichern; ein Navigationsfehler ist kein Speicherfehler.
+    if (saved && nextPath) await goto(nextPath);
   }
 
   async function confirmWaive() {
@@ -215,7 +225,7 @@
 <PageBar back="/settings" backLabel="Einstellungen" title="Meine Firmendaten">
   {#snippet actions()}
     {#if !loading && !loadError}
-      <Button variant="secondary" href="/settings">Abbrechen</Button>
+      <Button variant="secondary" href={nextPath ?? "/settings"}>Abbrechen</Button>
       <Button type="submit" form="seller-form" busy={saving}>{saving ? "Speichert …" : "Speichern"}</Button>
     {/if}
   {/snippet}
@@ -333,15 +343,23 @@
         {#if input.isKleinunternehmer}
           <p class="hint">
             <strong>Eingeschaltet.</strong> Auf jeder Rechnung erscheint automatisch der
-            Hinweis „{info?.hinweisText}“. Du weist keine Umsatzsteuer aus — die
-            USt-Felder sind gesperrt, damit dir kein Fehler passiert.
+            Hinweis „{info?.hinweisText}“. Du weist keine Umsatzsteuer aus — Rechnungen
+            und Angebote blenden die USt-Felder aus, damit dir kein Fehler passiert.
           </p>
         {:else}
+          <!-- U6-002/U7 (R1-02): Gespeichert ist nur das Datum des Wechsels, nicht sein Grund
+               (freiwilliger Verzicht oder Wegfall durch eine Umsatzgrenze, ADR 0041 Nr. 21/220).
+               Deshalb die Fälle nennen; der Server lässt die Rückkehr in allen erst ab diesem
+               Datum zu. -->
           <p class="caveat">
             <strong>Regelbesteuerung.</strong> Du weist auf deinen Rechnungen
             Umsatzsteuer aus und meldest sie regelmäßig ans Finanzamt.{#if info?.returnDateAfterWaiver}{" "}
-              Zurück zur Kleinunternehmer-Regelung kannst du frühestens am
-              <strong>{date(info.returnDateAfterWaiver)}</strong> (du bist 5 Jahre gebunden).
+              Hast du freiwillig verzichtet, bist du mindestens 5 Kalenderjahre gebunden: Zurück
+              zur Kleinunternehmer-Regelung kannst du frühestens am
+              <strong>{date(info.returnDateAfterWaiver)}</strong>. Beim Wegfall durch eine
+              Umsatzgrenze (über 25.000 € im Vorjahr oder über 100.000 € im laufenden Jahr) gilt
+              diese Bindung nicht; Klein.Buch kennt den Grund des Wechsels aber nicht und lässt
+              die Rückkehr erst ab diesem Datum zu.
             {/if}
           </p>
         {/if}
@@ -427,7 +445,7 @@
 {#if showWaiveDialog}
   <!-- Gefahr-Dialog: kein Schließen über den Hintergrund, Startfokus „Abbrechen“,
        Escape bricht ab (ADR 0041 Nr. 11). Eigener Dialog statt confirmDialog,
-       weil er zwei Fälle mit Zwischenüberschriften erklärt (R5-004, F8e). -->
+       weil er drei Fälle mit Zwischenüberschriften erklärt (R5-004, F8e, U7 R1-02). -->
   <div class="kb-backdrop" use:portal>
     <div
       class="kb-dialog waive"
@@ -442,21 +460,33 @@
       </header>
       <div class="kb-dialog-body">
         <p id="waive-lead">
-          Du schaltest die Kleinunternehmer-Regelung aus. Ab jetzt weisen neue Rechnungen
-          <strong>Umsatzsteuer</strong> aus. Dafür gibt es zwei Gründe — lies den passenden Abschnitt.
+          Du schaltest die Kleinunternehmer-Regelung aus. Neue Rechnungen weisen dann
+          <strong>Umsatzsteuer</strong> aus. Für den Wechsel gibt es drei Gründe mit
+          unterschiedlichen Folgen — lies den passenden Abschnitt. Die Hinweise ersetzen keine
+          Steuerberatung.
         </p>
 
-        <h3>Freiwilliger Verzicht (§19 Abs. 2 UStG)</h3>
+        <h3>Freiwilliger Verzicht (§ 19 Abs. 3 UStG)</h3>
         <p>
-          An diese Entscheidung bist du <strong>5 Jahre lang gebunden</strong>. Zurück zur
-          Kleinunternehmer-Regelung kannst du erst danach.
+          Der Verzicht gilt ab Beginn des Kalenderjahres, für das du ihn erklärst, und bindet
+          dich <strong>mindestens 5 Kalenderjahre</strong>. Zurück zur Kleinunternehmer-Regelung
+          kannst du erst danach. Hast du in diesem Jahr schon Rechnungen mit §19-Hinweis
+          ausgestellt, klärst du mit deiner Steuerberatung, wie du mit ihnen umgehst. Willst du
+          erst ab dem nächsten Jahr verzichten, schalte erst im neuen Jahr um.
         </p>
 
-        <h3>Gesetzlicher Wegfall durch die 100.000-€-Grenze</h3>
+        <h3>Wegfall, weil dein Vorjahresumsatz über 25.000 € lag</h3>
         <p>
-          Überschreitet dein Umsatz im laufenden Jahr 100.000 €, endet die Regelung
-          automatisch mit diesem Umsatz (§19 Abs. 1 UStG). Die 5-Jahres-Bindung gilt dann
-          <strong>nicht</strong> — sie betrifft nur den freiwilligen Verzicht.
+          Lag dein Gesamtumsatz im Vorjahr über 25.000 €, gilt die Regelung ab dem 1. Januar
+          nicht mehr (§ 19 Abs. 1 UStG). Eine 5-Jahres-Bindung gibt es dabei
+          <strong>nicht</strong>. Schalte um, bevor du die erste Rechnung des Jahres ausstellst.
+        </p>
+
+        <h3>Wegfall, weil dein Umsatz in diesem Jahr 100.000 € überschreitet</h3>
+        <p>
+          Überschreitet dein Umsatz im laufenden Jahr 100.000 €, endet die Regelung mit dem
+          Umsatz, der die Grenze überschreitet (§ 19 Abs. 1 UStG). Auch hier gilt
+          <strong>keine</strong> 5-Jahres-Bindung.
         </p>
         <ul>
           <li>
@@ -468,22 +498,33 @@
             Kosten vor dem Überschreiten bleiben ohne Vorsteuerabzug; Klein.Buch rechnet für das
             ganze Jahr mit Vorsteuer — das korrigierst du mit deiner Steuerberatung.
           </li>
-          <li>Anlagen, die du vorher angeschafft hast, korrigierst du in diesem Fall nicht.</li>
+          <li>
+            Die Anschaffungskosten von Anlagen, die du vorher angeschafft hast, korrigierst du in
+            diesem Fall nicht.
+          </li>
         </ul>
 
-        <h3>In beiden Fällen</h3>
+        <h3>In allen Fällen</h3>
         <ul>
           <li>Du weist auf allen neuen Rechnungen Umsatzsteuer aus,</li>
           <li>schickst regelmäßig eine Umsatzsteuer-Voranmeldung ans Finanzamt</li>
           <li>und kümmerst dich um den Vorsteuerabzug.</li>
         </ul>
         <p>
+          Nutzt du Anlagen weiter, die du als Kleinunternehmer angeschafft hast, kann der
+          Wechsel eine Berichtigung der Vorsteuer nach § 15a UStG auslösen (der Übergang gilt
+          als Änderung der Verhältnisse). Klein.Buch berechnet sie nicht; kläre das mit deiner
+          Steuerberatung.
+        </p>
+        <p>
           Klein.Buch unterstützt das nur teilweise: Es weist die Umsatzsteuer auf
           Rechnungen aus und teilt die EÜR-Ausfüllhilfe in netto und Umsatzsteuer
           auf. Die Umsatzsteuer-Voranmeldung, Zahlungen an und Erstattungen vom
           Finanzamt sowie die Umsatzsteuer auf Anlagenverkäufe bildet Klein.Buch
-          nicht ab — das klärst du mit deiner Steuerberatung. Mehr im Handbuch,
-          Kapitel <a href="/help/kleinunternehmer-regelung">Kleinunternehmer-Regelung</a>.
+          nicht ab — das klärst du mit deiner Steuerberatung. Klein.Buch kennt den Grund des
+          Wechsels nicht und lässt eine Rückkehr zur Kleinunternehmer-Regelung in allen drei
+          Fällen erst nach Ablauf der 5-Jahres-Frist zu. Mehr im Handbuch, Kapitel
+          <a href="/help/kleinunternehmer-regelung">Kleinunternehmer-Regelung</a>.
         </p>
       </div>
       <footer class="kb-dialog-foot">

@@ -1323,6 +1323,11 @@ pub async fn invoices_cancel(
         chrono::Datelike::year(&storno_date) as i64,
     )
     .await?;
+    // U7 (R1-01): Der Storno-Beleg trägt dieselbe Käuferreferenz (BT-10) wie das
+    // Original, bei Behörden die Leitweg-ID; ohne sie ordnet die Eingangsplattform
+    // den Storno nicht zu. Gespeichert ist sie nur in der archivierten XML des
+    // Originals (Lesen mit Hash-Prüfung, eine Manipulation bricht ab).
+    let buyer_reference = original_buyer_reference(pool, &original.invoice).await?;
 
     // Domain-Storno bauen.
     let original_view = OriginalInvoiceView {
@@ -1443,7 +1448,7 @@ pub async fn invoices_cancel(
         pool,
         &paths,
         &storno_id,
-        "N/A",
+        &buyer_reference,
         LockCancelPair {
             original_id: &original.invoice.id,
             reason: Some(&args.reason),
@@ -1481,6 +1486,17 @@ pub async fn invoices_cancel(
         original: original_refreshed,
         storno: lock,
     })
+}
+
+/// Käuferreferenz BT-10 einer festgeschriebenen Rechnung aus ihrer archivierten
+/// XML (U7, R1-01). Ohne XML-Archiv oder ohne Element „N/A“ wie bei B2C.
+async fn original_buyer_reference(pool: &SqlitePool, invoice: &InvoiceRow) -> Result<String> {
+    let Some(archive_id) = invoice.xml_archive_id.as_deref() else {
+        return Ok("N/A".to_string());
+    };
+    let bytes = archive::read_and_verify(pool, archive_id).await?;
+    let xml = String::from_utf8_lossy(&bytes);
+    Ok(crate::einvoice::parser::cii_buyer_reference(&xml).unwrap_or_else(|| "N/A".to_string()))
 }
 
 /// Vervollständigt ein Storno-Paar aus dem Altbestand (Lauf F2c): der Storno

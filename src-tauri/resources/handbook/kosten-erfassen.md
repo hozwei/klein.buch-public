@@ -3,7 +3,7 @@ slug: kosten-erfassen
 title: Kosten erfassen
 category: erste-schritte
 order: 70
-keywords: [kosten, ausgabe, eingangsrechnung, beleg, brutto, eür, kategorie, §13b, reverse-charge]
+keywords: [kosten, ausgabe, eingangsrechnung, beleg, brutto, eür, kategorie, §13b, reverse-charge, festschreiben, foto]
 ---
 
 # Kosten erfassen
@@ -24,40 +24,64 @@ Beleg landet im Archiv und ist 10 Jahre nachweisbar.
 ## Schritte
 
 Klick im Hauptmenü auf "Kosten" und dann auf **"+ Neue Kosten"**.
-Im Formular gibst Du ein:
+Es öffnet sich die Seite "Neue Kosten erfassen". Felder mit Stern sind
+Pflicht. Im Formular gibst Du ein:
 
-1. **Beleg-Datum** — das Datum auf der Eingangsrechnung.
-2. **Bezahlt am** — der Tag, an dem Du bezahlt hast. Dieses Datum
+1. **Beleg (PDF oder Bild, optional)** — die Eingangsrechnung. Das
+   Feld steht ganz oben, damit Du erst den Beleg wählst und dann
+   abtippst. Auf Geräten mit Touch-Bildschirm öffnet der Knopf "Foto
+   aufnehmen" daneben direkt die Kamera.
+2. **Beleg-Datum** — das Datum auf der Eingangsrechnung.
+3. **Bezahlt am** — der Tag, an dem Du bezahlt hast. Dieses Datum
    zählt fürs Finanzamt (Cash-Basis nach §11 EStG). Wenn Du noch
    nicht bezahlt hast, hake "noch nicht bezahlt" an — Klein.Buch
    nimmt die Position dann erst in die EÜR auf, wenn Du die
-   Zahlung nachträgst.
-3. **Lieferant** — entweder ein bestehender Kontakt oder ein
-   neuer Lieferanten-Name als Freitext.
-4. **Rechnungs-Nr. des Lieferanten** — optional.
-5. **Kategorie (EÜR)** — aus der Auswahl-Liste, siehe unten.
-6. **Beschreibung** — Pflichtfeld, kurze Bezeichnung der Ausgabe.
-7. **Netto, Umsatzsteuer-Satz, Brutto** — Klein.Buch rechnet die
-   Felder gegenseitig aus. Als §19-Kleinunternehmer trägst Du den
-   USt-Satz "0 % (Kleinunternehmer / steuerfrei)" und nimmst den
-   vollen Brutto-Betrag als Ausgabe (siehe "Warum Brutto" unten).
-8. **Zahlungs-Konto** — über welches Konto die Ausgabe gelaufen
-   ist (Bankkonto, Bargeld-Kasse, PayPal, Stripe, Sonstiges).
-9. **§13b-Reverse-Charge** — Schalter für Eingangsrechnungen, bei
-   denen nicht der Lieferant, sondern Du die Umsatzsteuer schuldest.
-   Das betrifft auch Kleinunternehmer, zum Beispiel Online-Werbung
-   bei Anbietern mit Sitz im EU-Ausland oder Software-Abos aus dem
-   Ausland. Die Rechnung kommt dann ohne Umsatzsteuer; Du trägst
-   Netto = Brutto und eine Umsatzsteuer von 0 ein. Beim Anschalten
-   stellt das Formular den USt-Satz auf 0 % und sperrt die übrigen
-   Sätze; Klein.Buch lehnt §13b mit einem Umsatzsteuer-Betrag ab.
-   Was Du sonst noch tun musst, steht unten unter "§13b: Du schuldest die Steuer".
-10. **Beleg-Anhang** — PDF oder Bild der Eingangsrechnung. Auf dem
-    Handy öffnet der Knopf "Beleg fotografieren" direkt die Kamera.
-11. **Notiz** — freier Text.
+   Zahlung nachträgst. Liegt das Zahldatum vor dem Beleg-Datum (etwa
+   bei Vorkasse), weist das Formular darauf hin; erlaubt ist es.
+4. **Lieferant (Kontakt)** und **Lieferanten-Name** — wählst Du einen
+   bestehenden Kontakt, trägt Klein.Buch dessen Namen ein. Ohne Kontakt
+   schreibst Du den Namen als Freitext; der Lieferanten-Name ist
+   Pflicht.
+5. **Rechnungs-Nr. des Lieferanten** — optional.
+6. **Kategorie (EÜR)** — aus der Auswahl-Liste, siehe unten.
+7. **Beschreibung** — Pflichtfeld, kurze Bezeichnung der Ausgabe.
+8. **Netto, USt-Satz, USt-Betrag** — übernimm Netto und Satz vom
+   Beleg; Klein.Buch rechnet den USt-Betrag und den Brutto-Betrag
+   aus. Rundet der Lieferant anders, wähle beim Satz "individuell
+   (Betrag vom Beleg)" und trag den USt-Betrag genau vom Beleg ein.
+   Steht auf dem Beleg keine Umsatzsteuer (etwa weil der Lieferant
+   selbst Kleinunternehmer ist), wähle "0 % (steuerfrei / §13b /
+   Kleinunternehmer)". Als §19-Kleinunternehmer zählt in jedem Fall
+   der volle Brutto-Betrag als Ausgabe (siehe "Warum Brutto" unten).
+   Beträge tippst Du wie gewohnt, etwa "1.234,56"; ein Minuszeichen
+   gibt es nicht.
+9. **Zahlungs-Konto** — über welches Konto die Ausgabe gelaufen
+   ist, zum Beispiel Bankkonto oder Bargeld-Kasse. Zur Auswahl stehen
+   Deine Konten aus "Einstellungen" und "Konten"; vorbelegt ist Dein
+   Standard-Konto.
+10. **§13b Reverse-Charge (Steuerschuldnerschaft des
+    Leistungsempfängers)** — Haken für Eingangsrechnungen, bei
+    denen nicht der Lieferant, sondern Du die Umsatzsteuer schuldest.
+    Das betrifft auch Kleinunternehmer, zum Beispiel Online-Werbung
+    bei Anbietern mit Sitz im EU-Ausland oder Software-Abos aus dem
+    Ausland. Die Rechnung kommt dann ohne Umsatzsteuer; Du trägst
+    Netto = Brutto und eine Umsatzsteuer von 0 ein. Mit dem Haken
+    stellt das Formular den USt-Satz auf 0 % und sperrt die übrigen
+    Sätze und den USt-Betrag (0); ein Hinweis darunter erklärt das.
+    Kommt trotzdem ein Umsatzsteuer-Betrag an, meldet Klein.Buch
+    den Fehler am Feld "USt-Betrag".
+    Was Du sonst noch tun musst, steht unten unter "§13b: Du schuldest die Steuer".
+11. **Notiz (optional)** — freier Text.
 
-Klick auf "Kosten speichern". Klein.Buch schreibt die Position
-sofort fest. Eine Korrektur geht nur noch über eine Storno-Buchung.
+Klick auf "Kosten festschreiben", oben auf der Seite oder am Ende des
+Formulars. Über dem unteren Knopf steht, was das bedeutet: "Danach
+nicht mehr änderbar — Korrektur nur per Storno." Fehlt eine Angabe,
+steht die Meldung am Feld, und der Fokus springt zum ersten fehlerhaften
+Feld. Sonst fragt Klein.Buch nach und nennt die Eckwerte: Belegdatum,
+Lieferant, Brutto, Zahlung und Beleg. Mit "Festschreiben" schreibt
+Klein.Buch die Position fest und öffnet ihre Seite; "Abbrechen" ändert
+nichts. Eine Korrektur geht danach nur noch über einen Storno;
+"Korrigiert neu erfassen" übernimmt dabei die Werte (Kapitel "Kosten").
 
 ## Warum Brutto
 
@@ -94,7 +118,7 @@ Leistungsempfängers" oder "Reverse Charge".
 Was Du tun musst:
 
 1. In Klein.Buch die Rechnung netto erfassen (Umsatzsteuer 0) und
-   den Schalter "§13b-Reverse-Charge" anschalten.
+   den Haken bei "§13b Reverse-Charge" setzen.
 2. Für den Monat, in dem die Steuer entsteht (in der Regel der Monat
    der Leistung, spätestens der Folgemonat), eine
    Umsatzsteuer-Voranmeldung über ELSTER abgeben und die Steuer
@@ -113,12 +137,17 @@ Was Du tun musst:
    ans Finanzamt als eigene Kosten (nur der Anteil dieser Anlage,
    Umsatzsteuer 0, ohne §13b-Schalter) und übernimmst sie als eigene
    Anlage mit gleichem Anschaffungsdatum, gleicher Methode und
-   Nutzungsdauer. So wird sie genau einmal abgeschrieben. Mehr unter
-   "Anlagen und AfA", Abschnitt "Aus Kosten aktivieren".
+   Nutzungsdauer. So wird sie genau einmal abgeschrieben. Dafür gibt
+   es auf der Seite der Anlage im Abschnitt "Selbst geschuldete Steuer
+   (§13b)" den Knopf "Steuer als Kosten erfassen". Er öffnet das
+   Formular vorbelegt (Lieferant "Finanzamt", Kategorie "Sonstiges",
+   USt-Satz 0 %, ohne §13b-Haken); nach dem Festschreiben geht es
+   direkt zur Übernahme als Anlage. Mehr unter "Anschaffungen und AfA",
+   Abschnitt "Aus Kosten aktivieren".
 
 Wenn Du unsicher bist, ob eine Rechnung unter §13b fällt, frag
 Deinen Steuerberater. Eine E-Rechnung, die neben §13b-Positionen
-auch Umsatzsteuer ausweist, übernimmt Klein.Buch ohne den Schalter
+auch Umsatzsteuer ausweist, übernimmt Klein.Buch ohne den §13b-Haken
 und mit einem Hinweis in der Notiz.
 
 ## Kategorien
@@ -153,25 +182,29 @@ jedes Mal von Hand eintragen. Klein.Buch hat dafür **Wiederkehrende
 Abos** mit zwei Modi:
 
 **Automatisch.** Klein.Buch bucht die Position am Stichtag selbst
-mit dem Stichtag als Zahlungs-Datum. Praktisch für stehende
-Lastschriften, bei denen der Abzug pünktlich auf den Cent kommt.
+mit dem Stichtag als Beleg-Datum, zunächst "noch nicht bezahlt". Die
+Zahlung bestätigst Du, wenn die Abbuchung auf dem Konto steht.
+Praktisch für stehende Lastschriften, bei denen der Abzug pünktlich
+auf den Cent kommt.
 
 **Erinnerung.** Klein.Buch legt am Stichtag nur einen Eintrag
-unter "Hinweise" an. Du klickst dort auf "buchen", prüfst Betrag
-und Zahlungs-Datum und speicherst. Sinnvoll, wenn der echte
-Belegbetrag jeden Monat etwas abweicht.
+"Abo fällig" unter "Hinweise" an. "Öffnen" beim Hinweis führt zur
+Abo-Liste; dort legt "Buchen" die Position mit dem erwarteten Betrag
+an und schreibt sie fest. Du prüfst Betrag und Datum und trägst die
+Zahlung nach, sobald sie abgebucht ist.
 
 Lege wiederkehrende Vorlagen über das Menü "Kosten" und
-"Wiederkehrende Abos" an.
+"Kosten-Abos" an. Mehr dazu im Kapitel "Kosten".
 
 ## E-Rechnung empfangen
 
 Wenn Du eine XRechnung oder ZUGFeRD-Datei per E-Mail bekommst,
-nutzt Du in der Kosten-Liste den Knopf "E-Rechnung importieren" und
-lädst die Datei im Browser hoch. Klein.Buch liest die XML-Daten aus
-der Datei, füllt die Felder automatisch aus und legt das Original im
-Archiv ab. Du musst nur noch Zahlungs-Datum und Kategorie prüfen und
-mit "Als Kosten festschreiben" abschließen.
+nutzt Du in der Kosten-Liste den Knopf "E-Rechnung importieren" (auf
+dem Handy im Menü "Mehr") und lädst die Datei im Browser hoch.
+Klein.Buch liest die XML-Daten aus der Datei, füllt die Felder
+automatisch aus und legt das Original im Archiv ab. Du musst nur noch
+Zahlungs-Datum und Kategorie prüfen und mit "Kosten festschreiben"
+abschließen.
 
 Klein.Buch prüft die XRechnung mit dem KoSIT-Validator. Der
 Validator ist beratend, nie blockierend: Bei Fehlern warnt die App
@@ -183,9 +216,9 @@ per Upload".
 Wenn Du Geld zwischen Deinem geschäftlichen und Deinem privaten
 Konto verschiebst, ist das keine Kosten-Position. Es ist eine
 Privatbewegung. Dafür gibt es im Hauptmenü einen eigenen Eintrag
-"Privat-Geld". Privatbewegungen beeinflussen die EÜR nicht. Mehr
+"Privatbewegungen". Privatbewegungen beeinflussen die EÜR nicht. Mehr
 dazu im Kapitel "Privatbewegungen".
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

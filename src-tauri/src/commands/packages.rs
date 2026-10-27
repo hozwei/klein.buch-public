@@ -548,9 +548,7 @@ pub async fn package_materialize_item(
         .ok_or_else(|| Error::Domain(format!("Paket nicht gefunden: {package_id}")))?;
     let rev = packages::current_revision(pool, &package_id)
         .await?
-        .ok_or_else(|| {
-            Error::Domain("Dieses Paket hat noch keine veröffentlichte Revision.".into())
-        })?;
+        .ok_or_else(|| Error::Domain("Dieses Paket hat noch keine Version.".into()))?;
 
     // XRechnung-BT-154 = Klartext des Body (ohne Titel); Fallback Titel, falls
     // der Body leer ist (BT-154 darf nicht leer sein). Der Body-Markup treibt
@@ -680,7 +678,7 @@ async fn load_catalog_revisions(
     }
     if revs.is_empty() {
         return Err(Error::Domain(
-            "Bitte mindestens ein Paket mit veröffentlichter Version auswählen.".into(),
+            "Bitte mindestens ein Paket auswählen, das schon eine Version hat.".into(),
         ));
     }
     Ok(revs)

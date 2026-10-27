@@ -11,7 +11,7 @@ keywords: [update, aktualisieren, version, image-tag, migration, rückfall, roll
 Klein.Buch aktualisiert sich nie selbst. Du entscheidest, wann eine neue
 Version läuft, indem Du in Deiner Container-Verwaltung das Image-Tag
 änderst, also die Versionsnummer hinter dem Doppelpunkt in
-`ghcr.io/hozwei/klein-buch:2026.10.0`. Einen Update-Knopf in der App
+`ghcr.io/hozwei/klein-buch:2026.11.0`. Einen Update-Knopf in der App
 gibt es absichtlich nicht: Dafür bräuchte der Container Zugriff auf
 Docker selbst und damit praktisch volle Rechte über Deinen Server. Bei
 einem Dienst, der aus dem Internet erreichbar ist, wäre das zu

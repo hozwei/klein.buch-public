@@ -31,7 +31,7 @@
   let loading = $state(true);
   let loadError = $state<string | null>(null);
 
-  // Auswahl der Pakete (nur aktive mit veröffentlichter Version sind broschürbar).
+  // Auswahl der Pakete (nur aktive mit einer Version kommen in die Broschüre).
   let selected = $state<Record<string, boolean>>({});
   let printing = $state(false);
   let sending = $state(false);
@@ -71,7 +71,7 @@
 
   onMount(load);
 
-  // Nur aktive Pakete mit veröffentlichter Version lassen sich in die Broschüre nehmen.
+  // Nur aktive Pakete mit einer Version lassen sich in die Broschüre nehmen.
   let usable = $derived(
     packages.filter((p) => p.status === "active" && p.currentRevision != null),
   );
@@ -193,7 +193,7 @@
   </Banner>
 {:else if usable.length === 0}
   <div class="empty">
-    <p>Es gibt noch keine aktiven Pakete mit veröffentlichter Version. Leg zuerst ein Paket an.</p>
+    <p>Es gibt noch keine aktiven Pakete. Leg zuerst ein Paket an.</p>
     <Button variant="primary" href="/packages/new">+ Neues Paket</Button>
   </div>
 {:else}

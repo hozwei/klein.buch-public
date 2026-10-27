@@ -978,8 +978,8 @@ pub async fn bind_legal_docs_for_quote(
         let privacy = legal_documents::get_active(pool, "privacy").await?;
         if agb.is_none() || privacy.is_none() {
             return Err(Error::Domain(
-                "Für Versand/Bundle müssen aktive AGB UND Datenschutz hinterlegt sein \
-                 (Einstellungen → Rechtsdokumente)."
+                "Für das Senden und das Druck-PDF mit AGB müssen AGB und Datenschutzerklärung \
+                 hinterlegt sein (Einstellungen → „AGB & Datenschutz“)."
                     .into(),
             ));
         }

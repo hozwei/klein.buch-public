@@ -16,6 +16,7 @@
   import DocNo from "#lib/DocNo.svelte";
   import { dateTime } from "#lib/format.ts";
   import { daysUntilBerlin } from "#lib/date.ts";
+  import { dayClock } from "#lib/dayClock.svelte.ts";
   import Button from "#lib/Button.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
@@ -122,7 +123,24 @@
   let confirmFor = $state<RestoredDraftConflict | null>(null);
   let confirmReason = $state("");
 
-  onMount(load);
+  // U7 (R3-05): Sprungziele (#bk-numbering-h aus dem Restore-Banner, den Rechnungen
+  // und Angeboten) entstehen erst nach dem Laden — danach selbst hinscrollen und die
+  // Überschrift fokussieren, sonst landet man oben auf der Seite.
+  onMount(async () => {
+    await load();
+    await scrollToHash();
+  });
+
+  async function scrollToHash() {
+    const id = location.hash.slice(1);
+    if (!id) return;
+    await tick();
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.scrollIntoView({ block: "start" });
+    if (!el.matches("a[href], button, input, select, textarea, [tabindex]")) el.setAttribute("tabindex", "-1");
+    el.focus({ preventScroll: true });
+  }
 
   async function load() {
     loadError = null;
@@ -252,7 +270,8 @@
 
   /** Alter einer Kopie in Berliner Kalendertagen („heute“, „vor 3 Tagen“; F3). */
   function ageLabel(ts: string): string {
-    const d = -daysUntilBerlin(ts);
+    // U7 (R4-07): über `dayClock`, damit „heute“ über Mitternacht zu „gestern“ wird.
+    const d = -daysUntilBerlin(ts, dayClock.now);
     if (!Number.isFinite(d)) return "";
     return daysAgoLabel(d);
   }

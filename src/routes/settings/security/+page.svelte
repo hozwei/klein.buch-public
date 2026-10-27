@@ -9,7 +9,7 @@
   // Abfrage der GitHub-Releases; Hinweise landen bei den Hinweisen.
   // U4 (V2-06/V2-07/V2-11): Knöpfe während eines Laufs `ariaDisabled` (Fokus bleibt),
   // Ladefehler je Abschnitt mit „Erneut laden“, „Abbrechen“ (secondary) vor der Hauptaktion.
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
   import LoadingState from "#lib/LoadingState.svelte";
   import Badge from "#lib/Badge.svelte";
@@ -35,10 +35,32 @@
   } from "#lib/api.ts";
   import type { UpdateCheckSettings } from "#lib/types.ts";
   import { REAUTH_CANCELED } from "#lib/transport.ts";
+  import { canCopyRecoveryCodes, copyRecoveryCodes, saveRecoveryCodes } from "#lib/recoveryCodes.ts";
 
   let updateCheck = $state<UpdateCheckSettings | null>(null);
   let recoveryLeft = $state<number | null>(null);
   let codes = $state<string[]>([]);
+  // U7 (R3-09): Woher die angezeigten Codes kommen — „Notiert“ führt den Fokus dorthin zurück.
+  let codesFrom = $state<"sec-renew-codes" | "sec-totp-start">("sec-renew-codes");
+
+  /** Neue Codes sind da: Fokus auf die Überschrift, damit Screenreader sie ansagen (R3-09). */
+  async function showCodes(list: string[], from: typeof codesFrom) {
+    codes = list;
+    codesFrom = from;
+    codesInfo = "";
+    await tick();
+    document.getElementById("sec-codes-h")?.focus();
+  }
+
+  /** „Notiert“: Codes ausblenden, Fokus zurück zum auslösenden Knopf statt auf <body>. */
+  async function codesNoted() {
+    codes = [];
+    await tick();
+    document.getElementById(codesFrom)?.focus();
+  }
+  // U6-008: Kopieren/Speichern wie bei der Einrichtung (BackupGate, #lib/recoveryCodes.ts).
+  let codesInfo = $state("");
+  const canCopy = canCopyRecoveryCodes();
   let offer = $state<TotpOffer | null>(null);
   let totpCode = $state("");
   let newPass = $state("");
@@ -167,7 +189,7 @@
     }
     busy = true;
     try {
-      codes = await authRecoveryRenew();
+      await showCodes(await authRecoveryRenew(), "sec-renew-codes");
       await load();
     } catch (e) {
       flash(`Einmal-Codes erzeugen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -191,10 +213,16 @@
 
   async function finishTotp() {
     if (busy) return;
+    // U7 (R3-03): leeren Code nicht abschicken; Fokus ins Code-Feld.
+    if (!totpCode.trim()) {
+      totpEl?.focus();
+      return;
+    }
     busy = true;
     try {
-      codes = await authTotpRenewFinish(totpCode.trim());
+      const renewed = await authTotpRenewFinish(totpCode.trim());
       offer = null;
+      await showCodes(renewed, "sec-totp-start");
       flash("Zweiter Faktor neu eingerichtet — die alte App-Verbindung gilt nicht mehr.", "ok");
       await load();
     } catch (e) {
@@ -277,19 +305,24 @@
       {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
     </Banner>
   {/if}
-  <Button variant="secondary" ariaDisabled={busy} onclick={renewRecovery}>
+  <Button id="sec-renew-codes" variant="secondary" ariaDisabled={busy} onclick={renewRecovery}>
     Neue Einmal-Codes erzeugen
   </Button>
 </section>
 
 {#if codes.length > 0}
   <section class="card" aria-labelledby="sec-codes-h">
-    <h2 id="sec-codes-h">Neue Einmal-Codes</h2>
+    <h2 id="sec-codes-h" tabindex="-1">Neue Einmal-Codes</h2>
     <p>Jetzt notieren — sie werden nur einmal angezeigt.</p>
     <ul class="codes">
       {#each codes as c (c)}<li><code>{c}</code></li>{/each}
     </ul>
-    <Button variant="secondary" onclick={() => (codes = [])}>Notiert</Button>
+    <div class="actions">
+      {#if canCopy}<Button variant="secondary" onclick={async () => (codesInfo = await copyRecoveryCodes(codes))}>Codes kopieren</Button>{/if}
+      <Button variant="secondary" onclick={() => (codesInfo = saveRecoveryCodes(codes))}>Als Textdatei speichern</Button>
+      <Button variant="secondary" onclick={codesNoted}>Notiert</Button>
+    </div>
+    <p class="codes-info" role="status">{codesInfo}</p>
   </section>
 {/if}
 
@@ -328,7 +361,7 @@
     </form>
   {:else}
     <p>Neues Gerät oder neue App? Richte den zweiten Faktor neu ein.</p>
-    <Button variant="secondary" ariaDisabled={busy} onclick={startTotp}>
+    <Button id="sec-totp-start" variant="secondary" ariaDisabled={busy} onclick={startTotp}>
       Zweiten Faktor neu einrichten
     </Button>
   {/if}
@@ -564,6 +597,8 @@
   .codes { columns: 2; max-width: 24rem; }
   .codes code { white-space: nowrap; }
   @media (max-width: 420px) { .codes { columns: 1; } }
+  .codes-info { margin: 0.5rem 0 0; min-height: 1.5em; color: var(--text-muted); font-size: var(--fs-sm); }
+  .codes-info:empty { min-height: 0; margin: 0; }
   table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
   th, td { text-align: left; font-size: var(--fs-sm); }
   tr.current td { background: var(--surface-hover); }

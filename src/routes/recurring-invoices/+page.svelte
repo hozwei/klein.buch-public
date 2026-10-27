@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { goto } from "$app/navigation";
   import {
     recurringInvoicesList,
@@ -16,6 +16,8 @@
   import type { RecurringInvoiceRow, Contact, Invoice, ResumeMode } from "#lib/types.ts";
   import { date } from "#lib/format.ts";
   import { daysUntilBerlin } from "#lib/date.ts";
+  import { dayClock } from "#lib/dayClock.svelte.ts";
+  import { focusRowAfterRemoval } from "#lib/focusAfterRemoval.ts";
   import { frequencyLabel } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
@@ -27,6 +29,7 @@
   import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let rows = $state<RecurringInvoiceRow[]>([]);
+  let inactiveChk = $state<HTMLInputElement | null>(null);
   let contactInfo = $state<Record<string, { name: string; email: string | null }>>({});
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -59,9 +62,10 @@
   onMount(load);
 
   // Tage bis zur Fälligkeit (negativ = überfällig) ab dem Berliner Datum,
-  // nicht in der Zeitzone des Geräts (Lauf F, D-15).
+  // nicht in der Zeitzone des Geräts (Lauf F, D-15). U7 (R4-07): über `dayClock`,
+  // damit Fälligkeit und „Jetzt erstellen“ über Mitternacht mitlaufen.
   function daysUntil(iso: string): number {
-    return daysUntilBerlin(iso);
+    return daysUntilBerlin(iso, dayClock.now);
   }
 
   // Fällig nur innerhalb der Laufzeit (F1d, wie `has_backlog` im Server).
@@ -154,6 +158,7 @@
   // Toast mit „Rückgängig“ (ersetzt die Rückfrage aus KB-0057).
   async function pause(s: RecurringInvoiceRow) {
     if (busyId) return;
+    const index = rows.findIndex((x) => x.id === s.id);
     busyId = s.id;
     try {
       await recurringInvoicesSetActive(s.id, false);
@@ -161,6 +166,9 @@
         action: { label: "Rückgängig", run: () => void resume({ ...s, active: 0 }) },
       });
       await load();
+      // U7 (R3-04): Verschwindet die Zeile, nie den Fokus auf <body> fallen lassen.
+      await tick();
+      focusRowAfterRemoval(index, inactiveChk);
     } catch (e) {
       flash("Pausieren fehlgeschlagen: " + String(e), "error");
     } finally {
@@ -381,7 +389,7 @@
 {#if !error}
   <div class="toolbar">
     <label class="chk">
-      <input type="checkbox" bind:checked={includeInactive} onchange={load} /> Pausierte anzeigen
+      <input type="checkbox" bind:this={inactiveChk} bind:checked={includeInactive} onchange={load} /> Pausierte anzeigen
     </label>
     {#if dueCount > 0}
       <!-- U2 (Touch ohne Hover): Erklärung sichtbar statt nur als `title`-Tooltip,

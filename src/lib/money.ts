@@ -247,6 +247,25 @@ export function parseQuantity(text: string, opts: QuantityOptions = {}): ParseRe
   return { ok: true, value: value === 0 ? 0 : value, normalized: formatQuantity(value, frac) };
 }
 
+/**
+ * Hinweis zur Auslegung einer Menge (U7, R1-08): Ein einzelner Punkt mit drei Ziffern
+ * („1.250“) gilt als Tausenderpunkt (Plan-Regel), die DIN-Anzeige nach dem Verlassen
+ * („1.250“) sieht aber genauso aus wie die Eingabe. Wer englisch „1.250“ für 1,25
+ * tippt (iOS mit englischer Region zeigt nur „.“), sähe die Auslegung sonst nur am
+ * Zeilen-Netto. Leer, wenn die Eingabe eindeutig ist oder das Feld weniger als drei
+ * Nachkommastellen erlaubt (dann ist „1.250“ nur als 1250 lesbar).
+ */
+export function quantityReadingNote(text: string, maxFractionDigits = QUANTITY_DECIMALS): string {
+  if (maxFractionDigits < 3) return "";
+  const m = /^\s*(\d{1,3})\.(\d{3})\s*$/.exec(text);
+  if (!m) return "";
+  const r = parseQuantity(text, { maxFractionDigits });
+  if (!r.ok || r.value === null) return "";
+  const dec = m[2].replace(/0+$/, "");
+  const alt = dec ? `${m[1]},${dec}` : m[1];
+  return `Gelesen als ${formatQuantity(r.value, maxFractionDigits, false)} (Punkt = Tausender). Meinst du ${alt}? Dann mit Komma eingeben.`;
+}
+
 /** Echtes Minuszeichen (U+2212) für negative Beträge (U4, V3-22). */
 const MINUS = "\u2212";
 

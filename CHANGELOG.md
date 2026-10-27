@@ -3,11 +3,11 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
 `JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
-## [Unreleased]
+## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, 2026-10-27
 
-Umsetzung der Entscheidungen nach v2026.10.0 (Lauf E) sowie Funktion und Technik vor
-dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und Desktop
-(Lauf 2026.11); erscheint mit 2026.11.0.
+Die Oberfläche für Smartphone, Tablet und Desktop (Lauf 2026.11), dazu die Umsetzung der
+Entscheidungen nach v2026.10.0 (Lauf E) sowie Funktion und Technik für den Dauerbetrieb
+(Lauf F).
 
 ### Lauf 2026.11 — Oberfläche (UI/UX)
 
@@ -52,7 +52,11 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   vor offenen Entwürfen; Anschaffungskosten aus Kosten mit Erklärung brutto/netto; Entnahmewert bei
   Privatentnahme als Pflichtfeld.
 - **Einstellungen:** Übersicht in drei Gruppen mit Links zu Protokollen und Regeln; §19-Dialog
-  erklärt auch den Wegfall durch die 100.000-€-Grenze (ohne 5-Jahres-Bindung); Backup-Seite ohne
+  erklärt drei Fälle — freiwilliger Verzicht (§ 19 Abs. 3 UStG, ab Jahresbeginn, mindestens
+  5 Kalenderjahre gebunden) sowie den Wegfall durch die 25.000-€-Grenze im Vorjahr oder die
+  100.000-€-Grenze im laufenden Jahr (ohne Bindung) — und weist auf § 15a UStG hin; „Meine
+  Firmendaten“ nennt, dass Klein.Buch die Rückkehr in allen Fällen erst ab dem genannten Datum
+  zulässt; Backup-Seite ohne
   Desktop-Reste, mit Alter der letzten externen Kopie; Hinweise zu SMTP-/SFTP-Host; Sitzungsliste
   mit Kurzkennung passend zum Server-Log; Audit-Protokoll mit Spalte „Ausgelöst von“ und betroffener
   Datei bei Prüfsummenfehlern.
@@ -90,7 +94,18 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   Fälligkeit ist Pflicht, Währung fest Euro; Abo-Läufe mit Auto-Modus fragen vor dem Ausstellen
   und Versenden nach; Storno mit Rückfrage; Jahr-Filter als Auswahl; Kontaktauswahl mit Suche.
 - **Behoben (Belege):** Eine im Rechnungs-Editor eingetragene Leitweg-ID ging verloren und die
-  E-Rechnung enthielt „N/A“; die Leitweg-ID wird jetzt beim Ausstellen eingegeben.
+  E-Rechnung enthielt „N/A“; die Leitweg-ID wird jetzt beim Ausstellen eingegeben. Der
+  Storno-Beleg übernimmt die Leitweg-ID der Rechnung aus deren archivierter E-Rechnung (mit
+  Prüfsummen-Kontrolle), damit die Behörde ihn zuordnen kann.
+- **Weitere Abläufe:** Nach einer Wiederherstellung nennt das Pause-Banner Links zum Prüfen
+  (Rechnungen, Kosten, Nummernkreise und vorgemerkte Entwürfe, Abo-Rechnungen, Kosten-Abos);
+  neue Einmal-Codes lassen sich auch beim Erneuern kopieren oder als Textdatei speichern;
+  Seitennamen „Erinnerungen einstellen“ und „Kosten-Abos“; „Buchen“ eines Kosten-Abos fragt wie
+  jede Kosten-Erfassung „Kosten festschreiben?“; nach dem Speichern von „Meine Firmendaten“ geht
+  es zurück zur Seite, von der du gekommen bist (nur Adressen innerhalb der App); Hilfe-Knopf und
+  F1 führen zum selben Handbuch-Kapitel; der Abgang einer Anschaffung fragt mit Datum, Art,
+  Erlös, Restbuchwert und Gewinn oder Verlust nach („Abgang buchen“), und die Vorschau zeigt
+  ersetzte und nachgeholte AfA mit Vorzeichen.
 - **Kosten, Anschaffungen, EÜR:** „Kosten festschreiben“ (statt „speichern“) mit Rückfrage, Beleg
   zuerst im Formular, „Korrigiert neu erfassen“ nach einem Storno übernimmt die Werte; Berater- und
   Mandantennummer im DATEV- und Steuerberater-Export; Hinweis zur Steuerkategorie K beim
@@ -111,7 +126,12 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
 - **Behoben:** Bestätigungsdialoge warfen beim Schließen einen Skriptfehler; eine abgebrochene
   Seitenübergangs-Animation erschien als unbehandelter Fehler; auf `/expenses/new` und in Tabellen
   mit versteckten Spaltenköpfen lief die Seite im Querformat seitlich über; die Statusliste der
-  Backup-Seite stand in einer Zeile (Klassenkonflikt mit den Status-Pillen).
+  Backup-Seite stand in einer Zeile (Klassenkonflikt mit den Status-Pillen). Ein Backup-Ziel
+  übernahm die „letzte erfolgreiche Kopie“ eines anderen oder entfernten Ziels mit derselben
+  Bezeichnung (jetzt nur Kopien am selben Ort); die Meldung bei einer Zeitüberschreitung lud
+  zum Wiederholen ein, obwohl die Aktion im Hintergrund weiterläuft — jetzt: erst in der Liste
+  prüfen. Die Rücksprung-Adresse auf „Meine Firmendaten“ ließ sich mit Punkt-Segmenten auf eine
+  fremde Seite lenken.
 
 ### Hinweise für Betreiber (Update von 2026.10)
 
@@ -145,8 +165,9 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   Service Worker, ohne Offline-Funktion; die CSP bleibt unverändert). Auf iOS hat die
   Startbildschirm-App eigene Cookies und braucht eine eigene Anmeldung.
 - **Meldungstexte der API:** Die Texte im Feld `message` sind sprachlich überarbeitet
-  (Daten als TT.MM.JJJJ, „Firmendaten“, ohne XRechnung-Regelkennungen); die Codes (`code`)
-  sind unverändert. Wer eigene Auswertungen auf Meldungstexte stützt, bitte anpassen.
+  (Daten als TT.MM.JJJJ, „Firmendaten“, ohne XRechnung-Regelkennungen; Wörter wie
+  „verworfen“/„fertiggestellt“ auch in Anonymisierungs-Meldungen und im DSGVO-Auskunfts-PDF); die
+  Codes (`code`) sind unverändert. Wer eigene Auswertungen auf Meldungstexte stützt, bitte anpassen.
 - **Eigene PDF-Vorlagen (Typst 0.15):** `json.decode(…)` gibt es nicht mehr;
   Daten lesen mit `json(bytes(sys.inputs.at("data-json")))`. Eine alte Vorlage
   meldet Klein.Buch beim Rendern mit genau diesem Ersatz.
@@ -241,7 +262,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   statt Hinweisen auf App-Neustart und App-Update. Doku, ADRs (Amendments zu
   0003, 0023, 0027, 0033, 0039) und Handbuch beschreiben Serverstart und
   Entsperren statt des Programmstarts der Desktop-Fassung.
-- **Nur noch die Inbox:** Der ungenutzte Weiterleitungskanal für
+- **Nur noch die „Hinweise“:** Der ungenutzte Weiterleitungskanal für
   OS-Benachrichtigungen aus der Desktop-Fassung ist entfernt.
 - **Migration 0032 (Schema 32, Lauf F, ADR 0039 Nr. 124):** Nummerierte
   Rechnungs- und Storno-Entwürfe lassen sich verwerfen (`invoices_void_draft`,
@@ -337,7 +358,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   Sicherheit zeigt die angemeldeten Sitzungen und meldet auf Wunsch alle anderen
   ab (Re-Auth). Nach 100 Fehlversuchen in Folge ist die Anmeldung mit App-Code
   von unbekannten Geräten gesperrt, bis eine Anmeldung mit Einmal-Code oder von
-  einem bekannten Gerät gelingt (Inbox-Hinweis). Neue Daten-Passwörter prüft der
+  einem bekannten Gerät gelingt (Eintrag unter „Hinweise“). Neue Daten-Passwörter prüft der
   Server gegen eine eingebettete Sperrliste, einfache Muster und Firmenname bzw.
   E-Mail (höchstens 1024 Zeichen); bestehende bleiben gültig. Eine Anmeldung, die
   wegen einer Datenbank-Umstellung länger dauert, antwortet nach 25 s mit 202
@@ -359,7 +380,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   10 min statt 1 h auf dem Server und verschwinden mit dem ersten Abruf. Die Art
   jedes Commands (Lesen/Ändern/Job) steht ausdrücklich in der Registry statt aus
   dem Namen abgeleitet. Beim Start prüft der Server den Java-Sidecar (Log und
-  Inbox-Hinweis beim Entsperren, kein Abbruch).
+  Eintrag unter „Hinweise“ beim Entsperren, kein Abbruch).
 - **Logs und Fehlermeldungen (Lauf F4c, ADR 0039 Nr. 132):** Das
   Zugriffsprotokoll nennt Client-IP (`ip=`), Aufruf-Kennung (`req=`, gleich der
   `ref` in „Interner Fehler (Ref …)“) und eine gekürzte Sitzungskennung
@@ -412,7 +433,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   und Paket-Positionen setzen E auf S mit 19 %, der Satz ist an jeder Position
   (auch aus Paketen) einstellbar.
 - **Eigene Rechnungsvorlage ohne Storno-Darstellung:** Stornos entstehen dann
-  mit der eingebauten Vorlage, ein Hinweis in der Inbox erklärt es.
+  mit der eingebauten Vorlage, ein Eintrag unter „Hinweise“ erklärt es.
 - **Fehlermeldungen der Datenbank-Schutzregeln** erscheinen deutsch und
   verständlich (mit Referenz), der technische Text steht nur im Log.
 - **Übersicht über Mitternacht:** Datum, Jahr und Fälligkeiten springen in einem
@@ -504,7 +525,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
     beiden Status und Verweis an die Steuerberatung ab; bestehende Anlagen in dieser
     Lage gelten nach einem Wechsel als nicht korrigierbar.
   - *Wegfall von §19 mitten im Jahr (100.000-€-Grenze):* als bekannte Grenze
-    dokumentiert. Inbox-Hinweis und Ausfüllhilfe raten in diesem Fall nicht mehr zur
+    dokumentiert. Hinweis und Ausfüllhilfe raten in diesem Fall nicht mehr zur
     Korrektur der Anlagen und nennen die zu hohe Vorsteuer in Kz 185; das Handbuch
     beschreibt das Vorgehen bei Einnahmen, Kosten und Anlagen und sagt, dass
     Klein.Buch die Umsatzgrenzen nicht überwacht.
@@ -519,7 +540,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   - *Zahldatum aktivierter Kosten:* Die F8c-Sperre entfällt; das Zahldatum ändert den
     Status nicht mehr. Das Belegdatum bleibt unveränderlich.
   - *§19-Wechsel nach dem Aktivieren:* Ein Verzicht oder eine Rückkehr wird nicht
-    blockiert; die Inbox nennt jede betroffene Anlage mit richtigem Betrag und
+    blockiert; ein Eintrag unter „Hinweise“ nennt jede betroffene Anlage mit richtigem Betrag und
     Handlungsweg (korrigieren bzw. Steuerberatung), die Ausfüllhilfe ebenso.
 - **Nachbesserung F8c (ADR 0039 Nr. 147):**
   - *Zahldatum aktivierter Kosten:* Ein neues Zahldatum (oder das Entfernen), das den
@@ -567,7 +588,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
     auf einen stornierten Kauf weiter ab); eine Rückabwicklung ist ein Abgang der
     Anlage.
   - *Restore:* Ein älteres Backup öffnet ein inzwischen abgeschlossenes
-    Geschäftsjahr nicht wieder — der Abschluss wird übernommen, Hinweis in der Inbox.
+    Geschäftsjahr nicht wieder — der Abschluss wird übernommen, Eintrag unter „Hinweise“.
     Ein nach dem Restore bestätigter Entwurf mit schon festgeschriebener Nummer wird
     nach jeder Änderung wieder vorgemerkt.
   - *„Datenbank sperren“* sperrt nach dem Abmelden immer zu Ende, auch wenn ein
@@ -602,7 +623,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
     Steuergruppe werden gegengebucht statt weggelassen.
   - Paket-Provenienz auch an Angeboten und Abo-Vorlagen: eine bearbeitete
     Position verliert `source_package_*` schon beim Speichern.
-  - Der Inbox-Hinweis zur eingebauten Storno-Vorlage entsteht erst nach dem
+  - Der Hinweis zur eingebauten Storno-Vorlage entsteht erst nach dem
     erfolgreichen Festschreiben.
   - Druck-PDF mit AGB: auch GoToR-, Thread-, Movie-, Sound-, RichMediaExecute-,
     SetOCGState- und GoTo3DView-Aktionen, Medien-/3D-Annotationen und Links
@@ -636,7 +657,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   UBL-Gutschrift als Kosten durch).
 - **Versandprotokoll (R4-S2-EMAILLOG):** Scheitert der Eintrag im
   `email_log` nach einem Versand, gibt es einen Audit-Eintrag
-  `mail.log_failed`, einen Inbox-Hinweis und eine Warnung nach dem Senden statt
+  `mail.log_failed`, einen Eintrag unter „Hinweise“ und eine Warnung nach dem Senden statt
   nur einer Log-Zeile.
 - **Eigene SMTP-CA:** Eine CA-Datei ohne PEM-Zertifikat wird mit klarer Meldung
   abgelehnt (bisher scheiterte erst der Handshake mit „UnknownIssuer“).

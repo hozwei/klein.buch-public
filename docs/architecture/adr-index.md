@@ -9,7 +9,7 @@ Quelle: `klein-buch/docs/adr/0001-…0041-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** die ADRs 0001–0040 sind **akzeptiert** (Stand 2026-10-24), ADR 0041 ist **in Arbeit** (Lauf 2026.11);
+**Status-Konvention:** die ADRs 0001–0041 sind **akzeptiert** (Stand 2026-10-27);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -42,7 +42,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0018 | Rechtsdokumente (AGB/Datenschutz): Versionierung + Angebots-Bundle | Legal-Docs | `data-model.md` §2d + `../ARCHITECTURE.md` §4.9 |
 | 0019 | Kosten: Sofort-Festschreiben + Eingangsseitige USt | Kosten | `gobd.md` §2.3 + `modules.md` §1 (domain/expense) |
 | 0020 | Privatbewegungen: EÜR-neutral, append-only, kein Storno | Privatbewegungen | `gobd.md` §2.6 + `modules.md` §1 |
-| 0021 | UI-Feedback & Interaktions-Konventionen (Block DS, Feedback-Teil) | UX-Konventionen | Frontend-`src/lib/components/` |
+| 0021 | UI-Feedback & Interaktions-Konventionen (Block DS, Feedback-Teil); Amendment 2026-10-27: Feldfehler am Feld, stehende Fehler-Toasts, ActionMenu (ADR 0041) | UX-Konventionen | Frontend-`src/lib/components/` |
 | 0022 | EÜR-Einnahmen-Erfassung: Zufluss/Abfluss + Storno als negative Einnahme | EÜR-Cash-Basis | `modules.md` §13 + `../ARCHITECTURE.md` §4.11 |
 | 0023 | Wiederkehrende Belege + In-App-Scheduler | Scheduler | `../ARCHITECTURE.md` §5 + `modules.md` §6 |
 | 0024 | E-Rechnung-Empfang: CII+UBL-Parser, KoSIT beratend, Import als Kosten | E-Rechnung-Empfang | `modules.md` §2 + `../ARCHITECTURE.md` §4.10 |
@@ -50,7 +50,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0026 | EÜR-Export: ELSTER-Ausfüllhilfe, DATEV-Buchungsstapel, Steuerberater-Paket | EÜR-Export | `modules.md` §13 + `reference/datev-format.md` + `reference/elster-euer-formular-schema.md` |
 | 0027 | Notifications, prüfungssicherer GJ-Abschluss, Integritäts-Cron | Notifications + GJ-Lock | `gobd.md` §2.4 + `modules.md` §6 + §11 |
 | 0028 | Versand via Microsoft Graph (OAuth/PKCE; Code seit Lauf F6 entfernt) + append-only E-Mail-Protokoll | OAuth / Mail | `security.md` §9 + `modules.md` §8 |
-| 0029 | Design-System: zentrale Tokens, wiederverwendbare Komponenten, Toast-Default | Design-System | Frontend-`src/lib/styles/tokens.css` |
+| 0029 | Design-System: zentrale Tokens, wiederverwendbare Komponenten, Toast-Default; Amendment 2026-10-27: Rollen-Tokens, `!important`-Rückbau (ADR 0041) | Design-System | Frontend-`src/lib/styles/tokens.css` |
 | 0030 | Wählbare PDF-Vorlagen: eingebettete Unified-Built-ins + inputs-Override + Sentinel-Auflösung | PDF-Templates | `modules.md` §3 + `../ARCHITECTURE.md` §4.14 |
 | 0031 | Pakete (versioniert) + Anfahrt | Pakete/Anfahrt | `modules.md` §1 (domain/package, domain/travel) + `../ARCHITECTURE.md` §4.15 |
 | 0032 | DSGVO: Auskunft (Art. 15) + Anonymisierung (Art. 17) | DSGVO | `modules.md` §1 (domain/dsgvo, domain/anonymize) + `../ARCHITECTURE.md` §4.16 |
@@ -62,7 +62,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 | 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
-| 0041 | UI/UX-Standards (2026.11): WCAG 2.2 AA als Ziel, Prüf-Harness mit Abdeckungsbericht, Design über Tokens und Bausteine, deutsche Formate (in Arbeit) | UX / Frontend | `design.md` |
+| 0041 | UI/UX-Standards (2026.11): Orientierung an WCAG 2.2 AA (keine Konformitätsaussage), Prüf-Harness mit axe-core und Abdeckungsbericht über Mobil, Tablet und Desktop, Design über Rollen-Tokens und Bausteine (PageBar mit Menü „Mehr“, DocNo, ContactSelect, MoneyInput/QuantityInput), Container Queries, deutsche Formate und Betragseingabe, Fehler am Feld, Seitentitel je Route, F1 zum passenden Handbuch-Kapitel, Begriffe der Oberfläche, Lesefelder ohne Migration | UX / Frontend | `design.md`, `../ARCHITECTURE.md` §2g, `modules.md` §14, `data-model.md` §2g |
 
 ---
 
@@ -230,6 +230,6 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 ## Letzte Verifikation
 
-Stand: 2026-10-25, ADR-Files 0001–0040 (Amendments bis Lauf F8). Bei einer neuen
+Stand: 2026-10-27, ADR-Files 0001–0041 (Amendments bis Lauf 2026.11: ADR 0021, 0029). Bei einer neuen
 ADR diese Tabelle am Ende verlängern und das passende Vertiefungs-Dokument verlinken;
 bei einem neuen Amendment eine Zeile in Abschnitt 3 ergänzen.

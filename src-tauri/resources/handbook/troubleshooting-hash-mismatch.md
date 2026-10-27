@@ -27,11 +27,21 @@ Dateien verändert sind und wie viele fehlen. Der Knopf "Öffnen" führt zu
 "Einstellungen" und "Protokoll & Datensicherheit".
 
 Dort zeigt die Karte "Archiv-Integrität" jede bisherige Prüfung mit
-Zeitpunkt und der Zahl der geprüften, einwandfreien und fehlerhaften
-Dateien. Mit "Jetzt prüfen" startest Du die Prüfung sofort. Automatisch
+Zeitpunkt und den Spalten "Geprüft", "Ok", "Fehler", "Davon fehlend" und
+"Nicht lesbar". Hatte eine Prüfung Befunde, klappst Du in der Spalte
+"Betroffene Dateien" die Liste auf ("… Dateien anzeigen"). Sie nennt je
+Datei die Art des Befunds ("Prüfsumme weicht ab", "fehlt" oder "nicht
+lesbar"), die Archiv-ID und, wenn bekannt, den Dateinamen. Mit "Jetzt
+prüfen" startest Du die Prüfung sofort; während sie läuft, heißt der
+Knopf "Prüfe …", danach meldet Klein.Buch das Ergebnis. Automatisch
 läuft sie einmal im Monat, allerdings nur, solange Klein.Buch entsperrt
-ist. Darunter steht das Audit-Protokoll mit Einträgen wie "Integrität
-gestört".
+ist.
+
+Darunter steht das Audit-Protokoll mit den Spalten "Zeitpunkt",
+"Aktion", "Ausgelöst von" ("Du", "Zeitplan" oder "System") und
+"Bezug". Befunde stehen dort als "Integrität gestört (Prüfsumme weicht
+ab)", "Archiv-Datei fehlt" oder "Archiv-Datei nicht lesbar", in der
+Regel mit dem Namen der betroffenen Datei.
 
 Willst Du eine betroffene Datei öffnen, liefert Klein.Buch sie nicht aus,
 sondern meldet einen Fehler. Es gibt Dir also nie unbemerkt eine
@@ -127,4 +137,4 @@ durch das Finanzamt auffallen kann.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

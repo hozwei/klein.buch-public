@@ -1,7 +1,7 @@
 <script lang="ts">
   import PageBar from "#lib/PageBar.svelte";
 
-  // Einstellungs-Hub. U1: Querverweise auf Hinweis-Regeln, EÜR-Export und die
+  // Einstellungs-Hub. U1: Querverweise auf „Erinnerungen einstellen“, EÜR-Export und die
   // Protokolle (R5-SUB4-007), Hover nur mit Zeigegerät, Rollen-Tokens.
   // U4 (V2-15/V2-19): Einträge heißen wie die Seitentitel; „Hinweise“ statt „Posteingang“.
   // U4 (V3-04): je Gruppe eine Linkliste mit Lineatur (.kb-linklist, tokens.css) statt
@@ -22,7 +22,7 @@
       items: [
         { href: "/settings/mail", title: "E-Mail-Versand", sub: "Postfach einrichten und Testmail senden" },
         { href: "/settings/mail-log", title: "E-Mail-Protokoll", sub: "Alle Versandversuche mit Empfänger und Ergebnis" },
-        { href: "/notifications/rules", title: "Hinweis-Regeln", sub: "Welche Hinweise erscheinen und wann" },
+        { href: "/notifications/rules", title: "Erinnerungen einstellen", sub: "Welche Hinweise erscheinen und wann" },
       ],
     },
     {

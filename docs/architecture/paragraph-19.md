@@ -18,9 +18,9 @@ hat keinen USt-Block; im XML steht stattdessen die Tax-Category `E` (exempt)
 und eine textuelle Klausel.
 
 **Klein.Buch ist primär ein §19-Tool.** Default: `seller_profile.is_kleinunternehmer
-= true`. Wer auf §19 verzichten will (Option zur Regelbesteuerung nach §19
-Abs. 2 UStG), kann das per Settings-Toggle aktivieren — mit Warnhinweis auf
-die **5-Jahres-Bindung**. Datum landet in
+= true`. Wer auf §19 verzichten will (Option zur Regelbesteuerung nach § 19
+Abs. 3 UStG, bis 2024 Abs. 2), kann das per Settings-Toggle aktivieren — mit
+Warnhinweis auf die **5-Jahres-Bindung**. Datum landet in
 `seller_profile.waived_paragraph_19_since`.
 
 ---
@@ -137,13 +137,23 @@ keinen Eintritt fordert.
 
 ## 6. Verzicht auf §19 und 5-Jahres-Bindung
 
-§19 Abs. 2 UStG erlaubt den **Verzicht** auf die Kleinunternehmer-Regelung —
-sinnvoll z. B., wenn überwiegend B2B-Kunden Vorsteuer ziehen wollen. Wer
-verzichtet, ist **5 Jahre an die Regelbesteuerung gebunden**.
+§ 19 Abs. 3 UStG (seit dem JStG 2024; vorher Abs. 2) erlaubt den **Verzicht**
+auf die Kleinunternehmer-Regelung — sinnvoll z. B., wenn überwiegend
+B2B-Kunden Vorsteuer ziehen wollen. Der Verzicht wirkt ab Beginn des
+Kalenderjahres, für das er erklärt wird; wer verzichtet, ist **mindestens
+5 Kalenderjahre an die Regelbesteuerung gebunden**. Davon zu unterscheiden
+ist der gesetzliche Wegfall nach § 19 Abs. 1 UStG (Gesamtumsatz im Vorjahr
+über 25.000 €: ab 1. Januar; im laufenden Jahr über 100.000 €: ab dem
+Umsatz, der die Grenze überschreitet) — ohne Bindung. Jeder Übergang ist bei
+Anlagen eine Änderung der Verhältnisse nach § 15a Abs. 7 UStG
+(Vorsteuerberichtigung); Klein.Buch berechnet sie nicht.
 
 **Im UI** ist das ein Toggle in den Verkäuferprofil-Einstellungen mit
-**ausführlichem** Warn-Dialog, der die 5-Jahres-Bindung erklärt und nach
-einer expliziten Bestätigung verlangt. Bei Bestätigung wird
+**ausführlichem** Warn-Dialog, der die drei Fälle (Verzicht mit Bindung,
+Wegfall durch die 25.000-€- oder die 100.000-€-Grenze ohne Bindung) und
+§ 15a UStG erklärt und nach einer expliziten Bestätigung verlangt (ADR 0041
+Nr. 21, 220; U7). Der Grund des Wechsels wird nicht gespeichert; die
+Rückkehr-Sperre gilt deshalb in allen drei Fällen. Bei Bestätigung wird
 `seller_profile.waived_paragraph_19_since = TODAY` gesetzt.
 
 **Im Code** prüft `domain::kleinunternehmer::waiver_window(seller, today)`,

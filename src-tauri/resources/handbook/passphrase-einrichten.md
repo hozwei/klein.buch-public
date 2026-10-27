@@ -81,20 +81,35 @@ Kapiteln "[Installation mit Docker Compose](/help/installation-docker)" und
    das Fenster "Klein.Buch einrichten".
 2. Trag den Setup-Token aus dem Container-Log in das Feld "Setup-Token
    (aus dem Container-Log)" ein.
-3. Tipp Deine Passphrase in das Feld "Passwort" und wiederhole sie im
-   Feld "Passwort wiederholen". Klick auf "Weiter zum QR-Code".
+3. Tipp Deine Passphrase in das Feld "Daten-Passwort (mindestens 16
+   Zeichen — am besten 3–4 Wörter)" und wiederhole sie im Feld
+   "Daten-Passwort wiederholen". Mit "Anzeigen" neben einem Feld siehst
+   Du, was Du getippt hast, mit "Verbergen" schaltest Du zurück. Unter
+   dem ersten Feld steht eine "Stärke (Schätzung)". Sie ist nur ein
+   Hinweis; ob Klein.Buch die Passphrase annimmt, prüft der Server. Klick
+   auf "Weiter zum QR-Code". Ist etwas nicht in Ordnung (Token falsch,
+   Passphrase zu kurz oder zu leicht zu erraten, Wiederholung anders),
+   steht die Meldung unter den Feldern und der Cursor im betroffenen
+   Feld.
 4. Im Fenster "Authenticator-App verbinden" siehst Du einen QR-Code.
    Scanne ihn mit Deiner Authenticator-App. Klappt das Scannen nicht,
-   tippst Du den "Schlüssel zum Abtippen" in die App ein.
+   tippst Du den "Schlüssel zum Abtippen" in die App ein. Mit "Zurück zu
+   Token und Passwort" kommst Du zum vorigen Schritt zurück; Deine
+   Eingaben bleiben dabei erhalten.
 5. Gib den sechsstelligen Code, den die App jetzt anzeigt, in das Feld
    "Code aus der App" ein und klick auf "Einrichten & erstes Backup
    erstellen".
-6. Klein.Buch zeigt Dir zehn Einmal-Codes. Mit jedem davon kommst Du
-   einmal hinein, falls Dein Telefon mit der Authenticator-App verloren
-   geht. Ein Einmal-Code ersetzt nur den App-Code, nicht die Passphrase.
-   Die Codes werden nur dieses eine Mal angezeigt. Schreib sie ab oder
-   leg sie im Passwort-Manager ab, setz das Häkchen bei "Ich habe die
-   Codes sicher notiert." und klick auf "Weiter".
+6. Im Fenster "Einmal-Codes notieren" zeigt Klein.Buch Dir zehn
+   Einmal-Codes. Mit jedem davon kommst Du einmal hinein, falls Dein
+   Telefon mit der Authenticator-App verloren geht. Ein Einmal-Code
+   ersetzt nur den App-Code, nicht die Passphrase. Die Codes werden nur
+   dieses eine Mal angezeigt. Mit "Codes kopieren" legst Du sie in die
+   Zwischenablage, um sie in Deinen Passwort-Manager einzufügen (der Knopf
+   erscheint nur, wenn Dein Browser das Kopieren erlaubt); "Als
+   Textdatei speichern" lädt sie als Datei `klein-buch-einmal-codes.txt`
+   herunter (die Datei entsteht in Deinem Browser). Du kannst sie auch
+   abschreiben. Setz dann das Häkchen bei "Ich habe die Codes sicher
+   notiert." und klick auf "Weiter".
 
 Klein.Buch hat jetzt die verschlüsselte Datenbank angelegt, die
 Verschlüsselung eingerichtet und ein erstes Backup geschrieben. Du bist
@@ -108,17 +123,30 @@ einrichten](/help/backup-ziel-einrichten)").
 
 ## Anmelden
 
-Später meldest Du Dich im Fenster "Anmelden" mit Deinem Daten-Passwort
-und dem aktuellen Code aus der Authenticator-App an. Hast Du das Telefon
+Später meldest Du Dich im Fenster "Anmelden" an: Daten-Passwort ins
+Feld "Daten-Passwort", den aktuellen Code der Authenticator-App ins Feld
+"Code aus der Authenticator-App", dann "Anmelden". Hast Du das Telefon
 nicht zur Hand, klickst Du auf "Gerät verloren? Einmal-Code verwenden"
-und gibst einen Deiner Einmal-Codes ein.
+und gibst einen Deiner Einmal-Codes ein. Danach sagt Dir Klein.Buch,
+wie viele Einmal-Codes noch übrig sind.
+
+Schlägt die Anmeldung fehl, leert Klein.Buch beide Felder; die Meldung
+sagt, dass Du Daten-Passwort und Code neu eingeben musst (der App-Code
+wechselt alle 30 Sekunden). Gab es seit Deiner letzten Anmeldung
+Fehlversuche, zeigt Klein.Buch nach der Anmeldung eine Warnung mit
+ihrer Zahl und dem Knopf "Sicherheit öffnen". Er führt zu "Sicherheit &
+Anmeldung", wo Du die angemeldeten Sitzungen prüfst.
 
 Eine Anmeldung gilt für diesen Browser. Nach 30 Minuten ohne Aktivität
-und spätestens nach 12 Stunden musst Du Dich neu anmelden. Im Hauptmenü
-beendet "Abmelden" nur die Anmeldung in diesem Browser. "Datenbank
-sperren" schließt die Datenbank und meldet alle Geräte ab. Welche
-Browser gerade angemeldet sind, siehst Du unter "Einstellungen" →
-"Sicherheit & Anmeldung"; dort meldest Du auch alle anderen ab.
+und spätestens nach 12 Stunden musst Du Dich neu anmelden. Ganz unten im
+Hauptmenü stehen in der Gruppe "Sitzung" die Einträge "Über",
+"Datenbank sperren" und "Abmelden". "Abmelden" beendet nur die
+Anmeldung in diesem Browser. "Datenbank sperren" schließt nach der
+Rückfrage "Datenbank sperren?" die Datenbank und meldet alle Geräte ab;
+geplante Aufgaben wie Abo-Rechnungen und Backups ruhen dann bis zur
+nächsten Anmeldung. Welche Browser gerade angemeldet sind, siehst Du
+unter "Einstellungen" → "Sicherheit & Anmeldung"; dort meldest Du auch
+alle anderen ab.
 
 Nach einem Update kann die erste Anmeldung länger dauern, weil
 Klein.Buch vorher ein Backup anlegt und die Datenbank umstellt. Die
@@ -163,11 +191,16 @@ nicht entschlüsseln.
 ## Passphrase ändern
 
 Unter "Einstellungen" und "Sicherheit & Anmeldung" gibt es die Karte
-"Daten-Passwort ändern". Du gibst das neue Passwort zweimal ein
-(mindestens 16 Zeichen), klickst auf "Passwort ändern" und bestätigst die
-Rückfrage. Eventuell fragt Klein.Buch vorher im Fenster "Aktion
-bestätigen" noch einmal nach dem bisherigen Daten-Passwort und dem
-App-Code.
+"Daten-Passwort ändern". Du gibst das neue Passwort in "Neues Passwort
+(mindestens 16 Zeichen — am besten 3–4 Wörter)" und "Neues Passwort
+wiederholen" ein; auch hier gibt es "Anzeigen" und die "Stärke
+(Schätzung)". Dann klickst Du auf "Passwort ändern" und bestätigst die
+Rückfrage "Daten-Passwort ändern?" mit "Ändern". Eventuell fragt
+Klein.Buch danach im Fenster "Aktion bestätigen: Daten-Passwort ändern"
+noch einmal nach dem bisherigen Daten-Passwort und dem App-Code. Ist das
+neue Passwort zu kurz oder lehnt Klein.Buch es ab, steht die Meldung am
+Feld. Stimmen die beiden Eingaben nicht überein, leert Klein.Buch beide
+Felder, und Du gibst sie neu ein.
 
 Klein.Buch verschlüsselt die Datenbank dann mit dem neuen Passwort neu,
 meldet andere angemeldete Geräte ab und legt ein Backup mit dem neuen
@@ -207,4 +240,4 @@ Sofort.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

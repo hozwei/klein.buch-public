@@ -3,7 +3,7 @@ slug: pflichtangaben-rechnung
 title: Pflichtangaben auf Rechnungen
 category: recht-und-steuern
 order: 310
-keywords: [§14, pflichtangaben, rechnung, ust, steuernummer, leistungsdatum]
+keywords: [§14, pflichtangaben, rechnung, ust, steuernummer, leistungsdatum, fälligkeit, telefon, leitweg-id]
 ---
 
 # Pflichtangaben auf Rechnungen (§14 UStG)
@@ -36,28 +36,41 @@ eingesetzt, solange Du Kleinunternehmer bist.
 
 ## Was Klein.Buch beim Ausstellen prüft
 
-Vor dem Ausstellen einer Rechnung prüft Klein.Buch automatisch:
+Schon beim Öffnen eines Rechnungs-Entwurfs und noch einmal beim
+Ausstellen prüft Klein.Buch automatisch:
 
-1. Dein Verkäuferprofil hat Name und Anschrift.
+1. Dein Verkäuferprofil (Einstellungen → Meine Firmendaten) hat Name
+   und Anschrift.
 2. Der gewählte Kunde hat Name und Anschrift.
-3. Die Rechnung hat ein Belegdatum.
+3. Die Rechnung hat ein Rechnungsdatum.
 4. Es ist mindestens eine Position eingetragen.
-5. Im Profil ist eine Steuernummer oder USt-IdNr hinterlegt, auch
-   bei Kleinbetragsrechnungen (siehe unten).
-6. Im Profil ist eine Telefonnummer hinterlegt.
-7. Ist ein Betrag offen, hat die Rechnung ein Fälligkeitsdatum.
+5. Im Verkäuferprofil ist eine Steuernummer oder USt-IdNr. hinterlegt,
+   auch bei Kleinbetragsrechnungen (siehe unten).
+6. Im Verkäuferprofil ist eine Telefonnummer hinterlegt.
+7. Ist ein Betrag offen, hat die Rechnung ein Fälligkeitsdatum. Im
+   Rechnungs-Formular ist die Fälligkeit deshalb immer Pflicht.
 
 Die Punkte 6 und 7 verlangt nicht §14 UStG, sondern die XRechnung,
 die Klein.Buch zu jeder Rechnung erzeugt. Ohne sie würde der
 KoSIT-Validator (das amtliche Prüfprogramm für XRechnungen) die
 Rechnung ablehnen.
 
-Wenn etwas fehlt, erscheint oben rechts ein roter Hinweis-Toast,
-der das fehlende Feld benennt. Korrigiere und versuche erneut.
+In den Firmendaten trägt das Feld "Telefon" deshalb den Zusatz
+"(Pflicht für die E-Rechnung)". Fehlen Telefon oder Steuernummer bzw.
+USt-IdNr., speichert Klein.Buch die Firmendaten trotzdem, weist aber
+am Feld und beim Speichern darauf hin: Eine Rechnung ausstellen kannst
+Du ohne sie nicht.
+
+Was fehlt, nennt die Karte "Ausstellen" unter den Positionen des
+Entwurfs schon vor dem Klick, jeweils mit einem Link zur Korrektur
+("Firmendaten ergänzen", "Kontakt ergänzen" oder "Entwurf
+bearbeiten"). Lehnt Klein.Buch das Ausstellen ab, steht dort der
+Hinweis "Die Rechnung wurde nicht ausgestellt." mit den Gründen.
+Korrigiere und versuche erneut.
 
 Die Rechnungsnummer vergibt Klein.Buch automatisch fortlaufend
 pro Geschäftsjahr; eine Eindeutigkeits-Verletzung kann gar nicht
-entstehen. Das Belegdatum ist über das Datenbank-Schema Pflicht,
+entstehen. Das Rechnungsdatum ist über das Datenbank-Schema Pflicht,
 es kann nicht leer sein.
 
 ## Kleinbetragsrechnung (bis 250 € Brutto)
@@ -90,12 +103,17 @@ Das Leistungsdatum ist der Zeitpunkt, an dem Du die Leistung
 tatsächlich erbracht hast. Es ist Pflichtangabe nach §14 UStG.
 Bei einer einmaligen Leistung (zum Beispiel ein Reparatur-Termin)
 ist es ein konkretes Datum. Bei laufenden Leistungen (zum Beispiel
-"Beratung im Monat April") trägst Du einen Zeitraum ein.
+"Beratung im Monat April") ist es ein Zeitraum. Das Formular hat
+dafür ein einzelnes Datumsfeld; den Zeitraum nennst Du zusätzlich in
+der Beschreibung der Position. Bei Abo-Rechnungen schreibt Klein.Buch
+den Leistungszeitraum auf Wunsch selbst auf die Rechnung (siehe
+Kapitel "Abo-Rechnungen").
 
-Wenn Du das Feld im Formular leer lässt, übernimmt Klein.Buch
-automatisch das Belegdatum als Fallback. Der gesetzliche Inhalt
-ist damit erfüllt — auf der fertigen Rechnung steht in jedem Fall
-ein Leistungsdatum.
+Im Rechnungs-Formular ist das Leistungsdatum ein Pflichtfeld.
+Klein.Buch belegt es mit dem Rechnungsdatum vor und zieht es mit, bis
+Du es selbst änderst; es darf nicht nach dem Rechnungsdatum liegen.
+Auf der fertigen Rechnung steht damit in jedem Fall ein
+Leistungsdatum.
 
 ## Steuernummer und USt-IdNr
 
@@ -106,21 +124,32 @@ Kunden im EU-Ausland belieferst. Klein.Buch zeigt Dir an, welche
 Nummer eingetragen ist.
 
 Internationale Geschäfte (innergemeinschaftliche Lieferungen,
-Reverse Charge, Drittland) sind in Klein.Buch v1.0 ohnehin nicht
+Reverse Charge, Drittland) sind in Klein.Buch ohnehin nicht
 voll abgebildet — siehe Disclaimer-Kapitel.
+
+## Leitweg-ID bei Behörden
+
+Rechnungen an öffentliche Auftraggeber (Behörden) brauchen in der
+Regel eine Leitweg-ID, die Kennung, unter der die Behörde
+E-Rechnungen entgegennimmt. Du trägst sie unmittelbar vor dem
+Ausstellen in der Karte "Ausstellen" in das Feld "Leitweg-ID
+(optional)" ein; Klein.Buch schreibt sie als Käuferreferenz in die
+E-Rechnung. Der Entwurf speichert sie nicht. Für alle anderen Kunden
+bleibt das Feld leer.
 
 ## Bewährter Ablauf
 
 1. Verkäuferprofil sauber pflegen (einmalig).
 2. Kontakte mit kompletter Anschrift anlegen.
-3. Beim Rechnungs-Schreiben Belegdatum und Leistungsdatum bewusst
-   setzen.
-4. Im Entwurf alle Eingaben aufmerksam prüfen, weil nach dem
-   Ausstellen nur noch ein Storno möglich ist.
+3. Beim Rechnungs-Schreiben Rechnungsdatum, Leistungsdatum und
+   Fälligkeit bewusst setzen.
+4. Im Entwurf alle Eingaben und die Prüfung in der Karte "Ausstellen"
+   aufmerksam ansehen, weil nach dem Ausstellen nur noch ein Storno
+   möglich ist.
 
 Wenn Du diese Reihenfolge einhältst, sind Deine Rechnungen formal
 vollständig nach §14 UStG.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

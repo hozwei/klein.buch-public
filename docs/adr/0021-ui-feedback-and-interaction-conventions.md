@@ -68,3 +68,23 @@ geht es nur um Feedback- und Interaktions-Verhalten.
 `lib/{toast.svelte.ts, confirm.svelte.ts, ToastHost.svelte, ConfirmDialog.svelte, Banner.svelte}`,
 `routes/+layout.svelte`; betroffene Routen unter `routes/{contacts,invoices,quotes,expenses,private-movements,settings}`;
 Cowork-Memory `feedback/ui-feedback-pattern`.
+
+## Amendment 2026-10-27 — UI/UX-Lauf 2026.11 (ADR 0041)
+
+**Status:** Akzeptiert · 2026-10-27 · Lauf 2026.11 (ADR 0041). Die Bausteine bleiben, drei
+Regeln dieser Entscheidung gelten nicht mehr:
+
+- **Pflichtfeld- und Formatfehler stehen am Feld, nicht im Toast** (ADR 0041 Nr. 22, 38): nach dem
+  ersten Absenden, verknüpft per `aria-describedby`/`aria-invalid`, Fokus auf das erste fehlerhafte
+  Feld. Server-Ablehnungen mit mehreren Gründen erscheinen als stehendes Banner. Der Toast bleibt
+  Standard für das Ergebnis einer Aktion.
+- **Fehler-, Warn- und Aktions-Toasts schließen nicht automatisch** (ADR 0041 Nr. 12, 69, 231–233);
+  Erfolgsmeldungen nach 5 s mit Pause bei Hover/Fokus. Toasts liegen unten, jede Art trägt ein
+  Symbol.
+- **Das „Mehr“-Menü ist eingeführt** (ADR 0041 Nr. 65, 66): `ActionMenu` nach dem WAI-ARIA-Muster
+  „Menu Button“; die PageBar zeigt bis 600 px Breite nur die Hauptaktion als Knopf. Die Regel „genau
+  ein Primärknopf je Zustand“ gilt weiter.
+
+Bestätigungsdialoge laufen über den gemeinsamen Fokus-Helfer `focusTrap`; Gefahr-Dialoge sind
+`alertdialog` mit Startfokus auf „Abbrechen“ (ADR 0041 Nr. 11). Der §19-Wechsel-Dialog bleibt ein
+eigener Dialog (ADR 0041 Nr. 21).

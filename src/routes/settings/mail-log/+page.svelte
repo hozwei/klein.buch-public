@@ -99,7 +99,7 @@
   }
 </script>
 
-<PageBar back="/settings/mail" backLabel="E-Mail-Versand" title="E-Mail-Protokoll" />
+<PageBar back="/settings" backLabel="Einstellungen" title="E-Mail-Protokoll" />
 
 <p class="lead">
   Lückenloser, unveränderlicher Nachweis jedes Versand­versuchs (Erfolg und
@@ -208,7 +208,7 @@
             <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
             <td data-label="Status">
               {#if e.status === "success"}
-                <Badge tone="success">Versendet</Badge>
+                <Badge tone="info">Versendet</Badge>
               {:else}
                 <Badge tone="danger">Fehlgeschlagen</Badge>
               {/if}

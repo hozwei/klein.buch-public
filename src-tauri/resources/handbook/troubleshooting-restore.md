@@ -12,13 +12,16 @@ Beim Wiederherstellen spielst Du ein Backup in Deine Klein.Buch-Instanz
 zurück. Klein.Buch prüft das Backup gründlich, bevor es irgendetwas
 ersetzt. Die meisten Fehler zeigen sich deshalb, bevor sich an Deinen
 Daten etwas ändert. Und sobald die eigentliche Wiederherstellung
-beginnt, gibt es ein Sicherheits-Backup des vorherigen Stands. Hier die
-typischen Fehler.
+beginnt, gibt es ein Sicherheits-Backup des vorherigen Stands. Ein
+falsches Backup-Passwort meldet Klein.Buch direkt am Feld, alle anderen
+Fehler als Meldung "Wiederherstellen fehlgeschlagen: …" mit dem Grund.
+Hier die typischen Fehler.
 
 ## Passphrase wird nicht akzeptiert
 
-Die Meldung lautet "Authentifizierung fehlgeschlagen (falsche Passphrase
-oder beschädigtes Backup)".
+Die Meldung steht direkt am Feld "Backup-Passwort" und lautet
+"Authentifizierung fehlgeschlagen (falsche Passphrase oder beschädigtes
+Backup)". Das Feld ist danach leer, damit Du die Passphrase neu eingibst.
 
 Mögliche Ursachen:
 
@@ -174,4 +177,4 @@ der Passphrase verschlüsselt, die vor der Wiederherstellung galt.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

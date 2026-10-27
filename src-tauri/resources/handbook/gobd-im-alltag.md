@@ -70,8 +70,8 @@ Hinweise.
 
 Bei einer Betriebsprüfung muss das Finanzamt Zugriff auf Deine
 Daten bekommen, in einem auswertbaren Format. Klein.Buch deckt das
-über den Steuerberater-Export ab: ZIP mit PDFs, XRechnung-XMLs,
-DATEV-Stapel und Inhalts-Übersicht.
+über das Steuerberater-Paket im EÜR-Export ab: ein ZIP mit PDFs,
+XRechnung-XMLs, DATEV-Stapel und Inhalts-Übersicht.
 
 ## Was Klein.Buch für Dich macht
 
@@ -88,4 +88,4 @@ einzelne Punkte denken musst.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

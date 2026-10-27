@@ -38,6 +38,7 @@
   import { onAuthRequired } from "#lib/transport.ts";
   import { estimatePassphraseStrength } from "#lib/passphraseStrength.ts";
   import { setGateTitle } from "#lib/pageTitle.svelte.ts";
+  import { canCopyRecoveryCodes, copyRecoveryCodes, saveRecoveryCodes } from "#lib/recoveryCodes.ts";
   import {
     authStatus,
     authSetupOffer,
@@ -218,6 +219,12 @@
   async function finishSetup() {
     if (busy) return;
     error = null;
+    // U7 (R3-03): leeren Code nicht abschicken (kein Fehlversuch beim Server).
+    if (!code.trim()) {
+      error = "Gib den Code aus der Authenticator-App ein.";
+      void focusField("gate-totp");
+      return;
+    }
     busy = true;
     let failed = false;
     try {
@@ -238,37 +245,16 @@
     if (failed) void focusField("gate-totp");
   }
 
-  const codesText = $derived(
-    "Klein.Buch – Einmal-Codes (jeder Code gilt einmal und ersetzt nur den App-Code)\n\n" +
-      recoveryCodes.join("\n") +
-      "\n",
-  );
-
+  // U6-008: dieselben Helfer wie auf „Sicherheit & Anmeldung“ (#lib/recoveryCodes.ts).
   async function copyCodes() {
-    try {
-      await navigator.clipboard.writeText(codesText);
-      codesInfo = "Codes kopiert. Füg sie in deinen Passwort-Manager ein.";
-    } catch {
-      codesInfo = "Kopieren ging nicht. Speichere die Codes als Textdatei oder schreib sie ab.";
-    }
+    codesInfo = await copyRecoveryCodes(recoveryCodes);
   }
 
   function saveCodes() {
-    // Datei entsteht im Browser (Blob), nichts geht an den Server.
-    const url = URL.createObjectURL(new Blob([codesText], { type: "text/plain;charset=utf-8" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "klein-buch-einmal-codes.txt";
-    a.rel = "noopener";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-    codesInfo = "Textdatei gespeichert. Leg sie außerhalb dieses Servers ab.";
+    codesInfo = saveRecoveryCodes(recoveryCodes);
   }
 
-  const canCopy = typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
+  const canCopy = canCopyRecoveryCodes();
 
   function done() {
     resetFields();
@@ -282,6 +268,23 @@
   async function doLogin() {
     if (busy) return;
     error = null;
+    // U7 (R3-03, 3.3.1/3.3.3): Enter im Passwortfeld („Weiter“) schickte die Anmeldung
+    // mit leerem Code ab — der Server zählte das als Fehlversuch und die Eingaben waren
+    // weg. Leere Felder deshalb ohne Anfrage abfangen: Enter im Passwortfeld führt still
+    // zum Code-Feld, sonst nennt eine Meldung das fehlende Feld.
+    if (!pass) {
+      error = "Gib dein Daten-Passwort ein.";
+      void focusField("gate-pass");
+      return;
+    }
+    if (!code.trim()) {
+      const fromPass = document.activeElement?.id === "gate-pass";
+      if (!fromPass) {
+        error = useRecovery ? "Gib einen noch unbenutzten Einmal-Code ein." : "Gib den aktuellen Code aus der Authenticator-App ein.";
+      }
+      void focusField("gate-code");
+      return;
+    }
     if (insecureContext()) {
       resetFields();
       return;

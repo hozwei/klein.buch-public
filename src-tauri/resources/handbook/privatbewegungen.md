@@ -3,7 +3,7 @@ slug: privatbewegungen
 title: Privatbewegungen
 category: bedienen
 order: 150
-keywords: [privatbewegung, privatentnahme, privateinlage, geschäftlich, privat, eür-neutral]
+keywords: [privatbewegung, privatentnahme, privateinlage, geschäftlich, privat, eür-neutral, gegenbuchung, festschreiben]
 ---
 
 # Privatbewegungen
@@ -40,34 +40,53 @@ die EÜR.
 
 ## Privatentnahme erfassen
 
-Klick im Hauptmenü auf "Privat-Geld" und dann auf **"+ Neue
-Buchung"**. Wähle bei "Art" die Privatentnahme. Trage Datum,
-Betrag und das Konto ein, über das die Bewegung gelaufen ist
-(zum Beispiel Bankkonto oder Bargeld-Kasse). Trag in das
+Klick im Hauptmenü auf "Privatbewegungen" und dann auf **"+ Neue
+Privatbewegung"**. Wähle bei "Art" die Privatentnahme. Trage Datum
+und Betrag ein und wähle das Konto, über das die Bewegung gelaufen
+ist (zum Beispiel Bankkonto oder Bargeld-Kasse). Trag in das
 Beschreibungs-Feld eine kurze Erläuterung ein (Pflichtfeld, zum
-Beispiel "Privater Lebensunterhalt April"). Speichere.
+Beispiel "Privater Lebensunterhalt April"). Einen Beleg (PDF oder
+Bild) und eine Notiz kannst Du dazugeben, beides ist freiwillig.
 
-Klein.Buch legt die Position fest. Der Betrag erscheint nicht als
-Ausgabe in der EÜR.
+Klick auf "Privatbewegung festschreiben". Fehlt eine Angabe, steht
+die Meldung am Feld. Sonst fragt Klein.Buch nach und nennt Datum,
+Art, Betrag und Beleg. Mit "Festschreiben" legt Klein.Buch die
+Privatbewegung fest und öffnet ihre Seite; "Abbrechen" ändert
+nichts. Danach lässt sie sich nicht mehr ändern. Der Betrag
+erscheint nicht als Ausgabe in der EÜR.
 
 ## Privateinlage erfassen
 
 Wenn Du privates Geld in das geschäftliche Konto einzahlst (zum
 Beispiel zur Vorfinanzierung eines Auftrags oder zur Deckung einer
-Lücke), wähle "Privateinlage". Trage Datum und Betrag ein.
-Speichere.
+Lücke), wähle "Privateinlage". Trage Datum, Betrag und Beschreibung
+ein und klick auf "Privatbewegung festschreiben".
 
 Der Betrag erscheint nicht als Einnahme in der EÜR, weil er nicht
 aus geschäftlicher Tätigkeit stammt.
 
+## Liste und Detailseite
+
+Die Liste unter "Privatbewegungen" zeigt Nummer, Datum, Art, Konto,
+Beschreibung und Betrag. Die Art ("Privatentnahme" oder
+"Privateinlage") steht als neutrales Merkmal ohne Ampelfarbe; die
+Richtung erkennst Du am Vorzeichen des Betrags: minus für eine
+Entnahme, plus für eine Einlage.
+
+Über die Nummer oder "Öffnen" kommst Du zur Seite "Privatbewegung
+PV-…". Sie zeigt alle Angaben mit Geschäftsjahr und Erfassungszeit,
+das Merkmal "Festgeschrieben" und, falls vorhanden, den Knopf "Beleg
+herunterladen". Ändern oder löschen lässt sich dort nichts.
+
 ## Gegenbuchung
 
 Wenn Du Dich vertippt hast, korrigierst Du eine Privatbewegung
-über eine Gegenbuchung: lege eine neue Buchung mit umgekehrter Art
-und gleichem Betrag an, mit einer kurzen Erläuterung im
-Beschreibungs-Feld (zum Beispiel "Korrektur zur Buchung vom
-12.05.2026"). Beide Einträge bleiben dauerhaft sichtbar. Trage
-danach die korrigierte Bewegung neu ein.
+über eine Gegenbuchung: lege eine neue Privatbewegung mit umgekehrter
+Art und gleichem Betrag an, mit einer kurzen Erläuterung im
+Beschreibungs-Feld (zum Beispiel "Korrektur zu PV-2026-0003"). Den Weg
+dorthin bietet auch die Detailseite mit dem Link "Gegenbuchung". Beide
+Einträge bleiben dauerhaft sichtbar. Trage danach die korrigierte
+Bewegung neu ein.
 
 ## Was Du nicht als Privatbewegung erfasst
 
@@ -82,4 +101,4 @@ Aufzeichnen, ersetzt aber die Beratung zu Abgrenzungsfragen nicht.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -297,6 +297,43 @@ pub fn parse(xml: &str) -> Result<ParsedEInvoice, ParseError> {
     Ok(p)
 }
 
+/// Käuferreferenz BT-10 (bei Behörden die Leitweg-ID) einer CII-Rechnung, also
+/// `ApplicableHeaderTradeAgreement/BuyerReference`. U7 (R1-01): Der Storno-Beleg
+/// übernimmt sie aus der archivierten XML der Original-Rechnung, denn gespeichert
+/// ist sie nur dort. `None`, wenn das Element fehlt oder leer ist oder das XML
+/// nicht lesbar ist.
+pub fn cii_buyer_reference(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    let mut text = String::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                stack.push(local_name(e.name().as_ref()));
+                text.clear();
+            }
+            Ok(Event::Text(t)) => text.push_str(&t.xml10_content()),
+            Ok(Event::CData(c)) => text.push_str(&c.xml10_content()),
+            Ok(Event::GeneralRef(r)) => text.push(resolve_entity(&r)?),
+            Ok(Event::End(_)) => {
+                if ends_with(
+                    &stack,
+                    &["ApplicableHeaderTradeAgreement", "BuyerReference"],
+                ) {
+                    let value = text.trim();
+                    return (!value.is_empty()).then(|| value.to_string());
+                }
+                text.clear();
+                stack.pop();
+            }
+            Ok(Event::Eof) | Err(_) => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
 /// Gutschrift-Typ-Codes (BT-3) nach EN 16931 / UNTDID 1001 (Lauf F5c): 81, 83,
 /// 261, 262, 296, 308, 381, 396, 420, 458, 532. Eine UBL-`CreditNote` ohne Code
 /// gilt als 381.
@@ -1427,5 +1464,41 @@ mod tests {
         let urn = p.guideline_id.expect("Generator schreibt eine URN");
         assert!(urn.contains("en16931"));
         assert!(urn.contains("xrechnung_3.0"));
+    }
+
+    /// U7 (R1-01): BT-10 aus der eigenen XML zurücklesen, auch mit Entitäten.
+    #[test]
+    fn cii_buyer_reference_reads_bt10_of_own_xml() {
+        let xml = |reference: &str| {
+            crate::einvoice::generator::to_xrechnung(
+                "RE-2026-0001",
+                &invoice_two_items(),
+                &seller_klein(),
+                &buyer(),
+                reference,
+                &[],
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            cii_buyer_reference(&xml("991-12345-67")).as_deref(),
+            Some("991-12345-67")
+        );
+        assert_eq!(
+            cii_buyer_reference(&xml("Amt <A> & B")).as_deref(),
+            Some("Amt <A> & B")
+        );
+        assert_eq!(cii_buyer_reference(&xml("N/A")).as_deref(), Some("N/A"));
+        // Ohne Element, leer oder kaputt: kein Wert (der Aufrufer nimmt „N/A“).
+        assert_eq!(cii_buyer_reference(UBL_FIXTURE), None);
+        assert_eq!(
+            cii_buyer_reference(
+                "<r><ram:ApplicableHeaderTradeAgreement><ram:BuyerReference> \
+                 </ram:BuyerReference></ram:ApplicableHeaderTradeAgreement></r>"
+            ),
+            None
+        );
+        assert_eq!(cii_buyer_reference("<r><a>&unbekannt;</a></r>"), None);
+        assert_eq!(cii_buyer_reference(""), None);
     }
 }

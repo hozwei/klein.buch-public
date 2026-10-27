@@ -132,7 +132,10 @@ verbraucht, danach unveränderlich; kein DELETE).
 **`quotes`** + **`quote_items`** — analog zu Rechnungen, eigener Belegkreis
 `AN-…`, eigener Lifecycle (`draft → sent → accepted → converted`/`rejected`/`canceled`).
 Ein zurückgezogener Entwurf (`canceled`, `locked_at` NULL) gilt als verworfen;
-`canceled` ist endgültig (Migration 0032).
+`canceled` ist endgültig (Migration 0032). Die Angebotsliste liefert dafür
+`locked_at` mit (§2g). Der Status `sent` bedeutet festgeschrieben, nicht
+versendet; die Oberfläche nennt ihn „Fertiggestellt“ und liest den Versand aus
+`email_log` (ADR 0041 Nr. 170).
 
 **`expenses`** — Kosten (Eingangsseite). Felder: `id`, `expense_number`,
 `date`, `paid_date`, `category` (z. B. `office`, `travel`, `equipment`,
@@ -213,7 +216,8 @@ Abstand am häufigsten geschriebene; **niemals** Passphrase oder Token in
 `afa_total_cents`, `surplus_cents`, `assets_locked`,
 `depreciation_entries_locked`, `app_version`, `schema_version`, `notes`.
 Auswertungen und Exporte abgeschlossener Jahre gleichen die live gerechneten
-Eckwerte damit ab (Lauf F, KB-0031, `gobd.md` §6.1). **Trigger:**
+Eckwerte damit ab (Lauf F, KB-0031, `gobd.md` §6.1); die EÜR-Ansicht zeigt den
+Abgleich als Lesefeld `snapshotCheck` (§2g). **Trigger:**
 `trg_fiscal_year_locks_no_update`/`_no_delete`.
 
 **`email_log`** — Versand-Protokoll. Felder: `id`, `created_at`, `account_id`,
@@ -231,7 +235,8 @@ Lauf und Ablage (Erfolg und Fehlschlag). Felder: `id`, `created_at`,
 SFTP-Host), `file_name`, `full_path` (voller Pfad bzw. `sftp://`-URI),
 `size_bytes`, `status` (`ok`/`failed`), `detail` (Fehlertext bei `failed`).
 **Trigger:** `trg_backup_log_no_update`/`_no_delete`. **Niemals** die
-Passphrase.
+Passphrase. Aus `backup_log` stammt die letzte gute Kopie eines Ziels, dessen
+letzter Lauf scheiterte (Lesefeld `offsiteLastCopyAt`, §2g).
 
 ### 2f. Infrastruktur
 
@@ -305,6 +310,26 @@ Kosten-Abo im Modus „Erinnerung“ fällig, Migration 0032), `rule_type`, `lab
 **`payment_accounts`** — höchstens ein Konto mit `is_default = 1`
 (`uq_payment_accounts_default`, Migration 0032); ein inaktives Konto ist nie
 Standard (`ensure_one_default`).
+
+### 2g. Abgeleitete Lesefelder (Lauf 2026.11, ohne Migration)
+
+Für die Oberfläche liefern einige Lese-Commands Felder, die keine eigene Spalte
+haben, sondern aus bestehenden Daten abgeleitet werden (ADR 0041 Nr. 80–86).
+Schema und Schreibwege bleiben unverändert (Schema v32).
+
+| Feld (Frontend-Typ) | Command | Quelle | ADR 0041 |
+|---|---|---|---|
+| `QuoteListItem.lockedAt` | `quotes_list` | `quotes.locked_at`: `canceled` ohne Wert = verworfener Entwurf, mit Wert = zurückgezogenes Angebot | Nr. 83 |
+| `PdfTemplateMeta.supportsStorno`, `stornoFallback` | `pdf_templates_list` | Quelltext der Vorlage (nutzt sie `storno_of`?) bzw. die eingebaute Ersatzvorlage, mit der Stornos entstehen | Nr. 84 |
+| `OffsiteResult.suspended` | `backup_create_now` | Pause nach einem Restore bis zur Freigabe: Spiegelung ausgesetzt, kein Fehlschlag (`error` nennt dann den Grund) | Nr. 85 |
+| `BackupSettings.offsiteLastCopyAt`, `offsiteAgeDays` | `backup_get_settings` | älteste der je Ziel jüngsten Kopien: letztes Ergebnis je Ziel (`app_settings.backup_offsite_results`), war es ein Fehlschlag, der jüngste erfolgreiche Eintrag in `backup_log`; Alter in Berliner Kalendertagen wie der Status `stale` | Nr. 86 |
+| `EuerReport.isKleinunternehmer`, `snapshotCheck` | `euer_compute_report` | `seller_profile` (§19 je Jahr, Verzicht berücksichtigt) bzw. `fiscal_year_locks` (Abgleich, `null` bei offenem Jahr); ohne Audit und Hinweis | Nr. 80 |
+| `ParsedEInvoice.taxCategories`, `intraCommunity` | `expenses_parse_einvoice` | Steuerkategorien der eingelesenen Rechnung (UNTDID 5305), Kennzeichen für Kategorie K; nicht gespeichert, nur Hinweis | Nr. 82 |
+| `AssetDisposalPreview` (neuer Command) | `assets_disposal_preview` | `assets` und `depreciation_entries` über `plan_disposal`, ohne zu buchen; `blockedReason` mit den Texten von `assets_dispose` | Nr. 81 |
+
+Berater- und Mandantennummer für den DATEV-Export stehen nicht in der Datenbank:
+Die Oberfläche merkt sie im Browser (`localStorage`) und übergibt sie je Export
+(ADR 0041 Nr. 113).
 
 ---
 
@@ -457,7 +482,7 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft). Quelle:
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). Quelle:
 `klein-buch/src-tauri/migrations/0001..0032.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
 `src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:

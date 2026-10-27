@@ -313,7 +313,9 @@
     <h2 id="exp-h">Exportieren</h2>
     <p class="info-banner dl-note">
       Jede Datei wird beim Klick neu erzeugt und kann <strong>einmal</strong> abgerufen
-      werden. Bricht der Download ab, klickst du einfach noch einmal.
+      werden. Bricht der Download ab, klickst du einfach noch einmal. Exportieren ist
+      geschützt: Beim ersten Export fragt Klein.Buch dein Daten-Passwort und den App-Code
+      ab; danach gilt die Bestätigung 5 Minuten lang.
     </p>
     <div class="exp-row">
       <span class="exp-label" id="exp-pdf-l">Vollständige EÜR (PDF)</span>

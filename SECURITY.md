@@ -40,7 +40,7 @@ Version, nie durch Ändern eines bestehenden Tags: Images tragen nur volle
 Versionen, es gibt kein `:latest`, und Tags werden nie verschoben oder gelöscht
 (ADR 0039, E15). Aktualisiert wird in der eigenen Container-Verwaltung;
 `docs/operations-guide.md` §8 beschreibt Update und Rückfall. Die App kann neue
-Versionen in der Inbox melden (opt-in unter Einstellungen → Sicherheit &
+Versionen als Hinweis melden (opt-in unter Einstellungen → Sicherheit &
 Anmeldung).
 
 ## Image prüfen

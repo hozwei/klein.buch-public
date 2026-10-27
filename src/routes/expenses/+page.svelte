@@ -90,7 +90,7 @@
 <PageBar
   title="Kosten"
   secondary={[
-    { label: "Wiederkehrende Abos", href: "/expenses/recurring" },
+    { label: "Kosten-Abos", href: "/expenses/recurring" },
     { label: "E-Rechnung importieren", href: "/expenses/import" },
   ]}
 >
@@ -109,7 +109,7 @@
 {#if dueAbos > 0}
   <a class="due-banner" href="/expenses/recurring">
     <span class="due-dot" aria-hidden="true"></span>
-    {dueAbos} {dueAbos === 1 ? "wiederkehrendes Abo ist" : "wiederkehrende Abos sind"} fällig
+    {dueAbos} {dueAbos === 1 ? "Kosten-Abo ist" : "Kosten-Abos sind"} fällig
     <span class="due-cta">ansehen und buchen <span aria-hidden="true">→</span></span>
   </a>
 {/if}

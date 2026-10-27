@@ -7,7 +7,8 @@
 //! - `hinweis_text()` liefert den exakten Klausel-Text, der laut PRD-Hardline
 //!   **wortgleich** auf XRechnung (BT-22 Note) UND PDF erscheinen muss.
 //! - `waiver_deadline()` berechnet das Ende der 5-Jahres-Bindung nach
-//!   §19 Abs. 2 UStG (Verzicht auf die Kleinunternehmerregelung).
+//!   § 19 Abs. 3 UStG (Verzicht auf die Kleinunternehmerregelung; bis 2024
+//!   Abs. 2).
 //!
 //! `assert_no_vat()` (§14c-Schutz auf `invoice_items`) prüft seit Block 3,
 //! dass bei aktivem §19 weder ein USt-Betrag noch ein nicht-Exempt-Steuer-
@@ -79,7 +80,11 @@ pub fn must_show_hinweis(status: &KleinunternehmerStatus) -> bool {
 }
 
 /// 5-Jahres-Bindung nach Verzicht: Der Unternehmer ist ab `since` für mindestens
-/// 5 volle Kalenderjahre an die Regelbesteuerung gebunden (§19 Abs. 2 UStG).
+/// 5 volle Kalenderjahre an die Regelbesteuerung gebunden (§ 19 Abs. 3 UStG).
+/// Der gesetzliche Wegfall (Vorjahresumsatz über 25.000 € oder Überschreiten von
+/// 100.000 € im laufenden Jahr, § 19 Abs. 1 UStG) bindet nicht; der Grund des
+/// Wechsels ist aber nicht gespeichert, die Sperre gilt deshalb immer (ADR 0041
+/// Nr. 220).
 ///
 /// Wir geben das **erste Datum** zurück, an dem ein Rückwechsel zu §19 wieder
 /// möglich ist — konservativ der 01.01. des 6. Folgejahres.

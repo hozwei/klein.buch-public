@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
   import LoadingState from "#lib/LoadingState.svelte";
   import Toggle from "#lib/Toggle.svelte";
@@ -17,12 +17,14 @@
   import Table from "#lib/Table.svelte";
   import { iban as fmtIban } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
+  import { focusRowAfterRemoval } from "#lib/focusAfterRemoval.ts";
 
   // U4 (V2-06/V2-10/V2-11/V2-12/V2-19): Titel wie im Einstellungs-Hub („Konten“), Liste im
   // Table-Baustein, „Abbrechen“ vor der Hauptaktion, Knöpfe während einer Aktion
   // `ariaDisabled` (Fokus bleibt), Deaktivieren ohne Rückfrage mit „Rückgängig“ im Toast.
 
   let accounts = $state<PaymentAccount[]>([]);
+  let inactiveChk = $state<HTMLInputElement | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let busy = $state(false);
@@ -168,6 +170,7 @@
   /** Aktivieren/Deaktivieren ist umkehrbar: keine Rückfrage, „Rückgängig“ im Toast (design.md §5). */
   async function setActive(a: PaymentAccount, active: boolean, undo = false) {
     if (busy) return;
+    const index = accounts.findIndex((x) => x.id === a.id);
     busy = true;
     try {
       await paymentAccountsSetActive(a.id, active);
@@ -179,6 +182,10 @@
         });
       }
       await reload();
+      // U7 (R3-04): Blendet „Inaktive Konten anzeigen“ = aus die Zeile aus, nie den
+      // Fokus auf <body> fallen lassen.
+      await tick();
+      focusRowAfterRemoval(index, inactiveChk);
     } catch (e) {
       flash(`Konto ${active ? "aktivieren" : "deaktivieren"} fehlgeschlagen: ${String(e)}`, "error");
     } finally {
@@ -264,7 +271,7 @@
 </section>
 
 <label class="chk show-inactive">
-  <input type="checkbox" bind:checked={showInactive} onchange={reload} /> Inaktive Konten anzeigen
+  <input type="checkbox" bind:this={inactiveChk} bind:checked={showInactive} onchange={reload} /> Inaktive Konten anzeigen
 </label>
 
 {#if loading}

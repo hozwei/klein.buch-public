@@ -95,7 +95,7 @@
     } finally {
       loading = false;
     }
-    if (detail && !detail.invoice.lockedAt && !detail.invoice.voidedAt) await check();
+    if (detail && !detail.invoice.lockedAt && !detail.invoice.voidedAt && !detail.invoice.isStornoFor) await check();
   }
 
   // Nur zur Anzeige; fehlt der Bezug, bleibt der Hinweis ohne Nummer.
@@ -243,7 +243,8 @@
 
   // Wo sich ein Grund beheben lässt (V1-03): Firmendaten, Kontakt oder Entwurf.
   function targetLink(t: ReasonTarget, inv: Invoice): { href: string; label: string } | null {
-    if (t === "seller") return { href: "/settings/seller", label: "Firmendaten ergänzen" };
+    // U6-005: nach dem Speichern der Firmendaten zurück zu dieser Rechnung.
+    if (t === "seller") return { href: `/settings/seller?next=/invoices/${inv.id}`, label: "Firmendaten ergänzen" };
     if (t === "buyer") return { href: `/contacts/${inv.contactId}`, label: "Kontakt ergänzen" };
     if (!inv.isStornoFor) return { href: `/invoices/${inv.id}/edit`, label: "Entwurf bearbeiten" };
     return null;
@@ -270,9 +271,13 @@
     if (!inv || inv.voidedAt) return { secondary: [], more: [] };
     if (!inv.lockedAt) {
       const secondary: ActionMenuItem[] = [];
-      if (!inv.isStornoFor) secondary.push({ label: "Bearbeiten", href: `/invoices/${inv.id}/edit` });
-      // Während der Prüfung nicht gesperrt (Fokus bleibt, ADR 0041 Nr. 33); check() wartet.
-      secondary.push({ label: validating ? "Prüfe …" : "Prüfen", onSelect: runValidation });
+      // U7 (R1-04): Storno-Entwurf ohne „Bearbeiten“/„Prüfen“ — Ergebnis stünde in der
+      // Karte „Ausstellen“, die es für ihn nicht gibt.
+      if (!inv.isStornoFor) {
+        secondary.push({ label: "Bearbeiten", href: `/invoices/${inv.id}/edit` });
+        // Während der Prüfung nicht gesperrt (Fokus bleibt, ADR 0041 Nr. 33); check() wartet.
+        secondary.push({ label: validating ? "Prüfe …" : "Prüfen", onSelect: runValidation });
+      }
       return {
         secondary,
         more: [{ label: "Entwurf verwerfen", onSelect: openVoid, danger: true, disabled: voiding || issuing }],
@@ -336,7 +341,11 @@
 >
   {#snippet actions()}
     {#if detail && !detail.invoice.voidedAt}
-      {#if !detail.invoice.lockedAt}
+      {#if !detail.invoice.lockedAt && detail.invoice.isStornoFor}
+        <!-- U7 (R1-04): Ein Storno-Entwurf wird über „Stornieren“ der Original-Rechnung
+             abgeschlossen (der Server lehnt „Ausstellen“ hier ab). -->
+        <Button href={`/invoices/${detail.invoice.isStornoFor}/cancel`}>Weiter zum Stornieren</Button>
+      {:else if !detail.invoice.lockedAt}
         <Button onclick={lockAndIssue} ariaDisabled={issuing}>
           {issuing ? "Stelle aus …" : "Rechnung ausstellen"}
         </Button>
@@ -377,6 +386,10 @@
         <a class="kb-link" href={`/invoices/${inv.isStornoFor}`}>die ursprüngliche Rechnung</a>.
       {/if}
       {#if inv.lockedAt && !sentAtIso}{" "}Schick ihn dem Kunden mit „Senden“.{/if}
+      {#if !inv.lockedAt && !inv.voidedAt}
+        {" "}Er ist noch ein Entwurf und wird über „Stornieren“ der Original-Rechnung abgeschlossen:
+        <a class="kb-link kb-target" href={`/invoices/${inv.isStornoFor}/cancel`}>Weiter zum Stornieren</a>.
+      {/if}
     </Banner>
   {/if}
   {#if inv.canceledByStornoId}
@@ -569,7 +582,7 @@
     </div>
   </section>
 
-  {#if !inv.lockedAt && !inv.voidedAt}
+  {#if !inv.lockedAt && !inv.voidedAt && !inv.isStornoFor}
     <!-- V1-06/V1-03: Karte „Ausstellen“ unter den Positionen — Prüfung, Leitweg-ID (BT-10,
          der Entwurf speichert sie nicht, ADR 0041 Nr. 91) und die Hauptaktion am Ende. -->
     <section class="card issue-card" aria-labelledby="issue-h">
@@ -685,7 +698,7 @@
           {#each sendLog as e (e.id)}
             <tr>
               <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-              <td data-label="Status">{#if e.status === "success"}<Badge tone="success">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
+              <td data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
               <td class="cards-full" data-label="Antwort des Anbieters">

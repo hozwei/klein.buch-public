@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { goto } from "$app/navigation";
   import {
     recurringList,
@@ -13,6 +13,8 @@
   import { askBacklogChoice } from "#lib/recurringChoice.ts";
   import { euro, date } from "#lib/format.ts";
   import { daysUntilBerlin } from "#lib/date.ts";
+  import { dayClock } from "#lib/dayClock.svelte.ts";
+  import { focusRowAfterRemoval } from "#lib/focusAfterRemoval.ts";
   import { expenseCategoryLabel, frequencyLabel } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
@@ -21,6 +23,7 @@
   import PageBar from "#lib/PageBar.svelte";
   import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
 
   let subs = $state<RecurringSubscription[]>([]);
   let loading = $state(true);
@@ -30,6 +33,7 @@
   let checking = $state(false);
   // Abos, die nach einer Wiederherstellung auf „Rückstand …“ warten (F1d).
   let reviewIds = $state<Set<string>>(new Set());
+  let inactiveChk = $state<HTMLInputElement | null>(null);
 
   async function load() {
     loading = true;
@@ -47,9 +51,10 @@
   onMount(load);
 
   // Tage bis zur Fälligkeit (negativ = überfällig) ab dem Berliner Datum,
-  // nicht in der Zeitzone des Geräts (Lauf F, D-15).
+  // nicht in der Zeitzone des Geräts (Lauf F, D-15). U7 (R4-07): über `dayClock`,
+  // damit Fälligkeit und „Buchen“ über Mitternacht mitlaufen.
   function daysUntil(iso: string): number {
-    return daysUntilBerlin(iso);
+    return daysUntilBerlin(iso, dayClock.now);
   }
 
   function isDue(s: RecurringSubscription): boolean {
@@ -126,19 +131,26 @@
       resumeMode = choice;
     }
     const pausing = s.active === 1;
+    const index = subs.findIndex((x) => x.id === s.id);
     busyId = s.id;
     try {
       await recurringSetActive(s.id, !pausing, resumeMode);
       // U4 (V2-12, design.md §5): Pausieren ist umkehrbar — keine Rückfrage, dafür
       // „Rückgängig“ im Toast (setzt das Abo fort, bei Rückstand mit der Wahl).
+      // U7 (R3-01): mit dem festgehaltenen Abo — bei ausgeblendeten pausierten Abos
+      // steht es nach dem Neuladen nicht mehr in `subs`.
       if (pausing) {
+        const paused: RecurringSubscription = { ...s, active: 0 };
         flash(`„${s.label}“ pausiert.`, "ok", undefined, {
-          action: { label: "Rückgängig", run: () => void resumeById(s.id) },
+          action: { label: "Rückgängig", run: () => void toggleActive(paused) },
         });
       } else {
         flash(`„${s.label}“ fortgesetzt.`);
       }
       await load();
+      // U7 (R3-04): Verschwindet die Zeile, nie den Fokus auf <body> fallen lassen.
+      await tick();
+      focusRowAfterRemoval(index, inactiveChk);
     } catch (e) {
       flash("Statuswechsel fehlgeschlagen: " + String(e), "error");
     } finally {
@@ -146,16 +158,32 @@
     }
   }
 
-  async function resumeById(id: string) {
-    const cur = subs.find((x) => x.id === id);
-    if (cur && cur.active !== 1) await toggleActive(cur);
-  }
-
   async function bookNow(s: RecurringSubscription) {
+    if (busyId) return;
+    // U6-003 (ADR 0041 Nr. 180): „Buchen“ legt Kosten an, die sofort festgeschrieben sind
+    // (ADR 0019) — Rückfrage mit den Eckwerten wie bei „Kosten festschreiben“.
+    const ok = await confirmDialog({
+      title: "Kosten festschreiben?",
+      body:
+        "Danach lässt sich nichts mehr ändern. Eine Korrektur geht nur per Storno und " +
+        "neuer Erfassung. Weicht der Betrag diesmal ab, brich ab und erfasse die Kosten " +
+        "unter „Kosten“ mit „+ Neue Kosten“; die nächste Fälligkeit setzt du dann im Abo " +
+        "unter „Bearbeiten“ weiter.",
+      bullets: [
+        `Abo: ${s.label}`,
+        `Belegdatum: ${date(s.nextDueDate)}`,
+        `Brutto: ${euro(s.expectedAmountCents)}`,
+        "Bezahlt: noch offen",
+        ...(s.reverseCharge13bDefault === 1 ? ["Als §13b (Reverse-Charge) markiert"] : []),
+      ],
+      confirmLabel: "Festschreiben",
+      cancelLabel: "Abbrechen",
+    });
+    if (!ok) return;
     busyId = s.id;
     try {
       const expense = await recurringRunNow(s.id);
-      flash("Als Kosten gebucht: " + expense.expenseNumber);
+      flash("Kosten festgeschrieben: " + expense.expenseNumber);
       await goto(`/expenses/${expense.id}`);
     } catch (e) {
       flash("Buchen fehlgeschlagen: " + String(e), "error");
@@ -209,7 +237,7 @@
   }
 </script>
 
-<PageBar back="/expenses" backLabel="Kosten" title="Wiederkehrende Abos">
+<PageBar back="/expenses" backLabel="Kosten" title="Kosten-Abos">
   {#snippet actions()}
     <Button variant="primary" href="/expenses/recurring/new">+ Neues Abo</Button>
   {/snippet}
@@ -240,7 +268,7 @@
 {:else}
   <div class="toolbar">
     <label class="chk">
-      <input type="checkbox" bind:checked={includeInactive} onchange={load} /> Pausierte anzeigen
+      <input type="checkbox" bind:this={inactiveChk} bind:checked={includeInactive} onchange={load} /> Pausierte anzeigen
     </label>
     {#if autoDueCount > 0}
       <Button variant="secondary" size="sm" onclick={bookAllDue} ariaDisabled={checking}
@@ -253,7 +281,7 @@
     <p id="rec-bookall-hint" class="toolbar-hint">Sonst bucht der Hintergrund-Lauf fällige Auto-Abos von selbst.</p>
   {/if}
 
-  <Table caption="Wiederkehrende Abos" cards cardGrid>
+  <Table caption="Kosten-Abos" cards cardGrid>
     <thead>
       <tr>
         <th>Abo</th>

@@ -21,7 +21,7 @@
   // Feldfehler statt Toast (ADR 0041 Nr. 22), erst nach einem Versuch ohne Wahl.
   let pkgError = $state("");
 
-  // Nur aktive Pakete mit veröffentlichter Revision sind einfügbar.
+  // Nur aktive (nicht archivierte) Pakete mit einer Version sind einfügbar.
   let active = $derived(
     packages.filter((p) => p.status === "active" && p.currentRevision != null),
   );
@@ -107,7 +107,7 @@
 {:else if loaded}
   <div class="pkg">
     <span class="hint">
-      Keine veröffentlichten Pakete —
+      Keine aktiven Pakete —
       <a href="/packages">Paket-Katalog öffnen</a>, um eins anzulegen.
     </span>
   </div>

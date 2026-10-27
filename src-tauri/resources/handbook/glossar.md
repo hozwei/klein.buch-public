@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, einheit]
 ---
 
 # Glossar
@@ -22,10 +22,28 @@ verwendet, gilt die Erklärung von hier.
 
 Eine Rechnung, die in regelmäßigen Abständen automatisch wieder
 erzeugt wird (zum Beispiel jeden Monat oder jedes Quartal). Du legst
-eine Vorlage an und sagst Klein.Buch, in welchem Rhythmus daraus
-neue Rechnungen werden sollen. Wird auch "wiederkehrende Rechnung"
-genannt. Klein.Buch kann diese Rechnungen auf Wunsch direkt
-abschicken, sobald sie fällig sind.
+eine Abo-Vorlage an und sagst Klein.Buch, in welchem Rhythmus daraus
+neue Rechnungen werden sollen. Du erreichst sie über "Rechnungen" und
+"Abo-Rechnungen". Je Vorlage wählst Du einen Modus: "Nur Entwurf",
+"Automatisch ausstellen" oder "Ausstellen + senden" (dann schickt
+Klein.Buch die Rechnung direkt ab, sobald sie fällig ist). Für
+regelmäßige Ausgaben gibt es das Kosten-Abo (siehe dort).
+
+## Abgang
+
+Das Ausscheiden einer Anschaffung aus dem Betrieb: Verkauf,
+Verschrottung oder Privatentnahme bzw. Geschenk. Du buchst ihn auf
+der Seite der Anschaffung über das Menü "Mehr" und "Veräußern /
+Entsorgen". Vor dem Buchen zeigt Klein.Buch den Restbuchwert (siehe
+dort) zum gewählten Datum; mit "Abgang bestätigen" wird gebucht.
+
+## Aktion bestätigen
+
+Der Dialog, mit dem Du eine geschützte Aktion noch einmal bestätigst,
+zum Beispiel einen Export, eine Wiederherstellung oder eine Änderung
+der Bankverbindung. Er nennt die Aktion im Titel und fragt Dein
+Daten-Passwort und den App-Code (oder einen Einmal-Code) ab. Danach
+gilt die Bestätigung 5 Minuten lang. "Abbrechen" ändert nichts.
 
 ## AfA (Absetzung für Abnutzung)
 
@@ -42,22 +60,33 @@ Deine EÜR.
 Eine Beleg-Position, die Du nach gefahrenen Kilometern und einem
 Kilometer-Satz abrechnest, wenn Du zum Kunden fährst. Klein.Buch
 rechnet das Produkt automatisch aus, sobald Du Kilometer und Satz
-einträgst.
+einträgst. Den Satz legst Du unter "Einstellungen" und
+"Anfahrtspauschale" fest.
 
 ## Anlage
 
 Ein teurer Gegenstand, den Du nicht im Kaufjahr komplett absetzt,
 sondern über mehrere Jahre verteilt (siehe AfA). Typische Anlagen
-sind Notebook, Werkstattmaschine, Geschäftswagen.
+sind Notebook, Werkstattmaschine, Geschäftswagen. In der Oberfläche
+heißen der Bereich "Anschaffungen" und jedes einzelne Stück
+"Anschaffung" (mit Nummer "AV-…"). Das Wort "Anlage" steht dort nur
+als Steuerbegriff, zum Beispiel beim Knopf "Als Anlage übernehmen" in
+den Kosten oder bei der "Anlage EÜR".
+
+## Anschaffung
+
+So heißt in Klein.Buch ein Wirtschaftsgut, das Du über mehrere Jahre
+abschreibst; der Bereich in der Navigation heißt "Anschaffungen".
+Siehe Anlage und AfA.
 
 ## Anonymisierung (DSGVO)
 
 Das Löschen aller persönlichen Daten eines Kontakts, entweder auf
 Deine eigene Entscheidung oder auf Anforderung der betroffenen
 Person. Klein.Buch ersetzt Name, Adresse und Notizen durch leere
-Felder. Die alten Rechnungen bleiben als Buchhaltungs-Beleg
-unverändert erhalten (das ist gesetzliche Pflicht laut GoBD, kein
-Bug). Siehe auch DSGVO.
+Felder und archiviert den Kontakt. Die alten Rechnungen bleiben als
+Buchhaltungs-Beleg unverändert erhalten (das ist gesetzliche Pflicht
+laut GoBD, kein Bug). Siehe auch DSGVO.
 
 ## App-Code (TOTP)
 
@@ -107,9 +136,11 @@ Klein.Buch Dich.
 
 ## Belegdatum
 
-Das Datum, das oben auf der Rechnung steht. In der Regel der Tag,
-an dem Du die Rechnung schreibst und festschreibst. Nicht zu
-verwechseln mit dem Leistungsdatum (siehe dort).
+Das Datum, das oben auf der Rechnung steht; im Formular heißt das
+Feld "Rechnungsdatum" (beim Angebot "Angebotsdatum"). In der Regel
+der Tag, an dem Du die Rechnung schreibst und ausstellst. Nicht zu
+verwechseln mit dem Leistungsdatum (siehe dort). Bei Kosten ist das
+"Beleg-Datum" das Datum auf der Eingangsrechnung.
 
 ## Brutto und Netto
 
@@ -145,7 +176,10 @@ bist meist Du selbst.
 Ein Daten-Format, das praktisch jeder Steuerberater versteht.
 Klein.Buch erzeugt Dir auf Knopfdruck einen DATEV-Stapel mit allen
 Buchungen des Geschäftsjahres, den Dein Steuerberater direkt in
-sein System importieren kann. Standard-Kontenrahmen ist SKR03.
+sein System importieren kann. Standard-Kontenrahmen ist SKR03. Die
+Berater- und die Mandantennummer, die Dir Dein Steuerberater nennt,
+trägst Du im EÜR-Export ein; Dein Browser merkt sie sich (sie stehen
+nicht in der Datenbank und nicht im Backup).
 
 ## DSGVO (Datenschutz-Grundverordnung)
 
@@ -153,14 +187,22 @@ Das EU-Datenschutz-Gesetz. Es gibt jeder Person das Recht zu
 erfahren, welche Daten Du über sie speicherst (Auskunft, Art. 15),
 und unter bestimmten Bedingungen das Recht, dass Du diese Daten
 löschst (Anonymisierung, Art. 17). Klein.Buch unterstützt beide
-Funktionen über das Menü "Kontakte".
+Funktionen auf der Seite des jeweiligen Kontakts.
+
+## E-Mail-Protokoll
+
+Die Liste aller Versandversuche mit Empfänger, Ergebnis und Antwort
+des Mailservers, auch der gescheiterten. Einträge lassen sich nicht
+ändern oder löschen. Du findest sie unter "Einstellungen" und
+"E-Mail-Protokoll".
 
 ## EÜR (Einnahmen-Überschuss-Rechnung)
 
 Die einfache Steuer-Aufstellung für Kleinunternehmer und kleine
 Selbständige: Einnahmen minus Ausgaben. Du brauchst sie einmal im
 Jahr für Deine Steuererklärung. Klein.Buch erstellt sie auf
-Knopfdruck. Gesetzliche Grundlage: §4 Abs. 3 EStG.
+Knopfdruck; in der Navigation heißt der Bereich "Steuer (EÜR)".
+Gesetzliche Grundlage: §4 Abs. 3 EStG.
 
 ## ELSTER
 
@@ -168,6 +210,14 @@ Das offizielle Online-Portal des Finanzamts. Dort gibst Du Deine
 Steuererklärung digital ab. Klein.Buch exportiert die EÜR in einem
 Format, das Du direkt in das ELSTER-Formular übertragen kannst
 (diese Funktion heißt in der App "Ausfüllhilfe").
+
+## Einheit
+
+Die Mengeneinheit einer Position (Stunde, Stück, Monat, Pauschale
+…). Klein.Buch zeigt sie im Klartext und speichert dahinter den
+genormten Code, den die E-Rechnung verlangt. Eine alte, frei
+eingetippte Einheit wie "Pauschal" meldet das Formular als Fehler am
+Feld und schlägt die passende vor.
 
 ## Factory Reset
 
@@ -185,21 +235,29 @@ Das endgültige Abschließen eines Belegs. Ab diesem Moment kannst
 Du die zentralen Felder (Beträge, Kunde, Datum) nicht mehr ändern.
 Eine festgeschriebene Rechnung lässt sich nur noch durch einen
 Storno neutralisieren. Diese Sperre kommt aus der GoBD und schützt
-Dich vor Vorwürfen bei einer Steuerprüfung.
+Dich vor Vorwürfen bei einer Steuerprüfung. In der Oberfläche heißt
+der Schritt je nach Beleg anders: Eine Rechnung wird "ausgestellt",
+ein Angebot "fertiggestellt" (Status "Fertiggestellt", der Versand
+ist ein eigener Schritt). Kosten und Privatbewegungen sind schon beim
+Erfassen festgeschrieben; deshalb heißen die Knöpfe dort "Kosten
+festschreiben" und "Privatbewegung festschreiben" und fragen vorher
+nach.
 
 ## Geschäftsjahr
 
 In Klein.Buch immer das Kalenderjahr (1. Januar bis 31. Dezember).
-Jede Rechnung, Ausgabe und AfA-Buchung gehört zu genau einem
-Geschäftsjahr. Die Rechnungs-Nummern starten in jedem neuen
-Geschäftsjahr von vorn (zum Beispiel "2026-0001").
+Jede Rechnung, jede Kostenposition und jede AfA-Buchung gehört zu
+genau einem Geschäftsjahr. Die Rechnungs-Nummern starten in jedem
+neuen Geschäftsjahr von vorn (zum Beispiel "RE-2026-0001").
 
 ## Geschäftsjahr-Abschluss
 
 Das endgültige Festschreiben eines kompletten Geschäftsjahres.
 Danach kannst Du in dem abgeschlossenen Jahr nichts mehr ändern,
-auch keine alten Belege nachtragen. Vorher solltest Du den
-Steuerberater-Export erzeugt und die EÜR übermittelt haben.
+auch keine alten Belege nachtragen. Vorher solltest Du das
+Steuerberater-Paket (siehe dort) erzeugt und die EÜR übermittelt
+haben. Abgeschlossene Jahre stehen auf der Seite "Geschäftsjahr" im
+Abschlussprotokoll.
 
 ## GoBD (Grundsätze ordnungsmäßiger Buchführung)
 
@@ -210,14 +268,16 @@ Festschreibung unveränderlich, Storno ersetzt Löschung, alles wird
 Klein.Buch erzwingt diese Regeln direkt im Code; Du kannst sie
 nicht aus Versehen brechen.
 
-## Hinweise (Inbox)
+## Hinweise
 
 Die Liste der Mitteilungen, die Klein.Buch im Hintergrund für Dich
 erzeugt: fälliges Backup, gescheitertes Backup-Ziel, fehlgeschlagener
 Mail-Versand, neue Version (wenn Du die Versionsprüfung eingeschaltet
-hast). Du findest sie über das
-Menü "Hinweise". Jeder Hinweis bleibt stehen, bis Du ihn als
-gelesen markierst.
+hast). Du findest sie in der Navigation unter "Hinweise"; daneben
+steht die Zahl der offenen Hinweise. Jeder Hinweis bleibt stehen, bis
+Du ihn abhakst ("Abhaken" oder "Alle abhaken"); abgehakte Hinweise
+zeigt "Abgehakte anzeigen". Welche Hinweise erscheinen, stellst Du
+unter "Erinnerungen einstellen" ein.
 
 ## Kleinbetragsrechnung
 
@@ -238,6 +298,20 @@ Umsatz). Wer Kleinunternehmer ist, weist auf Rechnungen
 keine Umsatzsteuer aus, darf aber auch keine Vorsteuer abziehen.
 Gesetzliche Grundlage: §19 UStG.
 
+## Korrigiert neu erfassen
+
+Der Knopf auf einer stornierten Kostenposition. Er öffnet das
+Formular für neue Kosten mit den Werten des Originals, damit Du nach
+einem Storno nur noch den Fehler korrigierst. Es entsteht eine neue,
+eigenständige Kostenposition.
+
+## Kosten-Abo
+
+Eine Vorlage für regelmäßige Ausgaben wie Miete oder Software, unter
+"Kosten" und "Kosten-Abos". Im Modus "Automatisch" bucht
+Klein.Buch die Kosten am Stichtag selbst, im Modus "Erinnerung"
+erscheint ein Hinweis "Abo fällig" und Du buchst per Knopf.
+
 ## KoSIT
 
 Die Koordinierungsstelle für IT-Standards, die offizielle deutsche
@@ -251,8 +325,25 @@ direkt; er meldet sich nur, wenn etwas nicht passt.
 Der Zeitpunkt oder Zeitraum, an dem Du die Leistung tatsächlich
 erbracht hast. Pflichtangabe auf jeder Rechnung. Wenn Du die
 Leistung am gleichen Tag erbringst und abrechnest, sind
-Leistungs- und Belegdatum gleich. Bei Monats-Arbeiten (zum
-Beispiel "Beratung im April 2026") ist es ein Zeitraum.
+Leistungs- und Belegdatum gleich; Klein.Buch belegt das Feld deshalb
+mit dem Rechnungsdatum vor, bis Du es änderst. Bei Monats-Arbeiten
+(zum Beispiel "Beratung im April 2026") ist es ein Zeitraum; den
+nennst Du in der Beschreibung der Position.
+
+## Leitweg-ID
+
+Die Kennung, mit der eine Behörde E-Rechnungen an die richtige
+Stelle leitet. Nur Rechnungen an öffentliche Auftraggeber brauchen
+sie. Du trägst sie beim Ausstellen in der Karte "Ausstellen" ein;
+bei allen anderen Kunden bleibt das Feld leer.
+
+## Menü "Mehr"
+
+Das Menü oben auf einer Seite, in dem seltene und gefährliche
+Aktionen stehen (zum Beispiel "PDF herunterladen" oder
+"Stornieren"). Gefährliche Aktionen stehen dort unten. Auf dem
+Smartphone liegen dort auch die Nebenaktionen; sichtbar bleibt nur
+der nächste Schritt.
 
 ## Mustang
 
@@ -274,10 +365,13 @@ oder wenn das letzte erfolgreiche Backup zu lange her ist.
 ## Paket
 
 Eine wiederverwendbare Leistung mit fertigem Titel, Beschreibung
-und Preis. Du legst ein Paket einmal an und ziehst es per Klick in
-jedes Angebot oder jede Rechnung. Wenn Du das Paket später
-änderst, bleiben die alten Belege als historische Kopie unverändert
-(das schützt Deine Buchführung vor nachträglicher Verfälschung).
+und Preis. Du legst ein Paket einmal an und fügst es mit "+ Paket"
+in jedes Angebot oder jede Rechnung ein. Jede Änderung speichert
+Klein.Buch als neue Version; eine frühere Version holst Du mit
+"Wiederverwenden" zurück, auch das ergibt eine neue Version. Die alten
+Belege bleiben als historische Kopie unverändert (das schützt Deine
+Buchführung vor nachträglicher Verfälschung). Pakete ordnest Du in
+Kategorien, die Du umbenennen und sortieren kannst.
 
 ## Passphrase
 
@@ -306,8 +400,9 @@ Steuernummer, Rechnungsdatum, Rechnungsnummer,
 Leistungsbeschreibung, Leistungsdatum, Betrag. Bei
 Kleinunternehmern kommt der §19-Hinweis dazu. Klein.Buch prüft
 Pflichtangaben vor jeder Festschreibung; ohne vollständige Angaben
-geht die Festschreibung nicht durch. Gesetzliche Grundlage: §14
-UStG.
+geht die Festschreibung nicht durch. Bei einem Rechnungs-Entwurf
+zeigt die Karte "Ausstellen" schon beim Öffnen, was noch fehlt.
+Gesetzliche Grundlage: §14 UStG.
 
 ## Privatbewegung
 
@@ -317,15 +412,19 @@ Ausgabe, sondern nur eine Umbuchung. Eine Privatbewegung verändert
 den Gewinn nicht und taucht deshalb nicht in der EÜR auf. Es gibt
 zwei Richtungen: Privatentnahme (Geld geht von geschäftlich nach
 privat) und Privateinlage (Geld geht von privat nach
-geschäftlich).
+geschäftlich). Der Bereich heißt "Privatbewegungen". Eine
+Privatbewegung ist mit "Privatbewegung festschreiben" sofort
+festgeschrieben; einen Fehler korrigierst Du mit einer Gegenbuchung
+in die andere Richtung.
 
 ## Rechnungseingang
 
 Der Weg, auf dem empfangene E-Rechnungen in Klein.Buch kommen: Du
 lädst die XRechnung-Datei oder die ZUGFeRD-PDF im Browser hoch, über
 "Kosten" und "E-Rechnung importieren". Klein.Buch liest die Angaben
-aus, prüft sie mit KoSIT und legt nach Deiner Bestätigung einen
-Eingangsbeleg in den Kosten an. Einen überwachten Ordner (früher
+aus ("Einlesen und prüfen"), prüft sie mit KoSIT und legt mit
+"Kosten festschreiben" nach einer Rückfrage einen Eingangsbeleg in
+den Kosten an. Einen überwachten Ordner (früher
 "Drop-Folder" genannt) gibt es nicht.
 
 ## Regelbesteuerung
@@ -335,7 +434,9 @@ Umsatzsteuer aus, führt sie ans Finanzamt ab und darf gezahlte
 Umsatzsteuer aus Eingangsrechnungen als Vorsteuer abziehen. Wenn
 Du als Kleinunternehmer freiwillig regelbesteuert sein willst,
 heißt das "Verzicht auf §19". Die Bindung an die Regelbesteuerung
-beträgt dann mindestens 5 Jahre.
+beträgt dann mindestens 5 Jahre. Fällt §19 weg, weil Dein Umsatz im
+laufenden Jahr 100.000 € übersteigt, ist das kein Verzicht und
+bindet nicht.
 
 ## Wiederherstellen (Restore)
 
@@ -346,6 +447,13 @@ zurückwechseln kannst. Du brauchst die Passphrase, mit der das
 Backup ursprünglich verschlüsselt wurde. Der englische Begriff
 "Restore" bedeutet dasselbe und taucht in manchen technischen
 Hinweisen noch auf.
+
+## Restbuchwert
+
+Der Wert einer Anschaffung, der nach den bisherigen Abschreibungen
+noch nicht abgesetzt ist. Bei einem Abgang zählt er in der EÜR als
+Ausgabe; ein Verkaufserlös darüber ist Gewinn. Klein.Buch zeigt ihn
+vor dem Buchen eines Abgangs zum gewählten Datum an.
 
 ## Roh-XML
 
@@ -384,6 +492,14 @@ nicht lesbar ist. Selbst wenn jemand das Daten-Volume oder einen
 Backup-Ordner kopiert, kann er ohne die Passphrase nichts damit
 anfangen.
 
+## Steuerberater-Paket
+
+Ein ZIP-Paket für Deinen Steuerberater mit Deckblatt, "Anlage
+EÜR"-PDF, DATEV-Stapel, ELSTER-Ausfüllhilfe, Einzelaufstellungen und
+den Belegen. Du erzeugst es unter "Steuer (EÜR)", "Für die
+Steuererklärung exportieren" und "Paket herunterladen". Wie jeder
+Export lässt es sich genau einmal herunterladen.
+
 ## Steuernummer
 
 Die Nummer, die Dir Dein Finanzamt zugeteilt hat (zum Beispiel
@@ -394,19 +510,37 @@ alternativ angeben.
 
 ## Storno
 
-Eine Gegenrechnung. Sie neutralisiert eine bereits festgeschriebene
+Eine Gegenrechnung. Sie neutralisiert eine bereits ausgestellte
 Rechnung mit umgekehrtem Vorzeichen. Klein.Buch erzeugt sie als
-eigenen Beleg mit eigener Nummer in der Form "ST-2026-0001". Das
-nachträgliche Löschen einer Rechnung ist gesetzlich verboten;
-Storno ist der einzige zulässige Weg, einen Fehler zu korrigieren.
+eigenen Beleg mit eigener Nummer in der Form "ST-2026-0001"; in der
+Oberfläche heißt er "Storno-Beleg" (auf dem PDF "Stornorechnung").
+Du startest ihn auf der Rechnung über das Menü "Mehr" und
+"Stornieren"; vorher fragt Klein.Buch nach. Das nachträgliche Löschen
+einer Rechnung ist gesetzlich verboten; Storno ist der einzige
+zulässige Weg, einen Fehler zu korrigieren. Kosten stornierst Du
+ebenfalls über "Mehr" und "Stornieren", mit Grund; sie stehen danach
+als "Storniert" in der Liste, ein eigener Beleg entsteht dabei nicht.
+Einen noch nicht ausgestellten Entwurf stornierst Du nicht, Du
+verwirfst ihn (siehe Verwerfen).
 
 ## Verkäuferprofil
 
-Deine eigenen Stammdaten in Klein.Buch: Firmen- oder
-Berufs-Bezeichnung, Adresse, Steuernummer, Bankverbindung,
-optional ein Logo. Klein.Buch druckt diese Daten auf jede Rechnung
-und jedes Angebot. Du legst das Profil im Onboarding einmal an und
-passt es in den Einstellungen an, falls sich etwas ändert.
+Deine eigenen Firmendaten in Klein.Buch: Firmen- oder
+Berufs-Bezeichnung, Adresse, Steuernummer bzw. USt-IdNr, Telefon und
+E-Mail. In der Oberfläche heißt die Seite "Meine Firmendaten" (unter
+"Einstellungen"), in Meldungen kurz "Firmendaten". Die Bankverbindung
+pflegst Du unter "Einstellungen" und "Konten", Logo und Unterschrift
+unter "Rechnungs-Layout". Klein.Buch druckt diese Daten auf jede
+Rechnung und jedes Angebot. Solange Angaben fehlen, die das Ausstellen
+verlangt, erinnert Dich die Startseite daran.
+
+## Verwerfen
+
+Was Du mit einem Rechnungs- oder Angebots-Entwurf machst, den Du
+nicht mehr brauchst: Menü "Mehr" und "Entwurf verwerfen", mit einem
+Grund. Der Entwurf bleibt mit dem Status "Verworfen" sichtbar und
+wird nicht gelöscht; bei Rechnungen bleibt die schon vergebene Nummer
+verbraucht. "Stornieren" gibt es nur für festgeschriebene Belege.
 
 ## Verzicht auf §19 (Option zur Regelbesteuerung)
 
@@ -414,8 +548,10 @@ Die freiwillige Entscheidung, kein Kleinunternehmer mehr zu sein
 und stattdessen normal Umsatzsteuer auszuweisen und abzuführen. Du
 bindest Dich damit für mindestens 5 Jahre an die Regelbesteuerung
 und kannst in dieser Zeit nicht zurück auf §19 wechseln.
-Klein.Buch warnt Dich vor dieser Folge ausdrücklich, bevor Du den
-Schalter umlegst.
+Klein.Buch warnt Dich vor dieser Folge ausdrücklich: Wenn Du den
+Schalter ausschaltest und speicherst, erklärt der Dialog "Zur
+Regelbesteuerung wechseln?" den freiwilligen Verzicht und den
+Wegfall durch die 100.000-€-Grenze, der nicht bindet.
 
 ## XRechnung
 
@@ -505,4 +641,4 @@ Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

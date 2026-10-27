@@ -11,8 +11,8 @@
   import PdfPreviewDialog from "#lib/PdfPreviewDialog.svelte";
   import ReauthDialog from "#lib/ReauthDialog.svelte";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
-  import { flash } from "#lib/toast.svelte.ts";
-  import { appState } from "#lib/stores.svelte.ts";
+  import { clearToasts, flash } from "#lib/toast.svelte.ts";
+  import { appState, notificationsState } from "#lib/stores.svelte.ts";
   import { modalStack } from "#lib/modalStack.svelte.ts";
   import { focusTrap } from "#lib/focusTrap.ts";
   import {
@@ -110,7 +110,18 @@
     mainEl?.scrollIntoView({ block: "start" });
   }
 
-  // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
+  // U7 (R2-02): Verlässt die App den Zustand „bereit“ (Sperre, Sitzungsablauf), werden
+  // alle Toasts samt „Rückgängig“ verworfen — ihr Inhalt (Abo-Namen, Belegnummern)
+  // stünde sonst unter der Anmelde-Maske. Die Maske zeigt ihre Meldungen selbst.
+  let wasReady = false;
+  $effect(() => {
+    const ready = appState.ready;
+    if (wasReady && !ready) untrack(clearToasts);
+    wasReady = ready;
+  });
+
+  // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert und
+  // (U7, R3-06) nach Abhaken/Prüfen auf der Hinweise-Seite (`notificationsChanged`).
   // U4 (V3-16): Der Zähler steht in Akzentfarbe; Gefahrfarbe nur, wenn mindestens ein
   // dringender Hinweis offen ist (Statusfarbe nur für Status, design.md §2 Nr. 3). Die
   // Liste (nur lesend) wird dafür nur geholt, wenn überhaupt etwas offen ist.
@@ -126,6 +137,7 @@
   }
   $effect(() => {
     page.url.pathname; // bei Navigation neu laden
+    void notificationsState.version; // nach Abhaken/Prüfen neu laden (R3-06)
     // Erst nach dem Entsperren (G1-ENC Schritt 2) liegt der DB-Pool im State —
     // vorher keine Command-Aufrufe absetzen.
     if (appState.ready) {
@@ -157,12 +169,14 @@
         (hold?.message ?? "") +
         "\n\nNach der Freigabe erstellt Klein.Buch fällige Abo-Rechnungen und -Kosten wieder " +
         "selbst (größere Rückstände nur nach Rückfrage) und versendet Rechnungen im Modus " +
-        "„Auto + Versand“." +
+        "„Ausstellen + senden“." +
         (afterRestore
           ? "\n\nAußerdem gehen Backups wieder auf die externen Ziele — auf einer Probe-Instanz " +
             "würden dort Dateien mit älterem Datenstand neben den echten Backups landen. " +
-            "Vorher prüfen: Nummernkreise und vorgemerkte Entwürfe (Einstellungen → Backups) sowie " +
-            "Abo-Vorlagen und ihre nächsten Termine (Hinweis „Abo-Termine nach der Wiederherstellung“)."
+            "Vorher prüfen (Links im Banner oben): Rechnungen und Kosten, Nummernkreise und " +
+            "vorgemerkte Entwürfe (Einstellungen → „Backups“, Karte „Nummernkreise“), " +
+            "Abo-Rechnungen und Kosten-Abos mit ihren nächsten Terminen (Hinweis „Abo-Termine " +
+            "nach der Wiederherstellung“)."
           : ""),
       confirmLabel: afterRestore ? "Ja, produktiv — freigeben" : "Freigeben",
       cancelLabel: "Abbrechen",
@@ -514,20 +528,34 @@
     inert={modalStack.count > 0 || drawerOpen || undefined}
   >
     {#if hold?.held}
-      <Banner kind="warning">
-        <strong>Automatische Abo-Läufe angehalten.</strong>
+      <!-- U6-007: nach einer Wiederherstellung die Prüfpunkte als Links; der Knopf steht
+           wie in jedem Banner am Ende (`actions`). -->
+      <Banner kind="warning" title="Automatische Abo-Läufe angehalten.">
         {hold.message}
-        <button
-          type="button"
-          class="btn-secondary hold-release"
-          onclick={() => {
-            if (!releasing) releaseHold();
-          }}
-          aria-disabled={releasing || undefined}
-          aria-busy={releasing || undefined}
-        >
-          {releasing ? "Gebe frei …" : "Prüfen und freigeben"}
-        </button>
+        {#if hold.reason === "restore"}
+          <span class="hold-checks-label" id="hold-checks-h">Prüfen:</span>
+          <ul class="hold-checks" aria-labelledby="hold-checks-h">
+            <li><a class="kb-link kb-target" href="/invoices">Rechnungen</a></li>
+            <li><a class="kb-link kb-target" href="/expenses">Kosten</a></li>
+            <li><a class="kb-link kb-target" href="/settings/backup#bk-numbering-h">Nummernkreise und vorgemerkte Entwürfe</a></li>
+            <li><a class="kb-link kb-target" href="/recurring-invoices">Abo-Rechnungen</a></li>
+            <li><a class="kb-link kb-target" href="/expenses/recurring">Kosten-Abos</a></li>
+            <li><a class="kb-link kb-target" href="/notifications">Hinweis „Abo-Termine nach der Wiederherstellung“</a></li>
+          </ul>
+        {/if}
+        {#snippet actions()}
+          <button
+            type="button"
+            class="btn-secondary"
+            onclick={() => {
+              if (!releasing) releaseHold();
+            }}
+            aria-disabled={releasing || undefined}
+            aria-busy={releasing || undefined}
+          >
+            {releasing ? "Gebe frei …" : "Prüfen und freigeben"}
+          </button>
+        {/snippet}
       </Banner>
     {/if}
     {@render children?.()}
@@ -720,7 +748,10 @@
     view-transition-name: page-content;
     /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt.
        Seiten ohne PageBar bekommen den oberen Abstand über :first-child zurück. */
-    padding: 0 var(--main-pad) var(--main-pad);
+    /* U7 (R3-02, 2.4.11): unten so viel Platz wie der Toast-Stapel belegt, damit
+       scroll-padding-bottom auch am Seitenende greift und ein stehender Toast die
+       Hauptaktion am Formularende nicht verdeckt. */
+    padding: 0 var(--main-pad) calc(var(--main-pad) + var(--toast-h));
     overflow-y: auto;
     height: 100vh;
     height: 100dvh;
@@ -859,7 +890,8 @@
       overflow: visible;
       padding-left: calc(var(--main-pad) + env(safe-area-inset-left, 0px));
       padding-right: calc(var(--main-pad) + env(safe-area-inset-right, 0px));
-      padding-bottom: calc(var(--main-pad) + env(safe-area-inset-bottom, 0px));
+      /* --toast-h enthält die Safe-Area schon, solange ein Toast steht (R3-02). */
+      padding-bottom: calc(var(--main-pad) + max(env(safe-area-inset-bottom, 0px), var(--toast-h)));
     }
   }
 
@@ -883,8 +915,18 @@
       margin-top: 0;
     }
   }
-  /* U4: Knopf im Banner wie jeder Sekundärknopf (.btn-secondary, gleiche Höhe). */
-  .hold-release {
-    margin-left: var(--sp-2);
+  /* U6-007: Prüfpunkte nach einer Wiederherstellung als Linkzeile (Ziel ≥ --target). */
+  .hold-checks-label {
+    display: block;
+    margin-top: var(--sp-2);
+    font-weight: 600;
+  }
+  .hold-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--sp-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 </style>

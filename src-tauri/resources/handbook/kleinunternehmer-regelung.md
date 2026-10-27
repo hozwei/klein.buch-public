@@ -3,7 +3,7 @@ slug: kleinunternehmer-regelung
 title: Kleinunternehmer-Regelung
 category: recht-und-steuern
 order: 300
-keywords: [§19, kleinunternehmer, umsatzsteuer, grenze, regelung, paragraph 19]
+keywords: [§19, kleinunternehmer, umsatzsteuer, grenze, regelung, paragraph 19, regelbesteuerung, verzicht]
 ---
 
 # Kleinunternehmer-Regelung (§19 UStG)
@@ -62,10 +62,14 @@ die 100.000 €-Grenze beschrieben.
 
 Klein.Buch kennt den Steuerstatus nur je Kalenderjahr. Einen Wechsel
 mitten im Jahr bildet es nicht vollständig ab; der einzige Weg ist der
-Schalter "Ich bin Kleinunternehmer" in den Einstellungen. Der Dialog
-dort ist für den freiwilligen Verzicht geschrieben; seine Warnung zur
-5-Jahres-Bindung betrifft den Verzicht, nicht den gesetzlichen Wegfall
-durch die Umsatzgrenze. So gehst Du vor:
+Schalter "Kleinunternehmer nach §19 UStG" unter Einstellungen → "Meine
+Firmendaten" (Abschnitt "Steuer"). Schaltest Du ihn aus und speicherst,
+fragt der Dialog "Zur Regelbesteuerung wechseln?" nach. Er erklärt drei
+Fälle getrennt: den freiwilligen Verzicht mit 5-Jahres-Bindung, den
+Wegfall, weil der Vorjahresumsatz über 25.000 € lag, und den Wegfall
+durch die 100.000 €-Grenze; für beide Wegfälle gilt die Bindung
+nicht. Bestätige mit "Zur Regelbesteuerung wechseln". So gehst Du
+vor:
 
 - **Einnahmen:** Leg den Schalter um, **bevor** Du die Rechnung
   ausstellst, mit der Du die Grenze überschreitest. Rechnungen behalten
@@ -81,19 +85,39 @@ durch die Umsatzgrenze. So gehst Du vor:
   für diese Kosten Vorsteuer in Kz 185, und der DATEV-Stapel bucht sie
   mit Vorsteuerabzug. Das musst Du mit Deiner Steuerberatung korrigieren; die
   Ausfüllhilfe weist darauf hin.
-- **Anlagen:** Der Inbox-Hinweis nach dem Umlegen nennt Deine bisher
-  brutto übernommenen Anlagen als abweichend. **Korrigiere sie in diesem
+- **Anlagen:** Nach dem Umlegen nennt ein Hinweis (Bereich "Hinweise")
+  Deine bisher brutto übernommenen Anlagen als abweichend. **Korrigiere sie in diesem
   Fall nicht** — für Anlagen, die Du vor dem Überschreiten bekommen hast,
-  ist der Brutto-Betrag richtig (Kapitel "Anlagen und AfA").
+  ist der Brutto-Betrag richtig (Kapitel "Anschaffungen und AfA"). Davon
+  getrennt kann der Wechsel eine Vorsteuerberichtigung nach §15a UStG
+  auslösen (siehe "Verzicht auf §19").
+
+Nach dem Umschalten nennt Klein.Buch unter dem Schalter ein Datum, ab
+dem Du frühestens zur Kleinunternehmer-Regelung zurückkannst. Die
+5-Jahres-Bindung gilt nur für den freiwilligen Verzicht, nicht für einen
+Wegfall durch eine der Umsatzgrenzen. Klein.Buch kennt den Grund des
+Wechsels aber nicht und lässt die Rückkehr in allen Fällen erst ab
+diesem Datum zu.
+
+### Wenn Dein Vorjahresumsatz über 25.000 € lag
+
+Dann giltst Du ab dem 1. Januar des laufenden Jahres nicht mehr als
+Kleinunternehmer, ohne 5-Jahres-Bindung. Leg den Schalter "Kleinunternehmer
+nach §19 UStG" um, bevor Du die erste Rechnung des Jahres ausstellst.
+Klein.Buch wendet den Wechsel ab Beginn des Kalenderjahres an; das passt
+zu diesem Fall. Hast Du in diesem Jahr schon Rechnungen mit dem
+§19-Hinweis ausgestellt, gilt dasselbe wie beim Überschreiten der
+100.000 €-Grenze: stornieren und mit Umsatzsteuer neu ausstellen.
 
 ## Der Pflicht-Hinweis
 
 Auf jeder Rechnung steht "Gemäß §19 UStG wird keine Umsatzsteuer
 ausgewiesen". Im XRechnung-XML steht derselbe Text im Feld BT-22
 (eine technische Anweisung für die Empfänger-Software). Klein.Buch
-prüft vor dem Festschreiben, dass das gewählte PDF-Template den
-Hinweis tatsächlich druckt. Templates ohne den Pflicht-Hinweis sind
-für §19-Rechnungen gesperrt.
+prüft vor dem Ausstellen, dass die gewählte Vorlage den
+Hinweis tatsächlich druckt. Vorlagen ohne den Pflicht-Hinweis sind
+für §19-Rechnungen gesperrt: Unter Einstellungen → "Rechnungs-Layout"
+tragen sie den Vermerk "Ohne §19-Klausel" und lassen sich nicht wählen.
 
 ## §14c-Schutz
 
@@ -102,23 +126,36 @@ Rechnung schreibst, schuldest Du diese Umsatzsteuer trotzdem dem
 Finanzamt. Das nennt sich "§14c-Wirkung" und ist eine bittere
 Falle.
 
-Klein.Buch verhindert das aktiv: Solange der Schalter "Ich bin
-Kleinunternehmer" angeschaltet ist, sind alle Umsatzsteuer-Felder
-im Rechnungs-Formular gesperrt und auf 0. Du kannst gar nicht aus
-Versehen einen falschen Wert eintippen.
+Klein.Buch verhindert das aktiv: Solange der Schalter "Kleinunternehmer
+nach §19 UStG" angeschaltet ist, blendet das Rechnungs-Formular die
+Umsatzsteuer-Felder ("USt-Satz", "USt-Art") aus und sagt das in einem
+Hinweis oben im Formular; alle Positionen laufen ohne Umsatzsteuer. Du
+kannst gar nicht aus Versehen einen falschen Wert eintippen.
 
 ## Verzicht auf §19
 
 Wenn Du regelbesteuert sein willst (zum Beispiel, weil Du große
-Investitionen tätigst und die Vorsteuer ziehen möchtest), legst
-Du in den Einstellungen den Schalter um. Klein.Buch warnt Dich
+Investitionen tätigst und die Vorsteuer ziehen möchtest), schaltest
+Du unter Einstellungen → "Meine Firmendaten" den Schalter
+"Kleinunternehmer nach §19 UStG" aus und klickst auf "Speichern".
+Klein.Buch warnt Dich im Dialog "Zur Regelbesteuerung wechseln?"
 ausdrücklich: Mit dem Verzicht bindest Du Dich für mindestens
-5 Jahre an die Regelbesteuerung. Du kannst in dieser Zeit nicht
-zurück.
+5 Kalenderjahre an die Regelbesteuerung (§ 19 Abs. 3 UStG). Du kannst
+in dieser Zeit nicht zurück. Der Verzicht gilt ab Beginn des
+Kalenderjahres, für das Du ihn erklärst; Umsätze, die Du in diesem Jahr
+schon mit dem §19-Hinweis abgerechnet hast, klärst Du mit Deiner
+Steuerberatung. Willst Du erst ab dem nächsten Jahr verzichten, leg den
+Schalter erst im neuen Jahr um. "Abbrechen" lässt alles, wie es war; mit "Zur Regelbesteuerung
+wechseln" bestätigst Du. Weil der Wechsel geschützt ist, fragt
+Klein.Buch danach im Dialog "Aktion bestätigen: Bankverbindung oder
+Kleinunternehmer-Status ändern" Dein Daten-Passwort und den App-Code ab,
+wenn Deine letzte Bestätigung länger als fünf Minuten her ist. Danach
+steht unter dem Schalter "Regelbesteuerung" und das Datum, ab dem Du
+frühestens zur Kleinunternehmer-Regelung zurückkannst.
 
 Lies vor dem Wechsel das Kapitel zu §14-Pflichtangaben und sprich
 am besten mit einem Steuerberater. Klein.Buch unterstützt die
-Regelbesteuerung in Version 1.0 nur eingeschränkt; die volle
+Regelbesteuerung nur eingeschränkt; die volle
 Workflow-Tiefe kommt in einer späteren Version.
 
 Bei Regelbesteuerung gilt in den Formularen: Neue Positionen bekommen
@@ -141,16 +178,22 @@ Vorsteuer abziehen darfst, hängt von Deinem Status bei Leistungsbezug ab
 die Du vor dem Verzicht noch als Kleinunternehmer bezogen hast, ist nicht
 abziehbar, auch wenn Du die Rechnung erst danach bezahlst. Klein.Buch nimmt
 als Zeitpunkt des Leistungsbezugs das Belegdatum der Kosten; das Jahr der
-Ausgabe bleibt das Jahr der Zahlung.
+Ausgabe bleibt das Jahr der Zahlung. Die Steuer-Übersicht (EÜR) weist für
+jedes Jahr mit Regelbesteuerung darauf hin, dass ihre Beträge Zahlungen
+mit Umsatzsteuer sind; getrennt nach Netto und Umsatzsteuer siehst Du sie
+im EÜR-Export.
 
 Der Verzicht gilt ab Beginn des Kalenderjahres, in dem Du den Schalter
 umlegst. Hast Du in diesem Jahr schon Kosten als Anlage übernommen
 (brutto), passen deren Anschaffungskosten nicht mehr. Klein.Buch hindert
-Dich nicht am Wechsel, nennt Dir die betroffenen Anlagen aber in der Inbox
-und in der EÜR-Ausfüllhilfe; wie Du sie korrigierst, steht im Kapitel
-"Anlagen und AfA" unter "Nach einem Wechsel des Steuerstatus". Eine
-Vorsteuerberichtigung nach §15a UStG für Anlagen aus früheren Jahren
-berechnet Klein.Buch nicht. Hast Du §19 nicht freiwillig aufgegeben, sondern
+Dich nicht am Wechsel, nennt Dir die betroffenen Anlagen aber unter
+"Hinweise" und in der EÜR-Ausfüllhilfe; wie Du sie korrigierst, steht im Kapitel
+"Anschaffungen und AfA" unter "Nach einem Wechsel des Steuerstatus". Nutzt Du
+Anlagen aus früheren Jahren weiter, kann der Wechsel eine
+Vorsteuerberichtigung nach §15a UStG auslösen: Der Übergang von der
+Kleinunternehmer-Regelung zur Regelbesteuerung gilt dort als Änderung der
+Verhältnisse. Klein.Buch berechnet diese Berichtigung nicht; kläre sie mit
+Deiner Steuerberatung. Hast Du §19 nicht freiwillig aufgegeben, sondern
 durch Überschreiten der 100.000 €-Grenze verloren, korrigierst Du die
 Anlagen nicht (siehe "Wenn Du die 100.000 €-Grenze mitten im Jahr
 überschreitest").
@@ -165,4 +208,4 @@ Steuerberater; die Ausfüllhilfe weist darauf hin.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -12,7 +12,12 @@
   <p class="meta">Handbuch · Fehler {page.status}</p>
 </header>
 
-<p>{page.error?.message ?? "Diese Handbuch-Seite lässt sich nicht anzeigen."}</p>
+<!-- U7 (R2-04): Bei 404 fester Text, nie Teile der Adresse (Inhalts-Spoofing). -->
+<p>
+  {notFound
+    ? "Diese Handbuch-Seite gibt es nicht. Vielleicht ist der Link veraltet."
+    : (page.error?.message ?? "Diese Handbuch-Seite lässt sich nicht anzeigen.")}
+</p>
 <p>
   Wähle ein Kapitel aus der Liste, suche im Handbuch oder beginne bei
   <a href="/help/willkommen">Willkommen in Klein.Buch</a>.

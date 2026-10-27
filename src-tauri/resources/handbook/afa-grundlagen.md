@@ -93,12 +93,20 @@ Wenn Du sie brauchst, sprich mit Deinem Steuerberater.
 
 Wenn die Anlage vor Ablauf der Nutzungsdauer kaputt geht, verkauft
 wird oder anderweitig nicht mehr nutzbar ist, beendest Du die AfA
-vorzeitig. Klein.Buch hat dafür den Knopf "Anlage ausbuchen":
+vorzeitig. Klein.Buch hat dafür in der Anschaffung im Menü "Mehr" den
+Eintrag "Veräußern / Entsorgen" ("Abgang bestätigen", danach in der
+Rückfrage "Abgang buchen"):
 
-1. Den verbleibenden Buch-Wert (also der noch nicht abgeschriebene
-   Rest-Anteil) buchst die App als Ausgabe in das laufende Jahr.
-2. Einen Verkaufs-Erlös (falls vorhanden) buchst die App als
-   Einnahme in das laufende Jahr.
+1. Die AfA des Abgangsjahres bucht die App anteilig bis zum Monat
+   des Abgangs.
+2. Den verbleibenden Buch-Wert (also der noch nicht abgeschriebene
+   Rest-Anteil) bucht die App als Ausgabe in das Jahr des Abgangs.
+3. Einen Verkaufs-Erlös (falls vorhanden) bucht die App als
+   Einnahme in das Jahr des Abgangs.
+
+Eine Vorschau zeigt Dir vor dem Bestätigen den Restbuchwert zum Abgang.
+Die Einzelheiten stehen im Kapitel
+[Anschaffungen und AfA](/help/anlagen-und-afa).
 
 Wenn Du die Anlage zum Beispiel im dritten Jahr Deiner 6-Jahre-AfA
 verkaufst, sind 50 % schon abgeschrieben. Den Rest-Buch-Wert bucht
@@ -111,8 +119,8 @@ schmälert den Gewinn. Da kein Geld fließt, ist das ein reiner
 Buchungs-Vorgang. Das schreibt §4 Abs. 3 Satz 3 EStG ausdrücklich
 als Ausnahme von der Cash-Basis vor.
 
-Hast Du eine Anlage aus einer Kostenposition angelegt („als Anlage
-aktivieren“), zählt diese Kostenposition in der EÜR nicht mehr als
+Hast Du eine Anlage aus einer Kostenposition angelegt („Als Anlage
+übernehmen“), zählt diese Kostenposition in der EÜR nicht mehr als
 Ausgabe. Die Anschaffungskosten wirken dann nur über die AfA, sonst
 stünden sie doppelt in der EÜR. Im DATEV-Buchungsstapel erscheint die
 Zahlung als Zugang auf dem Anlagekonto.
@@ -127,4 +135,4 @@ hilft Dir dann, die Anlage korrekt zu erfassen.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

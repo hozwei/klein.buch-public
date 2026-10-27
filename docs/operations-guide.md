@@ -35,12 +35,28 @@ fasst die Fakten zusammen und verweist dorthin:
   Abo-Rechnungen oder Integritätsprüfung (Log-Zeile „Instanz gesperrt …“ beim
   Serverstart und alle 6 h); der Scheduler holt Fälliges ab einer Minute nach dem
   Entsperren gestaffelt nach (ein Backup je Tick, Vollscan frühestens im
-  zweiten Tick). Mehr als zwei Tage ohne Aktivität meldet die Inbox.
+  zweiten Tick). Mehr als zwei Tage ohne Aktivität meldet ein Hinweis (Seite
+  „Hinweise“ in der App).
 - **TLS** terminiert ein Reverse-Proxy des Betreibers; der Container spricht nur
   HTTP auf Port 8080.
 - **Verbindungen nach außen** nur für Versand (SMTP), Off-Site-Backup (SFTP) und
   die opt-in Versionsprüfung (GitHub-Releases). Keine Telemetrie, kein
   Auto-Update.
+- **Oberfläche** (seit 2026.11, ADR 0041): für Smartphone, Tablet und Desktop
+  ausgelegt; sie orientiert sich an WCAG 2.2 AA. Das Web-App-Manifest
+  (`/manifest.webmanifest`, `display: standalone`) erlaubt „Zum Startbildschirm“;
+  es gibt **keinen Service Worker und keine Offline-Funktion**, ohne Verbindung
+  zur Instanz geht nichts. Die CSP bleibt unverändert (`default-src 'self'`
+  deckt das Manifest ab). Eine Startbildschirm-App unter iOS hat eigene Cookies:
+  Dort meldet sich der Nutzer einmal neu an (eigene Sitzung in der
+  Sitzungsübersicht), und es gibt keine Zurück-Taste des Browsers.
+- **Vorkomprimierte Oberfläche** (seit 2026.11, ADR 0041 Nr. 212): Die Dateien der
+  Oberfläche liegen im Image zusätzlich als `.br` und `.gz` vor; der Server wählt sie
+  nach `Accept-Encoding` und setzt `Vary: Accept-Encoding`. Der Reverse-Proxy muss
+  `Content-Encoding` und `Vary` unverändert durchreichen und darf diese Antworten nicht
+  erneut komprimieren (Caddy `encode`, nginx `gzip on`, Traefik `compress` überspringen
+  kodierte Antworten). Für `/api/` und `/files/` keine Proxy-Kompression einschalten —
+  der Server liefert sie absichtlich unkomprimiert (BREACH, Belege bitgenau).
 
 ## 2. Voraussetzungen
 
@@ -154,11 +170,11 @@ es sich nur aus Backups oder Snapshots (`docs/architecture/security.md`,
 Klein.Buch fehlende Dateien aus dem Image. `/inputs/.seed-manifest.json` merkt
 sich die zuletzt kopierte Fassung: Eine unveränderte Datei ersetzt ein Update
 durch die neue Fassung; eine vom Nutzer geänderte bleibt unangetastet, die neue
-Fassung liegt einmal daneben als `<name>.neu` (Hinweis in der Inbox nach dem
+Fassung liegt einmal daneben als `<name>.neu` (Hinweis unter „Hinweise“ nach dem
 Entsperren). Das Manifest merkt sich angebotene Fassungen (`offered`): Eine
 gelöschte `.neu`-Datei kommt erst mit einer weiteren Image-Fassung wieder
 (Lauf F, D-10). **`/inputs` ist nicht Teil der Klein.Buch-Backups** und braucht eine
-eigene Sicherung beim Betreiber. Nach einem Restore meldet die Inbox Vorlagen, die
+eigene Sicherung beim Betreiber. Nach einem Restore meldet ein Hinweis Vorlagen, die
 in der Datenbank referenziert sind, aber in `/inputs` fehlen.
 
 **`/backup-targets/<Name>`** — je Off-Site-Ordner ein eigenes Volume (z. B.
@@ -281,7 +297,7 @@ einspielen. Ausnahme: Das Pflicht-Backup vor einer Datenbank-Umstellung hat das
 Format der vorherigen Version (für den Rückfall, §8; seit Lauf F3c).
 
 **Überwachung.** Ein gescheitertes Ziel steht im append-only Backup-Protokoll
-und als Hinweis in der Inbox; ohne Ziel kommt wöchentlich ein Hinweis, die
+und als Hinweis unter „Hinweise“; ohne Ziel kommt wöchentlich ein Hinweis, die
 Übersicht zeigt eine Aufgabe. Das Festschreiben blockiert das nie. Den Status
 `offsite` (`missing` | `failing` | `stale` | `ok`; `stale` = ein Ziel hat noch keine
 Kopie oder seine letzte ist älter als die Frist der Regel „Backup überfällig“,
@@ -316,7 +332,7 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
    zurück und migriert erst danach (Audit `backup.pre_migration`). Dieses
    Backup hat das Format, das die vorherige Version einspielt (für ein Update
    von 2026.10 Format 2, ADR 0039 Nr. 129). Scheitert es, wird nicht migriert
-   und die Instanz bleibt gesperrt (Meldung im Log und in der Inbox). Dauert
+   und die Instanz bleibt gesperrt (Meldung im Log und unter „Hinweise“). Dauert
    das Entsperren länger als 25 s (großes Archiv), antwortet der Server mit 202
    und der Browser wartet, bis die Umstellung fertig ist (Abholung über
    `POST /api/auth/login/poll`, Lauf F4a) — ein Proxy-Timeout von 60 s reicht.
@@ -374,7 +390,7 @@ Voraussetzungen und Grenzen:
   (nicht gleichzeitig) so viel wie ein Backup der laufenden Instanz für das
   Pre-Restore-Backup (§10).
 - Backups der Desktop-Fassung mit festgeschriebenen Belegen werden abgelehnt
-  (Windows-Archivpfade; kein Datenumzug, E17). Backups ab Schema 30 einer
+  (Archivpfade der Desktop-Fassung; kein Datenumzug, E17). Backups ab Schema 30 einer
   Server-Instanz sind einspielbar.
 
 **Disaster Recovery** (Host verloren, Off-Site-Backup vorhanden): neuen Host mit
@@ -461,7 +477,7 @@ des Proxys), auch bei abgewiesenen Anfragen. `req` ist zugleich die `ref`, die
 eine Fehlermeldung „Interner Fehler (Ref …)“ dem Nutzer zeigt — mit
 `docker compose logs klein-buch | grep <ref>` findet man Zugriffszeile und
 Fehlertext. `sess` sind die ersten 4 Byte des SHA-256 des Sitzungs-Cookies (wie
-in Einstellungen → Sicherheit → „Angemeldete Sitzungen“), `-` ohne Cookie; das
+in Einstellungen → Sicherheit & Anmeldung → „Angemeldete Sitzungen“), `-` ohne Cookie; das
 Cookie selbst lässt sich daraus nicht ableiten. Die IP ist ein personenbezogenes
 Datum: Sie steht im Log aus berechtigtem Interesse an der Sicherheit des Dienstes
 (Art. 6 Abs. 1 lit. f DSGVO, Erkennen und Sperren von Angriffen); die
@@ -522,7 +538,7 @@ Verbindungen).
 
 Nach jeder Anmeldung zeigt Klein.Buch zudem die Zahl der Fehlversuche seit der
 letzten erfolgreichen Anmeldung; das `audit_log` hält jede Buchung append-only
-fest (Einstellungen → Audit-Trail).
+fest (Einstellungen → Protokoll & Datensicherheit → Audit-Protokoll).
 
 **Healthcheck.** Das Image prüft sich selbst (`HEALTHCHECK`, alle 30 s, über den
 Subcommand `klein-buch-server healthcheck`). `GET /healthz` antwortet von außen
@@ -567,7 +583,7 @@ Hintergrund die Java-Komponente für E-Rechnungen (Launcher, JARs,
 XRechnung-Konfiguration, `java -version`). Im Log steht dann
 `Sidecar bereit (KoSIT-Validator, Mustang)` oder als `ERROR`
 `Sidecar nicht einsatzbereit (…): …` mit den fehlenden Teilen; zusätzlich
-erscheint nach dem Entsperren ein dringender Hinweis in der Inbox. Der Server
+erscheint nach dem Entsperren ein dringender Hinweis unter „Hinweise“. Der Server
 läuft trotzdem weiter — nur Festschreiben sowie Prüfen und Einlesen von
 E-Rechnungen scheitern. Abhilfe: Image neu ziehen (Container neu erstellen).
 
@@ -584,7 +600,7 @@ Kapitel: `fehlersuche-im-container`.
   beendet den aktuellen Termin, der Archiv-Vollscan die aktuelle Datei;
   gesperrt wird spätestens nach 10 s. Dabei verwirft der Server auch
   gespeicherte Antworten, Job-Ergebnisse und offene Anmeldungen.
-- **Sitzungen:** Einstellungen → Sicherheit zeigt alle angemeldeten Sitzungen
+- **Sitzungen:** Einstellungen → Sicherheit & Anmeldung zeigt alle angemeldeten Sitzungen
   (Anmeldezeit, letzte Nutzung, gekürzte Kennung) und meldet auf Wunsch alle
   anderen ab (mit Bestätigung, Audit `auth.sessions_revoked`).
 - **Neue Daten-Passwörter** (Einrichtung, Wechsel) prüft der Server gegen eine
@@ -592,7 +608,7 @@ Kapitel: `fehlersuche-im-container`.
   und gegen Firmenname und E-Mail aus dem Profil (Meldung „zu leicht zu
   erraten“). Bestehende Passwörter bleiben gültig.
 - **Anmeldung mit App-Code gesperrt** (`totp_locked`, WARN
-  `auth.totp_locked`, Inbox-Hinweis): Nach 100 Fehlversuchen in Folge ohne
+  `auth.totp_locked`, Hinweis in der App): Nach 100 Fehlversuchen in Folge ohne
   Gerätecookie nimmt der Server keine TOTP-Anmeldung von unbekannten Geräten
   mehr an — unabhängig von der Zeit und auch nach einem Neustart
   (`/data/auth/totp-lock.json`). Aufgehoben wird die Sperre durch eine
@@ -606,11 +622,11 @@ Kapitel: `fehlersuche-im-container`.
   Einmal-Codes prüfen, bei Bedarf den App-Code neu einrichten (neue
   Einmal-Codes).
 - **Gültiger App-Code mit falschem Daten-Passwort** (WARN
-  `auth.factor_suspect`, dringender Inbox-Hinweis): Drei Anmeldungen bzw.
+  `auth.factor_suspect`, dringender Hinweis in der App): Drei Anmeldungen bzw.
   Re-Auths in Folge mit gültigem App-Code oder Einmal-Code, aber falschem
   Daten-Passwort (ohne erfolgreiche Anmeldung dazwischen). Warst du das nicht,
   kennt jemand womöglich das TOTP-Geheimnis oder einen Einmal-Code: App-Code
-  unter Einstellungen → Sicherheit neu einrichten und die Sitzungen prüfen. Bei
+  unter Einstellungen → Sicherheit & Anmeldung neu einrichten und die Sitzungen prüfen. Bei
   gesperrter Instanz (nach einem Neustart) erscheint der Hinweis mit der
   nächsten erfolgreichen Anmeldung; der Zähler liegt nur im Speicher.
 - **Gerät mit der Authenticator-App verloren** und keine Einmal-Codes mehr:
@@ -636,10 +652,23 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
   als Browser-Download: einmal abrufbar, die Datei wird mit dem Abruf gelöscht
   (auch bei Abbruch — dann neu erzeugen), spätestens nach 10 min. Snapshots von
   `/data` können einen Export nur in diesem kurzen Fenster im Klartext enthalten.
-- **Geschäftsjahres-Abschluss** (Menü → Geschäftsjahr): nur für
+- **Geschäftsjahres-Abschluss** (Seitenleiste → Geschäftsjahr): nur für
   abgelaufene Jahre, unumkehrbar; Korrekturen danach nur per Storno-Beleg.
-- **E-Mail-Versandprotokoll:** jeder Versandversuch append-only mit
-  Provider-Antwort (Einstellungen → E-Mail-Versand). Eine angenommene Mail ist
+- **DATEV-Berater- und Mandantennummer** (EÜR-Export, seit 2026.11) stehen nicht
+  in der Datenbank: Der Browser merkt sie sich wie den Kontenrahmen (Local
+  Storage, je Browser und Gerät). Sie sind deshalb nicht Teil der Backups und auf
+  einem anderen Gerät neu einzutragen; die Grenzen prüft der Server beim Export.
+- **Meldungstexte der API** (seit 2026.11 in der Sprache der Oberfläche: feste
+  Vorsätze wie „Die Rechnung kann nicht ausgestellt werden: …“, Gründe mit „; “
+  getrennt, Daten als TT.MM.JJJJ, „Firmendaten“, keine Regel-Kennungen der
+  XRechnung; ADR 0041 Nr. 168). Diese Texte gehen nur an den Browser (Feld
+  `message` der Fehlerantwort), nicht ins Log; wer API-Antworten auswertet,
+  prüft das stabile Feld `code`. Im Log hat sich nur eine Zeile geändert:
+  `Hinweis „E-Mail-Protokoll unvollständig“ fehlgeschlagen` (vorher
+  „Versandprotokoll unvollständig“). Die Zeilen für fail2ban und Monitoring (§11)
+  sind unverändert.
+- **E-Mail-Protokoll:** jeder Versandversuch append-only mit
+  Provider-Antwort (Einstellungen → E-Mail-Protokoll). Eine angenommene Mail ist
   beim Provider eingeliefert, nicht zwingend im Posteingang des Empfängers.
 - **Sidecar-Versionen** (KoSIT-Validator, Mustang, XRechnung-Konfiguration) sind
   Teil des Images; ein Update kommt mit einem neuen Release
@@ -658,3 +687,8 @@ Stand: 2026-10-25 (Phase W, Block W13; Lauf F4b: Verbindungsgrenzen, Exporte, /h
 `src-tauri/src/config.rs`, `src-tauri/src/uploads.rs`, `src-tauri/src/nettest.rs`,
 `src-tauri/src/mail/smtp.rs`, `src-tauri/src/build_info.rs`,
 `src-tauri/src/scheduler/update_check.rs`, `src-tauri/src/backup/`, ADR 0039.
+Nachtrag 2026-10-27 (Lauf 2026.11, U6): §1 Oberfläche und Web-App-Manifest
+(`static/manifest.webmanifest`, ADR 0041 Nr. 72), §13 DATEV-Nummern im Browser
+und Meldungstexte (`src-tauri/src/server/errors.rs`, `src/routes/euer/export`),
+Begriffe der Oberfläche („Hinweise“, „Sicherheit & Anmeldung“, „E-Mail-Protokoll“,
+„Protokoll & Datensicherheit“).

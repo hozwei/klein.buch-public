@@ -15,6 +15,9 @@
   // „<Titel> – Klein.Buch“ in `document.title` (Root-Layout, pageTitle.svelte.ts).
   // Ohne `title` (Detailseite lädt) gilt der Ersatztitel der Route — auch als
   // sichtbares `h1` (V4-08: Seitenstruktur nie ohne Überschrift).
+  // U7 (R2-05): `docTitle` ersetzt den Titel nur in `document.title` — für Seiten,
+  // deren sichtbarer Titel personenbezogen ist (Kontaktname). Er landete sonst im
+  // Browserverlauf und in der Sitzungswiederherstellung, auch nach einer Anonymisierung.
   // - `actions` (Snippet): die Hauptaktion, höchstens eine `primary`, zuletzt
   //   (rechts, mit dem Daumen erreichbar). Bisherige Seiten geben hier alle
   //   Knöpfe an — das funktioniert unverändert.
@@ -32,6 +35,7 @@
     back,
     backLabel = "Zurück",
     title,
+    docTitle,
     actions,
     secondary = [],
     more = [],
@@ -40,6 +44,8 @@
     back?: string;
     backLabel?: string;
     title?: string;
+    /** Titel nur für `document.title` (ohne personenbezogene Daten), sonst `title`. */
+    docTitle?: string;
     /** Hauptaktion(en), immer sichtbar. */
     actions?: Snippet;
     /** Nebenaktionen: breit als Knöpfe, bis 600 px im Menü „Mehr“. */
@@ -56,7 +62,7 @@
   // (liest `document.title` nach der Navigation) schon den neuen Titel hat.
   const titleOwner = claimPageTitle();
   $effect.pre(() => {
-    setPageTitle(titleOwner, title);
+    setPageTitle(titleOwner, docTitle ?? title);
   });
   onDestroy(() => releasePageTitle(titleOwner));
   const shownTitle = $derived(title || routeTitle(page.route.id) || undefined);

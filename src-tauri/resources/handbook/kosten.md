@@ -3,7 +3,7 @@ slug: kosten
 title: Kosten
 category: bedienen
 order: 140
-keywords: [kosten, ausgabe, eingangsrechnung, beleg, brutto, kategorie, e-rechnung-empfang]
+keywords: [kosten, ausgabe, eingangsrechnung, beleg, brutto, kategorie, e-rechnung-empfang, storno, abo, bezahlt]
 ---
 
 # Kosten
@@ -14,50 +14,96 @@ hier steht die laufende Bedienung.
 
 ## Liste der Kosten
 
-Die Hauptansicht zeigt Beleg-Datum, Zahlungs-Datum, Lieferant,
-Beschreibung, Brutto-Betrag und Kategorie. Du sortierst über die
-Spaltenköpfe und suchst über das Suchfeld oben. Filter: nach
-Geschäftsjahr, nach Kategorie, nach Lieferant.
+Die Hauptansicht zeigt je Eintrag Nummer, Beleg-Datum, Lieferant,
+Beschreibung mit der Kategorie in einer zweiten Zeile, Brutto-Betrag,
+Zahlungs-Datum und Status. Der Status heißt "Bezahlt" oder
+"Unbezahlt"; fehlt der Beleg, steht daneben "Kein Beleg". Über der
+Liste suchst Du nach Beleg-Nummer, Lieferant oder Beschreibung und
+filterst nach Geschäftsjahr und Kategorie. Stornierte Kosten blendet
+die Liste aus, bis Du "Stornierte anzeigen" anhakst. "Filter
+zurücksetzen" zeigt wieder alles. Darunter stehen Anzahl und Summe der
+angezeigten Einträge, ohne Stornos.
 
-Klick auf eine Zeile, um den Beleg-Anhang zu öffnen oder die
-Stamm-Daten einzusehen. Die Felder sind nach dem Speichern
-gesperrt, weil Klein.Buch eine Kosten-Position direkt mit dem
-Speichern festschreibt.
+Über die Nummer oder den Knopf "Öffnen" kommst Du zur Seite der Kosten
+(Titel "Kosten KO-…"). Dort siehst Du alle Angaben, die Zahlung und den
+Beleg. Die Angaben selbst lassen sich nicht ändern, weil Klein.Buch
+Kosten schon beim Erfassen festschreibt.
+
+## Zahlung nachtragen
+
+Kosten, die Du als "noch nicht bezahlt" erfasst hast, stehen als
+"Unbezahlt" in der Liste und zählen noch nicht in der EÜR. Ist das Geld
+abgegangen, öffne die Kosten und klick auf "Als bezahlt markieren".
+Trag das Datum unter "Bezahlt am" ein, wähle bei Bedarf das
+Zahlungs-Konto und klick auf "Zahlung speichern". Liegt das Zahldatum
+vor dem Beleg-Datum (etwa bei Vorkasse), weist Klein.Buch darauf hin;
+das ist erlaubt, prüf nur, ob beide Daten stimmen.
+
+Hast Du Dich beim Zahldatum vertan, nimm "Zahlung korrigieren". "Als
+unbezahlt markieren" setzt die Kosten ohne Rückfrage wieder auf offen;
+mit "Rückgängig" in der Einblendung danach holst Du die Zahlung zurück.
+Das Zahldatum gehört nicht zu den festgeschriebenen Angaben, jede
+Änderung steht aber im Protokoll.
 
 ## Korrektur per Storno
 
-Eine Kosten-Position lässt sich nicht direkt bearbeiten, weil sie
-schon festgeschrieben ist. Wenn Du Dich vertippt hast, erzeugst
-Du eine Storno-Buchung. Klick auf "Stornieren". Klein.Buch legt
-eine Gegen-Buchung mit umgekehrtem Vorzeichen an. Trage danach eine
-neue korrekte Position ein.
+Kosten lassen sich nicht bearbeiten, weil sie schon festgeschrieben
+sind. Wenn Du Dich vertippt hast, stornierst Du sie: Öffne die Kosten,
+wähle im Menü "Mehr" den Eintrag "Stornieren", trag einen Storno-Grund
+ein (Pflicht, zum Beispiel "doppelt erfasst") und klick auf "Kosten
+stornieren".
 
-Beide Positionen (Original und Storno) bleiben sichtbar. Der EÜR-
-Effekt ist neutral, sobald beide das gleiche Datum haben.
+Die Kosten bleiben mit dem Status "Storniert" erhalten und zählen nicht
+mehr in der EÜR; in der Liste siehst Du sie mit "Stornierte anzeigen".
+Auf ihrer Seite steht danach "Korrigiert neu erfassen". Der Knopf öffnet
+das Formular für neue Kosten mit allen Werten des Originals, auch mit
+Beleg- und Zahldatum. Du korrigierst den Fehler, lädst den Beleg neu hoch
+und schreibst die neuen Kosten fest. Das Original bleibt unverändert.
+
+Nicht stornieren lassen sich Kosten, deren Geschäftsjahr (des Belegs
+oder der Zahlung) schon abgeschlossen ist, und Kosten, die Du als Anlage
+übernommen hast. Wie Du einen rückabgewickelten Kauf einer Anlage
+erfasst, steht im Kapitel "Anschaffungen und AfA".
+
+## Ähnliche Kosten als Vorlage
+
+Kommt eine Ausgabe in ähnlicher Form wieder, öffne die früheren Kosten
+und klick auf "Als Vorlage für neue Kosten" (auf dem Handy im Menü
+"Mehr"). Das Formular übernimmt Lieferant, Kategorie, Beschreibung,
+Beträge, Zahlungs-Konto, den §13b-Haken und die Notiz. Beleg- und
+Zahldatum stehen auf heute, die Rechnungs-Nr. des Lieferanten bleibt
+leer, den Beleg wählst Du neu. Es entstehen neue Kosten; die früheren
+bleiben unverändert.
 
 ## E-Rechnung importieren
 
-Klick auf "E-Rechnung importieren", wähle eine XRechnung-XML oder
-ZUGFeRD-PDF aus und klick auf "Einlesen & prüfen". Klein.Buch lädt
-die Datei hoch, liest die XML-Daten, füllt die Felder automatisch und
-legt die Original-Datei beim Festschreiben im Archiv ab.
+Klick in der Kosten-Liste auf "E-Rechnung importieren" (auf dem Handy im
+Menü "Mehr"), wähle eine XRechnung-XML oder ZUGFeRD-PDF aus und klick
+auf "Einlesen und prüfen". Klein.Buch lädt die Datei hoch, liest die
+XML-Daten, füllt die Felder automatisch und legt die Original-Datei beim
+Festschreiben im Archiv ab.
 
 Klein.Buch prüft die Datei zusätzlich mit dem KoSIT-Validator. Wenn
 die XML Fehler hat (zum Beispiel fehlende Pflicht-Angabe des
 Absenders), zeigt die App die Fehlermeldung an. Du kannst die
-Position trotzdem speichern, weil Du als Empfänger nicht für die
+Position trotzdem festschreiben, weil Du als Empfänger nicht für die
 Korrektheit der Eingangs-XRechnung haftest.
 
 Trage vor dem Festschreiben noch das Zahlungs-Datum und die Kategorie
-ein und klick auf "Als Kosten festschreiben". Mehr dazu im Kapitel
+ein und klick auf "Kosten festschreiben". Mehr dazu im Kapitel
 "Rechnungseingang per Upload".
 
-## Wiederkehrende Abos
+## Kosten-Abos
 
-Klick auf "Wiederkehrende Abos" und dann auf "+ Neues Abo". Trage
-Lieferant, Beschreibung, Brutto-Betrag, Kategorie, Rhythmus
-(monatlich, vierteljährlich, halbjährlich, jährlich), Stichtag und
-Modus ein. Es gibt zwei Modi:
+Klick in der Kosten-Liste auf "Kosten-Abos" (auf dem Handy im
+Menü "Mehr") und dann auf "+ Neues Abo". Trag eine Bezeichnung ein,
+wähle bei Bedarf Lieferant und Kategorie, dann Frequenz (monatlich,
+vierteljährlich, halbjährlich, jährlich), Stichtag (Tag im Monat),
+nächste Fälligkeit, den erwarteten Betrag (Brutto) und die
+Beschreibungs-Vorlage, also den Text der erzeugten Kosten. Zuletzt
+wählst Du, was am Stichtag passieren soll, und klickst auf "Abo
+anlegen". Abo-Kosten entstehen immer mit Netto = Brutto und
+Umsatzsteuer 0, weil das Abo keine Aufteilung kennt. Es gibt zwei Modi:
 
 **Automatisch.** Klein.Buch bucht am Stichtag selbst eine
 Kosten-Position mit dem Stichtag als Beleg-Datum. Die Position entsteht
@@ -66,10 +112,26 @@ Abbuchung auf dem Konto steht (erst dann zählt sie in der EÜR).
 Sinnvoll für stehende Lastschriften mit gleichem Betrag.
 
 **Erinnerung.** Klein.Buch bucht nichts selbst. Am Stichtag erscheint
-unter "Hinweise" der Eintrag "Abo fällig", und das Abo steht in der
-Liste als "fällig". Klick dort auf "Buchen", prüfe Betrag und Datum
-der Kosten-Position und bestätige die Zahlung, sobald sie abgebucht
-ist. Sinnvoll, wenn der echte Betrag je Monat etwas abweicht.
+unter "Hinweise" der Eintrag "Abo fällig", und das Abo ist in der Liste
+als fällig markiert ("Heute fällig", später "Überfällig"). Klick dort
+auf "Buchen": Klein.Buch legt die Kosten-Position mit dem Stichtag als
+Beleg-Datum und dem erwarteten Betrag an. Vorher fragt es "Kosten
+festschreiben?" und zeigt Abo, Belegdatum und Betrag — nach dem Bestätigen
+ist die Position festgeschrieben. Markiere sie als bezahlt, sobald die
+Zahlung abgebucht ist. Weicht der Betrag ab, erfasse den Termin stattdessen
+über "+ Neue Kosten" und setze im Abo unter "Bearbeiten" die nächste
+Fälligkeit weiter; eine schon gebuchte falsche Position stornierst Du und
+erfasst sie mit "Korrigiert neu erfassen" neu. Sinnvoll, wenn Du jeden Termin selbst anstoßen
+willst.
+
+In der Abo-Liste steht je Abo eine Aktion, die zu seinem Zustand passt:
+"Rückstand …", "Buchen", "Bearbeiten" oder bei einem pausierten Abo
+"Fortsetzen". Die übrigen Aktionen (etwa "Bearbeiten" und "Pausieren")
+liegen im Menü "Mehr" der Zeile. Pausieren geht ohne Rückfrage; mit
+"Rückgängig" in der Einblendung setzt Du das Abo gleich wieder fort.
+Pausierte Abos zeigt die Liste erst mit "Pausierte anzeigen". Sind
+automatische Abos fällig, bucht der Knopf "… fällige Auto-Abos jetzt
+buchen" sie sofort; sonst übernimmt das der nächste Lauf im Hintergrund.
 
 ### Verpasste Termine
 
@@ -80,8 +142,8 @@ Abos bucht Klein.Buch beim nächsten Lauf selbst nach, je Termin mit
 dem jeweiligen Stichtag; ein Hinweis nennt die nachgebuchten Termine.
 
 Sind mehr Termine offen, bucht Klein.Buch nichts und meldet unter
-"Hinweise": "Entscheidung nötig". Klick in der Abo-Liste beim Abo auf
-"Rückstand …" und wähle:
+"Hinweise": "Abo-Kosten: Entscheidung nötig". Klick in der Abo-Liste
+beim Abo auf "Rückstand …" und wähle:
 
 - **Nachholen:** Der nächste Lauf bucht die offenen Termine (höchstens
   24). Termine in einem bereits abgeschlossenen Geschäftsjahr werden
@@ -100,10 +162,15 @@ drei Termine zusammen, fragt Klein.Buch erneut.
 Öffne die Kosten-Position und klick im Abschnitt "Beleg" auf
 "Beleg herunterladen". Dein Browser speichert die Datei in seinem
 Download-Ordner, von dort öffnest Du sie. Fehlt der Beleg, zeigt die
-Liste beim Eintrag den Hinweis "kein Beleg". Der Beleg liegt im
+Liste beim Eintrag "Kein Beleg". Der Beleg liegt im
 Archiv und wird vor dem Herunterladen gegen seinen Prüfwert geprüft.
 Wenn jemand die Datei im Archiv heimlich verändert hat, schlägt
 Klein.Buch Alarm.
+
+Weitere Dateien, etwa ein nachgereichtes Foto, hängst Du im Abschnitt
+"Zusätzliche Anhänge" an: Datei wählen, auf Wunsch eine Bezeichnung
+eintragen und auf "Anhängen" klicken. Erlaubt sind PDF, Bilder und XML
+bis 20 MB.
 
 ## Roh-XML einer Eingangsrechnung ansehen
 
@@ -111,8 +178,9 @@ Bei einer über "E-Rechnung importieren" hochgeladenen
 E-Rechnung kannst Du die ursprüngliche XML-Datei einsehen, also die
 maschinenlesbaren Felder, die Du nicht im normalen Eingabe-Formular
 siehst. Öffne dazu den Eingangsbeleg und klick auf "Roh-XML
-anzeigen". Klein.Buch zeigt die XML formatiert in einem eigenen
-Fenster mit einem Knopf zum Kopieren.
+anzeigen" (auf dem Handy im Menü "Mehr"). Klein.Buch zeigt die XML
+formatiert im Dialog "Roh-XML der E-Rechnung", dazu Format, Prüfwert
+und Größe; "XML kopieren" legt sie in die Zwischenablage.
 
 Das ist praktisch, wenn ein Steuerberater oder ein Prüfer in die
 Original-Felder schauen will. Die Anzeige verändert nichts am Beleg.
@@ -128,4 +196,4 @@ das EÜR-Jahr 2027. Das ist die Cash-Basis nach §11 EStG.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

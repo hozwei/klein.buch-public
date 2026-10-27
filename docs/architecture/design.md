@@ -399,7 +399,7 @@ Servers; keine Floskeln.
 | Kosten, Kosten-Abo | Kosten | Kosten · Kosten KO-… · Kosten-Abos | Kosten |
 | Anlage (Steuerbegriff) | Anschaffungen | Anschaffungen · Anschaffung AV-… | Anschaffungen |
 | Privatbewegung | Privatbewegungen | Privatbewegungen · Privatbewegung PV-… | Privatbewegungen |
-| Hinweise (offen / abgehakt) | Hinweise (Zähler „offen“) | Hinweise · Hinweis-Regeln | Hinweise |
+| Hinweise (offen / abgehakt) | Hinweise (Zähler „offen“) | Hinweise · Erinnerungen einstellen | Hinweise |
 | Verkäuferprofil | — (Einstellungen) | Meine Firmendaten (in Meldungen „Firmendaten“) | Einstellungen |
 | E-Mail-Protokoll | — (Einstellungen) | E-Mail-Protokoll | Einstellungen |
 
@@ -474,9 +474,11 @@ Fehler: am Feld, bei mehreren Server-Gründen ein Banner oben, bei technischem F
 Fehler-Toast.
 
 **Bestätigungen.** Nur für folgenreiche oder nicht umkehrbare Aktionen (Ausstellen, Stornieren,
-Wiederherstellen, Sperren). Umkehrbares (Abhaken, Archivieren mit Reaktivieren, Pausieren) ohne
-Rückfrage, dafür Toast mit „Rückgängig“ (`flash(text, "ok", { action })`, §4.10). GoBD: Stornieren
-und Verwerfen verlangen einen Grund.
+Wiederherstellen, Sperren). Umkehrbares (Archivieren mit Reaktivieren, Konto deaktivieren, Pausieren)
+ohne Rückfrage, dafür Toast mit „Rückgängig“ (`flash(text, "ok", { action })`, §4.10). Abhaken von
+Hinweisen läuft ohne Rückfrage und ohne „Rückgängig“ (Toast, Fokus auf den nächsten Eintrag; „Alle
+abhaken“ fragt nur bei dringenden Hinweisen nach; ADR 0041 Nr. 184). GoBD: Stornieren und Verwerfen
+verlangen einen Grund.
 
 **Leer, Laden, Fehler.** Leer: ein Satz, was hier erscheint, plus die eine Aktion („Noch keine
 Rechnungen. + Neue Rechnung“) — keine Illustration; leerer Filter: „Keine Treffer für diese

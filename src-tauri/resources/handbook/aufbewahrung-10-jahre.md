@@ -107,13 +107,14 @@ vernichten. Ist die Frist für Dich sicher abgelaufen, entscheidest Du
 selbst.
 
 Die Anonymisierung eines Kontakts (Kapitel "DSGVO-Auskunft und
-Anonymisierung") entfernt dabei nur einen Teil: die Stammdaten des
-Kontakts, den Empfänger in verworfenen Rechnungs-Entwürfen und in nie
-ausgestellten, zurückgezogenen Angeboten sowie Bezeichnung und Notiz
-seiner Abo-Vorlagen. Was Klein.Buch unveränderlich aufbewahrt, bleibt
-auch nach der Frist: die ausgestellten Rechnungen, Stornos und Angebote
-mit dem damaligen Empfänger, ihre PDF- und XML-Dateien im Archiv, das
-Versandprotokoll mit den Empfängeradressen und das Audit-Protokoll.
+Anonymisierung") entfernt dabei nur einen Teil: die Kontaktdaten
+selbst, den Empfänger in verworfenen Rechnungs- und
+Angebots-Entwürfen, Bezeichnung und Notiz seiner Abo-Vorlagen und die
+Bezeichnung seiner Kosten-Abos. Was Klein.Buch unveränderlich
+aufbewahrt, bleibt auch nach der Frist: die ausgestellten Rechnungen
+und Storno-Belege und die fertiggestellten Angebote mit dem damaligen
+Empfänger, ihre PDF- und XML-Dateien im Archiv, das E-Mail-Protokoll
+mit den Empfängeradressen und das Audit-Protokoll.
 Einzelne Belege oder eine einzelne Person lassen sich daraus nicht
 löschen. Den ganzen Datenbestand beendest Du, indem Du die Instanz
 stilllegst und ihr Volume samt Backups löschst; vorher sicherst Du, was
@@ -142,4 +143,4 @@ Kapitel "Notfall: Instanz neu aufsetzen und wiederherstellen".
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

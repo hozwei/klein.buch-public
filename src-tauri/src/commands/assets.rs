@@ -372,7 +372,7 @@ pub async fn capitalized_cost_mismatches(
 /// Inbox-Hinweis nach einem Wechsel des §19-Status in den Einstellungen
 /// (Verzicht oder Rückkehr, Lauf F8d): nennt jede betroffene Anlage mit dem
 /// Handlungsweg. Der Wechsel selbst wird nicht blockiert (gesetzliches Recht,
-/// § 19 Abs. 2 UStG). Best-effort; ohne betroffene Anlage kein Hinweis.
+/// § 19 Abs. 1 und 3 UStG). Best-effort; ohne betroffene Anlage kein Hinweis.
 pub async fn notify_capitalized_status_change(pool: &sqlx::SqlitePool) {
     let list = match capitalized_cost_mismatches(pool).await {
         Ok(l) => l,
@@ -411,12 +411,13 @@ pub async fn notify_capitalized_status_change(pool: &sqlx::SqlitePool) {
          (Belegdatum der Kosten): als Kleinunternehmer der Bruttobetrag, bei \
          Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Klein.Buch \
          wendet einen Wechsel immer ab Beginn des Kalenderjahres an; das passt zum Verzicht \
-         auf §19. {} Ist §19 dagegen im laufenden Jahr durch Überschreiten der \
-         100.000-€-Grenze weggefallen (§ 19 Abs. 1 UStG), bleiben Kosten mit Leistungsbezug \
-         vor dem Überschreiten beim Bruttobetrag ohne Vorsteuer: Dann diese Anlagen nicht \
-         korrigieren und die Erfassung des Jahres mit der Steuerberatung klären; einen \
-         Wechsel mitten im Jahr bildet Klein.Buch nicht ab. Eine Vorsteuerberichtigung nach \
-         § 15a UStG für Anlagen aus früheren Jahren berechnet Klein.Buch nicht.",
+         auf §19 und zum Wegfall, weil der Vorjahresumsatz über 25.000 € lag. {} Ist §19 \
+         dagegen im laufenden Jahr durch Überschreiten der 100.000-€-Grenze weggefallen \
+         (§ 19 Abs. 1 UStG), bleiben Kosten mit Leistungsbezug vor dem Überschreiten beim \
+         Bruttobetrag ohne Vorsteuer: Dann diese Anlagen nicht korrigieren und die \
+         Erfassung des Jahres mit der Steuerberatung klären; einen Wechsel mitten im Jahr \
+         bildet Klein.Buch nicht ab. Eine Vorsteuerberichtigung nach § 15a UStG für Anlagen \
+         aus früheren Jahren berechnet Klein.Buch nicht.",
         lines.join(" ")
     );
     let numbers: Vec<&str> = list.iter().map(|m| m.asset_number.as_str()).collect();

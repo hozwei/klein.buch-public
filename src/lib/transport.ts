@@ -72,6 +72,26 @@ export const JOB_POLL_MS = 500;
 /** So lange wird ein 503 `timeout`/`busy` mit demselben Schlüssel wiederholt. */
 export const RETRY_503_MS = 10 * 60_000;
 
+/**
+ * Meldung, wenn ein Command auch nach allen Wiederholungen (`RETRY_503_MS`) noch
+ * mit 503 `timeout` antwortet (U7, R1-07). Ein neuer Klick erzeugt einen neuen
+ * Idempotenz-Schlüssel; bei nicht idempotenten Anlagen (Kosten, Privatbewegung)
+ * entstünde so eine zweite festgeschriebene Buchung. Deshalb ersetzt die Oberfläche
+ * die Server-Meldung („… bitte noch einmal versuchen“) durch den Rat, erst zu prüfen.
+ */
+export const TIMEOUT_UNCLEAR =
+  "Die Aktion dauert ungewöhnlich lange und läuft im Hintergrund möglicherweise noch zu Ende. " +
+  "Prüf in der Liste, ob sie schon ausgeführt wurde, bevor du sie wiederholst.";
+
+async function isTimeout(res: Response): Promise<boolean> {
+  if (res.status !== 503) return false;
+  try {
+    return (await res.clone().json())?.code === "timeout";
+  } catch {
+    return false;
+  }
+}
+
 async function errorMessage(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -198,6 +218,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (!res.ok) {
     handleAuthStatus(res);
+    if (await isTimeout(res)) throw TIMEOUT_UNCLEAR;
     throw await errorMessage(res);
   }
   const text = await res.text();

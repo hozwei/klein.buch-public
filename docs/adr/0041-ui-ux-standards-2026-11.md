@@ -1,6 +1,6 @@
 # ADR 0041 — UI/UX-Standards (2026.11)
 
-**Status:** In Arbeit · 2026-10-25 · Lauf 2026.11 (Blöcke U0–U7). Keine Migration.
+**Status:** Akzeptiert · 2026-10-27 · Lauf 2026.11 (begonnen 2026-10-25). Keine Migration.
 Ergänzt ADR 0039 (Web-/Docker-Betrieb) und ADR 0040 (Dauerbetrieb) für die Oberfläche;
 abgelöste PRD-Stellen stehen in PRD-Revision 10 „UI/UX (2026.11)“.
 
@@ -496,6 +496,71 @@ gewollt.
      (Sitzungsdaten, gespiegelte Eingaben), `/files/` (Belege und Archive bitgenau) und `/legal/` bleiben
      unkomprimiert; es gibt keine Kompression zur Laufzeit (`CompressionLayer` verworfen: CPU je
      Anfrage, BREACH-Fläche, neue Crate; Kompression nur am Proxy verworfen: hinge vom Betreiber ab).
+220. **§19-Rückkehr ehrlich beschreiben (U6, präzisiert Nr. 21).** Der Grund eines §19-Wechsels wird nicht
+     gespeichert; „Meine Firmendaten“ nennt deshalb beide Fälle (5-Jahres-Bindung nur beim freiwilligen
+     Verzicht) und die tatsächliche Sperre des Servers bis zum genannten Datum. Eine Rückkehr nach einem
+     gesetzlichen Wegfall vor Ablauf ist eine fachliche Lücke (Entscheidung Manuel).
+221. **Kosten-Abo „Buchen“ ist Festschreiben (U6, ADR 0019, Nr. 180).** Gleiche Rückfrage mit Eckwerten.
+222. **Seitennamen nach Glossar (U6).** „Erinnerungen einstellen“ und „Kosten-Abos“ in Hub, Titel, PageBar,
+     Links und Handbuch.
+223. **Rücksprung per `?next=` nur innerhalb der App (U6).** `safeNextPath` lässt nur relative Pfade mit
+     genau einem führenden „/“ zu (kein `//`, kein Backslash, keine Steuerzeichen, nicht `/api`, `/files`,
+     `/legal`) — keine offene Weiterleitung.
+224. **Pause-Banner nach Wiederherstellung mit Prüf-Links (U6).** Rechnungen, Kosten, Nummernkreise und
+     vorgemerkte Entwürfe, Abo-Rechnungen, Kosten-Abos, Hinweis zu den Abo-Terminen.
+225. **Einmal-Codes überall kopieren oder lokal speichern (U6).** Gemeinsamer Helfer für Einrichtung und
+     Neuerzeugung; die Textdatei entsteht nur im Browser.
+226. **Hilfe-Knopf und F1 führen zum selben Kapitel (U6).**
+230. **`?next=` erst nach Normalisierung sicher (U7, R2-01, präzisiert Nr. 223).** Pfad roh und dekodiert
+     geprüft (keine leeren Segmente, keine prozentkodierten Trenn- oder Steuerzeichen, Server-Präfixe ohne
+     Rücksicht auf Groß-/Kleinschreibung); Gegenprobe: das Ergebnis bleibt als relativer Link auf demselben
+     Origin — `new URL()` machte aus `/.//host` ein `//host`.
+231. **Toasts verwerfen beim Verlassen von „bereit“ (U7).** Sperre oder Sitzungsablauf verwirft alle Toasts
+     samt „Rückgängig“-Aktionen.
+232. **`--toast-h` als belegter Streifen (U7, 2.4.11).** `<main>` wird unten um diesen Wert verlängert, damit
+     `scroll-padding-bottom` auch am Seitenende greift; Toasts bleiben unten; Escape schließt einen Toast.
+233. **Fokusführung bei Toasts (U7).** Nach Schließen oder Aktion: nächster Toast, Ursprung, h1, `<main>` —
+     nie `<body>`.
+234. **Fokus nach ausgeblendeter Zeile (U7).** Erste Aktion der Zeile an derselben Stelle, sonst der vorigen,
+     dann Filter, dann h1 (Konten, Kosten-Abos, Abo-Vorlagen).
+235. **Keine leeren Anmeldefelder an den Server (U7).** Enter im Passwortfeld führt ins Code-Feld; jede leere
+     Anfrage zählte sonst als Fehlversuch.
+236. **Kein Personenbezug im Seitentitel (U7, DSGVO Art. 17, ergänzt Nr. 160).** `docTitle` trennt den
+     Browser-Titel vom sichtbaren h1; die Kontakt-Detailseite heißt im Verlauf „Kontakt“.
+237. **Formal gültige Einheiten-Codes sperren nicht (U7, präzisiert Nr. 150).** 2–3 Großbuchstaben oder
+     Ziffern gelten als Rec-20/21-Code („(Code, nicht in der Liste)“); ob die Codeliste ihn kennt,
+     entscheidet der KoSIT-Validator beim Ausstellen; Freitext wie „Pauschal“ bleibt gesperrt.
+238. **Storno-Entwurf ohne „Ausstellen“ (U7).** Hauptaktion „Weiter zum Stornieren“ der Original-Rechnung;
+     die GoBD-Sperre im Server bleibt.
+239. **Unklarer Ausgang nach Zeitüberschreitung (U7).** Die Oberfläche rät zum Prüfen statt zum Wiederholen —
+     ein neuer Klick erzeugt einen neuen Idempotenz-Schlüssel und bei Kosten eine zweite festgeschriebene
+     Buchung.
+240. **Hinweis bei „1.234“ in Mengenfeldern (U7, ergänzt Nr. 15).** Die Leseregel bleibt; bei Feldern mit
+     mindestens 3 Nachkommastellen nennt ein nicht sperrender Hinweis die Auslegung und die Komma-Alternative.
+241. **Startseiten-Aufgaben als Tags; „Versendet“ `info`, „Aktiv“ `success` (U7).**
+242. **„Keine Seiteneffekte beim Öffnen“ als Test über alle Svelte-Dateien (U7, Plan §9.2 Nr. 8).** Wurzeln
+     `onMount`, `$effect`, `$effect.pre`, `afterNavigate`, `load`; Upload- und Auth-Schreiber zählen mit.
+250. **Storno übernimmt die Leitweg-ID des Originals (U7, R1-01).** BT-10 wird aus der archivierten XML des
+     Originals gelesen (Hash-Prüfung und Audit `archive.read` wie überall); fehlen Archiv-ID oder Element,
+     gilt „N/A“; ein manipuliertes Archiv bricht den Storno ab — keine ungeprüften Daten in einem GoBD-Beleg.
+     Kein Eingabefeld, kein Speicherfeld, keine Migration.
+251. **§19-Wechseldialog mit drei Fällen (U7, R1-02, präzisiert Nr. 21/220).** Verzicht nach § 19 Abs. 3 UStG
+     wirkt ab Beginn des Kalenderjahres und bindet mindestens fünf Kalenderjahre; Wegfall wegen über
+     25.000 € im Vorjahr ab 1. Januar, wegen über 100.000 € im laufenden Jahr ab diesem Umsatz, beide ohne
+     Bindung; Hinweis auf § 15a UStG und „ersetzt keine Steuerberatung“. Die Rückkehr-Sperre des Servers
+     bleibt und wird offen genannt.
+252. **Abgang einer Anschaffung mit Gefahr-Rückfrage (U7, R1-05).** Eckwerte aus der Server-Vorschau.
+253. **Vorzeichen in Aufstellungen (U7, R1-06).** Addierte/abgezogene Zeilen mit „+“/„−“; im Fließtext
+     „Gewinn/Verlust von“ ohne Vorzeichen.
+254. **Letzte Off-Site-Kopie nur am selben Ort (U7, R2-03, präzisiert Nr. 86).**
+255. **Timeout-Text des Servers (U7, R1-07).** Bittet um Prüfung in der Liste statt um Wiederholung.
+256. **Zahldatum im Handbuch (U7, R4-01).** Immer der tatsächliche Zahlungstag; eine Zuordnung nach der
+     10-Tage-Regel (§ 11 EStG) gehört in die Erklärung, nicht in ein abweichendes Datum (GoBD).
+257. **axe „target-size“ unter der Kopfleiste (U7, erweitert Nr. 59).** Eine Checkbox, die 2.5.8 am
+     Seitenanfang über den Abstand erfüllt (Label umschließt sie), gilt nicht als Verstoß, wenn ein
+     Prüfzustand die Seite so scrollt, dass sie halb unter der klebenden Kopfleiste liegt und axe deren
+     Menü-Knopf als Nachbarn zählt (Kosten-Abos, offenes Zeilenmenü im Querformat). Ausnahme im
+     Harness nur für diesen Zustand.
 
 ## Konsequenzen
 

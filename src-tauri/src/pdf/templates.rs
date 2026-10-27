@@ -563,8 +563,8 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
   voided: "verworfen (nie ausgestellt)",
 ).at(s, default: s)
 #let quote_status(s) = (
-  draft: "Entwurf", sent: "versandt", accepted: "angenommen", rejected: "abgelehnt",
-  canceled: "zurückgezogen", converted: "in Rechnung umgewandelt",
+  draft: "Entwurf", sent: "fertiggestellt", accepted: "angenommen", rejected: "abgelehnt",
+  canceled: "verworfen oder storniert", converted: "in Rechnung umgewandelt",
 ).at(s, default: s)
 #let frequency_label(f) = (
   monthly: "monatlich", quarterly: "vierteljährlich", semiannually: "halbjährlich",
@@ -788,7 +788,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
   #text(size: 8pt, fill: muted)[Die Original-Dateien liegen — soweit „im ZIP = Ja" — im Unterordner „dokumente/" dieser Auskunft bei. SHA-256-Prüfsummen stehen in der beigefügten auskunft.json.]
 ]
 
-= Versandprotokoll (E-Mail)
+= E-Mail-Protokoll
 #if data.emails.len() == 0 [
   #text(fill: muted)[Keine Versandvorgänge protokolliert.]
 ] else [

@@ -1,8 +1,14 @@
 // Lauf F (ADR 0040, Zielmodell §9.2 Nr. 8): Seiten lösen beim Öffnen keine
 // fachlichen Läufe und keine Schreib-Commands aus — manuelle Auslöser sind
-// Knöpfe. Statische Prüfung der Quelltexte: Was `onMount` (eine Ebene tief über
-// gleichnamige Funktionen der Datei) aufruft, darf kein schreibender Command
-// aus `#lib/api.ts` sein (W14-030 Abo-Rechnungen, D-14 Zahlungskonten).
+// Knöpfe. Statische Prüfung der Quelltexte: Was beim Öffnen läuft, darf kein
+// schreibender Command aus `#lib/api.ts` sein (W14-030 Abo-Rechnungen, D-14
+// Zahlungskonten).
+//
+// U7 (R4-08): Geprüft werden alle `.svelte`-Dateien unter `src/routes` und `src/lib`
+// (auch Bausteine wie `InvoiceEditor.svelte`), als Wurzeln `onMount`, `$effect`,
+// `$effect.pre` und `afterNavigate`, dazu `load` in `+page.ts`/`+layout.ts`; lokale
+// Funktionen der Datei werden bis drei Ebenen tief mitgelesen. Schreibend sind die
+// Schreib-Commands aus `api.ts` sowie `uploadFile` und die schreibenden Auth-Aufrufe.
 
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -10,7 +16,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROUTES = path.dirname(fileURLToPath(import.meta.url));
-const API = path.join(ROUTES, "..", "lib", "api.ts");
+const LIB = path.join(ROUTES, "..", "lib");
+const API = path.join(LIB, "api.ts");
+// Schreibende Aufrufe außerhalb der Commands (transport.ts): Upload und Auth.
+const OTHER_WRITERS = [
+  "uploadFile",
+  "authLogin",
+  "authLogout",
+  "authLock",
+  "authReauth",
+  "authSetupOffer",
+  "authSetupFinish",
+  "authTotpRenewOffer",
+  "authTotpRenewFinish",
+  "authRecoveryRenew",
+  "authChangePassphrase",
+  "authRevokeOtherSessions",
+];
 
 // Lesende Commands wie in `commands::registry::kind_of` (Suffixe + Liste).
 const READ_SUFFIXES = [
@@ -67,12 +89,12 @@ function apiCommands(): Map<string, string> {
   return out;
 }
 
-function svelteFiles(dir: string): string[] {
+function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     const p = path.join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...svelteFiles(p));
-    else if (name === "+page.svelte" || name === "+layout.svelte") out.push(p);
+    if (statSync(p).isDirectory()) out.push(...sourceFiles(p));
+    else if (name.endsWith(".svelte") || /^\+(page|layout)\.ts$/.test(name)) out.push(p);
   }
   return out;
 }
@@ -89,29 +111,64 @@ function balanced(src: string, open: number): string {
   return src.slice(open);
 }
 
-/** Was beim Öffnen läuft: `onMount(...)` plus Körper der darin aufgerufenen lokalen Funktionen. */
+const ROOTS = ["onMount(", "$effect(", "$effect.pre(", "afterNavigate("];
+const LOAD = /export\s+(?:async\s+)?function\s+load\s*\(|export\s+const\s+load\b[^=]*=/g;
+const LEVELS = 3;
+
+/** Körper einer lokalen Funktion `name` (Deklaration oder `const name = (…) =>`). */
+function localBody(src: string, name: string): string | null {
+  const decl = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*(?:<[^>]*>)?\\(`).exec(src);
+  const arrow = new RegExp(`(?:const|let)\\s+${name}\\s*=\\s*(?:async\\s*)?\\(`).exec(src);
+  const def = decl ?? arrow;
+  if (!def) return null;
+  const brace = src.indexOf("{", def.index + def[0].length - 1);
+  return brace >= 0 ? balanced(src, brace) : null;
+}
+
+/**
+ * Was beim Öffnen läuft: die Wurzeln (`onMount`, `$effect`, `$effect.pre`,
+ * `afterNavigate`, `load`) plus Körper der darin aufgerufenen lokalen Funktionen,
+ * bis `LEVELS` Ebenen tief.
+ */
 function onOpenCode(src: string): string {
   const parts: string[] = [];
-  let at = src.indexOf("onMount(");
-  while (at >= 0) {
-    parts.push(balanced(src, at + "onMount".length));
-    at = src.indexOf("onMount(", at + 1);
+  for (const root of ROOTS) {
+    let at = src.indexOf(root);
+    while (at >= 0) {
+      parts.push(balanced(src, at + root.length - 1));
+      at = src.indexOf(root, at + 1);
+    }
   }
-  const direct = parts.join("\n");
-  const locals = new Set<string>();
-  for (const m of direct.matchAll(/\b(\w+)\b/g)) locals.add(m[1]);
-  for (const name of locals) {
-    const def = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`).exec(src);
-    if (!def) continue;
-    const brace = src.indexOf("{", def.index + def[0].length - 1);
+  for (const m of src.matchAll(LOAD)) {
+    // Körper nach der Parameterliste (`function load(…) {…}` bzw. `(…) => {…}`).
+    const open = src.indexOf("(", m.index);
+    if (open < 0) continue;
+    const brace = src.indexOf("{", open + balanced(src, open).length);
     if (brace >= 0) parts.push(balanced(src, brace));
+  }
+  const seen = new Set<string>();
+  let frontier = parts.join("\n");
+  for (let level = 0; level < LEVELS && frontier; level++) {
+    const next: string[] = [];
+    for (const m of frontier.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) {
+      const name = m[1];
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const body = localBody(src, name);
+      if (body) next.push(body);
+    }
+    parts.push(...next);
+    frontier = next.join("\n");
   }
   return parts.join("\n");
 }
 
 describe("Keine Seiteneffekte beim Öffnen einer Seite", () => {
   const commands = apiCommands();
-  const writers = [...commands.entries()].filter(([, cmd]) => !isRead(cmd)).map(([fn]) => fn);
+  const writers = [
+    ...[...commands.entries()].filter(([, cmd]) => !isRead(cmd)).map(([fn]) => fn),
+    ...OTHER_WRITERS,
+  ];
 
   it("erkennt die Schreib-Commands aus api.ts", () => {
     expect(commands.get("recurringInvoicesRunDueCheck")).toBe("recurring_invoices_run_due_check");
@@ -121,9 +178,27 @@ describe("Keine Seiteneffekte beim Öffnen einer Seite", () => {
     expect(writers).not.toContain("paymentAccountsList");
   });
 
-  for (const file of svelteFiles(ROUTES)) {
-    const rel = path.relative(ROUTES, file);
-    it(`${rel}: onMount ruft keinen Schreib-Command auf`, () => {
+  it("deckt Bausteine, $effect und load ab (R4-08)", () => {
+    const files = [...sourceFiles(ROUTES), ...sourceFiles(LIB)].map((f) => path.basename(f));
+    expect(files).toContain("InvoiceEditor.svelte");
+    expect(files).toContain("ToastHost.svelte");
+    expect(files).toContain("+page.ts");
+    const probe = `
+      let x = $state(0);
+      $effect(() => { if (x) step(); });
+      function step() { inner(); }
+      async function inner() { await contactsCreate({}); }
+    `;
+    expect(onOpenCode(probe)).toContain("contactsCreate(");
+    const load = `export function load({ params }) { return helper(params); }
+      function helper(p) { return uploadFile("beleg", p); }`;
+    expect(onOpenCode(load)).toContain("uploadFile(");
+    expect(writers).toContain("contactsCreate");
+  });
+
+  for (const file of [...sourceFiles(ROUTES), ...sourceFiles(LIB)]) {
+    const rel = path.relative(path.join(ROUTES, ".."), file);
+    it(`${rel}: Öffnen ruft keinen Schreib-Command auf`, () => {
       const code = onOpenCode(readFileSync(file, "utf8"));
       const hits = writers.filter((fn) => new RegExp(`\\b${fn}\\s*\\(`).test(code));
       expect(hits, `${rel} schreibt beim Öffnen: ${hits.join(", ")}`).toEqual([]);

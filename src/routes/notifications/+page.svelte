@@ -12,6 +12,7 @@
   import type { AppNotification } from "#lib/types.ts";
   import { tick } from "svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import { notificationsChanged } from "#lib/stores.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Badge from "#lib/Badge.svelte";
   import Banner from "#lib/Banner.svelte";
@@ -75,6 +76,7 @@
     dismissing = true;
     try {
       await notificationsDismiss(item.id);
+      notificationsChanged();
       await load();
       flash(`Abgehakt: ${displayText(item.title)}. Abgehakte Hinweise zeigt „Abgehakte anzeigen“.`);
       await tick();
@@ -110,6 +112,7 @@
     dismissing = true;
     try {
       const n = await notificationsDismissAll();
+      notificationsChanged();
       flash(n === 0 ? "Nichts abzuhaken." : n === 1 ? "1 Hinweis abgehakt." : `${n} Hinweise abgehakt.`);
       await load();
       await tick();
@@ -126,6 +129,7 @@
     busy = true;
     try {
       const n = await notificationsRunChecks();
+      notificationsChanged();
       flash(n === 0 ? "Keine neuen Hinweise." : n === 1 ? "1 neuer Hinweis." : `${n} neue Hinweise.`);
       await load();
     } catch (e) {

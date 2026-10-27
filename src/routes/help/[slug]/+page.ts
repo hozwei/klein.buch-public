@@ -40,7 +40,9 @@ function splitLeadingH1(body: string): { heading: string | null; body: string } 
 export function load({ params }: { params: { slug: string } }) {
   const entry = getEntry(params.slug);
   if (!entry) {
-    throw error(404, `Handbuch-Seite "${params.slug}" nicht gefunden.`);
+    // U7 (R2-04): Slug nicht ausgeben — sonst ließe sich über die Adresse beliebiger
+    // Text im Handbuch-Layout der eigenen Instanz anzeigen (Inhalts-Spoofing).
+    throw error(404, "Diese Handbuch-Seite gibt es nicht.");
   }
   const { heading, body } = splitLeadingH1(entry.body);
   const title = heading || entry.title;

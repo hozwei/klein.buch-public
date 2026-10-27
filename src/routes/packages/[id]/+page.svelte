@@ -359,7 +359,7 @@
               <td data-label={r.revision === pkg.currentRevision ? "Status" : undefined}>
                 <div class="kb-actions">
                   {#if r.revision === pkg.currentRevision}
-                    <Badge tone="primary">Aktiv</Badge>
+                    <Badge tone="success">Aktiv</Badge>
                   {:else}
                     <Button
                       variant="secondary"

@@ -272,8 +272,21 @@ export function unitShort(code: string | null | undefined): string {
  */
 export function unitOptions(current?: string | null): { value: string; label: string }[] {
   const list = UNIT_CODES.map(({ value, label }) => ({ value, label }));
-  if (current && !list.some((u) => u.value === current)) list.push({ value: current, label: current });
+  if (current && !list.some((u) => u.value === current)) {
+    // U7 (R1-03): Ein formal gültiger, aber nicht gelisteter Code bleibt wählbar;
+    // der Zusatz zeigt, dass er nicht aus der Liste stammt (Hinweis statt Sperre).
+    list.push({ value: current, label: isFormalUnitCode(current) ? `${current} (Code, nicht in der Liste)` : current });
+  }
   return list;
+}
+
+/**
+ * Formal ein Code nach UN/ECE Rec 20/21 (U7, R1-03): zwei bis drei Zeichen aus
+ * Großbuchstaben und Ziffern (z. B. „H87“, „E48“, „P1“, „XPP“). Ob die Codeliste der
+ * XRechnung ihn kennt, prüft der KoSIT-Validator beim Ausstellen.
+ */
+export function isFormalUnitCode(code: string | null | undefined): boolean {
+  return !!code && /^[A-Z0-9]{2,3}$/.test(code);
 }
 
 /** Steht der Code in der Einheiten-Liste (`UNIT_CODES`)? */
@@ -318,9 +331,12 @@ export function suggestUnit(text: string | null | undefined): { value: string; l
  * „Pauschal“ aus älteren Paketen lehnt die KoSIT-Prüfung beim Ausstellen ab.
  * Leer bei einem Code aus `UNIT_CODES`. `fromPackage`: Position ist noch an ein
  * Paket gebunden — die Wahl löst sie vom Paket (sauberer Bruch, Hardline Pakete).
+ * U7 (R1-03): Leer auch bei einem formal gültigen Code außerhalb der Liste (z. B.
+ * „H87“ aus Lauf F oder einer importierten E-Rechnung) — er sperrt das Speichern
+ * nicht; die Auswahl zeigt ihn als „H87 (Code, nicht in der Liste)“.
  */
 export function unitCodeError(code: string | null | undefined, fromPackage = false): string {
-  if (isKnownUnit(code)) return "";
+  if (isKnownUnit(code) || isFormalUnitCode(code)) return "";
   const tail = fromPackage ? " Das löst die Position vom Paket." : "";
   if (!code || !code.trim()) return `Bitte eine Einheit aus der Liste wählen.${tail}`;
   const s = suggestUnit(code);

@@ -92,7 +92,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/euer/export": "EÜR-Export",
   "/fiscal-year": "Geschäftsjahr",
   "/notifications": "Hinweise",
-  "/notifications/rules": "Hinweis-Regeln",
+  "/notifications/rules": "Erinnerungen einstellen",
   "/settings": "Einstellungen",
   "/settings/seller": "Meine Firmendaten",
   "/settings/payment-accounts": "Konten",

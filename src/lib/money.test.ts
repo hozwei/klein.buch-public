@@ -9,6 +9,7 @@ import {
   parseDecimal,
   parseMoneyToCents,
   parseQuantity,
+  quantityReadingNote,
 } from "./money";
 
 function cents(text: string, allowNegative = false): number | null | string {
@@ -237,6 +238,19 @@ describe("parseQuantity (Mengen, 4 Nachkommastellen wie der Server)", () => {
 
   it("leer → null", () => {
     expect(qty("")).toBeNull();
+  });
+
+  // U7 (R1-08): „1.250“ bleibt 1250, das Feld nennt aber die Auslegung.
+  it("Hinweis bei einzelnem Punkt mit drei Ziffern", () => {
+    expect(quantityReadingNote("1.250")).toBe("Gelesen als 1250 (Punkt = Tausender). Meinst du 1,25? Dann mit Komma eingeben.");
+    expect(quantityReadingNote("12.345")).toMatch(/^Gelesen als 12345 .*Meinst du 12,345\?/);
+    expect(quantityReadingNote("1.000")).toMatch(/Meinst du 1\?/);
+    expect(quantityReadingNote("1,25")).toBe("");
+    expect(quantityReadingNote("1.25")).toBe("");
+    expect(quantityReadingNote("1.000.000")).toBe("");
+    expect(quantityReadingNote("1250")).toBe("");
+    expect(quantityReadingNote("1.250", 0)).toBe("");
+    expect(quantityReadingNote("1.250", 2)).toBe("");
   });
 
   it("formatQuantity ohne überflüssige Nullen und Rundtrip", () => {

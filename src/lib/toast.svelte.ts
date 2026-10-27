@@ -24,6 +24,15 @@
 //   „Schließen“ (oder die Aktion).
 // - Erfolgsmeldungen verschwinden nach 5 s; solange Maus oder Fokus auf
 //   dem Toast liegt, steht die Uhr (pauseToast/resumeToast aus ToastHost).
+//
+// Sperre/Sitzungsablauf (U7, R2-02): `clearToasts()` verwirft alle Toasts samt
+// Aktionen, sobald die App den Zustand „bereit“ verlässt (Layout). Meldungen mit
+// Inhalten (Abo-Namen, Belegnummern) stünden sonst unter der Anmelde-Maske, und ein
+// „Rückgängig“ ließe sich nach dem erneuten Anmelden beliebig spät auslösen.
+//
+// Fokus (U7, R3-04): `flash()` merkt sich das Element, das beim Erscheinen den
+// Fokus hatte (`toastOrigin`); ToastHost führt den Fokus nach Schließen oder
+// Aktion dorthin zurück statt auf <body>.
 
 import { REAUTH_CANCELED } from "#lib/transport.ts";
 
@@ -63,6 +72,14 @@ const MAX_STACK = 5;
 
 // Restlaufzeit je Toast (außerhalb des reaktiven Zustands).
 const timers = new Map<number, { handle: ReturnType<typeof setTimeout> | null; remaining: number; startedAt: number }>();
+// Fokus beim Erscheinen je Toast (außerhalb des reaktiven Zustands, U7 R3-04).
+const origins = new Map<number, HTMLElement>();
+
+function activeElement(): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  const el = document.activeElement;
+  return el instanceof HTMLElement && el !== document.body ? el : null;
+}
 
 function startTimer(id: number, ms: number): void {
   const t = { handle: null as ReturnType<typeof setTimeout> | null, remaining: ms, startedAt: Date.now() };
@@ -94,6 +111,10 @@ export function flash(
   const id = nextId++;
   const persistent = kind === "warning" || kind === "error" || !!o.action || ttlMs === 0;
   toastStore.items.push({ id, message, kind, action: o.action, persistent });
+  // Liegt der Fokus schon in einem Toast, gilt dessen Ursprung.
+  const active = activeElement();
+  const origin = active?.closest(".toast-stack") ? lastOrigin() : active;
+  if (origin) origins.set(id, origin);
   while (toastStore.items.length > MAX_STACK) {
     const old = toastStore.items.shift();
     if (old) clearTimer(old.id);
@@ -102,10 +123,28 @@ export function flash(
   return id;
 }
 
+function lastOrigin(): HTMLElement | undefined {
+  const ids = [...origins.keys()];
+  return ids.length ? origins.get(ids[ids.length - 1]) : undefined;
+}
+
 function clearTimer(id: number): void {
   const t = timers.get(id);
   if (t?.handle) clearTimeout(t.handle);
   timers.delete(id);
+  origins.delete(id);
+}
+
+/** Element, das beim Erscheinen des Toasts den Fokus hatte (falls noch bekannt). */
+export function toastOrigin(id: number): HTMLElement | null {
+  return origins.get(id) ?? null;
+}
+
+/** Alle Toasts samt Aktionen und Uhren verwerfen (Sperre, Sitzungsablauf; R2-02). */
+export function clearToasts(): void {
+  for (const id of [...timers.keys()]) clearTimer(id);
+  origins.clear();
+  toastStore.items.splice(0);
 }
 
 export function dismissToast(id: number): void {

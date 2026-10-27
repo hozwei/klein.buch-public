@@ -1171,7 +1171,7 @@ fn shutdown_budget_fits_stop_grace_period() {
     let unreleased = changelog
         .split("\n## [")
         .nth(1)
-        .expect("Abschnitt [Unreleased]");
+        .expect("oberster Abschnitt (Unreleased bzw. nächstes Release)");
     let total = format!("höchstens {} s", budget.as_secs());
     let flat = unreleased.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(flat.contains(&total), "CHANGELOG nennt „{total}“");

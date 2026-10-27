@@ -243,8 +243,13 @@ pub async fn offsite_status(
 
 /// Zeitpunkt der jüngsten erfolgreichen Kopie auf einem Ziel (RFC 3339,
 /// Europe/Berlin; Lauf 2026.11 U4): das letzte Ergebnis, wenn es erfolgreich
-/// war, sonst der jüngste erfolgreiche Eintrag im Backup-Protokoll mit Art und
-/// Bezeichnung des Ziels. `None` = noch keine Kopie bekannt.
+/// war, sonst der jüngste erfolgreiche Eintrag im Backup-Protokoll mit Art,
+/// Bezeichnung **und Ort** des Ziels. `None` = noch keine Kopie bekannt.
+///
+/// U7 (R2-03): Bezeichnungen sind frei wählbar und nicht eindeutig (Standard:
+/// Ordner bzw. Host). Ohne den Ort übernähme ein Ziel die Kopien eines entfernten
+/// oder eines zweiten Ziels mit derselben Bezeichnung (etwa SFTP auf demselben
+/// Host mit anderem Remote-Ordner).
 pub async fn last_copy_at(
     pool: &SqlitePool,
     entry: &TargetEntry,
@@ -254,12 +259,15 @@ pub async fn last_copy_at(
         return Ok(Some(r.at.clone()));
     }
     let (kind, label) = log_meta(entry);
+    let location = log_location(&entry.target);
     let newest: Option<String> = sqlx::query_scalar(
         "SELECT MAX(created_at) FROM backup_log
-          WHERE status = 'ok' AND target_kind = ? AND target_label = ?",
+          WHERE status = 'ok' AND target_kind = ?1 AND target_label = ?2
+            AND substr(full_path, -length(?3 || file_name)) = ?3 || file_name",
     )
     .bind(kind)
     .bind(label)
+    .bind(location)
     .fetch_one(pool)
     .await?;
     Ok(newest
@@ -497,6 +505,23 @@ pub async fn write_backup_shared(
 /// Off-Site-Ziels (der Floor wird als `("local", None)` protokolliert).
 pub fn log_meta(entry: &TargetEntry) -> (&'static str, Option<String>) {
     (kind_of(&entry.target), Some(entry.label.clone()))
+}
+
+/// Ort eines Ziels, wie ihn `full_path` einer erfolgreichen Kopie im
+/// Backup-Protokoll unmittelbar vor dem Dateinamen trägt (U7, R2-03): bei
+/// Verzeichnissen das Ende `/<Ordner>/` (davor steht die aufgelöste Wurzel), bei
+/// SFTP die URI bis zum Dateinamen wie in [`super::sftp::upload`].
+fn log_location(target: &BackupTarget) -> String {
+    match target {
+        BackupTarget::Directory { path } => format!("/{}/", path.trim().trim_matches('/')),
+        BackupTarget::Sftp {
+            host,
+            port,
+            user,
+            remote_dir,
+            ..
+        } => super::sftp::sftp_uri(user, host, *port, &super::sftp::remote_join(remote_dir, "")),
+    }
 }
 
 /// Beste-Wissen-`full_path`-Beschreibung für die **Fehler**-Zeile, wenn
@@ -739,6 +764,31 @@ mod tests {
             target: sftp(),
         };
         assert_eq!(log_meta(&e), ("sftp", Some("Server".into())));
+    }
+
+    /// U7 (R2-03): Der Ort passt genau auf den `full_path` erfolgreicher Kopien.
+    #[test]
+    fn log_location_is_the_path_before_the_file_name() {
+        let dir = BackupTarget::Directory {
+            path: "nas/kb/".into(),
+        };
+        assert_eq!(log_location(&dir), "/nas/kb/");
+        for remote_dir in ["klein-buch", "/srv/kb/", "", "."] {
+            let target = BackupTarget::Sftp {
+                host: "backup.example.org".into(),
+                port: 2222,
+                user: "kb".into(),
+                remote_dir: remote_dir.into(),
+                host_fingerprint: None,
+            };
+            let uploaded = crate::backup::sftp::sftp_uri(
+                "kb",
+                "backup.example.org",
+                2222,
+                &crate::backup::sftp::remote_join(remote_dir, "a.kbk"),
+            );
+            assert_eq!(format!("{}a.kbk", log_location(&target)), uploaded);
+        }
     }
 
     #[test]

@@ -26,14 +26,25 @@
   //   verloren). Leer haben sie die Höhe 0; Abstand nur zwischen gefüllten Regionen.
   //   Art „info“ (neutral, z. B. abgebrochene Bestätigung) mit „i“-Symbol; der
   //   Schließen-Knopf nennt die Art („Fehlermeldung schließen“).
+  // - U7 (R3-02, 2.4.11): `--toast-h` ist der Abstand vom unteren Fensterrand bis
+  //   zur Oberkante des Stapels (Höhe + Abstand unten + Safe-Area), nicht nur die
+  //   Höhe. Das Layout verlängert damit auch den Inhalt unten (`padding-bottom`), so
+  //   dass sich die Hauptaktion am Formularende über einen stehenden Toast scrollen
+  //   lässt. Escape in einem Toast schließt ihn.
+  // - U7 (R3-04, 2.4.3): Lag der Fokus im Toast, führt Schließen oder Aktion ihn
+  //   weiter: zum nächsten Toast, sonst zum Element, das beim Erscheinen fokussiert
+  //   war, sonst zur Seitenüberschrift bzw. zu <main> — nie auf <body>.
+  import { tick } from "svelte";
   import {
     toastStore,
     dismissToast,
     pauseToast,
     resumeToast,
+    toastOrigin,
     type ToastItem,
     type ToastKind,
   } from "#lib/toast.svelte.ts";
+  import { pageFocusFallback } from "#lib/focusAfterRemoval.ts";
 
   const KIND_NAME: Record<ToastKind, string> = {
     ok: "Hinweis",
@@ -56,13 +67,17 @@
     const el = stack;
     if (!el || typeof ResizeObserver === "undefined") return;
     const root = document.documentElement;
-    const ro = new ResizeObserver(() => {
-      const h = el.querySelector(".toast") ? Math.ceil(el.getBoundingClientRect().height) : 0;
-      root.style.setProperty("--toast-h", h > 0 ? `${h + 12}px` : "0px");
-    });
+    const measure = () => {
+      // Belegter Streifen unten: vom Fensterrand bis zur Oberkante des Stapels.
+      const h = el.querySelector(".toast") ? Math.ceil(window.innerHeight - el.getBoundingClientRect().top) : 0;
+      root.style.setProperty("--toast-h", h > 0 ? `${h + 4}px` : "0px");
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
+    window.addEventListener("resize", measure);
     return () => {
       ro.disconnect();
+      window.removeEventListener("resize", measure);
       root.style.removeProperty("--toast-h");
     };
   });
@@ -73,15 +88,46 @@
     resumeToast(id);
   }
 
-  function runAction(t: ToastItem) {
+  function visible(el: HTMLElement | null): el is HTMLElement {
+    return !!el && el.isConnected && el.getClientRects().length > 0 && !el.closest("[inert]");
+  }
+
+  /** Fokus-Ziel nach dem Schließen von `t`, solange der Toast noch im DOM ist. */
+  function nextFocusTarget(t: ToastItem): HTMLElement | null {
+    const own = stack?.querySelector<HTMLElement>(`[data-toast-id="${t.id}"]`);
+    const all = stack ? Array.from(stack.querySelectorAll<HTMLElement>(".toast")) : [];
+    const i = own ? all.indexOf(own) : -1;
+    const rest = i === -1 ? all : [...all.slice(i + 1), ...all.slice(0, i).reverse()];
+    return rest[0]?.querySelector<HTMLElement>("button.close") ?? null;
+  }
+
+  async function close(t: ToastItem, withAction: boolean) {
+    const hadFocus = !!stack?.querySelector(`[data-toast-id="${t.id}"]`)?.contains(document.activeElement);
+    const nextToast = hadFocus ? nextFocusTarget(t) : null;
+    const origin = toastOrigin(t.id);
     dismissToast(t.id);
-    t.action?.run();
+    if (withAction) t.action?.run();
+    if (!hadFocus) return;
+    await tick();
+    // Hat die Aktion den Fokus selbst gesetzt (z. B. Navigation, Dialog), bleibt er dort.
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const target = visible(nextToast) ? nextToast : visible(origin) ? origin : pageFocusFallback();
+    target?.focus({ preventScroll: target !== origin });
+  }
+
+  function onKeydown(e: KeyboardEvent, t: ToastItem) {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void close(t, false);
   }
 </script>
 
 {#snippet toast(t: ToastItem)}
   <div
     class="toast {t.kind}"
+    data-toast-id={t.id}
     role="group"
     aria-label={KIND_NAME[t.kind]}
     onmouseenter={() => pauseToast(t.id)}
@@ -98,13 +144,14 @@
     <span class="msg">{t.message}</span>
     {#if t.action}
       <!-- V3-21: Aktion als normaler Sekundärknopf (Höhe --control-h, Kante wie alle Knöpfe). -->
-      <button type="button" class="btn-secondary action" onclick={() => runAction(t)}>{t.action.label}</button>
+      <button type="button" class="btn-secondary action" onclick={() => close(t, true)} onkeydown={(e) => onKeydown(e, t)}>{t.action.label}</button>
     {/if}
     <button
       type="button"
       class="close"
       aria-label={CLOSE_NAME[t.kind]}
-      onclick={() => dismissToast(t.id)}
+      onclick={() => close(t, false)}
+      onkeydown={(e) => onKeydown(e, t)}
     ><span aria-hidden="true">×</span></button>
   </div>
 {/snippet}

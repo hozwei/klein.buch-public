@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  isFormalUnitCode,
   isKnownUnit,
   REAUTH_ACTION_KEYS,
   reauthActionLabel,
@@ -45,6 +46,20 @@ describe("Einheiten", () => {
     expect(unitCodeError("xyz")).toBe("„xyz“ ist keine Einheit für die E-Rechnung — bitte aus der Liste wählen.");
     expect(unitCodeError("")).toBe("Bitte eine Einheit aus der Liste wählen.");
     expect(unitCodeError("Pauschal", true)).toMatch(/Pauschale\. Das löst die Position vom Paket\.$/);
+  });
+
+  // U7 (R1-03): formal gültige Rec-20/21-Codes außerhalb der Liste sperren nicht.
+  it("lässt formal gültige Codes außerhalb der Liste zu", () => {
+    for (const c of ["H87", "E48", "P1", "XPP", "KWH"]) {
+      expect(isFormalUnitCode(c)).toBe(true);
+      expect(unitCodeError(c)).toBe("");
+      expect(unitCodeError(c, true)).toBe("");
+    }
+    for (const c of ["Pauschal", "h87", "Std", "H", "ABCD", "H-7", " H87"]) {
+      expect(isFormalUnitCode(c)).toBe(false);
+      expect(unitCodeError(c)).not.toBe("");
+    }
+    expect(unitOptions("H87").at(-1)).toEqual({ value: "H87", label: "H87 (Code, nicht in der Liste)" });
   });
 
   it("behält einen unbekannten Code als Option", () => {

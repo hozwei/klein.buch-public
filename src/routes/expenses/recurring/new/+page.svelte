@@ -144,7 +144,7 @@
 
 <!-- U4 (V2-19/V2-11): Zurück wie der Listentitel; beim Bearbeiten „Änderungen speichern“;
      während des Speicherns aria-disabled statt disabled (Fokus bleibt). -->
-<PageBar back="/expenses/recurring" backLabel="Wiederkehrende Abos" title={editId ? "Abo bearbeiten" : "Neues Abo"}>
+<PageBar back="/expenses/recurring" backLabel="Kosten-Abos" title={editId ? "Abo bearbeiten" : "Neues Abo"}>
   {#snippet actions()}
     {#if loaded && !notFound}
       <a class="btn-secondary" href="/expenses/recurring">Abbrechen</a>

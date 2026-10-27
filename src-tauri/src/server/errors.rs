@@ -139,8 +139,12 @@ impl ApiError {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "timeout",
+            // U7 (R1-07): Kein bloßes „noch einmal versuchen“ — ein erneuter Klick
+            // erzeugt einen neuen Idempotenz-Schlüssel, und Anlage-Commands sind
+            // nicht idempotent (zweite festgeschriebene Buchung).
             "Der Server braucht gerade länger als üblich. Eine begonnene Aktion läuft im \
-             Hintergrund zu Ende — bitte in einem Moment noch einmal versuchen.",
+             Hintergrund zu Ende. Prüf in einem Moment in der Liste, ob sie schon ausgeführt \
+             wurde, bevor du sie wiederholst.",
         )
         .with_retry_after(5)
     }

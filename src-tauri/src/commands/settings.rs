@@ -55,7 +55,7 @@ pub async fn seller_profile_upsert(
     let row = seller_profile::upsert(&pool, &input).await?;
     // Lauf F8d (ADR 0039 Nr. 148): Ein Verzicht auf §19 (wirkt ab Jahresbeginn)
     // oder eine Rückkehr kann den Status bereits aktivierter Kosten ändern.
-    // Nicht blockieren (§ 19 Abs. 2 UStG), aber die betroffenen Anlagen mit
+    // Nicht blockieren (§ 19 Abs. 1 und 3 UStG), aber die betroffenen Anlagen mit
     // Handlungsweg in der Inbox nennen.
     let prev_klein = prev.as_ref().is_none_or(|p| p.is_kleinunternehmer == 1);
     if prev_klein != (row.is_kleinunternehmer == 1) {

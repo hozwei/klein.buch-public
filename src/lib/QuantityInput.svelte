@@ -7,10 +7,12 @@
   // `integer` macht daraus eine Ganzzahl-Eingabe (Tage, Port, Jahr, Zähler)
   // mit `inputmode="numeric"`. Achtung Mengen: Ein einzelner Punkt mit drei
   // Ziffern ist ein Tausenderpunkt (`1.234` = 1234, Plan-Regel); die Anzeige
-  // nach dem Verlassen („1.234“) macht das sichtbar.
+  // nach dem Verlassen („1.234“) sieht aber aus wie die Eingabe — U7 (R1-08): Dann
+  // nennt ein Hinweis unter dem Feld die Auslegung („Gelesen als 1234 … Meinst du
+  // 1,234?“); er sperrt nichts und verschwindet bei der nächsten Eingabe.
   import { untrack } from "svelte";
   import { randomId } from "#lib/browser.ts";
-  import { formatQuantity, parseQuantity, QUANTITY_DECIMALS } from "#lib/money.ts";
+  import { formatQuantity, parseQuantity, quantityReadingNote, QUANTITY_DECIMALS } from "#lib/money.ts";
 
   let {
     value = $bindable<number | null>(null),
@@ -78,6 +80,7 @@
   const inputId = $derived(id ?? `qi-${uid}`);
   const hintId = `qi-hint-${uid}`;
   const errorId = `qi-err-${uid}`;
+  const noteId = `qi-note-${uid}`;
   const frac = $derived(integer ? 0 : maxFractionDigits);
 
   function parse(t: string) {
@@ -93,6 +96,7 @@
   let own: number | null = untrack(() => value ?? null);
   let atFocus: number | null = null;
   let shown = $state("");
+  let note = $state("");
 
   function currentError(t: string): string {
     const r = parse(t);
@@ -105,7 +109,8 @@
   const visibleError = $derived(error || (showErrors ? parseError : shown));
   // U4 (V4-14): Hinweis bleibt bei einem Fehler stehen (Korrekturhilfe, 3.3.3).
   const describedBy = $derived(
-    [visibleError ? errorId : "", hint ? hintId : ""].filter(Boolean).join(" ") || undefined,
+    [visibleError ? errorId : "", note && !visibleError ? noteId : "", hint ? hintId : ""].filter(Boolean).join(" ") ||
+      undefined,
   );
 
   $effect(() => {
@@ -128,6 +133,7 @@
     const v = r.ok ? r.value : null;
     own = v;
     value = v;
+    note = "";
     if (shown && !currentError(text)) shown = "";
   }
 
@@ -143,6 +149,7 @@
       own = ext;
       text = fmt(ext);
     } else {
+      note = quantityReadingNote(text, frac);
       const r = parse(text);
       if (r.ok) text = fmt(r.value);
     }
@@ -198,6 +205,9 @@
   </div>
   {#if visibleError}
     <div id={errorId} class="msg err">{visibleError}</div>
+  {/if}
+  {#if note && !visibleError}
+    <div id={noteId} class="msg hint">{note}</div>
   {/if}
   {#if hint}
     <div id={hintId} class="msg hint">{hint}</div>

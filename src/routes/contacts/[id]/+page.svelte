@@ -183,6 +183,7 @@
   back="/contacts"
   backLabel="Kontakte"
   title={contact?.name ?? (notFound ? "Kontakt nicht gefunden" : "Kontakt")}
+  docTitle={notFound ? "Kontakt nicht gefunden" : "Kontakt"}
   secondary={contact && contact.anonymizedAt == null
     ? [{ label: exporting ? "Erstelle Auskunft …" : "DSGVO-Auskunft", onSelect: handleDsgvoExport, disabled: exporting }]
     : []}

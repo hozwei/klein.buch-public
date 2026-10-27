@@ -89,6 +89,11 @@ async fn locked_invoice(env: &Env) -> String {
 }
 
 async fn locked_invoice_on(env: &Env, today: NaiveDate) -> String {
+    locked_invoice_with(env, today, "N/A").await
+}
+
+/// Festgeschriebene Rechnung mit Käuferreferenz BT-10 (z. B. Leitweg-ID).
+async fn locked_invoice_with(env: &Env, today: NaiveDate, buyer_reference: &str) -> String {
     let pool = env.ctx.pool().unwrap();
     let contact_id = contacts::create(
         &pool,
@@ -141,7 +146,7 @@ async fn locked_invoice_on(env: &Env, today: NaiveDate) -> String {
     let draft = inv_cmd::create_invoice_draft_from_input(&pool, &contact_id, &input, None)
         .await
         .unwrap();
-    inv_cmd::run_lock_pipeline(&pool, &env.ctx.paths, &draft.invoice.id, "N/A")
+    inv_cmd::run_lock_pipeline(&pool, &env.ctx.paths, &draft.invoice.id, buyer_reference)
         .await
         .unwrap();
     draft.invoice.id
@@ -201,6 +206,93 @@ async fn storno_core_cancels_original_and_locks_storno() {
 /// W14 (GoBD): Storno-Datum nicht vor der Rechnung, nicht in der Zukunft, nicht
 /// in einem abgeschlossenen Geschäftsjahr — die EÜR eines festgeschriebenen
 /// Jahres darf sich nicht nachträglich ändern.
+/// U7 (R1-01): Der Storno-Beleg einer Behördenrechnung trägt dieselbe
+/// Leitweg-ID (BT-10) wie das Original, gelesen aus dessen archivierter XML.
+/// Ohne Leitweg-ID bleibt es bei „N/A“; ein manipuliertes Archiv bricht ab.
+#[tokio::test]
+async fn storno_takes_buyer_reference_from_the_archived_original() {
+    let env = setup(true).await;
+    let pool = env.ctx.pool().unwrap();
+    let today = klein_buch_lib::clock::today_berlin();
+    let cancel = |id: String| {
+        inv_cmd::invoices_cancel(
+            &env.ctx,
+            inv_cmd::InvoicesCancelArgs {
+                args: inv_cmd::CancelArgs {
+                    invoice_id: id,
+                    reason: "Falscher Empfänger".into(),
+                    storno_date: None,
+                },
+            },
+        )
+    };
+    let storno_xml = |archive_id: String| {
+        let pool = pool.clone();
+        async move {
+            String::from_utf8(
+                klein_buch_lib::archive::store::read_and_verify_silent(&pool, &archive_id)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+    };
+
+    let id = locked_invoice_with(&env, today, "991-12345-67").await;
+    let resp = cancel(id.clone()).await.unwrap();
+    let xml = storno_xml(resp.storno.xml_archive_id.clone()).await;
+    assert!(
+        xml.contains("<ram:BuyerReference>991-12345-67</ram:BuyerReference>"),
+        "BT-10 des Originals im Storno: {xml}"
+    );
+    // Das Lesen des Originals steht im Audit-Log (GoBD-Nachvollziehbarkeit).
+    let original = klein_buch_lib::db::repo::invoices::get(&pool, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let reads: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audit_log WHERE action = 'archive.read' AND entity_id = ?",
+    )
+    .bind(original.xml_archive_id.as_deref().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reads, 1);
+
+    // Ohne Leitweg-ID: „N/A“ wie beim Original.
+    let plain = locked_invoice_on(&env, today).await;
+    let resp = cancel(plain).await.unwrap();
+    let xml = storno_xml(resp.storno.xml_archive_id.clone()).await;
+    assert!(xml.contains("<ram:BuyerReference>N/A</ram:BuyerReference>"));
+
+    // Manipulierte Original-XML: kein Storno mit ungeprüften Daten.
+    let tampered = locked_invoice_with(&env, today, "991-12345-67").await;
+    let row = klein_buch_lib::db::repo::invoices::get(&pool, &tampered)
+        .await
+        .unwrap()
+        .unwrap();
+    let path: String = sqlx::query_scalar("SELECT file_path FROM archive_entries WHERE id = ?")
+        .bind(row.xml_archive_id.as_deref().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    std::fs::set_permissions(&path, perms).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    let pos = bytes.len() / 2;
+    bytes[pos] ^= 0x01;
+    std::fs::write(&path, bytes).unwrap();
+    let err = cancel(tampered.clone()).await.unwrap_err();
+    assert!(err.to_string().contains("archive tamper"), "{err}");
+    let after = klein_buch_lib::db::repo::invoices::get(&pool, &tampered)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(after.status, "canceled", "Original bleibt unverändert");
+}
+
 #[tokio::test]
 async fn storno_date_must_be_in_an_open_year_after_the_invoice() {
     use chrono::Datelike as _;

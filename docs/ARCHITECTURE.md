@@ -1,4 +1,4 @@
-# Klein.Buch — Architektur (Stand Phase W, Server-Betrieb)
+# Klein.Buch — Architektur (Stand Lauf 2026.11, Server-Betrieb)
 
 Klein.Buch ist eine selbst gehostete EÜR-Buchhaltung für deutsche
 §19-Kleinunternehmer: ein Docker-Image, ein Nutzer pro Instanz, bedient im
@@ -11,15 +11,17 @@ Sidecar-Bridge, Scheduler-Modell und die nicht verhandelbaren Hard-Rules.
 ADR 0031) + DSGVO Auskunft/Anonymisierung (ADR 0032) + Phase 4 (Abo-Rechnungen,
 ADR 0033) + G1 Security/Backup-Härtung (ADRs 0034–0036) + Phase 7
 (E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039) + **Lauf E/F** (Entscheidungen,
-Funktion und Technik vor dem UI/UX-Lauf; ADR 0040):
-Tauri, Desktop-Shell und Windows-Installer sind entfallen; ein HTTP-Server
+Funktion und Technik vor dem UI/UX-Lauf; ADR 0040) + **Lauf 2026.11**
+(Oberfläche für Smartphone, Tablet und Desktop; ADR 0041, §2g):
+Tauri und die Desktop-Fassung sind entfallen; ein HTTP-Server
 `klein-buch-server` (axum) liefert API und SPA aus.
 
 **Schema-Stand v32** (Migrationen 0001–0032 forward-only; 0031 = Tabelle
 `secrets` für Zugangsdaten, 0032 = GoBD-Absicherungen aus Lauf F). **ADRs
-0001–0040** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038 (NSIS)
-ab und ändert zwölf weitere per Amendment; ADR 0040 regelt Dauerbetrieb, Start-
-und Zeitlogik (Lauf F).
+0001–0041** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038
+(Desktop-Release-Bundle) ab und ändert zwölf weitere per Amendment; ADR 0040 regelt
+Dauerbetrieb, Start- und Zeitlogik (Lauf F); ADR 0041 legt die UI/UX-Standards fest
+(Lauf 2026.11, in Arbeit bis U7).
 Betrieb: `docs/operations-guide.md`; Build und Release:
 `docs/architecture/build-and-release.md`.
 
@@ -92,8 +94,8 @@ Ablage eines angewendeten Restores. `commands::registry` ist die Allowlist für
 `POST /api/cmd/{name}` und listet jeden Kern mit Auth-Klasse
 (`public`/`session`/`reauth`/`conditional`; bedingte Re-Auth prüft der Kern,
 Lauf F4a), Art (`Read`/`Write`/`Job`), Kostenklasse und Körperlimit. Die bis
-Lauf F6 nur gesperrt mitgeführten Desktop-Commands (Explorer, Lizenzpfad,
-MS-Graph, Vorgänger der Auth-Routen) sind samt Kern entfernt; Desktop-
+Lauf F6 nur gesperrt mitgeführten Desktop-Commands (Dateimanager-Funktionen,
+Lizenzpfad, MS-Graph, Vorgänger der Auth-Routen) sind samt Kern entfernt; Desktop-
 Nebenwirkungen (`DesktopActions`) kennt `AppCtx` nicht mehr (ADR 0039 Nr. 138).
 
 **Verschlüsselung at Rest** (ADR 0035). Die SQLite-Datei ist
@@ -211,6 +213,30 @@ entfallen (E11, Code entfernt in W11); Eingangsrechnungen kommen per Upload
 | `nettest` | Port-Allowlist und Kontingent für Verbindungstests, SFTP-Probe-Speicher, Prüfung von SMTP-/SFTP-Hosts (`check_host`) |
 | `build_info` | Version, Commit, Tag, Quell-URL (AGPL §13, `/api/public/info`) |
 | `clock`, `limits`, `locks` | Uhr Europe/Berlin; CPU-Arbeit außerhalb der Runtime; Sperren je Beleg/Pfad/Vorlage (W1/W2) |
+
+### 2g. Lauf 2026.11 — Oberfläche (ADR 0041)
+
+Das Frontend (`src/`, SvelteKit 3 mit adapter-static, Svelte 5 Runes) ist eine SPA, die der
+Server ausliefert; Backend-Aufrufe laufen nur über `src/lib/api.ts` → `transport.ts`. Lauf
+2026.11 hat die Oberfläche für Smartphone, Tablet und Desktop überarbeitet; sie orientiert sich
+an WCAG 2.2 AA und wurde mit axe-core, eigenen Messungen und manuell geprüft (Prüf-Harness
+außerhalb des Repositorys). Maßgeblich sind ADR 0041 (Einzelentscheidungen ab Nr. 1) und die
+Designleitlinie `architecture/design.md`; dieser Abschnitt nennt nur die Bausteine.
+
+| Bereich | Ort | Verantwortung |
+|---|---|---|
+| Tokens | `src/lib/styles/tokens.css` | Palette `--c-*`, darüber Rollen (`--text*`, `--surface-*`, `--line*`, `--status-*`, `--focus-*`) und Skalen (Abstände, Typo-Rollen `--type-*`, Bedienhöhe `--control-h`, Trefferflächen `--target*`, Radien, Schatten); globale Regeln für Feldrahmen, Fokusring, Druckansicht und reduzierte Bewegung. Bausteine nutzen nur Rollen (Nr. 5–8, 60–75). |
+| Bausteine | `src/lib/*.svelte` | `PageBar` (Seitentitel als h1, Hauptaktion, Nebenaktionen, Menü „Mehr“), `ActionMenu` (Menu-Button-Muster, Popover-API), `Button`, `Card`, `Table` (Karten bis 820 px, Kartenraster), `Badge` (Status mit Punkt bzw. neutrales Merkmal), `Banner`, `ToastHost`, `FormField`, `MoneyInput`/`QuantityInput` (Leseregel in `money.ts`, Ziffern-Strings und `bigint`), `ContactSelect` (Suchfeld plus natives Auswahlfeld), `DocNo`, `Toggle`, `LoadingState`, `RequiredLegend`, Dialoge über `focusTrap`, `modalStack` und `portal` |
+| Layout und Container Queries | `src/routes/+layout.svelte` | Seitenleiste mit Gruppe „Sitzung“; auf Touch-Geräten und bis 900 px Breite ein Drawer (Hintergrund `inert`). `<main>` ist der Container `kb-main`: Seiten und Tabellen fragen die Inhaltsbreite ab, nicht den Viewport (Spaltenpriorität `.kb-col-opt1..3`, Formular-Raster `.kb-form-grid`; Nr. 40–43, 53). Sprunglink „Zum Inhalt“, `scroll-padding` gegen verdeckten Fokus (Nr. 10). |
+| Seitentitel | `src/lib/pageTitle.svelte.ts` | `document.title` = „<Titel> – Klein.Buch“; Quellen: Anmelde-Maske, Fehlerseite, PageBar-Titel, Handbuch-Kapitel, sonst Ersatztitel je Route; gesetzt vor dem Zeichnen, damit die Routen-Ansage von SvelteKit den neuen Titel liest (Nr. 160) |
+| Hilfe und F1 | `src/lib/routeHelp.ts`, `src/lib/handbook/`, `src/routes/help/` | F1 öffnet das Handbuch-Kapitel zur Route (Präfixtabelle, Test gegen die Slugs), sonst die Startseite des Handbuchs; nicht in Eingabefeldern (Nr. 161). Das Handbuch (`src-tauri/resources/handbook/*.md`) wird beim Build eingebunden (`architecture/handbook.md`). |
+| Begriffe und Status | `src/lib/labels.ts`, Status-Helfer je Bereich (`routes/{invoices,quotes,expenses,assets}/*Status.ts`) | Ein Wort je Zustand auf allen Seiten, Einheiten im Klartext (Codes nach UN/ECE Rec 20 bleiben gespeichert), Re-Auth-Titel je Command (Test gegen die Registry; Nr. 73, 163, 185, 201) |
+| Formate | `src/lib/format.ts`, `src/lib/date.ts`, `src/lib/money.ts` | DIN 5008 (geschütztes Leerzeichen vor „€“ und „%“, IBAN in Vierergruppen, echtes Minuszeichen), Datum TT.MM.JJJJ in Europe/Berlin, deutsche Betragseingabe „1.234,56“ ohne Float (Nr. 15–19, 206) |
+| Fehlerseite, Manifest | `src/routes/+error.svelte`, `static/manifest.webmanifest` | deutsche Fehlerseite mit Weg zurück (Nr. 162); Web-App-Manifest für „Zum Startbildschirm“ ohne Service Worker und ohne Offline-Funktion, CSP unverändert (Nr. 72) |
+
+Server-Seite: neue Lesefelder ohne Migration und der Lese-Command `assets_disposal_preview`
+(Nr. 80–86, `architecture/modules.md` §14, `architecture/data-model.md` §2g); Meldungen des
+Servers in der Sprache der Oberfläche, nur Texte, keine Logik (Nr. 168).
 
 ---
 
@@ -706,6 +732,10 @@ den verlinkten ADRs.
   Hintergrund, Anmeldung und Härtung, Fachlogik, Tauri-Altcode entfernt,
   SvelteKit 3 / Vite 8 / Node 24 / Typst 0.15, CI und Doku. Erscheint mit
   2026.11.0 nach dem UI/UX-Lauf.
+- **Lauf 2026.11 (U0–U7, ADR 0041).** Oberfläche für Smartphone, Tablet und
+  Desktop: Tokens und Bausteine, deutsche Betragseingabe, Fehler am Feld, Menü
+  „Mehr“, Seitentitel, F1 zum Kapitel, Begriffe der Oberfläche in Handbuch und
+  Server-Meldungen, Lesefelder ohne Migration (§2g). Version 2026.11.0.
 
 **Auslieferung** ist das signierte Image `ghcr.io/hozwei/klein-buch:<CalVer>`
 aus dem öffentlichen Repository, mit SBOM und Quellarchiv je Release; betrieben
@@ -726,10 +756,11 @@ Dateien in `docs/architecture/`:
 | [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | 2026-10-25 (Lauf F2) |
 | [`architecture/build-and-release.md`](architecture/build-and-release.md) | Image-Build (`Dockerfile`), Sidecar aus geprüften Quellen, CI-Gates, Trockenlauf, Release mit Signatur/SBOM/Quellarchiv, Veröffentlichen | Phase W (W13) |
 | [`architecture/paragraph-19.md`](architecture/paragraph-19.md) | §19-Logik: UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Verzicht/5-Jahres-Bindung, §14c-Schutz | 2026-05-26 |
-| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0040) mit Querverweisen | 2026-10-25 |
-| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F |
-| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste | 2026-10-25, Schema v32 (inkl. 0032 GoBD-Absicherungen, ON DELETE) |
+| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0041) mit Querverweisen | 2026-10-27 (Lauf 2026.11, U6) |
+| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F und Lauf 2026.11 (Lesefelder, `assets_disposal_preview`) |
+| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste, abgeleitete Lesefelder (§2g) | 2026-10-27, Schema v32 (inkl. 0032 GoBD-Absicherungen, ON DELETE; Lesefelder Lauf 2026.11) |
 | [`architecture/handbook.md`](architecture/handbook.md) | Aufbau und Konventionen des eingebauten Handbuchs | — |
+| [`architecture/design.md`](architecture/design.md) | Designleitlinie: Tokens, Bausteine, Status-Wörter, Muster (Listen, Detailseiten, Editoren, Bestätigungen), Responsive, deutsche Formate | 2026-10-26 (Lauf 2026.11, U4) |
 | [`architecture/conventions.md`](architecture/conventions.md) | Doku-Konventionen (Sprache, Aufbau, „Letzte Verifikation") | 2026-05-26 |
 
 **Lese-Reihenfolge.** Wer das System zum ersten Mal versteht, liest diese Datei
@@ -747,4 +778,7 @@ W13 geprüft). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
 `auth.rs`, `policy.rs`, `health.rs`), `src-tauri/src/{app_ctx,config,seed,uploads,downloads,secrets}.rs`,
 `src-tauri/src/scheduler/tick.rs`, `src-tauri/src/db/mod.rs`,
 `src-tauri/src/commands/{registry,backup}.rs`, `src-tauri/src/einvoice/`,
-`Dockerfile`, ADR 0039.
+`Dockerfile`, ADR 0039. Nachtrag 2026-10-27 (Lauf 2026.11, U6; Version 2026.11.0,
+ADRs 0001–0041): Stand-Zeile, ADR-Zählung, §2g Oberfläche (gegen `src/lib/`,
+`src/lib/styles/tokens.css`, `src/routes/+layout.svelte`, `pageTitle.svelte.ts`,
+`routeHelp.ts`, `static/manifest.webmanifest` und ADR 0041 geprüft), §8 und §9.

@@ -25,15 +25,18 @@ gesichert.
 Klein.Buch hält Dich nicht vom Arbeiten ab, solange kein externes Ziel
 eingerichtet ist. Du kannst weiter Rechnungen festschreiben. Aber es
 erinnert Dich deutlich: Die Seite "Backups" zeigt eine Warnung, die
-Startseite zeigt die Aufgabe "Kein externes Backup-Ziel eingerichtet."
-mit dem Knopf "Ziele prüfen", und einmal pro Woche erscheint unter
-"Hinweise" der Eintrag "Kein externes Backup-Ziel".
+Startseite zeigt unter "Anstehende Aufgaben" den Eintrag "Kein externes
+Backup-Ziel eingerichtet." mit dem Knopf "Ziel einrichten" und in der
+Kennzahl "Backup" den Wert "Kein Ziel", und einmal pro Woche erscheint
+unter "Hinweise" der Eintrag "Kein externes Backup-Ziel".
 
-Dieselbe Aufgabe zeigt die Startseite, wenn ein Ziel beim letzten Backup
-fehlschlug ("Ein externes Backup-Ziel ist beim letzten Backup
-fehlgeschlagen.") oder wenn ein Ziel noch keine Kopie hat bzw. seine
-letzte Kopie älter als sieben Tage ist ("Ein externes Backup-Ziel hat
-keine aktuelle Kopie."). Ein neu angelegtes Ziel bekommt seine erste
+Einen Eintrag unter "Anstehende Aufgaben" zeigt die Startseite auch,
+wenn ein Ziel beim letzten Backup fehlschlug ("Ein externes Backup-Ziel
+ist beim letzten Backup fehlgeschlagen.", Knopf "Ziele prüfen"), wenn
+ein Ziel noch keine Kopie hat ("Ein externes Backup-Ziel hat noch keine
+Kopie.") oder wenn die externe Kopie älter als sieben Tage ist ("Die
+externe Kopie ist … Tage alt."); in den beiden letzten Fällen heißt der
+Knopf "Zu den Backups". Ein neu angelegtes Ziel bekommt seine erste
 Kopie mit dem nächsten Backup; mit "Jetzt sichern" geht das sofort.
 
 Es gibt zwei Arten von Zielen: einen Ordner, den der Betreiber in den
@@ -88,8 +91,9 @@ es den Abschnitt "Ordner-Ziel hinzufügen" mit drei Feldern:
 
 Dann klickst Du auf "Ordner-Ziel hinzufügen". Klein.Buch prüft mit einer
 Testdatei, ob es dort schreiben darf. Eventuell fragt es im Fenster
-"Aktion bestätigen" noch einmal nach Daten-Passwort und App-Code. Ab dem
-nächsten Backup wird das Ziel beschrieben.
+"Aktion bestätigen: Backup-Ziel (Verzeichnis) hinzufügen" noch einmal
+nach Daten-Passwort und App-Code. Ab dem nächsten Backup wird das Ziel
+beschrieben.
 
 Steht dort statt der Felder der Hinweis "Unter /backup-targets ist kein
 Ordner eingebunden", fehlt Schritt 1.
@@ -119,10 +123,16 @@ So richtest Du das Ziel ein:
 1. In der Karte "SFTP-Ziel hinzufügen (für Fortgeschrittene)" füllst Du
    "Bezeichnung", "Server (Host)", "Port", "Benutzer", "Zielordner auf
    dem Server" (leer bedeutet: das Home-Verzeichnis des Benutzers) und
-   "Passwort" aus.
-2. Klick auf "Verbindung testen". Klein.Buch verbindet sich, versucht
-   eine Testdatei zu schreiben und zeigt das Ergebnis ("Schreibtest im
-   Zielordner: ok") und den Host-Fingerprint.
+   "Passwort" aus. Bei "Server (Host)" trägst Du nur den Namen oder die
+   IP-Adresse ein, ohne Port und ohne "sftp://"; der Port hat ein eigenes
+   Feld (meist 22). In "Benutzer" und "Passwort" setzt Dein Browser
+   nicht Deine gespeicherten Klein.Buch-Anmeldedaten ein; dort gehören
+   die Zugangsdaten des SFTP-Servers hin.
+2. Klick auf "Verbindung testen". Dafür brauchst Du Server, Benutzer
+   und Passwort; fehlt eine Angabe, steht der Hinweis direkt am Feld.
+   Klein.Buch verbindet sich, versucht eine Testdatei zu schreiben und
+   zeigt das Ergebnis ("Schreibtest im Zielordner: ok") und den
+   Host-Fingerprint.
 3. Vergleiche den Host-Fingerprint mit dem Wert, den Dir der Anbieter
    genannt hat. Der Fingerprint ist eine Art Fingerabdruck des Servers.
    Er beginnt mit `SHA256:`. Wenn Du den Server selbst betreibst, zeigt
@@ -137,8 +147,10 @@ So richtest Du das Ziel ein:
 
 Zwischen Test und Hinzufügen dürfen höchstens zehn Minuten liegen, und
 Server und Port müssen gleich bleiben. Änderst Du einen davon, verlangt
-Klein.Buch einen neuen Test. Insgesamt sind höchstens zehn
-Verbindungstests pro Minute möglich.
+Klein.Buch einen neuen Test. Klickst Du ohne gültigen Test auf "Als
+SFTP-Ziel hinzufügen", steht unter den Knöpfen "Teste zuerst die
+Verbindung und prüfe den Fingerabdruck des Servers." Insgesamt sind
+höchstens zehn Verbindungstests pro Minute möglich.
 
 Das Passwort speichert Klein.Buch verschlüsselt in der Datenbank dieser
 Instanz, nur für dieses eine Ziel. Weil es in der Datenbank liegt, ist
@@ -167,9 +179,12 @@ liegen.
 ## Prüfen, ob es läuft
 
 Klick in der Karte "Backup jetzt erstellen" auf "Jetzt sichern".
-Klein.Buch meldet danach je Ziel, ob die Kopie geklappt hat. In der
-Liste der Ziele steht unter jedem Ziel "Zuletzt erfolgreich" oder
-"Fehlgeschlagen" mit Zeitpunkt und Meldung. Jeder einzelne Versuch steht
+Klein.Buch zeigt danach in der Karte je Ziel "Gespeichert", "Ausgesetzt"
+(nach einer Wiederherstellung bis zur Freigabe) oder "Fehlgeschlagen"
+mit dem Grund. In der Liste der Ziele steht unter jedem Ziel "Letzte
+Kopie:" mit Zeitpunkt und Alter oder "Fehlgeschlagen" mit Zeitpunkt und
+Meldung, dazu "Letzte erfolgreiche Kopie:". Ein Ziel ohne Kopie zeigt
+"Noch kein Backup auf dieses Ziel.". Jeder einzelne Versuch steht
 außerdem im "Backup-Protokoll" oben rechts. Wie Du es liest, erklärt das
 Kapitel "[Backup prüfen](/help/backup-pruefen)". Bei Fehlern hilft das
 Kapitel "[Backup-Fehler](/help/troubleshooting-backup)".
@@ -186,4 +201,4 @@ halb geschriebene Datei trägt deshalb nie den endgültigen Namen.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

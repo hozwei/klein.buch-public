@@ -42,18 +42,29 @@ pub fn anonymization_blocker(open_invoice_drafts: i64, open_quote_drafts: i64) -
     if open_invoice_drafts <= 0 && open_quote_drafts <= 0 {
         return None;
     }
+    // U6-006: Wörter der Oberfläche (Ausstellen, Fertigstellen, „Entwurf verwerfen“).
     let mut parts = Vec::new();
     if open_invoice_drafts > 0 {
-        parts.push(format!("{open_invoice_drafts} offene(r) Rechnungs-Entwurf"));
+        let noun = if open_invoice_drafts == 1 {
+            "Rechnungs-Entwurf"
+        } else {
+            "Rechnungs-Entwürfe"
+        };
+        parts.push(format!("{open_invoice_drafts} {noun}"));
     }
     if open_quote_drafts > 0 {
-        parts.push(format!("{open_quote_drafts} offene(s) Angebot im Entwurf"));
+        let noun = if open_quote_drafts == 1 {
+            "Angebots-Entwurf"
+        } else {
+            "Angebots-Entwürfe"
+        };
+        parts.push(format!("{open_quote_drafts} {noun}"));
     }
     Some(format!(
-        "Anonymisierung nicht möglich: {}. Bitte diese Belege zuerst festschreiben \
-         (ausstellen/versenden) oder verwerfen (Rechnungs-Entwurf) bzw. zurückziehen \
-         (Angebot). Festgeschriebene Belege bleiben mit ihrem Empfänger-Snapshot \
-         erhalten; verworfene Entwürfe verlieren ihn bei der Anonymisierung.",
+        "Anonymisierung nicht möglich: Es gibt noch offene Entwürfe ({}). Stell Rechnungen \
+         zuerst aus und Angebote fertig oder verwirf die Entwürfe („Entwurf verwerfen“ im \
+         Menü „Mehr“). Ausgestellte und fertiggestellte Belege behalten die Empfängerdaten; \
+         verworfene Entwürfe verlieren sie bei der Anonymisierung.",
         parts.join(" und ")
     ))
 }
@@ -120,14 +131,13 @@ mod tests {
     #[test]
     fn blocker_mentions_counts() {
         let msg = anonymization_blocker(2, 0).expect("should block");
-        assert!(msg.contains('2'));
-        assert!(msg.contains("Rechnungs-Entwurf"));
+        assert!(msg.contains("2 Rechnungs-Entwürfe"));
 
         let msg2 = anonymization_blocker(0, 3).expect("should block");
-        assert!(msg2.contains('3'));
-        assert!(msg2.contains("Angebot"));
+        assert!(msg2.contains("3 Angebots-Entwürfe"));
 
         let both = anonymization_blocker(1, 1).expect("should block");
-        assert!(both.contains(" und "));
+        assert!(both.contains("1 Rechnungs-Entwurf und 1 Angebots-Entwurf"));
+        assert!(both.contains("„Entwurf verwerfen“"));
     }
 }

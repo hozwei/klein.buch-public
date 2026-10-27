@@ -59,4 +59,18 @@ describe("flash", () => {
     vi.advanceTimersByTime(5000);
     expect(toastStore.items).toHaveLength(0);
   });
+
+  // U7 (R2-02): Sperre/Sitzungsablauf verwirft alle Toasts samt Aktion und Uhr.
+  it("clearToasts leert den Stapel und stoppt die Uhren", async () => {
+    const { flash, toastStore, clearToasts } = await load();
+    let undone = 0;
+    flash("„Server-Miete“ pausiert.", "ok", { action: { label: "Rückgängig", run: () => undone++ } });
+    flash("Gespeichert.");
+    flash("Fehlgeschlagen.", "error");
+    clearToasts();
+    expect(toastStore.items).toHaveLength(0);
+    vi.advanceTimersByTime(10_000);
+    expect(toastStore.items).toHaveLength(0);
+    expect(undone).toBe(0);
+  });
 });

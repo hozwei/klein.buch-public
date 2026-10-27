@@ -54,15 +54,23 @@ Es gibt zwei nennenswerte Ausnahmen:
    abgesetzt. Gesetzliche Grundlage: §4 Abs. 3 Satz 3 EStG.
    Klein.Buch macht das automatisch und legt die AfA-Buchungen in
    jedem Geschäftsjahr an.
-2. **Wiederkehrende Zahlungen rund um den Jahreswechsel.** Wenn
-   Du eine regelmäßige Zahlung (zum Beispiel Miete) in den 10
-   Tagen vor oder nach dem Jahreswechsel leistest, wird sie dem
-   Jahr zugeordnet, zu dem sie wirtschaftlich gehört — nicht dem
-   Jahr des tatsächlichen Geldflusses. Gesetzliche Grundlage:
-   §11 Abs. 1 Satz 2 EStG (für Einnahmen) und §11 Abs. 2 Satz 2
-   EStG (für Ausgaben), umgangssprachlich "10-Tage-Regel". Die
-   Zuordnung musst Du selbst entscheiden und das Zahlungs-Datum
-   in Klein.Buch entsprechend wählen.
+2. **Wiederkehrende Zahlungen rund um den Jahreswechsel.** Eine
+   regelmäßig wiederkehrende Zahlung (zum Beispiel Miete), die
+   kurze Zeit vor oder nach dem Jahreswechsel fließt, gehört in das
+   Jahr, zu dem sie wirtschaftlich gehört — nicht in das Jahr des
+   tatsächlichen Geldflusses. Als "kurze Zeit" gelten 10 Tage; in
+   diesem Zeitraum müssen sowohl die Zahlung als auch die Fälligkeit
+   liegen. Gesetzliche Grundlage: §11 Abs. 1 Satz 2 EStG (für
+   Einnahmen) und §11 Abs. 2 Satz 2 EStG (für Ausgaben),
+   umgangssprachlich "10-Tage-Regel".
+
+   Klein.Buch ordnet jede Zahlung nach dem Zahlungsdatum zu, das Du
+   einträgst. Trag dort immer den tatsächlichen Zahlungstag ein (das
+   Datum auf dem Konto-Auszug, siehe Kapitel "Zahlung erfassen"), auch
+   wenn die 10-Tage-Regel greift: Ein anderes Datum wäre eine unrichtige
+   Aufzeichnung (GoBD). Ob die Regel greift und wie Du die Zahlung in
+   der Steuererklärung dem anderen Jahr zuordnest, klärst Du mit Deiner
+   Steuerberatung; Klein.Buch rechnet diese Umbuchung nicht.
 
 ## Was in die EÜR rein muss
 
@@ -97,4 +105,4 @@ nachweisen können.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

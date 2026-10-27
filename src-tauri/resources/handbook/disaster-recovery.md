@@ -99,13 +99,14 @@ funktioniert nicht mehr. Die neuen Einmal-Codes gelten weiter.
 
 1. Kopiere die Backup-Datei vom externen Ziel vollständig auf Dein Gerät.
 2. Öffne in der neuen Instanz "Einstellungen" und "Backups" und wähle in
-   der Karte "Wiederherstellen" im Feld "Backup-Datei" die `.kbk`-Datei.
+   der Karte "Wiederherstellen" im Feld "Backup-Datei (.kbk)" die `.kbk`-Datei.
 3. Gib im Feld "Backup-Passwort" die Passphrase ein, die galt, als das
    Backup erstellt wurde.
-4. Klick auf "Wiederherstellen" und bestätige die Rückfrage. Fragt
-   Klein.Buch im Fenster "Aktion bestätigen" nach Daten-Passwort und
-   App-Code, sind das die Passphrase und der Code der neuen Instanz aus
-   Schritt 2.
+4. Klick auf "Wiederherstellen" und bestätige die Rückfrage "Backup
+   wiederherstellen?" mit "Wiederherstellen". Fragt Klein.Buch danach im
+   Fenster "Aktion bestätigen: Backup wiederherstellen" nach
+   Daten-Passwort und App-Code, sind das die Passphrase und der Code der
+   neuen Instanz aus Schritt 2.
 
 Klein.Buch lädt die Datei hoch und prüft sie: Passphrase, Vollständigkeit,
 Version und ob die Datenbank im Backup zu diesem Server passt. Erst dann
@@ -129,14 +130,20 @@ Danach prüfst Du:
    wurde nach dem Stand des Backups zuletzt vergeben (Mail-Ausgang,
    Korrespondenz, Kontoauszug)? Fehlen Belege, hebst Du unter
    "Einstellungen" → "Backups" → "Nummernkreise" den betroffenen Kreis
-   mit "Anheben …" auf die zuletzt vergebene laufende Nummer an. Klein.Buch
-   verlangt eine Begründung (sie steht im Audit-Log) und lässt nur ein
+   an: Klick in seiner Zeile auf "Anheben …", trag im Feld "Zuletzt
+   vergebene Nummer (laufende Nummer)" die zuletzt vergebene laufende
+   Nummer und im Feld "Begründung (Audit-Log)" mindestens 10 Zeichen ein
+   und klick auf "Nummernkreis anheben". Die Rückfrage nennt die nächste
+   Nummer; Du bestätigst mit "Anheben" und, falls Klein.Buch danach
+   fragt, mit Daten-Passwort und App-Code. Klein.Buch lässt nur ein
    Anheben zu, nie ein Absenken. Der Hinweis "Nummernkreise nach der
    Wiederherstellung" unter "Hinweise" erinnert daran.
 2. Unter "Einstellungen" und "Backups": Sind die externen Ziele wieder
    da? Bis zur Freigabe (Punkt 5) gehen Backups nur in den lokalen
-   Ordner. Unter "Wiederkehrende Rechnungen" und "Wiederkehrende Abos":
-   Reihen mit einem offenen Termin bis heute zeigen "Rückstand …"
+   Ordner; nach "Jetzt sichern" stehen die Ziele deshalb als
+   "Ausgesetzt". Unter "Rechnungen" → "Abo-Rechnungen" und "Kosten" →
+   "Kosten-Abos": Reihen mit einem offenen Termin bis heute
+   zeigen "Rückstand …"
    (pausierte Reihen fragen beim Fortsetzen). Prüfe im Mail-Ausgang bzw.
    auf dem Kontoauszug, ob der Termin auf dem alten Server schon
    abgerechnet wurde. "Ab heute fortsetzen" lässt die offenen Termine aus,
@@ -149,9 +156,11 @@ Danach prüfst Du:
    Karte "Archiv-Integrität" mit "Jetzt prüfen" eine Prüfung des
    Archivs.
 5. Erst wenn alles stimmt: Oben im Hinweis "Automatische Abo-Läufe
-   angehalten" auf "Prüfen und freigeben" klicken und bestätigen, dass
-   dies die produktive Instanz ist. Danach laufen Abo-Rechnungen,
-   Abo-Kosten und Versand wieder (größere Rückstände nur nach Rückfrage),
+   angehalten." auf "Prüfen und freigeben" klicken, die Rückfrage "Ist
+   dies die produktive Instanz?" mit "Ja, produktiv — freigeben"
+   beantworten und, falls Klein.Buch danach fragt, mit Daten-Passwort
+   und App-Code bestätigen. Danach laufen Abo-Rechnungen, Abo-Kosten und
+   Versand wieder (größere Rückstände nur nach Rückfrage),
    und Backups gehen wieder auf die externen Ziele. Klick danach auf
    "Jetzt sichern" und schau, ob die Kopie auf jedes Ziel klappt.
 
@@ -214,4 +223,4 @@ neu ein. `/inputs` sichert der Betreiber selbst.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

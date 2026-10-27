@@ -3,7 +3,7 @@ slug: volumes-und-rechte
 title: Volumes und Rechte
 category: betrieb
 order: 30
-keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, seed-manifest, neu, snapshot, data]
+keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, seed-manifest, neu, snapshot, data, browser, datev]
 ---
 
 # Volumes und Rechte
@@ -42,6 +42,13 @@ eingebunden ist, gibt es nicht.
 `/data` und `/inputs` müssen zwei getrennte Volumes sein, und keiner der
 beiden Ordner auf dem Server darf im anderen liegen. Klein.Buch prüft beim
 Start, dass beide wirklich eingebunden sind.
+
+Drei Einstellungen liegen nicht auf dem Server, sondern im Browser: den
+Kontenrahmen sowie die Berater- und Mandantennummer für den
+DATEV-Export merkt sich jeder Browser selbst. Sie stehen deshalb in
+keinem Backup. In einem anderen Browser, auf einem anderen Gerät oder
+nach einem Wechsel der Adresse in `KLEIN_BUCH_PUBLIC_URL` trägst Du sie
+auf der Seite "EÜR-Export" einmal neu ein.
 
 ## Rechte
 
@@ -103,7 +110,7 @@ Die Backups von Klein.Buch enthalten Datenbank, Archiv und Branding
 zum Beispiel mit den übrigen Sicherungen Deines Servers oder per
 Snapshot. Das ist vor allem wichtig, wenn Du Vorlagen angepasst hast.
 Nach einer Wiederherstellung prüft Klein.Buch, ob die PDF-Vorlagen, die
-Dein Verkäuferprofil, offene Entwürfe und Abo-Rechnungen nennen, in
+Deine Firmendaten, offene Entwürfe und Abo-Rechnungen nennen, in
 `/inputs` vorhanden sind, und meldet fehlende unter "Hinweise".
 
 ## Wie Klein.Buch /inputs aktuell hält
@@ -145,4 +152,4 @@ leeren Ordner an und bewahre den alten samt Backups auf.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

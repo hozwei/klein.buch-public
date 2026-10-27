@@ -112,6 +112,16 @@ Klein.Buch warnt in diesem Fall beim Containerstart im Log.
    kennt. Sollen alle Subdomains nur noch über HTTPS erreichbar sein,
    setzt Du HSTS mit `includeSubDomains` (und bei Bedarf `preload`) für
    die Hauptdomain an Deinem Proxy oder Webserver.
+7. Die Kopfzeilen `Content-Encoding` und `Vary` unverändert
+   durchreichen. Klein.Buch liefert die Dateien der Oberfläche schon
+   komprimiert aus (seit 2026.11); der Proxy komprimiert sie nicht ein
+   zweites Mal. Für `/api/` und `/files/` schaltest Du am Proxy keine
+   Kompression ein: Klein.Buch liefert sie absichtlich unkomprimiert,
+   weil Antworten mit Sitzungsdaten sonst angreifbar würden (BREACH)
+   und Belege bitgenau ankommen sollen. Caddy komprimiert nur mit der
+   Anweisung `encode` (im Beispiel unten nicht gesetzt), nginx nur mit
+   `gzip on` (in vielen Grundkonfigurationen gesetzt) und nur für die
+   Typen in `gzip_types`; nimm dort kein `application/json` auf.
 
 Bei den Zeitlimits musst Du meist nichts ändern. Klein.Buch beantwortet
 jede Anfrage innerhalb von 30 Sekunden; längere Arbeiten laufen im
@@ -180,4 +190,4 @@ läuft.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -463,7 +463,7 @@
 <!-- U4 (V1-10, design.md §4.10): Solange Pflichtangaben fehlen, führt die Übersicht zu den
      Firmendaten — oben als Banner und als erste Aufgabe. -->
 {#if sellerTask}
-  <Banner kind="warning" href="/settings/seller" linkLabel={sellerTask.cta}>
+  <Banner kind="warning" href="/settings/seller?next=/" linkLabel={sellerTask.cta}>
     {sellerTask.text}
   </Banner>
 {/if}
@@ -582,13 +582,15 @@
     {:else if taskTotal === 0}
       <p class="empty">Nichts zu tun: keine überfälligen Rechnungen, fälligen Abos oder offenen Hinweise.</p>
     {:else}
+      <!-- U7 (R3-07, design.md §4.9): Die Art der Aufgabe ist ein Merkmal (Tag ohne
+           Punkt); Status-Badge nur „Überfällig“. Die Dringlichkeit trägt der Text. -->
       <ul class="tasks">
         {#if sellerTask}
           <li class="task">
             <div class="task-row">
-              <Badge tone="warning">Firmendaten</Badge>
+              <Badge kind="tag">Firmendaten</Badge>
               <span class="task-text">{sellerTask.text}</span>
-              <a class="btn-secondary" href="/settings/seller">{sellerTask.cta}</a>
+              <a class="btn-secondary" href="/settings/seller?next=/">{sellerTask.cta}</a>
             </div>
           </li>
         {/if}
@@ -601,7 +603,7 @@
                 <DocNo value={inv.invoiceNumber} /> · {inv.contactName}
               </span>
               <span class="task-meta">
-                {inv.overdueDays} {inv.overdueDays === 1 ? "Tag" : "Tage"} fällig
+                {inv.overdueDays} {inv.overdueDays === 1 ? "Tag" : "Tage"} überfällig
               </span>
             </a>
           </li>
@@ -610,7 +612,7 @@
         {#each recurringDue.slice(0, 3) as r (r.id)}
           <li class="task">
             <a class="task-row" href="/recurring-invoices/new?id={r.id}">
-              <Badge tone="warning">Abo fällig</Badge>
+              <Badge kind="tag">Abo fällig</Badge>
               <span class="task-text">{r.label}</span>
               <span class="task-meta">{fmtDate(r.nextDueDate)}</span>
             </a>
@@ -620,7 +622,7 @@
         {#if backupTask}
           <li class="task">
             <div class="task-row">
-              <Badge tone={backupTask.tone}>Backup</Badge>
+              <Badge kind="tag">Backup</Badge>
               <span class="task-text">{backupTask.text}</span>
               <a class="btn-secondary" href="/settings/backup">{backupTask.cta}</a>
             </div>
@@ -630,7 +632,7 @@
         {#if overdueFy !== null}
           <li class="task">
             <div class="task-row">
-              <Badge tone="warning">GJ-Abschluss</Badge>
+              <Badge kind="tag">GJ-Abschluss</Badge>
               <span class="task-text">Geschäftsjahr {overdueFy} noch nicht festgeschrieben.</span>
               <a class="btn-secondary" href="/fiscal-year">Abschließen</a>
             </div>
@@ -640,7 +642,7 @@
         {#if notifCount > 0}
           <li class="task">
             <a class="task-row" href="/notifications">
-              <Badge tone="info">Hinweise</Badge>
+              <Badge kind="tag">Hinweise</Badge>
               <span class="task-text">
                 {notifCount} {notifCount === 1 ? "offener Hinweis" : "offene Hinweise"}.
               </span>

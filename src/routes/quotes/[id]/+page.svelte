@@ -206,7 +206,8 @@
   }
 
   function targetLink(t: ReasonTarget, contactId: string): { href: string; label: string } | null {
-    if (t === "seller") return { href: "/settings/seller", label: "Firmendaten ergänzen" };
+    // U6-005: nach dem Speichern der Firmendaten zurück zu diesem Angebot.
+    if (t === "seller") return { href: `/settings/seller?next=/quotes/${id}`, label: "Firmendaten ergänzen" };
     if (t === "buyer") return { href: `/contacts/${contactId}`, label: "Kontakt ergänzen" };
     return null;
   }
@@ -768,7 +769,7 @@
           {#each sendLog as e (e.id)}
             <tr>
               <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-              <td data-label="Status">{#if e.status === "success"}<Badge tone="success">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
+              <td data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
               <td class="cards-full" data-label="Antwort des Anbieters">
