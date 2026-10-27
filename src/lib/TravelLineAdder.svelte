@@ -1,7 +1,7 @@
 <script lang="ts">
   // Block P1: wiederverwendbarer „Anfahrt"-Block für die Positions-Editoren
   // (Rechnung, Angebot, Umwandlung). km × Satz → eine normale Position.
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { travelSettingsGet, travelCompute } from "#lib/api.ts";
   import type { TravelLine } from "#lib/types.ts";
   import { euro } from "#lib/format.ts";
@@ -33,8 +33,12 @@
   });
 
   async function add() {
+    if (adding) return;
     if (km == null || !(km > 0)) {
       kmError = "Bitte eine Kilometerzahl größer als 0 eingeben.";
+      // Fokus ans Feld mit der Meldung (ADR 0041 Nr. 22).
+      await tick();
+      document.getElementById(kmId)?.focus();
       return;
     }
     kmError = undefined;
@@ -68,7 +72,8 @@
         <input type="checkbox" bind:checked={roundTrip} /> Hin &amp; Rück
       </label>
       <span class="rate">Satz: {euro(rateCents)}/km</span>
-      <button type="button" class="btn-secondary" onclick={add} disabled={adding}>
+      <!-- Während des Rechnens gesperrt, aber fokussierbar (ADR 0041 Nr. 33). -->
+      <button type="button" class="btn-secondary" onclick={add} aria-disabled={adding ? "true" : undefined}>
         + Anfahrt
       </button>
     {/if}
@@ -77,11 +82,11 @@
 
 <style>
   .travel { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; }
-  .lbl { font-weight: 600; font-size: 0.9rem; }
-  .km { width: 8rem; }
-  .rt { display: inline-flex; align-items: center; gap: 0.5rem; min-height: var(--target); font-size: 0.9rem; color: var(--text-muted); cursor: pointer; }
-  .rate { color: var(--text-muted); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
-  .hint { color: var(--text-muted); font-size: 0.9rem; }
+  .lbl { font-weight: 600; font-size: var(--fs-sm); }
+  .km { width: var(--w-short); }
+  .rt { display: inline-flex; align-items: center; gap: 0.5rem; min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); cursor: pointer; }
+  .rate { color: var(--text-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  .hint { color: var(--text-muted); font-size: var(--fs-sm); }
   /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31). Vorher inline-flex mit
      44 px Mindesthöhe — das riss auf dem Handy jede Zeile des Satzes auseinander (U1-Sichtprüfung). */
   .hint a { text-decoration: underline; }

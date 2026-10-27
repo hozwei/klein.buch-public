@@ -164,12 +164,27 @@
 
   let showResults = $derived(query.trim().length >= SEARCH_MIN_QUERY_LENGTH);
   let noResults = $derived(showResults && hits.length === 0);
+
+  // --- Kapitelliste auf dem Handy (U4, U1-066) -------------------------------
+  //
+  // Einspaltig (≤ 760 px Breite oder ≤ 520 px Höhe) stand die ganze Kapitelliste vor
+  // dem Text. Dort ist sie jetzt eingeklappt: „Zur App“, Suchfeld und der Knopf
+  // „Kapitel“ (aria-expanded), dann folgt direkt der Text. Nach einem Seitenwechsel
+  // klappt sie wieder zu. Breitere Ansichten zeigen sie wie bisher (CSS).
+  const chapterCount = groups.reduce((n, g) => n + g.entries.length, 0);
+  let chaptersOpen = $state(false);
+  $effect(() => {
+    void page.url.pathname;
+    chaptersOpen = false;
+  });
 </script>
 
 <div class="help-shell">
   <aside class="help-sidebar" aria-label="Handbuch-Kapitelbaum">
     <a class="back" href="/" aria-label="Zurück zur App">← Zur App</a>
-    <h2 class="help-title">Handbuch</h2>
+    <!-- U4 (V4-09): kein h2 vor dem h1 des Kapitels; die Seitenleiste ist über
+         aria-label benannt, die Überschriften-Navigation beginnt mit dem Kapitel. -->
+    <p class="help-title">Handbuch</p>
 
     <div class="search">
       <label class="search-label" for="handbook-search">Im Handbuch suchen</label>
@@ -223,7 +238,18 @@
         {/if}
       </div>
     {:else}
-      <nav>
+      <button
+        type="button"
+        class="chapters-toggle"
+        aria-expanded={chaptersOpen}
+        aria-controls="help-chapters"
+        onclick={() => (chaptersOpen = !chaptersOpen)}
+      >
+        <span class="cat-arrow" class:turned={chaptersOpen} aria-hidden="true">▸</span>
+        <span class="cat-label">Kapitel</span>
+        <span class="cat-count">{chapterCount}</span>
+      </button>
+      <nav id="help-chapters" class="chapters" class:open={chaptersOpen} aria-label="Kapitel">
         {#each groups as group (group.category)}
           {#if group.entries.length > 0}
             <section class="cat" class:open={isCategoryOpen(group.category)}>
@@ -306,7 +332,7 @@
     background: var(--c-surface);
     border: 1px solid var(--c-border);
     border-radius: var(--r-lg);
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     padding: 1rem 0.75rem 1.25rem;
     overflow-y: auto;
     box-sizing: border-box;
@@ -469,6 +495,8 @@
   }
   .help-title {
     font-size: var(--fs-md);
+    font-weight: 700;
+    line-height: var(--lh-snug);
     margin: 0 0 0.75rem;
     color: var(--c-text);
     padding: 0 0.4rem;
@@ -560,7 +588,7 @@
     background: var(--c-surface);
     border: 1px solid var(--c-border);
     border-radius: var(--r-lg);
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     padding: 1.5rem 1.75rem;
     box-sizing: border-box;
     min-width: 0; /* verhindert, dass <pre>-Inhalt das Grid sprengt */
@@ -635,7 +663,42 @@
      untereinander; die Seite scrollt als Ganzes statt der Spalten. U1: auch
      bei niedriger Höhe (Handy quer, 844×390), sonst bleiben für zwei in sich
      scrollende Spalten nur wenige Zeilen. */
+  /* U4 (U1-066): Knopf „Kapitel“ nur einspaltig; dort ist die Liste eingeklappt. */
+  .chapters-toggle {
+    display: none;
+    width: 100%;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: var(--target);
+    padding: 0.35rem 0.55rem;
+    border: var(--rule-control) var(--line-control);
+    border-radius: var(--radius-control);
+    background: var(--surface-card);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cat-arrow.turned {
+    transform: rotate(90deg);
+  }
+  @media (hover: hover) {
+    .chapters-toggle:hover {
+      background: var(--surface-hover);
+      border-color: var(--line-hover);
+    }
+  }
   @media (max-width: 760px), (max-height: 520px) {
+    .chapters-toggle {
+      display: flex;
+    }
+    .chapters:not(.open) {
+      display: none;
+    }
+    .chapters.open {
+      margin-top: 0.5rem;
+    }
     .help-shell {
       grid-template-columns: 1fr;
       gap: 1rem;

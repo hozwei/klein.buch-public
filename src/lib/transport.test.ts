@@ -3,6 +3,7 @@ import {
   IDEMPOTENCY_HEADER,
   REQUEST_HEADER,
   PassphraseChangeUnclear,
+  REAUTH_CANCELED,
   authChangePassphrase,
   authLogin,
   authRevokeOtherSessions,
@@ -135,8 +136,10 @@ describe("transport.auth", () => {
 
   it("403 reauth_required: Dialog, dann Wiederholung mit demselben Schlüssel", async () => {
     let asked = 0;
-    setReauthHandler(async () => {
+    let askedFor = "";
+    setReauthHandler(async (url) => {
       asked++;
+      askedFor = url;
       return true;
     });
     const calls = mockFetch([
@@ -145,12 +148,14 @@ describe("transport.auth", () => {
     ]);
     await invoke("dsgvo_export", { contactId: "c1" });
     expect(asked).toBe(1);
+    expect(askedFor).toBe("/api/cmd/dsgvo_export");
     expect(calls).toHaveLength(2);
     expect(header(calls[0], IDEMPOTENCY_HEADER)).toBe(header(calls[1], IDEMPOTENCY_HEADER));
 
     setReauthHandler(async () => false);
     mockFetch([json(403, { code: "reauth_required", message: "Bitte bestätigen" })]);
-    await expect(invoke("dsgvo_export", {})).rejects.toBe("Bitte bestätigen");
+    // U4 (V1-09): Abbruch ist kein Server-Fehler, sondern „nichts geändert“.
+    await expect(invoke("dsgvo_export", {})).rejects.toBe(REAUTH_CANCELED);
     setReauthHandler(null);
   });
 

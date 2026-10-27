@@ -3,7 +3,7 @@
   import { onMount } from "svelte";
   import { euerAvailableYears, euerComputeReport } from "#lib/api.ts";
   import type { EuerReport } from "#lib/types.ts";
-  import { euro } from "#lib/format.ts";
+  import { euro, date } from "#lib/format.ts";
   import { expenseCategoryLabel } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
@@ -52,6 +52,20 @@
     !!report &&
       (report.disposalProceedsCents !== 0 || report.disposalBookValueCents !== 0),
   );
+
+  // U4 (Warteliste 3, Übergabe F2/F5): Lesefelder des Reports. Abweichung eines
+  // abgeschlossenen Jahres vom Stand beim Abschluss (nur Anzeige; Audit und Hinweis
+  // schreiben erst die Exporte, ADR 0041 Nr. 80) und Regelbesteuerung im Jahr.
+  const DIFF_LABEL: Record<string, string> = {
+    income: "Einnahmen",
+    expenses: "Ausgaben",
+    afa: "Abschreibungen",
+    surplus: "Ergebnis",
+  };
+  let snapshotMismatch = $derived(
+    report?.snapshotCheck && !report.snapshotCheck.matches ? report.snapshotCheck : null,
+  );
+  let isRegular = $derived(!!report && report.isKleinunternehmer === false);
 </script>
 
 <PageBar title="Steuer-Übersicht (EÜR)">
@@ -80,8 +94,30 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if report}
+  {#if snapshotMismatch}
+    <Banner kind="warning" title="Abweichung vom Jahresabschluss.">
+      Das Geschäftsjahr {snapshotMismatch.fiscalYear} wurde am {date(snapshotMismatch.closedAt)}
+      abgeschlossen. Die heutigen Zahlen weichen davon ab bei:
+      {snapshotMismatch.differences.map((d) => DIFF_LABEL[d] ?? d).join(", ")}. Ergebnis beim
+      Abschluss {euro(snapshotMismatch.snapshot.surplusCents)}, heute
+      {euro(snapshotMismatch.live.surplusCents)}. Kläre die Abweichung vor der Abgabe, am besten
+      mit deiner Steuerberatung.
+    </Banner>
+  {/if}
+
+  {#if isRegular}
+    <Banner kind="info" title="Regelbesteuerung {report.fiscalYear}.">
+      Die Beträge hier sind Zahlungen mit Umsatzsteuer: Vereinnahmte Umsatzsteuer zählt zu den
+      Einnahmen, gezahlte Vorsteuer zu den Ausgaben. Nicht enthalten sind die an das Finanzamt
+      gezahlte und die vom Finanzamt erstattete Umsatzsteuer; die Umsatzsteuer-Voranmeldung
+      erstellt Klein.Buch nicht. Die Anlage EÜR im
+      <a class="kb-link" href="/euer/export">Export</a> trennt Netto und Umsatzsteuer und nennt,
+      was du mit deiner Steuerberatung ergänzen musst.
+    </Banner>
+  {/if}
+
   {#if isEmpty}
     <Banner kind="info">
       Für {report.fiscalYear} sind noch keine bezahlten Rechnungen, Kosten oder
@@ -93,7 +129,7 @@
     <!-- Einnahmen: Schlüssel-Wert-Liste statt Tabelle (zwei Spalten, auch bei 320 px lesbar) -->
     <section class="card" aria-labelledby="euer-income-h">
       <h2 id="euer-income-h">Betriebseinnahmen</h2>
-      <dl class="ledger">
+      <dl class="kb-ledger">
         <div>
           <dt>Bezahlte Rechnungen</dt>
           <dd>{euro(report.invoiceIncomeCents)}</dd>
@@ -110,7 +146,7 @@
             <dd>{euro(report.disposalProceedsCents)}</dd>
           </div>
         {/if}
-        <div class="sum">
+        <div class="kb-sum">
           <dt>Summe Einnahmen</dt>
           <dd>{euro(report.totalIncomeCents)}</dd>
         </div>
@@ -120,11 +156,11 @@
     <!-- Ausgaben -->
     <section class="card" aria-labelledby="euer-exp-h">
       <h2 id="euer-exp-h">Betriebsausgaben</h2>
-      <dl class="ledger">
+      <dl class="kb-ledger">
         {#if report.expensesByCategory.length === 0 && report.depreciationTotalCents === 0 && report.disposalBookValueCents === 0}
           <div class="none">
             <dt class="muted">Keine Ausgaben erfasst.</dt>
-            <dd><a class="inline-link" href="/expenses/new">Kosten erfassen</a></dd>
+            <dd><a class="kb-link kb-target" href="/expenses/new">Kosten erfassen</a></dd>
           </div>
         {/if}
         {#each report.expensesByCategory as c (c.category)}
@@ -145,7 +181,7 @@
             <dd>{euro(report.disposalBookValueCents)}</dd>
           </div>
         {/if}
-        <div class="sum">
+        <div class="kb-sum">
           <dt>Summe Ausgaben</dt>
           <dd>{euro(report.totalExpensesCents)}</dd>
         </div>
@@ -190,20 +226,9 @@
     gap: var(--sp-4);
     margin: var(--sp-4) 0;
   }
-  /* Kontorbuch-Lineatur: feine Linie je Zeile, doppelte Linie über der Summe. */
-  .ledger { margin: 0; }
-  .ledger > div {
-    display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4);
-    padding: var(--sp-2) 0; border-bottom: 1px solid var(--line);
-  }
-  .ledger dt { overflow-wrap: anywhere; min-width: 0; }
-  .ledger dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .ledger > div.reduce { color: var(--status-danger-fg); }
-  .ledger > div.sum {
-    border-top: 3px double var(--line-control); border-bottom: none;
-    padding-top: var(--sp-3); font-weight: 600;
-  }
-  .ledger > div.none { flex-wrap: wrap; }
+  /* Kontorbuch-Lineatur: global .kb-ledger (tokens.css, U4 V3-13); hier nur Abzüge und Leerzeile. */
+  .kb-ledger > div.reduce { color: var(--status-danger-fg); }
+  .kb-ledger > div.none { flex-wrap: wrap; }
   .result {
     display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
     gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md);
@@ -222,6 +247,5 @@
   }
   .muted { color: var(--text-muted); }
   /* U1 (2.5.8): steht allein in der Zeile (kein Fließtext) → volle Trefferfläche. */
-  .inline-link { text-decoration: underline; display: inline-flex; align-items: center; min-height: var(--target); }
   .actions { margin: 0 0 var(--sp-2); }
 </style>

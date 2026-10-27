@@ -85,12 +85,14 @@
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <pre class="body" tabindex="0" aria-label="XML-Inhalt">{payload.xml}</pre>
+      <!-- U4 (V3-15): „Schließen“ wie „Abbrechen“ zuerst und secondary; die einzige primary
+           ist das Ergebnis („XML kopieren“). -->
       <footer class="kb-dialog-foot">
-        <button type="button" class="btn-secondary btn-sm" onclick={copyXml}>
-          XML kopieren
-        </button>
-        <button type="button" class="btn-primary btn-sm" onclick={closeXmlViewer}>
+        <button type="button" class="btn-secondary" onclick={closeXmlViewer}>
           Schließen
+        </button>
+        <button type="button" class="btn-primary" onclick={copyXml}>
+          XML kopieren
         </button>
       </footer>
     </div>
@@ -134,7 +136,7 @@
     color: var(--text);
     background: var(--surface-card);
   }
-  .body:focus-visible { outline-offset: -2px; }
+  .body:focus-visible { outline-offset: var(--focus-offset-inset); }
   /* Niedrige Fenster (U3, Zoom 400 %): Der ganze Dialog scrollt (tokens.css); der
      XML-Text behält eine Mindesthöhe und scrollt in sich weiter. */
   @media screen and (max-height: 420px) {

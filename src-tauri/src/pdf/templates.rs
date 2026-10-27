@@ -22,6 +22,15 @@ pub struct TemplateMeta {
     /// `inputs/pdf-templates/`. Ein `inputs/`-Override eines Built-in-Namens
     /// erscheint als `builtin = false` (die Datei gewinnt).
     pub builtin: bool,
+    /// Stellt die Vorlage Stornos dar (nutzt `storno_of`, LE-CUSTOM-TEMPLATE-STORNO;
+    /// erkannt wie der §19-Marker, nur gelesen — Lauf 2026.11 U4).
+    #[serde(default)]
+    pub supports_storno: bool,
+    /// Ohne Storno-Darstellung: Name der eingebauten Vorlage, mit der die
+    /// Rechnungs-Pipeline Stornos stattdessen erzeugt
+    /// ([`storno_fallback_name`]); sonst `None`.
+    #[serde(default)]
+    pub storno_fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1563,6 +1572,29 @@ pub fn storno_fallback_template(name: &str) -> &'static str {
     builtin_unified(name).unwrap_or(TEMPLATE_KLASSISCH)
 }
 
+/// Name der Vorlage aus [`storno_fallback_template`] (für die Vorlagenliste,
+/// Lauf 2026.11 U4).
+pub fn storno_fallback_name(name: &str) -> &'static str {
+    BUILTIN_UNIFIED_NAMES
+        .iter()
+        .copied()
+        .find(|b| *b == name)
+        .unwrap_or("klassisch")
+}
+
+/// Metadaten einer Vorlage aus ihrem Quelltext (§19-Marker, Storno-Darstellung).
+fn template_meta(name: &str, path: PathBuf, source: &str, builtin: bool) -> TemplateMeta {
+    let supports_storno = crate::pdf::klausel_check::supports_storno(source);
+    TemplateMeta {
+        name: name.to_string(),
+        path,
+        klausel_status: inspect(source).into(),
+        builtin,
+        supports_storno,
+        storno_fallback: (!supports_storno).then(|| storno_fallback_name(name).to_string()),
+    }
+}
+
 /// Löst die **Rechnungs**-Vorlage auf. Reihenfolge: `inputs/pdf-templates/
 /// {name}.typ`-Override (gewinnt immer, deckt auch `default` → `default.typ` ab)
 /// → eingebettete Unified-Built-in → sonst [`load_source`] (Fehler, wenn weder
@@ -1611,12 +1643,7 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
         let source = builtin_unified(name).unwrap_or("");
         map.insert(
             (*name).to_string(),
-            TemplateMeta {
-                name: (*name).to_string(),
-                path: PathBuf::new(),
-                klausel_status: inspect(source).into(),
-                builtin: true,
-            },
+            template_meta(name, PathBuf::new(), source, true),
         );
     }
 
@@ -1648,12 +1675,7 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
             };
             map.insert(
                 stem.to_string(),
-                TemplateMeta {
-                    name: stem.to_string(),
-                    path: path.clone(),
-                    klausel_status: inspect(&source).into(),
-                    builtin: false,
-                },
+                template_meta(stem, path.clone(), &source, false),
             );
         }
     }
@@ -1746,6 +1768,45 @@ mod tests {
         );
         // Trotzdem genau ein „modern"-Eintrag (kein Duplikat).
         assert_eq!(list.iter().filter(|m| m.name == "modern").count(), 1);
+        // U4: die eigene Datei ohne `storno_of` stellt keine Stornos dar —
+        // Stornos entstehen mit der eingebauten Vorlage gleichen Namens.
+        assert!(!modern.supports_storno);
+        assert_eq!(modern.storno_fallback.as_deref(), Some("modern"));
+    }
+
+    // Lauf 2026.11 U4 (Warteliste 11): Die Vorlagenliste sagt, ob eine Vorlage
+    // Stornos darstellt, und nennt sonst die Ersatzvorlage (wie die Pipeline).
+    #[test]
+    fn list_templates_reports_storno_support_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates = dir.path().join("pdf-templates");
+        std::fs::create_dir(&templates).unwrap();
+        std::fs::write(
+            templates.join("mit-storno.typ"),
+            "#let storno_of = data.invoice.at(\"storno_of\", default: none)",
+        )
+        .unwrap();
+        std::fs::write(templates.join("ohne-storno.typ"), "#text[Rechnung]").unwrap();
+
+        let list = list_templates(dir.path()).unwrap();
+        for name in BUILTIN_UNIFIED_NAMES {
+            let m = list.iter().find(|m| &m.name == name).unwrap();
+            assert!(m.supports_storno, "{name}");
+            assert_eq!(m.storno_fallback, None, "{name}");
+        }
+        let with = list.iter().find(|m| m.name == "mit-storno").unwrap();
+        assert!(with.supports_storno);
+        assert_eq!(with.storno_fallback, None);
+        let without = list.iter().find(|m| m.name == "ohne-storno").unwrap();
+        assert!(!without.supports_storno);
+        assert_eq!(without.storno_fallback.as_deref(), Some("klassisch"));
+        assert_eq!(
+            storno_fallback_template("ohne-storno"),
+            builtin_unified("klassisch").unwrap()
+        );
+        let json = serde_json::to_value(without).unwrap();
+        assert_eq!(json["supportsStorno"], false);
+        assert_eq!(json["stornoFallback"], "klassisch");
     }
 
     #[test]

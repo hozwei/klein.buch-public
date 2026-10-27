@@ -241,6 +241,55 @@ pub async fn offsite_status(
     Ok(if stale { "stale" } else { "ok" })
 }
 
+/// Zeitpunkt der jüngsten erfolgreichen Kopie auf einem Ziel (RFC 3339,
+/// Europe/Berlin; Lauf 2026.11 U4): das letzte Ergebnis, wenn es erfolgreich
+/// war, sonst der jüngste erfolgreiche Eintrag im Backup-Protokoll mit Art und
+/// Bezeichnung des Ziels. `None` = noch keine Kopie bekannt.
+pub async fn last_copy_at(
+    pool: &SqlitePool,
+    entry: &TargetEntry,
+    last: Option<&TargetResult>,
+) -> Result<Option<String>> {
+    if let Some(r) = last.filter(|r| r.ok) {
+        return Ok(Some(r.at.clone()));
+    }
+    let (kind, label) = log_meta(entry);
+    let newest: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM backup_log
+          WHERE status = 'ok' AND target_kind = ? AND target_label = ?",
+    )
+    .bind(kind)
+    .bind(label)
+    .fetch_one(pool)
+    .await?;
+    Ok(newest
+        .as_deref()
+        .and_then(crate::clock::db_utc_to_berlin)
+        .map(|t| t.to_rfc3339()))
+}
+
+/// Stand der Off-Site-Sicherung (Lauf 2026.11 U4): der älteste der je Ziel
+/// jüngsten Kopie-Zeitpunkte ([`last_copy_at`]) und sein Alter in Berliner
+/// Kalendertagen (0 = heute; gerechnet wie der Status `stale`). `None`, wenn
+/// kein Ziel eingerichtet ist oder ein Ziel noch keine (lesbare) Kopie hat.
+pub fn oldest_copy(
+    copies: &[Option<String>],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(String, i64)> {
+    let mut oldest: Option<(chrono::DateTime<chrono::FixedOffset>, &String)> = None;
+    for copy in copies {
+        let text = copy.as_ref()?;
+        let at = chrono::DateTime::parse_from_rfc3339(text).ok()?;
+        if oldest.is_none_or(|(o, _)| at < o) {
+            oldest = Some((at, text));
+        }
+    }
+    let (at, text) = oldest?;
+    let day = at.with_timezone(&chrono_tz::Europe::Berlin).date_naive();
+    let age = (crate::clock::berlin_date(now) - day).num_days().max(0);
+    Some((text.clone(), age))
+}
+
 pub fn kind_of(target: &BackupTarget) -> &'static str {
     match target {
         BackupTarget::Directory { .. } => "directory",
@@ -718,5 +767,28 @@ mod tests {
             host_fingerprint: None,
         };
         assert_eq!(log_failed_path(&sftp_root, "f.kbk"), "sftp://u@h:22/f.kbk");
+    }
+
+    // Lauf 2026.11 U4 (Warteliste 13): Stand der Off-Site-Sicherung = älteste der
+    // je Ziel jüngsten Kopien, Alter in Berliner Kalendertagen.
+    #[test]
+    fn oldest_copy_takes_weakest_target_in_berlin_days() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let now = crate::clock::berlin_to_utc(day, 0, 30);
+        let fresh = Some("2026-06-10T00:10:00+02:00".to_string());
+        // Am Vortag kurz nach Mitternacht (Berliner Zeit) → 1 Tag.
+        let older = Some("2026-06-09T00:30:00+02:00".to_string());
+        assert_eq!(
+            oldest_copy(&[fresh.clone(), older], now),
+            Some(("2026-06-09T00:30:00+02:00".to_string(), 1))
+        );
+        assert_eq!(
+            oldest_copy(std::slice::from_ref(&fresh), now),
+            Some(("2026-06-10T00:10:00+02:00".to_string(), 0))
+        );
+        // Ein Ziel ohne Kopie, kein Ziel oder unlesbare Zeit → keine Aussage.
+        assert_eq!(oldest_copy(&[fresh.clone(), None], now), None);
+        assert_eq!(oldest_copy(&[], now), None);
+        assert_eq!(oldest_copy(&[Some("gestern".into())], now), None);
     }
 }

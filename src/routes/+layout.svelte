@@ -17,6 +17,7 @@
   import { focusTrap } from "#lib/focusTrap.ts";
   import {
     notificationsUnreadCount,
+    notificationsList,
     appInfo,
     authLogout,
     authLock,
@@ -27,7 +28,23 @@
   import Banner from "#lib/Banner.svelte";
   import { openAboutDialog } from "#lib/aboutModal.svelte.ts";
   import { formatVersionDisplay } from "#lib/version.ts";
+  import { documentTitle, routeTitle, titleState } from "#lib/pageTitle.svelte.ts";
+  import { helpSlugForRoute } from "#lib/routeHelp.ts";
   let { children } = $props();
+
+  // U4 (2.4.2, ADR 0041 Nr. 160): ein Seitentitel je Seite, „<Seite> – Klein.Buch“.
+  // Reihenfolge der Quellen in pageTitle.svelte.ts; SvelteKits Routen-Ansage liest
+  // ihn nach jeder Navigation vor.
+  const docTitle = $derived.by(() => {
+    if (!appState.ready) return documentTitle(titleState.gate);
+    if (page.error) return documentTitle(page.status === 404 ? "Seite nicht gefunden" : "Fehler");
+    if (titleState.page) return documentTitle(titleState.page);
+    const chapter = page.data?.title;
+    if (typeof chapter === "string" && page.route.id?.startsWith("/help")) {
+      return documentTitle(`${chapter} – Handbuch`);
+    }
+    return documentTitle(routeTitle(page.route.id));
+  });
 
   // Plan W10 / U1: Im Drawer-Band (≤ 900 px oder Touch-Gerät, Plan §8.2) ist
   // die Navigation ein Drawer (Menü-Knopf in der Kopfleiste). Dieselbe
@@ -94,10 +111,15 @@
   }
 
   // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
+  // U4 (V3-16): Der Zähler steht in Akzentfarbe; Gefahrfarbe nur, wenn mindestens ein
+  // dringender Hinweis offen ist (Statusfarbe nur für Status, design.md §2 Nr. 3). Die
+  // Liste (nur lesend) wird dafür nur geholt, wenn überhaupt etwas offen ist.
   let unread = $state(0);
+  let unreadUrgent = $state(false);
   async function refreshUnread() {
     try {
       unread = await notificationsUnreadCount();
+      unreadUrgent = unread > 0 && (await notificationsList(false)).some((n) => n.severity === "urgent");
     } catch {
       // vor dem Entsperren / Bootstrap noch nicht verfügbar — ignorieren.
     }
@@ -139,7 +161,7 @@
         (afterRestore
           ? "\n\nAußerdem gehen Backups wieder auf die externen Ziele — auf einer Probe-Instanz " +
             "würden dort Dateien mit älterem Datenstand neben den echten Backups landen. " +
-            "Vorher prüfen: Nummernkreise und vorgemerkte Entwürfe (Einstellungen → Backup) sowie " +
+            "Vorher prüfen: Nummernkreise und vorgemerkte Entwürfe (Einstellungen → Backups) sowie " +
             "Abo-Vorlagen und ihre nächsten Termine (Hinweis „Abo-Termine nach der Wiederherstellung“)."
           : ""),
       confirmLabel: afterRestore ? "Ja, produktiv — freigeben" : "Freigeben",
@@ -275,7 +297,7 @@
     { href: "/packages", label: "Pakete", icon: "package" },
     { href: "/expenses", label: "Kosten", icon: "receipt" },
     { href: "/assets", label: "Anschaffungen", icon: "briefcase" },
-    { href: "/private-movements", label: "Privat-Geld", icon: "wallet" },
+    { href: "/private-movements", label: "Privatbewegungen", icon: "wallet" },
     { href: "/euer", label: "Steuer (EÜR)", icon: "calculator" },
     { href: "/fiscal-year", label: "Geschäftsjahr", icon: "calendar" },
     { href: "/notifications", label: "Hinweise", icon: "bell" },
@@ -293,7 +315,7 @@
 
   // --- F1-Keybinding (G2-DOC.3.4) ------------------------------------------
   //
-  // F1 öffnet `/help`. In Eingabefeldern (input/textarea/contenteditable
+  // F1 öffnet das Handbuch (U4: das Kapitel zur Route, sonst `/help`). In Eingabefeldern (input/textarea/contenteditable
   // oder eine Combobox-Rolle) wird F1 NICHT abgefangen, damit der Nutzer
   // ein etwaiges OS-/Browser-Default-Verhalten dort behält und das
   // Tippen nicht durcheinandergeht.
@@ -320,8 +342,10 @@
     // Modifikatoren ignorieren — Ctrl+F1 / Shift+F1 sind nicht „unser" F1.
     if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
     ev.preventDefault();
+    // U4 (V1-19, ADR 0041 Nr. 161): F1 öffnet das Kapitel zur aktuellen Seite.
     if (!page.url.pathname.startsWith("/help")) {
-      void goto("/help");
+      const slug = helpSlugForRoute(page.route.id);
+      void goto(slug ? `/help/${slug}` : "/help");
     }
   }
   $effect(() => {
@@ -330,6 +354,8 @@
     return () => window.removeEventListener("keydown", onWindowKeydown);
   });
 </script>
+
+<svelte:head><title>{docTitle}</title></svelte:head>
 
 <!-- App-Shell (Nav + Seiteninhalt) erst nach dem Entsperren rendern. Vorher
      existiert kein DB-Pool, und die Seiten würden ins Leere laufen. Das
@@ -359,7 +385,7 @@
       bind:this={menuToggleEl}
       class="menu-toggle"
       aria-label={(navOpen ? "Menü schließen" : "Menü öffnen") +
-        (unread > 0 ? `, ${unread} ${unread === 1 ? "ungelesener Hinweis" : "ungelesene Hinweise"}` : "")}
+        (unread > 0 ? `, ${unread} ${unread === 1 ? "offener Hinweis" : "offene Hinweise"}${unreadUrgent ? ", dringend" : ""}` : "")}
       aria-expanded={navOpen}
       aria-controls="app-nav"
       onclick={() => (navOpen = !navOpen)}
@@ -373,7 +399,7 @@
         aria-hidden="true"
         ><path d="M4 7h16M4 12h16M4 17h16" /></svg
       >
-      {#if unread > 0}<span class="nav-badge menu-badge" aria-hidden="true">{unread}</span>{/if}
+      {#if unread > 0}<span class="nav-badge menu-badge" class:urgent={unreadUrgent} aria-hidden="true">{unread}</span>{/if}
     </button>
     <a class="mobile-brand" href="/">Klein.Buch</a>
   </header>
@@ -413,16 +439,18 @@
               aria-hidden="true">{@html ICONS[item.icon]}</svg>
             <span class="nav-label">{item.label}</span>
             {#if item.href === "/notifications" && unread > 0}
-              <span class="nav-badge">{unread}<span class="kb-visually-hidden"> ungelesen</span></span>
+              <span class="nav-badge" class:urgent={unreadUrgent}>{unread}<span class="kb-visually-hidden"> offen{unreadUrgent ? ", dringend" : ""}</span></span>
             {/if}
           </a>
         </li>
       {/each}
-      <!--
-        G2-DOC.3.5 — „Über"-Eintrag neben „Hilfe".
-        Bewusst Button statt Link, weil der Über-Dialog ein Modal ist
-        (keine eigene Route, kein URL-State zu reflektieren).
-      -->
+    </ul>
+    <!--
+      U4 (U3-040): Über, Datenbank sperren und Abmelden als eigene Gruppe unten,
+      abgesetzt von den Bereichen. „Über“ ist bewusst ein Knopf (Modal, keine Route;
+      G2-DOC.3.5).
+    -->
+    <ul class="nav-session" aria-label="Sitzung">
       <li>
         <button type="button" class="nav-button" onclick={openAboutDialog}>
           <svg
@@ -489,7 +517,15 @@
       <Banner kind="warning">
         <strong>Automatische Abo-Läufe angehalten.</strong>
         {hold.message}
-        <button class="hold-release" onclick={releaseHold} disabled={releasing}>
+        <button
+          type="button"
+          class="btn-secondary hold-release"
+          onclick={() => {
+            if (!releasing) releaseHold();
+          }}
+          aria-disabled={releasing || undefined}
+          aria-busy={releasing || undefined}
+        >
           {releasing ? "Gebe frei …" : "Prüfen und freigeben"}
         </button>
       </Banner>
@@ -528,7 +564,7 @@
     font-weight: 600;
     border: 1px solid var(--line-control);
     border-radius: var(--r-md);
-    box-shadow: var(--sh-lg);
+    box-shadow: var(--shadow-overlay);
     transform: translateY(calc(-100% - 2 * var(--sp-2) - env(safe-area-inset-top, 0px)));
   }
   .skip-link:focus,
@@ -548,7 +584,7 @@
     height: 100dvh;
     overflow-y: auto;
     overscroll-behavior: contain;
-    /* flex-column, damit der Versions-Footer per `margin-top: auto` unten sitzt. */
+    /* flex-column, damit Sitzungs-Gruppe und Versions-Footer per `margin-top: auto` unten sitzen. */
     display: flex;
     flex-direction: column;
   }
@@ -558,7 +594,13 @@
     margin: 0;
   }
   .sidebar li {
-    margin: 0.15rem 0;
+    margin: 2px 0;
+  }
+  /* U4 (U3-040): Sitzungs-Gruppe unten, über der Version, mit Trennlinie. */
+  .sidebar .nav-session {
+    margin-top: auto;
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--line-inverse);
   }
   .sidebar a,
   .sidebar .nav-button {
@@ -566,17 +608,21 @@
     text-decoration: none;
     display: flex;
     align-items: center;
-    gap: 0.7rem;
+    /* U4 (U3-040): Abstände aus der Skala, Schrift --type-body — „Datenbank sperren“
+       passt in die 208 px breite Leiste in eine Zeile (DejaVu 134,5 px von 142 px);
+       umbrechen darf es weiterhin (Textabstände 1.4.12, andere Schriften). */
+    gap: var(--sp-2);
     min-height: max(var(--target), 36px);
-    padding: 0.5rem 0.6rem;
-    border-radius: var(--r-md);
-    font-size: 0.9rem;
+    padding: var(--sp-2);
+    border-radius: var(--radius-control);
+    font-size: var(--type-body);
+    line-height: var(--lh-snug);
     font-weight: 500;
   }
   @media (hover: hover) {
     .sidebar a:hover,
     .sidebar .nav-button:hover {
-      background: rgba(255, 255, 255, 0.07);
+      background: var(--surface-inverse-hover);
       color: var(--text-inverse);
       text-decoration: none;
     }
@@ -585,9 +631,16 @@
       opacity: 1;
     }
   }
+  /* Aktuelle Seite (U4, V4-12, 1.4.11): Fläche allein hob sich nur 1,46:1 ab. Dazu
+     ein 3-px-Balken links in --text-inverse (11,1:1 gegen die Leiste, 7,59:1 gegen
+     die aktive Fläche) und halbfette Schrift; der Balken ist eine echte Kante
+     (bleibt im Kontrastmodus sichtbar), der Innenabstand gleicht ihn aus. */
   .sidebar li.active a {
-    background: rgba(255, 255, 255, 0.13);
+    background: var(--surface-inverse-active);
     color: var(--text-inverse);
+    font-weight: 600;
+    border-left: 3px solid var(--text-inverse);
+    padding-left: calc(var(--sp-2) - 3px);
   }
   /* Fokus auf Petrol: heller Ring (Weiß, 11,1:1 gegen --surface-inverse). */
   .sidebar a:focus-visible,
@@ -595,7 +648,7 @@
   .mobilebar a:focus-visible,
   .mobilebar button:focus-visible {
     outline: var(--focus-width) solid var(--focus-ring-inverse);
-    outline-offset: 1px;
+    outline-offset: var(--focus-offset-tight);
   }
   /* Icon gedimmt im Ruhezustand, voll bei Hover/Aktiv. */
   .sidebar .nav-icon {
@@ -625,11 +678,12 @@
   .nav-close {
     display: none;
   }
-  /* Zähler: Weiß auf --danger-solid (7,38:1). */
+  /* Zähler (V3-16): Weiß auf --accent (6,02:1); mit dringendem Hinweis Weiß auf
+     --danger-solid (7,38:1). */
   .nav-badge {
-    background: var(--danger-solid);
+    background: var(--accent);
     color: var(--text-on-accent);
-    font-size: 0.7rem;
+    font-size: var(--type-caption);
     font-weight: 700;
     line-height: 1;
     padding: 0.15rem 0.4rem;
@@ -637,12 +691,14 @@
     min-width: 1rem;
     text-align: center;
   }
+  .nav-badge.urgent {
+    background: var(--danger-solid);
+  }
   .sidebar footer {
     color: var(--text-inverse-muted);
-    font-size: 0.75rem;
-    margin-top: auto;
-    padding: 0.75rem 0.5rem 0.25rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: var(--type-caption);
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-2) var(--sp-1);
   }
   /* Reine Versions-Anzeige, nicht klickbar (G4.1-Fix). */
   .sidebar .version-label {
@@ -769,7 +825,7 @@
     .sidebar.open {
       transform: none;
       visibility: visible;
-      box-shadow: var(--sh-xl);
+      box-shadow: var(--shadow-modal);
       transition: transform var(--t-base) var(--ease-apple);
     }
     .nav-close {
@@ -781,7 +837,7 @@
       margin: 0 0 var(--sp-2);
       padding: 0 var(--sp-3);
       background: transparent;
-      border: 1px solid rgba(255, 255, 255, 0.35);
+      border: 1px solid var(--line-inverse-control);
       border-radius: var(--r-md);
       color: var(--text-inverse);
       font: inherit;
@@ -827,15 +883,8 @@
       margin-top: 0;
     }
   }
+  /* U4: Knopf im Banner wie jeder Sekundärknopf (.btn-secondary, gleiche Höhe). */
   .hold-release {
-    margin-left: 0.5rem;
-    min-height: var(--target);
-    border: 1px solid currentColor;
-    background: transparent;
-    color: inherit;
-    border-radius: var(--r-md);
-    padding: 0.2rem 0.6rem;
-    font-weight: 600;
-    cursor: pointer;
+    margin-left: var(--sp-2);
   }
 </style>

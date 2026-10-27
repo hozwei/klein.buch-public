@@ -3,10 +3,18 @@
     fiscalYearOverview,
     fiscalYearClose,
     fiscalYearAutoCloseSet,
+    fiscalYearClosedList,
+    invoicesList,
   } from "#lib/api.ts";
-  import type { FiscalYearOverview, FiscalYearStatus } from "#lib/types.ts";
-  import { euro, date } from "#lib/format.ts";
+  import type {
+    FiscalYearLock,
+    FiscalYearOverview,
+    FiscalYearStatus,
+    InvoiceListItem,
+  } from "#lib/types.ts";
+  import { euro, date, dateTimeShort } from "#lib/format.ts";
   import Badge from "#lib/Badge.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Banner from "#lib/Banner.svelte";
@@ -18,6 +26,12 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let busyYear = $state<number | null>(null);
+  // U4 (F6, Warteliste 14): Abschlussprotokoll — Eckwerte, wie sie beim Abschluss
+  // festgeschrieben wurden (`fiscal_year_closed_list`, liest nur).
+  let closed = $state<FiscalYearLock[]>([]);
+  // U4 (U3-029): Kunde je offener Forderung. Die Übersicht liefert nur die Rechnung;
+  // der Name kommt aus der Rechnungsliste (liest nur, nichts Neues am Server).
+  let customerByInvoice = $state<Map<string, string>>(new Map());
 
   async function load() {
     loading = true;
@@ -29,6 +43,19 @@
     } finally {
       loading = false;
     }
+    // Zusätze: Fehler hier lassen die Übersicht stehen.
+    const [rClosed, rInvoices] = await Promise.allSettled([
+      fiscalYearClosedList(),
+      ov && ov.openReceivables.length > 0 ? invoicesList() : Promise.resolve<InvoiceListItem[]>([]),
+    ]);
+    closed =
+      rClosed.status === "fulfilled"
+        ? [...rClosed.value].sort((a, b) => b.fiscalYear - a.fiscalYear)
+        : [];
+    customerByInvoice =
+      rInvoices.status === "fulfilled"
+        ? new Map(rInvoices.value.map((i): [string, string] => [i.id, i.contactName]))
+        : new Map();
   }
   $effect(() => {
     load();
@@ -51,6 +78,7 @@
   }
 
   async function closeYear(y: FiscalYearStatus) {
+    if (busyYear !== null) return;
     const bullets = [
       `Einnahmen: ${euro(y.incomeTotalCents)}`,
       `Ausgaben: ${euro(y.expenseTotalCents)}`,
@@ -116,7 +144,7 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if ov}
   <div class="auto">
     <Toggle
@@ -130,8 +158,9 @@
   {#if ov.years.some((y) => y.snapshotMatches === false)}
     <Banner kind="warning">
       Bei mindestens einem abgeschlossenen Jahr weichen die heutigen Zahlen vom Stand beim
-      Abschluss ab (markiert mit „Abweichung“). Details zeigt der
-      <a class="inline-link" href="/euer/export">EÜR-Export</a> des Jahres.
+      Abschluss ab (markiert mit „Abweichung“). Den Stand beim Abschluss zeigt das
+      Abschlussprotokoll unten, Details der <a class="kb-link" href="/euer/export">EÜR-Export</a>
+      des Jahres.
     </Banner>
   {/if}
 
@@ -186,10 +215,11 @@
                     type="button"
                     class="btn-primary sm"
                     onclick={() => closeYear(y)}
-                    disabled={busyYear === y.fiscalYear}
+                    aria-disabled={busyYear !== null ? "true" : undefined}
+                    aria-busy={busyYear === y.fiscalYear}
                     aria-label={`Geschäftsjahr ${y.fiscalYear} abschließen`}
                   >
-                    {busyYear === y.fiscalYear ? "Schließe …" : "Abschließen"}
+                    {busyYear === y.fiscalYear ? "Schließt ab …" : "Abschließen"}
                   </button>
                 {:else}
                   <span class="muted small">läuft noch</span>
@@ -215,6 +245,7 @@
         <thead>
           <tr>
             <th>Rechnung</th>
+            <th>Kunde</th>
             <th>Datum</th>
             <th>Fällig</th>
             <th class="num">Offen</th>
@@ -223,7 +254,8 @@
         <tbody>
           {#each ov.openReceivables as r (r.id)}
             <tr>
-              <td data-label="Rechnung"><a class="doc-no" href={`/invoices/${r.id}`}>{r.invoiceNumber}</a></td>
+              <td data-label="Rechnung"><DocNo value={r.invoiceNumber} href={`/invoices/${r.id}`} /></td>
+              <td class="wrap" data-label="Kunde">{customerByInvoice.get(r.id) ?? "—"}</td>
               <td data-label="Datum">{date(r.invoiceDate)}</td>
               <td data-label="Fällig">{date(r.dueDate)}</td>
               <td class="num" data-label="Offen">{euro(r.outstandingCents)}</td>
@@ -231,6 +263,51 @@
           {/each}
         </tbody>
       </table>
+    </section>
+  {/if}
+
+  {#if closed.length > 0}
+    <section class="card" aria-labelledby="fy-log-h">
+      <h2 id="fy-log-h">Abschlussprotokoll</h2>
+      <p class="muted small">
+        Die Eckwerte, wie sie beim Abschluss festgeschrieben wurden. Weichen die heutigen
+        Zahlen davon ab, ist das Jahr in der Übersicht mit „Abweichung“ markiert.
+      </p>
+      <!-- U1: 7 Spalten scrollen bei 821–900 px in sich (Tastatur erreichbar, benannt). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="tbl-scroll" role="region" aria-label="Abschlussprotokoll" tabindex="0">
+        <table class="cards">
+          <caption class="kb-visually-hidden">Abgeschlossene Geschäftsjahre mit den Eckwerten beim Abschluss</caption>
+          <thead>
+            <tr>
+              <th>Jahr</th>
+              <th>Abgeschlossen</th>
+              <th class="num">Einnahmen</th>
+              <th class="num">Ausgaben</th>
+              <th class="num">darin AfA</th>
+              <th class="num">Ergebnis</th>
+              <th>Festgeschrieben</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each closed as c (c.fiscalYear)}
+              <tr>
+                <td data-label="Jahr"><strong>{c.fiscalYear}</strong></td>
+                <td data-label="Abgeschlossen">{dateTimeShort(c.closedAt)}</td>
+                <td class="num" data-label="Einnahmen">{euro(c.incomeTotalCents)}</td>
+                <td class="num" data-label="Ausgaben">{euro(c.expenseTotalCents)}</td>
+                <td class="num" data-label="darin AfA">{euro(c.afaTotalCents)}</td>
+                <td class="num" class:loss={c.surplusCents < 0} data-label="Ergebnis">{euro(c.surplusCents)}</td>
+                <td class="muted small" data-label="Festgeschrieben">
+                  {c.assetsLocked} {c.assetsLocked === 1 ? "Anschaffung" : "Anschaffungen"},
+                  {c.depreciationEntriesLocked} {c.depreciationEntriesLocked === 1 ? "AfA-Buchung" : "AfA-Buchungen"}
+                  · Version {c.appVersion}{#if c.notes}{" "}· {c.notes}{/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     </section>
   {/if}
 
@@ -259,12 +336,8 @@
   .act { text-align: right; }
   .status-cell { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
   .warn { color: var(--status-warning-fg); margin-right: var(--sp-2); }
-  /* Rechnungsnummer als Link: Trefferfläche ≥ --target, unterstrichen (1.4.1). */
-  a.doc-no {
-    display: inline-flex; align-items: center; min-height: var(--target);
-    font-family: var(--font-mono); white-space: nowrap; text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-  .inline-link { text-decoration: underline; }
+  td.wrap { overflow-wrap: break-word; hyphens: manual; }
+  .tbl-scroll { overflow-x: auto; max-width: 100%; position: relative; }
+  @media screen and (max-width: 820px) { .tbl-scroll { overflow: visible; } }
   .disclaimer { max-width: 46rem; line-height: 1.5; font-size: var(--fs-sm); margin-top: var(--sp-4); }
 </style>

@@ -9,6 +9,7 @@
   import { randomId } from "#lib/browser.ts";
 
   const selId = `pkg-sel-${randomId()}`;
+  const errId = `${selId}-err`;
 
   let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
 
@@ -17,6 +18,8 @@
   let selected = $state("");
   let loaded = $state(false);
   let adding = $state(false);
+  // Feldfehler statt Toast (ADR 0041 Nr. 22), erst nach einem Versuch ohne Wahl.
+  let pkgError = $state("");
 
   // Nur aktive Pakete mit veröffentlichter Revision sind einfügbar.
   let active = $derived(
@@ -54,15 +57,18 @@
   });
 
   async function add() {
+    if (adding) return;
     if (!selected) {
-      flash("Bitte ein Paket wählen.", "error");
+      pkgError = "Bitte zuerst ein Paket wählen.";
+      document.getElementById(selId)?.focus();
       return;
     }
+    pkgError = "";
     adding = true;
     try {
       const item = await packageMaterializeItem(selected);
       onAdd(item);
-      flash(`Paket „${item.packageName}" eingefügt.`);
+      flash(`Paket „${item.packageName}“ eingefügt.`);
       selected = "";
     } catch (e) {
       flash(String(e), "error");
@@ -75,7 +81,14 @@
 {#if loaded && active.length > 0}
   <div class="pkg">
     <label class="lbl" for={selId}>Paket</label>
-    <select id={selId} bind:value={selected} class="sel">
+    <select
+      id={selId}
+      bind:value={selected}
+      class="sel"
+      onchange={() => (pkgError = "")}
+      aria-invalid={pkgError ? "true" : undefined}
+      aria-describedby={pkgError ? errId : undefined}
+    >
       <option value="">— Paket wählen —</option>
       {#each groups as g (g.label)}
         <optgroup label={g.label}>
@@ -85,9 +98,11 @@
         </optgroup>
       {/each}
     </select>
-    <button type="button" class="btn-secondary" onclick={add} disabled={adding || !selected}>
+    <!-- Nicht gesperrt: ohne Wahl erscheint der Grund am Feld (design.md §4.1). -->
+    <button type="button" class="btn-secondary" onclick={add} aria-disabled={adding ? "true" : undefined}>
       + Paket
     </button>
+    {#if pkgError}<span id={errId} class="err">{pkgError}</span>{/if}
   </div>
 {:else if loaded}
   <div class="pkg">
@@ -100,13 +115,11 @@
 
 <style>
   .pkg { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; }
-  .lbl { font-weight: 600; font-size: 0.9rem; }
-  .sel {
-    padding: 0.4rem 0.5rem; border: 1px solid var(--line-control); border-radius: var(--r-sm);
-    font: inherit; min-width: min(16rem, 100%); max-width: 100%; min-height: var(--target);
-    background: var(--surface-card); color: var(--text);
-  }
-  .hint { color: var(--text-muted); font-size: 0.9rem; }
+  .lbl { font-weight: 600; font-size: var(--fs-sm); }
+  /* Kante, Höhe und Pfeil kommen aus tokens.css (U4); hier nur die Breite. */
+  .sel { min-width: min(16rem, 100%); max-width: 100%; }
+  .hint { color: var(--text-muted); font-size: var(--fs-sm); }
+  .err { flex-basis: 100%; font-size: var(--fs-xs); color: var(--status-danger-fg); }
   /* Link im Hinweistext: Trefferfläche ≥ --target ohne Zeilensprung. */
   /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31), keine 44-px-Zeile (U1-Sichtprüfung). */
   .hint a { text-decoration: underline; }

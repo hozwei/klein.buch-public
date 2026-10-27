@@ -158,7 +158,7 @@ export const AUDIT_ACTION_LABELS_ADDITIONAL: Record<string, string> = {
   "legal_document.activate": "Rechtstext aktiviert",
   "legal_document.deactivate": "Rechtstext deaktiviert",
   "legal_document.upload": "Rechtstext hochgeladen",
-  "mail.log_failed": "Versandprotokoll unvollständig",
+  "mail.log_failed": "E-Mail-Protokoll unvollständig",
   "mail_account.create": "Postfach angelegt",
   "mail_account.delete": "Postfach gelöscht",
   "mail_account.test_send": "Test-Mail gesendet",
@@ -215,3 +215,176 @@ export function pdfTemplateLabel(name: string | null | undefined): string {
   if (!name) return "—";
   return PDF_TEMPLATE_LABELS[name] ?? name;
 }
+
+/** Alle bekannten Vorlagen in Anzeige-Reihenfolge (Warteliste (17): zentral statt je Seite). */
+export const PDF_TEMPLATE_NAMES: readonly string[] = Object.keys(PDF_TEMPLATE_LABELS);
+
+/**
+ * Text der Option „default“ in einer Vorlagen-Auswahl (ADR 0041 Nr. 28): Der Server
+ * liest „default“ als Platzhalter für die Standardvorlage aus den Einstellungen.
+ * Beispiel: „Wie in den Einstellungen (Modern)“.
+ */
+export function pdfTemplateDefaultOptionLabel(settingsDefault: string | null | undefined): string {
+  return `Wie in den Einstellungen (${pdfTemplateLabel(settingsDefault || "default")})`;
+}
+
+// ---- Mengeneinheiten (U4, U1-060) -------------------------------------------
+
+/**
+ * Häufige Mengeneinheiten nach UN/ECE Recommendation 20 (Code-Liste der
+ * XRechnung) mit deutschem Klartext. Gespeichert und ins XML geschrieben wird
+ * immer der Code; die Oberfläche zeigt den Klartext (Auswahl „Stunde“ statt
+ * „HUR“). Unbekannte Codes (z. B. aus importierten E-Rechnungen) bleiben
+ * erhalten und erscheinen als Code.
+ */
+export const UNIT_CODES: { value: string; label: string; short: string }[] = [
+  { value: "C62", label: "Stück", short: "Stk." },
+  { value: "HUR", label: "Stunde", short: "Std." },
+  { value: "DAY", label: "Tag", short: "Tag" },
+  { value: "WEE", label: "Woche", short: "Wo." },
+  { value: "MON", label: "Monat", short: "Mon." },
+  { value: "ANN", label: "Jahr", short: "Jahr" },
+  { value: "LS", label: "Pauschale", short: "pausch." },
+  { value: "KMT", label: "Kilometer", short: "km" },
+  { value: "MIN", label: "Minute", short: "Min." },
+  { value: "MTR", label: "Meter", short: "m" },
+  { value: "MTK", label: "Quadratmeter", short: "m²" },
+  { value: "KGM", label: "Kilogramm", short: "kg" },
+  { value: "LTR", label: "Liter", short: "l" },
+  { value: "SET", label: "Satz", short: "Satz" },
+];
+
+/** Klartext einer Einheit („Stunde“); unbekannte Codes unverändert. */
+export function unitLabel(code: string | null | undefined): string {
+  if (!code) return "—";
+  return UNIT_CODES.find((u) => u.value === code)?.label ?? code;
+}
+
+/** Kurzform für Tabellen und Karten („Std.“); unbekannte Codes unverändert. */
+export function unitShort(code: string | null | undefined): string {
+  if (!code) return "—";
+  return UNIT_CODES.find((u) => u.value === code)?.short ?? code;
+}
+
+/**
+ * Optionen einer Einheiten-Auswahl: die bekannten Einheiten, dazu der aktuelle
+ * Code, falls er nicht in der Liste steht (sonst verlöre das Feld still seinen Wert).
+ */
+export function unitOptions(current?: string | null): { value: string; label: string }[] {
+  const list = UNIT_CODES.map(({ value, label }) => ({ value, label }));
+  if (current && !list.some((u) => u.value === current)) list.push({ value: current, label: current });
+  return list;
+}
+
+/** Steht der Code in der Einheiten-Liste (`UNIT_CODES`)? */
+export function isKnownUnit(code: string | null | undefined): boolean {
+  return !!code && UNIT_CODES.some((u) => u.value === code);
+}
+
+// Vergleichsschlüssel für Freitext-Einheiten: klein, ohne Punkte und Leerzeichen,
+// Umlaute ausgeschrieben („Stück“ = „stueck“, „Std.“ = „std“).
+function unitKey(s: string): string {
+  return s
+    .toLocaleLowerCase("de")
+    .replace(/[.\s]/g, "")
+    .replace(/ä/g, "ae")
+    .replace(/ö/g, "oe")
+    .replace(/ü/g, "ue")
+    .replace(/ß/g, "ss");
+}
+
+/**
+ * Passende Einheit aus der Liste zu einem Freitext oder kleingeschriebenen Code
+ * („Pauschal“ → Pauschale, „Std.“ → Stunde, „hur“ → Stunde); sonst `null`.
+ * Gleich bei Code, Klartext oder Kurzform; ab drei Zeichen auch, wenn einer der
+ * Anfang des anderen ist („Stunden“, „Pauschal“).
+ */
+export function suggestUnit(text: string | null | undefined): { value: string; label: string } | null {
+  const k = unitKey(text ?? "");
+  if (!k) return null;
+  const exact = UNIT_CODES.find((u) => [u.value, u.label, u.short].some((x) => unitKey(x) === k));
+  if (exact) return { value: exact.value, label: exact.label };
+  if (k.length < 3) return null;
+  const prefix = UNIT_CODES.find((u) => {
+    const l = unitKey(u.label);
+    return l.startsWith(k) || k.startsWith(l);
+  });
+  return prefix ? { value: prefix.value, label: prefix.label } : null;
+}
+
+/**
+ * Meldung am Einheiten-Feld einer Position (U4, Befund E): Die E-Rechnung
+ * (XRechnung, BT-130) verlangt einen Code nach UN/ECE Rec 20; Freitext wie
+ * „Pauschal“ aus älteren Paketen lehnt die KoSIT-Prüfung beim Ausstellen ab.
+ * Leer bei einem Code aus `UNIT_CODES`. `fromPackage`: Position ist noch an ein
+ * Paket gebunden — die Wahl löst sie vom Paket (sauberer Bruch, Hardline Pakete).
+ */
+export function unitCodeError(code: string | null | undefined, fromPackage = false): string {
+  if (isKnownUnit(code)) return "";
+  const tail = fromPackage ? " Das löst die Position vom Paket." : "";
+  if (!code || !code.trim()) return `Bitte eine Einheit aus der Liste wählen.${tail}`;
+  const s = suggestUnit(code);
+  return (
+    `„${code}“ ist keine Einheit für die E-Rechnung — bitte aus der Liste wählen` +
+    (s ? `, z. B. ${s.label}.` : ".") +
+    tail
+  );
+}
+
+// ---- Re-Auth: Name der Aktion (U4, V1-09; ADR 0041 Nr. 163) -----------------
+
+/**
+ * Verständlicher Name je Aktion, die eine frische Bestätigung verlangt (Re-Auth).
+ * Schlüssel: Command-Name (`/api/cmd/<name>`) bzw. Auth-Pfad. Die Liste folgt
+ * `auth_of` in `src-tauri/src/commands/registry.rs` (Test `labels.test.ts`); die
+ * Wörter folgen den Knöpfen und Bereichen der Oberfläche.
+ */
+const REAUTH_ACTIONS: Record<string, string> = {
+  seller_profile_upsert: "Bankverbindung oder Kleinunternehmer-Status ändern",
+  mail_send_invoice: "Rechnung an eine andere Adresse senden",
+  mail_send_quote: "Angebot an eine andere Adresse senden",
+  backup_target_add_directory: "Backup-Ziel (Verzeichnis) hinzufügen",
+  backup_target_add_sftp: "Backup-Ziel (SFTP) hinzufügen",
+  backup_target_remove: "Backup-Ziel entfernen",
+  backup_test_sftp: "SFTP-Verbindung testen",
+  backup_test_sftp_saved: "SFTP-Verbindung testen",
+  backup_restore_apply: "Backup wiederherstellen",
+  backup_download: "Backup herunterladen",
+  mail_account_create: "Postfach anlegen",
+  mail_account_update: "Postfach ändern",
+  mail_account_delete: "Postfach löschen",
+  mail_account_test_connection: "Postfach-Verbindung testen",
+  mail_account_test_saved: "Postfach-Verbindung testen",
+  mail_send_test: "Test-Mail senden",
+  migration_export_run: "Daten exportieren",
+  dsgvo_export: "DSGVO-Auskunft erstellen",
+  contacts_anonymize: "Kontakt anonymisieren",
+  euer_export_pdf: "EÜR als PDF herunterladen",
+  euer_export_elster: "ELSTER-Ausfüllhilfe (CSV) herunterladen",
+  euer_export_detail_zip: "Einzelaufstellung (ZIP) herunterladen",
+  euer_export_datev: "DATEV-Buchungsstapel herunterladen",
+  euer_export_stb_zip: "Steuerberater-Paket herunterladen",
+  payment_accounts_create: "Konto anlegen",
+  payment_accounts_update: "Konto ändern",
+  payment_accounts_set_active: "Konto aktivieren oder deaktivieren",
+  fiscal_year_close: "Geschäftsjahr abschließen",
+  scheduler_release_hold: "Automatische Abo-Läufe freigeben",
+  numbering_raise: "Nummernkreis anheben",
+  numbering_restored_draft_confirm: "Abgleich des Entwurfs bestätigen",
+  invoices_void_draft: "Entwurf verwerfen",
+  "/api/auth/sessions/others/revoke": "Andere Sitzungen abmelden",
+  "/api/auth/totp/renew": "Authenticator-App neu verbinden",
+  "/api/auth/recovery/renew": "Neue Einmal-Codes erzeugen",
+  "/api/auth/passphrase": "Daten-Passwort ändern",
+};
+
+/** Name der Aktion zur Adresse einer Anfrage; `null`, wenn unbekannt. */
+export function reauthActionLabel(url: string): string | null {
+  const path = url.split("?")[0];
+  const cmd = /^\/api\/cmd\/([^/]+)$/.exec(path);
+  const key = cmd ? decodeURIComponent(cmd[1]) : path;
+  return REAUTH_ACTIONS[key] ?? null;
+}
+
+/** Schlüssel der Tabelle (für den Abgleich mit der Registry im Test). */
+export const REAUTH_ACTION_KEYS: readonly string[] = Object.keys(REAUTH_ACTIONS);

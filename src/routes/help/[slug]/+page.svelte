@@ -26,9 +26,11 @@
   import { HANDBOOK_CATEGORY_LABELS } from "#lib/handbook/categories.ts";
   import type { TocEntry } from "#lib/handbook/render.ts";
 
+  // U4 (U3-041): `title` ist die führende H1 der Seite (sonst der Front-Matter-Titel);
+  // der Loader nimmt sie aus dem Text, damit sie nicht doppelt erscheint.
   let {
     data,
-  }: { data: { entry: HandbookEntry; html: string; toc: TocEntry[] } } =
+  }: { data: { entry: HandbookEntry; title?: string; html: string; toc: TocEntry[] } } =
     $props();
 
   const LEGAL_DISCLAIMER = "Klein.Buch ist ein Werkzeug, kein Steuerberater.";
@@ -86,7 +88,7 @@
 </script>
 
 <header class="entry-header">
-  <h1>{data.entry.title}</h1>
+  <h1>{data.title ?? data.entry.title}</h1>
   <!-- U1: Kapitelname statt interner Kennung und Sortierzahl. -->
   <p class="meta">{HANDBOOK_CATEGORY_LABELS[data.entry.category] ?? data.entry.category}</p>
 </header>
@@ -149,7 +151,7 @@
     font-size: var(--fs-lg);
     margin: 2rem 0 0.75rem;
     padding-top: 0.5rem;
-    border-top: 1px solid var(--c-border-subtle, var(--c-border));
+    border-top: var(--rule);
     scroll-margin-top: 1rem;
   }
   .prose :global(h3) {

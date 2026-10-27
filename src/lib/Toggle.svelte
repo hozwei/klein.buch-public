@@ -103,7 +103,7 @@
     width: 16px; height: 16px;
     border-radius: 50%;
     background: var(--surface-card);
-    box-shadow: 0 1px 2px rgba(16, 40, 50, 0.25);
+    box-shadow: var(--shadow-card);
     transition: transform var(--t-fast) ease;
   }
 

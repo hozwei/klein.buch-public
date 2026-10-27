@@ -26,6 +26,7 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
 - **Smartphone und Tablet:** Navigation auf Touch-Geräten immer als Schublade (auch Tablet quer),
   Tippflächen mindestens 44 × 44 px, Eingaben in 16 px (kein Auto-Zoom auf iOS), Dialoge auf kleinen
   Bildschirmen bildschirmfüllend, Tabellen bis 820 px als Karten, im Querformat in sich scrollend.
+- **Schneller auf dem Handy:** Die Oberfläche lädt bei langsamer Verbindung rund doppelt so schnell (Dateien vorkomprimiert, ADR 0041 Nr. 212).
 - **Lesbarkeit und Kontrast:** dunklere Hinweistexte, Feldrahmen, Checkboxen und Schalter;
   deutlicher Fokusrahmen (auch auf der Seitenleiste); Kopfleiste und Dialoge ohne Milchglas.
 - **Tastatur und Screenreader:** Dialoge halten den Fokus, schließen mit Escape und geben den Fokus
@@ -71,6 +72,42 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   den Fokusrahmen; der Fokus bleibt im PDF-Vorschau-Dialog.
 - **Drucken:** Rechnungsliste, Rechnung und EÜR drucken ohne Menü, Leisten und Knöpfe, als echte
   Tabelle ohne abgeschnittene Spalten.
+- **Gestaltung:** ruhigeres, präziseres Erscheinungsbild (eine Bedienhöhe für Knöpfe und Felder,
+  kleinere Radien, Haarlinien statt weicher Schatten, eigene Auswahlfelder ohne Doppelrahmen,
+  Belegnummern als Monospace), Seitenleiste mit Gruppe „Sitzung“, Startseite ohne Begrüßung mit
+  Datum, Kennzahlen und „Letzte Belege“ im Raster. Web-App-Manifest für „Zum Startbildschirm“
+  (ohne Offline-Funktion).
+- **Seitentitel und Hilfe:** Jede Seite hat einen eigenen Titel im Browser-Tab; F1 öffnet das passende
+  Handbuch-Kapitel; unbekannte Adressen zeigen eine deutsche Fehlerseite mit Weg zurück.
+- **Mehr-Menü:** Seiten mit vielen Aktionen zeigen den nächsten Schritt als Hauptaktion, Neben- und
+  Gefahraktionen im Menü „Mehr“ (auf dem Handy auch die Nebenaktionen).
+- **Belege:** eigene Seite „Entwurf bearbeiten“ (alte Links leiten weiter); Karte „Ausstellen“ unter
+  den Positionen mit Prüfung beim Öffnen und verständlichen Ablehnungsgründen samt Links zur
+  Korrektur; nach dem Ausstellen ist „Senden“ der nächste Schritt; Status „Überfällig“ auch in Liste
+  und Detail; Angebote heißen nach dem Fertigstellen „Fertiggestellt“ statt „Versendet“; Einheiten
+  im Klartext (Stunde, Stück, Pauschale …) mit Fehler am Feld bei alten Freitext-Einheiten;
+  Zahlungshistorie mit Konto je Zahlung; der Bezahlt-Hinweis ist in der Rechnung sichtbar;
+  Fälligkeit ist Pflicht, Währung fest Euro; Abo-Läufe mit Auto-Modus fragen vor dem Ausstellen
+  und Versenden nach; Storno mit Rückfrage; Jahr-Filter als Auswahl; Kontaktauswahl mit Suche.
+- **Behoben (Belege):** Eine im Rechnungs-Editor eingetragene Leitweg-ID ging verloren und die
+  E-Rechnung enthielt „N/A“; die Leitweg-ID wird jetzt beim Ausstellen eingegeben.
+- **Kosten, Anschaffungen, EÜR:** „Kosten festschreiben“ (statt „speichern“) mit Rückfrage, Beleg
+  zuerst im Formular, „Korrigiert neu erfassen“ nach einem Storno übernimmt die Werte; Berater- und
+  Mandantennummer im DATEV- und Steuerberater-Export; Hinweis zur Steuerkategorie K beim
+  E-Rechnungs-Import; EÜR mit Hinweis zur Regelbesteuerung und zu Abweichungen vom Jahresabschluss;
+  Abgang mit verbindlicher Restbuchwert-Vorschau; Steuer-Anlage zu §13b-Kosten mit Vorbelegung;
+  AfA je Jahr vor dem Buchen, Abschlussprotokoll der Geschäftsjahre, Detailseite für
+  Privatbewegungen; Alter der letzten externen Sicherung auf der Übersicht.
+- **Einstellungen, Pakete, Kontakte:** Paket-Kategorien umbenennen und sortieren (ohne Ziehen),
+  „Wiederverwenden“ einer früheren Paket-Version; Backup-Ergebnis je Ziel bleibt sichtbar,
+  „ausgesetzt“ nach einer Wiederherstellung statt „fehlgeschlagen“; Rückfrage vor dem
+  Wiederherstellen nennt alle Folgeschritte; Telefon und Steuernummer als „Pflicht für die
+  E-Rechnung“ gekennzeichnet; umkehrbare Aktionen (archivieren, deaktivieren, pausieren) ohne
+  Rückfrage, dafür mit „Rückgängig“.
+- **Bedienung allgemein:** Bestätigungsdialog nennt die Aktion; Abbrechen ist kein Fehler mehr;
+  Knöpfe behalten während einer Aktion den Fokus; Suchergebnisse und Ladezustände werden für
+  Screenreader angesagt; Meldungen des Servers in der Sprache der Oberfläche (Daten als TT.MM.JJJJ,
+  „Firmendaten“, ohne technische Regel-Kennungen).
 - **Behoben:** Bestätigungsdialoge warfen beim Schließen einen Skriptfehler; eine abgebrochene
   Seitenübergangs-Animation erschien als unbehandelter Fehler; auf `/expenses/new` und in Tabellen
   mit versteckten Spaltenköpfen lief die Seite im Querformat seitlich über; die Statusliste der
@@ -97,6 +134,19 @@ dem UI/UX-Lauf (Lauf F) und die UI/UX-Durchläufe für Smartphone, Tablet und De
   2026.10 kann sie nicht einspielen. Das Pflicht-Backup vor der Migration
   entsteht im Format der Vorversion und bleibt mit 2026.10 einspielbar
   (Handbuch „Updates und Rückfall“).
+- **Vorkomprimierte Oberfläche:** Die Dateien der Oberfläche kommen jetzt vorkomprimiert
+  (Brotli/gzip, passend zum `Accept-Encoding` des Browsers) mit `Vary: Accept-Encoding`.
+  Der Reverse-Proxy muss `Content-Encoding` und `Vary` unverändert durchreichen und darf
+  diese Antworten nicht noch einmal komprimieren (Caddy `encode`, nginx `gzip on` und
+  Traefik `compress` überspringen bereits kodierte Antworten von selbst). Für `/api/` und
+  `/files/` keine Kompression am Proxy einschalten: Der Server liefert sie absichtlich
+  unkomprimiert (Schutz gegen BREACH, Belege und Archive bitgenau).
+- **Startbildschirm-App:** Ein Web-App-Manifest erlaubt „Zum Startbildschirm“ (ohne
+  Service Worker, ohne Offline-Funktion; die CSP bleibt unverändert). Auf iOS hat die
+  Startbildschirm-App eigene Cookies und braucht eine eigene Anmeldung.
+- **Meldungstexte der API:** Die Texte im Feld `message` sind sprachlich überarbeitet
+  (Daten als TT.MM.JJJJ, „Firmendaten“, ohne XRechnung-Regelkennungen); die Codes (`code`)
+  sind unverändert. Wer eigene Auswertungen auf Meldungstexte stützt, bitte anpassen.
 - **Eigene PDF-Vorlagen (Typst 0.15):** `json.decode(…)` gibt es nicht mehr;
   Daten lesen mit `json(bytes(sys.inputs.at("data-json")))`. Eine alte Vorlage
   meldet Klein.Buch beim Rendern mit genau diesem Ersatz.

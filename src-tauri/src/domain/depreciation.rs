@@ -285,6 +285,132 @@ pub fn compute_disposal_year_partial(
     }
 }
 
+/// Gebuchtes AfA-Jahr einer Anlage (Ausschnitt aus `depreciation_entries`)
+/// für [`plan_disposal`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookedYear {
+    pub fiscal_year: i64,
+    pub amount_cents: i64,
+    pub book_value_after_cents: i64,
+    /// Festgeschrieben (Jahresabschluss).
+    pub locked: bool,
+}
+
+/// Ergebnis von [`plan_disposal`]: was ein Abgang zum Datum buchen würde.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisposalPlan {
+    /// Offene AfA-Jahre ab dem Abgangsjahr, die der Abgang ersetzt
+    /// (Jahr, Betrag).
+    pub replaced: Vec<(i64, i64)>,
+    /// Nachgeholte AfA der Vorjahre ohne Buchung (Jahr, Betrag).
+    pub catch_up: Vec<(i64, i64)>,
+    /// Restbuchwert zu Beginn des Abgangsjahres (nach Ersetzen und Nachholen).
+    pub book_value_before_cents: i64,
+    /// Anteilige AfA im Abgangsjahr (R 7.4 Abs. 8 EStR).
+    pub disposal_year: DepreciationCalc,
+    /// Ein abgeschlossenes Jahr nach dem Abgangsjahr bzw. festgeschriebene AfA
+    /// ab dem Abgangsjahr — der Abgang würde abgelehnt (spätestes solches Jahr).
+    pub closed_conflict_year: Option<i64>,
+}
+
+impl DisposalPlan {
+    /// Restbuchwert zum Abgang (geht als Ausgabe in die EÜR).
+    pub fn residual_book_value_cents(&self) -> i64 {
+        self.disposal_year.book_value_after_cents
+    }
+}
+
+/// Plant einen Abgang zum `disposal_date`, **ohne** zu buchen (Lauf 2026.11
+/// U4, Vorschau des Restbuchwerts). Spiegelt die Schritte von
+/// `commands::assets::assets_dispose`:
+///
+/// 1. Offene AfA ab dem Abgangsjahr wird ersetzt; der Restbuchwert steht danach
+///    auf dem letzten Stand davor (bzw. dem betrieblichen Startwert). Ohne
+///    solche Einträge gilt der aktuelle Restbuchwert der Anlage.
+/// 2. Vorjahre ohne gebuchte AfA werden nachgeholt ([`compute_yearly`]);
+///    abgeschlossene Jahre bleiben unberührt.
+/// 3. Anteilige AfA im Abgangsjahr ([`compute_disposal_year_partial`]).
+///
+/// `closed_years` sind die abgeschlossenen Geschäftsjahre (`fiscal_year_locks`).
+pub fn plan_disposal(
+    asset: &DepreciationAsset,
+    acquisition_fiscal_year: i64,
+    current_book_value_cents: i64,
+    booked: &[BookedYear],
+    closed_years: &[i64],
+    disposal_date: NaiveDate,
+) -> DisposalPlan {
+    let disposal_year = i64::from(disposal_date.year());
+
+    // 1. Ab dem Abgangsjahr gebuchte AfA.
+    let mut from_disposal: Vec<&BookedYear> = booked
+        .iter()
+        .filter(|b| b.fiscal_year >= disposal_year)
+        .collect();
+    from_disposal.sort_by_key(|b| b.fiscal_year);
+    let closed_after = closed_years
+        .iter()
+        .copied()
+        .filter(|y| *y > disposal_year && *y >= acquisition_fiscal_year)
+        .max();
+    let locked_after = from_disposal
+        .iter()
+        .filter(|b| b.locked)
+        .map(|b| b.fiscal_year)
+        .max();
+    let closed_conflict_year = closed_after.max(locked_after);
+
+    let mut running = if from_disposal.is_empty() {
+        current_book_value_cents
+    } else {
+        booked
+            .iter()
+            .filter(|b| b.fiscal_year < disposal_year)
+            .max_by_key(|b| b.fiscal_year)
+            .map(|b| b.book_value_after_cents)
+            .unwrap_or_else(|| {
+                business_book_value_start_cents(
+                    asset.acquisition_cost_cents,
+                    asset.business_share_percent,
+                )
+            })
+    };
+    let replaced = from_disposal
+        .iter()
+        .map(|b| (b.fiscal_year, b.amount_cents))
+        .collect();
+
+    // 2. Vorjahre ohne Buchung nachholen (wie `accrue_asset_through_in`).
+    let mut catch_up = Vec::new();
+    if disposal_year > acquisition_fiscal_year {
+        for year in acquisition_fiscal_year..disposal_year {
+            if running <= 0 {
+                break;
+            }
+            let already = booked.iter().any(|b| b.fiscal_year == year);
+            if already || closed_years.contains(&year) {
+                continue;
+            }
+            let calc = compute_yearly(asset, year as i32, running);
+            if calc.is_noop() {
+                continue;
+            }
+            running = calc.book_value_after_cents;
+            catch_up.push((year, calc.depreciation_amount_cents));
+        }
+    }
+
+    // 3. Anteilige AfA im Abgangsjahr.
+    let disposal_year_calc = compute_disposal_year_partial(asset, running, disposal_date);
+    DisposalPlan {
+        replaced,
+        catch_up,
+        book_value_before_cents: running,
+        disposal_year: disposal_year_calc,
+        closed_conflict_year,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,5 +729,76 @@ mod tests {
         assert_eq!(months_used_in_acquisition_year(d(2026, 1, 1)), 12);
         assert_eq!(months_used_in_acquisition_year(d(2026, 12, 31)), 1);
         assert_eq!(months_used_in_acquisition_year(d(2026, 7, 15)), 6);
+    }
+
+    fn booked(fiscal_year: i64, amount: i64, after: i64, locked: bool) -> BookedYear {
+        BookedYear {
+            fiscal_year,
+            amount_cents: amount,
+            book_value_after_cents: after,
+            locked,
+        }
+    }
+
+    // U4 (Warteliste 5): Vorschau des Abgangs — Nachholen der Vorjahre und
+    // anteilige AfA im Abgangsjahr (wie `assets_dispose`, Lauf F2c).
+    #[test]
+    fn plan_disposal_catches_up_and_books_pro_rata() {
+        let a = asset(
+            DepreciationMethod::Linear,
+            d(2025, 1, 1),
+            120_000,
+            100.0,
+            Some(4.0),
+        );
+        let plan = plan_disposal(&a, 2025, 120_000, &[], &[], d(2026, 6, 30));
+        assert!(plan.replaced.is_empty());
+        assert_eq!(plan.catch_up, vec![(2025, 30_000)]);
+        assert_eq!(plan.book_value_before_cents, 90_000);
+        assert_eq!(plan.disposal_year.depreciation_amount_cents, 15_000);
+        assert_eq!(plan.disposal_year.months_in_year, 6);
+        assert_eq!(plan.residual_book_value_cents(), 75_000);
+        assert_eq!(plan.closed_conflict_year, None);
+        // Abgangsjahr abgeschlossen davor: 2025 wird nicht nachgeholt.
+        let plan = plan_disposal(&a, 2025, 120_000, &[], &[2025], d(2026, 6, 30));
+        assert!(plan.catch_up.is_empty());
+        assert_eq!(plan.residual_book_value_cents(), 120_000 - 15_000);
+    }
+
+    // U4: Gebuchte offene AfA ab dem Abgangsjahr wird ersetzt; festgeschriebene
+    // AfA bzw. ein später abgeschlossenes Jahr melden den Konflikt.
+    #[test]
+    fn plan_disposal_replaces_open_later_years_and_flags_conflicts() {
+        let a = asset(
+            DepreciationMethod::Linear,
+            d(2024, 1, 1),
+            120_000,
+            100.0,
+            Some(3.0),
+        );
+        let entries = [
+            booked(2024, 40_000, 80_000, false),
+            booked(2025, 40_000, 40_000, false),
+            booked(2026, 40_000, 0, false),
+        ];
+        let plan = plan_disposal(&a, 2024, 0, &entries, &[], d(2025, 10, 15));
+        assert_eq!(plan.replaced, vec![(2025, 40_000), (2026, 40_000)]);
+        assert!(plan.catch_up.is_empty());
+        assert_eq!(plan.book_value_before_cents, 80_000);
+        assert_eq!(plan.disposal_year.depreciation_amount_cents, 33_333);
+        assert_eq!(plan.residual_book_value_cents(), 46_667);
+        assert_eq!(plan.closed_conflict_year, None);
+
+        let mut locked = entries.clone();
+        locked[2].locked = true;
+        let plan = plan_disposal(&a, 2024, 0, &locked, &[], d(2025, 10, 15));
+        assert_eq!(plan.closed_conflict_year, Some(2026));
+        let plan = plan_disposal(&a, 2024, 0, &entries, &[2026], d(2025, 10, 15));
+        assert_eq!(plan.closed_conflict_year, Some(2026));
+        // Abgang im Jahr nach dem letzten Abschluss: kein Konflikt.
+        let plan = plan_disposal(&a, 2024, 40_000, &entries[..2], &[2025], d(2026, 3, 1));
+        assert_eq!(plan.closed_conflict_year, None);
+        assert_eq!(plan.disposal_year.depreciation_amount_cents, 10_000);
+        assert_eq!(plan.residual_book_value_cents(), 30_000);
     }
 }

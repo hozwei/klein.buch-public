@@ -130,11 +130,16 @@ pub async fn is_closed(pool: &SqlitePool, year: i64) -> Result<bool> {
 
 /// Fehlertext für eine Buchung in einem abgeschlossenen Jahr (Klartext fürs UI).
 pub fn closed_error(year: i64) -> Error {
-    Error::Domain(format!(
+    Error::Domain(closed_message(year))
+}
+
+/// Klartext von [`closed_error`] (auch für Vorschauen, die nicht ablehnen).
+pub fn closed_message(year: i64) -> String {
+    format!(
         "Das Geschäftsjahr {year} ist abgeschlossen (festgeschrieben). \
          Eine Buchung mit Datum in diesem Jahr ist nicht mehr möglich. \
          Eine fehlerhafte Rechnung lässt sich weiterhin stornieren."
-    ))
+    )
 }
 
 /// Weitere Prüfung unter einer schon gehaltenen Erlaubnis (z. B. Zahlungs-

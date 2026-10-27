@@ -7,10 +7,37 @@
   // nichts aus), sonst die Bestätigung. Der Hintergrund schließt nur
   // ungefährliche Dialoge; bei Gefahr braucht es eine bewusste Wahl.
   // ≤ 600 px Vollbild-Blatt (tokens.css `.kb-dialog`), Knöpfe unten.
+  //
+  // U4 (U2-019): Mit drei Aktionen (`altLabel`) ist der Dialog 36rem breit, Knöpfe
+  // brechen nicht um. Reihenfolge der Knöpfe: ab 601 px „Abbrechen“ zuerst,
+  // Hauptaktion rechts; bis 600 px untereinander, Hauptaktion oben, „Abbrechen“
+  // unten. Die Reihenfolge im DOM folgt jeweils der sichtbaren (Tab- und
+  // Lesereihenfolge = Sichtreihenfolge, 1.3.2/2.4.3) statt sie per CSS
+  // umzudrehen; beim Wechsel der Breite bleibt der Fokus auf seinem Knopf.
+  import { tick } from "svelte";
   import { confirmStore, settleConfirm, settleChoice } from "#lib/confirm.svelte.ts";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
   import { focusTrap } from "#lib/focusTrap.ts";
   import Button from "#lib/Button.svelte";
+
+  const NARROW = "(max-width: 600px)";
+  let narrow = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia(NARROW);
+    narrow = mq.matches;
+    const onChange = async () => {
+      const focusedId = document.activeElement?.id ?? "";
+      narrow = mq.matches;
+      if (focusedId.startsWith("confirm-btn-")) {
+        await tick();
+        document.getElementById(focusedId)?.focus();
+      }
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  });
+  type Slot = "cancel" | "alt" | "confirm";
+  const order = $derived<Slot[]>(narrow ? ["confirm", "alt", "cancel"] : ["cancel", "alt", "confirm"]);
 
   // Beim Schließen setzt settleChoice `current` auf null, bevor der {#if}-Block
   // abgebaut ist; die Ausdrücke darin (c.danger …) liefen dann gegen null
@@ -44,6 +71,7 @@
   >
     <div
       class="kb-dialog confirm"
+      class:wide={!!c.altLabel}
       role={c.danger ? "alertdialog" : "dialog"}
       aria-modal="true"
       aria-labelledby="confirm-title"
@@ -69,19 +97,25 @@
         </div>
       </div>
       <div class="kb-dialog-foot actions">
-        <Button variant="secondary" initialFocus={!!c.danger} onclick={() => settleConfirm(false)}>
-          {c.cancelLabel ?? "Abbrechen"}
-        </Button>
-        {#if c.altLabel}
-          <Button variant="secondary" onclick={() => settleChoice("alt")}>
-            {c.altLabel}
-          </Button>
-        {/if}
-        <span class="confirm-btn" class:danger={c.danger}>
-          <Button variant="primary" initialFocus={!c.danger} onclick={() => settleConfirm(true)}>
-            {c.confirmLabel ?? "OK"}
-          </Button>
-        </span>
+        {#each order as slot (slot)}
+          {#if slot === "cancel"}
+            <Button id="confirm-btn-cancel" variant="secondary" initialFocus={!!c.danger} onclick={() => settleConfirm(false)}>
+              {c.cancelLabel ?? "Abbrechen"}
+            </Button>
+          {:else if slot === "alt"}
+            {#if c.altLabel}
+              <Button id="confirm-btn-alt" variant="secondary" onclick={() => settleChoice("alt")}>
+                {c.altLabel}
+              </Button>
+            {/if}
+          {:else}
+            <span class="confirm-btn" class:danger={c.danger}>
+              <Button id="confirm-btn-ok" variant="primary" initialFocus={!c.danger} onclick={() => settleConfirm(true)}>
+                {c.confirmLabel ?? "OK"}
+              </Button>
+            </span>
+          {/if}
+        {/each}
       </div>
     </div>
   </div>
@@ -90,6 +124,8 @@
 <style>
   .confirm-backdrop { z-index: 2000; }
   .confirm { --dialog-w: 30rem; }
+  /* Drei Aktionen (U2-019): Platz für „Abbrechen“, „Ab heute fortsetzen“, „Nachholen“ in einer Zeile. */
+  .confirm.wide { --dialog-w: 36rem; }
   h2 {
     margin: 0 0 0.6rem;
     font-size: var(--fs-lg);
@@ -128,10 +164,16 @@
       border-color: var(--danger-solid-hover);
     }
   }
-  /* Vollbild-Blatt: Text oben, Knöpfe unten in Daumenreichweite, volle Breite. */
+  /* Ab 601 px: Beschriftungen brechen nicht um; reicht die Breite nicht, rückt ein
+     ganzer Knopf in die nächste Zeile (der Fuß bricht um, tokens.css). */
+  @media (min-width: 601px) {
+    .actions :global(.btn) { white-space: nowrap; }
+  }
+  /* Vollbild-Blatt: Text oben, Knöpfe unten in Daumenreichweite, volle Breite,
+     Hauptaktion oben (Reihenfolge im DOM, siehe `order`). */
   @media (max-width: 600px) {
     .actions {
-      flex-direction: column-reverse;
+      flex-direction: column;
       align-items: stretch;
       border-top: 1px solid var(--line);
       padding-top: var(--sp-3);

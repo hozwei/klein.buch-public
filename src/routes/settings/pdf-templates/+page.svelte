@@ -1,13 +1,20 @@
 <script lang="ts">
   // Block 17a — PDF-Vorlagen-Switcher (globale Standard-Vorlage).
+  // U4: Vorlagennamen zentral aus `labels.ts` (Warteliste (17)); je Vorlage, ob sie
+  // Stornos darstellt, sonst mit welcher Vorlage Storno-Belege entstehen
+  // (Warteliste (11), `PdfTemplateMeta.supportsStorno`/`stornoFallback`).
+  // U4 (V2-06/V2-07): Ladefehler mit „Erneut laden“; Knöpfe und Datei-Felder während eines
+  // Laufs `aria-disabled` statt `disabled` (Fokus bleibt, ADR 0041 Nr. 33).
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { onMount } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
   import Toggle from "#lib/Toggle.svelte";
   import Banner from "#lib/Banner.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import { pdfTemplateLabel } from "#lib/labels.ts";
   import {
     pdfTemplatesList,
     sellerProfileGet,
@@ -41,23 +48,20 @@
   let signatureBusy = $state(false);
   let signatureEnabled = $state(false);
 
-  const LABELS: Record<string, string> = {
-    default: "Standard",
-    modern: "Modern",
-    klassisch: "Klassisch",
-    minimal: "Minimal",
-  };
+  // Beschreibungen der mitgelieferten Vorlagen; Namen über `pdfTemplateLabel()`.
   const DESCS: Record<string, string> = {
     default: "Die mitgelieferte Standard-Vorlage.",
     modern: "Petrol-Akzent, farbiger Tabellenkopf, hervorgehobener Gesamtbetrag.",
     klassisch: "Schlicht und formell — Serifenschrift, zentrierter Briefkopf, volle Tabellenlinien.",
     minimal: "Reduziert: viel Weißraum, dezente Linien, gedämpfte Beschriftungen.",
   };
-  const label = (name: string) => LABELS[name] ?? name;
+  const label = (name: string) => pdfTemplateLabel(name);
   const desc = (name: string) =>
     DESCS[name] ?? "Eigene Vorlage aus dem Ordner inputs/pdf-templates/.";
 
-  onMount(async () => {
+  async function load() {
+    loading = true;
+    loadError = null;
     try {
       const [tpls, profile] = await Promise.all([
         pdfTemplatesList(),
@@ -76,12 +80,16 @@
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(load);
 
   async function onLogoFile(e: Event) {
     const target = e.currentTarget as HTMLInputElement;
     const file = target.files?.[0];
     if (!file) return;
+    // Während eines Uploads bleibt das Feld bedienbar (aria-disabled); eine zweite Wahl zählt nicht.
+    if (logoBusy) { target.value = ""; return; }
     logoBusy = true;
     try {
       const { uploadId } = await uploadFile("logo", file);
@@ -89,7 +97,7 @@
       logoUrl = await sellerLogoData();
       flash("Logo gespeichert.");
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err), "error");
+      flash(`Logo hochladen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       logoBusy = false;
       target.value = "";
@@ -97,13 +105,14 @@
   }
 
   async function removeLogo() {
+    if (logoBusy) return;
     logoBusy = true;
     try {
       await sellerLogoClear();
       logoUrl = null;
       flash("Logo entfernt.");
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err), "error");
+      flash(`Logo entfernen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       logoBusy = false;
     }
@@ -113,13 +122,14 @@
     const target = e.currentTarget as HTMLInputElement;
     const file = target.files?.[0];
     if (!file) return;
+    if (signatureBusy) { target.value = ""; return; }
     signatureBusy = true;
     try {
       const { uploadId } = await uploadFile("unterschrift", file);
       signatureUrl = await sellerSignatureSet(uploadId);
       flash("Unterschrift gespeichert.");
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err), "error");
+      flash(`Unterschrift hochladen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       signatureBusy = false;
       target.value = "";
@@ -127,13 +137,14 @@
   }
 
   async function removeSignature() {
+    if (signatureBusy) return;
     signatureBusy = true;
     try {
       await sellerSignatureClear();
       signatureUrl = null;
       flash("Unterschrift entfernt.");
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err), "error");
+      flash(`Unterschrift entfernen fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       signatureBusy = false;
     }
@@ -144,7 +155,7 @@
       await quoteSignatureSet(signatureEnabled);
       flash(signatureEnabled ? "Unterschriftenfelder aktiviert." : "Unterschriftenfelder deaktiviert.");
     } catch (err) {
-      flash(err instanceof Error ? err.message : String(err), "error");
+      flash(`Unterschriftenfelder speichern fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}`, "error");
       signatureEnabled = !signatureEnabled;
     }
   }
@@ -159,9 +170,9 @@
     previewing = t.name;
     try {
       const ticket = await pdfTemplatePreview(t.name);
-      openPdfPreview(downloadUrl(ticket), `Vorschau: ${t.name}`, ticket.fileName);
+      openPdfPreview(downloadUrl(ticket), `Vorschau: ${label(t.name)}`, ticket.fileName);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e), "error");
+      flash(`Vorschau fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       previewing = null;
     }
@@ -173,9 +184,9 @@
     try {
       const p = await sellerDefaultTemplateSet(t.name);
       selected = p.defaultPdfTemplate;
-      flash(`Vorlage „${label(t.name)}" als Standard gespeichert.`);
+      flash(`Vorlage „${label(t.name)}“ als Standard gespeichert.`);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e), "error");
+      flash(`Vorlage wählen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -191,9 +202,11 @@
 </p>
 
 {#if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <LoadingState />
 {:else if loadError}
-  <Banner>Konnte Vorlagen nicht laden: {loadError}</Banner>
+  <Banner title="Das Rechnungs-Layout konnte nicht geladen werden.">{loadError}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
 {:else}
   <section class="branding" aria-label="Logo und Unterschrift">
     <div class="brand-block">
@@ -213,11 +226,11 @@
               accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
               aria-describedby="logo-hint"
               onchange={onLogoFile}
-              disabled={logoBusy}
+              aria-disabled={logoBusy ? "true" : undefined}
             />
           </label>
           {#if logoUrl}
-            <Button variant="secondary" onclick={removeLogo} disabled={logoBusy} ariaLabel="Logo entfernen">Entfernen</Button>
+            <Button variant="secondary" onclick={removeLogo} ariaDisabled={logoBusy} ariaLabel="Logo entfernen">Entfernen</Button>
           {/if}
         </div>
       </div>
@@ -244,11 +257,11 @@
               accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
               aria-describedby="sig-hint"
               onchange={onSignatureFile}
-              disabled={signatureBusy}
+              aria-disabled={signatureBusy ? "true" : undefined}
             />
           </label>
           {#if signatureUrl}
-            <Button variant="secondary" onclick={removeSignature} disabled={signatureBusy} ariaLabel="Unterschrift entfernen">Entfernen</Button>
+            <Button variant="secondary" onclick={removeSignature} ariaDisabled={signatureBusy} ariaLabel="Unterschrift entfernen">Entfernen</Button>
           {/if}
         </div>
       </div>
@@ -282,16 +295,29 @@
 
         <div class="tags">
           {#if t.builtin}
-            <Badge tone="neutral">Mitgeliefert</Badge>
+            <!-- U4 (V3-08): Herkunft ist ein Merkmal, kein Status. -->
+            <Badge kind="tag">Mitgeliefert</Badge>
           {:else}
-            <Badge tone="info">Eigene Vorlage</Badge>
+            <Badge kind="tag">Eigene Vorlage</Badge>
           {/if}
           {#if t.klauselStatus.isKleinCompatible}
             <Badge tone="success">§19-konform</Badge>
           {:else}
-            <Badge tone="danger">ohne §19-Klausel</Badge>
+            <Badge tone="danger">Ohne §19-Klausel</Badge>
+          {/if}
+          {#if !t.supportsStorno}
+            <Badge tone="warning">Ohne Storno-Darstellung</Badge>
           {/if}
         </div>
+
+        {#if !t.supportsStorno}
+          <!-- Warteliste (11): Stornos entstehen dann mit einer mitgelieferten Vorlage
+               (dieselbe, die die PDF-Erzeugung nimmt, ADR 0041 Nr. 84). -->
+          <p class="hint">
+            Diese Vorlage stellt Storno-Belege nicht dar. Stornos zu Rechnungen mit dieser
+            Vorlage erzeugt Klein.Buch mit der Vorlage „{label(t.stornoFallback ?? "klassisch")}“.
+          </p>
+        {/if}
 
         {#if blocked(t)}
           <p class="hint" id="tpl-blocked-{t.name}">
@@ -302,8 +328,8 @@
 
         <div class="tpl-foot">
           <Button
-            variant="ghost"
-            disabled={previewing === t.name}
+            variant="secondary"
+            busy={previewing === t.name}
             onclick={() => preview(t)}
             ariaLabel={`Vorschau, Vorlage ${label(t.name)}`}
           >
@@ -314,7 +340,8 @@
           {:else}
             <Button
               variant="secondary"
-              disabled={busy || blocked(t)}
+              disabled={blocked(t)}
+              ariaDisabled={busy}
               onclick={() => choose(t)}
               ariaLabel={`Als Standard wählen, Vorlage ${label(t.name)}`}
               ariaDescribedby={blocked(t) ? `tpl-blocked-${t.name}` : undefined}
@@ -349,7 +376,7 @@
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
     padding: 1.1rem 1.2rem;
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     min-width: 0;
   }
   .brand-h {
@@ -438,9 +465,6 @@
     font-size: var(--fs-lg);
     margin: 0 0 0.8rem;
   }
-  .muted {
-    color: var(--text-muted);
-  }
   .grid {
     list-style: none;
     margin: 0;
@@ -458,12 +482,12 @@
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
     padding: 1.1rem 1.2rem;
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     min-width: 0;
   }
   .tpl.active {
     border-color: var(--c-primary-500);
-    box-shadow: 0 0 0 1px var(--c-primary-500) inset, var(--sh-sm);
+    box-shadow: 0 0 0 1px var(--c-primary-500) inset, var(--shadow-card);
   }
   .tpl.disabled {
     background: var(--surface-sunken);

@@ -1,9 +1,19 @@
 <script lang="ts">
   // Block 4 — Backup & Restore.
+  // U4: Seitenraster ab 60rem (U2-021), Ergebnis je externem Ziel mit „ausgesetzt“
+  // (Warteliste (12)), Stand der externen Kopien (Lauf F3), Belegnummern über DocNo.
+  // U4 (V1-14/V1-15, Korrekturrunde): Rückfrage vor dem Wiederherstellen nennt den ganzen Ablauf;
+  // Knöpfe bleiben bedienbar und melden fehlende Eingaben am Feld (ADR 0041 Nr. 135); „Jetzt
+  // sichern“ mit Status während des Laufs und EINEM zusammenfassenden Toast; Ladefehler mit
+  // „Erneut laden“ (V2-07); „Abbrechen“ vor der Hauptaktion (V2-11).
   import { onMount, tick } from "svelte";
   import { waitForRestart } from "#lib/transport.ts";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import Banner from "#lib/Banner.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import { dateTime } from "#lib/format.ts";
   import { daysUntilBerlin } from "#lib/date.ts";
   import Button from "#lib/Button.svelte";
@@ -29,6 +39,8 @@
     numberingRestoredDraftConfirm,
     uploadFile,
     type BackupSettings,
+    type BackupOutcome,
+    type OffsiteResult,
     type NumberingCounter,
     type RestoredDraftConflict,
     type BackupHistoryItem,
@@ -39,6 +51,23 @@
   let settings = $state<BackupSettings | null>(null);
   let history = $state<BackupHistoryItem[]>([]);
   let busy = $state(false);
+  /** Ergebnis von „Jetzt sichern“ je Ziel (U4, Warteliste (12)); bleibt bis zum Verlassen. */
+  let lastOutcome = $state<BackupOutcome | null>(null);
+  /** U4 (V1-15): „Jetzt sichern“ läuft; Statuszeile (role=status) sagt den Lauf an. */
+  let backingUp = $state(false);
+  /** Wiederherstellen läuft (Upload und Anfrage). */
+  let restoring = $state(false);
+  let backupStatus = $state("");
+  /** U4 (V2-07): Fehler beim ersten Laden (danach meldet ein Toast). */
+  let loadError = $state<string | null>(null);
+  // U4 (V1-14, ADR 0041 Nr. 135): Knöpfe bleiben bedienbar, fehlende Eingaben stehen am Feld.
+  let restorePassError = $state("");
+  let dailyTimeError = $state("");
+  let sftpUserError = $state("");
+  let sftpPassError = $state("");
+  let sftpAddError = $state("");
+  let raiseReasonError = $state("");
+  let confirmReasonError = $state("");
 
   // Verzeichnis-Ziel unter /backup-targets (Plan W7).
   let dirChoice = $state("");
@@ -96,6 +125,7 @@
   onMount(load);
 
   async function load() {
+    loadError = null;
     try {
       settings = await backupGetSettings();
       dailyTime = settings.dailyTime;
@@ -104,17 +134,27 @@
       counters = await numberingCountersList();
       restoredDrafts = await numberingRestoredDraftsList();
     } catch (e) {
-      flash(String(e), "error");
+      // Ohne geladene Einstellungen: Fehlerzustand statt ewigem „Wird geladen …“ (V2-07);
+      // ein späteres Nachladen nach einer Aktion meldet sich als Toast.
+      if (!settings) loadError = String(e);
+      else flash(`Neu laden fehlgeschlagen: ${String(e)}`, "error");
     }
   }
 
   async function saveDailyTime() {
+    if (busy) return;
+    dailyTimeError = "";
+    if (!dailyTime) {
+      dailyTimeError = "Bitte gib eine Uhrzeit ein, z. B. 02:30.";
+      document.getElementById("bk-daily-time")?.focus();
+      return;
+    }
     busy = true;
     try {
       dailyTime = await backupSetDailyTime(dailyTime);
       flash(`Tages-Backup künftig ab ${dailyTime} Uhr.`);
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Uhrzeit speichern fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -124,16 +164,24 @@
     raiseFor = c;
     raiseValue = c.lastValue + 1;
     raiseReason = "";
+    raiseError = "";
+    raiseReasonError = "";
   }
 
   async function doRaise() {
     const c = raiseFor;
     raiseError = "";
-    if (!c) return;
+    raiseReasonError = "";
+    if (!c || busy) return;
     if (raiseInput && !raiseInput.validate()) { raiseInput.focus(); return; }
     if (raiseValue === null || raiseValue <= c.lastValue) {
       raiseError = `Bitte gib eine Nummer größer als ${c.lastValue} ein.`;
       raiseInput?.focus();
+      return;
+    }
+    if ([...raiseReason.trim()].length < 10) {
+      raiseReasonError = "Bitte begründe die Änderung mit mindestens 10 Zeichen.";
+      document.getElementById("bk-raise-reason")?.focus();
       return;
     }
     if (
@@ -160,7 +208,7 @@
       raiseFor = null;
       flash("Nummernkreis angehoben.");
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Nummernkreis anheben fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -171,7 +219,13 @@
   // übernimmt der UI/UX-Lauf.
   async function doConfirmDraft() {
     const c = confirmFor;
-    if (!c) return;
+    confirmReasonError = "";
+    if (!c || busy) return;
+    if ([...confirmReason.trim()].length < 10) {
+      confirmReasonError = "Bitte begründe den Abgleich mit mindestens 10 Zeichen.";
+      document.getElementById("bk-confirm-reason")?.focus();
+      return;
+    }
     busy = true;
     try {
       restoredDrafts = await numberingRestoredDraftConfirm({
@@ -183,7 +237,7 @@
       confirmReason = "";
       flash(`${c.number} lässt sich jetzt festschreiben.`);
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Abgleich bestätigen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -200,6 +254,11 @@
   function ageLabel(ts: string): string {
     const d = -daysUntilBerlin(ts);
     if (!Number.isFinite(d)) return "";
+    return daysAgoLabel(d);
+  }
+
+  /** Tage → „heute“, „gestern“, „vor N Tagen“ (auch für `offsiteAgeDays` des Servers). */
+  function daysAgoLabel(d: number): string {
     if (d <= 0) return "heute";
     if (d === 1) return "gestern";
     return `vor ${d} Tagen`;
@@ -220,7 +279,9 @@
     if (r === "auto_daily") return "Automatisch (täglich)";
     if (r === "manual") return "Manuell";
     if (r === "pre_restore") return "Vor einer Wiederherstellung";
-    if (r.endsWith(".lock") || r.startsWith("recurring")) return "Nach dem Festschreiben";
+    // Der Server speichert Sicherungen nach dem Festschreiben als `auto_critical`
+    // (U4: stand bisher roh in der Liste).
+    if (r === "auto_critical" || r.endsWith(".lock") || r.startsWith("recurring")) return "Nach dem Festschreiben";
     return r;
   }
 
@@ -228,7 +289,15 @@
     if (t === "daily") return "Täglich";
     if (t === "monthly") return "Monatlich";
     if (t === "yearly") return "Jährlich";
+    // `manual` (manuell und vor einer Wiederherstellung) räumt die Rotation nie auf.
+    if (t === "manual") return "Bleibt erhalten";
     return t;
+  }
+
+  /** Ergebnis einer Spiegelung (ADR 0041 Nr. 85: `suspended` vor `error`). */
+  function offsiteState(r: OffsiteResult): "suspended" | "failed" | "copied" {
+    if (r.suspended) return "suspended";
+    return r.error ? "failed" : "copied";
   }
 
   // Ort eines Backups (G1-BKP.4): lokaler Floor vs. Off-Site-Spiegelung.
@@ -251,7 +320,7 @@
   }
 
   async function addDirectory() {
-    if (!dirChoice) return;
+    if (!dirChoice || busy) return;
     const sub = dirSub.trim().replace(/^\/+|\/+$/g, "");
     const directory = sub ? `${dirChoice}/${sub}` : dirChoice;
     busy = true;
@@ -261,13 +330,14 @@
       flash("Ordner-Ziel hinzugefügt — es wird ab dem nächsten Backup beschrieben.");
       await load();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Ordner-Ziel hinzufügen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
   }
 
   async function removeTarget(t: TargetView) {
+    if (busy) return;
     if (
       !(await confirmDialog({
         title: `Backup-Ziel „${t.label}“ entfernen?`,
@@ -284,7 +354,7 @@
       flash("Backup-Ziel entfernt.");
       await load();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Backup-Ziel entfernen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -295,6 +365,8 @@
   function checkSftpFields(): boolean {
     sftpHostError = "";
     sftpPortError = "";
+    sftpUserError = "";
+    sftpPassError = "";
     if (!sftpHost.trim()) {
       sftpHostError = "Bitte gib den Server ein (Hostname oder IP-Adresse).";
       document.getElementById("sftp-host")?.focus();
@@ -307,6 +379,17 @@
     if (sftpPort == null) {
       sftpPortError = "Bitte gib den Port ein, meist 22.";
       sftpPortInput?.focus();
+      return false;
+    }
+    // U4 (ADR 0041 Nr. 135): statt gesperrter Knöpfe der Grund am Feld.
+    if (!sftpUser.trim()) {
+      sftpUserError = "Bitte gib den Benutzer ein.";
+      document.getElementById("sftp-user")?.focus();
+      return false;
+    }
+    if (!sftpPassword) {
+      sftpPassError = "Bitte gib das Passwort für diesen Server ein.";
+      document.getElementById("sftp-pass")?.focus();
       return false;
     }
     return true;
@@ -322,6 +405,8 @@
   }
 
   async function testSftp() {
+    if (busy) return;
+    sftpAddError = "";
     if (!checkSftpFields()) return;
     busy = true;
     sftpProbe = null;
@@ -342,7 +427,7 @@
         flash("Verbindung/Login ok, aber Schreiben im Zielordner schlug fehl.", "error");
       }
     } catch (e) {
-      if (!sftpHostErrorFrom(String(e))) flash(String(e), "error");
+      if (!sftpHostErrorFrom(String(e))) flash(`Verbindungstest fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -350,11 +435,14 @@
 
   // SFTP: als Backup-Ziel hinzufügen (Passwort je Ziel, Fingerprint → Pin).
   async function addSftp() {
+    if (busy) return;
+    sftpAddError = "";
+    if (!checkSftpFields()) return;
     if (!sftpProbeValid) {
-      flash("Bitte zuerst die Verbindung testen, um den Host-Fingerprint zu bestätigen.", "error");
+      sftpAddError = "Teste zuerst die Verbindung und prüfe den Fingerabdruck des Servers.";
+      document.getElementById("sftp-test-btn")?.focus();
       return;
     }
-    if (!checkSftpFields()) return;
     busy = true;
     try {
       await backupTargetAddSftp({
@@ -373,7 +461,7 @@
       flash("SFTP-Ziel hinzugefügt.");
       await load();
     } catch (e) {
-      if (!sftpHostErrorFrom(String(e))) flash(String(e), "error");
+      if (!sftpHostErrorFrom(String(e))) flash(`SFTP-Ziel hinzufügen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -382,6 +470,7 @@
   // Gespeichertes SFTP-Ziel testen (nur per ID: gespeichertes Passwort,
   // gepinnter Fingerprint — Plan W8).
   async function testSavedSftp(t: TargetView) {
+    if (testingTargetId) return;
     testingTargetId = t.id;
     try {
       const p = await backupTestSftpSaved(t.id);
@@ -391,27 +480,48 @@
         flash(`Login ok, aber Schreiben auf „${t.label}“ schlug fehl: ${p.writeError ?? ""}`, "error");
       }
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Verbindungstest fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       testingTargetId = null;
     }
   }
 
   async function backupNow() {
+    if (busy) return;
     busy = true;
+    backingUp = true;
+    // U4 (V1-15): Status während des Laufs (role="status"); der Knopf bleibt fokussierbar
+    // (ariaDisabled, ADR 0041 Nr. 33). Danach EIN zusammenfassender Toast — die Einzelheiten
+    // je Ziel stehen nur in der Ergebnisliste darunter (ADR 0041 Nr. 134), nicht als Toast je Ziel.
+    backupStatus = "Backup wird erstellt …";
     try {
       const o = await backupCreateNow();
-      flash(`Backup erstellt: ${o.fileName} (${fmtBytes(o.sizeBytes)})`);
-      // Off-Site-Spiegelung (Plan W7): je Ziel zurückmelden.
-      const failed = o.offsite.filter((r) => r.error);
-      for (const r of failed) flash(`Kopie auf „${r.label}“ fehlgeschlagen: ${r.error}`, "error");
-      if (o.offsite.length > 0 && failed.length === 0) {
-        flash(`Kopie auf ${o.offsite.length} externe(s) Ziel(e) gespeichert.`);
+      lastOutcome = o;
+      // Off-Site-Spiegelung (Plan W7): je Ziel in der Liste. U4 (Warteliste (12), ADR 0041
+      // Nr. 85): `suspended` vor `error` — nach einer Wiederherstellung ruht die Spiegelung
+      // bis zur Freigabe; das ist kein Fehlschlag des Ziels.
+      const total = o.offsite.length;
+      const suspended = o.offsite.filter((r) => r.suspended).length;
+      const failed = o.offsite.filter((r) => !r.suspended && r.error).length;
+      const copied = total - suspended - failed;
+      const size = fmtBytes(o.sizeBytes);
+      // Beginnt immer mit „Backup erstellt:“ (E2E-Harness wartet auf diesen Text).
+      if (total === 0) {
+        flash(`Backup erstellt: lokal gespeichert (${size}).`);
+      } else if (suspended + failed === 0) {
+        flash(`Backup erstellt: lokal und auf ${total === 1 ? "dem externen Ziel" : `allen ${total} externen Zielen`} gespeichert (${size}).`);
+      } else {
+        const parts = [`auf ${copied} von ${total} externen Zielen gespeichert`];
+        if (failed > 0) parts.push(`${failed} fehlgeschlagen`);
+        if (suspended > 0) parts.push(`${suspended} ausgesetzt`);
+        flash(`Backup erstellt: lokal gespeichert (${size}), ${parts.join(", ")}. Einzelheiten unter „Backup jetzt erstellen“.`, "warning");
       }
       await load();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Backup fehlgeschlagen: ${String(e)}`, "error");
     } finally {
+      backupStatus = "";
+      backingUp = false;
       busy = false;
     }
   }
@@ -419,11 +529,12 @@
   // Lauf F3a: verschlüsselte .kbk herunterladen (Umzug, Disaster Recovery ohne
   // externes Ziel). Re-Auth fragt der Transport selbst ab.
   async function downloadBackup(item: BackupHistoryItem) {
+    if (busy) return;
     busy = true;
     try {
       saveDownload(await backupDownload(item.id));
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Herunterladen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -447,14 +558,29 @@
   }
 
   async function doRestore() {
+    if (busy) return;
+    // U4 (V1-14, ADR 0041 Nr. 135): Knopf bleibt bedienbar, ein fehlendes Passwort steht am Feld.
+    restorePassError = "";
+    if (!restorePass) {
+      restorePassError = "Bitte gib das Passwort dieses Backups ein.";
+      restorePassInput?.focus();
+      return;
+    }
+    // U4 (V1-14): Die Rückfrage nennt den ganzen Ablauf bis zur Freigabe (ADR 0040 Nr. 11–14).
     if (
       !(await confirmDialog({
         title: "Backup wiederherstellen?",
         body:
-          "Wenn du ein älteres Backup wiederherstellst, gehen seither erfasste" +
-          " Belege verloren. Sicherheitshalber wird vorher automatisch ein Backup" +
-          " des aktuellen Stands erstellt. Nach dem Restore gilt die Passphrase" +
-          " dieses Backups.",
+          "Ist das Backup älter als der aktuelle Stand, gehen seither erfasste Belege verloren. " +
+          "So geht es weiter:",
+        bullets: [
+          "Klein.Buch legt zuerst ein Sicherheits-Backup des aktuellen Stands an.",
+          "Du bestätigst mit Daten-Passwort und App-Code.",
+          "Der Server startet neu und spielt das Backup ein.",
+          "Danach meldest du dich mit dem Passwort dieses Backups an.",
+          "Abo-Läufe, automatischer Versand und externe Backups ruhen, bis du sie über " +
+            "„Prüfen und freigeben“ wieder freigibst.",
+        ],
         confirmLabel: "Wiederherstellen",
         danger: true,
       }))
@@ -462,6 +588,7 @@
       return;
     }
     busy = true;
+    restoring = true;
     // R5-S2-UI (Lauf F4a): das Passwort des Backups nur für diesen Aufruf —
     // danach aus dem Zustand der Seite (auch nach einem Fehler; nicht in
     // Stores, URL oder Storage).
@@ -499,10 +626,19 @@
       }
     } catch (e) {
       // Nur nach falscher Passphrase bleibt der Upload auf dem Server liegen.
-      if (!String(e).includes("falsche Passphrase")) restoreUploadId = null;
-      flash(String(e), "error");
+      const msg = String(e);
+      const wrongPass = /falsche[ns]? (Passphrase|Passwort)/i.test(msg);
+      if (!wrongPass) restoreUploadId = null;
+      if (wrongPass) {
+        // Ablehnung des Backup-Passworts am Feld (Fokus dorthin), sonst Toast.
+        restorePassError = msg;
+        restorePassInput?.focus();
+      } else {
+        flash(`Wiederherstellen fehlgeschlagen: ${msg}`, "error");
+      }
     } finally {
       uploadPercent = null;
+      restoring = false;
       busy = false;
     }
   }
@@ -516,6 +652,11 @@
 </PageBar>
 
 {#if settings}
+  <!-- U4 (U2-021): Ab 60rem Inhaltsbreite (Tablet quer, Desktop) zwei Spalten statt
+       48rem-Karten mit leerer rechter Hälfte; links Stand und Sichern, rechts die Ziele.
+       Lesereihenfolge = DOM-Reihenfolge (erst links, dann rechts). -->
+  <div class="bk-cols">
+  <div class="bk-col">
   <section class="card" aria-labelledby="bk-status-h">
     <h2 id="bk-status-h">Status</h2>
     <dl class="bk-status">
@@ -533,6 +674,15 @@
             ? "1 Ziel"
             : `${settings.targets.length} Ziele`}
       </dd>
+      {#if settings.targets.length > 0}
+        <!-- Lauf F3/U4: älteste der je Ziel jüngsten Kopien (offsiteAgeDays, Berliner Tage). -->
+        <dt>Stand extern</dt>
+        <dd>
+          {settings.offsiteLastCopyAt && settings.offsiteAgeDays !== null
+            ? `${dateTime(settings.offsiteLastCopyAt)} (${daysAgoLabel(settings.offsiteAgeDays)})`
+            : "noch nicht auf jedem Ziel eine Kopie"}
+        </dd>
+      {/if}
     </dl>
     <p class="muted">
       Deine Backups sind verschlüsselt. Das Backup-Passwort wird niemals
@@ -540,6 +690,71 @@
     </p>
   </section>
 
+  <section class="card" aria-labelledby="bk-now-h">
+    <h2 id="bk-now-h">Backup jetzt erstellen</h2>
+    <!-- U4 (V1-15): während des Laufs fokussierbar (busy) mit Text „Sichert …“ und Statuszeile;
+         gesperrt (disabled) nur, solange die Datenbank gesperrt ist — mit sichtbarem Grund. -->
+    <Button
+      onclick={backupNow}
+      disabled={!settings.unlocked}
+      busy={backingUp}
+      ariaDisabled={busy && !backingUp}
+      ariaDescribedby={!settings.unlocked ? "bk-now-locked" : undefined}
+    >{backingUp ? "Sichert …" : "Jetzt sichern"}</Button>
+    <p class="sub" role="status">{backupStatus}</p>
+    {#if !settings.unlocked}
+      <p id="bk-now-locked" class="sub">Die Datenbank ist gesperrt — bitte neu anmelden.</p>
+    {/if}
+    {#if lastOutcome}
+      <!-- U4 (Warteliste (12)): Ergebnis je externem Ziel, „ausgesetzt“ getrennt von
+           „fehlgeschlagen“ (Pause nach einer Wiederherstellung, ADR 0041 Nr. 85). -->
+      <div class="outcome">
+        <p class="outcome-h">
+          Zuletzt gesichert: <span class="path">{lastOutcome.fileName}</span> ({fmtBytes(lastOutcome.sizeBytes)}), lokal gespeichert.
+        </p>
+        {#if lastOutcome.offsite.length > 0}
+          <ul class="outcome-list" aria-label="Ergebnis je externem Ziel">
+            {#each lastOutcome.offsite as r (r.targetId)}
+              {@const st = offsiteState(r)}
+              <li>
+                <span class="outcome-label">{r.label}</span>
+                {#if st === "copied"}
+                  <Badge tone="success">Gespeichert</Badge>
+                {:else if st === "suspended"}
+                  <Badge tone="warning">Ausgesetzt</Badge>
+                  <span class="sub">{r.error ?? "Pause nach einer Wiederherstellung bis zur Freigabe."}</span>
+                {:else}
+                  <Badge tone="danger">Fehlgeschlagen</Badge>
+                  <span class="sub">{r.error}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+
+    <h3>Tägliches Backup</h3>
+    <div class="row daily">
+      <div class="f">
+        <label for="bk-daily-time">Uhrzeit (Europe/Berlin)</label>
+        <input id="bk-daily-time" class="kb-w-date" type="time" bind:value={dailyTime}
+          aria-invalid={dailyTimeError ? "true" : undefined}
+          aria-describedby={dailyTimeError ? "bk-daily-err bk-daily-hint" : "bk-daily-hint"} />
+        {#if dailyTimeError}<span id="bk-daily-err" class="err">{dailyTimeError}</span>{/if}
+      </div>
+      <div class="btnrow-inline">
+        <Button variant="secondary" onclick={saveDailyTime} ariaDisabled={busy}>Uhrzeit speichern</Button>
+      </div>
+    </div>
+    <p id="bk-daily-hint" class="muted">
+      Einmal je Kalendertag, ab der eingestellten Uhrzeit oder beim ersten Lauf danach (etwa nach
+      einer Sperre). Sicherungen nach dem Festschreiben laufen unabhängig davon.
+    </p>
+  </section>
+  </div>
+
+  <div class="bk-col">
   <section class="card" aria-labelledby="bk-targets-h">
     <h2 id="bk-targets-h">Externe Ziele <HelpAnchor slug="backup-ziel-einrichten" /></h2>
     {#if settings.offsiteStatus === "missing"}
@@ -582,23 +797,36 @@
                   </div>
                 {:else}
                   <div class="bad">Fehlgeschlagen ({dateTime(t.lastResult.at)}): {t.lastResult.error}</div>
+                  <!-- U4 (Lauf F3): letzte gute Kopie auch nach einem Fehlschlag. -->
+                  <div class="sub">
+                    {#if t.lastCopyAt}
+                      Letzte erfolgreiche Kopie: {dateTime(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
+                    {:else}
+                      Noch keine erfolgreiche Kopie auf diesem Ziel.
+                    {/if}
+                  </div>
                 {/if}
+              {:else if t.lastCopyAt}
+                <div class="sub">
+                  Letzte Kopie: {dateTime(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
+                </div>
               {:else}
                 <div class="sub">Noch kein Backup auf dieses Ziel.</div>
               {/if}
             </div>
-            <div class="target-actions">
+            <div class="target-actions kb-actions">
               {#if t.kind === "sftp"}
                 <Button
                   variant="secondary"
                   onclick={() => testSavedSftp(t)}
-                  disabled={busy || testingTargetId === t.id}
+                  busy={testingTargetId === t.id}
+                  ariaDisabled={busy}
                   ariaLabel={`Verbindung testen, Ziel ${t.label}`}
                 >
                   {testingTargetId === t.id ? "Teste …" : "Testen"}
                 </Button>
               {/if}
-              <Button variant="danger" onclick={() => removeTarget(t)} disabled={busy} ariaLabel={`Entfernen, Ziel ${t.label}`}>Entfernen</Button>
+              <Button variant="danger" onclick={() => removeTarget(t)} ariaDisabled={busy} ariaLabel={`Entfernen, Ziel ${t.label}`}>Entfernen</Button>
             </div>
           </li>
         {/each}
@@ -630,7 +858,7 @@
         </div>
       </div>
       <div class="btnrow">
-        <Button onclick={addDirectory} disabled={busy || !dirChoice}>Ordner-Ziel hinzufügen</Button>
+        <Button onclick={addDirectory} ariaDisabled={busy}>Ordner-Ziel hinzufügen</Button>
       </div>
     {/if}
   </section>
@@ -687,7 +915,9 @@
         </div>
         <div class="f grow">
           <label for="sftp-user">Benutzer</label>
-          <input id="sftp-user" type="text" bind:value={sftpUser} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="z. B. klein-buch" />
+          <input id="sftp-user" type="text" bind:value={sftpUser} autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="z. B. klein-buch"
+            aria-invalid={sftpUserError ? "true" : undefined} aria-describedby={sftpUserError ? "sftp-user-err" : undefined} />
+          {#if sftpUserError}<span id="sftp-user-err" class="err">{sftpUserError}</span>{/if}
         </div>
       </div>
       <div class="f">
@@ -697,23 +927,29 @@
       </div>
       <div class="f">
         <label for="sftp-pass">Passwort</label>
-        <input id="sftp-pass" type="password" bind:value={sftpPassword} autocomplete="new-password" autocapitalize="off" spellcheck="false" />
+        <input id="sftp-pass" type="password" bind:value={sftpPassword} autocomplete="new-password" autocapitalize="off" spellcheck="false"
+          aria-invalid={sftpPassError ? "true" : undefined} aria-describedby={sftpPassError ? "sftp-pass-err" : undefined} />
+        {#if sftpPassError}<span id="sftp-pass-err" class="err">{sftpPassError}</span>{/if}
       </div>
     </div>
 
     <div class="btnrow">
+      <!-- U4 (ADR 0041 Nr. 135, V2-06): Knöpfe bleiben bedienbar; fehlende Angaben stehen am Feld,
+           ein fehlender Test unter den Knöpfen. -->
       <Button
+        id="sftp-test-btn"
         variant="secondary"
         onclick={testSftp}
-        disabled={busy || !sftpUser.trim() || !sftpPassword}
-        ariaDescribedby="sftp-btn-hint"
+        ariaDisabled={busy}
+        ariaDescribedby={sftpAddError ? "sftp-add-err sftp-btn-hint" : "sftp-btn-hint"}
       >
         Verbindung testen
       </Button>
-      <Button onclick={addSftp} disabled={busy || !sftpProbeValid || !sftpPassword} ariaDescribedby="sftp-btn-hint">
+      <Button onclick={addSftp} ariaDisabled={busy} ariaDescribedby={sftpAddError ? "sftp-add-err sftp-btn-hint" : "sftp-btn-hint"}>
         Als SFTP-Ziel hinzufügen
       </Button>
     </div>
+    {#if sftpAddError}<p id="sftp-add-err" class="err">{sftpAddError}</p>{/if}
     <p id="sftp-btn-hint" class="sub">
       Zum Testen brauchst du Server, Benutzer und Passwort; speichern lässt sich das Ziel erst nach einem
       erfolgreichen Test.
@@ -737,29 +973,8 @@
       </p>
     {/if}
   </section>
-
-  <section class="card" aria-labelledby="bk-now-h">
-    <h2 id="bk-now-h">Backup jetzt erstellen</h2>
-    <Button onclick={backupNow} disabled={busy || !settings.unlocked}>Jetzt sichern</Button>
-    {#if !settings.unlocked}
-      <p class="sub">Die Datenbank ist gesperrt — bitte neu anmelden.</p>
-    {/if}
-
-    <h3>Tägliches Backup</h3>
-    <div class="row daily">
-      <div class="f">
-        <label for="bk-daily-time">Uhrzeit (Europe/Berlin)</label>
-        <input id="bk-daily-time" type="time" bind:value={dailyTime} disabled={busy} aria-describedby="bk-daily-hint" />
-      </div>
-      <div class="btnrow-inline">
-        <Button variant="secondary" onclick={saveDailyTime} disabled={busy || !dailyTime}>Uhrzeit speichern</Button>
-      </div>
-    </div>
-    <p id="bk-daily-hint" class="muted">
-      Einmal je Kalendertag, ab der eingestellten Uhrzeit oder beim ersten Lauf danach (etwa nach
-      einer Sperre). Sicherungen nach dem Festschreiben laufen unabhängig davon.
-    </p>
-  </section>
+  </div>
+  </div>
 
   <section class="card wide" aria-labelledby="bk-history-h">
     <h2 id="bk-history-h">Backup-Verlauf</h2>
@@ -795,14 +1010,15 @@
               <td data-label="Aufbewahrung">{retentionLabel(item.retentionTag)}</td>
               <td class="num nowrap" data-label="Größe">{fmtBytes(item.fileSizeBytes)}</td>
               <td>
-                <div class="row-actions">
+                <!-- U4 (U3-036): Aktionen untereinander gleich breit. -->
+                <div class="kb-actions kb-stack">
                   {#if isLocalPath(item.targetPath)}
                     <Button variant="secondary" onclick={() => pickForRestore(item)} ariaLabel={`Zum Wiederherstellen auswählen, Backup vom ${dateTime(item.createdAt)}`}>Auswählen</Button>
                   {:else if item.targetPath.startsWith("sftp://")}
                     <span class="sub">Liegt auf dem SFTP-Server: dort holen, dann unten als Datei hochladen.</span>
                   {/if}
                   {#if !item.targetPath.startsWith("sftp://")}
-                    <Button variant="secondary" onclick={() => downloadBackup(item)} disabled={busy} ariaLabel={`Herunterladen, Backup vom ${dateTime(item.createdAt)}`}>Herunterladen</Button>
+                    <Button variant="secondary" onclick={() => downloadBackup(item)} ariaDisabled={busy} ariaLabel={`Herunterladen, Backup vom ${dateTime(item.createdAt)}`}>Herunterladen</Button>
                   {/if}
                 </div>
               </td>
@@ -813,6 +1029,9 @@
     {/if}
   </section>
 
+  <!-- U4 (U2-021): Wiederherstellen und Nummernkreise ab 60rem nebeneinander. -->
+  <div class="bk-cols">
+  <div class="bk-col">
   <section class="card danger" bind:this={restoreSection} aria-labelledby="bk-restore-h">
     <h2 id="bk-restore-h">Wiederherstellen</h2>
     <p class="muted">
@@ -846,12 +1065,16 @@
           autocomplete="current-password"
           autocapitalize="off"
           spellcheck="false"
-          aria-describedby="bk-restore-pass-hint"
+          aria-invalid={restorePassError ? "true" : undefined}
+          aria-describedby={restorePassError ? "bk-restore-pass-err bk-restore-pass-hint" : "bk-restore-pass-hint"}
+          oninput={() => (restorePassError = "")}
         />
+        {#if restorePassError}<span id="bk-restore-pass-err" class="err">{restorePassError}</span>{/if}
         <span id="bk-restore-pass-hint" class="sub">Das Passwort, mit dem dieses Backup erstellt wurde.</span>
       </div>
+      <!-- U4 (V1-14, ADR 0041 Nr. 135): bleibt bedienbar; ein fehlendes Passwort steht am Feld. -->
       <div class="btnrow">
-        <Button variant="danger" onclick={doRestore} disabled={busy || !restorePass}>Wiederherstellen</Button>
+        <Button variant="danger" onclick={doRestore} busy={restoring} ariaDisabled={busy}>Wiederherstellen</Button>
       </div>
       {#if uploadPercent !== null}
         <p class="muted" role="status">Hochladen … {uploadPercent} %</p>
@@ -862,8 +1085,10 @@
       <p class="ok-box" role="status">{restoreReport}</p>
     {/if}
   </section>
+  </div>
 
-  <section class="card wide" aria-labelledby="bk-numbering-h">
+  <div class="bk-col">
+  <section class="card" aria-labelledby="bk-numbering-h">
     <h2 id="bk-numbering-h">Nummernkreise <HelpAnchor slug="disaster-recovery" /></h2>
     <p class="muted">
       Zuletzt vergebene Nummer je Belegart und Geschäftsjahr. Nach einer Wiederherstellung
@@ -883,8 +1108,8 @@
         <ul class="drafts">
           {#each restoredDrafts as c (c.kind + c.id)}
             <li>
-              <a class="docno kb-target" href={c.kind === "quote" ? `/quotes/${c.id}` : `/invoices/${c.id}`}>{c.number}</a>
-              <Button variant="secondary" onclick={() => ((confirmFor = c), (confirmReason = ""))} disabled={busy} ariaLabel={`Abgleich bestätigen, ${c.number}`}>
+              <DocNo value={c.number} href={c.kind === "quote" ? `/quotes/${c.id}` : `/invoices/${c.id}`} />
+              <Button variant="secondary" onclick={() => ((confirmFor = c), (confirmReason = ""), (confirmReasonError = ""))} ariaDisabled={busy} ariaLabel={`Abgleich bestätigen, ${c.number}`}>
                 Abgleich bestätigen …
               </Button>
             </li>
@@ -902,13 +1127,16 @@
               maxlength="500"
               autocomplete="off"
               bind:value={confirmReason}
-              aria-describedby="bk-confirm-reason-hint"
+              aria-invalid={confirmReasonError ? "true" : undefined}
+              aria-describedby={confirmReasonError ? "bk-confirm-reason-err bk-confirm-reason-hint" : "bk-confirm-reason-hint"}
             />
+            {#if confirmReasonError}<span id="bk-confirm-reason-err" class="err">{confirmReasonError}</span>{/if}
             <span id="bk-confirm-reason-hint" class="sub">Mindestens 10 Zeichen, z. B. „an das Original laut Mail-Ausgang angepasst“.</span>
           </div>
           <div class="btnrow">
-            <Button type="submit" disabled={busy || confirmReason.trim().length < 10}>Bestätigen</Button>
-            <Button variant="secondary" onclick={() => (confirmFor = null)} disabled={busy}>Abbrechen</Button>
+            <!-- U4 (V2-11): „Abbrechen“ zuerst, Hauptaktion zuletzt; fehlende Begründung am Feld. -->
+            <Button variant="secondary" onclick={() => (confirmFor = null)} ariaDisabled={busy}>Abbrechen</Button>
+            <Button type="submit" ariaDisabled={busy}>Abgleich bestätigen</Button>
           </div>
         </form>
       {/if}
@@ -931,10 +1159,10 @@
             <tr>
               <td data-label="Belegart">{c.label}</td>
               <td class="num" data-label="Jahr">{c.fiscalYear}</td>
-              <td data-label="Zuletzt vergeben"><span class="docno">{c.lastNumber ?? "—"}</span></td>
+              <td data-label="Zuletzt vergeben"><DocNo value={c.lastNumber} /></td>
               <td>
-                <div class="row-actions">
-                  <Button variant="secondary" onclick={() => startRaise(c)} disabled={busy} ariaLabel={`Anheben, ${c.label} ${c.fiscalYear}`}>Anheben …</Button>
+                <div class="kb-actions">
+                  <Button variant="secondary" onclick={() => startRaise(c)} ariaDisabled={busy} ariaLabel={`Anheben, ${c.label} ${c.fiscalYear}`}>Anheben …</Button>
                 </div>
               </td>
             </tr>
@@ -948,6 +1176,7 @@
         <QuantityInput
           bind:this={raiseInput}
           bind:value={raiseValue}
+          fieldClass="kb-w-short"
           label="Zuletzt vergebene Nummer (laufende Nummer)"
           integer
           grouping={false}
@@ -963,19 +1192,28 @@
             maxlength="500"
             autocomplete="off"
             bind:value={raiseReason}
-            aria-describedby="bk-raise-reason-hint"
+            aria-invalid={raiseReasonError ? "true" : undefined}
+            aria-describedby={raiseReasonError ? "bk-raise-reason-err bk-raise-reason-hint" : "bk-raise-reason-hint"}
           />
+          {#if raiseReasonError}<span id="bk-raise-reason-err" class="err">{raiseReasonError}</span>{/if}
           <span id="bk-raise-reason-hint" class="sub">Mindestens 10 Zeichen, z. B. „letzte Rechnung laut Mail-Ausgang RE-2026-0042“.</span>
         </div>
         <div class="btnrow">
-          <Button type="submit" disabled={busy || raiseValue === null || raiseReason.trim().length < 10}>Anheben</Button>
-          <Button variant="secondary" onclick={() => (raiseFor = null)} disabled={busy}>Abbrechen</Button>
+          <!-- U4 (V2-11): „Abbrechen“ zuerst, Hauptaktion zuletzt; fehlende Angaben am Feld. -->
+          <Button variant="secondary" onclick={() => (raiseFor = null)} ariaDisabled={busy}>Abbrechen</Button>
+          <Button type="submit" ariaDisabled={busy}>Nummernkreis anheben</Button>
         </div>
       </form>
     {/if}
   </section>
+  </div>
+  </div>
+{:else if loadError}
+  <Banner title="Die Backup-Einstellungen konnten nicht geladen werden.">{loadError}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
 {:else}
-  <p aria-busy="true">Lädt …</p>
+  <LoadingState />
 {/if}
 
 <style>
@@ -983,6 +1221,34 @@
      Formular-Karten bleiben auf 48rem gedeckelt; Tabellen-Karten (.wide) nicht. */
   .card { max-width: 48rem; }
   .card.wide { max-width: none; }
+  /* U4 (U2-021): Seitenraster. Einspaltig wie bisher, ab 60rem Inhaltsbreite (gemessen
+     an <main>, Container „kb-main“, ADR 0041 Nr. 40) zwei gleich breite Spalten; die
+     Karten füllen dann ihre Spalte. */
+  .bk-cols { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: var(--sp-4); align-items: start; }
+  .bk-col { min-width: 0; }
+  @container kb-main (width >= 60rem) {
+    .bk-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .bk-col > .card { max-width: none; }
+  }
+  .outcome {
+    margin-top: var(--sp-3);
+    padding: var(--sp-3);
+    background: var(--surface-sunken);
+    border: var(--rule);
+    border-radius: var(--radius-control);
+  }
+  .outcome-h { margin: 0; font-size: var(--fs-sm); }
+  .outcome-list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+  .outcome-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--sp-1) var(--sp-2);
+    padding: var(--sp-1) 0;
+    border-top: var(--rule);
+  }
+  .outcome-label { font-weight: 600; overflow-wrap: anywhere; }
+  .outcome-list .sub { flex-basis: 100%; margin-top: 0; }
   h2 { margin: 0 0 0.6rem; font-size: var(--fs-lg); }
   h3 { margin: 1.1rem 0 0.4rem; font-size: var(--fs-md); }
   .muted { color: var(--text-muted); font-size: var(--fs-sm); }
@@ -1035,12 +1301,10 @@
   th, td { text-align: left; vertical-align: top; }
   th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.ort { overflow-wrap: anywhere; }
-  .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
   @media (min-width: 821px) {
     .nowrap { white-space: nowrap; }
     td.ort { min-width: 18rem; }
   }
-  .docno { font-family: var(--font-mono); letter-spacing: .02em; white-space: nowrap; }
   .preview {
     margin-top: 0.8rem;
     padding: 0.8rem;
@@ -1058,7 +1322,6 @@
   .bad-box p { margin: 0 0 0.5rem; }
   .drafts { list-style: none; padding: 0; margin: 0; }
   .drafts li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding: 0.25rem 0; }
-  .drafts a { text-decoration: underline; }
   ul.targets { list-style: none; padding: 0; margin: 0.6rem 0 1rem; }
   ul.targets li {
     display: flex;
@@ -1070,7 +1333,6 @@
     border-bottom: 1px solid var(--line);
   }
   .target-info { min-width: 0; flex: 1 1 16rem; }
-  .target-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .fingerprint {
     font-family: var(--font-mono);
     font-size: var(--fs-sm);

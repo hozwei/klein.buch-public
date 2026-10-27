@@ -1,30 +1,43 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { quotesList } from "#lib/api.ts";
   import type { QuoteListItem, QuoteStatus } from "#lib/types.ts";
   import { euro, date } from "#lib/format.ts";
+  import { yearChoices } from "#lib/date.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
-  import QuantityInput from "#lib/QuantityInput.svelte";
+  import Table from "#lib/Table.svelte";
+  import { quoteStatusView } from "./quoteStatus.ts";
 
   let rows: QuoteListItem[] = $state([]);
   let loading = $state(false);
   let error: string | null = $state(null);
   let fiscalYear: number | null = $state(null);
+  // U1-062: Jahr als Auswahl. Angeboten werden die Jahre aller bisher geladenen
+  // Belege (der erste Aufruf ist ungefiltert) und das laufende Jahr; ein
+  // gefilterter Aufruf lässt keine Jahre aus der Auswahl verschwinden.
+  let seenYears: number[] = $state([]);
+  let yearOptions = $derived(yearChoices([...seenYears, fiscalYear]));
   let statusFilter: QuoteStatus | "" = $state("");
   let includeInactive = $state(true);
+  // Stand des letzten Abrufs für Ergebniszeile und leeren Zustand (V2-09, V4-06).
+  let appliedFiltered = $state(false);
 
   async function load() {
     loading = true;
     error = null;
     try {
+      const filtered = fiscalYear !== null || statusFilter !== "" || !includeInactive;
       rows = await quotesList({
         fiscalYear: fiscalYear ?? undefined,
         status: (statusFilter || undefined) as QuoteStatus | undefined,
         includeInactive,
       });
+      seenYears = yearChoices([...seenYears, ...rows.map((r) => r.fiscalYear)]);
+      appliedFiltered = filtered;
     } catch (e) {
       error = String(e);
     } finally {
@@ -34,30 +47,28 @@
 
   onMount(load);
 
-  function statusLabel(s: string): string {
-    switch (s) {
-      case "draft":      return "Entwurf";
-      case "sent":       return "Versendet";
-      case "accepted":   return "Angenommen";
-      case "rejected":   return "Abgelehnt";
-      case "canceled":   return "Storniert";
-      case "converted":  return "Umgewandelt";
-      default:           return s;
-    }
+  async function resetFilters() {
+    fiscalYear = null;
+    statusFilter = "";
+    includeInactive = true;
+    await load();
+    await tick();
+    document.getElementById("quote-filter-year")?.focus();
   }
 
-  type Tone = "neutral" | "primary" | "info" | "success" | "warning" | "danger";
-  function statusTone(s: string): Tone {
-    switch (s) {
-      case "draft":      return "neutral";
-      case "sent":       return "info";
-      case "accepted":   return "success";
-      case "rejected":   return "danger";
-      case "canceled":   return "danger";
-      case "converted":  return "primary";
-      default:           return "neutral";
-    }
-  }
+  // Ergebniszeile (4.1.3): dauerhaft im DOM, damit die Trefferzahl nach „Filtern“
+  // angesagt wird; beim Laden „Wird geladen …“ (V2-02).
+  let resultText = $derived(
+    loading
+      ? "Wird geladen …"
+      : error
+        ? ""
+        : rows.length === 0
+          ? appliedFiltered
+            ? "Keine Treffer für diese Filter."
+            : "Noch keine Angebote."
+          : `${rows.length} ${rows.length === 1 ? "Angebot" : "Angebote"}`,
+  );
 </script>
 
 <PageBar title="Angebote">
@@ -66,42 +77,51 @@
   {/snippet}
 </PageBar>
 
-<form class="toolbar" onsubmit={(e) => { e.preventDefault(); load(); }} novalidate>
-  <div class="tb-field">
-    <label for="quote-filter-year">Jahr</label>
-    <QuantityInput id="quote-filter-year" bind:value={fiscalYear} integer grouping={false} noun="Jahr" placeholder="alle" />
-  </div>
+<form class="toolbar" onsubmit={(e) => { e.preventDefault(); if (!loading) load(); }} novalidate>
+  <label>
+    Jahr
+    <select id="quote-filter-year" class="kb-input" bind:value={fiscalYear}>
+      <option value={null}>Alle</option>
+      {#each yearOptions as y (y)}<option value={y}>{y}</option>{/each}
+    </select>
+  </label>
   <label>
     Status
     <select class="kb-input" bind:value={statusFilter}>
       <option value="">Alle</option>
       <option value="draft">Entwurf</option>
-      <option value="sent">Versendet</option>
+      <option value="sent">Fertiggestellt</option>
       <option value="accepted">Angenommen</option>
       <option value="rejected">Abgelehnt</option>
-      <option value="canceled">Storniert</option>
+      <option value="canceled">Verworfen oder storniert</option>
       <option value="converted">Umgewandelt</option>
     </select>
   </label>
   <label class="chk">
     <input type="checkbox" bind:checked={includeInactive} />
-    Abgelehnte &amp; stornierte anzeigen
+    Abgelehnte, verworfene und stornierte anzeigen
   </label>
-  <Button type="submit" variant="secondary">Filtern</Button>
+  <Button type="submit" variant="secondary" ariaDisabled={loading}>Filtern</Button>
 </form>
 
+<p class="result-info" role="status">{resultText}</p>
+
 {#if loading}
-  <p class="muted">Lade …</p>
+  <!-- Ladezustand: die Ergebniszeile darüber sagt „Wird geladen …“ an. -->
 {:else if error}
   <Banner>Fehler: {error}</Banner>
 {:else if rows.length === 0}
+  <!-- V2-09: Erststart mit der Hauptaktion (secondary), gefiltert mit dem Weg zurück. -->
   <div class="empty">
-    <p class="muted">Keine Angebote für diese Auswahl.</p>
-    <Button variant="primary" href="/quotes/new">Neues Angebot anlegen</Button>
+    {#if appliedFiltered}
+      <Button variant="secondary" onclick={resetFilters}>Filter zurücksetzen</Button>
+    {:else}
+      <Button variant="secondary" href="/quotes/new">+ Neues Angebot</Button>
+    {/if}
   </div>
 {:else}
-  <table class="kb-table cards kb-card-grid">
-    <caption class="kb-visually-hidden">Angebote</caption>
+  <!-- U3-030: Liste im Table-Baustein (weiße Karte, Lineatur), Nummer als DocNo. -->
+  <Table caption="Angebote" cards cardGrid>
     <thead>
       <tr>
         <th>Nummer</th>
@@ -115,30 +135,29 @@
     </thead>
     <tbody>
       {#each rows as r (r.id)}
-        <tr class:canceled={r.status === "canceled" || r.status === "rejected"}>
-          <td data-label="Nummer"><a class="doc-no" href={`/quotes/${r.id}`}>{r.quoteNumber}</a></td>
+        {@const inactive = r.status === "canceled" || r.status === "rejected"}
+        {@const st = quoteStatusView(r)}
+        <tr class:canceled={inactive}>
+          <td data-label="Nummer"><DocNo value={r.quoteNumber} href={`/quotes/${r.id}`} muted={inactive} /></td>
           <td class="kb-col-opt2" data-label="Datum">{date(r.quoteDate)}</td>
           <td data-label="Gültig bis">{date(r.validUntil)}</td>
           <td data-label="Empfänger">{r.contactName}</td>
           <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
-          <td data-label="Status"><Badge tone={statusTone(r.status)} strike={r.status === "canceled"}>{statusLabel(r.status)}</Badge></td>
-          <td class="right"><Button variant="secondary" size="sm" href={`/quotes/${r.id}`} ariaLabel={`Angebot ${r.quoteNumber} öffnen`}>Öffnen</Button></td>
+          <td data-label="Status"><Badge tone={st.tone} strike={st.strike}>{st.label}</Badge></td>
+          <td class="right"><Button variant="secondary" href={`/quotes/${r.id}`} ariaLabel={`Angebot ${r.quoteNumber} öffnen`}>Öffnen</Button></td>
         </tr>
       {/each}
     </tbody>
-  </table>
+  </Table>
 {/if}
 
 <style>
-  .toolbar { display: flex; gap: 0.75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
-  .toolbar label, .tb-field { display: flex; flex-direction: column; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); gap: 0.2rem; }
-  .toolbar .kb-input, .tb-field { min-width: 9rem; }
+  .toolbar { display: flex; gap: 0.75rem; align-items: end; margin-bottom: var(--sp-2); flex-wrap: wrap; }
+  .toolbar label { display: flex; flex-direction: column; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); gap: 0.2rem; }
+  .toolbar .kb-input { min-width: 9rem; }
   .chk { flex-direction: row !important; align-items: center; gap: 0.4rem; min-height: var(--target); font-weight: 400 !important; }
-  /* Belegnummer als markantes Monospace-Element; Trefferfläche ≥ --target (2.5.8). */
-  .doc-no { display: inline-flex; align-items: center; min-height: var(--target); font-family: var(--font-mono); white-space: nowrap; }
-  .empty { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
-  table { width: 100%; }
+  .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); min-height: 1.4em; }
+  .empty { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; margin: 0 0 var(--sp-3); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
   tr.canceled td { color: var(--text-muted); }
-  .muted { color: var(--text-muted); }
 </style>

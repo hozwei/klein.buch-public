@@ -289,12 +289,9 @@ pub async fn prepare_invoice_draft(
     let buyer_row = contacts::get(pool, contact_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Empfänger nicht gefunden: {contact_id}")))?;
-    let seller_row = seller_profile::get(pool).await?.ok_or_else(|| {
-        Error::Domain(
-            "Stammdaten (seller_profile) noch nicht gepflegt — bitte unter Einstellungen anlegen."
-                .into(),
-        )
-    })?;
+    let seller_row = seller_profile::get(pool)
+        .await?
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
 
     if buyer_row.anonymized_at.is_some() {
         return Err(Error::Domain(
@@ -443,6 +440,19 @@ fn check_draft_blockers(
     )))
 }
 
+/// Gründe einer Prüf-Ablehnung (Ausstellen/Fertigstellen), „; “ getrennt: die
+/// ersten fünf, darüber hinaus „und N weitere Gründe“ (U4, V1-03).
+pub(crate) fn issue_reasons<E>(errs: &[E], message: impl Fn(&E) -> String) -> String {
+    let mut parts: Vec<String> = errs.iter().take(5).map(message).collect();
+    if errs.len() > 5 {
+        parts.push(format!(
+            "… und {} weitere Gründe (siehe „Prüfen“).",
+            errs.len() - 5
+        ));
+    }
+    parts.join("; ")
+}
+
 /// Argumente von [`invoices_update_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -574,12 +584,9 @@ pub async fn update_draft_core(
             "Der Empfänger ist anonymisiert — an ihn entsteht keine neue Rechnung.".into(),
         ));
     }
-    let seller_row = seller_profile::get(pool).await?.ok_or_else(|| {
-        Error::Domain(
-            "Stammdaten (seller_profile) noch nicht gepflegt — bitte unter Einstellungen anlegen."
-                .into(),
-        )
-    })?;
+    let seller_row = seller_profile::get(pool)
+        .await?
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     crate::commands::packages::enforce_package_provenance(pool, &mut input.items).await?;
     check_draft_blockers(&input, &seller_row, &buyer_row, today)?;
     // Kein Jahresabschluss, bevor der Entwurf geschrieben ist.
@@ -658,10 +665,10 @@ pub async fn invoices_validate_draft(
     let pool = &pool;
     let detail = invoices::get_detail(pool, &id)
         .await?
-        .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
+        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen — kann nicht validieren".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .as_ref()
@@ -830,7 +837,7 @@ async fn run_lock_pipeline_inner(
     let _invoice_guard = crate::locks::INVOICES.lock(invoice_id).await;
     let detail = invoices::get_detail(pool, invoice_id)
         .await?
-        .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {invoice_id}")))?;
+        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {invoice_id}")))?;
 
     if detail.invoice.locked_at.is_some() {
         return Err(Error::Domain(format!(
@@ -854,7 +861,7 @@ async fn run_lock_pipeline_inner(
     crate::backup::after_restore::ensure_no_conflict(pool, "invoice", invoice_id).await?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .clone()
@@ -918,16 +925,17 @@ async fn run_lock_pipeline_inner(
     // (BT-109/110/112) und PDF; beim Festschreiben in den Datensatz übernommen.
     let issued_totals = invoice::compute_totals(&input.items);
 
-    // 1. Domain-Validation — Hard-Block bei §14/§19-Fehlern.
+    // 1. Domain-Validation — Hard-Block bei §14/§19-Fehlern. U4 (V1-03): deutscher
+    // Vorsatz, Gründe mit „; “ getrennt (die Detailseite zeigt sie als Liste).
     invoice::validate_for_issue(&input, &seller_view, &buyer_view, today).map_err(|errs| {
+        let what = if original.is_some() {
+            "Der Storno-Beleg"
+        } else {
+            "Die Rechnung"
+        };
         Error::Domain(format!(
-            "Validation failed ({} Fehler): {}",
-            errs.len(),
-            errs.iter()
-                .take(5)
-                .map(invoice::message)
-                .collect::<Vec<_>>()
-                .join("; ")
+            "{what} kann nicht ausgestellt werden: {}",
+            issue_reasons(&errs, invoice::message)
         ))
     })?;
 
@@ -1282,7 +1290,7 @@ pub async fn invoices_cancel(
 
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let storno_date = args.storno_date.unwrap_or_else(today_berlin);
     // W14 (GoBD): Das Storno wirkt in der EÜR im Jahr seines Datums. Nicht vor
     // der Original-Rechnung, nicht in der Zukunft und nur in einem offenen

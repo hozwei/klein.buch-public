@@ -6,6 +6,8 @@
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import Banner from "#lib/Banner.svelte";
+  import ContactSelect from "#lib/ContactSelect.svelte";
+  import DocNo, { splitDocNumbers } from "#lib/DocNo.svelte";
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import {
@@ -16,16 +18,19 @@
     assetsGet,
     assetsSuggestMethod,
     expensesGet,
+    expensesList,
   } from "#lib/api.ts";
   import type {
     Contact,
     AfaTabellen,
+    Asset,
     DepreciationMethod,
     AssetInputDto,
+    AssetSuggestion,
     MethodSuggestion,
   } from "#lib/types.ts";
-  import { DEPRECIATION_METHODS } from "#lib/labels.ts";
-  import { euro } from "#lib/format.ts";
+  import { DEPRECIATION_METHODS, depreciationMethodShort } from "#lib/labels.ts";
+  import { euro, date } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { roundHalfAwayFromZero } from "#lib/tax.ts";
 
@@ -43,6 +48,19 @@
   let sourceIsKlein = $state<boolean | null>(null);
   // Lauf F8c: §13b-Kosten bei §19 — selbst geschuldete Steuer als eigene Kosten + Anlage.
   let sourceReverseCharge = $state(false);
+  // Vorschlag und Vorbelegung aus den Quell-Kosten (zum Zurücksetzen der Verknüpfung).
+  let sourceSuggestion: AssetSuggestion | null = null;
+
+  // U4 (Warteliste 4, ADR 0039 Nr. 147 (2)): Die Zahlung der selbst geschuldeten
+  // §13b-Steuer ans Finanzamt wird eine eigene Anlage mit gleichem Anschaffungsdatum,
+  // gleicher Methode und Nutzungsdauer wie die Anlage aus der Lieferantenrechnung.
+  // Kandidaten: nicht abgegangene Anlagen aus §13b-Kosten unter §19. Nur Vorbelegung —
+  // es entsteht keine gespeicherte Verknüpfung, und der Server prüft wie immer.
+  let taxCandidates = $state<Asset[]>([]);
+  let taxForId = $state("");
+  let taxFor = $derived(taxCandidates.find((c) => c.id === taxForId) ?? null);
+  /** Notiz, die die Verknüpfung vorbelegt hat (wird beim Lösen wieder entfernt). */
+  let autoNote = "";
 
   // Formularfelder
   let label = $state("");
@@ -79,6 +97,10 @@
   );
   // Aus Kosten übernommen: Betrag fest (Server lehnt andere Beträge ab, F8).
   let costFromSource = $derived(!editId && sourceIsKlein !== null);
+  // Verknüpft, aber Methode von Hand auf GWG gestellt, obwohl die Hauptanlage keins ist.
+  let gwgMismatch = $derived(
+    !!taxFor && taxFor.depreciationMethod !== "gwg_sofort" && depreciationMethod === "gwg_sofort",
+  );
 
   onMount(async () => {
     try {
@@ -96,13 +118,13 @@
       try {
         const detail = await assetsGet(editId);
         if (!detail) {
-          flash("Anlage nicht gefunden.", "error");
+          flash("Anschaffung nicht gefunden.", "error");
           await goto("/assets");
           return;
         }
         const a = detail.asset;
         if (a.lockedAt || a.disposed === 1) {
-          flash("Diese Anlage ist festgeschrieben und kann nicht mehr bearbeitet werden.", "error");
+          flash("Diese Anschaffung ist festgeschrieben und kann nicht mehr bearbeitet werden.", "error");
           await goto(`/assets/${editId}`);
           return;
         }
@@ -140,7 +162,17 @@
           } else {
             costCents = e.netAmountCents;
           }
+          sourceSuggestion = s;
           applySuggestionResult(s);
+          // Steuer-Anlage (§13b) nur für Kosten unter §19 ohne eigenen §13b-Schalter.
+          if (s.source?.isKleinunternehmer && !s.source.reverseCharge13b) {
+            taxCandidates = await loadTaxCandidates(expenseId ?? "");
+            const pre = page.url.searchParams.get("taxFor");
+            if (pre && taxCandidates.some((c) => c.id === pre)) {
+              taxForId = pre;
+              applyTaxFor();
+            }
+          }
         }
       } catch (e) {
         loadError =
@@ -149,6 +181,67 @@
     }
     loaded = true;
   });
+
+  /** Anlagen aus §13b-Kosten unter §19 (Hauptanlagen für eine Steuer-Anlage). */
+  async function loadTaxCandidates(ownExpenseId: string): Promise<Asset[]> {
+    try {
+      const rc = (await expensesList({ includeCanceled: false })).filter(
+        (x) => x.reverseCharge13b === 1 && x.status !== "canceled" && x.id !== ownExpenseId,
+      );
+      const found = await Promise.all(
+        rc.map(async (x) => {
+          const d = await expensesGet(x.id);
+          const assetId = d?.expense.capitalizedAsAssetId;
+          if (!d || !assetId) return null;
+          const s = await assetsSuggestMethod(d.expense.category, d.expense.netAmountCents, x.id);
+          if (!s.source?.isKleinunternehmer) return null;
+          const a = (await assetsGet(assetId))?.asset;
+          return a && a.disposed === 0 ? a : null;
+        }),
+      );
+      return found
+        .filter((a): a is Asset => a !== null)
+        .sort((a, b) => b.acquisitionDate.localeCompare(a.acquisitionDate));
+    } catch {
+      // Nur ein Angebot zur Vorbelegung — ohne Liste bleibt das Formular wie bisher.
+      return [];
+    }
+  }
+
+  /** Übernimmt Methode, Nutzungsdauer, AfA-Kategorie und Anteil der Hauptanlage. */
+  function applyMainAsset(main: Asset) {
+    depreciationMethod = main.depreciationMethod as DepreciationMethod;
+    usefulLifeYears = main.usefulLifeYears ?? null;
+    afaCategory = main.afaCategory ?? "";
+    businessSharePercent = main.businessSharePercent;
+    suggestionReason =
+      `Wie die Anschaffung ${main.assetNumber} (${depreciationMethodShort(main.depreciationMethod)}): ` +
+      "Die selbst geschuldete Steuer gehört zu ihren Anschaffungskosten und wird genauso " +
+      "abgeschrieben" +
+      (main.depreciationMethod === "gwg_sofort"
+        ? "."
+        : " — auch wenn ihr eigener Betrag unter der GWG-Grenze liegt.");
+  }
+
+  function applyTaxFor() {
+    const main = taxFor;
+    if (!main) {
+      // Verknüpfung gelöst: zurück zur Vorbelegung aus den Kosten.
+      if (sourceSuggestion?.source) acquisitionDate = sourceSuggestion.source.acquisitionDate;
+      if (sourceSuggestion) applySuggestionResult(sourceSuggestion);
+      if (autoNote && notes === autoNote) notes = "";
+      autoNote = "";
+      return;
+    }
+    acquisitionDate = main.acquisitionDate.slice(0, 10);
+    applyMainAsset(main);
+    const note = `Selbst geschuldete Steuer (§13b) zu ${main.assetNumber}`;
+    if (!notes.trim() || notes === autoNote) {
+      notes = note;
+      autoNote = note;
+    }
+    errors = { ...errors, date: undefined, life: undefined, share: undefined };
+  }
 
   // AfA-Kategorie gewählt → Methode + Nutzungsdauer passend setzen.
   // Kategorien mit BMF-Sonderregel (digitale Wirtschaftsgüter, Nutzungsdauer
@@ -169,6 +262,12 @@
   }
 
   async function applySuggestion() {
+    // Steuer-Anlage: Methode der Hauptanlage statt eines eigenen Vorschlags (kein GWG,
+    // wenn die Hauptanlage keins ist).
+    if (taxFor) {
+      applyMainAsset(taxFor);
+      return;
+    }
     if ((costCents ?? 0) <= 0) {
       errors = { ...errors, cost: "Bitte zuerst die Anschaffungskosten eingeben." };
       await tick();
@@ -215,6 +314,7 @@
   }
 
   async function save() {
+    if (busy) return;
     saveError = "";
     if (!(await validate())) return;
     busy = true;
@@ -234,7 +334,7 @@
       const detail = editId
         ? await assetsUpdate(editId, input)
         : await assetsCreate(input);
-      flash(editId ? "Anlage geändert." : "Anlage angelegt: " + detail.asset.assetNumber);
+      flash(editId ? "Anschaffung geändert." : "Anschaffung angelegt: " + detail.asset.assetNumber);
       await goto(`/assets/${detail.asset.id}`);
     } catch (e) {
       saveError = String(e).replace(/^Error:\s*/, "");
@@ -250,8 +350,8 @@
   {#snippet actions()}
     {#if loaded}
       <a class="btn-secondary" href="/assets">Abbrechen</a>
-      <button type="button" class="btn-primary" onclick={save} disabled={busy} aria-busy={busy}>
-        {busy ? "Speichere …" : editId ? "Änderungen speichern" : "Anschaffung anlegen"}
+      <button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>
+        {busy ? "Speichert …" : editId ? "Änderungen speichern" : "Anschaffung anlegen"}
       </button>
     {/if}
     <HelpAnchor slug="afa-grundlagen" />
@@ -275,7 +375,7 @@
 {/if}
 {#if sourceExpenseNumber && !editId}
   <p class="src-note">
-    Übernahme aus den Kosten <a class="inline-link" href={`/expenses/${expenseId}`}>{sourceExpenseNumber}</a>:
+    Übernahme aus den Kosten <DocNo value={sourceExpenseNumber} href={`/expenses/${expenseId}`} inline />:
     Anschaffungskosten und -datum kommen aus der Kostenposition.
   </p>
 {/if}
@@ -284,6 +384,28 @@
   <form novalidate onsubmit={(e) => { e.preventDefault(); save(); }}>
     <p class="legend-req">Felder mit <span class="req" aria-hidden="true">*</span> sind Pflicht.</p>
     <div class="grid">
+      {#if !editId && taxCandidates.length > 0}
+        <div class="field span2 tax-for">
+          <label for="asset-tax-for">Selbst geschuldete Steuer (§13b) zu Anschaffung</label>
+          <select
+            id="asset-tax-for"
+            class="kb-input"
+            bind:value={taxForId}
+            onchange={applyTaxFor}
+            aria-describedby="asset-tax-for-hint"
+          >
+            <option value="">— keine, eigene Anschaffung —</option>
+            {#each taxCandidates as c (c.id)}
+              <option value={c.id}>{c.assetNumber} · {c.label} (angeschafft {date(c.acquisitionDate)})</option>
+            {/each}
+          </select>
+          <p id="asset-tax-for-hint" class="msg hint">
+            Ist diese Kostenposition deine Zahlung der Steuer nach §13b an das Finanzamt, wähle
+            die Anschaffung aus der Lieferantenrechnung. Anschaffungsdatum, Abschreibungsmethode,
+            Nutzungsdauer, AfA-Kategorie und betrieblicher Anteil kommen dann von ihr.
+          </p>
+        </div>
+      {/if}
       <div class="field span2">
         <label for="asset-label">Bezeichnung<span class="req" aria-hidden="true">*</span></label>
         <input
@@ -309,7 +431,7 @@
         <label for="asset-date">Anschaffungsdatum<span class="req" aria-hidden="true">*</span></label>
         <input
           id="asset-date"
-          class="kb-input"
+          class="kb-input kb-w-date"
           type="date"
           bind:this={dateEl}
           bind:value={acquisitionDate}
@@ -321,6 +443,8 @@
         />
         {#if errors.date}
           <p id="asset-date-err" class="msg err">{errors.date}</p>
+        {:else if taxFor}
+          <p id="asset-date-hint" class="msg hint">Vorbelegt mit dem Anschaffungsdatum von <DocNo value={taxFor.assetNumber} />.</p>
         {:else if costFromSource}
           <p id="asset-date-hint" class="msg hint">Vorbelegt mit dem Belegdatum der Kosten.</p>
         {/if}
@@ -329,6 +453,7 @@
         <MoneyInput
           bind:this={costInput}
           bind:cents={costCents}
+          fieldClass="kb-w-amount"
           label="Anschaffungskosten"
           required
           readonly={costFromSource}
@@ -345,8 +470,9 @@
         {#if sourceIsKlein === true && sourceReverseCharge}
           <p class="field-note">
             Die selbst geschuldete Steuer (§13b) erfasst du bei der Zahlung an das Finanzamt als
-            eigene Kosten und übernimmst sie als eigene Anlage — mit gleichem Anschaffungsdatum,
-            gleicher Methode und Nutzungsdauer.
+            eigene Kosten (USt-Betrag 0, ohne §13b-Schalter) und übernimmst sie als eigene Anlage.
+            Dort wählst du diese Anschaffung unter „Selbst geschuldete Steuer (§13b) zu Anschaffung“;
+            Anschaffungsdatum, Methode und Nutzungsdauer werden übernommen.
           </p>
         {:else if sourceIsKlein !== null}
           <p class="field-note">
@@ -357,13 +483,14 @@
           <p class="field-note">Die GWG-Grenze gilt immer für den Betrag ohne Umsatzsteuer.</p>
         {/if}
       </div>
-      <div class="field">
-        <label for="asset-vendor">Lieferant (Kontakt, optional)</label>
-        <select id="asset-vendor" class="kb-input" bind:value={vendorContactId}>
-          <option value="">— ohne Kontakt —</option>
-          {#each vendors as v (v.id)}<option value={v.id}>{v.name}</option>{/each}
-        </select>
-      </div>
+      <!-- U4 (Warteliste 15): durchsuchbar ab 8 Lieferanten, deutsche Sortierung. -->
+      <ContactSelect
+        bind:value={vendorContactId}
+        contacts={vendors}
+        label="Lieferant (Kontakt, optional)"
+        id="asset-vendor"
+        placeholder="— ohne Kontakt —"
+      />
       <div class="field">
         <label for="asset-afa-cat">AfA-Kategorie (optional)</label>
         <select id="asset-afa-cat" class="kb-input" bind:value={afaCategory} onchange={onCategorySelect}>
@@ -379,15 +506,22 @@
           id="asset-method"
           class="kb-input"
           bind:value={depreciationMethod}
-          aria-describedby={suggestionReason ? "asset-suggestion" : undefined}
+          aria-describedby={gwgMismatch ? "asset-gwg-note" : suggestionReason ? "asset-suggestion" : undefined}
         >
           {#each DEPRECIATION_METHODS as m}<option value={m.value}>{m.label}</option>{/each}
         </select>
+        {#if gwgMismatch && taxFor}
+          <p id="asset-gwg-note" class="msg note">
+            <DocNo value={taxFor.assetNumber} /> ist kein geringwertiges Wirtschaftsgut. Die Steuer dazu gehört zu
+            denselben Anschaffungskosten und wird genauso abgeschrieben, nicht sofort.
+          </p>
+        {/if}
       </div>
       {#if isLinear}
         <QuantityInput
           bind:this={lifeInput}
           bind:value={usefulLifeYears}
+          fieldClass="kb-w-short"
           maxFractionDigits={1}
           unit="Jahre"
           noun="Nutzungsdauer"
@@ -404,9 +538,12 @@
         </div>
       {/if}
       {#if suggestionReason}
-        <p id="asset-suggestion" class="info-banner span2" role="status">
-          <strong>Vorschlag:</strong> {suggestionReason}
-        </p>
+        <!-- V3-18/V3-23: Hinweis über Banner, Belegnummern als DocNo (design.md §4.6/§4.10). -->
+        <div class="span2">
+          <Banner kind="info" id="asset-suggestion">
+            <strong>Vorschlag:</strong>{" "}{#each splitDocNumbers(suggestionReason) as p, i (i)}{#if p.docNo}<DocNo value={p.text} />{:else}{p.text}{/if}{/each}
+          </Banner>
+        </div>
       {/if}
       <div class="span2 share">
         <QuantityInput
@@ -435,11 +572,11 @@
 
     {#if !editId}
       <div class="actions">
-        <button type="button" class="btn-secondary" onclick={applySuggestion} disabled={busy}>Methode vorschlagen</button>
+        <button type="button" class="btn-secondary" onclick={() => { if (!busy) void applySuggestion(); }} aria-disabled={busy ? "true" : undefined}>Methode vorschlagen</button>
       </div>
     {/if}
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-    <div class="kb-form-end"><button type="button" class="btn-primary" onclick={save} disabled={busy} aria-busy={busy}>{busy ? "Speichere …" : editId ? "Änderungen speichern" : "Anschaffung anlegen"}</button></div>
+    <div class="kb-form-end"><button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>{busy ? "Speichert …" : editId ? "Änderungen speichern" : "Anschaffung anlegen"}</button></div>
   </form>
 </section>
 
@@ -455,6 +592,10 @@
   .msg { font-size: var(--fs-sm); margin: 0; line-height: 1.4; }
   .msg.err { color: var(--status-danger-fg); font-weight: 600; }
   .msg.hint { color: var(--text-muted); }
+  .msg.note { color: var(--status-warning-fg); background: var(--status-warning-bg); border-left: 3px solid var(--status-warning-line); padding: var(--sp-1) var(--sp-2); }
+  .grid :global(.contact-select.with-label) { margin-bottom: 0; }
+  .grid :global(.contact-select label) { color: var(--text); }
+  .tax-for { padding-bottom: var(--sp-3); border-bottom: var(--rule); }
   .grid :global(.money-field.with-label), .grid :global(.qty-field.with-label) { margin-bottom: 0; }
   .grid :global(.money-field label), .grid :global(.qty-field label) { color: var(--text); }
   .cost-field { min-width: 0; }
@@ -465,7 +606,6 @@
   .share-basis { margin: 1.9rem 0 0; color: var(--text-muted); }
   @media (max-width: 600px) { .share-basis { margin-top: 0; } }
   .src-note { font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 var(--sp-3); }
-  .inline-link { text-decoration: underline; text-underline-offset: 2px; }
   .save-error:focus { outline: none; }
   .save-error:focus-visible { outline: var(--focus-width) solid var(--focus-ring); }
   .actions { display: flex; gap: var(--sp-3); margin-top: var(--sp-5); }

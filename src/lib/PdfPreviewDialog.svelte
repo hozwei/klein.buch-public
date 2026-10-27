@@ -55,23 +55,27 @@
           data-sveltekit-reload>PDF öffnen</a
         >
       </div>
+      <!-- U4 (V3-15, design.md §4.1/§4.11): höchstens eine primary je Bereich. Die Vorschau
+           ist das Ergebnis, darum im Fuß nur secondary; „Schließen“ zuerst wie „Abbrechen“.
+           Bis 600 px ist „PDF öffnen“ oben die einzige primary, „In neuem Tab öffnen“ wäre
+           dort doppelt und entfällt. -->
       <footer class="kb-dialog-foot">
+        <button type="button" class="btn-secondary" onclick={closePdfPreview}>
+          Schließen
+        </button>
         <a
-          class="btn-secondary btn-sm"
+          class="btn-secondary tab-open"
           href={pdfPreviewStore.url}
           target="_blank"
           rel="noopener noreferrer"
           data-sveltekit-reload>In neuem Tab öffnen</a
         >
         <a
-          class="btn-secondary btn-sm"
+          class="btn-secondary"
           href={pdfPreviewStore.url}
           download={pdfPreviewStore.fileName}
           data-sveltekit-reload>Herunterladen</a
         >
-        <button type="button" class="btn-primary btn-sm" onclick={closePdfPreview}>
-          Schließen
-        </button>
       </footer>
     </div>
   </div>
@@ -112,7 +116,8 @@
      Seite (iOS) — dort öffnet die PDF-Ansicht des Browsers. */
   @media (max-width: 600px) {
     .pdf { height: 100vh; height: 100dvh; }
-    .body {
+    .body,
+    .tab-open {
       display: none;
     }
     .mobile-open {

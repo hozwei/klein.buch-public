@@ -1248,6 +1248,8 @@ async fn restore_hold_replaces_hold_and_suspends_mirror() {
         out.offsite[0].error.as_deref(),
         Some(backup::MIRROR_SUSPENDED)
     );
+    // U4: ausgesetzt ist kein Fehlschlag des Ziels.
+    assert!(out.offsite[0].suspended);
     assert_eq!(count(&env.pool, mirrored).await, 0);
     assert_eq!(
         count(
@@ -1278,6 +1280,7 @@ async fn restore_hold_replaces_hold_and_suspends_mirror() {
     .unwrap()
     .unwrap();
     assert!(out.offsite[0].error.is_none(), "{:?}", out.offsite);
+    assert!(!out.offsite[0].suspended);
     assert_eq!(count(&env.pool, mirrored).await, 1);
     // F1d: Das Ergebnis je Ziel trägt die Zeit der injizierten Uhr, nicht die
     // Systemuhr.

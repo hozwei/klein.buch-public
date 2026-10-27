@@ -4,9 +4,11 @@
   import { goto } from "$app/navigation";
   import { paymentAccountsList, privateMovementsCreate, uploadFile } from "#lib/api.ts";
   import type { PaymentAccount, MovementType, PrivateMovementInputDto } from "#lib/types.ts";
-  import { MOVEMENT_TYPES } from "#lib/labels.ts";
-  import { euro } from "#lib/format.ts";
+  import { MOVEMENT_TYPES, movementTypeLabel } from "#lib/labels.ts";
+  import { date, euro } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import MoneyInput from "#lib/MoneyInput.svelte";
 
@@ -52,7 +54,25 @@
   }
 
   async function save() {
+    if (busy) return;
     if (!(await validate())) return;
+    // U4 (V1-05 analog, design.md §5): Privatbewegungen sind ab dem Erfassen
+    // festgeschrieben (GoBD) — Rückfrage mit den Eckwerten wie bei den Kosten.
+    const ok = await confirmDialog({
+      title: "Privatbewegung festschreiben?",
+      body:
+        "Danach lässt sich nichts mehr ändern. Einen Fehler korrigierst du mit einer " +
+        "Gegenbuchung.",
+      bullets: [
+        `Datum: ${date(movementDate)}`,
+        `Art: ${movementTypeLabel(movementType)}`,
+        `Betrag: ${euro(amountCents ?? 0)}`,
+        receiptFile ? `Beleg: ${receiptFile.name}` : "Beleg: keiner",
+      ],
+      confirmLabel: "Festschreiben",
+      cancelLabel: "Abbrechen",
+    });
+    if (!ok) return;
     busy = true;
     try {
       // Plan W7: Beleg zuerst hochladen (Größe/Typ prüft der Server).
@@ -69,8 +89,9 @@
         input,
         receiptUploadId,
       });
-      flash("Erfasst: " + row.movementNumber);
-      await goto("/private-movements");
+      // design.md §5: nach dem Speichern zur Detailseite.
+      flash("Privatbewegung festgeschrieben: " + row.movementNumber);
+      await goto(`/private-movements/${row.id}`);
     } catch (e) {
       flash("Speichern fehlgeschlagen: " + String(e), "error");
     } finally {
@@ -79,17 +100,20 @@
   }
 </script>
 
-<PageBar back="/private-movements" backLabel="Privat-Geld" title="Neue Privat-Buchung">
+<!-- U4 (V2-11/V2-15): Beschriftung nach dem Ergebnis (sofort festgeschrieben, wie
+     „Kosten festschreiben“), Objekt „Privatbewegung“ wie im Glossar. -->
+<PageBar back="/private-movements" backLabel="Privatbewegungen" title="Neue Privatbewegung">
   {#snippet actions()}
     <a class="btn-secondary" href="/private-movements">Abbrechen</a>
-    <button type="button" class="btn-primary" onclick={save} disabled={busy} aria-busy={busy}>
-      {busy ? "Speichere …" : "Speichern"}
+    <button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>
+      {busy ? "Schreibt fest …" : "Privatbewegung festschreiben"}
     </button>
+    <HelpAnchor slug="privatbewegungen" />
   {/snippet}
 </PageBar>
 <p class="caveat">
   Das ist keine Einnahme oder Ausgabe und zählt nicht für die Steuer. Einmal
-  gespeichert, lässt es sich nicht mehr ändern — korrigieren kannst du mit einer
+  festgeschrieben, lässt es sich nicht mehr ändern — korrigieren kannst du mit einer
   Gegenbuchung.
 </p>
 
@@ -101,7 +125,7 @@
         <label for="pm-date">Datum<span class="req" aria-hidden="true">*</span></label>
         <input
           id="pm-date"
-          class="kb-input"
+          class="kb-input kb-w-date"
           type="date"
           bind:this={dateEl}
           bind:value={movementDate}
@@ -122,6 +146,7 @@
       <MoneyInput
         bind:this={amountInput}
         bind:cents={amountCents}
+        fieldClass="kb-w-amount"
         label="Betrag"
         required
         error={errors.amount}
@@ -173,6 +198,11 @@
     <p class="preview" aria-live="polite">
       {movementType === "entnahme" ? "Entnahme" : "Einlage"}: <strong class="kb-num">{euro(amountCents ?? 0)}</strong>
     </p>
+    <!-- Hauptaktion am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
+    <div class="kb-form-end">
+      <p id="pm-end-note" class="end-note">Danach nicht mehr änderbar — Korrektur nur per Gegenbuchung.</p>
+      <button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy} aria-describedby="pm-end-note">{busy ? "Schreibt fest …" : "Privatbewegung festschreiben"}</button>
+    </div>
   </form>
 </section>
 
@@ -191,4 +221,5 @@
   .grid :global(.money-field.with-label) { margin-bottom: 0; }
   .grid :global(.money-field label) { color: var(--text); }
   .preview { margin-top: var(--sp-4); font-size: var(--fs-md); }
+  .end-note { flex-basis: 100%; margin: 0; font-size: var(--type-small); color: var(--text-muted); text-align: right; }
 </style>

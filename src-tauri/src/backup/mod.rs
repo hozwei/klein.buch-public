@@ -262,8 +262,12 @@ pub struct OffsiteResult {
     pub label: String,
     /// Pfad/URI bei Erfolg.
     pub location: Option<String>,
-    /// Fehlertext bei Fehlschlag.
+    /// Fehlertext bei Fehlschlag; bei `suspended` der Grund der Aussetzung
+    /// ([`MIRROR_SUSPENDED`]).
     pub error: Option<String>,
+    /// Spiegelung bewusst ausgesetzt (Pause nach einer Wiederherstellung bis
+    /// zur Freigabe, D-23) — kein Fehlschlag des Ziels (Lauf 2026.11 U4).
+    pub suspended: bool,
 }
 
 /// Fügt eine `backup_history`-Zeile ein (Floor oder Off-Site — unterschieden
@@ -870,6 +874,7 @@ pub async fn create_with(
                 label: entry.label.clone(),
                 location: None,
                 error: Some(MIRROR_SUSPENDED.to_string()),
+                suspended: true,
             });
         }
     } else {
@@ -987,6 +992,7 @@ pub async fn create_with(
                         label: entry.label.clone(),
                         location: Some(offsite_path),
                         error: None,
+                        suspended: false,
                     });
                 }
                 Err((e, failed_target)) => {
@@ -1054,6 +1060,7 @@ pub async fn create_with(
                         label: entry.label.clone(),
                         location: None,
                         error: Some(e.to_string()),
+                        suspended: false,
                     });
                 }
             }

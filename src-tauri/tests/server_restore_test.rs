@@ -1736,6 +1736,7 @@ async fn older_backup_restore_keeps_numbers_pauses_and_mirrors_only_after_releas
         Some(klein_buch_lib::backup::MIRROR_SUSPENDED),
         "{out}"
     );
+    assert_eq!(out["offsite"][0]["suspended"], true, "{out}");
     assert_eq!(scalar_i64(&srv, mirrored).await, before, "keine Spiegelung");
     assert!(
         scalar_i64(

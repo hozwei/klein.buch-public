@@ -6,6 +6,7 @@
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
   import { dateTime } from "#lib/format.ts";
 
   let entries = $state<BackupLogEntry[]>([]);
@@ -49,13 +50,15 @@
     }
   }
 
-  function reset() {
+  function reset(fromEmpty = false) {
     search = "";
     dateFrom = "";
     dateTo = "";
     statusF = "all";
     triggerF = "all";
     targetF = "all";
+    // Der Link im leeren Zustand verschwindet danach; Fokus an den Anfang der Filter.
+    if (fromEmpty) document.getElementById("bl-search")?.focus();
     load();
   }
 
@@ -109,6 +112,7 @@
     <label class="grow">
       Suche
       <input
+        id="bl-search"
         type="search"
         bind:value={search}
         enterkeyhint="search"
@@ -129,7 +133,7 @@
     <label>
       Status
       <select bind:value={statusF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="ok">gesichert</option>
         <option value="failed">fehlgeschlagen</option>
       </select>
@@ -137,7 +141,7 @@
     <label>
       Auslöser
       <select bind:value={triggerF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="manual">Manuell</option>
         <option value="auto_daily">Täglich (automatisch)</option>
         <option value="auto_critical">Beleg festgeschrieben</option>
@@ -147,41 +151,47 @@
     <label>
       Ziel
       <select bind:value={targetF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="local">Lokal (Pflichtkopie)</option>
         <option value="directory">Ordner (extern)</option>
         <option value="sftp">SFTP-Server</option>
       </select>
     </label>
+    <!-- U4 (V2-10/V2-06): „Filtern“ als secondary, „Filter zurücksetzen“; während des Ladens
+         fokussierbar (ariaDisabled). -->
     <div class="btns">
-      <Button type="submit" disabled={loading}>Suchen</Button>
-      <Button variant="secondary" onclick={reset} disabled={loading && !hasFilter}>Zurücksetzen</Button>
+      <Button type="submit" variant="secondary" busy={loading}>Filtern</Button>
+      <Button variant="secondary" onclick={() => reset()} ariaDisabled={loading}>Filter zurücksetzen</Button>
     </div>
   </div>
 </form>
 
-{#if error}
-  <Banner>{error}</Banner>
-{:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
-{:else}
-  <p class="muted count" role="status">
-    {entries.length}{entries.length === LIMIT ? "+" : ""} Treffer{hasFilter ? " (gefiltert)" : ""},
-    neueste zuerst.
-    {#if entries.length === LIMIT}<span> Zeige max. {LIMIT} — Suche eingrenzen für ältere.</span>{/if}
-  </p>
+<!-- U4 (V4-06/V2-02): eine dauerhafte Statuszeile für Laden und Trefferzahl (4.1.3). -->
+<p class="muted count" role="status">
+  {#if loading}
+    Wird geladen …
+  {:else if !error}
+    {entries.length}{entries.length === LIMIT ? "+" : ""} Treffer{hasFilter ? " (gefiltert)" : ""}, neueste zuerst.
+    {#if entries.length === LIMIT}<span>{" "}Zeige höchstens {LIMIT} — grenz die Suche ein, um ältere zu sehen.</span>{/if}
+  {/if}
+</p>
 
+{#if error}
+  <Banner title="Das Backup-Protokoll konnte nicht geladen werden.">{error}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
+{:else if !loading}
   {#if entries.length === 0}
     <p class="muted">
       {#if hasFilter}
-        Keine Einträge zu diesem Filter. <button type="button" class="inline-link" onclick={reset}>Filter zurücksetzen</button>
+        Keine Treffer für diese Filter. <button type="button" class="kb-link" onclick={() => reset(true)}>Filter zurücksetzen</button>
       {:else}
-        Noch keine Sicherung protokolliert. <a class="inline-link" href="/settings/backup">Zu den Backups</a>
+        Noch keine Sicherung protokolliert. <a class="kb-link kb-target" href="/settings/backup">Zu den Backups</a>
       {/if}
     </p>
   {:else}
-    <table class="cards">
-      <caption class="kb-visually-hidden">Backup-Protokoll, neueste zuerst</caption>
+    <!-- U4 (V2-10, design.md §4.5): Protokoll im Table-Baustein; scrollt in sich (ADR 0041 Nr. 42). -->
+    <Table cards caption="Backup-Protokoll, neueste zuerst">
       <thead>
         <tr>
           <th>Zeitpunkt</th>
@@ -198,9 +208,9 @@
             <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
             <td data-label="Status">
               {#if e.status === "ok"}
-                <Badge tone={e.detail ? "warning" : "success"}>{e.detail ? "gesichert, unvollständig" : "gesichert"}</Badge>
+                <Badge tone={e.detail ? "warning" : "success"}>{e.detail ? "Gesichert, unvollständig" : "Gesichert"}</Badge>
               {:else}
-                <Badge tone="danger">fehlgeschlagen</Badge>
+                <Badge tone="danger">Fehlgeschlagen</Badge>
               {/if}
             </td>
             <td data-label="Auslöser">{triggerLabel(e.trigger)}</td>
@@ -219,7 +229,7 @@
           </tr>
         {/each}
       </tbody>
-    </table>
+    </Table>
   {/if}
 {/if}
 
@@ -234,8 +244,6 @@
   .filterbar label.grow { flex: 1 1 18rem; max-width: 100%; }
   .filterbar input, .filterbar select { padding: 0.4rem 0.55rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); font: inherit; font-weight: 400; color: var(--text); background: var(--surface-card); min-height: var(--target); }
   .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
-  .inline-link { text-decoration: underline; color: var(--accent); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; min-height: var(--target); }
-  table { width: 100%; border-collapse: collapse; }
   th, td { font-size: var(--fs-sm); text-align: left; vertical-align: top; }
   th.num, td.num { text-align: right; }
   tr.bad td { background: var(--status-danger-bg); }

@@ -11,6 +11,7 @@ import {
   parseTimestamp,
   todayBerlin,
   yearBerlin,
+  yearChoices,
   yearOfIsoDate,
   msUntilNextBerlinMidnight,
 } from "./date";
@@ -159,5 +160,16 @@ describe("msUntilNextBerlinMidnight (D-27)", () => {
 
   it("genau Mitternacht → volle 24 Stunden", () => {
     expect(msUntilNextBerlinMidnight(new Date("2026-07-14T22:00:00Z"))).toBe(24 * 3_600_000);
+  });
+});
+
+describe("yearChoices", () => {
+  const now = new Date("2026-12-31T23:30:00Z"); // in Berlin schon 2027
+  it("Jahre der Belege plus laufendes Jahr, neueste zuerst, ohne Doppelte", () => {
+    expect(yearChoices([2025, 2026, 2025, 2024], now)).toEqual([2027, 2026, 2025, 2024]);
+  });
+  it("ohne Belege nur das laufende Jahr; ungültige Werte fallen weg", () => {
+    expect(yearChoices([], now)).toEqual([2027]);
+    expect(yearChoices([null, undefined, 0, 2026.5, 2027], now)).toEqual([2027]);
   });
 });

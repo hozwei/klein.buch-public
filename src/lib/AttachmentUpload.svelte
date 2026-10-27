@@ -27,18 +27,24 @@
   let label = $state("");
   let busy = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
+  /** U4 (ADR 0041 Nr. 135): „Anhängen“ bleibt bedienbar; ohne Datei steht der Grund am Feld. */
+  let fileError = $state("");
 
+  const SIZE_DE = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   function fmtBytes(n: number): string {
     if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    if (n < 1024 * 1024) return `${SIZE_DE.format(n / 1024)} KB`;
+    return `${SIZE_DE.format(n / 1024 / 1024)} MB`;
   }
 
   async function upload() {
+    if (busy) return;
     if (!file) {
-      flash("Bitte eine Datei wählen.", "error");
+      fileError = "Bitte wähl zuerst eine Datei aus.";
+      fileInput?.focus();
       return;
     }
+    fileError = "";
     busy = true;
     try {
       const { uploadId } = await uploadFile("anhang", file);
@@ -54,7 +60,7 @@
       flash("Anhang hinzugefügt.");
       onchange?.(list);
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Anhang hinzufügen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -74,7 +80,8 @@
         <li>
           <span class="fname">{a.fileName}</span>
           <span class="kb-subtle meta">· {fmtBytes(a.fileSizeBytes)}{a.label ? ` · ${a.label}` : ""}</span>
-          <Button variant="ghost" size="sm" onclick={() => open(a.archiveEntryId, a.fileName)}>Herunterladen</Button>
+          <!-- U4 (design.md §4.1): ghost nie allein; Name mit Dateiname (mehrere Anhänge). -->
+          <Button variant="secondary" onclick={() => open(a.archiveEntryId, a.fileName)} ariaLabel={`Herunterladen: ${a.fileName}`}>Herunterladen</Button>
         </li>
       {/each}
     </ul>
@@ -88,9 +95,14 @@
         bind:this={fileInput}
         type="file"
         accept={ACCEPT}
-        aria-describedby="att-hint-{uid}"
-        onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        aria-invalid={fileError ? "true" : undefined}
+        aria-describedby={fileError ? `att-err-${uid} att-hint-${uid}` : `att-hint-${uid}`}
+        onchange={(e) => {
+          file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null;
+          if (file) fileError = "";
+        }}
       />
+      {#if fileError}<span id="att-err-{uid}" class="err">{fileError}</span>{/if}
       <small id="att-hint-{uid}" class="kb-muted hint">PDF, Bild (PNG, JPEG, WebP, GIF, TIFF) oder XML, höchstens 20 MB.</small>
     </div>
     <div class="fld name">
@@ -104,26 +116,27 @@
         enterkeyhint="done"
       />
     </div>
-    <Button variant="secondary" size="sm" onclick={upload} disabled={busy || !file} ariaLabel={busy ? "Wird angehängt" : undefined}>
-      {busy ? "…" : "Anhängen"}
+    <Button variant="secondary" onclick={upload} busy={busy}>
+      {busy ? "Hängt an …" : "Anhängen"}
     </Button>
   </div>
 </div>
 
 <style>
   .att { display: flex; flex-direction: column; gap: 0.5rem; }
-  .empty { font-size: 0.9rem; margin: 0; }
+  .empty { font-size: var(--type-body); margin: 0; }
   .list { list-style: none; padding: 0; margin: 0; }
   .list li {
-    padding: 0.25rem 0; font-size: 0.9rem;
+    padding: 0.25rem 0; font-size: var(--type-body);
     display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
   }
   .fname { font-weight: 500; }
-  .meta { font-size: 0.85rem; }
+  .meta { font-size: var(--type-small); }
   .row { display: flex; gap: var(--sp-3); align-items: flex-end; flex-wrap: wrap; }
   .fld { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
   .fld label { font-size: var(--fs-sm); font-weight: 600; }
   .fld.file { flex: 1 1 16rem; }
   .fld.name { flex: 1 1 12rem; }
   .hint { font-size: var(--fs-xs); }
+  .err { font-size: var(--fs-sm); font-weight: 600; color: var(--status-danger-fg); }
 </style>

@@ -10,7 +10,9 @@
 // dadurch höchstens einmal aus und liefert bei `timeout` das Ergebnis der
 // noch laufenden ersten Ausführung. 403 `reauth_required` (Plan W6) öffnet den
 // Re-Auth-Dialog (`setReauthHandler`) und wiederholt danach mit demselben
-// Schlüssel.
+// Schlüssel. Der Dialog erfährt die Adresse (`/api/cmd/<name>` bzw. den
+// Auth-Pfad), um die Aktion zu nennen; ein Abbruch wirft `REAUTH_CANCELED`
+// (U4, V1-09: kein Fehler-Toast mit der Server-Meldung).
 
 import { randomId } from "./browser";
 
@@ -33,8 +35,12 @@ function notifyAuth(reason: AuthReason) {
   for (const l of listeners) l(reason);
 }
 
-/** Zeigt den Re-Auth-Dialog; `true`, wenn die Re-Auth gelungen ist. */
-type ReauthHandler = () => Promise<boolean>;
+/** Zeigt den Re-Auth-Dialog für die Anfrage an `url`; `true`, wenn die Re-Auth gelungen ist. */
+type ReauthHandler = (url: string) => Promise<boolean>;
+
+/** Re-Auth-Dialog abgebrochen: nichts wurde ausgeführt. `flash()` zeigt das als
+ *  neutralen Hinweis statt als Fehler (toast.svelte.ts). */
+export const REAUTH_CANCELED = "Abgebrochen – nichts geändert.";
 let reauthHandler: ReauthHandler | null = null;
 
 /** Registriert den Re-Auth-Dialog (einmal, im Layout). */
@@ -152,10 +158,11 @@ async function sendWithRetries(
     }
     if (!reauthTried && reauthHandler && (await needsReauth(res))) {
       reauthTried = true;
-      if (await reauthHandler()) {
+      if (await reauthHandler(url)) {
         res = await send(url, init);
         continue;
       }
+      throw REAUTH_CANCELED;
     }
     return res;
   }

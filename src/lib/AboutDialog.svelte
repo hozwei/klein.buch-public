@@ -18,7 +18,7 @@
   import { formatVersionDisplay } from "#lib/version.ts";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
   import { focusTrap } from "#lib/focusTrap.ts";
-  import { DEV_SOURCE_TEXT, safeSourceLink, shortCommit, sourceLabel } from "#lib/sourceInfo.ts";
+  import { DEV_SOURCE_TEXT, safeSourceLink, sourceLabel } from "#lib/sourceInfo.ts";
   import type { AppInfo } from "#lib/types.ts";
 
   let info = $state<AppInfo | null>(null);
@@ -221,7 +221,8 @@
               <dt>Build-Commit</dt>
               <dd>
                 {#if info.buildCommit}
-                  <code title={info.buildCommit}>{shortCommit(info.buildCommit)}</code>
+                  <!-- U4 (ADR 0041 Nr. 47): voller Commit sichtbar statt nur im Tooltip. -->
+                  <code class="commit">{info.buildCommit}</code>
                 {:else}
                   {DEV_SOURCE_TEXT}
                 {/if}
@@ -234,7 +235,7 @@
               <dd><code>{info.identifier}</code></dd>
             </dl>
           {:else}
-            <p class="muted">Lade …</p>
+            <p class="kb-loading" role="status">Wird geladen …</p>
           {/if}
         </section>
 
@@ -358,7 +359,7 @@
   }
   .block {
     padding: 0.5rem 0 1rem;
-    border-bottom: 1px solid var(--c-border);
+    border-bottom: 1px solid var(--line);
   }
   .block:last-of-type {
     border-bottom: 0;
@@ -366,12 +367,12 @@
   .block h3 {
     margin: 0 0 0.4rem;
     font-size: var(--fs-md);
-    color: var(--c-text);
+    color: var(--text);
   }
   .block h4 {
     margin: 0.85rem 0 0.25rem;
     font-size: var(--fs-sm);
-    color: var(--c-text-subtle);
+    color: var(--text-subtle);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -382,7 +383,7 @@
     margin: 0.35rem 0 0;
   }
   .sep {
-    color: var(--c-text-subtle);
+    color: var(--text-subtle);
     margin: 0 0.45rem;
   }
   /* Trefferfläche ≥ --target, ohne die Zeile optisch zu sprengen. */
@@ -393,14 +394,14 @@
     background: transparent;
     border: 0;
     padding: 0;
-    color: var(--c-primary-700);
+    color: var(--accent);
     text-decoration: underline;
     cursor: pointer;
     font: inherit;
   }
   @media (hover: hover) {
     .linklike:hover {
-      color: var(--c-primary-800);
+      color: var(--accent-hover);
     }
   }
   dl {
@@ -411,7 +412,7 @@
     margin: 0.25rem 0 0;
   }
   dt {
-    color: var(--c-text-subtle);
+    color: var(--text-subtle);
     font-weight: 600;
   }
   dd {
@@ -420,16 +421,17 @@
   /* G4.1-Fix: Roh-Semver klein neben dem CalVer-Display anzeigen —
      für Support/Bug-Reports die exakte Cargo-Version sichtbar lassen. */
   .version-raw {
-    color: var(--c-text-subtle);
+    color: var(--text-subtle);
     font-size: 0.85em;
     margin-left: 0.35rem;
   }
   code {
-    background: var(--c-surface-2);
+    background: var(--surface-sunken);
     padding: 0.05em 0.4em;
     border-radius: var(--r-sm);
     font-size: 0.9em;
   }
+  code.commit { overflow-wrap: anywhere; }
   .tp-list {
     margin: 0.25rem 0 0;
     padding-left: 1.1rem;
@@ -440,11 +442,11 @@
   .notice {
     margin-top: 0.85rem;
     padding: 0.5rem 0.7rem;
-    background: var(--c-surface-2);
-    border-left: 3px solid var(--c-primary-300);
+    background: var(--surface-sunken);
+    border-left: 3px solid var(--line-hover);
     border-radius: var(--r-sm);
     font-size: var(--fs-xs);
-    color: var(--c-text-muted);
+    color: var(--text-muted);
   }
   .legal-links {
     display: flex;
@@ -456,7 +458,7 @@
     word-break: break-all;
   }
   .muted {
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     margin: 0.25rem 0;
   }
   .error {
@@ -466,7 +468,7 @@
   .footer-disclaimer {
     margin: 1rem 0 0.25rem;
     text-align: center;
-    color: var(--c-text-subtle);
+    color: var(--text-subtle);
     font-size: var(--fs-xs);
     font-style: italic;
   }

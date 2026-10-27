@@ -244,7 +244,7 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<QuoteLis
     let mut sql = String::from(
         "SELECT q.id, q.quote_number, q.fiscal_year, q.quote_date, q.valid_until,
                 q.contact_id, c.name AS contact_name,
-                q.gross_amount_cents, q.currency_code, q.status
+                q.gross_amount_cents, q.currency_code, q.status, q.locked_at
            FROM quotes q
            JOIN contacts c ON c.id = q.contact_id
           WHERE 1=1",
@@ -413,7 +413,9 @@ pub async fn cancel_in(
     let (number, status) =
         row.ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
     let already = |status: &str| match status {
-        "canceled" => Some(format!("Angebot {number} ist bereits zurückgezogen.")),
+        "canceled" => Some(format!(
+            "Angebot {number} ist bereits verworfen oder storniert."
+        )),
         "converted" => Some(format!(
             "Angebot {number} wurde bereits in eine Rechnung umgewandelt — die Rechnung \
              korrigiert ein Storno bzw. das Verwerfen ihres Entwurfs."
@@ -441,7 +443,7 @@ pub async fn cancel_in(
             .fetch_one(&mut *conn)
             .await?;
         return Err(Error::Domain(already(&now).unwrap_or_else(|| {
-            format!("Angebot {number} wurde nicht zurückgezogen (Status {now}).")
+            format!("Angebot {number} wurde nicht verworfen oder storniert (Status {now}).")
         })));
     }
     Ok(number)
@@ -507,8 +509,8 @@ pub async fn mark_converted_in(
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(
-            "Konvertierung nur für angenommene Angebote möglich — das Angebot ist \
-             inzwischen umgewandelt oder zurückgezogen."
+            "Umwandeln geht nur bei angenommenen Angeboten — das Angebot ist \
+             inzwischen umgewandelt, verworfen oder storniert."
                 .into(),
         ));
     }

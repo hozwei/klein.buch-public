@@ -2,6 +2,7 @@
   import { todayBerlin, addDaysIso, daysFromTodayBerlin } from "#lib/date.ts";
   import { onMount, tick } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
   import { goto } from "$app/navigation";
   import {
     contactsList,
@@ -21,9 +22,12 @@
     MaterializedPackageItem,
   } from "#lib/types.ts";
   import { euro, percent } from "#lib/format.ts";
+  import { pdfTemplateLabel, pdfTemplateDefaultOptionLabel, unitCodeError, unitLabel, unitOptions } from "#lib/labels.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { applyTaxRules, documentTotals, REGEL_TAX_CODES, roundHalfAwayFromZero } from "#lib/tax.ts";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import ContactSelect from "#lib/ContactSelect.svelte";
   import TravelLineAdder from "#lib/TravelLineAdder.svelte";
   import PackageItemAdder from "#lib/PackageItemAdder.svelte";
   import MarkdownEditor from "#lib/MarkdownEditor.svelte";
@@ -83,19 +87,12 @@
   let validUntil = $state(
     daysFromTodayBerlin(30),
   );
-  let currency = $state("EUR");
   let pdfTemplate = $state("default");
   let notes = $state("");
 
   // PDF-Vorlage als Auswahl (KB-0050). „default“ ist der Platzhalter für die
-  // Standard-Vorlage aus den Einstellungen (Server: commands::quotes).
-  const TEMPLATE_LABELS: Record<string, string> = {
-    default: "Standard",
-    modern: "Modern",
-    klassisch: "Klassisch",
-    minimal: "Minimal",
-  };
-  const tplLabel = (name: string) => TEMPLATE_LABELS[name] ?? name;
+  // Standard-Vorlage aus den Einstellungen (Server: commands::quotes); Namen
+  // zentral aus labels.ts (Warteliste (17)).
   let templateOptions = $derived(templates.filter((t) => t.name !== "default").map((t) => t.name));
 
   let items = $state<FormItem[]>([emptyItem(1)]);
@@ -106,7 +103,8 @@
       description: "",
       quantity: 1,
       unitCode: "C62",
-      unitPriceCents: 0,
+      // V4-05: leer statt 0,00 — so meldet das Feld einen vergessenen Preis selbst.
+      unitPriceCents: null,
       taxRatePercent: 0,
       taxCategoryCode: "E" as TaxCategoryCode,
       descriptionMarkup: "",
@@ -142,8 +140,17 @@
       labelMissing(it) ||
       it.quantity == null ||
       it.unitPriceCents == null ||
-      (!isKlein && it.taxRatePercent == null)
+      (!isKlein && it.taxRatePercent == null) ||
+      !!unitCodeError(it.unitCode)
     );
+  }
+
+  // V4-05: Ein Gesamtbetrag von 0 € lehnt der Server ab (domain::quote, TotalNotPositive).
+  // Die Meldung steht nach dem ersten Speichern an den Preisfeldern mit 0 €, nicht als Toast.
+  const ZERO_TOTAL_MSG = "Bitte einen Einzelpreis eingeben — der Gesamtbetrag muss über 0 € liegen.";
+  let zeroTotal = $derived(submitted && totals.gross <= 0);
+  function priceError(it: FormItem): string | undefined {
+    return zeroTotal && it.unitPriceCents === 0 ? ZERO_TOTAL_MSG : undefined;
   }
 
   onMount(async () => {
@@ -217,6 +224,17 @@
     it.packageName = undefined;
   }
 
+  // Befund E (U4): Eine Paket-Position mit einer Einheit außerhalb der Liste
+  // (Freitext älterer Pakete, z. B. „Pauschal“) bekommt ein Auswahlfeld. Die Wahl
+  // ändert die Kopie und löst die Bindung ans Paket (sauberer Bruch wie „Paket
+  // anpassen“; der Server löst sie bei abweichender Einheit ebenso). Die Zeile
+  // wird dabei neu aufgebaut — der Fokus bleibt auf dem Einheiten-Feld.
+  async function unitChosenForPackage(idx: number) {
+    detachPackage(idx);
+    await tick();
+    document.getElementById(`item-${idx}-unit`)?.focus();
+  }
+
   function removeItem(idx: number) {
     items = items.filter((_, i) => i !== idx).map((it, i) => ({ ...it, position: i + 1 }));
   }
@@ -229,13 +247,18 @@
   }
 
   async function save() {
+    if (saving) return;
     submitted = true;
     if (errContact || errQuoteDate || errValidUntil || items.some(itemInvalid)) {
       await focusFirstInvalid();
       return;
     }
     if (totals.gross <= 0) {
-      flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+      // Meldung an den Preisfeldern (priceError); nur ohne solches Feld als Toast.
+      await focusFirstInvalid();
+      if (!items.some((it) => !it.sourcePackageId && it.unitPriceCents === 0)) {
+        flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+      }
       return;
     }
     saving = true;
@@ -245,7 +268,8 @@
         input: {
           quoteDate,
           validUntil,
-          currencyCode: currency,
+          // V1-04: nur Euro (domain::quote) — kein Eingabefeld.
+          currencyCode: "EUR",
           items: items.map(toInput),
           notes: notes.trim() || null,
           pdfTemplate,
@@ -266,26 +290,27 @@
   }
 </script>
 
-<PageBar back="/quotes" backLabel="Liste" title="Neues Angebot">
+<PageBar back="/quotes" backLabel="Angebote" title="Neues Angebot">
   {#snippet actions()}
     <a href="/quotes" class="btn-secondary">Abbrechen</a>
-    <button type="submit" form="quote-form" class="btn-primary" disabled={saving}>
+    <!-- V2-06: während des Speicherns fokussierbar (aria-disabled), Klick ohne Wirkung. -->
+    <Button type="submit" form="quote-form" ariaDisabled={saving}>
       {saving ? "Speichere …" : "Als Entwurf speichern"}
-    </button>
+    </Button>
   {/snippet}
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if !seller}
   <Banner kind="warning">
-    Deine Firmendaten fehlen. <a class="txt-link" href="/settings/seller">Jetzt ausfüllen</a>.
+    Deine Firmendaten fehlen. <a class="kb-link" href="/settings/seller?next=/quotes/new">Jetzt ausfüllen</a>.
   </Banner>
 {:else}
   {#if isKlein}
     <Banner kind="info">
       Du bist als Kleinunternehmer (§19) eingestellt — auf dem Angebot wird keine
-      Mehrwertsteuer ausgewiesen. Die MwSt-Felder sind deshalb ausgeblendet.
+      Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
     </Banner>
   {/if}
 
@@ -294,25 +319,21 @@
     <section class="card">
       <h2>Allgemein</h2>
       <div class="grid">
-        <label>
-          <span>Empfänger <span class="req" aria-hidden="true">*</span></span>
-          <select
-            bind:value={contactId}
-            required
-            aria-invalid={submitted && errContact ? "true" : undefined}
-            aria-describedby={submitted && errContact ? "err-contact" : undefined}
-          >
-            <option value="" disabled>— wählen —</option>
-            {#each contacts as c (c.id)}
-              <option value={c.id}>{c.name}{c.city ? ` (${c.city})` : ""}</option>
-            {/each}
-          </select>
-          {#if submitted && errContact}<span id="err-contact" class="field-err">{errContact}</span>{/if}
-        </label>
+        <ContactSelect
+          bind:value={contactId}
+          contacts={contacts}
+          label="Empfänger"
+          id="quote-contact"
+          required
+          requiredMessage="Bitte einen Empfänger wählen."
+          showErrors={submitted}
+          class="span-all kb-w-long"
+        />
         <label>
           <span>Angebotsdatum <span class="req" aria-hidden="true">*</span></span>
           <input
             type="date"
+            class="kb-w-date"
             bind:value={quoteDate}
             required
             aria-invalid={submitted && errQuoteDate ? "true" : undefined}
@@ -324,6 +345,7 @@
           <span>Gültig bis <span class="req" aria-hidden="true">*</span></span>
           <input
             type="date"
+            class="kb-w-date"
             bind:value={validUntil}
             min={quoteDate || undefined}
             required
@@ -332,19 +354,20 @@
           />
           {#if submitted && errValidUntil}<span id="err-valid-until" class="field-err">{errValidUntil}</span>{/if}
         </label>
-        <label>
-          Währung
-          <input type="text" bind:value={currency} maxlength="3" autocomplete="off" autocapitalize="characters" spellcheck="false" />
-        </label>
-        <label>
+        <!-- V1-04: Währung fest (nur Euro), kein Eingabefeld. -->
+        <div class="fixed-field">
+          <span class="fixed-lbl">Währung</span>
+          <span class="fixed-val">Euro (EUR)</span>
+        </div>
+        <label class="span-all">
           PDF-Vorlage
-          <select bind:value={pdfTemplate}>
-            <option value="default">Wie in den Einstellungen ({tplLabel(seller.defaultPdfTemplate)})</option>
+          <select class="kb-w-medium" bind:value={pdfTemplate}>
+            <option value="default">{pdfTemplateDefaultOptionLabel(seller.defaultPdfTemplate)}</option>
             {#each templateOptions as name (name)}
-              <option value={name}>{tplLabel(name)}</option>
+              <option value={name}>{pdfTemplateLabel(name)}</option>
             {/each}
             {#if pdfTemplate !== "default" && !templateOptions.includes(pdfTemplate)}
-              <option value={pdfTemplate}>{tplLabel(pdfTemplate)}</option>
+              <option value={pdfTemplate}>{pdfTemplateLabel(pdfTemplate)}</option>
             {/if}
           </select>
         </label>
@@ -361,12 +384,12 @@
         <thead>
           <tr>
             <th scope="col">#</th>
-            <th scope="col">Beschreibung</th>
-            <th scope="col" class="right">Menge</th>
+            <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
             <th scope="col">Einheit</th>
-            <th scope="col" class="right">Einzelpreis</th>
+            <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
             {#if !isKlein}
-              <th scope="col" class="right">USt-Satz</th>
+              <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">USt-Art</th>
             {/if}
             <th scope="col" class="right">Netto</th>
@@ -377,13 +400,15 @@
           {#each items as it, i (i)}
             {@const n = it.position}
             {@const descErr = submitted && labelMissing(it)}
+            <!-- Befund E: Einheit außerhalb der Liste; die Meldung steht sofort, sie stammt aus den Daten (Paket, Entwurf). -->
+            {@const unitErr = unitCodeError(it.unitCode, !!it.sourcePackageId)}
             {#if isRich(it)}
               {@const linked = !!it.sourcePackageId}
               <tr class="pkg-row">
                 <td data-label="Pos.">{n}</td>
-                <td class="cards-full" data-label="Titel">
+                <td class="cards-full" data-label={linked ? "Titel" : "Titel *"}>
                   {#if linked}
-                    <span class="pkg-badge">aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</span>
+                    <Badge kind="tag">Aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</Badge>
                     <div class="pkg-title">{it.descriptionTitle}</div>
                   {:else}
                     <label class="kb-visually-hidden" for="item-{i}-title">Titel, Position {n}</label>
@@ -401,17 +426,42 @@
                 </td>
                 {#if linked}
                   <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
-                  <td data-label="Einheit">{it.unitCode}</td>
+                  {#if unitErr}
+                    <td class="c-unit" data-label="Einheit">
+                      <select
+                        id="item-{i}-unit"
+                        bind:value={it.unitCode}
+                        onchange={() => unitChosenForPackage(i)}
+                        aria-label={`Einheit, Position ${n}`}
+                        aria-invalid="true"
+                        aria-describedby={`item-${i}-unit-err`}
+                      >
+                        {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                      </select>
+                      <span id="item-{i}-unit-err" class="field-err">{unitErr}</span>
+                    </td>
+                  {:else}
+                    <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
+                  {/if}
                   <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                 {:else}
-                  <td class="c-qty" data-label="Menge">
+                  <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                   </td>
                   <td class="c-unit" data-label="Einheit">
-                    <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                    <select
+                      id="item-{i}-unit"
+                      bind:value={it.unitCode}
+                      aria-label={`Einheit, Position ${n}`}
+                      aria-invalid={unitErr ? "true" : undefined}
+                      aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                    >
+                      {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                    </select>
+                    {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                   </td>
-                  <td class="c-price" data-label="Einzelpreis">
-                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                  <td class="c-price" data-label="Einzelpreis *">
+                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                   </td>
                 {/if}
                 {#if !isKlein}
@@ -421,7 +471,7 @@
                 <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if linked || items.length > 1}
                   <td class="c-actions">
-                    <div class="pkg-actions">
+                    <div class="kb-actions">
                       {#if linked}
                         <button type="button" class="btn-secondary" onclick={() => detachPackage(i)} aria-label={`Paket anpassen, Position ${n}`}>Paket anpassen</button>
                       {/if}
@@ -451,7 +501,7 @@
             {:else}
               <tr>
                 <td data-label="Pos.">{n}</td>
-                <td class="cards-full" data-label="Beschreibung">
+                <td class="cards-full" data-label="Beschreibung *">
                   <label class="kb-visually-hidden" for="item-{i}-desc">Beschreibung, Position {n}</label>
                   <input
                     id="item-{i}-desc"
@@ -464,17 +514,26 @@
                   />
                   {#if descErr}<span id="item-{i}-desc-err" class="field-err">Bitte eine Beschreibung eingeben.</span>{/if}
                 </td>
-                <td class="c-qty" data-label="Menge">
+                <td class="c-qty" data-label="Menge *">
                   <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                 </td>
                 <td class="c-unit" data-label="Einheit">
-                  <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                  <select
+                    id="item-{i}-unit"
+                    bind:value={it.unitCode}
+                    aria-label={`Einheit, Position ${n}`}
+                    aria-invalid={unitErr ? "true" : undefined}
+                    aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                  >
+                    {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                  </select>
+                  {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                 </td>
-                <td class="c-price" data-label="Einzelpreis">
-                  <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                <td class="c-price" data-label="Einzelpreis *">
+                  <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                 </td>
                 {#if !isKlein}
-                  <td class="c-rate" data-label="USt-Satz">
+                  <td class="c-rate" data-label="USt-Satz *">
                     <QuantityInput bind:value={it.taxRatePercent} maxFractionDigits={2} unit="%" noun="Steuersatz" ariaLabel={`USt-Satz, Position ${n}`} required showErrors={submitted} />
                   </td>
                   <td data-label="USt-Art">
@@ -508,7 +567,7 @@
               <td class="c-actions"></td>
             </tr>
           {/if}
-          <tr class="grand">
+          <tr class="kb-sum">
             <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
             <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
             <td class="c-actions"></td>
@@ -526,7 +585,7 @@
     </section>
 
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-    <div class="kb-form-end"><button type="submit" class="btn-primary" disabled={saving}>{saving ? "Speichere …" : "Als Entwurf speichern"}</button></div>
+    <div class="kb-form-end"><Button type="submit" ariaDisabled={saving}>{saving ? "Speichere …" : "Als Entwurf speichern"}</Button></div>
   </form>
 {/if}
 
@@ -537,7 +596,11 @@
   .field-err { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
   .field-hint { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
   .card-hdr { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
+  /* Empfänger und Vorlage über die volle Zeile, Felder so breit wie ihr Inhalt (U3-031). */
+  .grid > :global(.span-all), .grid > .span-all { grid-column: 1 / -1; }
+  .grid :global(.contact-select) { margin-bottom: 0; }
+  .grid :global(.contact-select > label) { color: var(--text-muted); }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   input, select, textarea {
     padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
@@ -549,21 +612,21 @@
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
   td.c-qty { width: 7.5rem; }
-  td.c-unit { width: 5.5rem; }
-  td.c-unit input { width: 100%; }
+  /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
+  td.c-unit { width: 9rem; }
+  td.c-unit select { width: 100%; }
   td.c-price { width: 9.5rem; }
   td.c-rate { width: 7rem; }
-  tr.grand td { border-top: 2px solid var(--text); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): überschrieb
      padding/radius/font/color der globalen .btn-*-Klassen aus tokens.css
      und brach app-weite Button-Konsistenz. Die globalen Tokens greifen jetzt. */
   .muted { color: var(--text-muted); }
-  /* Links im Fließtext unterstrichen (1.4.1). */
-  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
-  .pkg-badge { display: inline-block; font-size: var(--fs-xs); font-weight: 600; color: var(--status-info-fg); background: var(--status-info-bg); border: 1px solid var(--status-info-line); border-radius: var(--r-pill); padding: 0.05rem 0.5rem; }
+  /* Feste Angabe ohne Eingabe (Währung, V1-04): Label wie die Felder, Wert als Text. */
+  .fixed-field { display: flex; flex-direction: column; gap: 4px; }
+  .fixed-lbl { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
+  .fixed-val { min-height: var(--control-h); display: flex; align-items: center; color: var(--text); }
   .pkg-desc { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.2rem; white-space: pre-line; overflow-wrap: anywhere; }
   .pkg-title { font-weight: 600; margin-top: 0.25rem; overflow-wrap: anywhere; }
-  .pkg-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: flex-end; }
   .pkg-row td { background: var(--surface-sunken); border-bottom: 0; }
   .pkg-detail td { background: var(--surface-sunken); padding-top: 0; }
   /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im

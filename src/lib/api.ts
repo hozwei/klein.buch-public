@@ -115,6 +115,7 @@ import type {
   AssetListFilter,
   AssetInputDto,
   AssetDisposeArgs,
+  AssetDisposalPreview,
   AfaTabellen,
   AssetSuggestion,
   DepreciationEntry,
@@ -125,6 +126,7 @@ import type {
   EuerDetailExport,
   EuerPdfExport,
   DatevExport,
+  DatevHeaderNumbers,
   StbExport,
   AfaPending,
   AppNotification,
@@ -877,6 +879,15 @@ export function assetsDispose(args: AssetDisposeArgs): Promise<AssetDetail> {
   return invoke<AssetDetail>("assets_dispose", { args });
 }
 
+/** Vorschau des Abgangs zum Datum (liest nur, Lauf 2026.11 U4): Restbuchwert,
+ *  AfA bis zum Abgang und ggf. der Grund, aus dem `assetsDispose` ablehnen würde. */
+export function assetsDisposalPreview(
+  id: string,
+  disposalDate: string,
+): Promise<AssetDisposalPreview> {
+  return invoke<AssetDisposalPreview>("assets_disposal_preview", { id, disposalDate });
+}
+
 /** „AfA für Jahr X jetzt buchen" — bucht bis einschließlich fiscalYear (Catch-up). */
 export function depreciationAccrueYear(fiscalYear: number): Promise<AccrueReport> {
   return invoke<AccrueReport>("depreciation_accrue_year", { fiscalYear });
@@ -930,14 +941,35 @@ export function euerExportPdf(fiscalYear: number): Promise<EuerPdfExport> {
   return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear });
 }
 
-/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe. */
-export function euerExportDatev(fiscalYear: number, skr: string): Promise<DatevExport> {
-  return invoke<DatevExport>("euer_export_datev", { fiscalYear, skr });
+/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe.
+ *  Berater- und Mandantennummer sind optional (Feld 11/12 des DATEV-Kopfs;
+ *  1001–9999999 bzw. 1–99999, sonst lehnt der Server ab — F5, U4). */
+export function euerExportDatev(
+  fiscalYear: number,
+  skr: string,
+  numbers: DatevHeaderNumbers = {},
+): Promise<DatevExport> {
+  return invoke<DatevExport>("euer_export_datev", {
+    fiscalYear,
+    skr,
+    consultantNumber: numbers.consultantNumber ?? null,
+    clientNumber: numbers.clientNumber ?? null,
+  });
 }
 
-/** Erzeugt das komplette Steuerberater-Paket (ZIP). */
-export function euerExportStbZip(fiscalYear: number, skr: string): Promise<StbExport> {
-  return invoke<StbExport>("euer_export_stb_zip", { fiscalYear, skr });
+/** Erzeugt das komplette Steuerberater-Paket (ZIP); Nummern wie bei
+ *  `euerExportDatev` (gehen in den DATEV-Stapel im Paket). */
+export function euerExportStbZip(
+  fiscalYear: number,
+  skr: string,
+  numbers: DatevHeaderNumbers = {},
+): Promise<StbExport> {
+  return invoke<StbExport>("euer_export_stb_zip", {
+    fiscalYear,
+    skr,
+    consultantNumber: numbers.consultantNumber ?? null,
+    clientNumber: numbers.clientNumber ?? null,
+  });
 }
 
 // ---- Backup + Restore (Block 4) --------------------------------------------
@@ -955,6 +987,9 @@ export interface TargetView {
   remoteDir: string | null;
   hostFingerprint: string | null;
   lastResult: { ok: boolean; at: string; error: string | null } | null;
+  /** Jüngste erfolgreiche Kopie auf diesem Ziel (RFC 3339, Europe/Berlin), auch
+   *  wenn der letzte Lauf scheiterte; null = noch keine Kopie (Lauf 2026.11 U4). */
+  lastCopyAt: string | null;
 }
 
 export interface SftpProbe {
@@ -976,6 +1011,12 @@ export interface BackupSettings {
   /** `missing` | `failing` | `stale` (Kopie fehlt oder ist älter als die
    *  Frist der Regel „Backup überfällig“, Lauf F3a) | `ok`. */
   offsiteStatus: "missing" | "failing" | "stale" | "ok";
+  /** Stand der Off-Site-Sicherung: älteste der je Ziel jüngsten Kopien
+   *  (`targets[].lastCopyAt`, RFC 3339); null ohne Ziel oder solange ein Ziel
+   *  keine Kopie hat (Lauf 2026.11 U4). */
+  offsiteLastCopyAt: string | null;
+  /** Alter davon in Berliner Kalendertagen (0 = heute), wie der Status „stale“. */
+  offsiteAgeDays: number | null;
   /** Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F). */
   dailyTime: string;
 }
@@ -989,7 +1030,20 @@ export interface BackupOutcome {
   triggerReason: string;
   createdAt: string;
   /** Ergebnis je Off-Site-Ziel (Plan W7). */
-  offsite: { targetId: string; label: string; location: string | null; error: string | null }[];
+  offsite: OffsiteResult[];
+}
+
+/** Ergebnis der Spiegelung auf ein Off-Site-Ziel (`backup::OffsiteResult`). */
+export interface OffsiteResult {
+  targetId: string;
+  label: string;
+  /** Pfad/URI bei Erfolg. */
+  location: string | null;
+  /** Fehlertext; bei `suspended` der Grund der Aussetzung. */
+  error: string | null;
+  /** Spiegelung ausgesetzt (Pause nach einer Wiederherstellung bis zur Freigabe) —
+   *  kein Fehlschlag des Ziels; vor `error` prüfen (Lauf 2026.11 U4). */
+  suspended: boolean;
 }
 
 export interface BackupHistoryItem {

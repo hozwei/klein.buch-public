@@ -119,6 +119,19 @@ if [ -n "$EXPECT_COMMIT" ]; then
   test "$(echo "$info" | jq -r .commit)" = "$EXPECT_COMMIT" || fail "Commit in /api/public/info ≠ $EXPECT_COMMIT"
 fi
 
+step "SPA vorkomprimiert nach Accept-Encoding, API nie (ADR 0041 Nr. 212)"
+curl -fsS -H 'Accept-Encoding: br' -D "$WORK/spa-br.h" -o /dev/null "$URL/" || fail "/ mit br"
+grep -qi '^content-encoding: br' "$WORK/spa-br.h" || fail "/ ohne Content-Encoding: br"
+grep -qi '^vary: .*accept-encoding' "$WORK/spa-br.h" || fail "/ ohne Vary: Accept-Encoding"
+curl -fsS -H 'Accept-Encoding: gzip' -D "$WORK/spa-gz.h" -o "$WORK/index.html.gz" "$URL/invoices" \
+  || fail "/invoices mit gzip"
+grep -qi '^content-encoding: gzip' "$WORK/spa-gz.h" || fail "/invoices ohne Content-Encoding: gzip"
+gzip -dc "$WORK/index.html.gz" > "$WORK/index.html" && grep -q '<html' "$WORK/index.html" \
+  || fail "index.html.gz nicht lesbar"
+curl -fsS -H 'Accept-Encoding: gzip, br' -D "$WORK/api.h" -o /dev/null "$URL/api/public/info" \
+  || fail "/api/public/info mit gzip, br"
+if grep -qi '^content-encoding' "$WORK/api.h"; then fail "API-Antwort komprimiert"; fi
+
 step "Smoke über HTTP (Einrichtung, Festschreiben, Rechnungseingang)"
 token=$(docker logs "$NAME" 2>&1 | sed -n 's/^Setup-Token: \([A-Z0-9]*\).*/\1/p' | head -1 || true)
 test -n "$token" || fail "Setup-Token nicht im Log"

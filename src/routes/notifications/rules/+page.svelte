@@ -70,7 +70,7 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted" role="status" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else}
   <ul class="list">
     {#each rules as rule (rule.id)}
@@ -93,43 +93,45 @@
 {/if}
 
 <style>
-  /* .intro entfernt — globale .lead aus tokens.css. U1: PageBar statt eigenem Kopf. */
+  /* .lead global aus tokens.css. U1: PageBar statt eigenem Kopf.
+     U4 (design.md §2.4 „Lineatur statt Kästen“): eine Karte, Regeln durch Linien getrennt. */
   .muted {
-    color: var(--c-text-muted);
+    color: var(--text-muted);
   }
   .list {
     list-style: none;
-    padding: 0;
-    margin: 1rem 0 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    padding: 0 var(--sp-4);
+    margin: 0;
+    background: var(--surface-card);
+    border: var(--rule);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    max-width: 56rem;
   }
   .item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    background: var(--surface-card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    padding: 0.85rem 1rem;
+    gap: var(--sp-4);
+    padding: var(--sp-3) 0;
+    border-bottom: var(--rule);
   }
+  .item:last-child { border-bottom: 0; }
   .text {
-    margin: 0.3rem 0;
-    font-size: 0.9rem;
-    color: var(--text);
-    line-height: 1.45;
+    margin: var(--sp-1) 0 0;
+    font-size: var(--type-body);
+    color: var(--text-muted);
+    line-height: var(--lh-body);
     max-width: 40rem;
   }
   .switch {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-shrink: 0;
   }
   .switch .state {
-    font-size: 0.85rem;
+    font-size: var(--type-small);
     color: var(--text-muted);
     min-width: 2.4rem;
   }

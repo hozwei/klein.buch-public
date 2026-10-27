@@ -30,6 +30,13 @@ pub struct BackupSettings {
     /// `missing` | `failing` | `stale` | `ok` (Plan W7; `stale` = eine
     /// Off-Site-Kopie fehlt oder ist älter als die Frist, Lauf F3a).
     pub offsite_status: String,
+    /// Stand der Off-Site-Sicherung: älteste der je Ziel jüngsten Kopien
+    /// (`targets[].lastCopyAt`, RFC 3339). `None`, wenn kein Ziel eingerichtet
+    /// ist oder ein Ziel noch keine Kopie hat (Lauf 2026.11 U4, F3).
+    pub offsite_last_copy_at: Option<String>,
+    /// Alter von `offsite_last_copy_at` in Berliner Kalendertagen (0 = heute),
+    /// gerechnet wie der Status `stale`.
+    pub offsite_age_days: Option<i64>,
     /// Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F, D-04).
     pub daily_time: String,
 }
@@ -52,6 +59,10 @@ pub struct TargetView {
     pub host_fingerprint: Option<String>,
     /// Ergebnis des letzten Laufs.
     pub last_result: Option<backup::target::TargetResult>,
+    /// Jüngste erfolgreiche Kopie auf diesem Ziel (RFC 3339, Europe/Berlin) —
+    /// auch wenn der letzte Lauf scheiterte (aus dem Backup-Protokoll);
+    /// `None` = noch keine Kopie (Lauf 2026.11 U4).
+    pub last_copy_at: Option<String>,
 }
 
 /// Eine Zeile aus `backup_history` für die Liste.
@@ -99,45 +110,49 @@ pub async fn backup_get_settings(
     let paths = &ctx.paths;
     let root = &paths.backup_targets_dir;
     let results = backup::target::load_results(&pool).await?;
-    let targets = backup::target::list_targets(&pool, root)
-        .await?
-        .into_iter()
-        .map(|t| {
-            let last_result = results.get(&t.id).cloned();
-            match t.target {
-                backup::target::BackupTarget::Directory { path } => TargetView {
-                    id: t.id,
-                    label: t.label,
-                    kind: "directory".into(),
-                    directory: Some(path),
-                    host: None,
-                    port: None,
-                    user: None,
-                    remote_dir: None,
-                    host_fingerprint: None,
-                    last_result,
-                },
-                backup::target::BackupTarget::Sftp {
-                    host,
-                    port,
-                    user,
-                    remote_dir,
-                    host_fingerprint,
-                } => TargetView {
-                    id: t.id,
-                    label: t.label,
-                    kind: "sftp".into(),
-                    directory: None,
-                    host: Some(host),
-                    port: Some(port),
-                    user: Some(user),
-                    remote_dir: Some(remote_dir),
-                    host_fingerprint,
-                    last_result,
-                },
-            }
-        })
-        .collect();
+    let mut targets = Vec::new();
+    let mut copies = Vec::new();
+    for t in backup::target::list_targets(&pool, root).await? {
+        let last_result = results.get(&t.id).cloned();
+        let last_copy_at = backup::target::last_copy_at(&pool, &t, last_result.as_ref()).await?;
+        copies.push(last_copy_at.clone());
+        targets.push(match t.target {
+            backup::target::BackupTarget::Directory { path } => TargetView {
+                id: t.id,
+                label: t.label,
+                kind: "directory".into(),
+                directory: Some(path),
+                host: None,
+                port: None,
+                user: None,
+                remote_dir: None,
+                host_fingerprint: None,
+                last_result,
+                last_copy_at,
+            },
+            backup::target::BackupTarget::Sftp {
+                host,
+                port,
+                user,
+                remote_dir,
+                host_fingerprint,
+            } => TargetView {
+                id: t.id,
+                label: t.label,
+                kind: "sftp".into(),
+                directory: None,
+                host: Some(host),
+                port: Some(port),
+                user: Some(user),
+                remote_dir: Some(remote_dir),
+                host_fingerprint,
+                last_result,
+                last_copy_at,
+            },
+        });
+    }
+    let now = ctx.clock().now_utc();
+    let oldest = backup::target::oldest_copy(&copies, now);
     Ok(BackupSettings {
         passphrase_set: backup::is_passphrase_set(&pool).await?,
         unlocked: session.is_unlocked(),
@@ -145,9 +160,11 @@ pub async fn backup_get_settings(
         targets_root: root.to_string_lossy().to_string(),
         available_dirs: backup::target::available_dirs(root),
         targets,
-        offsite_status: backup::target::offsite_status(&pool, root, ctx.clock().now_utc())
+        offsite_status: backup::target::offsite_status(&pool, root, now)
             .await?
             .to_string(),
+        offsite_last_copy_at: oldest.as_ref().map(|(at, _)| at.clone()),
+        offsite_age_days: oldest.map(|(_, days)| days),
         daily_time: backup::daily_time(&pool).await?.format("%H:%M").to_string(),
     })
 }

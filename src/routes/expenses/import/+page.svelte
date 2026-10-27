@@ -4,6 +4,7 @@
   import { goto } from "$app/navigation";
   import PageBar from "#lib/PageBar.svelte";
   import MoneyInput from "#lib/MoneyInput.svelte";
+  import ContactSelect from "#lib/ContactSelect.svelte";
   import {
     contactsList,
     paymentAccountsList,
@@ -20,9 +21,11 @@
     ValidationSummary,
   } from "#lib/types.ts";
   import { EXPENSE_CATEGORIES, einvoiceSourceLabel } from "#lib/labels.ts";
-  import { euro } from "#lib/format.ts";
+  import { date, euro } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Banner from "#lib/Banner.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
   import { REVERSE_CHARGE_13B_HINT, reverseChargeTaxError } from "#lib/tax.ts";
 
   const SEVERITY_LABEL: Record<string, string> = { error: "Fehler", warning: "Warnung", info: "Hinweis" };
@@ -77,15 +80,11 @@
     !notPaidYet && !!paidDate && !!expenseDate && paidDate < expenseDate,
   );
 
-  // Übergabe F5: Hinweis bei möglicher Steuerkategorie K (innergemeinschaftlicher
-  // Erwerb). Der Parser liefert die Kategorie K nicht aus; Näherung für die
-  // Anzeige: Lieferant mit ausländischer USt-IdNr., keine USt, kein §13b.
-  const maybeIntraEu = $derived(
-    !!parsed?.sellerVatId &&
-      !/^DE/i.test(parsed.sellerVatId.replace(/\s/g, "")) &&
-      (taxCents ?? 0) === 0 &&
-      !reverseCharge13b,
-  );
+  // Übergabe F5 (Warteliste 2, U4): Hinweis bei Steuerkategorie K (innergemeinschaftliche
+  // Lieferung). Seit U4 liest der Parser die Kategorien der Rechnung
+  // (`parsed.intraCommunity`, ADR 0041 Nr. 82) — keine Näherung über die USt-IdNr. mehr.
+  // Nur ein Hinweis: Beträge und §13b-Vorschlag hängen nicht daran.
+  const intraCommunity = $derived(parsed?.intraCommunity === true);
 
   onMount(async () => {
     try {
@@ -102,9 +101,12 @@
     fileError = "";
   }
 
+  // U4 (V1-20, ADR 0041 Nr. 135): Der Knopf bleibt ohne Datei aktiv; der Klick nennt den
+  // Grund am Datei-Feld und setzt den Fokus dorthin.
   async function parse() {
+    if (busy) return;
     if (!file) {
-      fileError = "Bitte zuerst eine Datei wählen (XML oder PDF).";
+      fileError = "Bitte eine Datei wählen (XRechnung-XML oder ZUGFeRD-PDF).";
       fileEl?.focus();
       return;
     }
@@ -148,15 +150,17 @@
 
       phase = "review";
     } catch (e) {
-      fileError = "E-Rechnung konnte nicht gelesen werden: " + String(e);
-      flash("E-Rechnung konnte nicht gelesen werden.", "error");
+      // V1-20: Der Fehler steht am Feld (dort fokussiert), kein zusätzlicher Toast.
+      fileError = "E-Rechnung konnte nicht gelesen werden: " + String(e).replace(/^Error:\s*/, "");
+      await tick();
+      fileEl?.focus();
     } finally {
       busy = false;
     }
   }
 
-  function onVendorSelect() {
-    const c = vendors.find((v) => v.id === vendorContactId);
+  function onVendorSelect(id: string) {
+    const c = vendors.find((v) => v.id === id);
     if (c) {
       vendorName = c.name;
       errors.vendorName = undefined;
@@ -197,7 +201,24 @@
   }
 
   async function confirm() {
+    if (busy) return;
     if (!(await validate())) return;
+    // U4 (V1-05): Rückfrage mit den Eckwerten wie bei der manuellen Erfassung.
+    const ok = await confirmDialog({
+      title: "Kosten festschreiben?",
+      body:
+        "Danach lässt sich nichts mehr ändern. Eine Korrektur geht nur per Storno und " +
+        "neuer Erfassung. Die E-Rechnung wird unverändert archiviert.",
+      bullets: [
+        `Belegdatum: ${date(expenseDate)}`,
+        `Lieferant: ${vendorName.trim()}`,
+        `Brutto: ${euro(grossCents)}`,
+        notPaidYet || !paidDate ? "Bezahlt: noch offen" : `Bezahlt am: ${date(paidDate)}`,
+      ],
+      confirmLabel: "Festschreiben",
+      cancelLabel: "Abbrechen",
+    });
+    if (!ok) return;
     busy = true;
     try {
       const input: ExpenseInputDto = {
@@ -222,7 +243,7 @@
         sourceFormat,
         validation,
       });
-      flash("E-Rechnung erfasst: " + detail.expense.expenseNumber);
+      flash("Kosten festgeschrieben: " + detail.expense.expenseNumber);
       await goto(`/expenses/${detail.expense.id}`);
     } catch (e) {
       const msg = String(e);
@@ -250,7 +271,11 @@
   }
 </script>
 
-<PageBar back="/expenses" backLabel="Kosten" title="E-Rechnung importieren" />
+<PageBar back="/expenses" backLabel="Kosten" title="E-Rechnung importieren">
+  {#snippet actions()}
+    <HelpAnchor slug="rechnungseingang-per-upload" />
+  {/snippet}
+</PageBar>
 
 {#if phase === "select"}
   <p class="muted">
@@ -279,14 +304,14 @@
     {/if}
     <div class="actions">
       <a class="btn-secondary" href="/expenses">Abbrechen</a>
-      <button type="button" class="btn-primary" onclick={parse} disabled={busy || !file} aria-busy={busy}>
-        {busy ? "Lese ein …" : "Einlesen und prüfen"}
+      <button type="button" class="btn-primary" onclick={parse} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>
+        {busy ? "Liest ein …" : "Einlesen und prüfen"}
       </button>
     </div>
   </section>
 {:else}
   <p class="caveat">
-    Bitte die übernommenen Werte prüfen. Mit dem Festschreiben wird die Kosten-Position
+    Bitte die übernommenen Werte prüfen. Mit „Kosten festschreiben“ wird die Kostenposition
     <strong>unveränderlich</strong> — die Original-Datei wird unverändert archiviert
     (gesetzliche Aufbewahrung). Vertippt? Dann später stornieren und neu erfassen.
   </p>
@@ -339,7 +364,7 @@
           <label for="imp-date">Beleg-Datum<span class="req" aria-hidden="true">*</span></label>
           <input
             id="imp-date"
-            class="kb-input"
+            class="kb-input kb-w-date"
             type="date"
             bind:this={expenseDateEl}
             bind:value={expenseDate}
@@ -355,7 +380,7 @@
           <label for="imp-paid">Bezahlt am <span class="lbl-hint">(zählt fürs Finanzamt)</span></label>
           <input
             id="imp-paid"
-            class="kb-input"
+            class="kb-input kb-w-date"
             type="date"
             bind:value={paidDate}
             max={maxDate}
@@ -372,13 +397,15 @@
             </p>
           {/if}
         </div>
-        <div class="field">
-          <label for="imp-vendor-contact">Lieferant (Kontakt)</label>
-          <select id="imp-vendor-contact" class="kb-input" bind:value={vendorContactId} onchange={onVendorSelect}>
-            <option value="">— ohne Kontakt (Freitext) —</option>
-            {#each vendors as v (v.id)}<option value={v.id}>{v.name}</option>{/each}
-          </select>
-        </div>
+        <!-- U4 (Warteliste 15): durchsuchbar ab 8 Lieferanten, deutsche Sortierung. -->
+        <ContactSelect
+          bind:value={vendorContactId}
+          contacts={vendors}
+          label="Lieferant (Kontakt)"
+          id="imp-vendor-contact"
+          placeholder="— ohne Kontakt (Freitext) —"
+          onchange={onVendorSelect}
+        />
         <div class="field">
           <label for="imp-vendor-name">Lieferanten-Name<span class="req" aria-hidden="true">*</span></label>
           <input
@@ -426,6 +453,7 @@
         <MoneyInput
           bind:this={netInput}
           bind:cents={netCents}
+          fieldClass="kb-w-amount"
           label="Netto"
           required
           error={errors.net}
@@ -434,6 +462,7 @@
         <MoneyInput
           bind:this={taxInput}
           bind:cents={taxCents}
+          fieldClass="kb-w-amount"
           label="USt-Betrag"
           readonly={reverseCharge13b}
           error={errors.tax}
@@ -442,19 +471,19 @@
         />
         <div class="field">
           <label for="imp-gross">Brutto</label>
-          <output id="imp-gross" class="kb-input ro kb-num">{euro(grossCents)}</output>
+          <output id="imp-gross" class="kb-input ro kb-num kb-w-amount">{euro(grossCents)}</output>
         </div>
         <p class="info-banner span2">
           Netto und USt wurden aus der E-Rechnung übernommen. Stimmen sie nicht mit
           dem Beleg überein, hier korrigieren — der Brutto-Betrag rechnet sich neu.
         </p>
-        {#if maybeIntraEu}
+        {#if intraCommunity}
           <div class="caveat span2" role="note">
-            <strong>Lieferant aus dem EU-Ausland ohne Umsatzsteuer?</strong>
-            Steht auf der Rechnung Steuerkategorie K (innergemeinschaftlicher Erwerb),
+            <strong>Steuerkategorie K (innergemeinschaftliche Lieferung):</strong>
+            Der Lieferant aus dem EU-Ausland stellt ohne Umsatzsteuer in Rechnung. Für dich
             kann auch mit §19 Erwerbsteuer anfallen — abhängig von der Erwerbsschwelle und
-            davon, ob du deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das
-            prüfst du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung.
+            davon, ob du deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das prüfst
+            du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung.
           </div>
         {/if}
         <div class="field">
@@ -485,11 +514,13 @@
         </div>
       </div>
 
+      <!-- U4 (V1-05): Folge direkt über dem Knopf; Knopf heißt wie bei der manuellen Erfassung. -->
+      <p id="imp-end-note" class="end-note">Danach nicht mehr änderbar — Korrektur nur per Storno.</p>
       <div class="actions">
         <a class="btn-secondary" href="/expenses">Abbrechen</a>
-        <button type="button" class="btn-secondary" onclick={reset} disabled={busy}>Andere Datei</button>
-        <button type="submit" class="btn-primary" disabled={busy} aria-busy={busy}>
-          {busy ? "Schreibe fest …" : "Als Kosten festschreiben"}
+        <button type="button" class="btn-secondary" onclick={() => { if (!busy) reset(); }} aria-disabled={busy ? "true" : undefined}>Andere Datei</button>
+        <button type="submit" class="btn-primary" aria-disabled={busy ? "true" : undefined} aria-busy={busy} aria-describedby="imp-end-note">
+          {busy ? "Schreibt fest …" : "Kosten festschreiben"}
         </button>
       </div>
     </form>
@@ -518,9 +549,11 @@
   .info-banner, .caveat { margin: 0; }
   .rc-hint strong { margin-right: var(--sp-1); }
   .rc-facts { display: block; margin-top: var(--sp-1); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .grid :global(.money-field.with-label) { margin-bottom: 0; }
-  .grid :global(.money-field label) { color: var(--text); }
+  .grid :global(.money-field.with-label), .grid :global(.contact-select.with-label) { margin-bottom: 0; }
+  .grid :global(.money-field label), .grid :global(.contact-select label) { color: var(--text); }
   .actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-5); }
+  .end-note + .actions { margin-top: var(--sp-2); }
+  .end-note { margin: var(--sp-5) 0 0; font-size: var(--type-small); color: var(--text-muted); }
   .findings { font-size: var(--fs-sm); margin: 0 0 1rem; }
   .findings summary { cursor: pointer; color: var(--text-muted); min-height: var(--target); display: flex; align-items: center; }
   .findings ul { margin: var(--sp-2) 0 0; padding-left: 1rem; }

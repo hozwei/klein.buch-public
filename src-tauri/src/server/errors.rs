@@ -75,7 +75,7 @@ impl ApiError {
         Self::new(
             StatusCode::FORBIDDEN,
             "reauth_required",
-            "Bitte zur Bestätigung erneut anmelden (Passphrase und TOTP).",
+            "Diese Aktion ist geschützt: Bestätige sie mit Daten-Passwort und App-Code.",
         )
     }
 
@@ -270,7 +270,7 @@ pub fn constraint_message(raw: &str) -> &'static str {
         ),
         (
             "invoice records are immutable",
-            "Rechnungen werden nie gelöscht (GoBD). Eine festgeschriebene Rechnung korrigiert ein Storno, einen Entwurf verwirfst Du.",
+            "Rechnungen werden nie gelöscht (GoBD). Eine festgeschriebene Rechnung korrigiert ein Storno, einen Entwurf verwirfst du.",
         ),
         (
             "invoices are created as drafts",
@@ -286,15 +286,15 @@ pub fn constraint_message(raw: &str) -> &'static str {
         ),
         (
             "quote is canceled",
-            "Das Angebot ist zurückgezogen und lässt sich nicht mehr ändern.",
+            "Das Angebot ist verworfen oder storniert und lässt sich nicht mehr ändern.",
         ),
         (
             "quote is converted",
-            "Das Angebot ist in eine Rechnung umgewandelt. Zurück geht es nur, indem Du den Rechnungs-Entwurf verwirfst.",
+            "Das Angebot ist in eine Rechnung umgewandelt. Zurück geht es nur, indem du den Rechnungs-Entwurf verwirfst.",
         ),
         (
             "quote is locked or canceled",
-            "Das Angebot ist festgeschrieben oder zurückgezogen; seine Positionen sind unveränderlich.",
+            "Das Angebot ist festgeschrieben, verworfen oder storniert; seine Positionen sind unveränderlich.",
         ),
         (
             "quote is locked",
@@ -302,15 +302,15 @@ pub fn constraint_message(raw: &str) -> &'static str {
         ),
         (
             "quote records are immutable",
-            "Angebote werden nie gelöscht; ein nicht mehr gültiges Angebot ziehst Du zurück.",
+            "Angebote werden nie gelöscht: Einen Entwurf verwirfst du, ein festgeschriebenes Angebot stornierst du.",
         ),
         (
             "expense is locked",
-            "Die Ausgabe ist festgeschrieben und kann nicht mehr geändert werden (GoBD). Korrigieren lässt sie sich nur mit einem Storno.",
+            "Diese Kosten sind festgeschrieben und können nicht mehr geändert werden (GoBD). Korrigieren lassen sie sich nur mit einem Storno.",
         ),
         (
             "expense records are immutable",
-            "Ausgaben werden nie gelöscht (GoBD); eine falsche Ausgabe stornierst Du.",
+            "Kosten werden nie gelöscht (GoBD); falsch erfasste Kosten stornierst du.",
         ),
         (
             "private_movement is locked",
@@ -330,7 +330,7 @@ pub fn constraint_message(raw: &str) -> &'static str {
         ),
         (
             "asset records are append-only",
-            "Anlagen werden nie gelöscht (GoBD); einen Abgang buchst Du über „Veräußern“.",
+            "Anlagen werden nie gelöscht (GoBD); einen Abgang buchst du über „Veräußern“.",
         ),
         (
             "depreciation entry is locked",

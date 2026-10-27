@@ -1,4 +1,4 @@
-/* Klein.Buch — zentrale Design-Tokens (DS-1, semantisch seit Lauf 2026.11/U1).
+/* Klein.Buch — zentrale Design-Tokens (DS-1, semantisch seit Lauf 2026.11/U1, geschärft in U4).
  * Single source of truth für Farben, Abstände, Typo, Radien, Schatten.
  * Markenfarbe Petrol stammt aus wildbach-computerhilfe.de (#176b87).
  * Wird einmalig in +layout.svelte importiert. Keine Netz-Abhängigkeit
@@ -6,10 +6,18 @@
  *
  * Aufbau: 1. Palette (Rohmaterial, `--c-*`, bleibt für Seiten gültig)
  *         2. Rollen (`--text`, `--surface-*`, `--line*`, `--accent*`,
- *            `--status-*`, `--focus-*`) — Bausteine nutzen nur diese.
- *            Ein späterer Dark Mode ist ein zweiter Rollensatz.
+ *            `--status-*`, `--focus-*`, `--type-*`, `--radius-*`,
+ *            `--shadow-*`) — Bausteine nutzen nur diese.
+ *            Ein späterer Dark Mode ist ein zweiter Rollensatz (nur die
+ *            Abschnitte „Flächen“ bis „Fokus“ und das Pfeil-Bild der Auswahlfelder).
  *         3. Skalen (Abstände, Typo, Radien, Schatten, Bewegung, Größen).
- * Kontraste (WCAG-Formel) stehen in docs/architecture/design.md §3.2. */
+ * Kontraste (WCAG-Formel) stehen in docs/architecture/design.md §3.3.
+ *
+ * `!important` (U4, ADR 0041 Nr. 7): nur noch, wo eine Regel gegen seitenlokale
+ * Stile gewinnen muss, die es noch gibt (Tabellenköpfe/-zellen, Schriftgröße der
+ * Felder im Drawer-Band, Pfeil der Auswahlfelder, Fehlerkante), sowie in
+ * Hilfsklassen (.kb-visually-hidden), Druck und reduzierter Bewegung. Begründung je
+ * Stelle im Kommentar; Liste in design.md §4.12. */
 
 :root {
   /* ======================= 1. Palette ======================= */
@@ -58,9 +66,12 @@
   --surface-hover:   var(--c-primary-50);
   --surface-row-hover: #edf4f7; /* Tabellenzeile unter dem Zeiger (U3), auf Weiß und --c-bg sichtbar */
   --surface-inverse: var(--c-primary-800); /* Seitenleiste, mobile Kopfleiste */
+  --surface-inverse-hover:  rgba(255, 255, 255, 0.07); /* ergibt #1e4e5c: Weiß 9,13:1 */
+  --surface-inverse-active: rgba(255, 255, 255, 0.13); /* ergibt #2c5a67: Weiß 7,59:1 */
   --overlay:         rgba(16, 36, 44, 0.55); /* Abdunklung hinter Dialogen, ohne Weichzeichner */
 
-  /* Text (alle ≥ 4,5:1 auf --surface-page, --surface-card, --surface-sunken) */
+  /* Text (alle ≥ 4,5:1 auf --surface-page, --surface-card, --surface-sunken,
+   * --surface-row-hover; Werte in design.md §3.3) */
   --text:           var(--c-text);
   --text-muted:     var(--c-text-muted);
   --text-subtle:    var(--c-text-subtle);
@@ -68,9 +79,15 @@
   --text-inverse:   #ffffff;
   --text-inverse-muted: #bcd4dc; /* 7,19:1 auf --surface-inverse */
 
-  /* Linien */
-  --line:         var(--c-border);        /* Lineatur, Trennlinien (dekorativ) */
+  /* Linien (Lineatur des Kontorbuchs) */
+  --line:         var(--c-border);        /* Lineatur, Trennlinien (dekorativ, 1,22:1) */
   --line-control: var(--c-border-strong); /* Bedienelement-Grenze, ≥ 3:1 */
+  --line-hover:   var(--c-primary-300);   /* Rahmen unter dem Zeiger (nur Hover, Ruhe-Kante bleibt --line-control) */
+  --line-inverse: rgba(255, 255, 255, 0.12); /* Trennlinie auf Petrol (dekorativ) */
+  --line-inverse-control: rgba(255, 255, 255, 0.45); /* Knopfkante auf Petrol: ergibt #7a979f, 3,58:1 */
+  --rule:         1px solid var(--line);
+  --rule-control: 1px solid var(--line-control);
+  --rule-sum:     3px double var(--line-control); /* doppelte Linie über einer Summe */
 
   /* Akzent (Marke, Primäraktion, Links) */
   --accent:         var(--c-primary-600);
@@ -78,22 +95,54 @@
   --accent-soft:    var(--c-primary-50);
   --accent-on-soft: var(--c-primary-700);
 
-  /* Status: fg auf bg ≥ 4,5:1; line ist die Kante (danger-line ≥ 3:1) */
+  /* Status: fg auf bg ≥ 4,5:1; line ist die Kante (dekorativ, der Text trägt den Status).
+   * primary = „Festgeschrieben“ (Badge). */
   --status-success-bg: var(--c-success-50); --status-success-fg: var(--c-success-700); --status-success-line: var(--c-success-500);
   --status-warning-bg: var(--c-warning-50); --status-warning-fg: var(--c-warning-700); --status-warning-line: var(--c-warning-500);
   --status-danger-bg:  var(--c-danger-50);  --status-danger-fg:  var(--c-danger-700);  --status-danger-line:  var(--c-danger-500);
   --status-info-bg:    var(--c-info-50);    --status-info-fg:    var(--c-info-700);    --status-info-line:    var(--c-primary-300);
   --status-neutral-bg: var(--c-neutral-50); --status-neutral-fg: var(--c-neutral-700); --status-neutral-line: var(--c-border-strong);
-  /* Gefahr als volle Fläche (Bestätigen im Dialog): Weiß darauf 7,38:1 */
+  --status-primary-bg: var(--c-primary-100); --status-primary-fg: var(--c-primary-800); --status-primary-line: var(--c-primary-300);
+  /* Gefahr als volle Fläche (Bestätigen im Dialog, Zähler): Weiß darauf 7,38:1 */
   --danger-solid: var(--c-danger-700);
   --danger-solid-hover: #861f28;
 
-  /* Fokus: Ring ≥ 3:1 gegen alle hellen Flächen (4,66 Weiß, 4,33 --c-bg);
-   * auf Petrol (Seitenleiste, Kopfleiste) der helle Ring (11,1:1). */
+  /* Fokus: Ring ≥ 3:1 gegen alle hellen Flächen (4,66 Weiß, 4,33 --c-bg, 4,04
+   * --status-danger-bg); auf Petrol (Seitenleiste, Kopfleiste) der helle Ring (11,1:1). */
   --focus-ring:         var(--c-primary-500);
   --focus-ring-inverse: #ffffff;
   --focus-width:  2px;
+  /* Abstand des Rings (U4, V4-13): Standard außen; `tight` für Felder (der Ring liegt
+   * dicht an der Feldkante) und dicht gestapelte Einträge (Seitenleiste); `inset`
+   * innen, wo außen kein Platz ist (Menüeinträge, Textfeld im Markdown-Editor). */
   --focus-offset: 2px;
+  --focus-offset-tight: 1px;
+  --focus-offset-inset: -2px;
+
+  /* Typo-Rollen (U4): wenige Stufen, Seiten wählen die Rolle, nicht die Pixelzahl.
+   * Display und Kennzahl wachsen mit der Fensterbreite (320 px → 24/22 px,
+   * ab ~720/800 px 34/28 px), damit Begrüßung und Kennzahlen auf dem Handy nicht
+   * den halben Bildschirm belegen (U1-064). */
+  --type-display: clamp(24px, 16px + 2.5vw, 34px); /* U4 (V3-03): derzeit ungenutzt — keine Hero-Flächen; Datum der Startseite in --type-heading */
+  --type-figure:  clamp(22px, 18px + 1.25vw, 28px); /* Kennzahlen (Beträge in Kacheln) */
+  --type-title:   clamp(20px, 18px + 0.5vw, 22px); /* Seitentitel (h1 in der PageBar) */
+  --type-heading: 18px; /* Abschnitt (h2 in Karten), Dialogtitel */
+  --type-body:    14px; /* Fließtext, Tabellen, Felder am Desktop */
+  --type-small:   13px; /* Labels, Hinweise, Metazeilen */
+  --type-caption: 12px; /* Spaltenköpfe in Versalien, Badges, Karten-Labels */
+  --lh-tight: 1.2;  /* Knöpfe, Kennzahlen, Display */
+  --lh-snug:  1.3;  /* Überschriften, Labels */
+  --lh-body:  1.55; /* Fließtext */
+
+  /* Radien (U4: präziser, weniger „weich“): Bedienelemente 8 px, Karten/Dialoge 12 px. */
+  --radius-control: var(--r-md);
+  --radius-card:    var(--r-lg);
+  --radius-pill:    var(--r-pill);
+
+  /* Schatten sparsam: Karten nur Haarlinie, schwebende Ebenen (Menü, Toast) und Dialoge. */
+  --shadow-card:    var(--sh-sm);
+  --shadow-overlay: var(--sh-lg);
+  --shadow-modal:   var(--sh-xl);
 
   /* ======================= 3. Skalen ======================= */
   /* Abstände: 4-px-Raster */
@@ -104,9 +153,20 @@
   --target-min:   24px;
   --target-touch: 44px;
   --target:       var(--target-min);
+  /* Höhe aller einzeiligen Bedienelemente (Knöpfe, Text-, Datums-, Auswahlfelder;
+   * U4, U3-033): 40 px am Desktop, im Drawer-Band 44 px. rem, damit sie mit einer
+   * größeren Grundschrift des Browsers mitwächst. */
+  --control-h:    2.5rem;
 
-  /* Radien. --r-xl nur noch für Ausnahmen; Karten und Dialoge nutzen --r-lg. */
-  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 20px; --r-pill: 999px;
+  /* Feldbreiten nach Inhalt (U4, U3-031): Höchstbreiten, auf schmalen Flächen 100 %. */
+  --w-short:  8rem;   /* PLZ, Menge, km, %, Tage, Uhrzeit */
+  --w-date:   11rem;  /* TT.MM.JJJJ mit Kalender-Knopf */
+  --w-amount: 12rem;  /* Betrag bis 1.000.000.000,00 € */
+  --w-medium: 20rem;  /* Ort, Telefon, IBAN, Auswahl mit kurzen Texten */
+  --w-long:   32rem;  /* Name, E-Mail, Betreff */
+
+  /* Radien. --r-xl nur noch für Ausnahmen; Bausteine nutzen --radius-*. */
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-pill: 999px;
 
   /* Layout */
   --main-pad: 2rem;      /* Innenabstand des Haupt-Scrollbereichs (für sticky PageBar genutzt) */
@@ -117,13 +177,13 @@
 
   /* Schatten: Hairline-Lage + dezente Tiefe, kein weicher Halo als Dekor */
   --sh-sm: 0 1px 1px rgba(16,40,50,.04), 0 1px 2px rgba(16,40,50,.04);
-  --sh-md: 0 1px 2px rgba(16,40,50,.05), 0 4px 12px rgba(16,40,50,.05);
   --sh-lg: 0 2px 4px rgba(16,40,50,.05), 0 12px 28px rgba(16,40,50,.10);
   --sh-xl: 0 4px 8px rgba(16,40,50,.06), 0 24px 48px rgba(16,40,50,.16);
 
-  /* Typo-Skala */
-  --fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px; --fs-md: 16px;
-  --fs-lg: 18px; --fs-xl: 22px; --fs-2xl: 28px; --fs-3xl: 34px;
+  /* Typo-Skala (Kompatibilität: Seiten nutzen --fs-*; jede Stufe ist eine Rolle).
+   * --fs-md (16 px) ist die Schrift der Eingaben im Drawer-Band (kein Auto-Zoom auf iOS). */
+  --fs-xs: var(--type-caption); --fs-sm: var(--type-small); --fs-base: var(--type-body); --fs-md: 16px;
+  --fs-lg: var(--type-heading); --fs-xl: var(--type-title); --fs-2xl: var(--type-figure); --fs-3xl: var(--type-display);
 
   /* Font-Stack: System-Schriften (SF, Segoe UI Variable, Roboto), kein Web-Font. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -134,7 +194,6 @@
   --ease-apple: cubic-bezier(.22,.61,.36,1);
   --t-fast: 140ms;
   --t-base: 200ms;
-  --t-slow: 280ms;
 }
 
 /* Drawer-Band (Plan §8.2): schmale Fenster und jedes Touch-Gerät.
@@ -142,6 +201,7 @@
 @media screen and (max-width: 900px), screen and (pointer: coarse) {
   :root {
     --target: var(--target-touch);
+    --control-h: max(var(--target-touch), 2.5rem);
     --main-pad: 1rem;
     --sticky-top: calc(var(--mobilebar-h) + env(safe-area-inset-top, 0px));
   }
@@ -159,25 +219,41 @@ html {
 }
 body {
   font-family: var(--font-sans);
-  font-size: var(--fs-base);
-  line-height: 1.55;
+  font-size: var(--type-body);
+  line-height: var(--lh-body);
   background: var(--surface-page);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
-a { color: var(--accent); text-decoration: none; }
+/* Links: Spezifität 0 (:where), damit Knopf-Klassen (.btn-*) und Bausteine ohne
+ * !important gewinnen. Links im Fließtext unterstreicht `.kb-link` (ADR 0041 Nr. 31). */
+:where(a) { color: var(--accent); text-decoration: none; }
 @media (hover: hover) {
-  a:hover { text-decoration: underline; }
+  :where(a):hover { text-decoration: underline; }
 }
-/* Überschriften: Display-Schrift, leicht engeres Tracking. */
+/* Link im Text (U4, V2-21): einzige Link-Klasse — ersetzt seiteneigene `.txt-link` und
+ * `.inline-link`. Immer unterstrichen (1.4.1); einzeln stehend zusätzlich `.kb-target`.
+ * Auf `<button>` (Aktion im Fließtext, z. B. „Details“) ohne Knopf-Optik; Aktionen mit
+ * eigenem Ergebnis bleiben aber Knöpfe (`secondary`). */
+.kb-link { color: var(--accent); text-decoration: underline; text-underline-offset: 0.15em; }
+button.kb-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; cursor: pointer; text-align: inherit;
+  min-height: var(--target);
+}
+@media (hover: hover) {
+  .kb-link:hover { color: var(--accent-hover); text-decoration-thickness: 2px; }
+}
+/* Überschriften: Display-Schrift, leicht engeres Tracking, kompakte Zeilenhöhe. */
 h1, h2, h3, h4 { color: var(--text); font-family: var(--font-display); }
+:where(h1, h2, h3, h4) { line-height: var(--lh-snug); }
 h1 { letter-spacing: -.022em; }
 h2 { letter-spacing: -.018em; }
 h3 { letter-spacing: -.012em; }
 
 /* ---- Fokus (2.4.7, 1.4.11) ----
- * Ein deutlicher Ring überall; Felder bekommen ihn auch dann, wenn eine
- * Seite lokal `outline: none` setzt (darum !important). */
+ * Ein deutlicher Ring überall. U4: ohne !important — keine Seite setzt bei Feldern
+ * noch `outline: none`, und die Feldregel hat ohnehin hohe Spezifität (0,5,1). */
 :focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
 /* Felder mit Texteingabe zeigen den Ring bei jedem Fokus (auch per Maus, wie Browser es für
    Textfelder tun). Datums- und Uhrzeitfelder setzen in Chromium `:focus-visible` nicht
@@ -186,23 +262,33 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="r
 select:focus, textarea:focus, .kb-input:focus,
 input:not([type="checkbox"]):not([type="radio"]):focus-visible,
 select:focus-visible, textarea:focus-visible, .kb-input:focus-visible {
-  outline: var(--focus-width) solid var(--focus-ring) !important;
-  outline-offset: 1px !important;
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset-tight);
 }
 
 /* ---- Hilfsklassen ---- */
 .kb-num { font-variant-numeric: tabular-nums; text-align: right; }
 .kb-muted { color: var(--text-muted); }
 .kb-subtle { color: var(--text-subtle); }
+/* Kein Umbruch zwischen „z.“ und „B.“, Zahl und Einheit u. Ä. (U3-037). */
+.kb-nowrap { white-space: nowrap; }
+/* Einzeln stehender Link (nicht im Fließtext) mit Mindest-Trefferfläche (ADR 0041 Nr. 8). */
+.kb-target { display: inline-flex; align-items: center; min-height: var(--target); }
+/* Ladezustand (U4, V2-02/V4-07; Baustein LoadingState.svelte): „Wird geladen …“ mit
+ * role="status"; aria-busy gehört an den nachladenden Bereich, nicht an diesen Text. */
+.kb-loading { color: var(--text-muted); margin: var(--sp-3) 0; }
+/* Pflicht-Legende (U4, V2-18; Baustein RequiredLegend.svelte): „Felder mit * sind
+ * Pflicht.“, Stern aria-hidden + „Stern“ für Screenreader. */
+.kb-req-legend { color: var(--text-muted); font-size: var(--type-small); margin: 0 0 var(--sp-3); }
+.kb-req-legend .kb-req-star { color: var(--status-danger-fg); font-weight: 600; }
+
 /* Nur für Screenreader sichtbar (Labels, Tabellen-Captions).
  * U1: Maße mit !important, sonst gewinnen Element-Regeln wie
  * `input[type="file"] { width: 100% }` (Spezifität 0,1,1) und das Element
  * schiebt die Seite in die Breite. `left: 0`: ohne positionierten Vorfahren
  * läge der 1-px-Kasten an seiner statischen Stelle (z. B. rechte Tabellen-
- * spalte) und entkäme dem Scroll-Container der Tabelle → Seitenüberlauf. */
-/* Einzeln stehender Link (nicht im Fließtext) mit Mindest-Trefferfläche (ADR 0041 Nr. 8). */
-.kb-target { display: inline-flex; align-items: center; min-height: var(--target); }
-
+ * spalte) und entkäme dem Scroll-Container der Tabelle → Seitenüberlauf.
+ * !important bleibt: Hilfsklasse, die jede Element- und Seitenregel schlagen muss. */
 .kb-visually-hidden {
   position: absolute !important; left: 0;
   width: 1px !important; height: 1px !important;
@@ -212,26 +298,121 @@ select:focus-visible, textarea:focus-visible, .kb-input:focus-visible {
   white-space: nowrap; border: 0 !important;
 }
 
+/* Belegnummer (U4, U1-061/U3-030; Baustein DocNo.svelte): markantes Monospace-
+ * Element, nie umbrechend. Als Link immer unterstrichen (feine Linie, beim Zeigen
+ * kräftig) — überall gleich, auch in Rechnungs- und Angebotslisten. */
+.kb-docno {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+a.kb-docno {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--line-hover);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+a.kb-docno:not(.kb-docno-inline) { display: inline-flex; align-items: center; min-height: var(--target); }
+.kb-docno.kb-docno-muted { color: var(--text-muted); }
+@media (hover: hover) {
+  a.kb-docno:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }
+}
+
+/* Aktionsgruppen in Karten, Zeilen und Formularen (U4, U1-068/U3-036):
+ * .kb-actions          nebeneinander, rechtsbündig, umbrechend
+ * .kb-actions.kb-start linksbündig (Formularende, Karten mit Text links)
+ * .kb-actions.kb-stack untereinander, alle so breit wie die breiteste Aktion
+ *                      (Seitenspalte einer Karte, Zeilenaktionen in Karten) */
+.kb-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
+.kb-actions > * { flex: none; }
+.kb-actions.kb-start { justify-content: flex-start; }
+.kb-actions.kb-stack {
+  display: grid;
+  grid-template-columns: minmax(0, max-content);
+  justify-content: end;
+  justify-items: stretch;
+}
+.kb-actions.kb-stack.kb-start { justify-content: start; }
+.kb-actions.kb-stack > * { width: 100%; }
+
+/* Feldbreite nach Inhalt (U4, U3-031): Höchstbreite, darunter 100 % der Spalte.
+ * Auf das Feld selbst oder auf den Rahmen eines Bausteins (MoneyInput, QuantityInput
+ * per `class`). max-inline-size, damit seitenlokale `width: 100%` nicht stören. */
+.kb-w-short, .kb-w-date, .kb-w-amount, .kb-w-medium, .kb-w-long { inline-size: 100%; }
+.kb-w-short  { max-inline-size: var(--w-short); }
+.kb-w-date   { max-inline-size: var(--w-date); }
+.kb-w-amount { max-inline-size: var(--w-amount); }
+.kb-w-medium { max-inline-size: var(--w-medium); }
+.kb-w-long   { max-inline-size: var(--w-long); }
+
 /* ---- Eingabefelder ----
- * Bedienelement-Grenze ≥ 3:1 (1.4.11) zentral für alle nativen Felder, auch
- * wenn Seiten eigene (zu helle) Rahmenfarben setzen. Ungültig = Danger-Kante. */
-/* :where() hält die Spezifität bei 0, damit der Fehlerzustand darunter gewinnt. */
+ * Bedienelement-Grenze ≥ 3:1 (1.4.11) zentral für alle nativen Felder.
+ * U4: ohne !important — alle Seiten, die Feldrahmen setzen, nutzen --line-control;
+ * :where() hält die Spezifität bei 0, damit Seiten und der Fehlerzustand gewinnen. */
 :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
 select, textarea) {
-  border-color: var(--line-control) !important;
+  border-color: var(--line-control);
 }
+/* Fehlerkante: !important bleibt — der Zustand muss gegen seitenlokale `border`-
+ * Kurzschreibweisen gleicher Spezifität gewinnen (Text und aria-invalid tragen ihn mit). */
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] {
   border-color: var(--status-danger-line) !important;
 }
+/* Einheitliche Höhe aller einzeiligen Felder (U4, U3-033): vorher 32–44 px je nach
+ * Seite (Innenabstand, Zeilenhöhe, Datumsfeld). Feste Höhe mit Spezifität 0 — keine
+ * Seite setzt `height` an Feldern; Text, der höher ist (16 px im Drawer-Band, Test
+ * Textabstände 1.4.12), läuft in den Innenabstand, nicht abgeschnitten. Nur Bildschirm. */
+@media screen {
+  :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]),
+  select:not([multiple]):not([size])) {
+    block-size: var(--control-h);
+  }
+}
 .kb-input {
   width: 100%; font: inherit; padding: 9px 11px;
-  border: 1px solid var(--line-control); border-radius: var(--r-md);
+  border: var(--rule-control); border-radius: var(--radius-control);
   background: var(--surface-card); color: var(--text);
   transition: border-color var(--t-base) var(--ease-apple);
 }
 .kb-input:focus { border-color: var(--focus-ring); }
 .kb-input::placeholder, input::placeholder, textarea::placeholder { color: var(--text-subtle); opacity: 1; }
 .kb-input[aria-invalid="true"] { border-color: var(--status-danger-line); }
+
+/* Auswahlfelder einheitlich (U4, U1-062/U3-032): eigene Kante und Pfeil statt der
+ * Browser-Optik (WebKit zeichnete grau mit doppeltem Rahmen); Pfeil als Inline-SVG
+ * (kein Netz), Farbe --text-muted (5,53:1). Lange Optionstexte enden mit „…“ statt
+ * hart abgeschnitten. !important nur für Pfeil und Platz dafür: Seiten setzen
+ * `background:`/`padding:` als Kurzschreibweise (würde den Pfeil löschen bzw. Text
+ * unter ihn schieben). Nur Bildschirm — der Druck zeigt Auswahlfelder als Text. */
+@media screen {
+  select:not([multiple]):not([size]) {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%235a6b75' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 6 8 10 12 6'/></svg>") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 10px center !important;
+    background-size: 16px 16px !important;
+    padding-inline-end: 34px !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  :where(select:not([multiple]):not([size])) {
+    background-color: var(--surface-card);
+    color: var(--text);
+    border: var(--rule-control);
+    border-radius: var(--radius-control);
+    padding-inline-start: 11px;
+    font: inherit;
+    line-height: var(--lh-tight);
+  }
+  select:disabled { cursor: not-allowed; }
+}
 
 /* Pflicht-Sternchen bleibt hinter der Bezeichnung (U1-Sichtprüfung): Seiten, die
  * `label` als Flex-Spalte setzen (für umschließende Labels mit Feld), machen aus
@@ -240,75 +421,130 @@ input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="
 label:has(> .req):not(:has(input, select, textarea)) { display: block; }
 
 /* Tabelle */
-.kb-table { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+.kb-table { width: 100%; border-collapse: collapse; font-size: var(--type-body); }
+/* Ausrichtung aus `:where(th)` (links) bzw. `.kb-num` (rechts — U4, V3-10: auch im Kopf). */
 .kb-table th {
-  text-align: left; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase;
+  font-size: var(--type-caption); font-weight: 600; text-transform: uppercase;
   letter-spacing: .05em; color: var(--text-subtle); padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: var(--rule);
 }
-.kb-table td { padding: 12px; border-bottom: 1px solid var(--line); }
+.kb-table td { padding: 12px; border-bottom: var(--rule); }
 .kb-table tbody tr:last-child td { border-bottom: 0; }
 
-/* Kennzahl-Karte */
-.kb-metric { background: var(--surface-card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 16px 18px; box-shadow: var(--sh-sm); }
-.kb-metric .lbl { font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 6px; }
-.kb-metric .val { font-size: var(--fs-2xl); font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+/* Kennzahl-Karte. U4 (V3-01): Der Wert bricht nie um (Betrag und € bleiben zusammen);
+ * die Schrift richtet sich nach der Kachelbreite (13 % davon, höchstens --type-figure),
+ * damit auch „−12.800,90 €“ in eine Kachel von rund 170 px Innenbreite passt. Die
+ * Kachel steht deshalb in einem Raster mit festen Spalten (Größen-Containment: ihre
+ * Breite hängt nicht vom Inhalt ab). Kurze Texte statt Zahlen: `.val` mit eigener
+ * Größe und `white-space: normal` auf der Seite. */
+.kb-metric { background: var(--surface-card); border: var(--rule); border-radius: var(--radius-card); padding: var(--sp-4) var(--sp-5); box-shadow: var(--shadow-card); container-type: inline-size; min-width: 0; }
+.kb-metric .lbl { font-size: var(--type-small); color: var(--text-muted); margin: 0 0 var(--sp-1); }
+.kb-metric .val { font-size: min(var(--type-figure), 13cqi); line-height: var(--lh-tight); font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-/* Datei-Auswahl: nativer Knopf als Sekundär-Button, Trefferfläche ≥ --target. */
-input[type="file"] {
-  font: inherit; font-size: var(--fs-sm); color: var(--text-muted); max-width: 100%;
+/* Linkliste (U4, V3-04): Ziele mit Titel (`.kb-ll-title`) und Unterzeile (`.kb-ll-sub`) in
+ * EINER Karte, getrennt durch 1-px-Fugen in Linienfarbe (Lineatur statt Einzelkarten,
+ * design.md §2 Nr. 4). Spalten nach der eigenen Breite, je mindestens 18rem; Seiten dürfen
+ * die Spaltenzahl festlegen (Startseite: keine einzelne Zeile allein). Die Linien zeichnet
+ * ein Schatten je Eintrag rechts und unten in die Fuge; am Rand schneidet die Karte sie ab,
+ * leere Rasterzellen bleiben weiß. */
+.kb-linklist {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(18rem, 100%), 1fr));
+  gap: 1px;
+  background: var(--surface-card);
+  border: var(--rule);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.kb-linklist > li { box-shadow: 1px 0 0 var(--line), 0 1px 0 var(--line), 1px 1px 0 var(--line); }
+.kb-linklist a {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  height: 100%;
   min-height: var(--target);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-card);
+  text-decoration: none;
+  transition: background var(--t-base) var(--ease-apple);
+}
+@media (hover: hover) {
+  .kb-linklist a:hover { background: var(--surface-hover); text-decoration: none; }
+}
+.kb-linklist a:focus-visible { outline-offset: var(--focus-offset-inset); }
+.kb-ll-title { font-weight: 600; color: var(--accent); }
+.kb-ll-sub { color: var(--text-muted); font-size: var(--type-small); }
+
+/* Aufstellung mit Summe (U4, V3-13; ADR 0041 Nr. 25): `<dl class="kb-ledger">` mit je
+ * einem `<div>` aus `dt` (Posten) und `dd` (Betrag, rechtsbündig, tabellarisch); feine
+ * Linie je Zeile, die Summenzeile `<div class="kb-sum">` mit doppelter Linie darüber. */
+.kb-ledger { margin: 0; }
+.kb-ledger > div {
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4);
+  padding: var(--sp-2) 0; border-bottom: var(--rule);
+}
+.kb-ledger dt { min-width: 0; overflow-wrap: break-word; }
+.kb-ledger dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kb-ledger > div.kb-sum { border-top: var(--rule-sum); border-bottom: none; padding-top: var(--sp-3); font-weight: 600; }
+
+/* Datei-Auswahl: nativer Knopf als Sekundär-Button in Knopfhöhe. */
+input[type="file"] {
+  font: inherit; font-size: var(--type-small); color: var(--text-muted); max-width: 100%;
+  min-height: var(--control-h);
 }
 input[type="file"]::file-selector-button {
-  font: inherit; font-weight: 600; font-size: var(--fs-sm);
-  margin-right: 10px; padding: 7px 13px; min-height: var(--target);
+  font: inherit; font-weight: 600; font-size: var(--type-body);
+  margin-right: var(--sp-3); padding: var(--sp-2) var(--sp-4); min-height: var(--control-h);
   background: var(--surface-card); color: var(--accent-on-soft);
-  border: 1px solid var(--line-control); border-radius: var(--r-md);
+  border: var(--rule-control); border-radius: var(--radius-control);
   cursor: pointer; transition: background var(--t-base) var(--ease-apple), border-color var(--t-base) var(--ease-apple);
 }
 @media (hover: hover) {
-  input[type="file"]::file-selector-button:hover { background: var(--surface-hover); }
+  input[type="file"]::file-selector-button:hover { background: var(--surface-hover); border-color: var(--line-hover); }
 }
 
-/* ---- Globale Button-/Link-Aktions-Klassen (DS-2) ----
- * Vereinheitlicht ALLE Aktions-Buttons app-weit, ohne jede Seite einzeln anzufassen.
- * !important auf den VISUELLEN Eigenschaften überschreibt Legacy-Inline-Styles
- * der Seiten (Übergang, Abbau in U4). Gilt für <button> UND <a>.
- * Trefferfläche: min. --target (24 px, im Drawer-Band/Touch 44 px). */
-.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger,
-.link, .link-a, .link-btn {
-  font: inherit !important;
-  font-weight: 600 !important;
-  border-radius: var(--r-md) !important;
+/* ---- Globale Knopf-Klassen (DS-2, U4) ----
+ * Für rohe <button>/<a> (`.btn-primary` …), gleiche Optik wie Button.svelte.
+ * Eine Größe für alle (Manuel-Vorgabe 2026-05-26): Höhe --control-h (40 px, im
+ * Drawer-Band 44 px), dieselbe Höhe wie Text- und Auswahlfelder (U4) — Knopf und Feld
+ * in einer Zeile stehen bündig. U4: ohne !important (die Seiten-Inline-Stile aus der
+ * Desktop-Zeit sind entfernt; keine Seitenregel setzt Farbe, Rahmen oder Schrift
+ * dieser Klassen). `.link` (früher „kleiner Text-Link-Knopf“) sieht aus wie
+ * `secondary`; `.link-a`/`.link-btn` und die `.status-*`-Pillen waren ungenutzt
+ * und sind entfernt (Status nur noch über Badge.svelte). */
+.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .link {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  min-height: var(--control-h); min-width: var(--target);
+  padding: var(--sp-2) var(--sp-4);
+  font: inherit; font-weight: 600; line-height: var(--lh-tight);
+  border: 1px solid transparent; border-radius: var(--radius-control);
+  text-decoration: none;
   cursor: pointer;
-  text-decoration: none !important;
-  min-height: var(--target);
-  min-width: var(--target);
   transition:
     background var(--t-base) var(--ease-apple),
-    border-color var(--t-base) var(--ease-apple) !important;
+    border-color var(--t-base) var(--ease-apple);
 }
-.btn-primary { background: var(--accent) !important; color: var(--text-on-accent) !important; border: 1px solid var(--accent) !important; }
-.btn-secondary { background: var(--surface-card) !important; color: var(--accent-on-soft) !important; border: 1px solid var(--line-control) !important; }
-.btn-ghost { background: transparent !important; color: var(--text-muted) !important; border: 1px solid transparent !important; }
-.btn-danger, .btn-ghost-danger { background: var(--surface-card) !important; color: var(--status-danger-fg) !important; border: 1px solid var(--status-danger-line) !important; }
-/* .link* waren Text-Links → als kleine Sekundär-Buttons darstellen */
-.link, .link-a, .link-btn {
-  display: inline-flex !important; align-items: center; justify-content: center; gap: 6px;
-  padding: 6px 11px !important; font-size: var(--fs-sm) !important;
-  background: var(--surface-card) !important; color: var(--accent-on-soft) !important;
-  border: 1px solid var(--line-control) !important;
-}
-.link.danger, .link-btn.danger, .link-a.danger { color: var(--status-danger-fg) !important; border-color: var(--status-danger-line) !important; }
+.btn-primary { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
+.btn-secondary, .link { background: var(--surface-card); color: var(--accent-on-soft); border-color: var(--line-control); }
+.btn-ghost { background: transparent; color: var(--text-muted); }
+.btn-danger, .btn-ghost-danger { background: var(--surface-card); color: var(--status-danger-fg); border-color: var(--status-danger-line); }
 @media (hover: hover) {
-  .btn-primary:hover { background: var(--accent-hover) !important; border-color: var(--accent-hover) !important; }
-  .btn-secondary:hover { background: var(--surface-hover) !important; border-color: var(--c-primary-300) !important; }
-  .btn-ghost:hover { background: var(--surface-page) !important; color: var(--text) !important; }
-  .btn-danger:hover, .btn-ghost-danger:hover { background: var(--status-danger-bg) !important; }
-  .link:hover, .link-a:hover, .link-btn:hover { background: var(--surface-hover) !important; border-color: var(--c-primary-300) !important; }
+  .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); text-decoration: none; }
+  .btn-secondary:hover, .link:hover { background: var(--surface-hover); border-color: var(--line-hover); text-decoration: none; }
+  .btn-ghost:hover { background: var(--surface-page); color: var(--text); text-decoration: none; }
+  .btn-danger:hover, .btn-ghost-danger:hover { background: var(--status-danger-bg); text-decoration: none; }
 }
 .btn-primary:disabled, .btn-secondary:disabled, .btn-ghost:disabled, .btn-danger:disabled,
-.btn-ghost-danger:disabled, .link:disabled, .link-a:disabled, .link-btn:disabled { opacity: .5 !important; cursor: not-allowed !important; pointer-events: none; }
+.btn-ghost-danger:disabled, .link:disabled,
+:is(.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .link)[aria-disabled="true"] {
+  opacity: .5; cursor: not-allowed;
+}
+/* Aktion läuft (U4, ADR 0041 Nr. 33): fokussierbar, Zeiger zeigt „beschäftigt“. */
+:is(.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .link)[aria-busy="true"] {
+  cursor: progress;
+}
+.btn-primary:disabled, .btn-secondary:disabled, .btn-ghost:disabled, .btn-danger:disabled,
+.btn-ghost-danger:disabled, .link:disabled { pointer-events: none; }
 
 /* `.btn-sm` und `.sm`-Modifier sind absichtlich no-op (Manuel-Hardline 2026-05-26):
    ALLE Buttons in der App haben dieselbe Größe. */
@@ -362,68 +598,53 @@ input[type="checkbox"]:not([role="switch"]):disabled {
 }
 
 /* ---- Globale Tabellen (DS-2): feine Lineatur, Kopf klein in Versalien ----
- * !important überschreibt alte lokale th/td-Styles (Übergang). text-align
- * bleibt frei, damit .num/.right (rechtsbündige Beträge) weiter greifen. */
+ * !important bleibt (U4 geprüft): 24 Seiten setzen noch eigene th/td-Regeln
+ * (Hintergrund, Schriftgröße, Innenabstand, z. B. Positions-Editoren, Einstellungen);
+ * ohne !important zerfiele die einheitliche Lineatur. Abbau, wenn die Seiten ihre
+ * lokalen th/td-Regeln entfernt haben (Phase 2 des U4-Laufs). text-align bleibt
+ * frei, damit .num/.right (rechtsbündige Beträge) weiter greifen. */
 table { width: 100%; border-collapse: collapse; }
 th {
-  font-size: var(--fs-xs) !important; font-weight: 600 !important;
+  font-size: var(--type-caption) !important; font-weight: 600 !important;
   text-transform: uppercase !important; letter-spacing: .05em !important;
   color: var(--text-subtle) !important; background: transparent !important;
-  padding: 10px 12px !important; border-bottom: 1px solid var(--line) !important;
+  padding: 10px 12px !important; border-bottom: var(--rule) !important;
 }
-td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !important; }
+td { padding: 11px 12px !important; border-bottom: var(--rule) !important; }
 /* Zeilen-Hover: siehe Abschnitt „Desktop (U3)“ weiter unten. */
 
-/* ---- Globale Status-Pills (DS-2): einheitlich wie die Badge-Komponente ---- */
-.status {
-  display: inline-flex !important; align-items: center; gap: 6px;
-  font-size: var(--fs-xs) !important; font-weight: 600 !important;
-  padding: 3px 10px !important; border-radius: var(--r-pill) !important; white-space: nowrap;
-}
-.status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
-.status-draft, .status-inactive, .status-paused { background: var(--status-neutral-bg) !important; color: var(--status-neutral-fg) !important; }
-.status-issued, .status-converted { background: var(--c-primary-100) !important; color: var(--c-primary-800) !important; }
-.status-sent { background: var(--status-info-bg) !important; color: var(--status-info-fg) !important; }
-.status-accepted, .status-paid, .status-active { background: var(--status-success-bg) !important; color: var(--status-success-fg) !important; }
-.status-partially_paid { background: var(--status-warning-bg) !important; color: var(--status-warning-fg) !important; }
-.status-rejected, .status-canceled, .status-overdue { background: var(--status-danger-bg) !important; color: var(--status-danger-fg) !important; }
-
-/* ---- Globaler „Zurück"-Button (DS-2) ---- */
+/* ---- Globaler „Zurück"-Knopf (DS-2) ---- nur noch in der Hilfe (`a.back`). */
 .back {
-  display: inline-flex !important; align-items: center; gap: 6px;
-  margin: 0 0 1rem !important;
-  padding: 9px 16px !important;
-  min-height: var(--target);
-  font: inherit !important; font-weight: 600 !important;
-  background: var(--surface-card) !important; color: var(--accent-on-soft) !important;
-  border: 1px solid var(--line-control) !important; border-radius: var(--r-md) !important;
-  text-decoration: none !important; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  margin: 0 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
+  min-height: var(--control-h);
+  font: inherit; font-weight: 600; line-height: var(--lh-tight);
+  background: var(--surface-card); color: var(--accent-on-soft);
+  border: var(--rule-control); border-radius: var(--radius-control);
+  text-decoration: none; white-space: nowrap;
 }
 @media (hover: hover) {
-  .back:hover { background: var(--surface-hover) !important; border-color: var(--c-primary-300) !important; }
-}
-
-/* Klassen-Buttons brauchen eine Default-Größe (z. B. PageBar-Aktionen). */
-.btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  line-height: 1.2; padding: 9px 16px;
+  .back:hover { background: var(--surface-hover); border-color: var(--line-hover); text-decoration: none; }
 }
 
 /* ---- Globale Card ----------------------------------------------------------
- * U1: Radius --r-lg, Hairline-Rahmen + flacher Schatten statt weichem Halo.
- * overflow-x: auto bleibt als Sicherheitsnetz gegen breite Tabellen. */
+ * U1: Hairline-Rahmen + flacher Schatten statt weichem Halo; U4: Radius 12 px,
+ * Innenabstand aus der Skala. overflow-x: auto bleibt als Sicherheitsnetz gegen
+ * breite Tabellen. Karten nur, wo sie gruppieren (design.md §4). */
 .card {
   background: var(--surface-card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-sm);
-  padding: 1.25rem 1.5rem;
-  margin-bottom: 1rem;
+  border: var(--rule);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-4);
   overflow-x: auto;
 }
 .card > h2:first-child {
-  margin: 0 0 0.75rem;
-  font-size: var(--fs-lg);
+  margin: 0 0 var(--sp-3);
+  font-size: var(--type-heading);
+  line-height: var(--lh-snug);
   font-weight: 700;
   color: var(--text);
 }
@@ -437,20 +658,21 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
 /* ---- Lead-Paragraph: Erklär-Absatz unter der PageBar ---- */
 .lead {
   color: var(--text-muted);
-  font-size: var(--fs-base);
-  line-height: 1.55;
-  margin: 0 0 1rem;
+  font-size: var(--type-body);
+  line-height: var(--lh-body);
+  margin: 0 0 var(--sp-4);
   max-width: 72ch; /* U3: wie Fließtext (vorher 56rem ≈ 110 Zeichen je Zeile) */
 }
 
-/* ---- Banner-Boxen (Inline-Hinweise) ---- */
+/* ---- Banner-Boxen (Inline-Hinweise; neue Stellen nutzen Banner.svelte) ---- */
 .caveat, .danger-banner, .info-banner {
-  padding: 0.7rem 0.95rem;
-  border-radius: var(--r-md);
-  font-size: var(--fs-sm);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-control);
+  font-size: var(--type-small);
   line-height: 1.5;
-  margin: 0 0 1rem;
+  margin: 0 0 var(--sp-4);
   border: 1px solid;
+  border-left-width: 4px;
 }
 .caveat { background: var(--status-warning-bg); border-color: var(--status-warning-line); color: var(--status-warning-fg); }
 .danger-banner { background: var(--status-danger-bg); border-color: var(--status-danger-line); color: var(--status-danger-fg); }
@@ -479,9 +701,9 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
 .kb-dialog {
   background: var(--surface-card);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  box-shadow: var(--sh-xl);
+  border: var(--rule);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-modal);
   width: min(var(--dialog-w, 32rem), 100%);
   max-height: calc(100vh - 2 * var(--sp-6));
   max-height: calc(100dvh - 2 * var(--sp-6));
@@ -498,7 +720,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   border-bottom: 1px solid var(--line);
   flex: none;
 }
-.kb-dialog-head h2 { margin: 0; font-size: var(--fs-lg); color: var(--text); }
+.kb-dialog-head h2 { margin: 0; font-size: var(--type-heading); line-height: var(--lh-snug); color: var(--text); }
 .kb-dialog-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -516,7 +738,7 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
 .kb-dialog-close {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: max(var(--target), 36px); min-height: max(var(--target), 36px);
-  padding: 0; border: 0; border-radius: var(--r-md);
+  padding: 0; border: 0; border-radius: var(--radius-control);
   background: transparent; color: var(--text-muted);
   font: inherit; font-size: 1.5rem; line-height: 1; cursor: pointer;
 }
@@ -660,6 +882,13 @@ td { padding: 11px 12px !important; border-bottom: 1px solid var(--line) !import
   tfoot tr:first-child > td { border-top: 1px solid var(--line-control); }
 }
 tfoot td { font-variant-numeric: tabular-nums; }
+/* Summenzeile (U4, V3-13): `<tr class="kb-sum">` — doppelte Linie darüber wie im
+ * Kontorbuch (--rule-sum), eine Regel für Belege, EÜR und Aufstellungen. Im
+ * Tabellenmodus und im Druck; als Karten (≤ 820 px) trägt die Zeile ihren Rahmen. */
+table:not(.cards) tr.kb-sum > :is(td, th) { border-top: var(--rule-sum); }
+@media print, screen and (min-width: 821px) {
+  table.cards tr.kb-sum > :is(td, th) { border-top: var(--rule-sum); }
+}
 
 /* Dichte mit Maus/Touchpad ab 901 px: niedrigere Zeilen (Text 38 px, mit Knopf
  * 54 px statt 44/60 px), schmalere Zellränder; Trefferflächen bleiben ≥ 24 px
@@ -719,9 +948,8 @@ tfoot td { font-variant-numeric: tabular-nums; }
   /* Grid-/Flex-Spalten dürfen schmaler werden als lange Auswahltexte oder
      Datei-Eingaben (sonst bestimmt deren Mindestbreite die Spalte). */
   label, fieldset { min-width: 0; }
-  select { text-overflow: ellipsis; }
   input[type="file"] { width: 100%; }
-  .card { padding: 1rem; }
+  .card { padding: var(--sp-4); }
 }
 
 /* Tabellen als Karten (Plan W10): `<table class="cards">` und `data-label`
@@ -734,7 +962,7 @@ tfoot td { font-variant-numeric: tabular-nums; }
   table.cards tbody, table.cards tfoot { display: block; }
   table.cards tr {
     display: block; margin: 0 0 0.75rem; padding: 0.4rem 0.85rem;
-    border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface-card);
+    border: var(--rule); border-radius: var(--radius-card); background: var(--surface-card);
   }
   table.cards td {
     display: flow-root; padding: 0.45rem 0 !important; text-align: right;
@@ -747,7 +975,9 @@ tfoot td { font-variant-numeric: tabular-nums; }
        Silbentrennung nur, wo ein Wort breiter als die halbe Karte ist. */
     overflow-wrap: break-word; hyphens: auto;
     font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-    line-height: 1.6; color: var(--text-subtle);
+    /* U4 (V4-11): --text-muted statt --text-subtle — Karten stehen auch auf Status-Flächen
+       (fehlgeschlagene Backup-/Versandzeile: 4,81:1 statt 4,40:1 auf --status-danger-bg). */
+    line-height: 1.6; color: var(--text-muted);
   }
   table.cards td:has(input:not([type="checkbox"]):not([type="radio"]), select, textarea)[data-label]::before {
     line-height: 2.6rem;
@@ -810,8 +1040,8 @@ tfoot td { font-variant-numeric: tabular-nums; }
 @media print {
   @page { margin: 14mm 12mm; }
   :root {
-    --fs-xs: 7.5pt; --fs-sm: 8.5pt; --fs-base: 9.5pt; --fs-md: 10.5pt;
-    --fs-lg: 12pt; --fs-xl: 14pt; --fs-2xl: 16pt; --fs-3xl: 18pt;
+    --type-caption: 7.5pt; --type-small: 8.5pt; --type-body: 9.5pt; --fs-md: 10.5pt;
+    --type-heading: 12pt; --type-title: 14pt; --type-figure: 16pt; --type-display: 18pt;
     --line: #b3bcc2; --line-control: #6b7a83;
     --main-pad: 0px; --pagebar-h: 0px; --toast-h: 0px; --sticky-top: 0px;
   }
@@ -829,13 +1059,13 @@ tfoot td { font-variant-numeric: tabular-nums; }
   .pagebar .pb-back, .kb-form-end, .help-anchor,
   form.toolbar, form.filterbar, .filters, .toolbar,
   button, .btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger,
-  .link, .link-a, .link-btn, .back, input[type="file"] {
+  .link, .back, input[type="file"] {
     display: none !important;
   }
   /* Aktionen in der PageBar: dort setzt eine eigene Regel `.pb-right .btn …` die Anzeige mit
      !important — höhere Spezifität nötig (U4, Druckprüfung). Auswahlfelder bleiben als Text. */
   html body .pagebar .pb-back,
-  html body .pagebar :is(a, button):is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .help-anchor),
+  html body .pagebar :is(a, button):is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-ghost-danger, .link, .help-anchor),
   html body .pagebar button {
     display: none !important;
   }
@@ -908,7 +1138,7 @@ tfoot td { font-variant-numeric: tabular-nums; }
   th { font-size: var(--fs-xs) !important; }
 
   /* Status bleibt als Text mit feinem Rahmen erkennbar (Farbe fällt weg). */
-  body .status, body .badge {
+  body .badge {
     color: #000 !important;
     background: transparent !important;
     border: 0.5pt solid #555 !important;

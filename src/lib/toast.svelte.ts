@@ -8,13 +8,33 @@
 // hierher — dafür gibt es das inline <Banner/>. Folgenreiche Bestätigungen laufen
 // über confirmDialog() (siehe confirm.svelte.ts).
 //
+// Arten (U4, Warteliste (19)): "ok" (Erfolg), "info" (neutral, z. B. „Abgebrochen –
+// nichts geändert.“), "warning" (Warnung: Aktion ist gelungen, aber etwas braucht
+// Aufmerksamkeit, z. B. „E-Mail-Protokoll unvollständig“), "error" (Fehler).
+// Warnungen stehen wie Fehler, werden aber höflich angesagt (`role="status"`),
+// Fehler sofort (`role="alert"`). „info“ schließt wie Erfolg nach 5 s.
+//
+// Re-Auth abgebrochen (U4, V1-09): Der Transport wirft dann `REAUTH_CANCELED`.
+// Seiten melden Fehler meist mit `flash(String(e), "error")`, oft mit Präfix
+// („Speichern fehlgeschlagen: …“); ein Abbruch ist aber kein Fehler. `flash`
+// macht daraus zentral einen neutralen Hinweis, statt jede Seite anzupassen.
+//
 // Zeitbegrenzung (WCAG 2.2.1, Lauf 2026.11/U1):
-// - Fehler und Toasts mit Aktion schließen NICHT automatisch — nur über
+// - Fehler, Warnungen und Toasts mit Aktion schließen NICHT automatisch — nur über
 //   „Schließen“ (oder die Aktion).
 // - Erfolgsmeldungen verschwinden nach 5 s; solange Maus oder Fokus auf
 //   dem Toast liegt, steht die Uhr (pauseToast/resumeToast aus ToastHost).
 
-export type ToastKind = "ok" | "error";
+import { REAUTH_CANCELED } from "#lib/transport.ts";
+
+export type ToastKind = "ok" | "info" | "warning" | "error";
+
+export interface FlashOptions {
+  /** Knopf im Toast, z. B. „Rückgängig“ (der Toast bleibt dann stehen). */
+  action?: ToastAction;
+  /** Nur Erfolg/Info ohne Aktion: Anzeigedauer in ms (0 = bleibt stehen). */
+  ttlMs?: number;
+}
 
 export interface ToastAction {
   label: string;
@@ -51,19 +71,29 @@ function startTimer(id: number, ms: number): void {
 }
 
 /**
- * Zeigt einen Toast. Erfolg: 5 s (pausiert bei Hover/Fokus). Fehler und
- * Toasts mit `opts.action` bleiben, bis sie geschlossen werden. `ttlMs`
- * verkürzt/verlängert nur Erfolgsmeldungen ohne Aktion (0 = bleibt stehen).
+ * Zeigt einen Toast. Erfolg und Info: 5 s (pausiert bei Hover/Fokus). Fehler,
+ * Warnungen und Toasts mit Aktion bleiben, bis sie geschlossen werden. `ttlMs`
+ * verkürzt/verlängert nur Erfolgs-/Info-Meldungen ohne Aktion (0 = bleibt stehen).
+ *
+ * Dritter Parameter: Dauer in ms oder Optionen (U4, für „Rückgängig“):
+ * `flash("Kontakt archiviert.", "ok", { action: { label: "Rückgängig", run } })`.
  */
 export function flash(
   message: string,
   kind: ToastKind = "ok",
-  ttlMs?: number,
-  opts?: { action?: ToastAction },
+  ttlOrOpts?: number | FlashOptions,
+  opts?: FlashOptions,
 ): number {
+  const o: FlashOptions = typeof ttlOrOpts === "object" ? ttlOrOpts : { ...opts, ttlMs: ttlOrOpts ?? opts?.ttlMs };
+  const ttlMs = o.ttlMs;
+  // Abgebrochene Re-Auth ist kein Fehler (V1-09): neutraler Hinweis ohne Präfix.
+  if (kind === "error" && message.includes(REAUTH_CANCELED)) {
+    message = REAUTH_CANCELED;
+    kind = "info";
+  }
   const id = nextId++;
-  const persistent = kind === "error" || !!opts?.action || ttlMs === 0;
-  toastStore.items.push({ id, message, kind, action: opts?.action, persistent });
+  const persistent = kind === "warning" || kind === "error" || !!o.action || ttlMs === 0;
+  toastStore.items.push({ id, message, kind, action: o.action, persistent });
   while (toastStore.items.length > MAX_STACK) {
     const old = toastStore.items.shift();
     if (old) clearTimer(old.id);

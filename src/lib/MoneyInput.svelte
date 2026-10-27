@@ -40,6 +40,7 @@
     enterkeyhint,
     onchange,
     class: className = "",
+    fieldClass = "",
   }: {
     /** Betrag in Cent; `null` = leer oder ungültig. */
     cents?: number | null;
@@ -62,7 +63,13 @@
     enterkeyhint?: "enter" | "done" | "go" | "next" | "previous" | "search" | "send";
     /** Nach dem Verlassen, wenn sich der Wert geändert hat. */
     onchange?: (cents: number | null) => void;
+    /** Klassen am äußeren Baustein (Label, Feld, Hinweis, Fehler), z. B. Rasterplatz. */
     class?: string;
+    /**
+     * Klassen nur an der Feld-Box, z. B. `kb-w-amount` (U4): begrenzt die Breite des
+     * Felds, Label, Hinweis und Fehler behalten die volle Breite.
+     */
+    fieldClass?: string;
   } = $props();
 
   const uid = randomId();
@@ -89,7 +96,10 @@
 
   const parseError = $derived(currentError(text));
   const visibleError = $derived(error || (showErrors ? parseError : shown));
-  const describedBy = $derived(visibleError ? errorId : hint ? hintId : undefined);
+  // U4 (V4-14): Hinweis bleibt bei einem Fehler stehen (Korrekturhilfe, 3.3.3).
+  const describedBy = $derived(
+    [visibleError ? errorId : "", hint ? hintId : ""].filter(Boolean).join(" ") || undefined,
+  );
 
   // Formularprüfung des Browsers (ohne `novalidate`) kennt so auch Lesefehler.
   $effect(() => {
@@ -158,7 +168,7 @@
       {label}{#if required}<span class="req" aria-hidden="true">*</span>{/if}
     </label>
   {/if}
-  <div class="box">
+  <div class="box {fieldClass}">
     <input
       bind:this={inputEl}
       class="kb-input"
@@ -188,15 +198,17 @@
   </div>
   {#if visibleError}
     <div id={errorId} class="msg err">{visibleError}</div>
-  {:else if hint}
+  {/if}
+  {#if hint}
     <div id={hintId} class="msg hint">{hint}</div>
   {/if}
 </div>
 
 <style>
   .money-field { min-width: 0; }
-  .money-field.with-label { margin-bottom: 14px; }
-  label { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: 5px; }
+  .money-field.with-label { margin-bottom: var(--sp-4); }
+  /* Wie FormField (U4, V4-14): Label, Hinweis und Fehler aus den Typo-Rollen. */
+  label { display: block; font-size: var(--type-small); font-weight: 600; line-height: var(--lh-snug); margin-bottom: var(--sp-1); }
   .req { color: var(--status-danger-fg); margin-left: 2px; }
   .box { position: relative; }
   input {
@@ -214,7 +226,7 @@
     color: var(--text-subtle);
     pointer-events: none;
   }
-  .msg { font-size: var(--fs-xs); margin-top: 4px; }
-  .hint { color: var(--text-subtle); }
-  .err { color: var(--status-danger-fg); }
+  .msg { font-size: var(--type-small); margin-top: var(--sp-1); line-height: 1.4; }
+  .hint { color: var(--text-muted); }
+  .err { color: var(--status-danger-fg); font-weight: 600; }
 </style>

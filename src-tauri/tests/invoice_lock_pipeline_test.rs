@@ -410,7 +410,7 @@ async fn paragraph_19_violation_blocks_lock() {
         .unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("Paragraph19VatViolation") || msg.contains("Validation failed"),
+        msg.contains("Die Rechnung kann nicht ausgestellt werden: ") && msg.contains("§19 UStG"),
         "erwarte §19-Block, got: {msg}"
     );
 

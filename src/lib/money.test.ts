@@ -152,23 +152,30 @@ describe("formatCents / formatEuro", () => {
     [100, "1,00"],
     [123456, "1.234,56"],
     [100_000_000, "1.000.000,00"],
-    [-123456, "-1.234,56"],
+    [-123456, "\u22121.234,56"],
     [-0, "0,00"],
     [Number.MAX_SAFE_INTEGER, "90.071.992.547.409,91"],
-    [-Number.MAX_SAFE_INTEGER, "-90.071.992.547.409,91"],
+    [-Number.MAX_SAFE_INTEGER, "\u221290.071.992.547.409,91"],
   ])("%d → %s", (c, expected) => {
     expect(formatCents(c)).toBe(expected);
   });
 
   it("Anzeige-Rundung für nicht ganze Cent (Menge × Preis), kaufmännisch", () => {
     expect(formatCents(12.5)).toBe("0,13");
-    expect(formatCents(-12.5)).toBe("-0,13");
+    expect(formatCents(-12.5)).toBe("\u22120,13");
     expect(formatCents(12.4)).toBe("0,12");
     expect(formatCents(Number.NaN)).toBe("—");
   });
 
   it("formatEuro mit U+00A0 vor €", () => {
     expect(formatEuro(123456)).toBe("1.234,56 €");
+  });
+
+  it("negative Beträge mit echtem Minus (U+2212), der Parser liest es zurück (V3-22)", () => {
+    expect(formatEuro(-45000)).toBe("\u2212450,00\u00a0€");
+    expect(formatCents(-5)).not.toContain("-");
+    expect(cents("\u2212450,00 €", true)).toBe(-45000);
+    expect(cents(formatEuro(-123456), true)).toBe(-123456);
   });
 
   it("Rundtrip parse(format(x)) == x", () => {

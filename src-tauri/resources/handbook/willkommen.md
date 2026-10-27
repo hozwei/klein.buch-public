@@ -3,7 +3,7 @@ slug: willkommen
 title: Willkommen in Klein.Buch
 category: erste-schritte
 order: 10
-keywords: [willkommen, einstieg, überblick, kleinunternehmer, einzelunternehmer]
+keywords: [willkommen, einstieg, überblick, kleinunternehmer, einzelunternehmer, tastatur, f1]
 ---
 
 # Willkommen in Klein.Buch
@@ -84,6 +84,28 @@ Wenn Du irgendwo im Programm ein Fragezeichen-Symbol siehst, kommst
 Du mit einem Klick direkt zur passenden Erklärung in diesem Handbuch.
 Mit der Taste F1 öffnest Du das Handbuch jederzeit.
 
+## Mit der Tastatur arbeiten
+
+Du kannst Klein.Buch ganz ohne Maus bedienen. Mit der Tab-Taste
+springst Du zum nächsten Bedienelement, mit Umschalt und Tab zurück.
+Das Element, auf dem Du gerade stehst (der Fokus), trägt einen gut
+sichtbaren Rahmen.
+
+Beim ersten Druck auf Tab erscheint oben links der Sprunglink "Zum
+Inhalt". Drückst Du dann die Eingabetaste, springst Du an der
+Navigation vorbei direkt zum Inhalt der Seite.
+
+F1 öffnet dieses Handbuch. Steht der Fokus in einem Eingabefeld,
+überlässt Klein.Buch die Taste dem Browser, damit beim Tippen nichts
+dazwischenkommt.
+
+Die Escape-Taste schließt Dialoge, das Menü "Mehr" und auf schmalen
+Bildschirmen die Navigation. Der Fokus kehrt danach zu dem Knopf
+zurück, mit dem Du sie geöffnet hast. In einem Suchfeld leert Escape
+zuerst die Suche. Nur die Anmeldung lässt sich nicht mit Escape
+schließen. Im Menü "Mehr" wählst Du einen Eintrag mit den
+Pfeiltasten aus und bestätigst ihn mit der Eingabetaste.
+
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 26.10.2026 · Klein.Buch 2026.11*

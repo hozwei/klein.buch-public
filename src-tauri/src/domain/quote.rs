@@ -315,37 +315,39 @@ pub fn message(e: &QuoteValidationError) -> String {
     use QuoteValidationError as E;
     match e {
         E::NoItems => "Mindestens eine Position ist erforderlich.".into(),
-        E::CurrencyEmpty => "Währung fehlt.".into(),
+        E::CurrencyEmpty => "Die Währung fehlt.".into(),
         E::TotalNotPositive => "Der Gesamtbetrag muss größer als 0 € sein.".into(),
         E::ValidUntilBeforeQuoteDate {
             quote_date,
             valid_until,
-        } => format!("Gültig-bis ({valid_until}) liegt vor dem Angebotsdatum ({quote_date})."),
-        E::SellerNameMissing => "Verkäufer-Name fehlt (Stammdaten).".into(),
+        } => format!(
+            "„Gültig bis“ ({}) liegt vor dem Angebotsdatum ({}).",
+            crate::domain::invoice::de_date(valid_until),
+            crate::domain::invoice::de_date(quote_date)
+        ),
+        E::SellerNameMissing => "Der Firmenname fehlt in den Firmendaten.".into(),
         E::SellerAddressIncomplete => {
-            "Verkäufer-Adresse ist unvollständig (Straße, PLZ, Ort).".into()
+            "Die Adresse in den Firmendaten ist unvollständig (Straße, PLZ, Ort).".into()
         }
-        E::BuyerNameMissing => "Empfänger-Name fehlt.".into(),
-        E::ItemDescriptionMissing(p) => format!("Position {p}: Beschreibung fehlt."),
-        E::ItemQuantityNotPositive(p) => format!("Position {p}: Menge muss größer als 0 sein."),
+        E::BuyerNameMissing => "Der Name des Empfängers fehlt im Kontakt.".into(),
+        E::ItemDescriptionMissing(p) => format!("Position {p}: Die Beschreibung fehlt."),
+        E::ItemQuantityNotPositive(p) => format!("Position {p}: Die Menge muss größer als 0 sein."),
         E::ItemUnitPriceNegative(p) => {
-            format!("Position {p}: Einzelpreis darf nicht negativ sein.")
+            format!("Position {p}: Der Einzelpreis darf nicht negativ sein.")
         }
         E::ItemDuplicatePosition(p) => format!("Position {p} ist doppelt vergeben."),
         E::ItemInvalidTaxCategoryCode { position, code } => {
-            format!("Position {position}: ungültiger Steuer-Kategorie-Code {code}.")
+            format!("Position {position}: Die Steuerart „{code}“ ist ungültig.")
         }
         E::ItemTaxRateNegative { position, rate } => {
-            format!("Position {position}: Steuersatz darf nicht negativ sein ({rate} %).")
+            format!("Position {position}: Der Steuersatz darf nicht negativ sein ({rate} %).")
         }
         E::ItemAmountOutOfRange(p) => crate::domain::invoice::item_amount_out_of_range_message(*p),
         E::TotalOutOfRange => crate::domain::invoice::TOTAL_OUT_OF_RANGE_MESSAGE.into(),
         E::ItemExemptWithoutKleinunternehmer(p) => {
             crate::domain::invoice::exempt_without_klein_message(*p)
         }
-        E::Paragraph19VatViolation(_) => {
-            "§19-Verstoß: Bei Kleinunternehmer darf keine Umsatzsteuer ausgewiesen werden.".into()
-        }
+        E::Paragraph19VatViolation(_) => crate::domain::invoice::PARAGRAPH19_VAT_MESSAGE.into(),
     }
 }
 

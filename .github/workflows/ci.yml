@@ -124,6 +124,9 @@ jobs:
           pnpm build
           test -s build/index.html
           test -s build/legal/js-licenses.json
+          # Vorkomprimierte Varianten (Vite-Plugin, ADR 0041 Nr. 212), nicht unter legal/.
+          test -s build/index.html.br && test -s build/index.html.gz
+          test -z "$(find build/legal -name '*.br' -o -name '*.gz')"
           # Die Prüfliste der Lizenzseite im Image-Smoke (image_smoke.sh, „for js in …“)
           # nennt genau die Pakete des Bundles (Lauf F7a).
           python3 -I -c 'import json, re, sys; names = {p["name"] for p in json.load(open("build/legal/js-licenses.json"))}; m = re.search(r"^for js in (.+); do$", open(sys.argv[1], encoding="utf-8").read(), re.M); listed = set(m.group(1).split()); assert names == listed, (sorted(names), sorted(listed))' "$GITHUB_WORKSPACE/.github/scripts/image_smoke.sh"

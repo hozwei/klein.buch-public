@@ -17,6 +17,7 @@
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
+  import ActionMenu, { type ActionMenuItem } from "#lib/ActionMenu.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
@@ -67,14 +68,48 @@
   function dueBadge(s: RecurringSubscription): { label: string; tone: Tone } | null {
     if (s.active !== 1) return null;
     const n = daysUntil(s.nextDueDate);
-    if (n < 0) return { label: "überfällig", tone: "danger" };
-    if (n === 0) return { label: "heute fällig", tone: "warning" };
-    if (n <= 7) return { label: `in ${n} ${n === 1 ? "Tag" : "Tagen"}`, tone: "info" };
+    // U4 (V3-09): dieselben Wörter wie bei den Abo-Rechnungen.
+    if (n < 0) return { label: "Überfällig", tone: "danger" };
+    if (n === 0) return { label: "Heute fällig", tone: "warning" };
+    if (n <= 7) return { label: `In ${n} ${n === 1 ? "Tag" : "Tagen"}`, tone: "info" };
     return null;
   }
 
   function rhythm(s: RecurringSubscription): string {
     return `${frequencyLabel(s.frequency)} · zum ${s.dayOfPeriod}.`;
+  }
+
+  // Zeilenaktionen (U3-036, design.md §4.5) wie bei den Abo-Rechnungen: eine
+  // sichtbare Aktion — die, die den Zustand der Zeile auflöst — und der Rest im
+  // Menü „Mehr“. Bei einem Rückstand „Rückstand …“ (Nachholen bucht auch den
+  // fälligen Termin), sonst bei Fälligkeit „Buchen“, sonst „Bearbeiten“;
+  // pausiert „Fortsetzen“.
+  type RowAction = { label: string; ariaLabel: string; href?: string; onclick?: () => void };
+  function rowActions(s: RecurringSubscription): { main: RowAction; more: ActionMenuItem[] } {
+    const busy = busyId === s.id;
+    const edit: RowAction = { label: "Bearbeiten", ariaLabel: `„${s.label}“ bearbeiten`, href: `/expenses/recurring/new?id=${s.id}` };
+    if (s.active !== 1) {
+      return {
+        main: { label: "Fortsetzen", ariaLabel: `„${s.label}“ fortsetzen`, onclick: () => toggleActive(s) },
+        more: [{ label: edit.label, href: edit.href }],
+      };
+    }
+    const book: RowAction = {
+      label: "Buchen",
+      ariaLabel: `Fälligen Termin von „${s.label}“ buchen`,
+      onclick: () => bookNow(s),
+    };
+    const backlog: RowAction = {
+      label: "Rückstand …",
+      ariaLabel: `Rückstand von „${s.label}“ klären`,
+      onclick: () => resolveBacklog(s),
+    };
+    const main = hasBacklog(s) ? backlog : isDue(s) ? book : edit;
+    const more: ActionMenuItem[] = [];
+    if (main !== book && isDue(s)) more.push({ label: book.label, onSelect: book.onclick, disabled: busy });
+    if (main !== edit) more.push({ label: edit.label, href: edit.href });
+    more.push({ label: "Pausieren", onSelect: () => toggleActive(s), disabled: busy });
+    return { main, more };
   }
 
   let dueCount = $derived(subs.filter(isDue).length);
@@ -90,15 +125,30 @@
       if (!choice) return;
       resumeMode = choice;
     }
+    const pausing = s.active === 1;
     busyId = s.id;
     try {
-      await recurringSetActive(s.id, s.active !== 1, resumeMode);
+      await recurringSetActive(s.id, !pausing, resumeMode);
+      // U4 (V2-12, design.md §5): Pausieren ist umkehrbar — keine Rückfrage, dafür
+      // „Rückgängig“ im Toast (setzt das Abo fort, bei Rückstand mit der Wahl).
+      if (pausing) {
+        flash(`„${s.label}“ pausiert.`, "ok", undefined, {
+          action: { label: "Rückgängig", run: () => void resumeById(s.id) },
+        });
+      } else {
+        flash(`„${s.label}“ fortgesetzt.`);
+      }
       await load();
     } catch (e) {
       flash("Statuswechsel fehlgeschlagen: " + String(e), "error");
     } finally {
       busyId = null;
     }
+  }
+
+  async function resumeById(id: string) {
+    const cur = subs.find((x) => x.id === id);
+    if (cur && cur.active !== 1) await toggleActive(cur);
   }
 
   async function bookNow(s: RecurringSubscription) {
@@ -135,6 +185,7 @@
   }
 
   async function bookAllDue() {
+    if (checking) return;
     checking = true;
     try {
       const r = await recurringRunDueCheck();
@@ -172,26 +223,27 @@
 </p>
 
 <p class="legend">
-  <span><Badge tone="info">Automatisch</Badge> wird am Stichtag selbst als Kosten gebucht.</span>
-  <span><Badge tone="primary">Erinnerung</Badge> am Stichtag ein Hinweis „Abo fällig“, du buchst per Knopf.</span>
+  <span><Badge kind="tag">Automatisch</Badge> wird am Stichtag selbst als Kosten gebucht.</span>
+  <span><Badge kind="tag">Erinnerung</Badge> am Stichtag ein Hinweis „Abo fällig“, du buchst per Knopf.</span>
 </p>
 
 {#if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if error}
   <Banner>{error}</Banner>
 {:else if subs.length === 0}
+  <!-- U4 (V2-09): Erststart mit derselben Beschriftung wie die PageBar, als secondary. -->
   <div class="empty">
     <p>Noch keine Abos angelegt.</p>
-    <Button variant="primary" href="/expenses/recurring/new">+ Erstes Abo anlegen</Button>
+    <Button variant="secondary" href="/expenses/recurring/new">+ Neues Abo</Button>
   </div>
 {:else}
   <div class="toolbar">
     <label class="chk">
-      <input type="checkbox" bind:checked={includeInactive} onchange={load} /> pausierte anzeigen
+      <input type="checkbox" bind:checked={includeInactive} onchange={load} /> Pausierte anzeigen
     </label>
     {#if autoDueCount > 0}
-      <Button variant="secondary" size="sm" onclick={bookAllDue} disabled={checking}
+      <Button variant="secondary" size="sm" onclick={bookAllDue} ariaDisabled={checking}
         ariaDescribedby="rec-bookall-hint">
         {checking ? "Buche …" : `${autoDueCount} fällige Auto-Abos jetzt buchen`}
       </Button>
@@ -215,13 +267,15 @@
     <tbody>
       {#each subs as s (s.id)}
         {@const due = dueBadge(s)}
+        {@const act = rowActions(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
           <td class="cards-full" data-label="Abo">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {expenseCategoryLabel(s.category)}
-              {#if s.reverseCharge13bDefault === 1}<Badge tone="primary">§13b</Badge>{/if}
-              {#if s.active !== 1}<Badge tone="neutral">pausiert</Badge>{/if}
+              <!-- U4 (V3-08/V3-09): Merkmal ohne Statusfarbe; „Pausiert“ wie bei den Abo-Rechnungen. -->
+              {#if s.reverseCharge13bDefault === 1}<Badge kind="tag">§13b</Badge>{/if}
+              {#if s.active !== 1}<Badge tone="neutral">Pausiert</Badge>{/if}
             </div>
           </td>
           <td class="muted-cell" data-label="Rhythmus">{rhythm(s)}</td>
@@ -237,29 +291,17 @@
           </td>
           <td class="num kb-num" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
           <td data-label="Modus">
+            <!-- U4 (V3-08): Ein Modus ist kein Status (ADR 0041 Nr. 177). -->
             {#if s.autoCreateExpense === 1}
-              <Badge tone="info">Automatisch</Badge>
+              <Badge kind="tag">Automatisch</Badge>
             {:else}
-              <Badge tone="primary">Erinnerung</Badge>
+              <Badge kind="tag">Erinnerung</Badge>
             {/if}
           </td>
           <td class="actions">
-            <div class="act-row">
-              {#if s.active === 1}
-                {#if isDue(s)}
-                  <Button variant="primary" size="sm" onclick={() => bookNow(s)} disabled={busyId === s.id}
-                    ariaLabel={`${s.label}: Buchen (fälliger Stichtag)`}>Buchen</Button>
-                {/if}
-                {#if hasBacklog(s)}
-                  <Button variant="secondary" size="sm" onclick={() => resolveBacklog(s)} disabled={busyId === s.id}
-                    ariaLabel={`${s.label}: Rückstand … (nachholen oder ab heute fortsetzen)`}>Rückstand …</Button>
-                {/if}
-                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`} ariaLabel={`${s.label}: Bearbeiten`}>Bearbeiten</Button>
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`${s.label}: Pausieren`}>Pausieren</Button>
-              {:else}
-                <Button variant="secondary" size="sm" onclick={() => toggleActive(s)} disabled={busyId === s.id} ariaLabel={`${s.label}: Fortsetzen`}>Fortsetzen</Button>
-                <Button variant="secondary" size="sm" href={`/expenses/recurring/new?id=${s.id}`} ariaLabel={`${s.label}: Bearbeiten`}>Bearbeiten</Button>
-              {/if}
+            <div class="kb-actions">
+              <Button variant="secondary" href={act.main.href} onclick={act.main.onclick} ariaDisabled={!act.main.href && busyId === s.id} ariaLabel={act.main.ariaLabel}>{act.main.label}</Button>
+              <ActionMenu variant="ghost" ariaLabel={`Mehr zu „${s.label}“`} items={act.more} />
             </div>
           </td>
         </tr>
@@ -288,8 +330,11 @@
   /* Pausiert: Badge „pausiert“ trägt den Zustand; keine Deckkraft-Absenkung (Kontrast 1.4.3). */
   tr.paused .abo-name { font-weight: 500; }
   tr.is-due td { background: var(--status-warning-bg); }
-  td.actions { text-align: right; }
-  .act-row { display: inline-flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; }
+  td.actions { text-align: right; white-space: nowrap; }
+  /* W10: In der Karten-Ansicht dürfen die Aktions-Knöpfe umbrechen. */
+  @media screen and (max-width: 820px) {
+    td.actions { white-space: normal; }
+  }
   .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); background: var(--surface-card); border: 1px dashed var(--line-control); border-radius: var(--r-lg); }
   .empty p { margin: 0 0 1rem; }
   .muted { color: var(--text-muted); }

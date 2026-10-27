@@ -13,6 +13,7 @@
   const INT_DE = new Intl.NumberFormat("de-DE");
 
   async function runExport() {
+    if (busy) return;
     busy = true;
     report = null;
     try {
@@ -20,7 +21,7 @@
       if (report.download) saveDownload(report.download);
       flash("Export erstellt.");
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Export fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -44,7 +45,8 @@
     Der Download lässt sich nur einmal abrufen. Bricht er ab, erstelle den Export einfach neu.
   </p>
 
-  <Button onclick={runExport} disabled={busy}>
+  <!-- U4 (V2-06): während des Exports fokussierbar (ariaDisabled, ADR 0041 Nr. 33). -->
+  <Button onclick={runExport} busy={busy}>
     {busy ? "Exportiere …" : "Export erstellen und herunterladen"}
   </Button>
 

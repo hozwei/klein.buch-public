@@ -27,7 +27,9 @@ use crate::domain::asset::{
     self, business_book_value_start_cents, AssetInput, DepreciationMethod, DisposalType,
     MethodSuggestion,
 };
-use crate::domain::depreciation::{compute_disposal_year_partial, DepreciationAsset};
+use crate::domain::depreciation::{
+    compute_disposal_year_partial, plan_disposal, BookedYear, DepreciationAsset,
+};
 use crate::domain::numbering::DocType;
 use crate::error::{Error, Result};
 use crate::fiscal_year::guard;
@@ -770,13 +772,10 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
         .map(|e| e.fiscal_year)
         .max();
     if let Some(year) = closed_after.max(locked_after) {
-        return Err(Error::Domain(format!(
-            "Das Geschäftsjahr {year} ist abgeschlossen und führt die Anlage {} mit \
-             festgeschriebener AfA bzw. im Bestand. Ein Abgang im Jahr {disposal_year} \
-             widerspräche dem abgeschlossenen Jahr — erfassen lässt er sich frühestens {}. \
-             Eine frühere Veräußerung klärst Du mit Deiner Steuerberatung.",
-            asset.asset_number,
-            year + 1
+        return Err(Error::Domain(closed_conflict_message(
+            &asset.asset_number,
+            year,
+            disposal_year,
         )));
     }
     if !from_disposal_year.is_empty() {
@@ -922,7 +921,155 @@ pub async fn assets_dispose(ctx: &Arc<AppCtx>, args: AssetsDisposeArgs) -> Resul
         .ok_or_else(|| Error::Domain("dispose: detail-load leer".into()))
 }
 
+// =============================================================================
+// Vorschau des Abgangs (Lauf 2026.11 U4, Warteliste 5) — liest nur
+// =============================================================================
+
+/// Argumente von [`assets_disposal_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetsDisposalPreviewArgs {
+    pub id: String,
+    /// Geplantes Abgangsdatum (YYYY-MM-DD).
+    pub disposal_date: NaiveDate,
+}
+
+/// Was [`assets_dispose`] zum gewählten Datum buchen würde (Restbuchwert,
+/// AfA bis zum Abgang). Gewinn bzw. Verlust = Erlös − `residual_book_value_cents`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDisposalPreview {
+    pub asset_id: String,
+    pub disposal_date: NaiveDate,
+    /// Aktueller Restbuchwert der Anlage (Stand vor dem Abgang).
+    pub current_book_value_cents: i64,
+    /// Offene AfA ab dem Abgangsjahr, die der Abgang ersetzt (Summe, Jahre).
+    pub replaced_depreciation_cents: i64,
+    pub replaced_years: Vec<i64>,
+    /// AfA der Vorjahre ohne Buchung, die der Abgang nachholt (Summe, Jahre).
+    pub catch_up_depreciation_cents: i64,
+    pub catch_up_years: Vec<i64>,
+    /// Restbuchwert zu Beginn des Abgangsjahres (nach Ersetzen und Nachholen).
+    pub book_value_before_cents: i64,
+    /// Anteilige AfA im Abgangsjahr bis einschließlich Abgangsmonat.
+    pub disposal_year_depreciation_cents: i64,
+    pub disposal_year_months: i32,
+    /// Restbuchwert zum Abgang (geht als Ausgabe in die EÜR).
+    pub residual_book_value_cents: i64,
+    /// AfA insgesamt von der Anschaffung bis zum Abgang (betrieblicher
+    /// Anschaffungswert − Restbuchwert).
+    pub depreciation_to_date_cents: i64,
+    /// Grund, aus dem der Abgang zu diesem Datum abgelehnt würde (Datum,
+    /// abgeschlossenes Jahr); `None` = möglich.
+    pub blocked_reason: Option<String>,
+}
+
+/// Vorschau des Abgangs einer Anlage zum Datum: dieselbe Rechnung wie
+/// [`assets_dispose`] ([`plan_disposal`]), ohne zu buchen.
+pub async fn assets_disposal_preview(
+    ctx: &Arc<AppCtx>,
+    args: AssetsDisposalPreviewArgs,
+) -> Result<AssetDisposalPreview> {
+    let AssetsDisposalPreviewArgs { id, disposal_date } = args;
+    let pool = ctx.pool()?;
+
+    let asset = assets::get(&pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {id}")))?;
+    if asset.disposed == 1 {
+        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+    }
+    let acquisition_date = parse_db_date(&asset.acquisition_date)?;
+    let method = DepreciationMethod::from_db(&asset.depreciation_method).ok_or_else(|| {
+        Error::Domain(format!(
+            "Unbekannte AfA-Methode: {}",
+            asset.depreciation_method
+        ))
+    })?;
+    let dep_asset = DepreciationAsset {
+        depreciation_method: method,
+        acquisition_date,
+        acquisition_cost_cents: asset.acquisition_cost_cents,
+        business_share_percent: asset.business_share_percent,
+        useful_life_years: asset.useful_life_years,
+    };
+    let entries: Vec<DepreciationEntryRow> = sqlx::query_as(
+        "SELECT * FROM depreciation_entries WHERE asset_id = ? ORDER BY fiscal_year",
+    )
+    .bind(&asset.id)
+    .fetch_all(&pool)
+    .await?;
+    let booked: Vec<BookedYear> = entries
+        .iter()
+        .map(|e| BookedYear {
+            fiscal_year: e.fiscal_year,
+            amount_cents: e.depreciation_amount_cents,
+            book_value_after_cents: e.book_value_after_cents,
+            locked: e.locked_at.is_some(),
+        })
+        .collect();
+    let closed_years: Vec<i64> = sqlx::query_scalar("SELECT fiscal_year FROM fiscal_year_locks")
+        .fetch_all(&pool)
+        .await?;
+
+    let plan = plan_disposal(
+        &dep_asset,
+        asset.acquisition_fiscal_year,
+        asset.book_value_cents,
+        &booked,
+        &closed_years,
+        disposal_date,
+    );
+    let disposal_year = i64::from(disposal_date.year());
+    // Gleiche Reihenfolge der Prüfungen wie `assets_dispose`.
+    let blocked_reason = if let Err(e) = crate::domain::asset::validate_disposal(
+        DisposalType::Scrap,
+        0,
+        disposal_date,
+        acquisition_date,
+        ctx.clock().today_berlin(),
+    ) {
+        Some(crate::domain::asset::disposal_message(&e))
+    } else if closed_years.contains(&disposal_year) {
+        Some(guard::closed_message(disposal_year))
+    } else {
+        plan.closed_conflict_year
+            .map(|year| closed_conflict_message(&asset.asset_number, year, disposal_year))
+    };
+
+    let residual = plan.residual_book_value_cents();
+    let start =
+        business_book_value_start_cents(asset.acquisition_cost_cents, asset.business_share_percent);
+    Ok(AssetDisposalPreview {
+        asset_id: asset.id,
+        disposal_date,
+        current_book_value_cents: asset.book_value_cents,
+        replaced_depreciation_cents: plan.replaced.iter().map(|(_, c)| c).sum(),
+        replaced_years: plan.replaced.iter().map(|(y, _)| *y).collect(),
+        catch_up_depreciation_cents: plan.catch_up.iter().map(|(_, c)| c).sum(),
+        catch_up_years: plan.catch_up.iter().map(|(y, _)| *y).collect(),
+        book_value_before_cents: plan.book_value_before_cents,
+        disposal_year_depreciation_cents: plan.disposal_year.depreciation_amount_cents,
+        disposal_year_months: plan.disposal_year.months_in_year,
+        residual_book_value_cents: residual,
+        depreciation_to_date_cents: start - residual,
+        blocked_reason,
+    })
+}
+
 // ---- intern ----------------------------------------------------------------
+
+/// Ablehnung eines Abgangs, wenn ein späteres abgeschlossenes Jahr die Anlage
+/// mit festgeschriebener AfA bzw. im Bestand führt (Lauf F3b; auch Vorschau).
+fn closed_conflict_message(asset_number: &str, year: i64, disposal_year: i64) -> String {
+    format!(
+        "Das Geschäftsjahr {year} ist abgeschlossen und führt die Anlage {asset_number} mit \
+         festgeschriebener AfA bzw. im Bestand. Ein Abgang im Jahr {disposal_year} \
+         widerspräche dem abgeschlossenen Jahr — erfassen lässt er sich frühestens {}. \
+         Eine frühere Veräußerung klärst Du mit Deiner Steuerberatung.",
+        year + 1
+    )
+}
 
 /// Leitet aus der (validierten) Eingabe den DB-Methoden-Slug + die effektive
 /// Nutzungsdauer ab: linear = Eingabe, Computer-Sonderregel = 1 Jahr, GWG = keine.

@@ -247,10 +247,16 @@ export function parseQuantity(text: string, opts: QuantityOptions = {}): ParseRe
   return { ok: true, value: value === 0 ? 0 : value, normalized: formatQuantity(value, frac) };
 }
 
+/** Echtes Minuszeichen (U+2212) für negative Beträge (U4, V3-22). */
+const MINUS = "\u2212";
+
 /**
  * Cent → `1.234,56` (DIN 5008, ohne €). Ganzzahl-Rechnung, keine Float-
  * Formatierung. Eine nicht ganze Eingabe (nur Anzeige-Rechnungen wie
  * Menge × Preis) wird kaufmännisch gerundet; nicht endlich: „—“.
+ * Negative Beträge beginnen mit dem echten Minus „−“ (U+2212, so breit wie eine
+ * Ziffer — die Fluchten tabellarischer Ziffern bleiben); der Betragsparser nimmt
+ * „−“ und „-“ an, Eingabefelder (MoneyInput) zeigen deshalb auch „−“.
  */
 export function formatCents(cents: number): string {
   if (!Number.isFinite(cents)) return "—";
@@ -262,9 +268,9 @@ export function formatCents(cents: number): string {
     const rest = abs % 100;
     const euros = (abs - rest) / 100;
     const out = `${groupThousands(String(euros))},${String(rest).padStart(2, "0")}`;
-    return neg ? `-${out}` : out;
+    return neg ? `${MINUS}${out}` : out;
   }
-  return formatScaled(BigInt(c), 2, true);
+  return formatScaled(BigInt(c), 2, true).replace(/^-/, MINUS);
 }
 
 /** Cent → `1.234,56 €` mit geschütztem Leerzeichen (U+00A0) vor `€`. */

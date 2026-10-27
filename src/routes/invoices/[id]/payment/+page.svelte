@@ -6,7 +6,10 @@
   import { invoicesGet, invoicesRecordPayment, paymentAccountsList } from "#lib/api.ts";
   import type { InvoiceDetail, PaymentAccount } from "#lib/types.ts";
   import { euro, iban } from "#lib/format.ts";
+  import { shortIban } from "../../paymentHistory.ts";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import MoneyInput from "#lib/MoneyInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
@@ -86,7 +89,7 @@
   let selectedAccount = $derived(accounts.find((a) => a.id === accountId) ?? null);
 
   async function submit() {
-    if (!detail) return;
+    if (!detail || submitting) return;
     submitted = true;
     const amountOk = amountRef?.validate() ?? true;
     // R5-002: Future-Datum auch im Submit abfangen (max-Attribut allein wird
@@ -116,19 +119,25 @@
   }
 </script>
 
-<PageBar back={`/invoices/${id}`} backLabel="Rechnung" title="Zahlung erfassen">
+<!-- V2-19: Titel nach dem Muster Art + Nummer wie bei Senden und Stornieren. -->
+<PageBar
+  back={`/invoices/${id}`}
+  backLabel="Rechnung"
+  title={detail ? `Zahlung zu Rechnung ${detail.invoice.invoiceNumber}` : "Zahlung erfassen"}
+>
   {#snippet actions()}
     {#if canPay}
       <a href={`/invoices/${id}`} class="btn-secondary">Abbrechen</a>
-      <button type="submit" form="payment-form" class="btn-primary" disabled={submitting}>
+      <!-- V2-06: während des Buchens fokussierbar (aria-disabled), Klick ohne Wirkung. -->
+      <Button type="submit" form="payment-form" ariaDisabled={submitting}>
         {submitting ? "Speichere …" : "Zahlung buchen"}
-      </button>
+      </Button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if !detail}
   <Banner>{error ?? "Rechnung nicht gefunden."}</Banner>
 {:else}
@@ -143,7 +152,7 @@
     <section class="card">
       <h2>Rechnung</h2>
       <dl>
-        <dt>Nummer</dt><dd class="doc-no">{inv.invoiceNumber}</dd>
+        <dt>Nummer</dt><dd><DocNo value={inv.invoiceNumber} /></dd>
         <dt>Brutto</dt><dd>{euro(inv.grossAmountCents)}</dd>
         <dt>Bisher bezahlt</dt><dd>{euro(inv.paidAmountCents)}</dd>
         <dt>Offen</dt><dd><strong>{euro(outstanding)}</strong></dd>
@@ -161,13 +170,14 @@
         <MoneyInput
           bind:this={amountRef}
           bind:cents={amountCents}
+          fieldClass="kb-w-amount"
           label="Betrag"
           required
           readonly={payInFull}
           showErrors={submitted}
           error={submitted && errAmount ? errAmount : undefined}
           hint={payInFull ? "Der komplette offene Betrag. Für eine Teilzahlung das Häkchen unten entfernen." : undefined}
-          class="pay-field"
+          class="pay-amount"
         />
         <label class="chk">
           <input type="checkbox" bind:checked={payInFull} />
@@ -177,6 +187,7 @@
           <span>Zahlungsdatum <span class="req" aria-hidden="true">*</span></span>
           <input
             type="date"
+            class="kb-w-date"
             bind:value={paidDate}
             max={today}
             required
@@ -190,11 +201,11 @@
           {/if}
         </label>
         <label>
-          Zahlungs-Konto
-          <select bind:value={accountId} aria-describedby="pay-account-hint">
+          Zahlungskonto
+          <select class="kb-w-medium" bind:value={accountId} aria-describedby="pay-account-hint">
             <option value="">Kein Konto zuordnen</option>
             {#each accounts as a (a.id)}
-              <option value={a.id}>{a.label}{a.isDefault === 1 ? " (Standard)" : ""}</option>
+              <option value={a.id}>{a.label}{a.iban ? ` (${shortIban(a.iban)})` : ""}{a.isDefault === 1 ? ", Standard" : ""}</option>
             {/each}
           </select>
           <span id="pay-account-hint" class="field-hint">
@@ -202,14 +213,18 @@
               Eingang auf {iban(selectedAccount.iban)}.
             {/if}
             Das Konto bestimmt das Geldkonto im DATEV-Export.
-            {#if accounts.length === 0}Konten legst du unter <a class="txt-link" href="/settings/payment-accounts">Einstellungen → Zahlungskonten</a> an.{/if}
+            {#if accounts.length === 0}Konten legst du unter <a class="kb-link" href="/settings/payment-accounts">Einstellungen → Konten</a> an.{/if}
           </span>
         </label>
         <label>
           Notiz (optional)
-          <input type="text" bind:value={note} autocomplete="off" aria-describedby="pay-note-hint" />
+          <input type="text" class="kb-w-long" bind:value={note} autocomplete="off" aria-describedby="pay-note-hint" />
           <span id="pay-note-hint" class="field-hint">Zum Beispiel Verwendungszweck oder Position im Kontoauszug.</span>
         </label>
+        <!-- V1-06 (ADR 0041 Nr. 35): Hauptaktion am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
+        <div class="kb-form-end">
+          <Button type="submit" ariaDisabled={submitting}>{submitting ? "Speichere …" : "Zahlung buchen"}</Button>
+        </div>
       </form>
     </section>
   {/if}
@@ -217,19 +232,19 @@
 
 <style>
   /* .card entfernt — globale Definition aus tokens.css. */
-  dl { display: grid; grid-template-columns: 9rem 1fr; gap: 0.25rem 0.75rem; }
-  dt { color: var(--text-muted); font-size: var(--fs-sm); }
+  /* Labelspalte so breit wie das längste Label (U3-037). */
+  dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.75rem; }
+  dt { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-  .doc-no { font-family: var(--font-mono); }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin-bottom: 0.75rem; max-width: 32rem; }
-  :global(.pay-field) { max-width: 32rem; }
+  /* Betrag: Feldbreite über `fieldClass` (U3-031), Hinweis und Fehler höchstens 32rem wie die übrigen Felder. */
+  :global(.pay-amount) { max-width: 32rem; }
   .chk { flex-direction: row; align-items: center; gap: 0.4rem; min-height: var(--target); font-weight: 400; color: var(--text); }
   input:not([type="checkbox"]), select { padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md); font: inherit; font-weight: 400; color: var(--text); }
   .req-legend { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
   .req { color: var(--status-danger-fg); }
   .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
   .field-hint { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
-  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
   .info { background: var(--status-info-bg); color: var(--text); padding: 0.75rem 1rem; border-left: 4px solid var(--status-info-line); border-radius: var(--r-sm); font-size: var(--fs-base); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .muted { color: var(--text-muted); }

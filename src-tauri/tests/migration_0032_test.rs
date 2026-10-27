@@ -1547,7 +1547,10 @@ async fn quote_cancel_needs_reason_and_reports_repeat_cleanly() {
     assert_eq!(row.status, "canceled");
     assert_eq!(row.canceled_reason.as_deref(), Some("Kunde hat abgesagt"));
     let err = cancel("Noch einmal zurückziehen").await.unwrap_err();
-    assert!(err.to_string().contains("bereits zurückgezogen"), "{err}");
+    assert!(
+        err.to_string().contains("bereits verworfen oder storniert"),
+        "{err}"
+    );
     assert!(
         !err.to_string().contains("RAISE"),
         "kein roher Trigger-Fehler"

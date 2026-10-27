@@ -23,8 +23,12 @@
   import { date, euro, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { applyTaxRules, documentTotals, REGEL_TAX_CODES, roundHalfAwayFromZero } from "#lib/tax.ts";
+  import { pdfTemplateLabel, pdfTemplateDefaultOptionLabel, unitCodeError, unitLabel, unitOptions } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
   import TravelLineAdder from "#lib/TravelLineAdder.svelte";
   import PackageItemAdder from "#lib/PackageItemAdder.svelte";
   import MarkdownEditor from "#lib/MarkdownEditor.svelte";
@@ -109,15 +113,21 @@
   ];
 
   // PDF-Vorlage als Auswahl (KB-0050). „default“ ist der Platzhalter für die
-  // Standard-Vorlage aus den Einstellungen (Server: commands::invoices).
-  const TEMPLATE_LABELS: Record<string, string> = {
-    default: "Standard",
-    modern: "Modern",
-    klassisch: "Klassisch",
-    minimal: "Minimal",
-  };
-  const tplLabel = (name: string) => TEMPLATE_LABELS[name] ?? name;
+  // Standard-Vorlage aus den Einstellungen (Server: commands::invoices); Namen
+  // zentral aus labels.ts (Warteliste (17)).
   let templateOptions = $derived(templates.filter((t) => t.name !== "default").map((t) => t.name));
+  // Warteliste (11): Stellt die gewählte Vorlage Stornos dar? Sonst entsteht ein
+  // Storno mit der Ersatzvorlage (`stornoFallback`, wie die Rechnungs-Pipeline).
+  let effectiveTemplate = $derived(
+    pdfTemplate === "default" ? seller?.defaultPdfTemplate || "default" : pdfTemplate,
+  );
+  let templateMeta = $derived(templates.find((t) => t.name === effectiveTemplate) ?? null);
+  let stornoHint = $derived(
+    templateMeta && !templateMeta.supportsStorno
+      ? `Die Vorlage „${pdfTemplateLabel(templateMeta.name)}“ stellt keine Storno-Belege dar. ` +
+          `Wird die Rechnung storniert, entsteht der Storno-Beleg mit der Vorlage „${pdfTemplateLabel(templateMeta.stornoFallback ?? "klassisch")}“.`
+      : "",
+  );
 
   // Positionen werden aus dem Angebot übernommen und sind anpassbar.
   let items = $state<FormItem[]>([]);
@@ -156,18 +166,31 @@
         ? "Das Leistungsdatum darf nicht nach dem Rechnungsdatum liegen."
         : "",
   );
+  // V1-04: Fälligkeit ist Pflicht für die E-Rechnung (domain::invoice, XRechnungDueDateMissing
+  // bei offenem Betrag) — Meldung schon beim Umwandeln statt erst beim Ausstellen.
   let errDueDate = $derived(
-    dueDate && invoiceDate && dueDate < invoiceDate
-      ? "Die Fälligkeit darf nicht vor dem Rechnungsdatum liegen."
-      : "",
+    !dueDate
+      ? "Bitte eine Fälligkeit angeben — Pflicht für die E-Rechnung."
+      : invoiceDate && dueDate < invoiceDate
+        ? "Die Fälligkeit darf nicht vor dem Rechnungsdatum liegen."
+        : "",
   );
   function itemInvalid(it: FormItem): boolean {
     return (
       labelMissing(it) ||
       it.quantity == null ||
       it.unitPriceCents == null ||
-      (!isKlein && it.taxRatePercent == null)
+      (!isKlein && it.taxRatePercent == null) ||
+      !!unitCodeError(it.unitCode)
     );
+  }
+
+  // V4-05: Ein Gesamtbetrag von 0 € lehnt der Server ab (domain::invoice, TotalNotPositive).
+  // Die Meldung steht nach dem ersten Speichern an den Preisfeldern mit 0 €, nicht als Toast.
+  const ZERO_TOTAL_MSG = "Bitte einen Einzelpreis eingeben — der Gesamtbetrag muss über 0 € liegen.";
+  let zeroTotal = $derived(submitted && totals.gross <= 0);
+  function priceError(it: FormItem): string | undefined {
+    return zeroTotal && it.unitPriceCents === 0 ? ZERO_TOTAL_MSG : undefined;
   }
 
   onMount(async () => {
@@ -226,7 +249,8 @@
         description: "",
         quantity: 1,
         unitCode: "C62",
-        unitPriceCents: 0,
+        // V4-05: leer statt 0,00 — so meldet das Feld einen vergessenen Preis selbst.
+        unitPriceCents: null,
         taxRatePercent: 0,
         taxCategoryCode: "E" as TaxCategoryCode,
         descriptionMarkup: "",
@@ -283,6 +307,17 @@
     it.packageName = undefined;
   }
 
+  // Befund E (U4): Eine Paket-Position mit einer Einheit außerhalb der Liste
+  // (Freitext älterer Pakete, z. B. „Pauschal“) bekommt ein Auswahlfeld. Die Wahl
+  // ändert die Kopie und löst die Bindung ans Paket (sauberer Bruch wie „Paket
+  // anpassen“; der Server löst sie bei abweichender Einheit ebenso). Die Zeile
+  // wird dabei neu aufgebaut — der Fokus bleibt auf dem Einheiten-Feld.
+  async function unitChosenForPackage(idx: number) {
+    detachPackage(idx);
+    await tick();
+    document.getElementById(`item-${idx}-unit`)?.focus();
+  }
+
   function removeItem(idx: number) {
     items = items.filter((_, i) => i !== idx).map((it, i) => ({ ...it, position: i + 1 }));
   }
@@ -295,7 +330,7 @@
   }
 
   async function save() {
-    if (!detail) return;
+    if (!detail || saving) return;
     if (items.length === 0) {
       flash("Mindestens eine Position erforderlich.", "error");
       return;
@@ -306,7 +341,11 @@
       return;
     }
     if (totals.gross <= 0) {
-      flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+      // Meldung an den Preisfeldern (priceError); nur ohne solches Feld als Toast.
+      await focusFirstInvalid();
+      if (!items.some((it) => !it.sourcePackageId && it.unitPriceCents === 0)) {
+        flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+      }
       return;
     }
     saving = true;
@@ -332,25 +371,30 @@
   }
 </script>
 
-<PageBar back={`/quotes/${id}`} backLabel="Angebot" title="Angebot in Rechnung umwandeln">
+<PageBar
+  back={`/quotes/${id}`}
+  backLabel="Angebot"
+  title={detail ? `Angebot ${detail.quote.quoteNumber} in Rechnung umwandeln` : "Angebot in Rechnung umwandeln"}
+>
   {#snippet actions()}
     {#if convertible}
       <a href={`/quotes/${id}`} class="btn-secondary">Abbrechen</a>
-      <button type="submit" form="convert-form" class="btn-primary" disabled={saving}>
+      <!-- V2-06: während des Erzeugens fokussierbar (aria-disabled), Klick ohne Wirkung. -->
+      <Button type="submit" form="convert-form" ariaDisabled={saving}>
         {saving ? "Erzeuge Rechnung …" : "Rechnung erstellen"}
-      </button>
+      </Button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if error && !detail}
   <Banner>Fehler: {error}</Banner>
 {:else if detail}
   {@const q = detail.quote}
   <p class="sub">
-    Aus Angebot <strong>{q.quoteNumber}</strong> ({q.currencyCode}) wird ein
+    Aus Angebot <DocNo value={q.quoteNumber} href={`/quotes/${id}`} inline /> ({q.currencyCode}) wird ein
     Rechnungs-Entwurf erzeugt. Die Positionen sind übernommen und hier noch
     anpassbar; ausgestellt wird erst die Rechnung selbst.
   </p>
@@ -359,13 +403,13 @@
     <Banner kind="warning">
       Dieses Angebot ist noch nicht angenommen. Eine Rechnung lässt sich nur aus
       einem <strong>angenommenen</strong> Angebot erstellen.
-      <a class="txt-link" href={`/quotes/${id}`}>Zurück zum Angebot</a>.
+      <a class="kb-link" href={`/quotes/${id}`}>Zurück zum Angebot</a>.
     </Banner>
   {:else}
     {#if isKlein}
       <Banner kind="info">
         Du bist als Kleinunternehmer (§19) eingestellt — auf der Rechnung wird keine
-        Mehrwertsteuer ausgewiesen. Die MwSt-Felder sind deshalb ausgeblendet.
+        Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
       </Banner>
     {/if}
 
@@ -378,6 +422,7 @@
             <span>Rechnungsdatum <span class="req" aria-hidden="true">*</span></span>
             <input
               type="date"
+              class="kb-w-date"
               bind:value={invoiceDate}
               max={today}
               required
@@ -390,6 +435,7 @@
             <span>Leistungsdatum <span class="req" aria-hidden="true">*</span></span>
             <input
               type="date"
+              class="kb-w-date"
               bind:value={deliveryDate}
               oninput={() => (deliveryDateTouched = true)}
               max={invoiceDate || today}
@@ -400,31 +446,39 @@
             {#if submitted && errDeliveryDate}<span id="err-delivery-date" class="field-err">{errDeliveryDate}</span>{/if}
           </label>
           <label>
-            Fälligkeit
+            <span>Fälligkeit <span class="req" aria-hidden="true">*</span></span>
             <input
               type="date"
+              class="kb-w-date"
               bind:value={dueDate}
               min={invoiceDate || undefined}
+              required
               aria-invalid={submitted && errDueDate ? "true" : undefined}
-              aria-describedby={submitted && errDueDate ? "err-due-date" : undefined}
+              aria-describedby={submitted && errDueDate ? "err-due-date" : "hint-due-date"}
             />
-            {#if submitted && errDueDate}<span id="err-due-date" class="field-err">{errDueDate}</span>{/if}
+            {#if submitted && errDueDate}
+              <span id="err-due-date" class="field-err">{errDueDate}</span>
+            {:else}
+              <span id="hint-due-date" class="field-hint">Pflicht für die E-Rechnung.</span>
+            {/if}
           </label>
-          <label>
-            Währung
-            <input type="text" value={currency} readonly />
-          </label>
-          <label>
+          <!-- V1-04: Währung fest (nur Euro), kein Eingabefeld. -->
+          <div class="fixed-field">
+            <span class="fixed-lbl">Währung</span>
+            <span class="fixed-val">{currency === "EUR" ? "Euro (EUR)" : currency}</span>
+          </div>
+          <label class="span-all">
             PDF-Vorlage
-            <select bind:value={pdfTemplate}>
-              <option value="default">Wie in den Einstellungen ({tplLabel(seller?.defaultPdfTemplate ?? "default")})</option>
+            <select class="kb-w-medium" bind:value={pdfTemplate} aria-describedby={stornoHint ? "hint-pdf-template" : undefined}>
+              <option value="default">{pdfTemplateDefaultOptionLabel(seller?.defaultPdfTemplate)}</option>
               {#each templateOptions as name (name)}
-                <option value={name}>{tplLabel(name)}</option>
+                <option value={name}>{pdfTemplateLabel(name)}</option>
               {/each}
               {#if pdfTemplate !== "default" && !templateOptions.includes(pdfTemplate)}
-                <option value={pdfTemplate}>{tplLabel(pdfTemplate)}</option>
+                <option value={pdfTemplate}>{pdfTemplateLabel(pdfTemplate)}</option>
               {/if}
             </select>
+            {#if stornoHint}<span id="hint-pdf-template" class="field-hint">{stornoHint}</span>{/if}
           </label>
         </div>
         <p class="muted small">Jahr der Rechnung: {fiscalYear()} · Empfänger: {detail.buyer?.name ?? "—"}</p>
@@ -440,12 +494,12 @@
           <thead>
             <tr>
               <th scope="col">#</th>
-              <th scope="col">Beschreibung</th>
-              <th scope="col" class="right">Menge</th>
+              <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">Einheit</th>
-              <th scope="col" class="right">Einzelpreis</th>
+              <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
               {#if !isKlein}
-                <th scope="col" class="right">USt-Satz</th>
+                <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
                 <th scope="col">USt-Art</th>
               {/if}
               <th scope="col" class="right">Netto</th>
@@ -456,13 +510,15 @@
             {#each items as it, i (i)}
               {@const n = it.position}
               {@const descErr = submitted && labelMissing(it)}
+              <!-- Befund E: Einheit außerhalb der Liste; die Meldung steht sofort, sie stammt aus den Daten (Paket, Entwurf). -->
+              {@const unitErr = unitCodeError(it.unitCode, !!it.sourcePackageId)}
               {#if isRich(it)}
                 {@const linked = !!it.sourcePackageId}
                 <tr class="pkg-row">
                   <td data-label="Pos.">{n}</td>
-                  <td class="cards-full" data-label="Titel">
+                  <td class="cards-full" data-label={linked ? "Titel" : "Titel *"}>
                     {#if linked}
-                      <span class="pkg-badge">aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</span>
+                      <Badge kind="tag">Aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</Badge>
                       <div class="pkg-title">{it.descriptionTitle}</div>
                     {:else}
                       <label class="kb-visually-hidden" for="item-{i}-title">Titel, Position {n}</label>
@@ -480,17 +536,42 @@
                   </td>
                   {#if linked}
                     <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
-                    <td data-label="Einheit">{it.unitCode}</td>
+                    {#if unitErr}
+                      <td class="c-unit" data-label="Einheit">
+                        <select
+                          id="item-{i}-unit"
+                          bind:value={it.unitCode}
+                          onchange={() => unitChosenForPackage(i)}
+                          aria-label={`Einheit, Position ${n}`}
+                          aria-invalid="true"
+                          aria-describedby={`item-${i}-unit-err`}
+                        >
+                          {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                        </select>
+                        <span id="item-{i}-unit-err" class="field-err">{unitErr}</span>
+                      </td>
+                    {:else}
+                      <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
+                    {/if}
                     <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                   {:else}
-                    <td class="c-qty" data-label="Menge">
+                    <td class="c-qty" data-label="Menge *">
                       <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                     </td>
                     <td class="c-unit" data-label="Einheit">
-                      <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                      <select
+                        id="item-{i}-unit"
+                        bind:value={it.unitCode}
+                        aria-label={`Einheit, Position ${n}`}
+                        aria-invalid={unitErr ? "true" : undefined}
+                        aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                      >
+                        {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                      </select>
+                      {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                     </td>
-                    <td class="c-price" data-label="Einzelpreis">
-                      <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                    <td class="c-price" data-label="Einzelpreis *">
+                      <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                     </td>
                   {/if}
                   {#if !isKlein}
@@ -500,7 +581,7 @@
                   <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
                   {#if linked || items.length > 1}
                     <td class="c-actions">
-                      <div class="pkg-actions">
+                      <div class="kb-actions">
                         {#if linked}
                           <button type="button" class="btn-secondary" onclick={() => detachPackage(i)} aria-label={`Paket anpassen, Position ${n}`}>Paket anpassen</button>
                         {/if}
@@ -530,7 +611,7 @@
               {:else}
                 <tr>
                   <td data-label="Pos.">{n}</td>
-                  <td class="cards-full" data-label="Beschreibung">
+                  <td class="cards-full" data-label="Beschreibung *">
                     <label class="kb-visually-hidden" for="item-{i}-desc">Beschreibung, Position {n}</label>
                     <input
                       id="item-{i}-desc"
@@ -543,17 +624,26 @@
                     />
                     {#if descErr}<span id="item-{i}-desc-err" class="field-err">Bitte eine Beschreibung eingeben.</span>{/if}
                   </td>
-                  <td class="c-qty" data-label="Menge">
+                  <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                   </td>
                   <td class="c-unit" data-label="Einheit">
-                    <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                    <select
+                      id="item-{i}-unit"
+                      bind:value={it.unitCode}
+                      aria-label={`Einheit, Position ${n}`}
+                      aria-invalid={unitErr ? "true" : undefined}
+                      aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                    >
+                      {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                    </select>
+                    {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                   </td>
-                  <td class="c-price" data-label="Einzelpreis">
-                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                  <td class="c-price" data-label="Einzelpreis *">
+                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                   </td>
                   {#if !isKlein}
-                    <td class="c-rate" data-label="USt-Satz">
+                    <td class="c-rate" data-label="USt-Satz *">
                       <QuantityInput bind:value={it.taxRatePercent} maxFractionDigits={2} unit="%" noun="Steuersatz" ariaLabel={`USt-Satz, Position ${n}`} required showErrors={submitted} />
                     </td>
                     <td data-label="USt-Art">
@@ -587,7 +677,7 @@
                 <td class="c-actions"></td>
               </tr>
             {/if}
-            <tr class="grand">
+            <tr class="kb-sum">
               <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
               <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
               <td class="c-actions"></td>
@@ -613,11 +703,11 @@
         {#if alreadyPaid}
           <p class="paid-hint small">
             Reiner Hinweis auf dem Beleg — die Zahlung wird dadurch <strong>nicht</strong>
-            verbucht. Erfasse sie bei Bedarf zusätzlich über „Zahlung erfassen".
+            verbucht. Erfasse sie nach dem Ausstellen über „+ Zahlung“ auf der Rechnungsseite.
           </p>
           <div class="paid-chips" role="group" aria-label="Textvorschläge für den Bezahlt-Hinweis">
             {#each paymentTemplates as t (t)}
-              <button type="button" class="chip" onclick={() => (paymentNote = t)}>{t}</button>
+              <button type="button" class="btn-secondary" onclick={() => (paymentNote = t)}>{t}</button>
             {/each}
           </div>
           <label class="paid-note">
@@ -628,7 +718,7 @@
       </section>
 
       <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-      <div class="kb-form-end"><button type="submit" class="btn-primary" disabled={saving}>{saving ? "Erzeuge Rechnung …" : "Rechnung erstellen"}</button></div>
+      <div class="kb-form-end"><Button type="submit" ariaDisabled={saving}>{saving ? "Erzeuge Rechnung …" : "Rechnung erstellen"}</Button></div>
     </form>
   {/if}
 {/if}
@@ -636,7 +726,10 @@
 <style>
   .sub { color: var(--text-muted); margin: 0 0 1rem; }
   .small { font-size: var(--fs-sm); }
-  input[readonly] { background: var(--surface-sunken); color: var(--text-muted); }
+  /* Feste Angabe ohne Eingabe (Währung, V1-04): Label wie die Felder, Wert als Text. */
+  .fixed-field { display: flex; flex-direction: column; gap: 4px; }
+  .fixed-lbl { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
+  .fixed-val { min-height: var(--control-h); display: flex; align-items: center; color: var(--text); }
   /* .card entfernt — globale Definition aus tokens.css. */
   .req-legend { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
   .req { color: var(--status-danger-fg); }
@@ -645,17 +738,12 @@
   /* U1 (2.5.8): ganze Zeile als Trefferfläche, mindestens --target hoch. */
   .paid-toggle { display: flex; flex-direction: row; align-items: center; gap: 0.5rem; color: var(--text); min-height: var(--target); cursor: pointer; }
   .paid-hint { color: var(--text-muted); line-height: 1.5; margin: 0.6rem 0; }
-  .paid-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.6rem; }
-  .chip {
-    cursor: pointer; font: inherit; font-size: var(--fs-sm); min-height: var(--target);
-    padding: 4px 12px; border: 1px solid var(--line-control); border-radius: var(--r-pill);
-    background: var(--surface-card); color: var(--accent-on-soft); text-align: left;
-  }
-  @media (hover: hover) {
-    .chip:hover { background: var(--surface-hover); }
-  }
+  /* V3-21: Vorschläge als normale Sekundärknöpfe (eine Höhe, eine Kante, design.md §4.1). */
+  .paid-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-3); }
   .card-hdr { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
+  /* Vorlage über die volle Zeile, Felder so breit wie ihr Inhalt (U3-031). */
+  .grid > .span-all { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   .paid-note { margin-top: var(--sp-2); }
   input, select, textarea {
@@ -668,21 +756,17 @@
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
   td.c-qty { width: 7.5rem; }
-  td.c-unit { width: 5.5rem; }
-  td.c-unit input { width: 100%; }
+  /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
+  td.c-unit { width: 9rem; }
+  td.c-unit select { width: 100%; }
   td.c-price { width: 9.5rem; }
   td.c-rate { width: 7rem; }
-  tr.grand td { border-top: 2px solid var(--text); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): überschrieb
      padding/radius/font/color der globalen .btn-*-Klassen aus tokens.css
      und brach app-weite Button-Konsistenz. Die globalen Tokens greifen jetzt. */
   .muted { color: var(--text-muted); }
-  /* Links im Fließtext unterstrichen (1.4.1). */
-  .txt-link { text-decoration: underline; text-underline-offset: 2px; }
-  .pkg-badge { display: inline-block; font-size: var(--fs-xs); font-weight: 600; color: var(--status-info-fg); background: var(--status-info-bg); border: 1px solid var(--status-info-line); border-radius: var(--r-pill); padding: 0.05rem 0.5rem; }
   .pkg-desc { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.2rem; white-space: pre-line; overflow-wrap: anywhere; }
   .pkg-title { font-weight: 600; margin-top: 0.25rem; overflow-wrap: anywhere; }
-  .pkg-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: flex-end; }
   .pkg-row td { background: var(--surface-sunken); border-bottom: 0; }
   .pkg-detail td { background: var(--surface-sunken); padding-top: 0; }
   /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im

@@ -14,20 +14,40 @@
 // `transformAsFaq` in eine `<details>`-Accordion-Ansicht überführt; die
 // TOC-Anker werden auf `faq-<slug>` umgeschrieben, sodass Deeplinks auf
 // einzelne Fragen aus dem Glossar/Recht-Kapitel funktionieren.
+//
+// U4 (U3-041): Jede Handbuch-Seite beginnt mit `# Titel`. Die Seite zeigt den Titel
+// schon im Kopf (`h1`); gerendert stand er darunter ein zweites Mal als Überschrift
+// („Angebote“ / „Angebote“). Die führende H1 wird deshalb vor dem Rendern
+// abgetrennt und ersetzt den Titel aus dem Front-Matter im Kopf (sie ist teils
+// genauer, z. B. „Kleinunternehmer-Regelung (§19 UStG)“). Die Markdown-Dateien
+// bleiben unverändert; Suche und Index lesen weiter den ganzen Text.
 
 import { error } from "@sveltejs/kit";
 import { getEntry } from "#lib/handbook/index.ts";
 import { renderHandbookMarkdown, transformAsFaq } from "#lib/handbook/render.ts";
+
+/**
+ * Trennt eine führende ATX-Überschrift erster Ordnung (`# Titel`) ab. Nur, wenn sie
+ * vor jedem anderen Inhalt steht (Leerzeilen davor erlaubt); sonst bleibt der Text
+ * unverändert und `heading` ist `null`.
+ */
+function splitLeadingH1(body: string): { heading: string | null; body: string } {
+  const m = /^(?:[ \t]*\r?\n)*[ \t]{0,3}#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*(?:\r?\n|$)/.exec(body);
+  if (!m) return { heading: null, body };
+  return { heading: m[1].trim(), body: body.slice(m[0].length) };
+}
 
 export function load({ params }: { params: { slug: string } }) {
   const entry = getEntry(params.slug);
   if (!entry) {
     throw error(404, `Handbuch-Seite "${params.slug}" nicht gefunden.`);
   }
-  const rendered = renderHandbookMarkdown(entry.body);
+  const { heading, body } = splitLeadingH1(entry.body);
+  const title = heading || entry.title;
+  const rendered = renderHandbookMarkdown(body);
   if (entry.category === "faq") {
     const faq = transformAsFaq(rendered.html, rendered.toc);
-    return { entry, html: faq.html, toc: faq.toc };
+    return { entry, title, html: faq.html, toc: faq.toc };
   }
-  return { entry, html: rendered.html, toc: rendered.toc };
+  return { entry, title, html: rendered.html, toc: rendered.toc };
 }

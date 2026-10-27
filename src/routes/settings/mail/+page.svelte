@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import RequiredLegend from "#lib/RequiredLegend.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import {
     mailAccountsList,
     mailAccountCreate,
@@ -19,7 +21,12 @@
   import Toggle from "#lib/Toggle.svelte";
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
+  import ActionMenu from "#lib/ActionMenu.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
+
+  // U4 (V2-06/V2-07/V2-11/V2-17): Ladefehler als Banner mit „Erneut laden“ statt „Noch kein
+  // Postfach“; Knöpfe während eines Laufs `ariaDisabled`; „Abbrechen“ vor der Hauptaktion;
+  // Fehler-Toasts nennen die Tätigkeit.
 
   let accounts = $state<MailAccount[]>([]);
   let loading = $state(true);
@@ -123,9 +130,10 @@
   );
 
   async function sendTest() {
+    if (sendingTest) return;
     testToError = "";
     if (!testAccountId) {
-      flash("Bitte ein Postfach wählen.", "error");
+      flash("Bitte wähl ein Postfach für die Test-Mail aus.", "error");
       return;
     }
     if (!testTo.trim()) {
@@ -188,7 +196,7 @@
   async function remove(a: MailAccount) {
     if (
       !(await confirmDialog({
-        title: `Postfach „${a.label}" löschen?`,
+        title: `Postfach „${a.label}“ löschen?`,
         body: "Das gespeicherte Passwort wird mit gelöscht.",
         confirmLabel: "Löschen",
         danger: true,
@@ -202,7 +210,7 @@
       flash("Postfach gelöscht.", "ok");
       await load();
     } catch (e) {
-      flash("Löschen fehlgeschlagen: " + String(e), "error");
+      flash("Postfach löschen fehlgeschlagen: " + String(e), "error");
     }
   }
 
@@ -220,6 +228,7 @@
   }
 
   async function testConnection() {
+    if (testing) return;
     fieldErrors = {};
     if (!smtpHost.trim()) {
       fieldErrors = { smtpHost: "Bitte gib den Server (SMTP-Host) ein." };
@@ -279,6 +288,7 @@
   }
 
   async function save() {
+    if (saving) return;
     const errs: Partial<Record<FieldKey, string>> = {};
     if (!label.trim()) errs.label = "Bitte gib eine Bezeichnung ein, z. B. „Geschäftspostfach“.";
     if (!fromName.trim()) errs.fromName = "Bitte gib den Absender-Namen ein.";
@@ -332,7 +342,7 @@
       await load();
     } catch (e) {
       const msg = String(e);
-      if (!hostErrorFrom(msg)) flash("Speichern fehlgeschlagen: " + msg, "error");
+      if (!hostErrorFrom(msg)) flash("Postfach speichern fehlgeschlagen: " + msg, "error");
     } finally {
       saving = false;
     }
@@ -350,17 +360,18 @@
   zu verschicken. Das Passwort wird verschlüsselt in der Datenbank dieser
   Instanz gespeichert — nie in Protokollen oder Exporten — und gilt nur für den
   eingetragenen Server, Port und Benutzer. Den lückenlosen Nachweis jedes
-  Versands findest du unter <a class="inline" href="/settings/mail-log">E-Mail-Protokoll</a>.
+  Versands findest du im <a class="inline" href="/settings/mail-log">E-Mail-Protokoll</a>.
 </p>
-
-{#if error}
-  <Banner>Fehler: {error}</Banner>
-{/if}
 
 <section class="card" aria-labelledby="mail-accounts-h">
   <h2 id="mail-accounts-h">Postfächer</h2>
   {#if loading}
-    <p class="muted" aria-busy="true">Lädt …</p>
+    <LoadingState />
+  {:else if error}
+    <!-- U4 (V2-07): Fehler statt „Noch kein Postfach eingerichtet“. -->
+    <Banner title="Die Postfächer konnten nicht geladen werden.">{error}
+      {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+    </Banner>
   {:else if accounts.length === 0}
     <p class="muted">Noch kein Postfach eingerichtet. Trage unten unter „Neues Postfach“ die Daten deines Postfachs ein.</p>
   {:else}
@@ -396,19 +407,31 @@
                 <span class="status-warn">im Server-Betrieb nicht verfügbar</span>
               {/if}
             </td>
-            <td data-label="Standard">{#if a.isDefault === 1}<Badge tone="primary">Standard</Badge>{:else}—{/if}</td>
+            <td data-label="Standard">{#if a.isDefault === 1}<Badge kind="tag">Standard</Badge>{:else}—{/if}</td>
             <td data-label="Zuletzt genutzt">{date(a.lastUsedAt)}</td>
             <td>
-              <div class="row-actions">
+              <!-- U4 (U3-036, design.md §4.5): eine sichtbare Aktion + Menü „Mehr“
+                   (Verbindung testen, Löschen unten abgesetzt). -->
+              <div class="kb-actions">
                 {#if a.authType === "smtp_password"}
-                  <Button variant="secondary" onclick={() => testSaved(a)} disabled={testingId === a.id} ariaLabel={`Verbindung testen, Postfach ${a.label}`}>
-                    {testingId === a.id ? "Teste …" : "Testen"}
-                  </Button>
                   <Button variant="secondary" onclick={() => startEdit(a)} ariaLabel={`Bearbeiten, Postfach ${a.label}`}>Bearbeiten</Button>
                 {:else}
                   <Button variant="secondary" onclick={() => startEdit(a)} ariaLabel={`Auf SMTP umstellen, Postfach ${a.label}`}>Auf SMTP umstellen</Button>
                 {/if}
-                <Button variant="danger" onclick={() => remove(a)} ariaLabel={`Löschen, Postfach ${a.label}`}>Löschen</Button>
+                <ActionMenu
+                  variant="ghost"
+                  ariaLabel={`Mehr zu Postfach ${a.label}`}
+                  items={[
+                    ...(a.authType === "smtp_password"
+                      ? [{
+                          label: testingId === a.id ? "Verbindung wird getestet …" : "Verbindung testen",
+                          onSelect: () => testSaved(a),
+                          disabled: testingId === a.id,
+                        }]
+                      : []),
+                    { label: "Löschen", onSelect: () => remove(a), danger: true },
+                  ]}
+                />
               </div>
             </td>
           </tr>
@@ -449,7 +472,7 @@
         </div>
 
         <div class="testmail-btn">
-          <Button type="submit" variant="secondary" disabled={sendingTest}>
+          <Button type="submit" variant="secondary" busy={sendingTest}>
             {sendingTest ? "Sende …" : "Test-Mail senden"}
           </Button>
         </div>
@@ -474,7 +497,7 @@
     </Banner>
   {/if}
 
-  <p class="muted legend"><span class="req" aria-hidden="true">*</span> Pflichtfeld</p>
+  <RequiredLegend />
   <form class="grid" novalidate onsubmit={(e) => { e.preventDefault(); save(); }} id="mail-form">
     <div class="f">
       <label for="mail-label">Bezeichnung<span class="req" aria-hidden="true">*</span></label>
@@ -549,6 +572,7 @@
     <QuantityInput
       bind:this={portInput}
       bind:value={smtpPort}
+      fieldClass="kb-w-short"
       id="mail-port"
       label="Port"
       integer
@@ -627,15 +651,17 @@
     </Banner>
   {/if}
 
+  <!-- U4 (V2-11/V2-06): „Abbrechen“ zuerst, Hauptaktion zuletzt; während eines Laufs
+       `ariaDisabled` statt `disabled` (Fokus bleibt, ADR 0041 Nr. 33). -->
   <div class="actions">
-    <Button variant="secondary" onclick={testConnection} disabled={testing}>
+    {#if editingId}
+      <Button variant="secondary" onclick={resetForm} ariaDisabled={saving}>Abbrechen</Button>
+    {/if}
+    <Button variant="secondary" onclick={testConnection} busy={testing}>
       {testing ? "Teste …" : "Verbindung testen"}
     </Button>
-    {#if editingId}
-      <Button variant="secondary" onclick={resetForm} disabled={saving}>Abbrechen</Button>
-    {/if}
-    <Button type="submit" form="mail-form" disabled={saving}>
-      {saving ? "Speichere …" : editingId ? "Änderungen speichern" : "Postfach speichern"}
+    <Button type="submit" form="mail-form" busy={saving}>
+      {saving ? "Speichert …" : editingId ? "Änderungen speichern" : "Postfach speichern"}
     </Button>
   </div>
 </section>
@@ -650,7 +676,6 @@
     min-height: var(--target); background: var(--surface-card); color: var(--text);
   }
   .req { color: var(--status-danger-fg); margin-left: 2px; }
-  .legend { font-size: var(--fs-sm); margin: 0 0 0.5rem; }
   .hint { font-weight: 400; color: var(--text-muted); font-size: var(--fs-sm); margin: 0; }
   .err { font-weight: 600; color: var(--status-danger-fg); font-size: var(--fs-sm); }
   .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
@@ -669,13 +694,13 @@
   .testmail { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   .testmail-h { font-size: var(--fs-md); margin: 0 0 0.5rem; }
   .testmail-row { display: flex; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap; }
-  .testmail .field { flex: 0 1 14rem; }
+  /* U4 (U3-032): Postfach-Auswahl so breit, dass „Bezeichnung (Standard)“ nicht abgeschnitten wird. */
+  .testmail .field { flex: 1 1 18rem; min-width: 0; }
   .testmail .field.grow { flex: 1 1 16rem; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
   .testmail .field.grow > label { display: block; }
   .testmail-btn { align-self: flex-end; }
   .testmail .hint { margin: 0.4rem 0 0; }
   .default-toggle { display: flex; flex-direction: column; gap: 0.25rem; }
-  .row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
   .muted { color: var(--text-muted); }
   @media screen and (max-width: 820px) {
     td { overflow-wrap: anywhere; }

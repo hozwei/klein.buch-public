@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { page } from "$app/state";
-  import { assetsGet, depreciationResetAsset } from "#lib/api.ts";
+  import { assetsGet, assetsSuggestMethod, depreciationResetAsset } from "#lib/api.ts";
   import type { AssetDetail } from "#lib/types.ts";
+  import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import { euro, date, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { depreciationMethodLabel, disposalTypeLabel } from "#lib/labels.ts";
   import Banner from "#lib/Banner.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import Badge from "#lib/Badge.svelte";
+  import { assetStatusView } from "../assetStatus.ts";
   import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
@@ -16,6 +19,7 @@
   let detail = $state<AssetDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let notFound = $state(false);
   let busy = $state(false);
 
   let id = $derived(page.params.id ?? "");
@@ -32,28 +36,63 @@
       detail.depreciationEntries.length === 0,
   );
 
+  // U4 (Warteliste 4, ADR 0039 Nr. 147 (2)): Anlage aus §13b-Kosten unter §19 — die
+  // selbst geschuldete Steuer gehört als eigene Kosten und eigene Anlage dazu. Nur ein
+  // Hinweis mit Weg; ob die Kosten §13b und §19 sind, sagt der Server (Vorbelegung).
+  let reverseChargeKlein = $state(false);
+
   async function load() {
     loading = true;
     error = null;
+    reverseChargeKlein = false;
+    notFound = false;
     try {
       detail = await assetsGet(id);
-      if (!detail) error = "Anlage nicht gefunden.";
+      if (!detail) {
+        notFound = true;
+        error = "Anschaffung nicht gefunden.";
+      }
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+    const a = detail?.asset;
+    if (a?.expenseId && a.disposed === 0) {
+      try {
+        const s = await assetsSuggestMethod(null, 0, a.expenseId);
+        reverseChargeKlein = !!s.source?.reverseCharge13b && s.source.isKleinunternehmer;
+      } catch {
+        // Hinweis ist Zusatz; ohne Antwort bleibt er weg.
+      }
+    }
   }
+
+  // PageBar (U4, design.md §4.2): „Bearbeiten“ als Nebenaktion, seltene und nicht
+  // umkehrbare Aktionen im Menü „Mehr“ (vorher Ghost-Gefahrknöpfe in der Leiste).
+  let barSecondary = $derived<ActionMenuItem[]>(
+    detail && canEdit ? [{ label: "Bearbeiten", href: `/assets/new?id=${detail.asset.id}` }] : [],
+  );
+  let barMore = $derived.by<ActionMenuItem[]>(() => {
+    if (!detail || detail.asset.disposed !== 0) return [];
+    const items: ActionMenuItem[] = [];
+    if (hasUnlockedAfa) {
+      items.push({ label: "Abschreibung zurücksetzen", onSelect: resetAfa, danger: true, disabled: busy });
+    }
+    items.push({ label: "Veräußern / Entsorgen", href: `/assets/${detail.asset.id}/dispose`, danger: true });
+    return items;
+  });
 
   onMount(load);
 
   async function resetAfa() {
+    if (busy) return;
     const ok = await confirmDialog({
       title: "Abschreibung zurücksetzen?",
       body:
-        "Die noch nicht festgeschriebene Abschreibung dieser Anlage wird zurückgesetzt " +
+        "Die noch nicht festgeschriebene Abschreibung dieser Anschaffung wird zurückgesetzt " +
         "und der Restbuchwert wiederhergestellt. Der Vorgang wird protokolliert. " +
-        "Danach kannst du die Anlage wieder bearbeiten oder neu abschreiben.",
+        "Danach kannst du die Anschaffung wieder bearbeiten oder neu abschreiben.",
       confirmLabel: "Zurücksetzen",
       cancelLabel: "Abbrechen",
       danger: true,
@@ -71,48 +110,50 @@
   }
 </script>
 
-<PageBar back="/assets" backLabel="Anschaffungen" title={detail?.asset.assetNumber}>
-  {#snippet actions()}
-    {#if detail}
-      {#if canEdit}
-        <a class="btn-secondary btn-sm" href={`/assets/new?id=${detail.asset.id}`}>Bearbeiten</a>
-      {/if}
-      {#if hasUnlockedAfa && detail.asset.disposed === 0}
-        <button type="button" class="btn-ghost-danger btn-sm" onclick={resetAfa} disabled={busy}>Abschreibung zurücksetzen</button>
-      {/if}
-      {#if detail.asset.disposed === 0}
-        <a class="btn-ghost-danger btn-sm" href={`/assets/${detail.asset.id}/dispose`}>Veräußern / Entsorgen</a>
-      {/if}
-    {/if}
-  {/snippet}
-</PageBar>
+<!-- U4 (V2-13): Objekt heißt „Anschaffung“ wie Bereich und Handbuch; V4-08: h1 auch beim
+     Laden und bei „nicht gefunden“. -->
+<PageBar
+  back="/assets"
+  backLabel="Anschaffungen"
+  title={detail ? `Anschaffung ${detail.asset.assetNumber}` : notFound ? "Anschaffung nicht gefunden" : "Anschaffung"}
+  secondary={barSecondary}
+  more={barMore}
+/>
 
 {#if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if error}
-  <Banner>{error}</Banner>
+  <Banner>{error}{#if notFound}{" "}<a class="kb-link" href="/assets">Zu den Anschaffungen</a>{/if}</Banner>
 {:else if detail}
   {@const a = detail.asset}
+  <!-- U4 (V3-09): Status aus assetStatus.ts, wie in der Liste. -->
+  {@const st = assetStatusView(a)}
   <p class="sub">
-    {#if a.disposed === 1}
-      <Badge tone="neutral">veräußert</Badge>
-    {:else if a.bookValueCents <= 0}
-      <Badge tone="success">abgeschrieben</Badge>
-    {:else if a.lockedAt}
-      <Badge tone="primary">festgeschrieben</Badge>
-    {:else if a.lastDepreciationYear != null}
-      <Badge tone="info">in Abschreibung</Badge>
-    {:else}
-      <Badge tone="warning">neu</Badge>
-    {/if}
+    <Badge tone={st.tone}>{st.label}</Badge>
   </p>
 
   {#if hasUnlockedAfa && a.disposed === 0}
     <p class="edit-hint">
-      Es ist bereits eine Abschreibung gebucht. Zum Korrigieren der Stammdaten erst
-      „Abschreibung zurücksetzen“ — möglich, solange das Geschäftsjahr nicht
+      Es ist bereits eine Abschreibung gebucht. Zum Korrigieren der Angaben erst
+      „Abschreibung zurücksetzen“ (Menü „Mehr“) — möglich, solange das Geschäftsjahr nicht
       abgeschlossen ist.
     </p>
+  {/if}
+
+  {#if reverseChargeKlein}
+    <section class="card" aria-labelledby="rc-h">
+      <h2 id="rc-h">Selbst geschuldete Steuer (§13b)</h2>
+      <p class="rc-text">
+        Diese Anschaffung kommt aus Kosten mit §13b. Als Kleinunternehmer schuldest du die
+        Umsatzsteuer darauf selbst und kannst sie nicht abziehen; sie gehört zu den
+        Anschaffungskosten. Falls noch nicht geschehen: Erfasse die Zahlung an das Finanzamt
+        (nur den Anteil dieser Anschaffung) als eigene Kosten und übernimm sie als eigene Anlage —
+        Anschaffungsdatum, Methode und Nutzungsdauer kommen dann von <DocNo value={a.assetNumber} />.
+      </p>
+      <div class="kb-actions kb-start">
+        <a class="btn-secondary" href={`/expenses/new?taxFor=${a.id}`}>Steuer als Kosten erfassen</a>
+      </div>
+    </section>
   {/if}
 
   <section class="card">
@@ -131,9 +172,9 @@
           <dt>Aus Kosten-Beleg</dt>
           <dd>
             {#if a.expenseId}
-              <a class="inline-link doc-no kb-target" href={`/expenses/${a.expenseId}`}>{detail.sourceExpenseNumber}</a>
+              <DocNo value={detail.sourceExpenseNumber} href={`/expenses/${a.expenseId}`} />
             {:else}
-              {detail.sourceExpenseNumber}
+              <DocNo value={detail.sourceExpenseNumber} />
             {/if}
           </dd>
         </div>
@@ -157,8 +198,7 @@
         </div>
       </dl>
       <p class="muted small">
-        Der Veräußerungsgewinn/-verlust fließt in die EÜR des Veräußerungsjahres
-        (kommt mit der Steuer-Auswertung).
+        Der Veräußerungsgewinn bzw. -verlust fließt in die EÜR des Veräußerungsjahres.
       </p>
     </section>
   {/if}
@@ -168,7 +208,7 @@
     {#if detail.depreciationEntries.length === 0}
       <p class="muted">
         Noch keine Abschreibung gebucht. Buche sie über „Abschreibung buchen“ in der
-        <a class="inline-link" href="/assets">Anschaffungs-Übersicht</a>.
+        <a class="kb-link" href="/assets">Anschaffungs-Übersicht</a>.
       </p>
     {:else}
       <Table caption="Abschreibungs-Verlauf" cards>
@@ -184,7 +224,7 @@
         <tbody>
           {#each detail.depreciationEntries as e (e.id)}
             <tr>
-              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}{" "}<Badge tone="success">Sofort</Badge>{/if}</td>
+              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}{" "}<Badge kind="tag">Sofort</Badge>{/if}</td>
               <td class="num" data-label="Monate">{e.monthsInYear}</td>
               <td class="num" data-label="Restbuchwert davor">{euro(e.bookValueBeforeCents)}</td>
               <td class="num" data-label="Abschreibung">{euro(e.depreciationAmountCents)}</td>
@@ -211,8 +251,7 @@
   dd.gain { color: var(--status-success-fg); font-weight: 600; }
   dd.loss { color: var(--status-danger-fg); font-weight: 600; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .inline-link { text-decoration: underline; text-underline-offset: 2px; }
-  .doc-no { font-family: var(--font-mono); }
+  .rc-text { margin: 0 0 var(--sp-3); max-width: 72ch; line-height: var(--lh-body); }
   .muted { color: var(--text-muted); }
   .small { font-size: var(--fs-sm); }
   .edit-hint { color: var(--text-muted); font-size: var(--fs-sm); margin: 0 0 var(--sp-2); max-width: 46rem; }

@@ -1,11 +1,19 @@
 <script lang="ts">
+  // E-Mail-Protokoll (Block 16b): append-only `email_log`, Suche serverseitig.
+  // U4 (Warteliste (14), F6 `emailLogList`): Diese Seite IST das Versandprotokoll
+  // gesamt — `emailLogSearch` ohne Filter liefert dasselbe wie `emailLogList`, dazu
+  // Suche und Filter. `emailLogList` bleibt deshalb ohne eigene Oberfläche.
+  // U4: Titel wie im Handbuch und im Einstellungs-Hub („E-Mail-Protokoll“), Art „Paket-Broschüre“
+  // (`package_catalog`) als Filter und Klartext, Belegnummern als Link (DocNo).
   import { onMount } from "svelte";
   import { emailLogSearch } from "#lib/api.ts";
   import type { EmailLogEntry, EmailLogFilter } from "#lib/types.ts";
   import Badge from "#lib/Badge.svelte";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
+  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
   import { dateTime } from "#lib/format.ts";
 
   let entries = $state<EmailLogEntry[]>([]);
@@ -17,7 +25,7 @@
   let dateFrom = $state("");
   let dateTo = $state("");
   let statusF = $state<"all" | "success" | "failed">("all");
-  let kindF = $state<"all" | "invoice" | "quote" | "test">("all");
+  let kindF = $state<"all" | "invoice" | "quote" | "package_catalog" | "test">("all");
   let channelF = $state<"all" | "smtp" | "graph">("all");
 
   const LIMIT = 1000;
@@ -46,13 +54,15 @@
     }
   }
 
-  function reset() {
+  function reset(fromEmpty = false) {
     search = "";
     dateFrom = "";
     dateTo = "";
     statusF = "all";
     kindF = "all";
     channelF = "all";
+    // Der Link im leeren Zustand verschwindet danach; Fokus an den Anfang der Filter.
+    if (fromEmpty) document.getElementById("ml-search")?.focus();
     load();
   }
 
@@ -64,7 +74,25 @@
   );
 
   function kindLabel(k: string): string {
-    return k === "invoice" ? "Rechnung" : k === "quote" ? "Angebot" : k === "test" ? "Test-Mail" : k;
+    switch (k) {
+      case "invoice":
+        return "Rechnung";
+      case "quote":
+        return "Angebot";
+      case "package_catalog":
+        return "Paket-Broschüre";
+      case "test":
+        return "Test-Mail";
+      default:
+        return k;
+    }
+  }
+  /** Ziel des Belegs (Rechnung/Angebot); Broschüre und Test-Mail haben keine Detailseite. */
+  function relatedHref(e: EmailLogEntry): string | undefined {
+    if (!e.relatedId) return undefined;
+    if (e.relatedKind === "invoice") return `/invoices/${e.relatedId}`;
+    if (e.relatedKind === "quote") return `/quotes/${e.relatedId}`;
+    return undefined;
   }
   function channelLabel(c: string): string {
     return c === "graph" ? "Microsoft 365 (früher)" : "SMTP";
@@ -84,11 +112,12 @@
     <label class="grow">
       Suche
       <input
+        id="ml-search"
         type="search"
         bind:value={search}
         enterkeyhint="search"
         autocomplete="off"
-        placeholder="z. B. Empfänger, Betreff, Beleg-Nr., Fehler, request-id"
+        placeholder="z. B. Empfänger, Betreff, Belegnummer, Fehler, request-id"
       />
     </label>
     <label>
@@ -104,7 +133,7 @@
     <label>
       Status
       <select bind:value={statusF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="success">versendet</option>
         <option value="failed">fehlgeschlagen</option>
       </select>
@@ -112,49 +141,56 @@
     <label>
       Art
       <select bind:value={kindF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="invoice">Rechnung</option>
         <option value="quote">Angebot</option>
+        <option value="package_catalog">Paket-Broschüre</option>
         <option value="test">Test-Mail</option>
       </select>
     </label>
     <label>
       Kanal
       <select bind:value={channelF} onchange={load}>
-        <option value="all">alle</option>
+        <option value="all">Alle</option>
         <option value="smtp">SMTP</option>
         <option value="graph">Microsoft 365 (früher)</option>
       </select>
     </label>
+    <!-- U4 (V2-10/V2-06): „Filtern“ als secondary (die Seite hat keine Hauptaktion in der
+         Filterleiste), „Filter zurücksetzen“; während des Ladens fokussierbar (ariaDisabled). -->
     <div class="btns">
-      <Button type="submit" disabled={loading}>Suchen</Button>
-      <Button variant="secondary" onclick={reset} disabled={loading && !hasFilter}>Zurücksetzen</Button>
+      <Button type="submit" variant="secondary" busy={loading}>Filtern</Button>
+      <Button variant="secondary" onclick={() => reset()} ariaDisabled={loading}>Filter zurücksetzen</Button>
     </div>
   </div>
 </form>
 
-{#if error}
-  <Banner>{error}</Banner>
-{:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
-{:else}
-  <p class="muted count" role="status">
-    {entries.length}{entries.length === LIMIT ? "+" : ""} Treffer{hasFilter ? " (gefiltert)" : ""},
-    neueste zuerst.
-    {#if entries.length === LIMIT}<span> Zeige max. {LIMIT} — Suche eingrenzen für ältere.</span>{/if}
-  </p>
+<!-- U4 (V4-06/V2-02): eine dauerhafte Statuszeile für Laden und Trefferzahl (4.1.3). -->
+<p class="muted count" role="status">
+  {#if loading}
+    Wird geladen …
+  {:else if !error}
+    {entries.length}{entries.length === LIMIT ? "+" : ""} Treffer{hasFilter ? " (gefiltert)" : ""}, neueste zuerst.
+    {#if entries.length === LIMIT}<span>{" "}Zeige höchstens {LIMIT} — grenz die Suche ein, um ältere zu sehen.</span>{/if}
+  {/if}
+</p>
 
+{#if error}
+  <Banner title="Das E-Mail-Protokoll konnte nicht geladen werden.">{error}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
+{:else if !loading}
   {#if entries.length === 0}
     <p class="muted">
       {#if hasFilter}
-        Keine Einträge zu diesem Filter. <button type="button" class="inline-link" onclick={reset}>Filter zurücksetzen</button>
+        Keine Treffer für diese Filter. <button type="button" class="kb-link" onclick={() => reset(true)}>Filter zurücksetzen</button>
       {:else}
-        Noch keine E-Mail versendet. <a class="inline-link" href="/settings/mail">Postfach einrichten und Testmail senden</a>
+        Noch keine E-Mail versendet. <a class="kb-link kb-target" href="/settings/mail">Postfach einrichten und Test-Mail senden</a>
       {/if}
     </p>
   {:else}
-    <table class="cards">
-      <caption class="kb-visually-hidden">E-Mail-Protokoll, neueste zuerst</caption>
+    <!-- U4 (V2-10, design.md §4.5): Protokoll im Table-Baustein; scrollt in sich (ADR 0041 Nr. 42). -->
+    <Table cards caption="E-Mail-Protokoll, neueste zuerst">
       <thead>
         <tr>
           <th>Zeitpunkt</th>
@@ -172,14 +208,14 @@
             <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
             <td data-label="Status">
               {#if e.status === "success"}
-                <Badge tone="success">versendet</Badge>
+                <Badge tone="success">Versendet</Badge>
               {:else}
-                <Badge tone="danger">fehlgeschlagen</Badge>
+                <Badge tone="danger">Fehlgeschlagen</Badge>
               {/if}
             </td>
             <td data-label="Beleg">
-              <span>{kindLabel(e.relatedKind)}
-              {#if e.relatedNumber}<span class="muted docno">· {e.relatedNumber}</span>{/if}</span>
+              <span class="kind">{kindLabel(e.relatedKind)}</span>
+              {#if e.relatedNumber}<DocNo value={e.relatedNumber} href={relatedHref(e)} />{/if}
             </td>
             <td class="wrap" data-label="Empfänger">{e.toEmail}</td>
             <td class="subj cards-full" data-label="Betreff">{e.subject}</td>
@@ -197,7 +233,7 @@
           </tr>
         {/each}
       </tbody>
-    </table>
+    </Table>
   {/if}
 {/if}
 
@@ -212,15 +248,13 @@
   .filterbar label.grow { flex: 1 1 18rem; max-width: 100%; }
   .filterbar input, .filterbar select { padding: 0.4rem 0.55rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); font: inherit; font-weight: 400; color: var(--text); background: var(--surface-card); min-height: var(--target); }
   .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
-  .inline-link { text-decoration: underline; color: var(--accent); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; min-height: var(--target); }
-  table { width: 100%; border-collapse: collapse; }
   th, td { font-size: var(--fs-sm); text-align: left; vertical-align: top; }
   tr.bad td { background: var(--status-danger-bg); }
   .ts { font-variant-numeric: tabular-nums; }
   @media (min-width: 821px) {
     .ts { white-space: nowrap; }
   }
-  .docno { font-family: var(--font-mono); white-space: nowrap; }
+  .kind { display: block; }
   .wrap, .subj { overflow-wrap: anywhere; }
   .subj { max-width: 18rem; }
   .resp { color: var(--text-muted); overflow-wrap: anywhere; }

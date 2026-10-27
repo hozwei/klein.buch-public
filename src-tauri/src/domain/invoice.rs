@@ -347,76 +347,97 @@ pub enum InvoiceValidationError {
     Paragraph19VatViolation(Vec<NoVatViolation>),
 }
 
+/// Datum in Meldungen nach DIN 5008 (TT.MM.JJJJ, U4).
+pub(crate) fn de_date(d: &NaiveDate) -> String {
+    d.format("%d.%m.%Y").to_string()
+}
+
+/// Text zu `Paragraph19VatViolation` (Rechnung und Angebot).
+pub const PARAGRAPH19_VAT_MESSAGE: &str = "Als Kleinunternehmer (§19 UStG) darf keine \
+     Umsatzsteuer ausgewiesen werden — bearbeite den Entwurf, damit alle Positionen 0 % haben.";
+
+/// Firmendaten (Verkäuferprofil) fehlen ganz — Belege, Prüfung und Mails brauchen sie.
+pub const SELLER_PROFILE_MISSING: &str =
+    "Die Firmendaten fehlen noch — trage sie unter Einstellungen → Meine Firmendaten ein.";
+
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI). Der maschinenlesbare
 /// Code lebt in `commands::invoices::variant_name`.
+///
+/// U4 (V1-03, V1-18): Begriffe der Oberfläche („Firmendaten“ statt „Stammdaten“,
+/// Seite „Meine Firmendaten“), Daten als TT.MM.JJJJ, keine Regel-IDs der
+/// XRechnung im Text (sie stehen im Prüfbericht); gesetzliche Fundstellen bleiben.
 pub fn message(e: &InvoiceValidationError) -> String {
     use InvoiceValidationError as E;
     match e {
         E::InvoiceDateInFuture {
             invoice_date,
             today,
-        } => {
-            format!("Rechnungsdatum ({invoice_date}) liegt in der Zukunft (heute {today}).")
-        }
+        } => format!(
+            "Das Rechnungsdatum ({}) liegt in der Zukunft (heute ist der {}).",
+            de_date(invoice_date),
+            de_date(today)
+        ),
         E::DueDateBeforeInvoiceDate {
             invoice_date,
             due_date,
-        } => {
-            format!("Fälligkeitsdatum ({due_date}) liegt vor dem Rechnungsdatum ({invoice_date}).")
-        }
+        } => format!(
+            "Das Fälligkeitsdatum ({}) liegt vor dem Rechnungsdatum ({}).",
+            de_date(due_date),
+            de_date(invoice_date)
+        ),
         E::DeliveryDateAfterInvoiceDate {
             invoice_date,
             delivery_date,
-        } => {
-            format!("Lieferdatum ({delivery_date}) liegt nach dem Rechnungsdatum ({invoice_date}).")
-        }
+        } => format!(
+            "Das Leistungsdatum ({}) liegt nach dem Rechnungsdatum ({}).",
+            de_date(delivery_date),
+            de_date(invoice_date)
+        ),
         E::NoItems => "Mindestens eine Position ist erforderlich.".into(),
-        E::CurrencyEmpty => "Währung fehlt.".into(),
+        E::CurrencyEmpty => "Die Währung fehlt.".into(),
         E::CurrencyUnsupported(code) => {
-            format!("Währung '{code}' wird nicht unterstützt (nur 'EUR').")
+            format!("Die Währung „{code}“ wird nicht unterstützt; Klein.Buch rechnet nur in Euro (EUR).")
         }
         E::StornoIdEmpty => {
-            "Storno-Verweis (`is_storno_for`) ist ein leerer String — entweder NULL setzen oder gültige Original-ID.".into()
+            "Der Storno-Beleg verweist auf keine Rechnung (interner Fehler, bitte melden).".into()
         }
         E::TotalNotPositive => "Der Gesamtbetrag muss größer als 0 € sein.".into(),
-        E::SellerNameMissing => "Verkäufer-Name fehlt (Stammdaten).".into(),
+        E::SellerNameMissing => "Der Firmenname fehlt in den Firmendaten.".into(),
         E::SellerAddressIncomplete => {
-            "Verkäufer-Adresse ist unvollständig (Straße, PLZ, Ort).".into()
+            "Die Adresse in den Firmendaten ist unvollständig (Straße, PLZ, Ort).".into()
         }
         E::SellerMissingTaxIdAndVatId => {
-            "Steuernummer oder USt-IdNr. ist erforderlich (§14 Abs. 4 UStG).".into()
+            "Steuernummer oder USt-IdNr. fehlt in den Firmendaten (Pflichtangabe nach §14 Abs. 4 UStG).".into()
         }
         E::XRechnungSellerPhoneMissing => {
-            "Telefonnummer fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-DE-6) Pflicht.".into()
+            "Die Telefonnummer fehlt in den Firmendaten — für die E-Rechnung ist sie Pflicht.".into()
         }
         E::XRechnungDueDateMissing => {
-            "Fälligkeitsdatum fehlt — für die E-Rechnung (XRechnung, BR-CO-25) Pflicht, wenn ein Betrag offen ist.".into()
+            "Das Fälligkeitsdatum fehlt — für die E-Rechnung ist es Pflicht, solange ein Betrag offen ist.".into()
         }
         E::XRechnungSellerIdMissing => {
-            "Steuernummer oder USt-IdNr. fehlt in den Stammdaten — für die E-Rechnung (XRechnung, BR-CO-26) Pflicht, auch bei Kleinbetragsrechnungen.".into()
+            "Steuernummer oder USt-IdNr. fehlt in den Firmendaten — für die E-Rechnung ist eine davon Pflicht, auch bei Kleinbetragsrechnungen.".into()
         }
-        E::BuyerNameMissing => "Empfänger-Name fehlt.".into(),
+        E::BuyerNameMissing => "Der Name des Empfängers fehlt im Kontakt.".into(),
         E::BuyerAddressIncomplete => {
-            "Empfänger-Adresse ist unvollständig (Straße, PLZ, Ort).".into()
+            "Die Adresse des Empfängers ist unvollständig (Straße, PLZ, Ort) — ergänze sie im Kontakt.".into()
         }
-        E::ItemDescriptionMissing(p) => format!("Position {p}: Beschreibung fehlt."),
-        E::ItemQuantityNotPositive(p) => format!("Position {p}: Menge muss größer als 0 sein."),
+        E::ItemDescriptionMissing(p) => format!("Position {p}: Die Beschreibung fehlt."),
+        E::ItemQuantityNotPositive(p) => format!("Position {p}: Die Menge muss größer als 0 sein."),
         E::ItemUnitPriceNegative(p) => {
-            format!("Position {p}: Einzelpreis darf nicht negativ sein.")
+            format!("Position {p}: Der Einzelpreis darf nicht negativ sein.")
         }
         E::ItemDuplicatePosition(p) => format!("Position {p} ist doppelt vergeben."),
         E::ItemInvalidTaxCategoryCode { position, code } => {
-            format!("Position {position}: ungültiger Steuer-Kategorie-Code {code}.")
+            format!("Position {position}: Die Steuerart „{code}“ ist ungültig.")
         }
         E::ItemTaxRateNegative { position, rate } => {
-            format!("Position {position}: Steuersatz darf nicht negativ sein ({rate} %).")
+            format!("Position {position}: Der Steuersatz darf nicht negativ sein ({rate} %).")
         }
         E::ItemAmountOutOfRange(p) => item_amount_out_of_range_message(*p),
         E::TotalOutOfRange => TOTAL_OUT_OF_RANGE_MESSAGE.into(),
         E::ItemExemptWithoutKleinunternehmer(p) => exempt_without_klein_message(*p),
-        E::Paragraph19VatViolation(_) => {
-            "§19-Verstoß: Bei Kleinunternehmer darf keine Umsatzsteuer ausgewiesen werden.".into()
-        }
+        E::Paragraph19VatViolation(_) => PARAGRAPH19_VAT_MESSAGE.into(),
     }
 }
 

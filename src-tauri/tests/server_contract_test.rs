@@ -142,14 +142,15 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(REGISTRY.len(), frontend.len(), "keine doppelten Namen");
     assert_eq!(
         REGISTRY.len(),
-        177,
+        178,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
          - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
          + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
          + Tages-Backup-Uhrzeit + 2 Nummernkreise (Lauf F1b) \
          + 2 vorgemerkte Entwürfe + Restore-Prüfung der Abos (Lauf F1d) \
          + Entwurf verwerfen (Lauf F2a) + Backup herunterladen (Lauf F3a) \
-         + Entwurf bearbeiten (Lauf F5a) - 18 gesperrte Desktop-Commands - 2 doppelte Leser (Lauf F6)"
+         + Entwurf bearbeiten (Lauf F5a) - 18 gesperrte Desktop-Commands - 2 doppelte Leser (Lauf F6) \
+         + Abgangs-Vorschau der Anlagen (Lauf 2026.11 U4)"
     );
     for gone in REMOVED_IN_F6 {
         assert!(find(gone).is_none(), "{gone} entfällt seit Lauf F6");
@@ -552,6 +553,8 @@ async fn header_snapshot_per_route_class() {
             ("cache-control", "no-store"),
             ("content-security-policy", &spa_csp),
             ("content-type", "text/html; charset=utf-8"),
+            // vorkomprimierte Varianten (ADR 0041 Nr. 212)
+            ("vary", "accept-encoding"),
         ])
     );
     // API
@@ -572,6 +575,7 @@ async fn header_snapshot_per_route_class() {
             ("cache-control", headers::CACHE_IMMUTABLE),
             ("content-security-policy", headers::CSP_NONE),
             ("content-type", "text/javascript; charset=utf-8"),
+            ("vary", "accept-encoding"),
         ])
     );
 
@@ -657,9 +661,9 @@ fn every_command_has_an_explicit_kind() {
     let writes = REGISTRY.iter().filter(|c| c.kind == Kind::Write).count();
     assert_eq!(
         (reads, writes, JOBS.len()),
-        (71, 93, 13),
+        (72, 93, 13),
         "Einstufung wie vor W14-012 (Lauf F4b), + invoices_update_draft (Write, Lauf F5a), \
          Lauf F6: − 4 Leser (Restore-Vorschau, OAuth-Status, zwei doppelte), − 16 gesperrte \
-         Schreiber"
+         Schreiber; Lauf 2026.11 U4: + assets_disposal_preview (Read)"
     );
 }

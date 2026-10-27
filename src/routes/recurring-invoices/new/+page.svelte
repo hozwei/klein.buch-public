@@ -4,6 +4,7 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
   import {
     contactsList,
     sellerProfileGet,
@@ -22,11 +23,13 @@
     RecurringInvoiceInputDto,
     RecurringInvoiceMode,
   } from "#lib/types.ts";
-  import { FREQUENCIES } from "#lib/labels.ts";
+  import { FREQUENCIES, unitCodeError, unitLabel, unitOptions } from "#lib/labels.ts";
   import { euro, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { applyTaxRules, documentTotals, REGEL_TAX_CODES, roundHalfAwayFromZero } from "#lib/tax.ts";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import ContactSelect from "#lib/ContactSelect.svelte";
   import TravelLineAdder from "#lib/TravelLineAdder.svelte";
   import PackageItemAdder from "#lib/PackageItemAdder.svelte";
   import MarkdownEditor from "#lib/MarkdownEditor.svelte";
@@ -70,6 +73,7 @@
 
   let editId = $state<string | null>(null);
   let loaded = $state(false);
+  let notFound = $state(false);
   let busy = $state(false);
   // Nach dem ersten Speicher-Versuch zeigen alle Felder ihre Meldungen.
   let submitted = $state(false);
@@ -97,7 +101,8 @@
       description: "",
       quantity: 1,
       unitCode: "C62",
-      unitPriceCents: 0,
+      // V4-05: leer statt 0,00 — so meldet das Feld einen vergessenen Preis selbst.
+      unitPriceCents: null,
       taxRatePercent: 0,
       taxCategoryCode: "E" as TaxCategoryCode,
       descriptionMarkup: "",
@@ -126,8 +131,16 @@
       labelMissing(it) ||
       it.quantity == null ||
       it.unitPriceCents == null ||
-      (!isKlein && it.taxRatePercent == null)
+      (!isKlein && it.taxRatePercent == null) ||
+      !!unitCodeError(it.unitCode)
     );
+  }
+  // V4-05: Ein Gesamtbetrag von 0 € lehnt der Server ab (domain::invoice, TotalNotPositive).
+  // Die Meldung steht nach dem ersten Speichern an den Preisfeldern mit 0 €, nicht als Toast.
+  const ZERO_TOTAL_MSG = "Bitte einen Einzelpreis eingeben — der Gesamtbetrag muss über 0 € liegen.";
+  let zeroTotal = $derived(submitted && totals.gross <= 0);
+  function priceError(it: FormItem): string | undefined {
+    return zeroTotal && it.unitPriceCents === 0 ? ZERO_TOTAL_MSG : undefined;
   }
   let dayRef: QuantityInput | undefined = $state();
   let termsRef: QuantityInput | undefined = $state();
@@ -148,7 +161,8 @@
         editId = id;
         const d = await recurringInvoicesGet(id);
         if (!d) {
-          flash("Vorlage nicht gefunden.", "error");
+          // Stehender Zustand statt Toast (design.md §5 „nicht gefunden“).
+          notFound = true;
         } else {
           const t = d.template;
           label = t.label;
@@ -184,8 +198,8 @@
     }
   });
 
-  function onCustomerSelect() {
-    const c = customers.find((v) => v.id === contactId);
+  function onCustomerSelect(id: string) {
+    const c = customers.find((v) => v.id === id);
     if (c && !label.trim()) label = c.name;
   }
 
@@ -232,6 +246,17 @@
     it.sourcePackageRevision = null;
     it.packageName = undefined;
   }
+
+  // Befund E (U4): Eine Paket-Position mit einer Einheit außerhalb der Liste
+  // (Freitext älterer Pakete, z. B. „Pauschal“) bekommt ein Auswahlfeld. Die Wahl
+  // ändert die Kopie und löst die Bindung ans Paket (sauberer Bruch wie „Paket
+  // anpassen“; der Server löst sie bei abweichender Einheit ebenso). Die Zeile
+  // wird dabei neu aufgebaut — der Fokus bleibt auf dem Einheiten-Feld.
+  async function unitChosenForPackage(idx: number) {
+    detachPackage(idx);
+    await tick();
+    document.getElementById(`item-${idx}-unit`)?.focus();
+  }
   function removeItem(idx: number) {
     items = items.filter((_, i) => i !== idx).map((it, i) => ({ ...it, position: i + 1 }));
     if (items.length === 0) items = [emptyItem(1)];
@@ -245,6 +270,7 @@
   }
 
   async function save() {
+    if (busy) return;
     submitted = true;
     const dayOk = dayRef?.validate() ?? true;
     const termsOk = termsRef?.validate() ?? true;
@@ -256,7 +282,14 @@
       await focusFirstInvalid();
       return;
     }
-    if (totals.gross <= 0) return flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+    if (totals.gross <= 0) {
+      // V4-05: Meldung an den Preisfeldern (priceError); nur ohne solches Feld als Toast.
+      await focusFirstInvalid();
+      if (!items.some((it) => !it.sourcePackageId && it.unitPriceCents === 0)) {
+        flash("Der Gesamtbetrag muss größer als 0 € sein.", "error");
+      }
+      return;
+    }
 
     const input: RecurringInvoiceInputDto = {
       label: label.trim(),
@@ -278,10 +311,10 @@
     try {
       if (editId) {
         await recurringInvoicesUpdate(editId, input);
-        flash("Vorlage gespeichert.");
+        flash("Abo-Vorlage gespeichert.");
       } else {
         await recurringInvoicesCreate(input);
-        flash("Vorlage angelegt.");
+        flash("Abo-Vorlage angelegt.");
       }
       await goto("/recurring-invoices");
     } catch (e) {
@@ -292,24 +325,35 @@
   }
 </script>
 
-<PageBar back="/recurring-invoices" backLabel="Abo-Rechnungen" title={editId ? "Vorlage bearbeiten" : "Neue Vorlage"}>
+<!-- V2-15: „Abo-Vorlage“ statt „Vorlage“ (Verwechslung mit der PDF-Vorlage); V2-11: beim
+     Bearbeiten „Änderungen speichern“ wie in den übrigen Editoren. -->
+<PageBar
+  back="/recurring-invoices"
+  backLabel="Abo-Rechnungen"
+  title={notFound ? "Abo-Vorlage nicht gefunden" : editId ? "Abo-Vorlage bearbeiten" : "Neue Abo-Vorlage"}
+>
   {#snippet actions()}
-    {#if loaded}
+    {#if loaded && !notFound}
       <a class="btn-secondary" href="/recurring-invoices">Abbrechen</a>
-      <button type="submit" form="ri-form" class="btn-primary" disabled={busy}>
-        {busy ? "Speichere …" : editId ? "Speichern" : "Vorlage anlegen"}
-      </button>
+      <!-- V2-06: während des Speicherns fokussierbar (aria-disabled), Klick ohne Wirkung. -->
+      <Button type="submit" form="ri-form" ariaDisabled={busy}>
+        {busy ? "Speichere …" : editId ? "Änderungen speichern" : "Abo-Vorlage anlegen"}
+      </Button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if !loaded}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
+{:else if notFound}
+  <Banner>
+    Diese Abo-Vorlage gibt es nicht (mehr). <a class="kb-link kb-target" href="/recurring-invoices">Zu den Abo-Rechnungen</a>
+  </Banner>
 {:else}
   {#if isKlein}
     <Banner kind="info">
       Kleinunternehmer (§19): auf den erzeugten Rechnungen wird keine Umsatzsteuer
-      ausgewiesen — die MwSt-Felder sind ausgeblendet.
+      ausgewiesen — die USt-Felder sind ausgeblendet.
     </Banner>
   {/if}
 
@@ -334,31 +378,27 @@
             <span id="hint-label" class="field-hint">Zum Beispiel „Wartung Server – Müller GmbH“. Wird beim Wählen des Kunden vorbelegt.</span>
           {/if}
         </label>
-        <label>
-          <span>Kunde <span class="req" aria-hidden="true">*</span></span>
-          <select
-            bind:value={contactId}
-            onchange={onCustomerSelect}
-            required
-            aria-invalid={submitted && errContact ? "true" : undefined}
-            aria-describedby={submitted && errContact ? "err-contact" : undefined}
-          >
-            <option value="" disabled>— wählen —</option>
-            {#each customers as c (c.id)}
-              <option value={c.id}>{c.name}{c.city ? ` (${c.city})` : ""}</option>
-            {/each}
-          </select>
-          {#if submitted && errContact}<span id="err-contact" class="field-err">{errContact}</span>{/if}
-        </label>
+        <ContactSelect
+          bind:value={contactId}
+          contacts={customers}
+          label="Kunde"
+          id="ri-contact"
+          required
+          requiredMessage="Bitte einen Kunden auswählen."
+          showErrors={submitted}
+          onchange={onCustomerSelect}
+          class="span2 kb-w-long"
+        />
         <label>
           Frequenz
-          <select bind:value={frequency}>
+          <select class="kb-w-medium" bind:value={frequency}>
             {#each FREQUENCIES as f}<option value={f.value}>{f.label}</option>{/each}
           </select>
         </label>
         <QuantityInput
           bind:this={dayRef}
           bind:value={dayOfPeriod}
+          fieldClass="kb-w-short"
           integer
           grouping={false}
           max={31}
@@ -375,6 +415,7 @@
                bei bestehenden schreibt Klein.Buch den Termin selbst fort. -->
           <input
             type="date"
+            class="kb-w-date"
             bind:value={nextDueDate}
             min={editId ? undefined : todayBerlin()}
             disabled={!!editId}
@@ -388,6 +429,7 @@
           Laufzeit-Ende (optional)
           <input
             type="date"
+            class="kb-w-date"
             bind:value={endDate}
             min={nextDueDate || undefined}
             aria-invalid={submitted && errEndDate ? "true" : undefined}
@@ -398,6 +440,7 @@
         <QuantityInput
           bind:this={termsRef}
           bind:value={paymentTermsDays}
+          fieldClass="kb-w-short"
           integer
           unit="Tage"
           noun="Zahlungsziel"
@@ -419,12 +462,12 @@
         <thead>
           <tr>
             <th scope="col">#</th>
-            <th scope="col">Beschreibung</th>
-            <th scope="col" class="right">Menge</th>
+            <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
             <th scope="col">Einheit</th>
-            <th scope="col" class="right">Einzelpreis</th>
+            <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
             {#if !isKlein}
-              <th scope="col" class="right">USt-Satz</th>
+              <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">USt-Art</th>
             {/if}
             <th scope="col" class="right">Netto</th>
@@ -435,13 +478,15 @@
           {#each items as it, i (i)}
             {@const n = it.position}
             {@const descErr = submitted && labelMissing(it)}
+            <!-- Befund E: Einheit außerhalb der Liste; die Meldung steht sofort, sie stammt aus den Daten (Paket, Entwurf). -->
+            {@const unitErr = unitCodeError(it.unitCode, !!it.sourcePackageId)}
             {#if isRich(it)}
               {@const linked = !!it.sourcePackageId}
               <tr class="pkg-row">
                 <td data-label="Pos.">{n}</td>
-                <td class="cards-full" data-label="Titel">
+                <td class="cards-full" data-label={linked ? "Titel" : "Titel *"}>
                   {#if linked}
-                    <span class="pkg-badge">aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</span>
+                    <Badge kind="tag">Aus Paket: {it.packageName ?? "Paket"} (V{it.sourcePackageRevision})</Badge>
                     <div class="pkg-title">{it.descriptionTitle}</div>
                   {:else}
                     <label class="kb-visually-hidden" for="item-{i}-title">Titel, Position {n}</label>
@@ -459,17 +504,42 @@
                 </td>
                 {#if linked}
                   <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
-                  <td data-label="Einheit">{it.unitCode}</td>
+                  {#if unitErr}
+                    <td class="c-unit" data-label="Einheit">
+                      <select
+                        id="item-{i}-unit"
+                        bind:value={it.unitCode}
+                        onchange={() => unitChosenForPackage(i)}
+                        aria-label={`Einheit, Position ${n}`}
+                        aria-invalid="true"
+                        aria-describedby={`item-${i}-unit-err`}
+                      >
+                        {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                      </select>
+                      <span id="item-{i}-unit-err" class="field-err">{unitErr}</span>
+                    </td>
+                  {:else}
+                    <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
+                  {/if}
                   <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                 {:else}
-                  <td class="c-qty" data-label="Menge">
+                  <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                   </td>
                   <td class="c-unit" data-label="Einheit">
-                    <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                    <select
+                      id="item-{i}-unit"
+                      bind:value={it.unitCode}
+                      aria-label={`Einheit, Position ${n}`}
+                      aria-invalid={unitErr ? "true" : undefined}
+                      aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                    >
+                      {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                    </select>
+                    {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                   </td>
-                  <td class="c-price" data-label="Einzelpreis">
-                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                  <td class="c-price" data-label="Einzelpreis *">
+                    <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                   </td>
                 {/if}
                 {#if !isKlein}
@@ -479,7 +549,7 @@
                 <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if linked || items.length > 1}
                   <td class="c-actions">
-                    <div class="pkg-actions">
+                    <div class="kb-actions">
                       {#if linked}
                         <button type="button" class="btn-secondary" onclick={() => detachPackage(i)} aria-label={`Paket anpassen, Position ${n}`}>Paket anpassen</button>
                       {/if}
@@ -509,7 +579,7 @@
             {:else}
               <tr>
                 <td data-label="Pos.">{n}</td>
-                <td class="cards-full" data-label="Beschreibung">
+                <td class="cards-full" data-label="Beschreibung *">
                   <label class="kb-visually-hidden" for="item-{i}-desc">Beschreibung, Position {n}</label>
                   <input
                     id="item-{i}-desc"
@@ -522,17 +592,26 @@
                   />
                   {#if descErr}<span id="item-{i}-desc-err" class="field-err">Bitte eine Beschreibung eingeben.</span>{/if}
                 </td>
-                <td class="c-qty" data-label="Menge">
+                <td class="c-qty" data-label="Menge *">
                   <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
                 </td>
                 <td class="c-unit" data-label="Einheit">
-                  <input type="text" bind:value={it.unitCode} maxlength="3" aria-label={`Einheit, Position ${n} (Code, z. B. C62 für Stück)`} autocomplete="off" autocapitalize="characters" spellcheck="false" />
+                  <select
+                    id="item-{i}-unit"
+                    bind:value={it.unitCode}
+                    aria-label={`Einheit, Position ${n}`}
+                    aria-invalid={unitErr ? "true" : undefined}
+                    aria-describedby={unitErr ? `item-${i}-unit-err` : undefined}
+                  >
+                    {#each unitOptions(it.unitCode) as u (u.value)}<option value={u.value}>{u.label}</option>{/each}
+                  </select>
+                  {#if unitErr}<span id="item-{i}-unit-err" class="field-err">{unitErr}</span>{/if}
                 </td>
-                <td class="c-price" data-label="Einzelpreis">
-                  <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} />
+                <td class="c-price" data-label="Einzelpreis *">
+                  <MoneyInput bind:cents={it.unitPriceCents} ariaLabel={`Einzelpreis, Position ${n}`} required showErrors={submitted} error={priceError(it)} />
                 </td>
                 {#if !isKlein}
-                  <td class="c-rate" data-label="USt-Satz">
+                  <td class="c-rate" data-label="USt-Satz *">
                     <QuantityInput bind:value={it.taxRatePercent} maxFractionDigits={2} unit="%" noun="Steuersatz" ariaLabel={`USt-Satz, Position ${n}`} required showErrors={submitted} />
                   </td>
                   <td data-label="USt-Art">
@@ -566,7 +645,7 @@
               <td class="c-actions"></td>
             </tr>
           {/if}
-          <tr class="grand">
+          <tr class="kb-sum">
             <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
             <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
             <td class="c-actions"></td>
@@ -581,25 +660,25 @@
       <legend>Was soll am Stichtag passieren?</legend>
       <label class="radio" class:sel={autoMode === "draft"}>
         <input type="radio" name="autoMode" value="draft" bind:group={autoMode} />
-        <span><strong>Nur Entwurf vorbereiten – ich gebe selbst frei.</strong>
+        <span><strong>Nur Entwurf – ich stelle selbst aus.</strong>
           Am Stichtag wird ein Rechnungs-<em>Entwurf</em> angelegt und gemeldet. Sicherste Variante.</span>
       </label>
       <label class="radio" class:sel={autoMode === "issue"}>
         <input type="radio" name="autoMode" value="issue" bind:group={autoMode} />
-        <span><strong>Automatisch erstellen – ich versende selbst.</strong>
-          Die Rechnung wird automatisch <em>festgeschrieben</em> (Nummer, PDF, E-Rechnung).</span>
+        <span><strong>Automatisch ausstellen – ich versende selbst.</strong>
+          Die Rechnung wird am Stichtag automatisch <em>ausgestellt</em> und festgeschrieben (Nummer, PDF, E-Rechnung).</span>
       </label>
       <label class="radio" class:sel={autoMode === "issue_send"}>
         <input type="radio" name="autoMode" value="issue_send" bind:group={autoMode} />
-        <span><strong>Automatisch erstellen und per E-Mail senden.</strong>
-          Versendet über dein Standard-Mail-Konto (Einstellungen → E-Mail). Schlägt der Versand fehl, bekommst du einen Hinweis und kannst manuell senden.</span>
+        <span><strong>Ausstellen + senden – automatisch per E-Mail an den Kunden.</strong>
+          Versendet über dein Standard-Postfach (Einstellungen → E-Mail-Versand). Schlägt der Versand fehl, bekommst du einen Hinweis und kannst manuell senden.</span>
       </label>
     </fieldset>
 
     <section class="card">
       <Toggle
         bind:checked={servicePeriodNote}
-        label={"Leistungszeitraum automatisch auf die Rechnung schreiben (z. B. „Leistungszeitraum: Mai 2026“)"}
+        label={"Leistungszeitraum automatisch auf die Rechnung schreiben (z.\u00a0B. „Leistungszeitraum: Mai 2026“)"}
       />
       <p class="hint">
         Belegdatum jeder erzeugten Rechnung ist der Erstellungstag (rechtlich vorgegeben);
@@ -608,7 +687,7 @@
       </p>
     </section>
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-    <div class="kb-form-end"><button type="submit" class="btn-primary" disabled={busy}>{busy ? "Speichere …" : editId ? "Speichern" : "Vorlage anlegen"}</button></div>
+    <div class="kb-form-end"><Button type="submit" ariaDisabled={busy}>{busy ? "Speichere …" : editId ? "Änderungen speichern" : "Abo-Vorlage anlegen"}</Button></div>
   </form>
 {/if}
 
@@ -619,7 +698,9 @@
   .field-err { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
   .field-hint { display: block; margin-top: 4px; font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
   .card-hdr { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
-  .span2 { grid-column: 1 / -1; }
+  .span2, .grid > :global(.span2) { grid-column: 1 / -1; }
+  .grid :global(.contact-select) { margin-bottom: 0; }
+  .grid :global(.contact-select > label) { color: var(--text-muted); }
   /* Labels der Bausteine (MoneyInput/QuantityInput) im Raster wie die übrigen. */
   .grid :global(.ri-field) { margin-bottom: 0; }
   .grid :global(.ri-field label) { color: var(--text-muted); margin-bottom: 4px; }
@@ -632,7 +713,7 @@
   label.radio input { width: auto; margin-top: 0.15rem; }
   label.radio.sel { border-color: var(--accent); background: var(--accent-soft); }
   .hint { font-size: var(--fs-sm); color: var(--status-info-fg); background: var(--status-info-bg); border: 1px solid var(--status-info-line); padding: 0.5rem 0.75rem; border-radius: var(--r-sm); margin-top: 0.75rem; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   input, select {
     padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
@@ -643,20 +724,18 @@
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
   .right { text-align: right; font-variant-numeric: tabular-nums; }
   td.c-qty { width: 7.5rem; }
-  td.c-unit { width: 5.5rem; }
-  td.c-unit input { width: 100%; }
+  /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
+  td.c-unit { width: 9rem; }
+  td.c-unit select { width: 100%; }
   td.c-price { width: 9.5rem; }
   td.c-rate { width: 7rem; }
-  tr.grand td { border-top: 2px solid var(--text); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): überschrieb
      padding/radius/font/color der globalen .btn-*-Klassen aus tokens.css
      und brach app-weite Button-Konsistenz. Die globalen Tokens greifen jetzt. */
   .muted { color: var(--text-muted); }
   input:disabled { background: var(--surface-sunken); color: var(--text-muted); }
-  .pkg-badge { display: inline-block; font-size: var(--fs-xs); font-weight: 600; color: var(--status-info-fg); background: var(--status-info-bg); border: 1px solid var(--status-info-line); border-radius: var(--r-pill); padding: 0.05rem 0.5rem; }
   .pkg-desc { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.2rem; white-space: pre-line; overflow-wrap: anywhere; }
   .pkg-title { font-weight: 600; margin-top: 0.25rem; overflow-wrap: anywhere; }
-  .pkg-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; justify-content: flex-end; }
   .pkg-row td { background: var(--surface-sunken); border-bottom: 0; }
   .pkg-detail td { background: var(--surface-sunken); padding-top: 0; }
   /* Plan W10 (Karten unter 820 px): die Summen-Beschriftung steht im

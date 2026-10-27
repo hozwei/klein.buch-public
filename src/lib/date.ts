@@ -33,6 +33,17 @@ export function yearBerlin(now: Date = new Date()): number {
   return Number(berlinParts(now).y);
 }
 
+/**
+ * Jahre für eine Jahres-Auswahl (Filter der Listen, U4/U1-062): die übergebenen
+ * Jahre plus das laufende Berliner Jahr, ohne Doppelte, neueste zuerst. Ungültige
+ * Werte (keine ganze Zahl ab 1) fallen weg.
+ */
+export function yearChoices(years: Iterable<number | null | undefined>, now: Date = new Date()): number[] {
+  const set = new Set<number>([yearBerlin(now)]);
+  for (const y of years) if (typeof y === "number" && Number.isInteger(y) && y > 0) set.add(y);
+  return [...set].sort((a, b) => b - a);
+}
+
 /** Jahr eines ISO-Datums (`YYYY-MM-DD`); bei ungültiger Eingabe das laufende Berliner Jahr. */
 export function yearOfIsoDate(iso: string, now: Date = new Date()): number {
   const m = ISO_DATE.exec(iso ?? "");

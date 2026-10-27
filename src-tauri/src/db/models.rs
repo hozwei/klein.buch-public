@@ -399,6 +399,11 @@ pub struct QuoteListItem {
     pub gross_amount_cents: i64,
     pub currency_code: String,
     pub status: String,
+    /// Festgeschrieben (ausgestellt) am; `None` = nie festgeschrieben. Ein
+    /// zurückgezogenes Angebot (`status = canceled`) ohne `locked_at` ist ein
+    /// verworfener Entwurf, mit `locked_at` ein zurückgezogenes Angebot
+    /// (Lauf 2026.11 U4, Warteliste 9).
+    pub locked_at: Option<String>,
 }
 
 // ---- Legal Documents (Block 8, Migration 0006) -----------------------------

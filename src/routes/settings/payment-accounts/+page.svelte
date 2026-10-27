@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import Toggle from "#lib/Toggle.svelte";
   import {
     paymentAccountsList,
@@ -12,8 +13,14 @@
   import Badge from "#lib/Badge.svelte";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
+  import ActionMenu from "#lib/ActionMenu.svelte";
+  import Table from "#lib/Table.svelte";
   import { iban as fmtIban } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
+
+  // U4 (V2-06/V2-10/V2-11/V2-12/V2-19): Titel wie im Einstellungs-Hub („Konten“), Liste im
+  // Table-Baustein, „Abbrechen“ vor der Hauptaktion, Knöpfe während einer Aktion
+  // `ariaDisabled` (Fokus bleibt), Deaktivieren ohne Rückfrage mit „Rückgängig“ im Toast.
 
   let accounts = $state<PaymentAccount[]>([]);
   let loading = $state(true);
@@ -73,7 +80,11 @@
   onMount(load);
 
   async function reload() {
-    accounts = await paymentAccountsList(showInactive);
+    try {
+      accounts = await paymentAccountsList(showInactive);
+    } catch (e) {
+      flash(`Konten neu laden fehlgeschlagen: ${String(e)}`, "error");
+    }
   }
 
   let labelError = $state("");
@@ -81,6 +92,7 @@
   let editLabelError = $state("");
 
   async function create() {
+    if (busy) return;
     labelError = "";
     if (!form.label.trim()) {
       labelError = "Bitte gib eine Bezeichnung ein, z. B. „Geschäftskonto“.";
@@ -107,7 +119,7 @@
       flash("Konto angelegt.");
       await reload();
     } catch (e) {
-      flash("Anlegen fehlgeschlagen: " + String(e), "error");
+      flash("Konto anlegen fehlgeschlagen: " + String(e), "error");
     } finally {
       busy = false;
     }
@@ -128,7 +140,7 @@
   }
 
   async function saveEdit() {
-    if (!editId) return;
+    if (!editId || busy) return;
     editLabelError = "";
     if (!editForm.label.trim()) {
       editLabelError = "Bitte gib eine Bezeichnung ein.";
@@ -147,30 +159,38 @@
       flash("Konto gespeichert.");
       await reload();
     } catch (e) {
-      flash("Speichern fehlgeschlagen: " + String(e), "error");
+      flash("Konto speichern fehlgeschlagen: " + String(e), "error");
     } finally {
       busy = false;
     }
   }
 
-  async function toggleActive(a: PaymentAccount) {
+  /** Aktivieren/Deaktivieren ist umkehrbar: keine Rückfrage, „Rückgängig“ im Toast (design.md §5). */
+  async function setActive(a: PaymentAccount, active: boolean, undo = false) {
+    if (busy) return;
     busy = true;
     try {
-      await paymentAccountsSetActive(a.id, a.active !== 1);
-      flash(a.active === 1 ? "Konto deaktiviert." : "Konto aktiviert.");
+      await paymentAccountsSetActive(a.id, active);
+      if (undo) {
+        flash(active ? `Konto „${a.label}“ wieder aktiv.` : `Konto „${a.label}“ wieder deaktiviert.`);
+      } else {
+        flash(active ? `Konto „${a.label}“ aktiviert.` : `Konto „${a.label}“ deaktiviert.`, "ok", {
+          action: { label: "Rückgängig", run: () => void setActive(a, !active, true) },
+        });
+      }
       await reload();
     } catch (e) {
-      flash("Fehlgeschlagen: " + String(e), "error");
+      flash(`Konto ${active ? "aktivieren" : "deaktivieren"} fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       busy = false;
     }
   }
 </script>
 
-<PageBar back="/settings" backLabel="Einstellungen" title="Konten (Bank & Bargeld)" />
+<PageBar back="/settings" backLabel="Einstellungen" title="Konten" />
 <p class="lead">
   Deine Konten für Zahlungen — Bankkonto, Bargeld, PayPal und so weiter. Du wählst
-  sie bei Kosten und Privat-Buchungen aus. Konten werden nicht gelöscht, sondern
+  sie bei Kosten und Privatbewegungen aus. Konten werden nicht gelöscht, sondern
   deaktiviert. Genau ein Konto ist der <strong>Standard</strong>. Konten mit
   <strong>„Auf Beleg anzeigen“</strong> erscheinen auf Angeboten und Rechnungen
   (mehrere möglich) — Bankkonten zusätzlich als Überweisungsweg in der XRechnung.
@@ -237,24 +257,27 @@
     <Toggle bind:checked={form.isDefault} label="Als Standard-Konto" />
     <Toggle bind:checked={form.showOnInvoice} label="Auf Beleg anzeigen" />
     <div class="submit">
-      <Button type="submit" disabled={busy}>{busy ? "Lege an …" : "Anlegen"}</Button>
+      <Button type="submit" ariaDisabled={busy}>{busy ? "Legt an …" : "Konto anlegen"}</Button>
     </div>
   </form>
 
 </section>
 
 <label class="chk show-inactive">
-  <input type="checkbox" bind:checked={showInactive} onchange={reload} /> Inaktive anzeigen
+  <input type="checkbox" bind:checked={showInactive} onchange={reload} /> Inaktive Konten anzeigen
 </label>
 
 {#if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <LoadingState />
 {:else if error}
-  <Banner>{error}</Banner>
+  <Banner title="Die Konten konnten nicht geladen werden.">{error}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
 {:else if accounts.length === 0}
   <p class="muted">Noch keine Konten. Lege oben unter „Neues Konto“ dein erstes an.</p>
 {:else}
-  <table class="cards kb-card-grid">
+  <!-- U4 (V2-10, design.md §4.5): Liste im Table-Baustein (weiße Karte), nicht frei auf dem Hintergrund. -->
+  <Table cards cardGrid>
     <caption class="kb-visually-hidden">Deine Konten</caption>
     <thead>
       <tr><th>Bezeichnung</th><th class="kb-col-opt2">Typ</th><th>IBAN / BIC</th><th class="kb-col-opt1">Details</th><th>Auf Beleg</th><th>Standard</th><th>Status</th><th><span class="kb-visually-hidden">Aktionen</span></th></tr>
@@ -330,9 +353,9 @@
                   </label>
                 </div>
                 <p class="muted edit-status">Status: {a.active === 1 ? "aktiv" : "inaktiv"}</p>
-                <div class="row-actions edit-actions">
-                  <Button onclick={saveEdit} disabled={busy} ariaLabel="Speichern, Konto {a.label}">Speichern</Button>
+                <div class="kb-actions kb-start edit-actions">
                   <Button variant="secondary" onclick={() => (editId = null)} ariaLabel="Abbrechen, Konto {a.label}">Abbrechen</Button>
+                  <Button onclick={saveEdit} ariaDisabled={busy} ariaLabel="Änderungen speichern, Konto {a.label}">Änderungen speichern</Button>
                 </div>
               </div>
             </td>
@@ -348,22 +371,25 @@
               {:else}—{/if}
             </td>
             <td class="muted kb-col-opt1" data-label="Details">{a.details ?? "—"}</td>
-            <td data-label="Auf Beleg">{#if a.showOnInvoice === 1}<Badge tone="success">ja</Badge>{:else}nein{/if}</td>
-            <td data-label="Standard">{#if a.isDefault === 1}<Badge tone="primary">Standard</Badge>{:else}—{/if}</td>
-            <td data-label="Status">{#if a.active === 1}<Badge tone="success">aktiv</Badge>{:else}<Badge>inaktiv</Badge>{/if}</td>
+            <td data-label="Auf Beleg">{a.showOnInvoice === 1 ? "ja" : "nein"}</td>
+            <td data-label="Standard">{#if a.isDefault === 1}<Badge kind="tag">Standard</Badge>{:else}—{/if}</td>
+            <td data-label="Status">{#if a.active === 1}<Badge tone="success">Aktiv</Badge>{:else}<Badge>Inaktiv</Badge>{/if}</td>
             <td>
-              <div class="row-actions">
-                <Button variant="secondary" onclick={() => startEdit(a)} disabled={busy} ariaLabel="Bearbeiten, Konto {a.label}">Bearbeiten</Button>
-                <Button variant="secondary" onclick={() => toggleActive(a)} disabled={busy} ariaLabel="{a.active === 1 ? 'Deaktivieren' : 'Aktivieren'}, Konto {a.label}">
-                  {a.active === 1 ? "Deaktivieren" : "Aktivieren"}
-                </Button>
+              <!-- U4 (U3-036, design.md §4.5): eine sichtbare Aktion + Menü „Mehr“. -->
+              <div class="kb-actions">
+                <Button variant="secondary" onclick={() => startEdit(a)} ariaDisabled={busy} ariaLabel="Bearbeiten, Konto {a.label}">Bearbeiten</Button>
+                <ActionMenu
+                  variant="ghost"
+                  ariaLabel={`Mehr zu Konto ${a.label}`}
+                  items={[{ label: a.active === 1 ? "Deaktivieren" : "Aktivieren", onSelect: () => setActive(a, a.active !== 1), disabled: busy }]}
+                />
               </div>
             </td>
           </tr>
         {/if}
       {/each}
     </tbody>
-  </table>
+  </Table>
 {/if}
 
 <style>
@@ -380,7 +406,6 @@
   .hint { font-weight: 400; color: var(--text-muted); font-size: var(--fs-xs); }
   .err { font-weight: 600; color: var(--status-danger-fg); font-size: var(--fs-sm); display: block; }
   input:not([type="checkbox"]), select { padding: 0.4rem 0.5rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); font: inherit; font-weight: 400; min-height: var(--target); background: var(--surface-card); }
-  table { width: 100%; border-collapse: collapse; background: var(--surface-card); }
   th, td { text-align: left; font-size: var(--fs-sm); }
   tr.inactive td { color: var(--text-muted); }
   .edit-row input:not([type="checkbox"]), .edit-row select { width: 100%; }
@@ -389,11 +414,10 @@
   .edit-checks { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; align-self: end; }
   .edit-checks .cell-chk { justify-content: flex-start; }
   .edit-status { margin: 0; align-self: end; min-height: var(--target); display: flex; align-items: center; }
-  .edit-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .edit-actions { grid-column: 1 / -1; }
   .cell-chk { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; min-width: var(--target); min-height: var(--target); }
   .mono { font-family: var(--font-mono); white-space: nowrap; }
   .bic-show { display: block; font-size: var(--fs-xs); }
-  .row-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
   .muted { color: var(--text-muted); }
   @media (max-width: 900px) {
     .grid { grid-template-columns: 1fr 1fr; }

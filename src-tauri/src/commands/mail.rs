@@ -832,7 +832,7 @@ pub async fn render_quote_mail(
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {quote_id}")))?;
     let seller = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let ctx = templates::build_quote_context(&quote, &seller, kleinunternehmer::hinweis_text());
     let source = templates::load_quote_template(&paths.inputs_dir);
     templates::render_quote_mail(&source, &ctx)
@@ -980,8 +980,8 @@ impl SendReceipt {
 
 /// Warnung an den Aufrufer bei unvollständigem Versandprotokoll.
 pub(crate) const LOG_FAILED_WARNING: &str =
-    "Die E-Mail wurde versendet, der Eintrag im Versandprotokoll fehlt aber (Hinweis in der \
-     Inbox; der Versand steht im Audit-Log).";
+    "Die E-Mail wurde versendet, der Eintrag im E-Mail-Protokoll fehlt aber (siehe Hinweise; \
+     der Versand steht im Audit-Protokoll).";
 
 /// Versendet eine fertig zusammengebaute Mail per SMTP (Passwort aus `secrets`).
 /// Liefert die Provider-Antwort zurück. Microsoft Graph gibt es im Server nicht
@@ -1112,14 +1112,13 @@ async fn report_log_failure(pool: &SqlitePool, entry: &email_log::EmailLogEntry,
         "konnte nicht versendet werden"
     };
     let body = format!(
-        "{what} {outcome}, der Eintrag im Versandprotokoll fehlt aber ({err}). Den Versuch \
-         belegt das Audit-Log (mail.log_failed). Bitte die Ursache prüfen (z. B. freier \
-         Speicherplatz)."
+        "{what} {outcome}, der Eintrag im E-Mail-Protokoll fehlt aber ({err}). Den Versuch \
+         belegt das Audit-Protokoll. Prüfe die Ursache (z. B. freien Speicherplatz)."
     );
     if let Err(e) = crate::notify::store::create(
         pool,
         crate::notify::store::NewNotification {
-            title: "Versandprotokoll unvollständig",
+            title: "E-Mail-Protokoll unvollständig",
             body: &body,
             severity: "warning",
             related_entity_type: Some(entry.related_kind.as_str()),
@@ -1130,7 +1129,7 @@ async fn report_log_failure(pool: &SqlitePool, entry: &email_log::EmailLogEntry,
     )
     .await
     {
-        tracing::error!(error = %e, "Hinweis „Versandprotokoll unvollständig“ fehlgeschlagen");
+        tracing::error!(error = %e, "Hinweis „E-Mail-Protokoll unvollständig“ fehlgeschlagen");
     }
 }
 
@@ -1255,7 +1254,7 @@ async fn render_invoice_mail_from(
 ) -> Result<RenderedMail> {
     let seller = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let mut ctx =
         templates::build_invoice_context(invoice, &seller, kleinunternehmer::hinweis_text());
     let source = match invoice.is_storno_for.as_deref() {

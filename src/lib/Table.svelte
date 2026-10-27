@@ -8,6 +8,11 @@
   //   jede <td> ein `data-label` (Aufgabe der Seite).
   // - `cardGrid` (U2): Listen mit Detailseite stellen die Karten auf dem Tablet hoch
   //   (601–820 px) zweispaltig (tokens.css `.kb-card-grid`).
+  // U4 (design.md §4.5, U3-030): Listen stehen immer in diesem Baustein (weiße
+  // Karte mit Lineatur), nie frei auf dem Seitenhintergrund und nicht zusätzlich in
+  // einer Card. Belegnummern in Zellen über DocNo, Beträge mit `.kb-num`.
+  // U4 (V2-02/V4-07): `busy` setzt `aria-busy` am Bereich, solange er nachlädt
+  // (z. B. neuer Filter); die Statusmeldung steht daneben (LoadingState).
   import type { Snippet } from "svelte";
 
   let {
@@ -15,12 +20,15 @@
     captionVisible = false,
     cards = false,
     cardGrid = false,
+    busy = false,
     children,
   }: {
     caption?: string;
     captionVisible?: boolean;
     cards?: boolean;
     cardGrid?: boolean;
+    /** Lädt gerade nach (aria-busy am Bereich). */
+    busy?: boolean;
     children?: Snippet;
   } = $props();
 </script>
@@ -34,6 +42,7 @@
   role={caption ? "region" : undefined}
   aria-label={caption}
   tabindex={caption ? 0 : undefined}
+  aria-busy={busy || undefined}
 >
   <table class="kb-table" class:cards class:kb-card-grid={cards && cardGrid}>
     {#if caption}
@@ -47,9 +56,9 @@
   .table-wrap {
     position: relative;
     background: var(--surface-card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    box-shadow: var(--sh-sm);
+    border: var(--rule);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
     overflow-x: auto;
     max-width: 100%;
   }

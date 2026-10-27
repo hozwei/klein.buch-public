@@ -50,7 +50,7 @@ pub enum Error {
     /// Die Änderung verlangt eine frische Bestätigung mit Passphrase und
     /// zweitem Faktor (bedingte Re-Auth im Kern, W14-038; HTTP 403
     /// `reauth_required`).
-    #[error("Bitte zur Bestätigung erneut anmelden (Passphrase und TOTP).")]
+    #[error("Diese Aktion ist geschützt: Bestätige sie mit Daten-Passwort und App-Code.")]
     ReauthRequired,
 
     /// Argumente eines Commands passen nicht zum Args-Struct (HTTP 400).

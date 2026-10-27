@@ -187,12 +187,9 @@ pub async fn create_draft_core(
     let buyer_row = contacts::get(pool, &args.contact_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Empfänger nicht gefunden: {}", args.contact_id)))?;
-    let seller_row = seller_profile::get(pool).await?.ok_or_else(|| {
-        Error::Domain(
-            "Stammdaten (seller_profile) noch nicht gepflegt — bitte unter Einstellungen anlegen."
-                .into(),
-        )
-    })?;
+    let seller_row = seller_profile::get(pool)
+        .await?
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
 
     let seller_view = make_seller_view(&seller_row);
     let buyer_view = QuoteBuyerView {
@@ -218,7 +215,7 @@ pub async fn create_draft_core(
             .collect();
         if !blockers.is_empty() {
             return Err(Error::Domain(format!(
-                "Draft kann nicht angelegt werden: {}",
+                "Der Entwurf kann nicht gespeichert werden: {}",
                 blockers
                     .iter()
                     .map(quote::message)
@@ -305,7 +302,7 @@ pub async fn quotes_validate_draft(
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen — kann nicht validieren".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .as_ref()
@@ -372,7 +369,7 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
     crate::backup::after_restore::ensure_no_conflict(pool, "quote", &id).await?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .clone()
@@ -385,13 +382,8 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
 
     quote::validate_quote(&input, &seller_view, &buyer_view, today_berlin()).map_err(|errs| {
         Error::Domain(format!(
-            "Validation failed ({} Fehler): {}",
-            errs.len(),
-            errs.iter()
-                .take(5)
-                .map(quote::message)
-                .collect::<Vec<_>>()
-                .join("; ")
+            "Das Angebot kann nicht fertiggestellt werden: {}",
+            crate::commands::invoices::issue_reasons(&errs, quote::message)
         ))
     })?;
 
@@ -824,7 +816,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
 
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .clone()

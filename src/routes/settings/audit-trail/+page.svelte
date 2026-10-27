@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import {
     auditTrailList,
     archiveIntegrityRun,
@@ -9,6 +10,7 @@
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import { dateTime } from "#lib/format.ts";
   import { AUDIT_ACTION_LABELS_ADDITIONAL } from "#lib/labels.ts";
 
@@ -18,46 +20,52 @@
   let error = $state<string | null>(null);
   let scanning = $state(false);
 
+  async function fetchAll() {
+    const [e, h] = await Promise.all([
+      auditTrailList(300),
+      archiveIntegrityHistory(20),
+    ]);
+    entries = e;
+    history = h;
+  }
+
   async function load() {
     loading = true;
     error = null;
     try {
-      const [e, h] = await Promise.all([
-        auditTrailList(300),
-        archiveIntegrityHistory(20),
-      ]);
-      entries = e;
-      history = h;
+      await fetchAll();
     } catch (err) {
       error = String(err);
     } finally {
       loading = false;
     }
   }
-  $effect(() => {
-    load();
-  });
+  // U4 (V2-07/V2-02/V2-06): Fehler mit „Erneut laden“, Ladezustand als Statusmeldung,
+  // „Jetzt prüfen“ während der Prüfung fokussierbar (ariaDisabled).
+  onMount(load);
 
   async function runScan() {
+    if (scanning) return;
     scanning = true;
     try {
       const s = await archiveIntegrityRun();
       if (s.filesFailed > 0) {
         flash(
-          `${s.filesFailed} von ${s.filesChecked} Archiv-Datei(en) beschädigt oder fehlend. Details unter „Archiv-Integrität“.`,
+          `${s.filesFailed} von ${s.filesChecked} Archiv-Dateien beschädigt oder fehlend. Einzelheiten unter „Archiv-Integrität“.`,
           "error",
         );
       } else if (s.filesUnreadable > 0) {
         flash(
-          `${s.filesUnreadable} von ${s.filesChecked} Archiv-Datei(en) nicht lesbar (z. B. Dateirechte) — kein Manipulationsbefund, Prüfung aber unvollständig.`,
+          `${s.filesUnreadable} von ${s.filesChecked} Archiv-Dateien nicht lesbar (z. B. Dateirechte) — kein Manipulationsbefund, Prüfung aber unvollständig.`,
           "error",
         );
       } else {
-        flash(`${s.filesChecked} Datei(en) geprüft — alle unverändert.`);
+        flash(s.filesChecked === 1 ? "1 Datei geprüft — unverändert." : `${s.filesChecked} Dateien geprüft — alle unverändert.`);
       }
-      await load();
+      // Ohne Ladezustand nachladen: „Jetzt prüfen“ bleibt stehen und behält den Fokus.
+      await fetchAll();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Archiv prüfen fehlgeschlagen: ${String(e)}`, "error");
     } finally {
       scanning = false;
     }
@@ -200,14 +208,16 @@
 </p>
 
 {#if error}
-  <Banner>{error}</Banner>
+  <Banner title="Protokoll und Prüfungen konnten nicht geladen werden.">{error}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
 {:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <LoadingState />
 {:else}
   <section class="card">
     <div class="card-hdr">
       <h2>Archiv-Integrität</h2>
-      <Button variant="secondary" onclick={runScan} disabled={scanning}>
+      <Button variant="secondary" onclick={runScan} busy={scanning}>
         {scanning ? "Prüfe …" : "Jetzt prüfen"}
       </Button>
     </div>

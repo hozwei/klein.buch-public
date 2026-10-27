@@ -150,6 +150,11 @@ export interface PdfTemplateMeta {
   path: string;
   klauselStatus: PdfTemplateKlauselStatus;
   builtin: boolean;
+  /** Stellt die Vorlage Stornos dar (nutzt `storno_of`; Lauf 2026.11 U4). */
+  supportsStorno: boolean;
+  /** Ohne Storno-Darstellung: eingebaute Vorlage, mit der Stornos entstehen
+   *  (z. B. "klassisch"); sonst null. */
+  stornoFallback: string | null;
 }
 
 export interface Paragraph19Info {
@@ -546,6 +551,10 @@ export interface QuoteListItem {
   grossAmountCents: Cents;
   currencyCode: string;
   status: QuoteStatus;
+  /** Festgeschrieben am (DB-Zeitstempel UTC); null = nie festgeschrieben.
+   *  `status === "canceled"` ohne `lockedAt` = verworfener Entwurf, mit
+   *  `lockedAt` = zurückgezogenes Angebot (Lauf 2026.11 U4). */
+  lockedAt: Iso8601 | null;
 }
 
 export interface QuoteListFilter {
@@ -950,6 +959,14 @@ export interface ParsedEInvoice {
   grossAmountCents: Cents | null;
   lineDescriptions: string[];
   reverseCharge: boolean;
+  /** Steuerkategorien laut Rechnung (UNTDID 5305, z. B. "S", "E", "AE", "K"),
+   *  je einmal in der Reihenfolge des Auftretens (Lauf 2026.11 U4). */
+  taxCategories: string[];
+  /** Mindestens eine Kategorie K (innergemeinschaftlich, §1a UStG) — nur ein
+   *  Kennzeichen für den Hinweis, Beträge bleiben unberührt (U4). */
+  intraCommunity: boolean;
+  /** CII-Profil-URN (BT-24); null bei UBL. */
+  guidelineId: string | null;
 }
 
 /** Ergebnis von expenses_parse_einvoice (Schritt 1, nichts persistiert). */
@@ -1271,6 +1288,33 @@ export interface AssetDisposeArgs {
   proceedsCents: Cents;
 }
 
+/** Vorschau eines Abgangs (`commands::assets::AssetDisposalPreview`, Lauf 2026.11 U4):
+ *  was `assets_dispose` zum Datum buchen würde. Gewinn bzw. Verlust =
+ *  Erlös − `residualBookValueCents`. */
+export interface AssetDisposalPreview {
+  assetId: Uuid;
+  disposalDate: string; // YYYY-MM-DD
+  /** Aktueller Restbuchwert (Stand vor dem Abgang). */
+  currentBookValueCents: Cents;
+  /** Offene AfA ab dem Abgangsjahr, die der Abgang ersetzt. */
+  replacedDepreciationCents: Cents;
+  replacedYears: number[];
+  /** AfA der Vorjahre ohne Buchung, die der Abgang nachholt. */
+  catchUpDepreciationCents: Cents;
+  catchUpYears: number[];
+  /** Restbuchwert zu Beginn des Abgangsjahres. */
+  bookValueBeforeCents: Cents;
+  /** Anteilige AfA im Abgangsjahr bis einschließlich Abgangsmonat. */
+  disposalYearDepreciationCents: Cents;
+  disposalYearMonths: number;
+  /** Restbuchwert zum Abgang (Ausgabe in der EÜR). */
+  residualBookValueCents: Cents;
+  /** AfA insgesamt von der Anschaffung bis zum Abgang. */
+  depreciationToDateCents: Cents;
+  /** Grund, aus dem der Abgang zu diesem Datum abgelehnt würde; null = möglich. */
+  blockedReason: string | null;
+}
+
 /** Korrespondiert zu `afa_tabellen::AfaCategory` in Rust. */
 export interface AfaCategory {
   code: string;
@@ -1349,6 +1393,11 @@ export interface EuerReport {
   disposalGainLossCents: Cents;
   // Ergebnis
   surplusCents: Cents;
+  /** §19 im Jahr aktiv (period-aware wie die Exporte); false = Regelbesteuerung
+   *  (Verzicht ab diesem Jahr). Lauf 2026.11 U4. */
+  isKleinunternehmer: boolean;
+  /** Abgleich mit dem Festschreibungs-Snapshot; null = Jahr offen (U4). */
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- ELSTER-Ausfüllhilfe / Anlage EÜR (Block 14a) --------------------------
@@ -1510,6 +1559,13 @@ export interface EuerPdfExport {
   download: DownloadTicket;
   sizeBytes: number;
   snapshotCheck: SnapshotCheck | null;
+}
+
+/** Optionale Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer
+ *  1001–9999999, Mandantennummer 1–99999 (Lauf F5, Durchreichen U4). */
+export interface DatevHeaderNumbers {
+  consultantNumber?: number | null;
+  clientNumber?: number | null;
 }
 
 /** Ergebnis des DATEV-Buchungsstapel-Exports (`commands::euer::DatevExport`). */

@@ -37,7 +37,7 @@ describe("date/dateTime in Europe/Berlin (Lauf F, D-25)", () => {
   it("euro: DIN 5008 mit geschütztem Leerzeichen (U+00A0) vor €", () => {
     expect(euro(123456)).toBe("1.234,56 €");
     expect(euro(0)).toBe("0,00 €");
-    expect(euro(-5)).toBe("-0,05 €");
+    expect(euro(-5)).toBe("\u22120,05 €");
     expect(euro(100_000_000_000)).toBe("1.000.000.000,00 €");
   });
 });

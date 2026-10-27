@@ -5,21 +5,32 @@
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Table from "#lib/Table.svelte";
   import type { Contact } from "#lib/types.ts";
+
+  // U4 (V4-06/V2-02): eine dauerhafte Statuszeile (`role="status"`) für Laden und
+  // Trefferzahl, damit Suchergebnisse angesagt werden (4.1.3); sie steht immer im DOM.
+  // U4 (V2-07/V2-09/V2-10): Ladefehler als Banner mit „Erneut laden“; leerer Erststart mit
+  // derselben Beschriftung wie die PageBar (secondary), leere Suche mit „Suche zurücksetzen“;
+  // Checkbox „Archivierte anzeigen“ wie in den anderen Listen.
 
   let contacts: Contact[] = $state([]);
   let query: string = $state("");
+  /** Suchbegriff des zuletzt geladenen Ergebnisses (Text der Statuszeile). */
+  let shownQuery: string = $state("");
   let includeArchived: boolean = $state(false);
-  let loading: boolean = $state(false);
+  let loading: boolean = $state(true);
   let error: string | null = $state(null);
 
   async function load() {
     loading = true;
     error = null;
+    const q = query.trim();
     try {
-      contacts = query.trim()
-        ? await contactsSearch(query, includeArchived)
+      contacts = q
+        ? await contactsSearch(q, includeArchived)
         : sortByName(await contactsList(includeArchived));
+      shownQuery = q;
     } catch (e) {
       error = String(e);
     } finally {
@@ -40,6 +51,25 @@
     e.preventDefault();
     load();
   }
+
+  /** Leere Suche zurücksetzen; der Knopf verschwindet danach, darum Fokus ins Suchfeld. */
+  function resetSearch() {
+    query = "";
+    document.getElementById("contacts-search")?.focus();
+    load();
+  }
+
+  const statusText = $derived.by(() => {
+    if (loading) return "Wird geladen …";
+    if (error) return "";
+    const n = contacts.length;
+    if (shownQuery) {
+      return n === 0
+        ? `Keine Treffer für „${shownQuery}“.`
+        : `${n === 1 ? "1 Kontakt" : `${n} Kontakte`} zu „${shownQuery}“.`;
+    }
+    return n === 1 ? "1 Kontakt." : `${n} Kontakte.`;
+  });
 
   function typeLabel(t: string): string {
     switch (t) {
@@ -71,26 +101,30 @@
   />
   <label class="chk">
     <input type="checkbox" bind:checked={includeArchived} onchange={load} />
-    Archivierte einschließen
+    Archivierte anzeigen
   </label>
-  <Button type="submit" variant="secondary">Suchen</Button>
+  <Button type="submit" variant="secondary" busy={loading}>Suchen</Button>
 </form>
 
-{#if loading}
-  <p class="muted" role="status" aria-busy="true">Lädt …</p>
-{:else if error}
-  <Banner>Fehler: {error}</Banner>
-{:else if contacts.length === 0}
+<p class="result-info" role="status">{statusText}</p>
+
+{#if error}
+  <Banner title="Die Kontakte konnten nicht geladen werden.">{error}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
+{:else if !loading && contacts.length === 0}
   <div class="empty">
-    {#if query.trim()}
-      <p class="muted">Keine Kontakte zu „{query.trim()}“ gefunden.</p>
+    {#if shownQuery}
+      <p class="muted">Keine Treffer für diese Suche.</p>
+      <Button variant="secondary" onclick={resetSearch}>Suche zurücksetzen</Button>
     {:else}
       <p class="muted">Noch keine Kontakte. Leg Kunden und Lieferanten hier an.</p>
-      <Button variant="primary" href="/contacts/new">Kontakt anlegen</Button>
+      <Button variant="secondary" href="/contacts/new">+ Neuer Kontakt</Button>
     {/if}
   </div>
-{:else}
-  <table class="kb-table cards kb-card-grid">
+{:else if !loading}
+  <!-- U4 (U3-030, design.md §4.5): Liste im Table-Baustein (weiße Karte, Lineatur). -->
+  <Table cards cardGrid>
     <caption class="kb-visually-hidden">Kontakte</caption>
     <thead>
       <tr>
@@ -107,7 +141,7 @@
         <tr class:archived={c.archived === 1}>
           <td data-label="Name">
             <a class="name" href={`/contacts/${c.id}`}>{c.name}</a>
-            {#if c.archived === 1}<Badge tone="warning">archiviert</Badge>{/if}
+            {#if c.archived === 1}<Badge tone="neutral">Archiviert</Badge>{/if}
           </td>
           <td data-label="Typ">{typeLabel(c.contactType)}</td>
           <td data-label="Ort">{[c.postalCode, c.city].filter(Boolean).join(" ") || "—"}</td>
@@ -117,7 +151,7 @@
         </tr>
       {/each}
     </tbody>
-  </table>
+  </Table>
 {/if}
 
 <style>
@@ -125,12 +159,13 @@
     display: flex;
     gap: 0.75rem;
     align-items: center;
-    margin-bottom: 1rem;
+    margin-bottom: 0.5rem;
     flex-wrap: wrap;
   }
   .search { flex: 1; min-width: 14rem; max-width: 100%; }
   /* Ganze Beschriftung ist Trefferfläche (U1). */
   .chk { display: flex; align-items: center; gap: 0.5rem; min-height: var(--target); color: var(--c-text-muted); cursor: pointer; }
+  .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); min-height: 1.4em; }
   /* Name als Kartentitel: Trefferfläche ≥ --target (U1, 2.5.8). */
   a.name { display: inline-flex; align-items: center; min-height: var(--target); overflow-wrap: anywhere; }
   .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; }

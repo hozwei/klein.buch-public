@@ -74,16 +74,44 @@ pub struct EuerComputeReportArgs {
     pub fiscal_year: i64,
 }
 
-/// Berechnet den EÜR-Report für ein Geschäftsjahr (Cash-Basis).
+/// Antwort von [`euer_compute_report`]: der Report (Felder flach wie bisher)
+/// plus zwei Lesefelder für die Anzeige (Lauf 2026.11 U4, Warteliste 3).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EuerReportView {
+    #[serde(flatten)]
+    pub report: EuerReport,
+    /// §19 im Jahr aktiv (period-aware wie Exporte und ELSTER-Ausfüllhilfe,
+    /// R2-002); `false` = Regelbesteuerung (Verzicht ab diesem Jahr).
+    pub is_kleinunternehmer: bool,
+    /// Abgleich mit dem Festschreibungs-Snapshot (nur abgeschlossene Jahre,
+    /// KB-0031); `None` = Jahr offen. Nur Anzeige — anders als die Exporte
+    /// schreibt die Auswertung weder Audit noch Hinweis.
+    pub snapshot_check: Option<SnapshotCheck>,
+}
+
+/// Berechnet den EÜR-Report für ein Geschäftsjahr (Cash-Basis) samt §19-Status
+/// des Jahres und Snapshot-Abgleich. Liest nur.
 pub async fn euer_compute_report(
     ctx: &Arc<AppCtx>,
     args: EuerComputeReportArgs,
-) -> Result<EuerReport> {
+) -> Result<EuerReportView> {
     let EuerComputeReportArgs { fiscal_year } = args;
     let pool = ctx.pool()?;
 
     let inputs = euer_repo::load_inputs(&pool).await?;
-    Ok(aggregate::aggregate(fiscal_year as i32, &inputs))
+    let report = aggregate::aggregate(fiscal_year as i32, &inputs);
+    let seller = seller_profile::get(&pool).await?;
+    // Gleiche Rechnung wie `snapshot::check`, ohne die Eingaben ein zweites Mal
+    // zu laden.
+    let snapshot_check = crate::fiscal_year::lock::get(&pool, fiscal_year)
+        .await?
+        .map(|lock| snapshot::compare(&lock, &report));
+    Ok(EuerReportView {
+        is_kleinunternehmer: is_klein_for_year(seller.as_ref(), fiscal_year as i32),
+        snapshot_check,
+        report,
+    })
 }
 
 /// Argumente von [`euer_available_years`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

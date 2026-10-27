@@ -201,6 +201,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         "app_info"
         | "archive_integrity_history"
         | "assets_afa_table"
+        | "assets_disposal_preview"
         | "assets_get"
         | "assets_list"
         | "assets_suggest_method"
@@ -434,6 +435,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("assets_create", h::assets_create),
     ("assets_update", h::assets_update),
     ("assets_dispose", h::assets_dispose),
+    ("assets_disposal_preview", h::assets_disposal_preview),
     ("attachments_list", h::attachments_list),
     ("attachments_add", h::attachments_add),
     ("backup_get_settings", h::backup_get_settings),
@@ -707,6 +709,15 @@ mod h {
             let args: crate::commands::assets::AssetsDisposeArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::assets::assets_dispose(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn assets_disposal_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::assets::AssetsDisposalPreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::assets::assets_disposal_preview(&ctx, args).await?,
             )?)
         })
     }

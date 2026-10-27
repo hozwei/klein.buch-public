@@ -6,12 +6,20 @@
   // (nicht während der Prüfung), Rücksprung zum Auslöser; Anzeigen/Verbergen
   // des Passworts (ASVS V2.1.12); Einfügen und Passwortmanager bleiben
   // erlaubt (3.3.8). ≤ 600 px Vollbild-Blatt.
-  import { onMount } from "svelte";
+  //
+  // U4 (V1-09, V4-03; ADR 0041 Nr. 163, Nr. 33): Titel nennt die Aktion
+  // („Aktion bestätigen: Backup wiederherstellen“). Während der Prüfung bleiben Felder und
+  // Knöpfe fokussierbar (`readonly`/`aria-disabled` statt `disabled`); nach einer
+  // Ablehnung steht der Fokus wieder im Passwortfeld, die Meldung ist verknüpft.
+  // Abbrechen löst keinen Fehler aus (Transport wirft `REAUTH_CANCELED`, `flash`
+  // zeigt „Abgebrochen – nichts geändert.“ als neutralen Hinweis).
+  import { onMount, tick } from "svelte";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
   import { focusTrap } from "#lib/focusTrap.ts";
   import { setReauthHandler } from "#lib/transport.ts";
   import { authReauth } from "#lib/api.ts";
   import { reauthStore, requestReauth, resolveReauth } from "#lib/reauth.svelte.ts";
+  import { reauthActionLabel } from "#lib/labels.ts";
 
   let pass = $state("");
   let code = $state("");
@@ -19,9 +27,10 @@
   let showPass = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
+  let passEl = $state<HTMLInputElement | null>(null);
 
   onMount(() => {
-    setReauthHandler(requestReauth);
+    setReauthHandler((url) => requestReauth(reauthActionLabel(url)));
     return () => setReauthHandler(null);
   });
 
@@ -41,21 +50,32 @@
   }
 
   async function confirm() {
+    if (busy) return;
     error = null;
     busy = true;
+    let failed = false;
     try {
       const factor = useRecovery ? { recoveryCode: code.trim() } : { totpCode: code.trim() };
       if (await authReauth(pass, factor)) {
         close(true);
       } else {
-        error = "Bestätigung fehlgeschlagen. Prüfe Passwort und Code und versuche es erneut.";
+        failed = true;
+        error = useRecovery
+          ? "Bestätigung fehlgeschlagen. Gib dein Daten-Passwort und einen noch unbenutzten Einmal-Code neu ein."
+          : "Bestätigung fehlgeschlagen. Gib dein Daten-Passwort und den aktuellen Code der Authenticator-App neu ein (er wechselt alle 30 Sekunden).";
       }
     } catch (e) {
+      failed = true;
       error = String(e);
     } finally {
       pass = "";
       code = "";
       busy = false;
+    }
+    // Fokus nicht auf <body> verlieren (2.4.3): zurück ins erste Feld.
+    if (failed && reauthStore.visible) {
+      await tick();
+      passEl?.focus();
     }
   }
 </script>
@@ -84,15 +104,19 @@
         }}
       >
         <div class="kb-dialog-body">
-          <h2 id="reauth-title">Aktion bestätigen</h2>
+          <h2 id="reauth-title">
+            {reauthStore.action ? `Aktion bestätigen: ${reauthStore.action}` : "Aktion bestätigen"}
+          </h2>
           <p id="reauth-desc">
-            Für diese Aktion bitte erneut mit <strong>Daten-Passwort</strong> und
-            <strong>App-Code</strong> bestätigen. Die Bestätigung gilt 5 Minuten.
+            Diese Aktion ist geschützt. Bestätige sie mit deinem <strong>Daten-Passwort</strong>
+            und dem <strong>App-Code</strong>; danach gilt die Bestätigung 5 Minuten lang auch für
+            weitere geschützte Aktionen.
           </p>
           <label for="reauth-pass">Daten-Passwort</label>
           <div class="pw">
             <input
               id="reauth-pass"
+              bind:this={passEl}
               type={showPass ? "text" : "password"}
               bind:value={pass}
               autocomplete="current-password"
@@ -101,7 +125,7 @@
               enterkeyhint="next"
               aria-invalid={error ? "true" : undefined}
               aria-describedby={error ? "reauth-err" : undefined}
-              disabled={busy}
+              readonly={busy}
             />
             <button
               type="button"
@@ -125,7 +149,7 @@
             enterkeyhint="done"
             aria-invalid={error ? "true" : undefined}
             aria-describedby={error ? "reauth-err" : undefined}
-            disabled={busy}
+            readonly={busy}
           />
           <button type="button" class="link switch" onclick={() => (useRecovery = !useRecovery)}>
             {useRecovery ? "Code aus der App verwenden" : "Einmal-Code verwenden"}
@@ -133,11 +157,18 @@
           {#if error}<p id="reauth-err" class="err" role="alert">{error}</p>{/if}
         </div>
         <div class="kb-dialog-foot">
-          <button type="button" class="btn-secondary" disabled={busy} onclick={() => close(false)}>
+          <button
+            type="button"
+            class="btn-secondary"
+            aria-disabled={busy || undefined}
+            onclick={() => {
+              if (!busy) close(false);
+            }}
+          >
             Abbrechen
           </button>
-          <button type="submit" class="btn-primary" disabled={busy} aria-busy={busy}>
-            {busy ? "Prüfe …" : "Bestätigen"}
+          <button type="submit" class="btn-primary" aria-disabled={busy || undefined} aria-busy={busy || undefined}>
+            {busy ? "Wird geprüft …" : "Bestätigen"}
           </button>
         </div>
       </form>

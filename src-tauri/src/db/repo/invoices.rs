@@ -483,7 +483,7 @@ pub async fn lock_with_pair_cancel(
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
+        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
     let locked_at: Option<String> = row.try_get("locked_at")?;
     if locked_at.is_some() {
         return Err(Error::Domain(format!(
@@ -608,7 +608,7 @@ pub async fn record_payment_to_account(
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
+    .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
 
     if let Some(acc) = account_id {
         let (n,): (i64,) =

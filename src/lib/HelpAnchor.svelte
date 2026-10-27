@@ -115,6 +115,6 @@
   }
   .help-anchor:focus-visible {
     outline: var(--focus-width) solid var(--focus-ring);
-    outline-offset: 0;
+    outline-offset: var(--focus-offset);
   }
 </style>

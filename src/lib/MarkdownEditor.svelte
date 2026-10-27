@@ -8,6 +8,8 @@
   // änderbar oder mit `labelHidden` nur für Screenreader), Werkzeugleiste
   // als benannte Gruppe mit Trefferflächen ≥ --target, Rahmen ≥ 3:1 und
   // sichtbarer Fokusring im Textfeld.
+  // U4 (U2-018): Werkzeugleiste mit Klartext („Überschrift“, „Fett“ …) statt
+  // Kürzeln mit Tooltip — auf Touch gibt es kein Hover.
   import { tick } from "svelte";
   import { randomId } from "#lib/browser.ts";
 
@@ -74,14 +76,16 @@
 <label class="md-label" class:kb-visually-hidden={labelHidden} for={fieldId}>{label}</label>
 <div class="md-editor">
   <div class="md-toolbar" role="group" aria-label="Formatierung">
-    <button type="button" title="Überschrift" onclick={() => prefixLines("# ", "Überschrift")}>H1<span class="kb-visually-hidden"> Überschrift</span></button>
-    <button type="button" title="Unterüberschrift" onclick={() => prefixLines("## ", "Überschrift")}>H2<span class="kb-visually-hidden"> Unterüberschrift</span></button>
+    <!-- U4 (U2-018): sichtbare Klartext-Beschriftung statt „H1/H2/F/K“ mit Tooltip;
+         Name = sichtbarer Text, Symbole davor sind Dekoration. -->
+    <button type="button" onclick={() => prefixLines("# ", "Überschrift")}>Überschrift</button>
+    <button type="button" onclick={() => prefixLines("## ", "Zwischentitel")}>Zwischentitel</button>
     <span class="sep" aria-hidden="true"></span>
-    <button type="button" title="Fett" class="b" onclick={() => wrap("**", "fett")}>F<span class="kb-visually-hidden"> (fett)</span></button>
-    <button type="button" title="Kursiv" class="i" onclick={() => wrap("*", "kursiv")}>K<span class="kb-visually-hidden"> (kursiv)</span></button>
+    <button type="button" class="b" onclick={() => wrap("**", "fett")}>Fett</button>
+    <button type="button" class="i" onclick={() => wrap("*", "kursiv")}>Kursiv</button>
     <span class="sep" aria-hidden="true"></span>
-    <button type="button" title="Aufzählung" onclick={() => prefixLines("- ", "Punkt")}><span aria-hidden="true">•</span> Liste</button>
-    <button type="button" title="Nummerierte Liste" onclick={() => prefixLines("1. ", "Punkt")}>1. Liste</button>
+    <button type="button" onclick={() => prefixLines("- ", "Punkt")}><span class="sym" aria-hidden="true">•</span>Aufzählung</button>
+    <button type="button" onclick={() => prefixLines("1. ", "Punkt")}><span class="sym" aria-hidden="true">1.</span>Nummerierung</button>
   </div>
   <textarea id={fieldId} bind:this={el} bind:value {rows} {placeholder} spellcheck="true"></textarea>
 </div>
@@ -97,7 +101,7 @@
   }
   .md-editor {
     border: 1px solid var(--line-control);
-    border-radius: var(--r-md);
+    border-radius: var(--radius-control);
     overflow: hidden;
     background: var(--surface-card);
   }
@@ -124,11 +128,12 @@
   @media (hover: hover) {
     .md-toolbar button:hover {
       background: var(--surface-hover);
-      border-color: var(--c-primary-300);
+      border-color: var(--line-hover);
     }
   }
   .md-toolbar button.b { font-weight: 700; }
   .md-toolbar button.i { font-style: italic; }
+  .md-toolbar .sym { margin-right: var(--sp-1); color: var(--text-muted); }
   .md-toolbar .sep {
     width: 1px;
     align-self: stretch;
@@ -151,8 +156,9 @@
     background: var(--surface-card);
     color: var(--text);
   }
+  .md-editor textarea:focus,
   .md-editor textarea:focus-visible {
-    outline: var(--focus-width) solid var(--focus-ring) !important;
-    outline-offset: -3px !important;
+    outline: var(--focus-width) solid var(--focus-ring);
+    outline-offset: var(--focus-offset-inset);
   }
 </style>

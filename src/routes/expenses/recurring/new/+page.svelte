@@ -8,6 +8,7 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import Banner from "#lib/Banner.svelte";
+  import ContactSelect from "#lib/ContactSelect.svelte";
   import {
     contactsList,
     recurringCreate,
@@ -79,8 +80,8 @@
     }
   });
 
-  function onVendorSelect() {
-    const c = vendors.find((v) => v.id === vendorContactId);
+  function onVendorSelect(id: string) {
+    const c = vendors.find((v) => v.id === id);
     if (c && !label.trim()) {
       label = c.name;
       errors.label = undefined;
@@ -109,6 +110,7 @@
   }
 
   async function save() {
+    if (busy) return;
     if (!(await validate())) return;
     busy = true;
     try {
@@ -140,22 +142,24 @@
   }
 </script>
 
-<PageBar back="/expenses/recurring" backLabel="Abos" title={editId ? "Abo bearbeiten" : "Neues Abo"}>
+<!-- U4 (V2-19/V2-11): Zurück wie der Listentitel; beim Bearbeiten „Änderungen speichern“;
+     während des Speicherns aria-disabled statt disabled (Fokus bleibt). -->
+<PageBar back="/expenses/recurring" backLabel="Wiederkehrende Abos" title={editId ? "Abo bearbeiten" : "Neues Abo"}>
   {#snippet actions()}
     {#if loaded && !notFound}
       <a class="btn-secondary" href="/expenses/recurring">Abbrechen</a>
-      <button type="button" class="btn-primary" onclick={save} disabled={busy} aria-busy={busy}>
-        {busy ? "Speichere …" : editId ? "Speichern" : "Abo anlegen"}
+      <button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>
+        {busy ? "Speichert …" : editId ? "Änderungen speichern" : "Abo anlegen"}
       </button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if !loaded}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if notFound}
   <Banner>
-    Abo nicht gefunden. <a class="inline-link" href="/expenses/recurring">Zur Abo-Liste</a>
+    Abo nicht gefunden. <a class="kb-link kb-target" href="/expenses/recurring">Zur Abo-Liste</a>
   </Banner>
 {:else}
   <section class="card">
@@ -183,13 +187,15 @@
             <p id="rec-label-hint" class="msg hint">z. B. „Microsoft 365 Business“</p>
           {/if}
         </div>
-        <div class="field">
-          <label for="rec-vendor">Lieferant (Kontakt)</label>
-          <select id="rec-vendor" class="kb-input" bind:value={vendorContactId} onchange={onVendorSelect}>
-            <option value="">— ohne Kontakt —</option>
-            {#each vendors as v (v.id)}<option value={v.id}>{v.name}</option>{/each}
-          </select>
-        </div>
+        <!-- U4 (Warteliste 15): durchsuchbar ab 8 Lieferanten, deutsche Sortierung. -->
+        <ContactSelect
+          bind:value={vendorContactId}
+          contacts={vendors}
+          label="Lieferant (Kontakt)"
+          id="rec-vendor"
+          placeholder="— ohne Kontakt —"
+          onchange={onVendorSelect}
+        />
         <div class="field">
           <label for="rec-category">Kategorie (EÜR)</label>
           <select id="rec-category" class="kb-input" bind:value={category}>
@@ -205,6 +211,7 @@
         <QuantityInput
           bind:this={dayInput}
           bind:value={dayOfPeriod}
+          fieldClass="kb-w-short"
           integer
           grouping={false}
           max={31}
@@ -219,7 +226,7 @@
           <label for="rec-next">Nächste Fälligkeit<span class="req" aria-hidden="true">*</span></label>
           <input
             id="rec-next"
-            class="kb-input"
+            class="kb-input kb-w-date"
             type="date"
             bind:this={nextDueEl}
             bind:value={nextDueDate}
@@ -233,6 +240,7 @@
         <MoneyInput
           bind:this={amountInput}
           bind:cents={expectedCents}
+          fieldClass="kb-w-amount"
           label="Erwarteter Betrag (Brutto)"
           required
           error={errors.amount}
@@ -298,7 +306,7 @@
         Storno und Neuerfassung. Betrag je Termin: <strong class="kb-num">{euro(expectedCents ?? 0)}</strong>.
       </p>
       <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-      <div class="kb-form-end"><button type="button" class="btn-primary" onclick={save} disabled={busy} aria-busy={busy}>{busy ? "Speichere …" : editId ? "Speichern" : "Abo anlegen"}</button></div>
+      <div class="kb-form-end"><button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>{busy ? "Speichert …" : editId ? "Änderungen speichern" : "Abo anlegen"}</button></div>
     </form>
   </section>
 {/if}
@@ -315,8 +323,8 @@
   .msg { font-size: var(--fs-sm); margin: 0; line-height: 1.4; }
   .msg.err { color: var(--status-danger-fg); font-weight: 600; }
   .msg.hint { color: var(--text-muted); }
-  .grid :global(.money-field.with-label), .grid :global(.qty-field.with-label) { margin-bottom: 0; }
-  .grid :global(.money-field label), .grid :global(.qty-field label) { color: var(--text); }
+  .grid :global(.money-field.with-label), .grid :global(.qty-field.with-label), .grid :global(.contact-select.with-label) { margin-bottom: 0; }
+  .grid :global(.money-field label), .grid :global(.qty-field label), .grid :global(.contact-select label) { color: var(--text); }
   .modepick { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-3) var(--sp-4) var(--sp-4); margin: 0; min-width: 0; }
   .modepick legend { font-size: var(--fs-sm); color: var(--text); font-weight: 600; padding: 0 var(--sp-1); }
   /* U1-Sichtprüfung: Auf dem Handy kein zweiter Rahmen um die Auswahlkarten — sonst bleibt bei 320 px eine Textspalte von ~150 px. */
@@ -329,6 +337,5 @@
   label.radio.sel { border-color: var(--accent); background: var(--accent-soft); }
   label.radio:focus-within { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   .note { margin: var(--sp-4) 0 0; }
-  .inline-link { text-decoration: underline; }
   .muted { color: var(--text-muted); }
 </style>

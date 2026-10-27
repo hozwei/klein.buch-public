@@ -2,7 +2,10 @@
   import { onMount } from "svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import RequiredLegend from "#lib/RequiredLegend.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import Toggle from "#lib/Toggle.svelte";
+  import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { focusTrap } from "#lib/focusTrap.ts";
@@ -28,6 +31,11 @@
   let profile: SellerProfile | null = $state(null);
   let info: Paragraph19Info | null = $state(null);
   let loading = $state(true);
+  /** U4 (V2-07): Nach einem Ladefehler kein leeres Formular (Speichern hätte die Firmendaten überschrieben). */
+  let loadError = $state<string | null>(null);
+  let saving = $state(false);
+  /** Nach dem ersten Speicherversuch: fehlende Angaben fürs Ausstellen am Feld zeigen. */
+  let triedSave = $state(false);
   let showWaiveDialog = $state(false);
   let pendingInput: SellerProfileInput | null = $state(null);
 
@@ -42,6 +50,15 @@
   type FieldKey = "name" | "street" | "postalCode" | "city" | "countryCode" | "email";
   let errors = $state<Partial<Record<FieldKey, string>>>({});
   const isDE = $derived(input.countryCode.trim().toUpperCase() === "DE");
+
+  // U4 (V1-04, ADR 0041 Nr. 190): Telefon (XRechnung BR-DE-6) und Steuernummer/USt-IdNr.
+  // (§14 Abs. 4 UStG, BR-CO-26) prüft der Server erst beim Ausstellen; speichern lassen sich die
+  // Firmendaten auch ohne sie (eine neue Firma hat oft noch keine Steuernummer). Deshalb kein `*`
+  // (das heißt „Pflicht zum Speichern“), sondern die Kennzeichnung „Pflicht für die E-Rechnung“ und
+  // ein Hinweis am Feld, sobald gespeicherte oder abgeschickte Daten sie nicht enthalten.
+  const phoneMissing = $derived(!(input.phone ?? "").trim());
+  const taxIdMissing = $derived(!(input.taxNumber ?? "").trim() && !(input.vatId ?? "").trim());
+  const showIssueHints = $derived(triedSave || profile !== null);
 
   // R5-SUB4/U1: App-Shell inert, solange der §19-Dialog offen ist.
   $effect(() => {
@@ -95,7 +112,9 @@
     };
   }
 
-  onMount(async () => {
+  async function load() {
+    loading = true;
+    loadError = null;
     try {
       profile = await sellerProfileGet();
       info = await paragraph19Info();
@@ -105,11 +124,13 @@
       quoteValidDays = terms.quoteValidDays;
       invoiceDueDays = terms.invoiceDueDays;
     } catch (e) {
-      flash(String(e), "error");
+      loadError = String(e);
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(load);
 
   function isWaiveTransition(): boolean {
     return profile?.isKleinunternehmer === 1 && input.isKleinunternehmer === false;
@@ -117,6 +138,8 @@
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
+    if (saving) return;
+    triedSave = true;
 
     const errs: Partial<Record<FieldKey, string>> = {};
     if (!input.name.trim()) errs.name = "Bitte gib den Namen deiner Firma ein.";
@@ -145,6 +168,8 @@
   }
 
   async function save(payload: SellerProfileInput) {
+    if (saving) return;
+    saving = true;
     try {
       profile = await sellerProfileUpsert(payload);
       await sellerOwnerSet(ownerName);
@@ -152,9 +177,22 @@
       await documentTermsSet(quoteValidDays ?? 30, invoiceDueDays ?? 14);
       info = await paragraph19Info();
       input = fromProfile(profile);
-      flash("Profil gespeichert.");
+      const missing = [
+        phoneMissing ? "Telefon" : "",
+        taxIdMissing ? "Steuernummer oder USt-IdNr." : "",
+      ].filter(Boolean);
+      if (missing.length > 0) {
+        flash(
+          `Firmendaten gespeichert. Für die E-Rechnung ${missing.length === 1 ? "fehlt" : "fehlen"} noch: ${missing.join(" und ")} — ohne ${missing.length === 1 ? "diese Angabe" : "diese Angaben"} kannst du keine Rechnung ausstellen.`,
+          "warning",
+        );
+      } else {
+        flash("Firmendaten gespeichert.");
+      }
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Firmendaten speichern fehlgeschlagen: ${String(e)}`, "error");
+    } finally {
+      saving = false;
     }
   }
 
@@ -176,9 +214,9 @@
 
 <PageBar back="/settings" backLabel="Einstellungen" title="Meine Firmendaten">
   {#snippet actions()}
-    {#if !loading}
+    {#if !loading && !loadError}
       <Button variant="secondary" href="/settings">Abbrechen</Button>
-      <Button type="submit" form="seller-form">Speichern</Button>
+      <Button type="submit" form="seller-form" busy={saving}>{saving ? "Speichert …" : "Speichern"}</Button>
     {/if}
   {/snippet}
 </PageBar>
@@ -189,12 +227,16 @@
 {/snippet}
 
 {#if loading}
-  <p aria-busy="true">Lädt …</p>
+  <LoadingState />
+{:else if loadError}
+  <Banner title="Die Firmendaten konnten nicht geladen werden.">{loadError}
+    {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+  </Banner>
 {:else}
   <!-- U2: ab rund 37rem Breite zwei Spalten (Firma | Adresse, Steuer über die volle Breite,
        Kontakt | Standard-Einstellungen; tokens.css .kb-form-grid). -->
   <form id="seller-form" class="kb-form-grid kb-sections" onsubmit={handleSubmit} novalidate>
-    <p class="legend-req kb-span-all"><span class="req" aria-hidden="true">*</span> Pflichtfeld</p>
+    <RequiredLegend class="kb-span-all" />
     <fieldset>
       <legend>Firma</legend>
       <div class="f">
@@ -257,8 +299,9 @@
       <div class="kb-form-grid">
         <div class="f">
           <label for="seller-taxno">Steuernummer</label>
-          <input id="seller-taxno" type="text" bind:value={input.taxNumber} autocomplete="off" inputmode="text"
-            autocapitalize="characters" spellcheck="false" aria-describedby="seller-taxno-hint" />
+          <input id="seller-taxno" class="kb-w-medium" type="text" bind:value={input.taxNumber} autocomplete="off" inputmode="text"
+            autocapitalize="characters" spellcheck="false"
+            aria-describedby={showIssueHints && taxIdMissing ? "seller-taxno-hint seller-taxid-warn" : "seller-taxno-hint"} />
           <small id="seller-taxno-hint" class="hint-inline">
             Format wie vom Finanzamt, z. B. 132/456/7890. Steht auf jeder Rechnung. Noch keine
             vom Finanzamt? Dann leer lassen — du kannst die Firmendaten trotzdem speichern.
@@ -267,10 +310,16 @@
         </div>
         <div class="f">
           <label for="seller-vatid">USt-IdNr.</label>
-          <input id="seller-vatid" type="text" bind:value={input.vatId} autocomplete="off" inputmode="text"
-            autocapitalize="characters" spellcheck="false" aria-describedby="seller-vatid-hint" />
+          <input id="seller-vatid" class="kb-w-medium" type="text" bind:value={input.vatId} autocomplete="off" inputmode="text"
+            autocapitalize="characters" spellcheck="false"
+            aria-describedby={showIssueHints && taxIdMissing ? "seller-vatid-hint seller-taxid-warn" : "seller-vatid-hint"} />
           <small id="seller-vatid-hint" class="hint-inline">In Deutschland „DE“ und 9 Ziffern, z. B. DE123456789.</small>
         </div>
+        {#if showIssueHints && taxIdMissing}
+          <p id="seller-taxid-warn" class="warn kb-span-all">
+            Noch fehlt: Steuernummer oder USt-IdNr. Ohne eine davon kannst du keine Rechnung ausstellen.
+          </p>
+        {/if}
       </div>
 
       <div class="paragraph19">
@@ -284,13 +333,13 @@
         {#if input.isKleinunternehmer}
           <p class="hint">
             <strong>Eingeschaltet.</strong> Auf jeder Rechnung erscheint automatisch der
-            Hinweis „{info?.hinweisText}“. Du weist keine Mehrwertsteuer aus — die
-            MwSt-Felder sind gesperrt, damit dir kein Fehler passiert.
+            Hinweis „{info?.hinweisText}“. Du weist keine Umsatzsteuer aus — die
+            USt-Felder sind gesperrt, damit dir kein Fehler passiert.
           </p>
         {:else}
           <p class="caveat">
-            <strong>Mehrwertsteuer-Pflicht.</strong> Du weist auf deinen Rechnungen
-            Mehrwertsteuer aus und meldest sie regelmäßig ans Finanzamt.{#if info?.returnDateAfterWaiver}{" "}
+            <strong>Regelbesteuerung.</strong> Du weist auf deinen Rechnungen
+            Umsatzsteuer aus und meldest sie regelmäßig ans Finanzamt.{#if info?.returnDateAfterWaiver}{" "}
               Zurück zur Kleinunternehmer-Regelung kannst du frühestens am
               <strong>{date(info.returnDateAfterWaiver)}</strong> (du bist 5 Jahre gebunden).
             {/if}
@@ -309,27 +358,37 @@
         {@render err("email")}
       </div>
       <div class="f">
-        <label for="seller-phone">Telefon</label>
-        <input id="seller-phone" type="tel" bind:value={input.phone} autocomplete="tel" aria-describedby="seller-phone-hint" />
+        <!-- U4 (V1-04): Pflicht fürs Ausstellen, nicht fürs Speichern — darum kein `*`. -->
+        <label for="seller-phone">Telefon <span class="issue-req">(Pflicht für die E-Rechnung)</span></label>
+        <input id="seller-phone" class="kb-w-medium" type="tel" bind:value={input.phone} autocomplete="tel"
+          aria-describedby={showIssueHints && phoneMissing ? "seller-phone-warn seller-phone-hint" : "seller-phone-hint"} />
+        {#if showIssueHints && phoneMissing}
+          <span id="seller-phone-warn" class="warn">Noch fehlt die Telefonnummer. Ohne sie kannst du keine Rechnung ausstellen.</span>
+        {/if}
         <small id="seller-phone-hint" class="hint-inline">
-          z. B. +49 30 1234567. Pflicht für die E-Rechnung (XRechnung, Verkäufer-Kontakt):
-          ohne Telefonnummer lässt sich keine Rechnung festschreiben.
+          z. B. +49 30 1234567. Die E-Rechnung (XRechnung) verlangt eine Telefonnummer des
+          Verkäufers; speichern kannst du die Firmendaten auch ohne.
         </small>
       </div>
     </fieldset>
 
     <fieldset>
       <legend>Standard-Einstellungen</legend>
+      <!-- U4 (V1-04): Währung als Auswahl statt Freitext — die E-Rechnung nimmt nur EUR an
+           (`CurrencyUnsupported`); ein abweichender Altwert bleibt als Option sichtbar. -->
       <div class="f narrow">
         <label for="seller-currency">Währung</label>
-        <input id="seller-currency" type="text" bind:value={input.defaultCurrency} maxlength="3" autocomplete="off"
-          autocapitalize="characters" spellcheck="false" aria-describedby="seller-currency-hint" />
-        <small id="seller-currency-hint" class="hint-inline">ISO-Kürzel, z. B. EUR</small>
+        <select id="seller-currency" class="kb-input kb-w-medium" bind:value={input.defaultCurrency} aria-describedby="seller-currency-hint">
+          <option value="EUR">Euro (EUR)</option>
+          {#if input.defaultCurrency !== "EUR"}<option value={input.defaultCurrency}>{input.defaultCurrency}</option>{/if}
+        </select>
+        <small id="seller-currency-hint" class="hint-inline">Klein.Buch rechnet in Euro.</small>
       </div>
       <div class="days">
         <QuantityInput
           bind:this={quoteDaysInput}
           bind:value={quoteValidDays}
+          fieldClass="kb-w-short"
           label="Angebot gültig"
           integer
           grouping={false}
@@ -342,6 +401,7 @@
         <QuantityInput
           bind:this={dueDaysInput}
           bind:value={invoiceDueDays}
+          fieldClass="kb-w-short"
           label="Zahlungsziel Rechnung"
           integer
           grouping={false}
@@ -360,7 +420,7 @@
     </fieldset>
 
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
-    <div class="kb-form-end kb-span-all"><button type="submit" class="btn-primary">Speichern</button></div>
+    <div class="kb-form-end kb-span-all"><Button type="submit" busy={saving}>{saving ? "Speichert …" : "Speichern"}</Button></div>
   </form>
 {/if}
 
@@ -413,7 +473,7 @@
 
         <h3>In beiden Fällen</h3>
         <ul>
-          <li>Du weist auf allen neuen Rechnungen Mehrwertsteuer aus,</li>
+          <li>Du weist auf allen neuen Rechnungen Umsatzsteuer aus,</li>
           <li>schickst regelmäßig eine Umsatzsteuer-Voranmeldung ans Finanzamt</li>
           <li>und kümmerst dich um den Vorsteuerabzug.</li>
         </ul>
@@ -445,7 +505,6 @@
     min-width: 0;
   }
   legend { font-weight: 600; padding: 0 0.4rem; }
-  .legend-req { font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 0.5rem; }
   .req { color: var(--status-danger-fg); margin-left: 2px; }
   .f { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; min-width: 0; }
   .f > label { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
@@ -474,6 +533,8 @@
     padding: 0.6rem; border-radius: var(--r-sm);
     margin-top: 0.5rem; font-size: var(--fs-sm);
   }
+  .warn { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--status-warning-fg); }
+  .issue-req { font-weight: 400; color: var(--text-muted); }
   .hint-inline {
     display: block;
     font-size: var(--fs-sm);

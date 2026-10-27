@@ -11,12 +11,15 @@
     saveArchiveFile,
   } from "#lib/api.ts";
   import type { ExpenseDetail, AttachmentView, PaymentAccount } from "#lib/types.ts";
+  import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
   import { euro, date } from "#lib/format.ts";
   import { expenseCategoryLabel } from "#lib/labels.ts";
   import AttachmentUpload from "#lib/AttachmentUpload.svelte";
   import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import Badge from "#lib/Badge.svelte";
+  import { expenseStatusView } from "../expenseStatus.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { openXmlViewer } from "#lib/xmlViewerModal.svelte.ts";
 
@@ -32,6 +35,9 @@
   let showPay = $state(false);
   let payDate = $state(todayBerlin());
   let payAccountId = $state<string>("");
+  let payError = $state("");
+  let payDateEl: HTMLInputElement | undefined = $state();
+  let notFound = $state(false);
 
   // PV1-A5: Roh-XML-Viewer wird global im Root-Layout gemountet
   // (siehe `XmlViewerDialog.svelte`). Lokal nur Lade-Flag, damit der Button
@@ -83,9 +89,13 @@
   async function load() {
     loading = true;
     error = null;
+    notFound = false;
     try {
       detail = await expensesGet(id);
-      if (!detail) error = "Kosten nicht gefunden.";
+      if (!detail) {
+        notFound = true;
+        error = "Kosten nicht gefunden.";
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -102,13 +112,17 @@
     await load();
   });
 
-  function startPay() {
-    payDate = detail?.expense.paidDate ?? todayBerlin();
+  async function startPay() {
+    if (busy) return;
+    payDate = detail?.expense.paidDate?.slice(0, 10) ?? todayBerlin();
     payAccountId =
       detail?.expense.paidFromAccountId ??
       accounts.find((a) => a.isDefault === 1 && a.active === 1)?.id ??
       "";
+    payError = "";
     showPay = true;
+    await tick();
+    payDateEl?.focus();
   }
 
   // Übergabe F5 (R1-019): Zahldatum vor dem Belegdatum ist erlaubt, aber auffällig.
@@ -117,6 +131,13 @@
   );
 
   async function markPaid() {
+    if (busy) return;
+    if (!payDate) {
+      payError = "Bitte das Zahldatum angeben.";
+      payDateEl?.focus();
+      return;
+    }
+    payError = "";
     busy = true;
     try {
       await expensesSetPayment({
@@ -134,11 +155,33 @@
     }
   }
 
+  // U4 (V2-12, design.md §5): umkehrbar — ohne Rückfrage, dafür „Rückgängig“ im Toast.
   async function setUnpaid() {
+    if (busy || !detail) return;
+    const prev = {
+      paidDate: detail.expense.paidDate,
+      paidFromAccountId: detail.expense.paidFromAccountId,
+    };
     busy = true;
     try {
       await expensesSetPayment({ expenseId: id, paidDate: null, paidFromAccountId: null });
-      flash("Wieder auf offen gesetzt.");
+      flash("Wieder auf offen gesetzt.", "ok", undefined, {
+        action: { label: "Rückgängig", run: () => void restorePayment(prev) },
+      });
+      await load();
+    } catch (e) {
+      flash("Fehlgeschlagen: " + String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function restorePayment(prev: { paidDate: string | null; paidFromAccountId: string | null }) {
+    if (busy) return;
+    busy = true;
+    try {
+      await expensesSetPayment({ expenseId: id, paidDate: prev.paidDate, paidFromAccountId: prev.paidFromAccountId });
+      flash("Zahlung wiederhergestellt.");
       await load();
     } catch (e) {
       flash("Fehlgeschlagen: " + String(e), "error");
@@ -155,6 +198,7 @@
   }
 
   async function doCancel() {
+    if (busy) return;
     if (!cancelReason.trim()) {
       cancelError = "Bitte einen Grund für das Storno angeben.";
       cancelReasonEl?.focus();
@@ -183,42 +227,60 @@
   function openReceipt(archiveId: string) {
     saveArchiveFile(archiveId);
   }
+
+  // U4 (V2-20, design.md §5 „Detailseiten“, ADR 0041 Nr. 96): Hauptaktion = nächster
+  // Schritt („Als bezahlt markieren“ solange offen; nach einem Storno „Korrigiert neu
+  // erfassen“), Nebenaktionen als `secondary`, Stornieren im Menü „Mehr“ unten. Der
+  // Eintrag öffnet den Storno-Bereich mit Pflichtgrund.
+  let isCanceled = $derived(detail?.expense.status === "canceled");
+  let barSecondary = $derived.by<ActionMenuItem[]>(() => {
+    if (!detail) return [];
+    const items: ActionMenuItem[] = [];
+    if (canShowRawXml) {
+      items.push({ label: xmlLoading ? "Roh-XML wird geladen …" : "Roh-XML anzeigen", onSelect: () => void openRawXml() });
+    }
+    // V1-22: Werte übernehmen (neue Kosten, das Original bleibt unverändert).
+    if (!isCanceled) items.push({ label: "Als Vorlage für neue Kosten", href: `/expenses/new?from=${detail.expense.id}` });
+    return items;
+  });
+  let barMore = $derived<ActionMenuItem[]>(
+    detail && !isCanceled ? [{ label: "Stornieren", onSelect: () => void openCancel(), danger: true }] : [],
+  );
 </script>
 
-<PageBar back="/expenses" backLabel="Kosten" title={detail?.expense.expenseNumber}>
+<PageBar
+  back="/expenses"
+  backLabel="Kosten"
+  title={detail ? `Kosten ${detail.expense.expenseNumber}` : notFound ? "Kosten nicht gefunden" : "Kosten"}
+  secondary={barSecondary}
+  more={barMore}
+>
   {#snippet actions()}
-    {#if canShowRawXml}
-      <button
-        type="button"
-        class="btn-secondary btn-sm"
-        onclick={openRawXml}
-        aria-disabled={xmlLoading ? "true" : undefined}
-        aria-busy={xmlLoading}
-      >
-        {xmlLoading ? "Lade Roh-XML …" : "Roh-XML anzeigen"}
-      </button>
+    {#if detail && isCanceled}
+      <Button variant="primary" href={`/expenses/new?from=${detail.expense.id}`}>Korrigiert neu erfassen</Button>
+    {:else if detail && !detail.expense.paidDate && !showPay}
+      <Button variant="primary" onclick={() => void startPay()} ariaDisabled={busy}>Als bezahlt markieren</Button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if error}
-  <Banner>{error}</Banner>
+  <Banner>{error}{#if notFound}{" "}<a class="kb-link" href="/expenses">Zur Kostenliste</a>{/if}</Banner>
 {:else if detail}
   {@const e = detail.expense}
+  <!-- U4 (V3-09): Status aus expenseStatus.ts, wie in der Liste. -->
+  {@const st = expenseStatusView(e)}
   <p class="sub">
-    {#if e.status === "canceled"}
-      <Badge tone="neutral" strike>storniert</Badge>
-    {:else}
-      <Badge tone="success">erfasst</Badge>
-    {/if}
+    <Badge tone={st.tone} strike={st.strike}>{st.label}</Badge>
   </p>
 
   {#if e.status === "canceled"}
     <p class="caveat">
       Diese Kosten wurden storniert{e.canceledReason ? ` — Grund: ${e.canceledReason}` : ""}.
-      Stornierte Kosten zählen nicht für die Steuer.
+      Stornierte Kosten zählen nicht für die Steuer. Mit „Korrigiert neu erfassen“ legst du
+      neue Kosten mit diesen Werten an.
     </p>
   {/if}
 
@@ -247,27 +309,32 @@
             <label for="pay-date">Bezahlt am<span class="req" aria-hidden="true">*</span></label>
             <input
               id="pay-date"
-              class="kb-input"
+              class="kb-input kb-w-date"
               type="date"
+              bind:this={payDateEl}
               bind:value={payDate}
+              oninput={() => (payError = "")}
               max={todayBerlin()}
               required
               aria-required="true"
-              aria-describedby={payBeforeExpense ? "pay-date-note" : undefined}
+              aria-invalid={payError ? "true" : undefined}
+              aria-describedby={[payError ? "pay-date-err" : "", payBeforeExpense ? "pay-date-note" : ""].filter(Boolean).join(" ") || undefined}
             />
+            {#if payError}<p id="pay-date-err" class="msg err">{payError}</p>{/if}
           </div>
           <div class="field">
             <label for="pay-account">Zahlungs-Konto</label>
-            <select id="pay-account" class="kb-input" bind:value={payAccountId}>
+            <select id="pay-account" class="kb-input kb-w-medium" bind:value={payAccountId}>
               <option value="">— keines —</option>
               {#each accounts.filter((a) => a.active === 1 || a.id === payAccountId) as a (a.id)}
                 <option value={a.id}>{a.label}</option>
               {/each}
             </select>
           </div>
+          <!-- design.md §5: „Abbrechen“ zuerst, Hauptaktion zuletzt. -->
           <div class="row">
-            <button type="button" class="btn-primary btn-sm" onclick={markPaid} disabled={busy || !payDate}>Zahlung speichern</button>
             <button type="button" class="btn-secondary btn-sm" onclick={() => (showPay = false)}>Abbrechen</button>
+            <button type="button" class="btn-primary btn-sm" onclick={markPaid} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>Zahlung speichern</button>
           </div>
           {#if payBeforeExpense}
             <p id="pay-date-note" class="note">
@@ -279,12 +346,14 @@
       {:else if e.paidDate}
         <p>Bezahlt am <strong>{date(e.paidDate)}</strong> · Konto: {accountLabel(e.paidFromAccountId)}</p>
         <div class="row">
-          <button type="button" class="btn-secondary btn-sm" onclick={startPay} disabled={busy}>Zahlung korrigieren</button>
-          <button type="button" class="btn-secondary btn-sm" onclick={setUnpaid} disabled={busy}>Als unbezahlt markieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={startPay} aria-disabled={busy ? "true" : undefined}>Zahlung korrigieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={setUnpaid} aria-disabled={busy ? "true" : undefined}>Als unbezahlt markieren</button>
         </div>
       {:else}
+        <!-- Hauptaktion steht in der PageBar (V2-20); hier dieselbe Aktion als `secondary`
+             im Zusammenhang (Handy: PageBar klebt nicht). -->
         <p class="muted">Noch nicht als bezahlt markiert (zählt erst mit dem Zahldatum für die Steuer).</p>
-        <button type="button" class="btn-primary btn-sm" onclick={startPay} disabled={busy}>Als bezahlt markieren</button>
+        <button type="button" class="btn-secondary btn-sm" onclick={startPay} aria-disabled={busy ? "true" : undefined}>Als bezahlt markieren</button>
       {/if}
     </section>
   {/if}
@@ -305,8 +374,8 @@
       <h2>Anlagevermögen</h2>
       {#if e.capitalizedAsAssetId}
         <p>
-          Aus dieser Position wurde eine Anlage aktiviert.
-          <a class="inline-link" href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anlage <span aria-hidden="true">→</span></a>
+          Diese Kosten sind als Anlage übernommen.
+          <a class="kb-link kb-target" href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anschaffung <span aria-hidden="true">→</span></a>
         </p>
       {:else}
         <p class="muted">
@@ -329,15 +398,15 @@
     />
   </section>
 
-  {#if e.status !== "canceled"}
-    <section class="card danger">
-      <h2>Stornieren</h2>
+  <!-- U4 (V2-20): geöffnet über „Mehr“ → „Stornieren“; GoBD: Storno mit Pflichtgrund. -->
+  {#if e.status !== "canceled" && showCancel}
+    <section class="card danger" aria-labelledby="exp-cancel-h">
+      <h2 id="exp-cancel-h">Stornieren</h2>
       <p class="muted">
-        Gespeicherte Kosten werden nicht gelöscht, sondern storniert — so verlangt
-        es das Gesetz. Für eine Korrektur danach einfach neue Kosten erfassen.
+        Festgeschriebene Kosten werden nicht gelöscht, sondern storniert — so verlangt
+        es das Gesetz. Danach kannst du sie mit „Korrigiert neu erfassen“ neu anlegen.
       </p>
-      {#if showCancel}
-        <div class="cancel-form">
+      <div class="cancel-form">
           <div class="field grow">
             <label for="cancel-reason">Storno-Grund<span class="req" aria-hidden="true">*</span></label>
             <input
@@ -361,12 +430,9 @@
           </div>
           <div class="row">
             <button type="button" class="btn-secondary btn-sm" onclick={() => (showCancel = false)}>Abbrechen</button>
-            <button type="button" class="btn-danger btn-sm" onclick={doCancel} disabled={busy}>Storno bestätigen</button>
+            <button type="button" class="btn-danger btn-sm" onclick={doCancel} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>Kosten stornieren</button>
           </div>
-        </div>
-      {:else}
-        <button type="button" class="btn-danger btn-sm" onclick={openCancel}>Kosten stornieren</button>
-      {/if}
+      </div>
     </section>
   {/if}
 {/if}
@@ -396,6 +462,5 @@
     color: var(--status-warning-fg); background: var(--status-warning-bg);
     border-left: 3px solid var(--status-warning-line); padding: var(--sp-1) var(--sp-2);
   }
-  .inline-link { text-decoration: underline; text-underline-offset: 2px; }
   .muted { color: var(--text-muted); }
 </style>

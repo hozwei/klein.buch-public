@@ -18,14 +18,26 @@
   // eine Stärke-Schätzung bei neuem Passwort (V2.1.8, nur Hinweis — ob das
   // Passwort angenommen wird, entscheidet der Server). Einfügen und
   // Passwortmanager bleiben erlaubt (3.3.8).
-  import { onMount } from "svelte";
+  //
+  // U4 (V1-16, V4-03, V4-08, V4-01; ADR 0041 Nr. 33, 160, 167): Titel als `h1` und
+  // als Seitentitel; während der Prüfung bleiben Felder (`readonly`) und Knöpfe
+  // (`aria-disabled`) fokussierbar, nach einer Ablehnung steht der Fokus im ersten
+  // betroffenen Feld und die Meldung nennt den nächsten Schritt; Einmal-Codes lassen
+  // sich kopieren und als Textdatei speichern; vom QR-Schritt führt „Zurück“ zu Token
+  // und Passwort; Fehlversuche seit der letzten Anmeldung als Warnung mit Weg zu
+  // „Sicherheit & Anmeldung“.
+  import { onMount, tick } from "svelte";
+  import { goto } from "$app/navigation";
   import { appState } from "#lib/stores.svelte.ts";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import Banner from "#lib/Banner.svelte";
   import SourceNotice from "#lib/SourceNotice.svelte";
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
   import { focusTrap } from "#lib/focusTrap.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { onAuthRequired } from "#lib/transport.ts";
+  import { estimatePassphraseStrength } from "#lib/passphraseStrength.ts";
+  import { setGateTitle } from "#lib/pageTitle.svelte.ts";
   import {
     authStatus,
     authSetupOffer,
@@ -51,26 +63,35 @@
   let error = $state<string | null>(null);
   let showPass = $state(false);
   let showConfirm = $state(false);
+  /** Rückmeldung zu „Codes kopieren“/„Als Textdatei speichern“ (Toasts liegen unter der Maske). */
+  let codesInfo = $state("");
 
-  // Stärke-Schätzung (Heuristik aus Länge, Wortzahl, Wiederholungen). Die
-  // verbindlichen Regeln (Mindestlänge, Sperrliste, Muster) prüft der Server.
-  type Strength = { level: 0 | 1 | 2 | 3; text: string };
-  function estimateStrength(p: string): Strength | null {
-    if (!p) return null;
-    const len = [...p].length;
-    const words = p.trim().split(/[\s\-_.,;:+\/]+/).filter((w) => w.length >= 3).length;
-    const unique = new Set(p.toLowerCase()).size;
-    if (len < 16) return { level: 0, text: `Zu kurz: ${len} von mindestens 16 Zeichen.` };
-    if (unique < 6) return { level: 1, text: "Schwach: viele Wiederholungen. Nimm 3–4 zufällige Wörter." };
-    if (len >= 28 || words >= 4) return { level: 3, text: "Stark." };
-    if (len >= 20 || words >= 3) return { level: 2, text: "Gut." };
-    return { level: 1, text: "Ausreichend. Länger ist besser, z. B. mit einem weiteren Wort." };
-  }
-  const strength = $derived(status === "setup" ? estimateStrength(pass) : null);
+  // Stärke-Schätzung (Heuristik aus Länge, Wortzahl, Wiederholungen; gemeinsamer
+  // Helfer mit Einstellungen → Sicherheit, U4). Die verbindlichen Regeln
+  // (Mindestlänge, Sperrliste, Muster) prüft der Server.
+  const strength = $derived(status === "setup" ? estimatePassphraseStrength(pass) : null);
 
   $effect(() => {
     appState.ready = status === "ready";
   });
+
+  // Seitentitel der Maske (2.4.2): gleich der Überschrift des Schritts.
+  const heading = $derived.by(() => {
+    if (status === "login") return "Anmelden";
+    if (status !== "setup" && status !== "totp_setup") return null;
+    if (step === "codes") return "Einmal-Codes notieren";
+    if (step === "qr" && offer) return "Authenticator-App verbinden";
+    return status === "setup" ? "Klein.Buch einrichten" : "Zweiten Faktor neu einrichten";
+  });
+  $effect(() => {
+    setGateTitle(heading);
+  });
+
+  /** Fokus nach einer Ablehnung aufs betroffene Feld (2.4.3, statt <body>). */
+  async function focusField(id: string) {
+    await tick();
+    document.getElementById(id)?.focus();
+  }
 
   // R5-014: Modal-Stack (App-Shell `inert`). Startfokus über `focusTrap`
   // (erstes Feld des jeweiligen Schritts, `data-initial-focus`).
@@ -141,26 +162,31 @@
 
   // Einrichtung Schritt 1: Token (+ Passphrase prüfen) → QR anfordern.
   async function requestOffer() {
+    if (busy) return;
     error = null;
     if (insecureContext()) return;
+    if (token.trim() === "") {
+      error = "Gib den Setup-Token aus dem Container-Log ein.";
+      void focusField("gate-token");
+      return;
+    }
     if (status === "setup") {
       // R5-005: Passphrase-Floor 16 Zeichen; Backend prüft dasselbe.
       if (pass.length < 16) {
         error =
-          "Das Passwort muss mindestens 16 Zeichen haben. " +
+          "Das Daten-Passwort muss mindestens 16 Zeichen haben. " +
           "Tipp: Nimm 3–4 zufällige Wörter, die nichts mit dir oder deiner Firma zu tun haben.";
+        void focusField("gate-pass");
         return;
       }
       if (pass !== confirm) {
-        error = "Die beiden Passwörter stimmen nicht überein.";
+        error = "Die beiden Passwörter stimmen nicht überein. Gib die Wiederholung neu ein.";
+        void focusField("gate-confirm");
         return;
       }
     }
-    if (token.trim() === "") {
-      error = "Bitte den Setup-Token aus dem Container-Log eingeben.";
-      return;
-    }
     busy = true;
+    let failed = false;
     try {
       // Lauf F4a: bei der Ersteinrichtung prüft der Server das neue Passwort
       // schon hier (Sperrliste, Muster), damit es vor dem QR-Code korrigierbar ist.
@@ -169,29 +195,80 @@
       code = "";
     } catch (e) {
       error = String(e);
+      failed = true;
     } finally {
       busy = false;
     }
+    // Server-Ablehnung: Token falsch → Token-Feld, sonst das Passwort (zu kurz,
+    // zu häufig, falsch bei der TOTP-Neueinrichtung).
+    if (failed) void focusField(/token/i.test(error ?? "") ? "gate-token" : "gate-pass");
+  }
+
+  /** QR-Schritt → zurück zu Token und Passwort (Eingaben bleiben). */
+  function backToToken() {
+    if (busy) return;
+    error = null;
+    offer = null;
+    code = "";
+    step = "token";
+    void focusField("gate-token");
   }
 
   // Einrichtung Schritt 2: Code bestätigen → DB anlegen bzw. TOTP neu.
   async function finishSetup() {
+    if (busy) return;
     error = null;
     busy = true;
+    let failed = false;
     try {
       const r = await authSetupFinish(token.trim(), pass, code.trim());
       recoveryCodes = r.recoveryCodes;
       codesNoted = false;
+      codesInfo = "";
       step = "codes";
       resetFields();
       token = "";
     } catch (e) {
       error = String(e);
       code = "";
+      failed = true;
     } finally {
       busy = false;
     }
+    if (failed) void focusField("gate-totp");
   }
+
+  const codesText = $derived(
+    "Klein.Buch – Einmal-Codes (jeder Code gilt einmal und ersetzt nur den App-Code)\n\n" +
+      recoveryCodes.join("\n") +
+      "\n",
+  );
+
+  async function copyCodes() {
+    try {
+      await navigator.clipboard.writeText(codesText);
+      codesInfo = "Codes kopiert. Füg sie in deinen Passwort-Manager ein.";
+    } catch {
+      codesInfo = "Kopieren ging nicht. Speichere die Codes als Textdatei oder schreib sie ab.";
+    }
+  }
+
+  function saveCodes() {
+    // Datei entsteht im Browser (Blob), nichts geht an den Server.
+    const url = URL.createObjectURL(new Blob([codesText], { type: "text/plain;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "klein-buch-einmal-codes.txt";
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    codesInfo = "Textdatei gespeichert. Leg sie außerhalb dieses Servers ab.";
+  }
+
+  const canCopy = typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
 
   function done() {
     resetFields();
@@ -203,19 +280,29 @@
   }
 
   async function doLogin() {
+    if (busy) return;
     error = null;
     if (insecureContext()) {
       resetFields();
       return;
     }
     busy = true;
+    let failed = false;
     try {
       const factor = useRecovery ? { recoveryCode: code.trim() } : { totpCode: code.trim() };
       const r = await authLogin(pass, factor);
       if (r.ok) {
         status = "ready";
         if (r.failedAttempts && r.failedAttempts > 0) {
-          flash(`${r.failedAttempts} Fehlversuch(e) seit der letzten Anmeldung.`, "error");
+          const n = r.failedAttempts;
+          flash(
+            (n === 1
+              ? "1 fehlgeschlagener Anmeldeversuch seit deiner letzten Anmeldung."
+              : `${n} fehlgeschlagene Anmeldeversuche seit deiner letzten Anmeldung.`) +
+              " Warst du das nicht? Prüfe die Sitzungen unter Einstellungen → Sicherheit & Anmeldung.",
+            "warning",
+            { action: { label: "Sicherheit öffnen", run: () => void goto("/settings/security") } },
+          );
         }
         if (r.usedRecoveryCode) {
           flash(
@@ -224,16 +311,21 @@
           );
         }
       } else {
-        error = "Anmeldung fehlgeschlagen.";
+        failed = true;
+        error = useRecovery
+          ? "Anmeldung fehlgeschlagen. Gib dein Daten-Passwort und einen noch unbenutzten Einmal-Code neu ein."
+          : "Anmeldung fehlgeschlagen. Gib dein Daten-Passwort und den aktuellen Code der Authenticator-App neu ein (er wechselt alle 30 Sekunden).";
       }
     } catch (e) {
       error = String(e);
       await refresh();
+      failed = status === "login";
     } finally {
       // R5-006: Klartext nicht über die await-Grenze hinaus halten.
       resetFields();
       busy = false;
     }
+    if (failed) void focusField("gate-pass");
   }
 </script>
 
@@ -241,7 +333,10 @@
   {#if error}<p id="gate-err" class="err" role="alert">{error}</p>{/if}
 {/snippet}
 
-{#if status === "setup" || status === "totp_setup" || status === "login"}
+{#if status === "loading"}
+  <!-- Erster Aufruf, bis der Server den Zustand meldet (V2-02). -->
+  <div class="gate-loading"><p class="kb-loading" role="status">Wird geladen …</p></div>
+{:else if status === "setup" || status === "totp_setup" || status === "login"}
   <div class="kb-backdrop gate-backdrop" role="presentation">
     <div
       class="kb-dialog gate"
@@ -253,13 +348,14 @@
     >
       <div class="kb-dialog-body">
       {#if insecureHttp}
-        <p class="insecure" role="alert">
+        <!-- U4 (V3-18): Hinweisflächen nur über Banner (design.md §4.10), eine Optik. -->
+        <Banner kind="warning">
           Unverschlüsselte Verbindung erlaubt (KLEIN_BUCH_INSECURE_HTTP) — nur für Tests.
-        </p>
+        </Banner>
       {/if}
 
       {#if status === "login"}
-        <h2 id="backup-gate-title">Anmelden</h2>
+        <h1 id="backup-gate-title">Anmelden</h1>
         <p>
           Gib dein <strong>Daten-Passwort</strong> und den aktuellen Code deiner
           Authenticator-App ein. Ohne beides bleiben deine Daten verschlüsselt.
@@ -284,7 +380,7 @@
               enterkeyhint="next"
               aria-invalid={error ? "true" : undefined}
               aria-describedby={error ? "gate-err" : undefined}
-              disabled={busy}
+              readonly={busy}
             />
             <button
               type="button"
@@ -308,18 +404,18 @@
             enterkeyhint="go"
             aria-invalid={error ? "true" : undefined}
             aria-describedby={error ? "gate-err" : undefined}
-            disabled={busy}
+            readonly={busy}
           />
           <button type="button" class="link switch" onclick={() => (useRecovery = !useRecovery)}>
             {useRecovery ? "Code aus der App verwenden" : "Gerät verloren? Einmal-Code verwenden"}
           </button>
           {@render errorText()}
-          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
-            {busy ? "Melde an …" : "Anmelden"}
+          <button type="submit" class="primary" aria-disabled={busy || undefined} aria-busy={busy || undefined}>
+            {busy ? "Wird angemeldet …" : "Anmelden"}
           </button>
         </form>
       {:else if step === "codes"}
-        <h2 id="backup-gate-title">Einmal-Codes notieren</h2>
+        <h1 id="backup-gate-title">Einmal-Codes notieren</h1>
         <p>
           Mit diesen Codes kommst du hinein, falls dein Gerät mit der Authenticator-App
           verloren geht — jeder Code gilt <strong>einmal</strong> und ersetzt nur den
@@ -328,13 +424,18 @@
         <ul class="codes">
           {#each recoveryCodes as c (c)}<li><code>{c}</code></li>{/each}
         </ul>
+        <div class="kb-actions kb-start codes-actions">
+          {#if canCopy}<button type="button" class="btn-secondary" onclick={copyCodes}>Codes kopieren</button>{/if}
+          <button type="button" class="btn-secondary" onclick={saveCodes}>Als Textdatei speichern</button>
+        </div>
+        <p class="codes-info" role="status">{codesInfo}</p>
         <label class="check">
           <input type="checkbox" bind:checked={codesNoted} data-initial-focus />
           Ich habe die Codes sicher notiert.
         </label>
         <button type="button" class="primary" disabled={!codesNoted} onclick={done}>Weiter</button>
       {:else if step === "qr" && offer}
-        <h2 id="backup-gate-title">Authenticator-App verbinden</h2>
+        <h1 id="backup-gate-title">Authenticator-App verbinden</h1>
         <p>
           Scanne den QR-Code mit deiner Authenticator-App (z. B. Aegis, 2FAS, Google
           Authenticator) und gib den angezeigten Code ein.
@@ -361,33 +462,36 @@
             enterkeyhint="done"
             aria-invalid={error ? "true" : undefined}
             aria-describedby={error ? "gate-err" : undefined}
-            disabled={busy}
+            readonly={busy}
           />
           {@render errorText()}
-          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
+          <button type="submit" class="primary" aria-disabled={busy || undefined} aria-busy={busy || undefined}>
             {busy
-              ? "Richte ein …"
+              ? "Wird eingerichtet …"
               : status === "setup"
                 ? "Einrichten & erstes Backup erstellen"
                 : "Zweiten Faktor einrichten"}
           </button>
+          <button type="button" class="btn-secondary gate-back" onclick={backToToken}>
+            <span aria-hidden="true">←</span> Zurück zu Token und Passwort
+          </button>
         </form>
       {:else}
-        <h2 id="backup-gate-title">
+        <h1 id="backup-gate-title">
           {status === "setup" ? "Klein.Buch einrichten" : "Zweiten Faktor neu einrichten"}
           <HelpAnchor slug="passphrase-einrichten" />
-        </h2>
+        </h1>
         {#if status === "setup"}
           <p>
             Leg ein <strong>Daten-Passwort</strong> fest. Damit werden deine gesamte
             Buchhaltung und deine Backups verschlüsselt; du brauchst es bei jeder
             Anmeldung.
           </p>
-          <p class="caveat">
-            Wichtig: Dieses Passwort wird <strong>nirgends gespeichert</strong> und kann
+          <Banner kind="warning" title="Wichtig:">
+            Dieses Passwort wird <strong>nirgends gespeichert</strong> und kann
             <strong>nicht zurückgesetzt</strong> werden. Vergisst du es, kommst du an
             deine Daten und Backups nicht mehr heran.
-          </p>
+          </Banner>
         {:else}
           <p>
             Der zweite Faktor wurde zurückgesetzt. Gib den Setup-Token aus dem
@@ -411,11 +515,11 @@
             autocapitalize="off"
             spellcheck="false"
             enterkeyhint="next"
-            disabled={busy}
+            readonly={busy}
           />
           <label for="gate-pass">
             {status === "setup"
-              ? "Passwort (mindestens 16 Zeichen — am besten 3–4 Wörter)"
+              ? "Daten-Passwort (mindestens 16 Zeichen — am besten 3–4 Wörter)"
               : "Daten-Passwort"}
           </label>
           <div class="pw">
@@ -431,7 +535,7 @@
               aria-describedby={[error ? "gate-err" : "", strength ? "gate-strength" : ""]
                 .filter(Boolean)
                 .join(" ") || undefined}
-              disabled={busy}
+              readonly={busy}
             />
             <button
               type="button"
@@ -450,7 +554,7 @@
             </div>
           {/if}
           {#if status === "setup"}
-            <label for="gate-confirm">Passwort wiederholen</label>
+            <label for="gate-confirm">Daten-Passwort wiederholen</label>
             <div class="pw">
               <input
                 id="gate-confirm"
@@ -462,7 +566,7 @@
                 enterkeyhint="go"
                 aria-invalid={error ? "true" : undefined}
                 aria-describedby={error ? "gate-err" : undefined}
-                disabled={busy}
+                readonly={busy}
               />
               <button
                 type="button"
@@ -474,8 +578,8 @@
             </div>
           {/if}
           {@render errorText()}
-          <button type="submit" class="primary" disabled={busy} aria-busy={busy}>
-            {busy ? "Prüfe …" : "Weiter zum QR-Code"}
+          <button type="submit" class="primary" aria-disabled={busy || undefined} aria-busy={busy || undefined}>
+            {busy ? "Wird geprüft …" : "Weiter zum QR-Code"}
           </button>
         </form>
       {/if}
@@ -490,9 +594,20 @@
 <style>
   .gate-backdrop { z-index: 2000; }
   .gate { --dialog-w: 32rem; }
-  .gate h2 {
+  .gate h1 {
     margin: 0 0 0.75rem;
     font-size: var(--fs-xl);
+  }
+  .gate-loading {
+    margin: auto;
+    padding: var(--sp-6);
+  }
+  .codes-actions { margin: var(--sp-2) 0; }
+  .codes-info { margin: 0; min-height: 1.5em; color: var(--text-muted); font-size: var(--type-small); }
+  .codes-info:empty { min-height: 0; }
+  .gate-back {
+    margin-top: var(--sp-2);
+    width: 100%;
   }
   .gate p {
     color: var(--text);
@@ -572,14 +687,6 @@
     color: var(--status-danger-fg);
     font-weight: 600;
   }
-  .insecure {
-    background: var(--status-warning-bg);
-    border: 1px solid var(--status-warning-line);
-    color: var(--status-warning-fg);
-    border-radius: var(--r-md);
-    padding: 0.5rem 0.75rem;
-    font-weight: 600;
-  }
   .qr {
     display: flex;
     justify-content: center;
@@ -619,12 +726,15 @@
     cursor: pointer;
   }
   @media (hover: hover) {
-    button.primary:hover:not(:disabled) {
+    button.primary:hover:not(:disabled):not([aria-disabled="true"]) {
       background: var(--accent-hover);
     }
   }
-  button.primary:disabled {
+  button.primary:disabled,
+  button.primary[aria-disabled="true"] {
     opacity: 0.6;
     cursor: default;
   }
+  button.primary[aria-busy="true"] { cursor: progress; }
+  input[readonly] { background: var(--surface-page); }
 </style>

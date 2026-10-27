@@ -6,14 +6,19 @@
   // schlichte Darstellung, Feinschliff im UI/UX-Lauf. Neue Passwörter liegen
   // nur bis zum Absenden bzw. Abbrechen im Zustand der Seite.
   // Plan W12 — Versionsprüfung (opt-in, E14): Schalter für die tägliche
-  // Abfrage der GitHub-Releases; Hinweise landen in der Inbox.
+  // Abfrage der GitHub-Releases; Hinweise landen bei den Hinweisen.
+  // U4 (V2-06/V2-07/V2-11): Knöpfe während eines Laufs `ariaDisabled` (Fokus bleibt),
+  // Ladefehler je Abschnitt mit „Erneut laden“, „Abbrechen“ (secondary) vor der Hauptaktion.
   import { onMount } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import LoadingState from "#lib/LoadingState.svelte";
   import Badge from "#lib/Badge.svelte";
+  import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import { dateTime } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import { estimatePassphraseStrength } from "#lib/passphraseStrength.ts";
   import {
     authSecurity,
     authSessions,
@@ -29,6 +34,7 @@
     type TotpOffer,
   } from "#lib/api.ts";
   import type { UpdateCheckSettings } from "#lib/types.ts";
+  import { REAUTH_CANCELED } from "#lib/transport.ts";
 
   let updateCheck = $state<UpdateCheckSettings | null>(null);
   let recoveryLeft = $state<number | null>(null);
@@ -39,12 +45,16 @@
   let newPassConfirm = $state("");
   let busy = $state(false);
   let sessions = $state<AuthSession[] | null>(null);
+  // U4 (V2-07): Ladefehler je Abschnitt mit „Erneut laden“ statt ewigem „Wird geladen …“.
+  let recoveryError = $state<string | null>(null);
+  let sessionsError = $state<string | null>(null);
+  let updateError = $state<string | null>(null);
   // Lauf F8: Hinweis bei unklarem Ausgang des Passphrase-Wechsels.
   let passphraseUnclear = $state<string | null>(null);
 
   // U1: Feldfehler am Passwort statt Toast, Anzeigen-Schalter und
-  // Stärke-Schätzung (ADR 0041 Nr. 13; Heuristik wie BackupGate, nur Hinweis —
-  // verbindlich prüft der Server).
+  // Stärke-Schätzung (ADR 0041 Nr. 13; gemeinsamer Helfer `passphraseStrength.ts`
+  // mit BackupGate, nur Hinweis — verbindlich prüft der Server).
   let passError = $state("");
   let confirmError = $state("");
   let showNew = $state(false);
@@ -53,19 +63,7 @@
   let confirmEl: HTMLInputElement | undefined = $state();
   let totpEl: HTMLInputElement | undefined = $state();
 
-  type Strength = { level: 0 | 1 | 2 | 3; text: string };
-  function estimateStrength(p: string): Strength | null {
-    if (!p) return null;
-    const len = [...p].length;
-    const words = p.trim().split(/[\s\-_.,;:+\/]+/).filter((w) => w.length >= 3).length;
-    const unique = new Set(p.toLowerCase()).size;
-    if (len < 16) return { level: 0, text: `Zu kurz: ${len} von mindestens 16 Zeichen.` };
-    if (unique < 6) return { level: 1, text: "Schwach: viele Wiederholungen. Nimm 3–4 zufällige Wörter." };
-    if (len >= 28 || words >= 4) return { level: 3, text: "Stark." };
-    if (len >= 20 || words >= 3) return { level: 2, text: "Gut." };
-    return { level: 1, text: "Ausreichend. Länger ist besser, z. B. mit einem weiteren Wort." };
-  }
-  const strength = $derived(estimateStrength(newPass));
+  const strength = $derived(estimatePassphraseStrength(newPass));
   const otherSessions = $derived(sessions ? sessions.filter((s) => !s.current).length : 0);
   onMount(() => {
     load();
@@ -74,14 +72,17 @@
   });
 
   async function loadSessions() {
+    sessionsError = null;
     try {
       sessions = await authSessions();
     } catch (e) {
-      flash(String(e), "error");
+      if (!sessions) sessionsError = String(e);
+      else flash(`Sitzungen neu laden fehlgeschlagen: ${String(e)}`, "error");
     }
   }
 
   async function revokeOthers() {
+    if (busy) return;
     if (
       !(await confirmDialog({
         title: "Andere Sitzungen abmelden?",
@@ -98,7 +99,7 @@
       flash(n === 1 ? "1 andere Sitzung abgemeldet." : `${n} andere Sitzungen abgemeldet.`, "ok");
       await loadSessions();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Sitzungen abmelden fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       busy = false;
     }
@@ -110,18 +111,21 @@
   }
 
   async function load() {
+    recoveryError = null;
     try {
       recoveryLeft = (await authSecurity()).recoveryLeft;
     } catch (e) {
-      flash(String(e), "error");
+      recoveryError = String(e);
     }
   }
 
   async function loadUpdateCheck() {
+    updateError = null;
     try {
       updateCheck = await updateCheckGet();
     } catch (e) {
-      flash(String(e), "error");
+      if (!updateCheck) updateError = String(e);
+      else flash(`Versionsprüfung laden fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
 
@@ -141,7 +145,7 @@
       // angezeigten Zustand ausdrücklich zurücksetzen (Svelte setzt ihn nicht
       // neu, wenn der geladene Wert gleich bleibt).
       box.checked = !enabled;
-      flash(String(e), "error");
+      flash(`Versionsprüfung umschalten fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       busy = false;
       await loadUpdateCheck();
@@ -151,6 +155,7 @@
 
 
   async function renewRecovery() {
+    if (busy) return;
     if (
       !(await confirmDialog({
         title: "Neue Einmal-Codes erzeugen?",
@@ -165,25 +170,27 @@
       codes = await authRecoveryRenew();
       await load();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Einmal-Codes erzeugen fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       busy = false;
     }
   }
 
   async function startTotp() {
+    if (busy) return;
     busy = true;
     try {
       offer = await authTotpRenewOffer();
       totpCode = "";
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Zweiten Faktor einrichten fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       busy = false;
     }
   }
 
   async function finishTotp() {
+    if (busy) return;
     busy = true;
     try {
       codes = await authTotpRenewFinish(totpCode.trim());
@@ -191,7 +198,7 @@
       flash("Zweiter Faktor neu eingerichtet — die alte App-Verbindung gilt nicht mehr.", "ok");
       await load();
     } catch (e) {
-      flash(String(e), "error");
+      flash(`Zweiten Faktor einrichten fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally {
       totpCode = "";
       busy = false;
@@ -199,6 +206,7 @@
   }
 
   async function changePassphrase() {
+    if (busy) return;
     passError = "";
     confirmError = "";
     if (newPass.length < 16) {
@@ -240,6 +248,9 @@
         // Nicht verwerfen: Die neue Passphrase kann schon gelten.
         passphraseUnclear = e.message;
         keepFields = true;
+      } else if (String(e).includes(REAUTH_CANCELED)) {
+        // Abgebrochene Bestätigung ist kein Fehler am Feld (V1-09): neutraler Hinweis.
+        flash(String(e), "error");
       } else {
         // Ablehnung des Servers (z. B. zu häufiges Passwort) am Feld zeigen.
         passError = String(e);
@@ -259,9 +270,14 @@
   <h2 id="sec-recovery-h">Einmal-Codes</h2>
   <p>
     Einmal-Codes ersetzen den App-Code, falls das Gerät mit der Authenticator-App
-    verloren geht. Noch übrig: <strong>{recoveryLeft ?? "…"}</strong>.
+    verloren geht. Noch übrig: <strong>{recoveryLeft ?? (recoveryError ? "unbekannt" : "…")}</strong>.
   </p>
-  <Button variant="secondary" disabled={busy} onclick={renewRecovery}>
+  {#if recoveryError}
+    <Banner title="Der Stand der Einmal-Codes konnte nicht geladen werden.">{recoveryError}
+      {#snippet actions()}<Button variant="secondary" onclick={load}>Erneut laden</Button>{/snippet}
+    </Banner>
+  {/if}
+  <Button variant="secondary" ariaDisabled={busy} onclick={renewRecovery}>
     Neue Einmal-Codes erzeugen
   </Button>
 </section>
@@ -305,13 +321,14 @@
       />
       <p id="sec-totp-hint" class="hint">6 Ziffern, wie sie die App gerade anzeigt.</p>
       <div class="actions">
-        <Button type="submit" disabled={busy}>Neu einrichten</Button>
-        <Button variant="ghost" onclick={() => (offer = null)}>Abbrechen</Button>
+        <!-- U4 (V2-11): „Abbrechen“ (secondary) zuerst, Hauptaktion zuletzt. -->
+        <Button variant="secondary" onclick={() => (offer = null)}>Abbrechen</Button>
+        <Button type="submit" ariaDisabled={busy}>Neu einrichten</Button>
       </div>
     </form>
   {:else}
     <p>Neues Gerät oder neue App? Richte den zweiten Faktor neu ein.</p>
-    <Button variant="secondary" disabled={busy} onclick={startTotp}>
+    <Button variant="secondary" ariaDisabled={busy} onclick={startTotp}>
       Zweiten Faktor neu einrichten
     </Button>
   {/if}
@@ -338,8 +355,8 @@
             <td class="ts" data-label="Zuletzt aktiv">{dateTime(s.lastSeenAt)}</td>
             <td data-label="Status">
               <span class="badges">
-                {#if s.current}<Badge tone="primary">diese Sitzung</Badge>{:else}<Badge>anderes Gerät oder Browser</Badge>{/if}
-                {#if s.reauthActive}<Badge tone="info">frisch bestätigt</Badge>{/if}
+                {#if s.current}<Badge kind="tag">Diese Sitzung</Badge>{:else}<Badge kind="tag">Anderes Gerät oder Browser</Badge>{/if}
+                {#if s.reauthActive}<Badge tone="info">Frisch bestätigt</Badge>{/if}
               </span>
             </td>
           </tr>
@@ -349,7 +366,8 @@
     <div class="actions">
       <Button
         variant="secondary"
-        disabled={busy || otherSessions === 0}
+        disabled={otherSessions === 0}
+        ariaDisabled={busy}
         onclick={revokeOthers}
         ariaDescribedby={otherSessions === 0 ? "sec-sessions-none" : undefined}
       >
@@ -359,8 +377,12 @@
         <span id="sec-sessions-none" class="muted">Nur diese Sitzung ist angemeldet.</span>
       {/if}
     </div>
+  {:else if sessionsError}
+    <Banner title="Die Sitzungen konnten nicht geladen werden.">{sessionsError}
+      {#snippet actions()}<Button variant="secondary" onclick={loadSessions}>Erneut laden</Button>{/snippet}
+    </Banner>
   {:else}
-    <p class="muted" aria-busy="true">Lädt …</p>
+    <LoadingState />
   {/if}
 </section>
 
@@ -433,7 +455,7 @@
     </div>
     {#if confirmError}<p id="sec-confirm-err" class="err">{confirmError}</p>{/if}
     <div class="actions">
-      <Button type="submit" disabled={busy}>Passwort ändern</Button>
+      <Button type="submit" ariaDisabled={busy}>Passwort ändern</Button>
     </div>
   </form>
 </section>
@@ -452,7 +474,8 @@
       <input
         type="checkbox"
         checked={updateCheck.enabled}
-        disabled={busy}
+        aria-disabled={busy ? "true" : undefined}
+        onclick={(e) => { if (busy) e.preventDefault(); }}
         onchange={(e) => toggleUpdateCheck(e.currentTarget)}
       />
       Nach neuen Versionen suchen
@@ -460,8 +483,12 @@
     {#if updateCheck.enabled}
       <p class="muted">Zuletzt geprüft: {dateTime(updateCheck.lastCheckAt, "noch nie")}</p>
     {/if}
+  {:else if updateError}
+    <Banner title="Die Versionsprüfung konnte nicht geladen werden.">{updateError}
+      {#snippet actions()}<Button variant="secondary" onclick={loadUpdateCheck}>Erneut laden</Button>{/snippet}
+    </Banner>
   {:else}
-    <p class="muted" aria-busy="true">Lädt …</p>
+    <LoadingState />
   {/if}
 </section>
 

@@ -44,14 +44,14 @@
   .source-notice {
     margin: 1.25rem 0 0;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--c-border);
-    color: var(--c-text-muted);
-    font-size: 0.78rem;
+    border-top: var(--rule);
+    color: var(--text-muted);
+    font-size: var(--type-caption);
     line-height: 1.5;
     text-align: center;
   }
   .source-notice a {
-    color: var(--c-primary-700);
+    color: var(--accent);
     text-decoration: underline;
   }
   @media (pointer: coarse) {

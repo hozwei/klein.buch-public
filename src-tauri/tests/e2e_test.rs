@@ -413,7 +413,7 @@ async fn failed_email_log_entry_is_reported_not_swallowed() {
     .await
     .expect("der Versand selbst gelingt");
     let warning = result.warning.expect("Warnung an den Aufrufer");
-    assert!(warning.contains("Versandprotokoll"), "{warning}");
+    assert!(warning.contains("E-Mail-Protokoll"), "{warning}");
     assert_eq!(server.messages().len(), 1, "Mail ist hinausgegangen");
     let inv = invoices::get(&env.pool, &invoice_id)
         .await
@@ -437,7 +437,7 @@ async fn failed_email_log_entry_is_reported_not_swallowed() {
         .unwrap()
         .contains("Protokoll nicht schreibbar"));
     let notice: (String, String) = sqlx::query_as(
-        "SELECT severity, body FROM notifications WHERE title = 'Versandprotokoll unvollständig'",
+        "SELECT severity, body FROM notifications WHERE title = 'E-Mail-Protokoll unvollständig'",
     )
     .fetch_one(&env.pool)
     .await

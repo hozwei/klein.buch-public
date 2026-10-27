@@ -1,5 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
 import adapter from "@sveltejs/adapter-static";
@@ -178,6 +180,103 @@ export function jsLicenses() {
   ];
 }
 
+// Vorkomprimierte Auslieferung (Lauf 2026.11 U4, ADR 0041 Nr. 212): Nach dem
+// Adapter liegt neben jeder Text-Datei in `build/` eine `<datei>.br` (Brotli,
+// Qualität 11) und eine `<datei>.gz` (gzip -9). Der Server (`ServeDir`) wählt
+// sie nach `Accept-Encoding`; er komprimiert selbst nichts. Ausgelassen: Dateien
+// bis 1 KiB, Varianten, die nicht kleiner sind, und `build/legal/` (Lizenzliste,
+// die das Dockerfile herausnimmt; `/legal/` liefert der Server aus dem
+// Ressourcen-Ordner).
+const PRECOMPRESS_FILE = /\.(?:js|css|html|svg|json|webmanifest)$/i;
+const PRECOMPRESS_MIN_BYTES = 1024;
+const PRECOMPRESS_SKIP_DIRS = ["legal"];
+const brotliAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+/**
+ * Dateien unter `dir` (rekursiv), ohne die Unterordner `skip` der ersten Ebene.
+ * @param {string} dir
+ * @param {string[]} skip
+ * @returns {string[]}
+ */
+function filesBelow(dir, skip) {
+  /** @type {string[]} */
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      if (!skip.includes(e.name)) out.push(...filesBelow(p, []));
+    } else if (e.isFile()) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+/**
+ * Legt `<datei>.br` und `<datei>.gz` zu jeder komprimierbaren Datei unter `dir` an
+ * (nur Dateien über 1 KiB, nur Varianten, die kleiner sind als die Datei; eine
+ * ältere Variante wird vorher entfernt).
+ * @param {string} dir
+ * @param {{ skip?: string[] }} [options] Unterordner der ersten Ebene, die ausgelassen werden
+ * @returns {Promise<{ files: number, raw: number, br: number, gz: number }>} Anzahl der Dateien über
+ *   1 KiB und Byte-Summen roh bzw. wie ausgeliefert (Variante, sonst roh)
+ */
+export async function precompressDir(dir, { skip = [] } = {}) {
+  const stats = { files: 0, raw: 0, br: 0, gz: 0 };
+  const targets = filesBelow(dir, skip).filter((f) => PRECOMPRESS_FILE.test(f));
+  await Promise.all(
+    targets.map(async (file) => {
+      for (const ext of [".br", ".gz"]) rmSync(file + ext, { force: true });
+      const data = readFileSync(file);
+      if (data.length <= PRECOMPRESS_MIN_BYTES) return;
+      const [br, gz] = await Promise.all([
+        brotliAsync(data, {
+          params: {
+            [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+            [zlibConstants.BROTLI_PARAM_QUALITY]: zlibConstants.BROTLI_MAX_QUALITY,
+            [zlibConstants.BROTLI_PARAM_SIZE_HINT]: data.length,
+          },
+        }),
+        gzipAsync(data, { level: zlibConstants.Z_BEST_COMPRESSION }),
+      ]);
+      stats.files += 1;
+      stats.raw += data.length;
+      stats.br += Math.min(br.length, data.length);
+      stats.gz += Math.min(gz.length, data.length);
+      if (br.length < data.length) writeFileSync(file + ".br", br);
+      if (gz.length < data.length) writeFileSync(file + ".gz", gz);
+    }),
+  );
+  return stats;
+}
+
+/**
+ * Vite-Plugin: komprimiert `build/` nach dem Adapter vor (ohne npm-Abhängigkeit).
+ * Muss in `plugins` nach `sveltekit()` stehen (`buildApp` „post“ nach dem Adapter).
+ * @returns {import("vite").Plugin}
+ */
+export function precompress() {
+  let root = process.cwd();
+  return {
+    name: "klein-buch-precompress",
+    apply: "build",
+    configResolved(config) {
+      root = config.root;
+    },
+    buildApp: {
+      order: "post",
+      async handler() {
+        const s = await precompressDir(path.join(root, "build"), { skip: PRECOMPRESS_SKIP_DIRS });
+        const kb = (/** @type {number} */ n) => `${Math.round(n / 1024)} KiB`;
+        console.info(
+          `klein-buch-precompress: ${s.files} Dateien, ${kb(s.raw)} → br ${kb(s.br)}, gzip ${kb(s.gz)}`,
+        );
+      },
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -194,6 +293,7 @@ export default defineConfig({
       version: { pollInterval: 0 },
     }),
     jsLicenses(),
+    precompress(),
   ],
   clearScreen: false,
   server: {

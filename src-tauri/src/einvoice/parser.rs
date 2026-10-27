@@ -117,6 +117,17 @@ pub struct ParsedEInvoice {
     pub line_descriptions: Vec<String>,
     /// Mindestens eine Steuerkategorie `AE` (Reverse-Charge, §13b).
     pub reverse_charge: bool,
+    /// Steuerkategorien laut Rechnung (BT-95/BT-102/BT-118/BT-151, UNTDID
+    /// 5305: `S`, `Z`, `E`, `AE`, `K`, `G`, `O`, `L`, `M`), je einmal in der
+    /// Reihenfolge des ersten Auftretens, in Großbuchstaben (Lauf 2026.11 U4).
+    #[serde(default)]
+    pub tax_categories: Vec<String>,
+    /// Mindestens eine Steuerkategorie `K` (innergemeinschaftliche Lieferung
+    /// des Lieferanten, Art. 138 MwStSystRL; beim Empfänger ggf.
+    /// innergemeinschaftlicher Erwerb, §1a UStG). Nur ein Kennzeichen für den
+    /// Hinweis in der Vorschau — Beträge und §13b-Vorschlag bleiben unberührt.
+    #[serde(default)]
+    pub intra_community: bool,
     /// CII `GuidelineSpecifiedDocumentContextParameter/ID` — die URN des
     /// genutzten ZUGFeRD-/XRechnung-Profils (z. B.
     /// `urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0`).
@@ -352,6 +363,13 @@ fn assign_cii(stack: &[String], scheme: Option<&str>, text: &str, p: &mut Parsed
     if l == "CategoryCode" && text.eq_ignore_ascii_case("AE") {
         p.reverse_charge = true;
     }
+    // Steuerkategorien (U4): Kopf (BT-118), Position (BT-151), Zu-/Abschläge
+    // (BT-95/BT-102) — alle unter `ApplicableTradeTax` bzw. `CategoryTradeTax`.
+    if ends_with(stack, &["ApplicableTradeTax", "CategoryCode"])
+        || ends_with(stack, &["CategoryTradeTax", "CategoryCode"])
+    {
+        note_tax_category(p, text);
+    }
 
     // PV1-A2: ZUGFeRD-/XRechnung-Profil-URN aus dem ExchangedDocumentContext.
     // Liegt bei CII strukturell vor dem ExchangedDocument; deshalb vorne in
@@ -420,6 +438,13 @@ fn assign_ubl(stack: &[String], text: &str, p: &mut ParsedEInvoice) {
     // Reverse-Charge: TaxCategory/ID == 'AE'.
     if ends_with(stack, &["TaxCategory", "ID"]) && text.eq_ignore_ascii_case("AE") {
         p.reverse_charge = true;
+    }
+    // Steuerkategorien (U4): Kopf/Zu-/Abschläge `TaxCategory/ID`, Position
+    // `ClassifiedTaxCategory/ID` (nicht `TaxScheme/ID` = „VAT“).
+    if ends_with(stack, &["TaxCategory", "ID"])
+        || ends_with(stack, &["ClassifiedTaxCategory", "ID"])
+    {
+        note_tax_category(p, text);
     }
 
     // Kopf-Felder sind direkte Kinder des Wurzelelements (Tiefe 2).
@@ -612,6 +637,23 @@ fn ends_with(stack: &[String], segs: &[&str]) -> bool {
 fn set_once(slot: &mut Option<String>, text: &str) {
     if slot.is_none() {
         *slot = Some(text.to_string());
+    }
+}
+
+/// Merkt eine Steuerkategorie (UNTDID 5305) einmalig vor; `K` setzt
+/// zusätzlich [`ParsedEInvoice::intra_community`] (U4). Werte, die kein
+/// Kategorie-Code sein können (leer, länger als 2 Zeichen, nicht
+/// alphanumerisch), bleiben außen vor.
+fn note_tax_category(p: &mut ParsedEInvoice, text: &str) {
+    let code = text.trim().to_ascii_uppercase();
+    if code.is_empty() || code.len() > 2 || !code.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return;
+    }
+    if code == "K" {
+        p.intra_community = true;
+    }
+    if !p.tax_categories.contains(&code) {
+        p.tax_categories.push(code);
     }
 }
 
@@ -909,6 +951,57 @@ mod tests {
         assert_eq!(p.line_descriptions.len(), 2);
         assert_eq!(p.line_descriptions[0], "Beratung & Support");
         assert!(!p.reverse_charge);
+        // U4: Steuerkategorien aus Position und Kopf, je einmal.
+        assert_eq!(p.tax_categories, vec!["E"]);
+        assert!(!p.intra_community);
+    }
+
+    /// U4 (Warteliste 2): Kategorie K (innergemeinschaftlich) wird aus CII
+    /// (Kopf/Position) und UBL (TaxCategory/ClassifiedTaxCategory) erkannt;
+    /// `TaxScheme/ID` („VAT“) zählt nicht als Kategorie, Beträge und der
+    /// §13b-Vorschlag bleiben unberührt.
+    #[test]
+    fn detects_intra_community_category_k() {
+        let cii = crate::einvoice::generator::to_xrechnung(
+            "RE-2026-0001",
+            &invoice_two_items(),
+            &seller_klein(),
+            &buyer(),
+            "N/A",
+            &[],
+        )
+        .unwrap()
+        .replace(
+            "<ram:CategoryCode>E</ram:CategoryCode>",
+            "<ram:CategoryCode>K</ram:CategoryCode>",
+        );
+        let p = parse(&cii).unwrap();
+        assert!(p.intra_community);
+        assert_eq!(p.tax_categories, vec!["K"]);
+        assert!(!p.reverse_charge);
+        let input = build_expense_input(&p, today());
+        assert!(!input.reverse_charge_13b);
+        assert!(input.notes.is_none());
+
+        // UBL: Kopf S, Position K (klein geschrieben) → beide, K erkannt.
+        let ubl = UBL_FIXTURE.replace(
+            "<cac:Item><cbc:Name>Internet-Anschluss April</cbc:Name></cac:Item>",
+            "<cac:Item><cbc:Name>Internet-Anschluss April</cbc:Name>\
+             <cac:ClassifiedTaxCategory><cbc:ID>k</cbc:ID>\
+             <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>\
+             </cac:ClassifiedTaxCategory></cac:Item>",
+        );
+        let p = parse(&ubl).unwrap();
+        assert!(p.intra_community);
+        assert_eq!(p.tax_categories, vec!["S", "K"]);
+
+        // Ohne K: nur S, kein Kennzeichen; JSON trägt beide Felder (camelCase).
+        let p = parse(UBL_FIXTURE).unwrap();
+        assert!(!p.intra_community);
+        assert_eq!(p.tax_categories, vec!["S"]);
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["intraCommunity"], false);
+        assert_eq!(json["taxCategories"], serde_json::json!(["S"]));
     }
 
     #[test]

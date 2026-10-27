@@ -23,8 +23,11 @@
   import { flash } from "#lib/toast.svelte.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
+  import DocNo from "#lib/DocNo.svelte";
+  import Badge from "#lib/Badge.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import QuantityInput from "#lib/QuantityInput.svelte";
 
   let years = $state<number[]>([]);
   let selectedYear = $state<number | null>(null);
@@ -54,6 +57,50 @@
   $effect(() => {
     if (typeof localStorage !== "undefined") localStorage.setItem("datevSkr", skr);
   });
+
+  // U4 (Warteliste 1, Übergabe F5): Berater- und Mandantennummer für den Kopf des
+  // DATEV-Stapels (Feld 11/12), optional; gemerkt wie der Kontenrahmen. Die Grenzen
+  // prüft der Server (`datev_csv::validate_header_numbers`); hier nur die Meldung am
+  // Feld, bevor ein Export scheitert.
+  const CONSULTANT_RANGE = { min: 1001, max: 9_999_999 };
+  const CLIENT_RANGE = { min: 1, max: 99_999 };
+  function storedNumber(key: string): number | null {
+    if (typeof localStorage === "undefined") return null;
+    const v = Number(localStorage.getItem(key) ?? "");
+    return Number.isInteger(v) && v > 0 ? v : null;
+  }
+  let consultantNumber = $state<number | null>(storedNumber("datevConsultantNumber"));
+  let clientNumber = $state<number | null>(storedNumber("datevClientNumber"));
+  // Meldung erst nach dem Verlassen eines Felds bzw. beim Export (ADR 0041 Nr. 15 (e)).
+  let numbersShown = $state(false);
+  let consultantInput: QuantityInput | undefined = $state();
+  let clientInput: QuantityInput | undefined = $state();
+  $effect(() => {
+    if (typeof localStorage === "undefined") return;
+    const pairs: [string, number | null][] = [
+      ["datevConsultantNumber", consultantNumber],
+      ["datevClientNumber", clientNumber],
+    ];
+    for (const [key, v] of pairs) {
+      if (v == null) localStorage.removeItem(key);
+      else localStorage.setItem(key, String(v));
+    }
+  });
+  function rangeError(v: number | null, r: { min: number; max: number }, noun: string): string {
+    if (v == null || (v >= r.min && v <= r.max)) return "";
+    return `${noun} liegt zwischen ${r.min} und ${r.max}. Sonst das Feld leer lassen.`;
+  }
+  const consultantError = $derived(rangeError(consultantNumber, CONSULTANT_RANGE, "Die Beraternummer"));
+  const clientError = $derived(rangeError(clientNumber, CLIENT_RANGE, "Die Mandantennummer"));
+  /** Prüft beide Nummern vor einem DATEV-Export; Fokus aufs erste fehlerhafte Feld. */
+  function numbersValid(): boolean {
+    numbersShown = true;
+    const okC = (consultantInput?.validate() ?? true) && !consultantError;
+    const okM = (clientInput?.validate() ?? true) && !clientError;
+    if (!okC) consultantInput?.focus();
+    else if (!okM) clientInput?.focus();
+    return okC && okM;
+  }
 
   const currentYear = yearBerlin();
   let canBookAfa = $derived(selectedYear != null && selectedYear <= currentYear);
@@ -118,10 +165,10 @@
   }
 
   async function exportDatev() {
-    if (selectedYear == null) return;
+    if (selectedYear == null || !numbersValid()) return;
     busyDatev = true;
     try {
-      const r = await euerExportDatev(selectedYear, skr);
+      const r = await euerExportDatev(selectedYear, skr, { consultantNumber, clientNumber });
       saveDownload(r.download);
       lastDatev = r.download.fileName;
       flash(`DATEV-Buchungsstapel erstellt (${r.bookingCount} Buchungen, ${skr}).`);
@@ -133,10 +180,10 @@
   }
 
   async function exportStb() {
-    if (selectedYear == null) return;
+    if (selectedYear == null || !numbersValid()) return;
     busyStb = true;
     try {
-      const r = await euerExportStbZip(selectedYear, skr);
+      const r = await euerExportStbZip(selectedYear, skr, { consultantNumber, clientNumber });
       saveDownload(r.download);
       lastStb = r.download.fileName;
       flash(`Steuerberater-Paket erstellt (${r.fileCount} Dateien).`);
@@ -170,7 +217,7 @@
       saveDownload(r.download);
       lastZip = r.download.fileName;
       flash(
-        `Einzelaufstellung erstellt (${r.incomeCount} Einnahmen, ${r.expenseCount} Ausgaben, ${r.assetCount} Anlagen).`,
+        `Einzelaufstellung erstellt (${r.incomeCount} Einnahmen, ${r.expenseCount} Ausgaben, ${r.assetCount} Anschaffungen).`,
       );
     } catch (e) {
       flash(String(e), "error");
@@ -188,7 +235,7 @@
         flash("Bitte zuerst die Sicherung (Backup) entsperren, dann AfA buchen.", "error");
       } else {
         flash(
-          `AfA gebucht: ${r.bookedEntries} Buchung(en) für ${r.processedAssets} Anlage(n).`,
+          `AfA gebucht: ${r.bookedEntries} Buchung(en) für ${r.processedAssets} Anschaffung(en).`,
         );
         const [p, ap] = await Promise.all([
           euerPackage(selectedYear),
@@ -235,11 +282,11 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted" aria-busy="true">Lädt …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if pkg && form}
   {#if snapshotMismatch}
-    <Banner kind="warning">
-      <strong>Abweichung vom Jahresabschluss:</strong> Das Geschäftsjahr {snapshotMismatch.fiscalYear}
+    <Banner kind="warning" title="Abweichung vom Jahresabschluss.">
+      Das Geschäftsjahr {snapshotMismatch.fiscalYear}
       wurde am {date(snapshotMismatch.closedAt)} abgeschlossen; die heutigen Zahlen weichen
       davon ab bei: {snapshotMismatch.differences.map((d) => DIFF_LABEL[d] ?? d).join(", ")}.
       Ergebnis beim Abschluss {euro(snapshotMismatch.snapshot.surplusCents)}, heute
@@ -249,11 +296,11 @@
   {#if afaPending > 0}
     <Banner kind="warning">
       Für {selectedYear} ist die Abschreibung (AfA) von {afaPending}
-      {afaPending === 1 ? "Anlage" : "Anlagen"} noch nicht gebucht — sie würde im
+      {afaPending === 1 ? "Anschaffung" : "Anschaffungen"} noch nicht gebucht — sie würde im
       Export <strong>fehlen</strong>.
       {#if canBookAfa}
         <div class="afa-action">
-          <Button variant="secondary" size="sm" onclick={bookAfa} disabled={bookingAfa}>
+          <Button variant="secondary" size="sm" onclick={bookAfa} ariaDisabled={bookingAfa}>
             {bookingAfa ? "Buche …" : `AfA für ${selectedYear} jetzt buchen`}
           </Button>
         </div>
@@ -270,7 +317,7 @@
     </p>
     <div class="exp-row">
       <span class="exp-label" id="exp-pdf-l">Vollständige EÜR (PDF)</span>
-      <Button variant="secondary" onclick={exportPdf} disabled={busyPdf} ariaDescribedby="exp-pdf-l">
+      <Button variant="secondary" onclick={exportPdf} ariaDisabled={busyPdf} ariaDescribedby="exp-pdf-l">
         {busyPdf ? "Erstelle …" : "PDF herunterladen"}
       </Button>
     </div>
@@ -279,7 +326,7 @@
     {/if}
     <div class="exp-row">
       <span class="exp-label" id="exp-csv-l">ELSTER-Ausfüllhilfe (CSV)</span>
-      <Button variant="secondary" onclick={exportCsv} disabled={busyCsv} ariaDescribedby="exp-csv-l">
+      <Button variant="secondary" onclick={exportCsv} ariaDisabled={busyCsv} ariaDescribedby="exp-csv-l">
         {busyCsv ? "Erstelle …" : "CSV herunterladen"}
       </Button>
     </div>
@@ -288,7 +335,7 @@
     {/if}
     <div class="exp-row">
       <span class="exp-label" id="exp-zip-l">Einzelaufstellung (ZIP)</span>
-      <Button variant="secondary" onclick={exportZip} disabled={busyZip} ariaDescribedby="exp-zip-l">
+      <Button variant="secondary" onclick={exportZip} ariaDisabled={busyZip} ariaDescribedby="exp-zip-l">
         {busyZip ? "Erstelle …" : "ZIP herunterladen"}
       </Button>
     </div>
@@ -296,32 +343,69 @@
       <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastZip}</code></p>
     {/if}
 
-    <div class="exp-row">
-      <span class="exp-label" id="exp-datev-l">DATEV-Buchungsstapel (Steuerberater)</span>
-      <div class="skr">
-        <label for="exp-skr">Kontenrahmen</label>
-        <select id="exp-skr" class="kb-input" bind:value={skr}>
-          <option value="SKR03">SKR03</option>
-          <option value="SKR04">SKR04</option>
-        </select>
+    <!-- U4 (Warteliste 1): Kontenrahmen und Nummern gelten für DATEV-Stapel und Paket. -->
+    <fieldset class="stb-set">
+      <legend>Für die Steuerberatung</legend>
+      <div class="stb-fields">
+        <div class="skr">
+          <label for="exp-skr">Kontenrahmen</label>
+          <select id="exp-skr" class="kb-input" bind:value={skr}>
+            <option value="SKR03">SKR03</option>
+            <option value="SKR04">SKR04</option>
+          </select>
+        </div>
+        <QuantityInput
+          bind:this={consultantInput}
+          bind:value={consultantNumber}
+          integer
+          grouping={false}
+          noun="Beraternummer"
+          label="Beraternummer"
+          id="exp-consultant"
+          hint="optional"
+          error={numbersShown ? consultantError : undefined}
+          onchange={() => (numbersShown = true)}
+        />
+        <QuantityInput
+          bind:this={clientInput}
+          bind:value={clientNumber}
+          integer
+          grouping={false}
+          noun="Mandantennummer"
+          label="Mandantennummer"
+          id="exp-client"
+          hint="optional"
+          error={numbersShown ? clientError : undefined}
+          onchange={() => (numbersShown = true)}
+        />
       </div>
-      <Button variant="secondary" onclick={exportDatev} disabled={busyDatev} ariaDescribedby="exp-datev-l">
-        {busyDatev ? "Erstelle …" : "DATEV herunterladen"}
-      </Button>
-    </div>
-    {#if lastDatev}
-      <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastDatev}</code></p>
-    {/if}
+      <p class="muted hint stb-hint">
+        Berater- und Mandantennummer bekommst du von deiner Steuerberatung (Beraternummer
+        1001 bis 9999999, Mandantennummer 1 bis 99999). Sie stehen dann im Kopf des
+        DATEV-Stapels. Ohne Nummern importiert DATEV den Stapel in den gerade geöffneten
+        Mandanten.
+      </p>
 
-    <div class="exp-row">
-      <span class="exp-label" id="exp-stb-l">Steuerberater-Paket (ZIP, alles in einem)</span>
-      <Button variant="primary" onclick={exportStb} disabled={busyStb} ariaDescribedby="exp-stb-l">
-        {busyStb ? "Erstelle …" : "Paket herunterladen"}
-      </Button>
-    </div>
-    {#if lastStb}
-      <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastStb}</code></p>
-    {/if}
+      <div class="exp-row">
+        <span class="exp-label" id="exp-datev-l">DATEV-Buchungsstapel (Steuerberater)</span>
+        <Button variant="secondary" onclick={exportDatev} ariaDisabled={busyDatev} ariaDescribedby="exp-datev-l">
+          {busyDatev ? "Erstelle …" : "DATEV herunterladen"}
+        </Button>
+      </div>
+      {#if lastDatev}
+        <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastDatev}</code></p>
+      {/if}
+
+      <div class="exp-row">
+        <span class="exp-label" id="exp-stb-l">Steuerberater-Paket (ZIP, alles in einem)</span>
+        <Button variant="primary" onclick={exportStb} ariaDisabled={busyStb} ariaDescribedby="exp-stb-l">
+          {busyStb ? "Erstelle …" : "Paket herunterladen"}
+        </Button>
+      </div>
+      {#if lastStb}
+        <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastStb}</code></p>
+      {/if}
+    </fieldset>
 
     <p class="muted hint">
       Das PDF „Anlage EÜR {selectedYear}“ enthält Anlage EÜR, Anlageverzeichnis und
@@ -364,7 +448,7 @@
       </tbody>
       <tfoot>
         {#each sumLines as l (l.bezeichnung)}
-          <tr class="sum">
+          <tr class="sum kb-sum">
             <td class="z" data-label="Zeile">{l.zeile}</td>
             <td class="z" data-label="Kz">{l.kennzahl ?? "—"}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
@@ -397,8 +481,8 @@
         <tbody>
           {#each pkg.assets as a (a.assetNumber)}
             <tr>
-              <td class="z doc-no" data-label="AV-Nr.">{a.assetNumber}</td>
-              <td class="wrap" data-label="Bezeichnung">{a.label}{#if a.disposedInYear}<span class="tag">Abgang {date(a.disposalDate)}</span>{/if}</td>
+              <td class="z" data-label="AV-Nr."><DocNo value={a.assetNumber} /></td>
+              <td class="wrap" data-label="Bezeichnung">{a.label}{#if a.disposedInYear}{" "}<Badge kind="tag">Abgang {date(a.disposalDate)}</Badge>{/if}</td>
               <td data-label="Anschaffung">{date(a.acquisitionDate)}</td>
               <td class="num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
               <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted">{" "}· {percent(a.businessSharePercent)} betrieblich</span>{/if}</td>
@@ -425,7 +509,7 @@
           {#each pkg.income as i (i.invoiceNumber + i.paidDate + i.amountCents)}
             <tr>
               <td data-label="Datum">{date(i.paidDate)}</td>
-              <td class="doc-no" data-label="Rechnungsnr.">{i.invoiceNumber}</td>
+              <td data-label="Rechnungsnr."><DocNo value={i.invoiceNumber} /></td>
               <td class="wrap" data-label="Kunde">{i.customer}</td>
               <td class="cards-full wrap" data-label="Beschreibung">{i.description}</td>
               <td class="num" data-label="Betrag">{euro(i.amountCents)}</td>
@@ -434,15 +518,15 @@
           {#each pkg.storno as s (s.stornoNumber)}
             <tr class="reduce">
               <td data-label="Datum">{date(s.stornoDate)}</td>
-              <td class="doc-no" data-label="Rechnungsnr.">{s.stornoNumber}</td>
-              <td data-label="Kunde">Storno zu {s.originalNumber}</td>
+              <td data-label="Rechnungsnr."><DocNo value={s.stornoNumber} /></td>
+              <td data-label="Kunde">Storno zu <DocNo value={s.originalNumber} /></td>
               <td class="no-card" data-label="Beschreibung">—</td>
               <td class="num" data-label="Betrag">−{euro(s.refundedCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
-          <tr class="sum">
+          <tr class="sum kb-sum">
             <td colspan="4" class="sum-label">Summe Zahlungseingänge</td>
             <td class="num" data-label="Summe Zahlungseingänge">{euro(incomeSum)}</td>
           </tr>
@@ -464,7 +548,7 @@
           {#each pkg.expenses as e (e.expenseNumber)}
             <tr>
               <td data-label="Datum">{date(e.paidDate)}</td>
-              <td class="doc-no" data-label="Beleg-Nr.">{e.expenseNumber}</td>
+              <td data-label="Beleg-Nr."><DocNo value={e.expenseNumber} /></td>
               <td class="wrap" data-label="Lieferant">{e.vendor}</td>
               <td data-label="Kategorie">{expenseCategoryLabel(e.category)}</td>
               <td class="cards-full wrap" data-label="Beschreibung">{e.description}</td>
@@ -473,7 +557,7 @@
           {/each}
         </tbody>
         <tfoot>
-          <tr class="sum">
+          <tr class="sum kb-sum">
             <td colspan="5" class="sum-label">Summe Betriebsausgaben (Kosten)</td>
             <td class="num" data-label="Summe Betriebsausgaben">{euro(expenseSum)}</td>
           </tr>
@@ -493,7 +577,7 @@
           {#each pkg.disposals as d (d.assetNumber)}
             <tr>
               <td data-label="Datum">{date(d.disposalDate)}</td>
-              <td class="z doc-no" data-label="AV-Nr.">{d.assetNumber}</td>
+              <td class="z" data-label="AV-Nr."><DocNo value={d.assetNumber} /></td>
               <td class="wrap" data-label="Bezeichnung">{d.label}</td>
               <td class="num" data-label="Erlös">{euro(d.proceedsCents)}</td>
               <td class="num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
@@ -528,16 +612,24 @@
   }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.wrap { overflow-wrap: anywhere; }
-  .doc-no { font-family: var(--font-mono); white-space: nowrap; }
   tr.reduce td { color: var(--status-danger-fg); }
-  tfoot tr.sum td { border-top: 3px double var(--line-control) !important; border-bottom: none !important; font-weight: 600; color: var(--text); }
-  .tag { display: inline-block; margin-left: var(--sp-2); padding: 0.05rem 0.4rem; background: var(--status-warning-bg); border: 1px solid var(--status-warning-line); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--status-warning-fg); }
+  /* Doppelte Linie über der Summe: global tr.kb-sum (tokens.css, U4 V3-13). */
+  tfoot tr.sum td { border-bottom: none !important; font-weight: 600; color: var(--text); }
   .dl-note { margin: 0 0 var(--sp-4); }
   .export .exp-row { display: flex; gap: var(--sp-3); align-items: flex-end; flex-wrap: wrap; margin-bottom: var(--sp-3); }
   .export .exp-label { flex: 1; min-width: min(18rem, 100%); font-weight: 600; align-self: center; }
   .skr { display: flex; flex-direction: column; gap: var(--sp-1); }
   .skr label { font-weight: 600; font-size: var(--fs-sm); }
-  .skr .kb-input { width: auto; }
+  /* U4 (Warteliste 1): Angaben für die Steuerberatung als eigene Gruppe; Felder nach
+     Inhalt breit (design.md §4.7), auf dem Handy untereinander in voller Breite. */
+  .stb-set { border: 0; border-top: var(--rule); margin: var(--sp-4) 0 0; padding: var(--sp-4) 0 0; min-width: 0; }
+  .stb-set legend { float: left; width: 100%; margin: 0 0 var(--sp-3); padding: 0; font-weight: 600; }
+  .stb-fields { clear: both; display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-4); align-items: flex-start; }
+  .stb-fields > :global(*) { flex: 0 1 10rem; min-width: 0; }
+  .stb-fields :global(.qty-field.with-label) { margin-bottom: 0; }
+  .stb-fields :global(.qty-field label) { color: var(--text); }
+  @media (max-width: 600px) { .stb-fields > :global(*) { flex-basis: 100%; } }
+  .stb-hint { max-width: 72ch; margin: var(--sp-3) 0 var(--sp-4); }
   .afa-action { margin-top: var(--sp-2); }
   .hint { font-size: var(--fs-sm); margin: var(--sp-1) 0 0; }
   .saved {
