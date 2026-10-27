@@ -426,6 +426,14 @@ pub struct LockUpdate<'a> {
     /// UPDATE wie `locked_at` eingefroren (danach sperrt ihn
     /// `trg_invoices_immutable`). `None` behält den gespeicherten Wert.
     pub is_kleinunternehmer: Option<bool>,
+    /// Maßgebliches Datum, aus dem `is_kleinunternehmer` über die
+    /// Statushistorie bestimmt wurde (ADR 0042 Nr. 3). Gesetzt, prüft der Lock
+    /// in seiner Schreibtransaktion, dass die Historie dort noch denselben
+    /// Status ergibt: Ein Statuseintrag oder Widerruf zwischen Statusbestimmung
+    /// und Commit (zweiter Tab, JVM-Lauf dauert Sekunden) bricht das
+    /// Festschreiben ab, statt den alten Status einzufrieren. `None` beim
+    /// Storno (er spiegelt das Original) und in Alt-Aufrufen.
+    pub tax_status_date: Option<NaiveDate>,
     /// Summen (netto, USt, brutto) des ausgestellten Belegs — aus denselben
     /// Positionen gerechnet wie XML (BT-109/110/112) und PDF und im selben
     /// UPDATE wie `locked_at` gesetzt, damit der festgeschriebene Datensatz dem
@@ -490,6 +498,23 @@ pub async fn lock_with_pair_cancel(
             "invoice {id} ist bereits gelockt (locked_at={:?})",
             locked_at
         )));
+    }
+
+    // ADR 0042 Nr. 3: Status in der Schreibtransaktion erneut lesen. Ein
+    // Statuseintrag (ebenfalls `begin_immediate`) läuft entweder ganz vor oder
+    // ganz nach diesem Commit; lief er nach der Statusbestimmung oben, gilt
+    // der eingefrorene Wert nicht mehr.
+    if let (Some(day), Some(klein)) = (update.tax_status_date, update.is_kleinunternehmer) {
+        let now = crate::db::repo::tax_status::history_in(&mut tx)
+            .await?
+            .is_klein_at(day);
+        if now != klein {
+            return Err(Error::Domain(
+                "Der Steuerstatus wurde während des Festschreibens geändert. Die Rechnung ist \
+                 nicht festgeschrieben; prüfe die Positionen und schreibe sie erneut fest."
+                    .into(),
+            ));
+        }
     }
 
     // 1. Storno (bzw. normale Rechnung) locken.

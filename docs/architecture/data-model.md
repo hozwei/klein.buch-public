@@ -6,9 +6,9 @@
 > in `klein-buch/src-tauri/migrations/*.sql` und sind die kanonische Quelle —
 > diese Doku ist die navigationsfreundliche Sicht darauf.
 
-**Schema-Stand: v32.** Migrationen 0001–0032, forward-only; nächste freie
-Migration 0033. Schema-Version liegt in `app_settings.schema_version`; geprüft
-wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (32) — eine neuere DB
+**Schema-Stand: v33.** Migrationen 0001–0033, forward-only; nächste freie
+Migration 0034. Schema-Version liegt in `app_settings.schema_version`; geprüft
+wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (33) — eine neuere DB
 lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 
 **Globale Konventionen** (ADR 0003):
@@ -70,6 +70,7 @@ lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 | 0030 | `0030_rename_drop_folder_labels.sql` | UI-Label-Update auf den Notification-Regeln aus 0029 (Block PV1-RENAME): „Drop-Folder: …" → „Rechnungs-Eingang: …" (CLAUDE.md-UI-Sprachregel, Plain-Language-Hardline). Code-Identifier (rule_id, Settings-Keys, Route, Module) bleiben englisch. Im Server wie 0029 ohne Wirkung. |
 | 0031 | `0031_secrets.sql` | `secrets` (STRICT) — Zugangsdaten in der verschlüsselten DB statt im OS-Keychain (Plan W8, ADR 0039 E6, Amendment ADR 0011/0028): Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie im Migrations- oder DSGVO-Export, nie in Log oder Audit |
 | 0032 | `0032_gobd_hardening.sql` | GoBD- und Schema-Absicherungen (Lauf F, Block F2a; ADR 0039 Nr. 124): Unique-Index `ux_invoices_one_locked_storno` (höchstens ein festgeschriebener Storno je Original; Vorab-Prüfung bricht bei Bestandsduplikaten mit klarer Meldung ab), `invoices.voided_at`/`void_reason` (Entwurf verwerfen ohne Löschen), `archive_integrity_checks.files_missing`/`files_unreadable`/`missing_archive_ids_json`/`unreadable_archive_ids_json`, Trigger für Positionen festgeschriebener Belege, Archiv ohne DELETE, endgültigen Storno, zurückgezogene Angebote, verworfene Entwürfe und den Anlagen-Abgang, Partial Unique Index `uq_payment_accounts_default` (Bestand mit Audit bereinigt), Seed `rule_recurring_due` |
+| 0033 | `0033_tax_status_history.sql` | Steuerstatus nach § 19 UStG als Historie (Lauf 2026.11.1, Block V1; ADR 0042 Nr. 1–6): `tax_status_changes` (STRICT, append-only: kein DELETE, UPDATE nur als einmaliger Widerruf mit Grund; CHECKs Grund ↔ Status, 1. Januar bei Verzicht/Vorjahr/Rückkehr, Bindung = 01.01. Wirkungsjahr + 5; Teil-Unique-Index je Wirkungsdatum), Übernahme des Bestands aus `seller_profile` mit festen IDs im UUIDv7-Format (für jedes Jahr dasselbe Ergebnis wie bisher), Audit `tax_status.migrated`, Seed `rule_tax_threshold` |
 
 **Down-Migrations gibt es nicht.** Wer eine Migration „rückgängig" braucht,
 muss eine neue, höher nummerierte Migration schreiben, die den Zustand
@@ -83,9 +84,22 @@ korrigiert.
 
 **`seller_profile`** — Verkäufer (es gibt genau einen Eintrag pro Installation).
 Felder: `id`, `legal_name`, `address_*`, `tax_number` (optional, §19),
-`vat_id` (optional), `is_kleinunternehmer` (Default 1), `waived_paragraph_19_since`
-(Datum, NULL solange §19 aktiv), `logo_archive_id`, `signature_archive_id`,
+`vat_id` (optional), `is_kleinunternehmer` (Default 1) und `waived_paragraph_19_since` —
+seit Migration 0033 nur noch Spiegel der Statushistorie, gepflegt von
+`db::repo::tax_status`, von keinem Code gelesen (ADR 0042 Nr. 1) —, `logo_archive_id`, `signature_archive_id`,
 `default_pdf_template`, `travel_*` (km-Satz), Banking-Felder.
+
+**`tax_status_changes`** — Steuerstatus nach § 19 UStG als Historie (Migration
+0033, ADR 0042): `id` (UUIDv7; übernommener Bestand mit festen IDs),
+`effective_from` (`0001-01-01` = seit Beginn), `status`
+(`kleinunternehmer`/`regelbesteuerung`), `reason` (`initial`, `verzicht`,
+`wegfall_vorjahr`, `wegfall_laufend`, `wegfall_gruendungsjahr`, `rueckkehr`,
+`legacy`), `binding_until` (nach einem Verzicht: erster Tag der möglichen
+Rückkehr), `trigger_document`, `note`, `created_at`, `revoked_at`/`revoke_reason`.
+Ohne gültigen Eintrag gilt §19. Den Status an einem Datum liefert
+`domain::tax_status::TaxStatusHistory::status_at`; maßgeblich ist bei
+Ausgangsbelegen das Leistungsdatum, sonst das Rechnungs- bzw. Angebotsdatum,
+bei Kosten das Belegdatum.
 
 **`contacts`** — Kunden + Lieferanten. Felder: `id`, `display_name`,
 `legal_name`, `kind` (`customer`/`supplier`/`both`), `address_*`, `email`,
@@ -323,9 +337,11 @@ Schema und Schreibwege bleiben unverändert (Schema v32).
 | `PdfTemplateMeta.supportsStorno`, `stornoFallback` | `pdf_templates_list` | Quelltext der Vorlage (nutzt sie `storno_of`?) bzw. die eingebaute Ersatzvorlage, mit der Stornos entstehen | Nr. 84 |
 | `OffsiteResult.suspended` | `backup_create_now` | Pause nach einem Restore bis zur Freigabe: Spiegelung ausgesetzt, kein Fehlschlag (`error` nennt dann den Grund) | Nr. 85 |
 | `BackupSettings.offsiteLastCopyAt`, `offsiteAgeDays` | `backup_get_settings` | älteste der je Ziel jüngsten Kopien: letztes Ergebnis je Ziel (`app_settings.backup_offsite_results`), war es ein Fehlschlag, der jüngste erfolgreiche Eintrag in `backup_log`; Alter in Berliner Kalendertagen wie der Status `stale` | Nr. 86 |
-| `EuerReport.isKleinunternehmer`, `snapshotCheck` | `euer_compute_report` | `seller_profile` (§19 je Jahr, Verzicht berücksichtigt) bzw. `fiscal_year_locks` (Abgleich, `null` bei offenem Jahr); ohne Audit und Hinweis | Nr. 80 |
+| `EuerReport.isKleinunternehmer`, `yearStatus`, `statusChange`, `snapshotCheck` | `euer_compute_report` | `tax_status_changes` (§19 das ganze Jahr, dreiwertiger Jahresstatus, Wechsel im Jahr als Text; ADR 0042) bzw. `fiscal_year_locks` (Abgleich, `null` bei offenem Jahr); ohne Audit und Hinweis | Nr. 80 |
 | `ParsedEInvoice.taxCategories`, `intraCommunity` | `expenses_parse_einvoice` | Steuerkategorien der eingelesenen Rechnung (UNTDID 5305), Kennzeichen für Kategorie K; nicht gespeichert, nur Hinweis | Nr. 82 |
 | `AssetDisposalPreview` (neuer Command) | `assets_disposal_preview` | `assets` und `depreciation_entries` über `plan_disposal`, ohne zu buchen; `blockedReason` mit den Texten von `assets_dispose` | Nr. 81 |
+| `SellerProfile.isKleinunternehmer`, `waivedParagraph19Since` | `seller_profile_get`/`_upsert` | Status heute aus `tax_status_changes` (ADR 0042 Nr. 1), nicht aus den Spiegelspalten; die Oberfläche nutzt ihn nur für Hinweise „anders als heute“, Belege rechnen mit dem Status ihres Datums (`tax_status_at`) | ADR 0042 |
+| `TaxStatusOverview` (neuer Command) | `tax_status_overview` | `tax_status_changes` (Verlauf mit widerrufenen Einträgen, Status heute, Bindung, frühestmögliche Rückkehr, widerrufbarer Eintrag) und Zahlungseingänge (Gesamtumsatz Vorjahr/laufendes Jahr, Grenzhinweise); Abschnitt „Steuerstatus“ in „Meine Firmendaten“ | ADR 0042 |
 
 Berater- und Mandantennummer für den DATEV-Export stehen nicht in der Datenbank:
 Die Oberfläche merkt sie im Browser (`localStorage`) und übergibt sie je Export
@@ -370,12 +386,16 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_package_revisions_immutable`/`_no_delete` | `package_revisions` | append-only Revisionen |
 | `trg_email_log_no_update`/`_no_delete` | `email_log` | append-only |
 | `trg_backup_log_no_update`/`_no_delete` | `backup_log` | append-only |
+| `trg_tax_status_changes_no_delete` | `tax_status_changes` | DELETE verboten (0033) |
+| `trg_tax_status_changes_revoke_only` | `tax_status_changes` | UPDATE nur als einmaliger Widerruf (`revoked_at` + `revoke_reason`), alle übrigen Spalten unveränderlich (0033) |
 
 **Indizes mit Hardline-Wirkung (0032):** `ux_invoices_one_locked_storno`
 (`invoices(is_storno_for) WHERE is_storno_for IS NOT NULL AND locked_at IS NOT
 NULL`), `uq_payment_accounts_default` (`payment_accounts(is_default) WHERE
-is_default = 1`). Tests: `tests/migration_0028_test.rs`,
-`tests/migration_0032_test.rs`.
+is_default = 1`). Seit 0033: `uq_tax_status_changes_active`
+(`tax_status_changes(effective_from) WHERE revoked_at IS NULL`). Tests:
+`tests/migration_0028_test.rs`, `tests/migration_0032_test.rs`,
+`tests/migration_0033_test.rs`.
 
 **Reason-Mapping.** `backup::db_trigger_reason` (privat in `backup/mod.rs`)
 bildet die Auslöser-Labels der Lock-Events auf die vom CHECK erlaubten Werte
@@ -482,8 +502,8 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). Quelle:
-`klein-buch/src-tauri/migrations/0001..0032.sql`,
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). 2026-10-27 (Lauf 2026.11.1, V1): Schema v33, `tax_status_changes`, Spiegelspalten im Profil (gegen `migrations/0033_tax_status_history.sql` und `src/db/repo/tax_status.rs` geprüft). Quelle:
+`klein-buch/src-tauri/migrations/0001..0033.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
 `src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:
 Migrations-Liste, `mail_accounts`, `app_settings`, `secrets`, `backup_log`,

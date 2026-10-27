@@ -243,6 +243,17 @@ Erfassen festgeschrieben; deshalb heißen die Knöpfe dort "Kosten
 festschreiben" und "Privatbewegung festschreiben" und fragen vorher
 nach.
 
+## Gesamtumsatz
+
+Die Summe Deiner Umsätze in einem Kalenderjahr, nach der sich die
+Grenzen der Kleinunternehmer-Regelung richten (§ 19 Abs. 2 UStG):
+nach vereinnahmten Entgelten, also nach Zahlungseingang, netto und ohne
+Umsätze mit Anlagevermögen. Klein.Buch zeigt den Gesamtumsatz des
+Vorjahres und des laufenden Jahres im Abschnitt "Steuerstatus" unter
+Einstellungen → "Meine Firmendaten" und meldet, wenn eine Grenze
+erreicht oder überschritten ist. Es zählt nur die in Klein.Buch
+erfassten Zahlungen.
+
 ## Geschäftsjahr
 
 In Klein.Buch immer das Kalenderjahr (1. Januar bis 31. Dezember).
@@ -297,6 +308,8 @@ die 100.000 € im laufenden Jahr überschreitet, verliert §19 ab diesem
 Umsatz). Wer Kleinunternehmer ist, weist auf Rechnungen
 keine Umsatzsteuer aus, darf aber auch keine Vorsteuer abziehen.
 Gesetzliche Grundlage: §19 UStG.
+Ob Du an einem Tag Kleinunternehmer bist, steht in Klein.Buch im
+Verlauf des Steuerstatus (siehe "Steuerstatus").
 
 ## Korrigiert neu erfassen
 
@@ -326,7 +339,8 @@ Der Zeitpunkt oder Zeitraum, an dem Du die Leistung tatsächlich
 erbracht hast. Pflichtangabe auf jeder Rechnung. Wenn Du die
 Leistung am gleichen Tag erbringst und abrechnest, sind
 Leistungs- und Belegdatum gleich; Klein.Buch belegt das Feld deshalb
-mit dem Rechnungsdatum vor, bis Du es änderst. Bei Monats-Arbeiten
+mit dem Rechnungsdatum vor, bis Du es änderst. Nach dem Leistungsdatum
+richtet sich auch der Steuerstatus der Rechnung (siehe "Steuerstatus"). Bei Monats-Arbeiten
 (zum Beispiel "Beratung im April 2026") ist es ein Zeitraum; den
 nennst Du in der Beschreibung der Position.
 
@@ -434,9 +448,10 @@ Umsatzsteuer aus, führt sie ans Finanzamt ab und darf gezahlte
 Umsatzsteuer aus Eingangsrechnungen als Vorsteuer abziehen. Wenn
 Du als Kleinunternehmer freiwillig regelbesteuert sein willst,
 heißt das "Verzicht auf §19". Die Bindung an die Regelbesteuerung
-beträgt dann mindestens 5 Jahre. Fällt §19 weg, weil Dein Umsatz im
-laufenden Jahr 100.000 € übersteigt, ist das kein Verzicht und
-bindet nicht.
+beträgt dann fünf Kalenderjahre einschließlich des Wirkungsjahres.
+Fällt §19 weg, weil Dein Umsatz eine Grenze überschreitet (über
+25.000 € im Vorjahr, über 100.000 € im laufenden Jahr), ist das kein
+Verzicht und bindet nicht.
 
 ## Wiederherstellen (Restore)
 
@@ -508,6 +523,20 @@ Umsatzsteuer-Identifikations-Nummer hast (USt-IdNr, für Geschäfte
 mit Kunden im EU-Ausland), darfst Du sie zusätzlich oder
 alternativ angeben.
 
+## Steuerstatus
+
+Ob Du an einem Tag Kleinunternehmer nach §19 UStG oder
+regelbesteuert bist. Klein.Buch führt ihn als Verlauf unter
+Einstellungen → "Meine Firmendaten", Abschnitt "Steuerstatus": Jeder
+Eintrag hat ein Wirkungsdatum und einen Grund (Stand zu Beginn,
+Verzicht auf §19, Wegfall durch eine Umsatzgrenze, Rückkehr). Ohne
+Eintrag gilt die Kleinunternehmer-Regelung. Einträge werden nie
+gelöscht oder geändert; ein irrtümlicher Eintrag wird mit Grund
+widerrufen. Jeder Beleg zählt mit dem Status seines Datums
+(Rechnungen: Leistungsdatum, Kosten: Belegdatum), beim Festschreiben
+bleibt der Status einer Rechnung unverändert. Mehr im Kapitel
+"Kleinunternehmer-Regelung".
+
 ## Storno
 
 Eine Gegenrechnung. Sie neutralisiert eine bereits ausgestellte
@@ -545,13 +574,15 @@ verbraucht. "Stornieren" gibt es nur für festgeschriebene Belege.
 ## Verzicht auf §19 (Option zur Regelbesteuerung)
 
 Die freiwillige Entscheidung, kein Kleinunternehmer mehr zu sein
-und stattdessen normal Umsatzsteuer auszuweisen und abzuführen. Du
-bindest Dich damit für mindestens 5 Jahre an die Regelbesteuerung
-und kannst in dieser Zeit nicht zurück auf §19 wechseln.
-Klein.Buch warnt Dich vor dieser Folge ausdrücklich: Wenn Du den
-Schalter ausschaltest und speicherst, erklärt der Dialog "Zur
-Regelbesteuerung wechseln?" den freiwilligen Verzicht und den
-Wegfall durch die 100.000-€-Grenze, der nicht bindet.
+und stattdessen normal Umsatzsteuer auszuweisen und abzuführen
+(§ 19 Abs. 3 UStG). Der Verzicht wirkt ab dem 1. Januar des Jahres,
+für das er gilt, und bindet Dich fünf Kalenderjahre einschließlich
+dieses Jahres; in dieser Zeit kannst Du nicht zurück auf §19
+wechseln (Verzicht ab 2026: Rückkehr frühestens zum 01.01.2031).
+Du trägst ihn im Abschnitt "Steuerstatus" mit "Statuswechsel
+eintragen …" ein; der Dialog nennt das Ende der Bindung, bevor Du
+bestätigst. Ein Wegfall durch eine Umsatzgrenze ist kein Verzicht und
+bindet nicht.
 
 ## XRechnung
 

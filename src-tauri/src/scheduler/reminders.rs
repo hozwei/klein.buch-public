@@ -44,6 +44,12 @@ pub async fn run(pool: &SqlitePool, today: NaiveDate, targets_root: &Path) -> Re
     if let Some(rule) = rules::get_enabled_by_type(pool, "recurring_due").await? {
         created += recurring_due(pool, &rule, today).await?;
     }
+    // ADR 0042 Nr. 5: Umsatzgrenzen nach §19 (Regel `rule_tax_threshold`, prüft
+    // selbst, ob sie aktiv ist). Ein Fehler hier hält die übrigen Hinweise nicht auf.
+    match crate::commands::tax_status::notify_thresholds(pool, today).await {
+        Ok(n) => created += n,
+        Err(e) => tracing::warn!("Grenzprüfung nach §19 fehlgeschlagen: {e}"),
+    }
     Ok(created)
 }
 

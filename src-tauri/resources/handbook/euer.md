@@ -38,12 +38,17 @@ Steuerberatung.
 Die einzelnen Belege des Jahres siehst Du im EÜR-Export (Knopf
 **"Für die Steuererklärung exportieren →"**, Kapitel "EÜR-Export").
 
-Zwei Hinweise erscheinen nur bei Bedarf über den Zahlen:
+Diese Hinweise erscheinen nur bei Bedarf über den Zahlen:
 
 - **Regelbesteuerung:** Warst Du im gewählten Jahr nicht
   Kleinunternehmer, erklärt ein Hinweis, dass die Beträge Zahlungen mit
   Umsatzsteuer sind und was die Seite nicht enthält. Die Anlage EÜR im
   Export trennt Netto und Umsatzsteuer.
+- **Wechsel des Steuerstatus:** Hat Dein Steuerstatus im Jahr
+  gewechselt (Kapitel "Kleinunternehmer-Regelung"), nennt der Hinweis
+  die Zeiträume mit ihrem Status. Jede Einnahme zählt mit dem Status,
+  mit dem die Rechnung festgeschrieben wurde, jede Kostenposition mit
+  dem Status an ihrem Belegdatum.
 - **Abweichung vom Jahresabschluss:** Ist das Jahr abgeschlossen und
   ergeben die heutigen Zahlen etwas anderes als beim Abschluss, warnt
   die Seite und nennt die betroffenen Werte sowie das Ergebnis beim

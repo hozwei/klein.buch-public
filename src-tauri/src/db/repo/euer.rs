@@ -165,12 +165,12 @@ pub async fn expense_payments<'e, E: sqlx::SqliteExecutor<'e>>(
 /// (§ 9b Abs. 1 EStG); die Vorsteuer bleibt Betriebsausgabe im Jahr der
 /// Zahlung (§ 11 Abs. 2 EStG, Anlage EÜR „gezahlte Vorsteuerbeträge“). Bei §19
 /// gibt es keine abziehbare Vorsteuer — der Bruttobetrag wirkt ganz über die
-/// AfA. Maßgeblich ist der Status im Jahr des Belegdatums, nicht des
-/// Zahlungsjahres (Lauf F8d, § 15 Abs. 1 UStG, Abschn. 19.5 UStAE). Kategorie
+/// AfA. Maßgeblich ist der Status am Belegdatum, nicht im Zahlungsjahr (Lauf
+/// F8d, datumsgenau seit ADR 0042 Nr. 3; § 15 Abs. 1 UStG, Abschn. 19.5 UStAE). Kategorie
 /// wie die Kosten (bei Regelbesteuerung stehen auch sonst Kosten brutto in
 /// ihrer Kategorie; die Ausfüllhilfe weist die Vorsteuer gesondert aus).
 pub async fn capitalized_input_tax(conn: &mut sqlx::SqliteConnection) -> Result<Vec<ExpenseView>> {
-    let profile = crate::db::repo::seller_profile::get_in(&mut *conn).await?;
+    let hist = crate::db::repo::tax_status::history_in(&mut *conn).await?;
     let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
         "SELECT paid_date, expense_date, category, tax_amount_cents
            FROM expenses
@@ -184,7 +184,7 @@ pub async fn capitalized_input_tax(conn: &mut sqlx::SqliteConnection) -> Result<
 
     let mut out = Vec::new();
     for (paid_date, expense_date, category, tax_cents) in rows {
-        if crate::db::repo::seller_profile::is_klein_for_expense(profile.as_ref(), &expense_date)? {
+        if crate::db::repo::tax_status::is_klein_for_expense(&hist, &expense_date)? {
             continue;
         }
         out.push(ExpenseView {
@@ -484,7 +484,7 @@ struct ExpenseDetailRow {
 
 impl ExpenseDetailRow {
     /// `is_klein` = §19-Status bei Leistungsbezug (Lauf F8d,
-    /// [`crate::db::repo::seller_profile::is_klein_for_expense`]).
+    /// [`crate::db::repo::tax_status::is_klein_for_expense`]).
     fn into_item(self, is_klein: bool) -> ExpenseItem {
         ExpenseItem {
             paid_date: trim_date(&self.paid_date),
@@ -527,13 +527,11 @@ async fn expense_rows(pool: &SqlitePool, year: i32, capitalized: bool) -> Result
           ORDER BY e.paid_date, e.expense_number"
     );
     let rows: Vec<ExpenseDetailRow> = sqlx::query_as(&sql).bind(&yp).fetch_all(pool).await?;
-    let profile = crate::db::repo::seller_profile::get(pool).await?;
+    let hist = crate::db::repo::tax_status::history(pool).await?;
     rows.into_iter()
         .map(|r| {
-            let is_klein = crate::db::repo::seller_profile::is_klein_for_expense(
-                profile.as_ref(),
-                &r.expense_date,
-            )?;
+            let is_klein =
+                crate::db::repo::tax_status::is_klein_for_expense(&hist, &r.expense_date)?;
             Ok(r.into_item(is_klein))
         })
         .collect()

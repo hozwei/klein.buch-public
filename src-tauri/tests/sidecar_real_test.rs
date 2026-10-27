@@ -45,7 +45,6 @@ fn seller() -> SellerView<'static> {
         iban: None,
         bic: None,
         is_kleinunternehmer: true,
-        waived_since: None,
     }
 }
 
@@ -157,7 +156,6 @@ async fn sidecar_real_kosit_accepts_storno_with_preceding_invoice() {
 async fn sidecar_real_kosit_accepts_regelbesteuerung_with_small_items() {
     let regel = SellerView {
         is_kleinunternehmer: false,
-        waived_since: Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
         vat_id: Some("DE123456788"),
         ..seller()
     };

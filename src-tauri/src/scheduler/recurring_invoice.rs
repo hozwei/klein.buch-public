@@ -195,10 +195,10 @@ pub async fn run_now(job: &JobCtx<'_>, id: &str) -> Result<String> {
             ));
         }
         let items = recurring_invoice::items_for(job.pool, id).await?;
-        if let Some(reason) = blocker(job.pool, &tmpl, &items).await? {
+        let occurrence = parse_date(&tmpl.next_due_date)?;
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, occurrence).await? {
             return Err(Error::Domain(reason));
         }
-        let occurrence = parse_date(&tmpl.next_due_date)?;
         if occurrence > today {
             return Err(Error::Domain(format!(
                 "Vorlage ist erst am {occurrence} fällig — eine vorzeitige Erstellung würde ein zukünftiges Periodendatum erzeugen."
@@ -380,7 +380,7 @@ async fn process_template(job: &JobCtx<'_>, id: &str, today: NaiveDate) -> Resul
             return Ok(TmplOutcome::Created(0));
         }
         let items = recurring_invoice::items_for(job.pool, id).await?;
-        if let Some(reason) = blocker(job.pool, &tmpl, &items).await? {
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, first).await? {
             blocked_notice(job, &tmpl, &reason).await;
             return Ok(TmplOutcome::Blocked);
         }
@@ -432,6 +432,12 @@ async fn process_template(job: &JobCtx<'_>, id: &str, today: NaiveDate) -> Resul
         let end = end_date(&tmpl);
         let next = parse_date(&tmpl.next_due_date)?;
         if next > today || end.is_some_and(|e| next > e) {
+            break;
+        }
+        // ADR 0042 Nr. 3: §19-Status je Termin — ein nachgeholter Termin nach einem
+        // Wechsel erzeugt keine Rechnung mit unpassender Steuerart (§14c-Schutz).
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, next).await? {
+            blocked_notice(job, &tmpl, &reason).await;
             break;
         }
         let remaining = count_due_occurrences(freq, day, next, today, end, catch_up::COUNT_CAP);
@@ -493,6 +499,7 @@ async fn blocker(
     pool: &SqlitePool,
     tmpl: &RecurringInvoiceRow,
     items: &[RecurringInvoiceItemRow],
+    occurrence: NaiveDate,
 ) -> Result<Option<String>> {
     match contacts::get(pool, &tmpl.contact_id).await? {
         None => return Ok(Some("Der Kunde der Vorlage existiert nicht mehr.".into())),
@@ -518,9 +525,11 @@ async fn blocker(
     }
     // R1-017: §14c-Schutz auch im Scheduler — keine Entwürfe mit USt-Ausweis
     // bei aktivem §19 (sonst nummerierte Entwürfe, die erst beim Festschreiben
-    // scheitern).
+    // scheitern). Status am Termin (Leistungsdatum, ADR 0042 Nr. 3).
     let inputs: Vec<InvoiceItemInput> = items.iter().map(row_to_item_input).collect();
-    if let Err(e) = crate::commands::recurring_invoice::check_items_no_vat(pool, &inputs).await {
+    if let Err(e) =
+        crate::commands::recurring_invoice::check_items_no_vat(pool, &inputs, occurrence).await
+    {
         return Ok(Some(e.to_string()));
     }
     Ok(None)
@@ -1365,10 +1374,9 @@ mod pipeline_tests {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: None,
             default_currency: None,
-            confirm_waive_paragraph_19: None,
         };
         seller_profile::upsert(pool, &input).await.unwrap();
     }

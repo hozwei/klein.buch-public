@@ -25,7 +25,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::kleinbetragsrechnung;
-use crate::domain::kleinunternehmer::{self, ItemVatCheck, KleinunternehmerStatus, NoVatViolation};
+use crate::domain::kleinunternehmer::{self, ItemVatCheck, NoVatViolation};
 use crate::domain::money;
 
 /// v0.1 ist single-currency EUR (Kleinunternehmer-Fokus, DE-Domäne). Multi-
@@ -122,17 +122,9 @@ pub struct SellerView<'a> {
     pub contact_name: Option<&'a str>,
     pub iban: Option<&'a str>,
     pub bic: Option<&'a str>,
+    /// §19-Status am maßgeblichen Datum des Belegs (ADR 0042 Nr. 3), beim
+    /// Festschreiben am Beleg eingefroren.
     pub is_kleinunternehmer: bool,
-    pub waived_since: Option<NaiveDate>,
-}
-
-impl<'a> SellerView<'a> {
-    pub fn status(&self) -> KleinunternehmerStatus {
-        KleinunternehmerStatus {
-            is_kleinunternehmer: self.is_kleinunternehmer,
-            waived_since: self.waived_since,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -606,7 +598,7 @@ pub fn validate_for_issue(
             tax_rate_percent: it.tax_rate_percent,
         })
         .collect();
-    if let Err(viol) = kleinunternehmer::assert_no_vat(&seller.status(), &checks) {
+    if let Err(viol) = kleinunternehmer::assert_no_vat(seller.is_kleinunternehmer, &checks) {
         errs.push(E::Paragraph19VatViolation(viol));
     }
 
@@ -708,7 +700,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 
@@ -1092,7 +1083,6 @@ mod tests {
     fn seller_regel() -> SellerView<'static> {
         SellerView {
             is_kleinunternehmer: false,
-            waived_since: NaiveDate::from_ymd_opt(2026, 1, 1),
             ..seller_klein()
         }
     }

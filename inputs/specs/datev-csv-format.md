@@ -1,38 +1,20 @@
-# DATEV-CSV-Format
+# DATEV-Format — Buchungsstapel
 
-DATEV ist die deutsche De-facto-Standard-Software für Steuerberater. Der
-**DATEV-Buchungsstapel-Import** (CSV-basiert, "DATEV-Format Version 5.0+")
-ist der wichtigste Integrations-Punkt — fast jeder Steuerberater erwartet
-diesen Import-Format.
+DATEV ist die verbreitete Software der Steuerberater. Klein.Buch exportiert die Buchungen
+eines Geschäftsjahres als DATEV-Buchungsstapel (CSV), den die Kanzlei über die
+Stapelverarbeitung einliest.
 
-Quelle: https://developer.datev.de/datev/platform/de/dtvf/formate/header
+Quelle: https://developer.datev.de/de/file-format/details/datev-format
+(Header, Buchungsstapel, Zeichensatz; dort auch das kostenlose Prüfprogramm und Musterdaten)
 
-Header-Zeile (erste 17 Spalten):
-```
-"EXTF";510;21;"Buchungsstapel";13;...;...;<JJJJMMDDHHMMSSXXX>;...
-```
+- Dateiname mit festem Präfix `EXTF_`, z. B. `EXTF_Buchungsstapel_2026_SKR03.csv`.
+- Zeichensatz Windows-1252 (ISO-8859-1), ohne BOM, Zeilenende CRLF, Trennzeichen `;`,
+  Textfelder in `"…"`, Beträge mit Dezimalkomma ohne Tausendertrenner.
+- Zeile 1 Kopf (31 Felder):
+  `"EXTF";700;21;"Buchungsstapel";12;<Erzeugt am JJJJMMTTHHMMSSmmm>;;"";"";"";<Berater>;<Mandant>;<WJ-Beginn JJJJ0101>;4;<von>;<bis>;"<Bezeichnung>";"";1;0;0;"EUR";;"";;;"03|04";;;"";""`
+  — Berater- (1001–9999999) und Mandantennummer (1–99999) sind Pflicht.
+- Zeile 2 Spaltenüberschriften, ab Zeile 3 Buchungen (Umsatz ohne Vorzeichen, Soll/Haben,
+  WKZ, Konto, Gegenkonto, BU-Schlüssel, Belegdatum TTMM, Belegfeld 1/2, Buchungstext ≤ 60).
 
-Daten-Zeilen (Spalten 1–22):
-```
-Umsatz (ohne Vorzeichen)
-Soll/Haben-Kennzeichen (S/H)
-WKZ Umsatz (EUR)
-Kurs (leer für EUR)
-Basisumsatz (leer)
-WKZ Basisumsatz (leer)
-Konto (Sachkonto)
-Gegenkonto
-BU-Schlüssel (Steuerschlüssel)
-Belegdatum (TTMM)
-Belegfeld 1 (Belegnummer)
-Belegfeld 2 (Kostenstelle 1, leer)
-Skonto (leer)
-Buchungstext (max. 60 Zeichen)
-...
-```
-
-SKR03 oder SKR04 — Manuels Steuerberater wählt den Kontenrahmen.
-Default SKR03 ist verbreiteter; SKR04 ist näher an HGB-Bilanz-Struktur.
-
-Klein.Buch's Block 14 erzeugt diesen CSV mit korrektem Encoding (Win-1252)
-und Trennzeichen (`;`).
+SKR03 oder SKR04 — der Steuerberater wählt den Kontenrahmen; Standard SKR03.
+Formatversion 12 bleibt, bis Prüfprogramm oder Import etwas anderes zeigen (ADR 0042 Nr. 15).

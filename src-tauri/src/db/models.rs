@@ -60,8 +60,8 @@ pub struct SellerProfileRow {
     pub iban: Option<String>,
     pub bic: Option<String>,
     pub logo_filename: Option<String>,
-    pub is_kleinunternehmer: i64,
-    pub waived_paragraph_19_since: Option<String>,
+    // `is_kleinunternehmer` und das Verzichtsdatum sind seit Migration 0033 nur
+    // Spiegel der Statushistorie und hier bewusst nicht gemappt (ADR 0042 Nr. 1).
     pub default_pdf_template: String,
     pub default_currency: String,
     pub updated_at: String,

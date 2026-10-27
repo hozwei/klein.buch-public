@@ -114,7 +114,13 @@ Termine zusammen, fragt Klein.Buch erneut.
 
 Klein.Buch überspringt eine Abo-Vorlage mit Hinweis, statt eine Rechnung
 anzulegen, wenn der Kunde archiviert oder anonymisiert ist oder wenn
-eine Position trotz Kleinunternehmer-Regelung Umsatzsteuer ausweist.
+die Positionen nicht zum Steuerstatus am Termin passen: eine Position
+mit Umsatzsteuer, obwohl am Termin die Kleinunternehmer-Regelung gilt,
+oder eine steuerbefreite Position (Steuerart E), obwohl dort die
+Regelbesteuerung gilt. Maßgeblich ist der Status am Termin, nicht der
+von heute; das Formular zeigt den Status am ersten bzw. nächsten Termin.
+Trägst Du einen Wechsel ein, nennt Klein.Buch die betroffenen
+Abo-Vorlagen (Kapitel "Kleinunternehmer-Regelung").
 
 ## Angehaltene Abo-Läufe
 

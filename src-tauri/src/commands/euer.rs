@@ -33,11 +33,19 @@ use crate::euer::elster_csv::{self, ElsterForm, ElsterInputs};
 use crate::fiscal_year::snapshot::{self, SnapshotCheck};
 use crate::pdf::{templates, typst_render};
 
-/// Period-aware §19-Status für ein konkretes Geschäftsjahr (Fix R2-002). Die
-/// Logik (Verzichts-Stichtag, ohne Profil §19 = aktiv) liegt seit Lauf F8b in
-/// [`seller_profile::is_klein_for_year`], damit auch die EÜR-Eingaben sie nutzen.
-pub(crate) fn is_klein_for_year(profile: Option<&SellerProfileRow>, fiscal_year: i32) -> bool {
-    seller_profile::is_klein_for_year(profile, fiscal_year)
+/// §19-Status eines Geschäftsjahres aus der Statushistorie (R2-002, ADR 0042
+/// Nr. 3): `(§19 das ganze Jahr, Wechsel im Jahr als Text)`. Ein Jahr mit
+/// Wechsel gilt im Kopf nicht als §19-Jahr; Einnahmen und Kosten tragen ihren
+/// eigenen Status.
+pub(crate) async fn year_tax_status(
+    pool: &SqlitePool,
+    fiscal_year: i32,
+) -> Result<(bool, Option<String>)> {
+    let hist = crate::db::repo::tax_status::history(pool).await?;
+    let ys = hist.year_status(fiscal_year);
+    let change = (ys == crate::domain::tax_status::YearStatus::Wechsel)
+        .then(|| crate::commands::tax_status::year_status_text(&hist, fiscal_year));
+    Ok((ys.is_klein(), change))
 }
 
 /// Pflicht-Audit eines Exports (Lauf F, R2-016 / ASVS 8.3.5): Geschäftsjahr,
@@ -81,9 +89,13 @@ pub struct EuerComputeReportArgs {
 pub struct EuerReportView {
     #[serde(flatten)]
     pub report: EuerReport,
-    /// §19 im Jahr aktiv (period-aware wie Exporte und ELSTER-Ausfüllhilfe,
-    /// R2-002); `false` = Regelbesteuerung (Verzicht ab diesem Jahr).
+    /// §19 das ganze Jahr (wie Exporte und ELSTER-Ausfüllhilfe, R2-002);
+    /// `false` = Regelbesteuerung oder Wechsel im Jahr.
     pub is_kleinunternehmer: bool,
+    /// Status des Jahres dreiwertig (ADR 0042 Nr. 3).
+    pub year_status: crate::domain::tax_status::YearStatus,
+    /// Wechsel im Jahr als Text; `None` = einheitlicher Status.
+    pub status_change: Option<String>,
     /// Abgleich mit dem Festschreibungs-Snapshot (nur abgeschlossene Jahre,
     /// KB-0031); `None` = Jahr offen. Nur Anzeige — anders als die Exporte
     /// schreibt die Auswertung weder Audit noch Hinweis.
@@ -101,14 +113,18 @@ pub async fn euer_compute_report(
 
     let inputs = euer_repo::load_inputs(&pool).await?;
     let report = aggregate::aggregate(fiscal_year as i32, &inputs);
-    let seller = seller_profile::get(&pool).await?;
+    let hist = crate::db::repo::tax_status::history(&pool).await?;
+    let year_status = hist.year_status(fiscal_year as i32);
     // Gleiche Rechnung wie `snapshot::check`, ohne die Eingaben ein zweites Mal
     // zu laden.
     let snapshot_check = crate::fiscal_year::lock::get(&pool, fiscal_year)
         .await?
         .map(|lock| snapshot::compare(&lock, &report));
     Ok(EuerReportView {
-        is_kleinunternehmer: is_klein_for_year(seller.as_ref(), fiscal_year as i32),
+        is_kleinunternehmer: year_status.is_klein(),
+        year_status,
+        status_change: (year_status == crate::domain::tax_status::YearStatus::Wechsel)
+            .then(|| crate::commands::tax_status::year_status_text(&hist, fiscal_year as i32)),
         snapshot_check,
         report,
     })
@@ -172,10 +188,8 @@ async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<Elst
     let storno = euer_repo::storno_detail(pool, fiscal_year).await?;
     let expenses = euer_repo::expense_detail(pool, fiscal_year).await?;
     let capitalized = euer_repo::capitalized_expense_detail(pool, fiscal_year).await?;
-    // R2-002: §19-Status period-aware (Klein→Regel-Wechsel darf das Vor-Jahr
-    // nicht rückwirkend kippen).
-    let profile = seller_profile::get(pool).await?;
-    let is_kleinunternehmer = is_klein_for_year(profile.as_ref(), fiscal_year);
+    // R2-002, ADR 0042 Nr. 3: §19-Status des Jahres aus der Historie.
+    let (is_kleinunternehmer, status_change) = year_tax_status(pool, fiscal_year).await?;
     Ok(elster_csv::build_form(&ElsterInputs {
         report: &report,
         afa: &afa,
@@ -184,6 +198,7 @@ async fn build_form_for_year(pool: &SqlitePool, fiscal_year: i32) -> Result<Elst
         expenses: &expenses,
         capitalized: &capitalized,
         is_kleinunternehmer,
+        status_change,
     }))
 }
 
@@ -396,8 +411,9 @@ async fn build_euer_pdf_bytes(
     let disposals = euer_repo::disposal_detail(pool, y).await?;
     let assets = euer_repo::aveeur_items(pool, y).await?;
     let seller = seller_profile::get(pool).await?;
-    // R2-002: §19-Status period-aware.
-    let is_klein = is_klein_for_year(seller.as_ref(), y);
+    // R2-002, ADR 0042 Nr. 3: §19 das ganze Jahr (ein Wechsel steht in den
+    // Hinweisen der Ausfüllhilfe).
+    let is_klein = year_tax_status(pool, y).await?.0;
 
     let data = euer_pdf_data(&EuerPdfParts {
         fiscal_year,
@@ -775,8 +791,9 @@ pub async fn euer_export_stb_zip(
     let expenses = euer_repo::expense_detail(pool, y).await?;
     let assets = euer_repo::aveeur_items(pool, y).await?;
     let seller = seller_profile::get(pool).await?;
-    // R2-002: §19-Status period-aware.
-    let is_klein = is_klein_for_year(seller.as_ref(), y);
+    // R2-002, ADR 0042 Nr. 3: §19 das ganze Jahr (ein Wechsel steht in den
+    // Hinweisen der Ausfüllhilfe).
+    let is_klein = year_tax_status(pool, y).await?.0;
 
     // DATEV-Buchungsstapel.
     let skr_enum = Skr::from_code(&skr);
@@ -866,6 +883,7 @@ pub async fn euer_export_stb_zip(
     let mut liesmich = build_stb_readme(
         fiscal_year,
         is_klein,
+        form.status_change.as_deref(),
         skr_enum,
         &unissued,
         consultant_number.is_some() && client_number.is_some(),
@@ -1024,6 +1042,7 @@ const UNISSUED_NUMBERS_FILE: &str = "nicht-festgeschriebene-nummern.csv";
 fn build_stb_readme(
     fiscal_year: i64,
     is_klein: bool,
+    status_change: Option<&str>,
     skr: Skr,
     unissued: &[detail::UnissuedNumberItem],
     datev_numbers_set: bool,
@@ -1037,8 +1056,11 @@ fn build_stb_readme(
     if is_klein {
         s.push_str("§19 UStG (Kleinunternehmer-Regelung):\n");
         s.push_str(&format!("    {HINWEIS_TEXT}\n\n"));
+    } else if let Some(change) = status_change {
+        // ADR 0042 Nr. 3: Wechsel im Jahr.
+        s.push_str(&format!("Steuerstatus: Wechsel im Jahr — {change}.\n\n"));
     } else {
-        s.push_str("Steuerstatus: Regelbesteuerung (Verzicht auf §19 UStG).\n\n");
+        s.push_str("Steuerstatus: Regelbesteuerung.\n\n");
     }
     s.push_str("Disclaimer:\n");
     s.push_str("    Klein.Buch ist ein Werkzeug, kein Steuerberater. Diese\n");
@@ -1234,6 +1256,7 @@ mod tests {
             expenses: &expenses,
             capitalized: &[],
             is_kleinunternehmer: true,
+            status_change: None,
         });
         (form, income, storno, expenses, disposals, assets)
     }
@@ -1343,11 +1366,19 @@ mod tests {
 
     #[test]
     fn stb_readme_names_money_accounts_and_header_numbers() {
-        let r = build_stb_readme(2026, true, Skr::Skr03, &[], false, &["Hinweis A".into()]);
+        let r = build_stb_readme(
+            2026,
+            true,
+            None,
+            Skr::Skr03,
+            &[],
+            false,
+            &["Hinweis A".into()],
+        );
         assert!(r.contains("Kasse 1000/1600"));
         assert!(r.contains("Berater- und Mandantennummer sind leer"));
         assert!(r.contains("- Hinweis A"));
-        let r = build_stb_readme(2026, true, Skr::Skr03, &[], true, &[]);
+        let r = build_stb_readme(2026, true, None, Skr::Skr03, &[], true, &[]);
         assert!(r.contains("Berater- und Mandantennummer stehen im Kopf"));
         assert!(!r.contains("Hinweise zur ELSTER-Ausfüllhilfe"));
     }

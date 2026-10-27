@@ -17,16 +17,16 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-/// §19-Hardline + Validierung: bei Kleinunternehmer wird die USt-Kategorie auf
-/// `'E'` (Exempt) gezwungen; danach strukturelle Validierung. Preis bleibt Netto.
+/// §19-Hardline + Validierung: gilt heute §19, wird die USt-Kategorie auf `'E'`
+/// (Exempt) gezwungen; danach strukturelle Validierung. Preis bleibt Netto. Die
+/// Steuerart einer eingefügten Position bestimmt der Status am Datum des
+/// Zielbelegs ([`package_tax_defaults`], ADR 0042 Nr. 3).
 async fn prepare_revision(
     pool: &SqlitePool,
     mut input: PackageRevisionInput,
 ) -> Result<PackageRevisionInput> {
-    if let Some(seller) = seller_profile::get(pool).await? {
-        if seller.is_kleinunternehmer == 1 {
-            input.tax_category_code = "E".to_string();
-        }
+    if crate::db::repo::tax_status::is_klein_at(pool, crate::clock::today_berlin()).await? {
+        input.tax_category_code = "E".to_string();
     }
     let issues = package::validate_revision(&input);
     if !issues.is_empty() {
@@ -456,10 +456,9 @@ pub async fn package_preview(
 
     let pool = &pool;
     let body_typst = package::to_typst(&package::parse_markup(&body_markup));
-    let is_klein = seller_profile::get(pool)
-        .await?
-        .map(|s| s.is_kleinunternehmer == 1)
-        .unwrap_or(true);
+    // Vorschau: Status heute (ADR 0042 Nr. 3; kein Beleg).
+    let is_klein =
+        crate::db::repo::tax_status::is_klein_at(pool, crate::clock::today_berlin()).await?;
     let title_show = if title.trim().is_empty() {
         "(ohne Titel)"
     } else {
@@ -525,6 +524,10 @@ pub struct MaterializedPackageItem {
 #[serde(rename_all = "camelCase")]
 pub struct PackageMaterializeItemArgs {
     pub package_id: String,
+    /// Maßgebliches Datum des Zielbelegs (Leistungsdatum, sonst Beleg-
+    /// datum; ADR 0042 Nr. 3). Ohne Angabe: heute.
+    #[serde(default)]
+    pub document_date: Option<chrono::NaiveDate>,
 }
 
 /// Materialisiert eine Beleg-Position aus der **aktiven** Revision eines Pakets
@@ -539,7 +542,10 @@ pub async fn package_materialize_item(
     ctx: &Arc<AppCtx>,
     args: PackageMaterializeItemArgs,
 ) -> Result<MaterializedPackageItem> {
-    let PackageMaterializeItemArgs { package_id } = args;
+    let PackageMaterializeItemArgs {
+        package_id,
+        document_date,
+    } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
@@ -567,10 +573,12 @@ pub async fn package_materialize_item(
     // zu 'S'. Bei 'S' gilt der Regelsatz 19 % (§12 Abs. 1 UStG) — ein anderer
     // Satz (z. B. 7 %) wird an der Position gesetzt; Satz und Steuerart gehören
     // nicht zum Paket-Inhalt, die Provenienz bleibt.
-    let is_klein = seller_profile::get(pool)
-        .await?
-        .map(|s| s.is_kleinunternehmer == 1)
-        .unwrap_or(true);
+    // ADR 0042 Nr. 3: Status am Datum des Zielbelegs, ohne Angabe heute.
+    let is_klein = crate::db::repo::tax_status::is_klein_at(
+        pool,
+        document_date.unwrap_or_else(crate::clock::today_berlin),
+    )
+    .await?;
     let (tax_category_code, tax_rate_percent) =
         package_tax_defaults(is_klein, &rev.tax_category_code);
 
@@ -641,7 +649,8 @@ pub struct SendPackageCatalogResult {
 
 /// Baut einen `SellerView` aus dem Stammdaten-Row (geliehen) — wie
 /// `commands::quotes::make_seller_view`, hier lokal für den Broschüren-Render.
-fn seller_view_from_row(row: &SellerProfileRow) -> SellerView<'_> {
+/// Die Broschüre ist kein Beleg; sie zeigt den Status von heute.
+fn seller_view_from_row(row: &SellerProfileRow, is_kleinunternehmer: bool) -> SellerView<'_> {
     SellerView {
         name: &row.name,
         street: &row.street,
@@ -655,11 +664,7 @@ fn seller_view_from_row(row: &SellerProfileRow) -> SellerView<'_> {
         contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
-        is_kleinunternehmer: row.is_kleinunternehmer == 1,
-        waived_since: row
-            .waived_paragraph_19_since
-            .as_deref()
-            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        is_kleinunternehmer,
     }
 }
 
@@ -705,7 +710,10 @@ async fn render_catalog_pdf(
             price_cents: r.default_unit_price_cents,
         })
         .collect();
-    let seller_view = seller_view_from_row(&seller_row);
+    let seller_view = seller_view_from_row(
+        &seller_row,
+        crate::db::repo::tax_status::is_klein_at(pool, crate::clock::today_berlin()).await?,
+    );
 
     // Inhaber-Name (Einzelunternehmer §14) — fürs Impressum, leere Werte → None.
     let owner_name = crate::db::repo::app_settings::get(pool, "seller_owner_name")

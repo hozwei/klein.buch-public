@@ -17,6 +17,7 @@ Pflichtangaben enthalten:
 - Steuernummer/USt-IdNr.
 - Anschrift des Empfängers.
 
-Klein.Buch's `domain::kleinbetragsrechnung::is_applicable(invoice)` (Block 3)
-erkennt automatisch und zeigt ein abweichendes PDF-Layout. Auch hier gilt:
+Klein.Buch erkennt das über `domain::kleinbetragsrechnung::is_applicable(brutto)` und prüft dann
+milder (Empfängeranschrift und Steuernummer entfallen; die Rechnungsnummer vergibt Klein.Buch
+trotzdem fortlaufend, GoBD). Auch hier gilt:
 bei `is_kleinunternehmer = true` → §19-Klausel obligatorisch.

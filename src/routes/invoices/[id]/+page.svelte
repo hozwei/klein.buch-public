@@ -18,6 +18,8 @@
   import { euro, date, dateTime, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { todayBerlin } from "#lib/date.ts";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import { dayClock } from "#lib/dayClock.svelte.ts";
   import Banner from "#lib/Banner.svelte";
   import Badge from "#lib/Badge.svelte";
@@ -74,6 +76,23 @@
   let id = $derived(page.params.id ?? "");
   // Heute in Europe/Berlin, reaktiv über Mitternacht (V2-03: „Überfällig“ wie auf Start).
   const todayIso = $derived(todayBerlin(dayClock.now));
+
+  // ADR 0042 Nr. 3 (V1-R06): Ein Entwurf zeigt den Steuerstatus seines Datums
+  // (Leistungsdatum, sonst Rechnungsdatum) wie der Editor; der gespeicherte Wert
+  // ist bis zum Festschreiben nur vorläufig. Festgeschriebene Belege zeigen den
+  // eingefrorenen Wert, Storno-Belege den des Originals, verworfene Entwürfe den
+  // gespeicherten.
+  const draftTaxDate = $derived.by(() => {
+    const i = detail?.invoice;
+    if (!i || i.lockedAt || i.voidedAt || i.isStornoFor) return "";
+    return relevantTaxDate(i.deliveryDate, i.invoiceDate, todayIso);
+  });
+  const draftTaxAt = taxStatusAtDate(() => draftTaxDate);
+  let isKlein = $derived(
+    draftTaxDate && draftTaxAt.date === draftTaxDate && draftTaxAt.isKlein !== null
+      ? draftTaxAt.isKlein
+      : detail?.invoice.isKleinunternehmer !== 0,
+  );
 
   async function load() {
     loading = true;
@@ -314,7 +333,7 @@
     return () => ro.disconnect();
   });
   // 6 Spalten (§19) passen ab rund 35rem, 8 Spalten (Regelbesteuerung) ab 45rem.
-  let itemsAsCards = $derived(itemsWidth < (detail?.invoice.isKleinunternehmer === 0 ? 720 : 560));
+  let itemsAsCards = $derived(itemsWidth < (!isKlein ? 720 : 560));
 
   // V4-08: Überschrift auch beim Laden und bei „nicht gefunden“.
   let pageTitle = $derived(detail ? docTitle(detail.invoice) : notFound ? "Rechnung nicht gefunden" : "Rechnung");
@@ -478,7 +497,7 @@
         {#if inv.sellerTaxNumber}<small>StNr: {inv.sellerTaxNumber}</small><br/>{/if}
         {#if inv.sellerVatId}<small>USt-IdNr: {inv.sellerVatId}</small>{/if}
       </p>
-      {#if inv.isKleinunternehmer === 1}
+      {#if isKlein}
         <p class="klein-note">Kleinunternehmer (§19) — es wird keine Umsatzsteuer ausgewiesen.</p>
       {/if}
     </section>
@@ -538,7 +557,7 @@
             <th class="right">Menge</th>
             <th>Einheit</th>
             <th class="right">Einzelpreis</th>
-            {#if inv.isKleinunternehmer === 0}
+            {#if !isKlein}
               <th class="right">USt %</th>
               <th>USt-Art</th>
             {/if}
@@ -553,7 +572,7 @@
               <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
               <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
               <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
-              {#if inv.isKleinunternehmer === 0}
+              {#if !isKlein}
                 <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
                 <td data-label="USt-Art">{it.taxCategoryCode}</td>
               {/if}
@@ -562,19 +581,19 @@
           {/each}
         </tbody>
         <tfoot>
-          <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
+          <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Netto</td>
               <td class="right" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
           {#if inv.taxAmountCents !== 0}
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
+            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">USt</td>
                 <td class="right" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
           {/if}
-          <tr class="kb-sum"><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
+          <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="right sum-label">
                 <strong>Brutto</strong></td>
               <td class="right" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
           {#if inv.paidAmountCents > 0}
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Bezahlt</td>
+            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Bezahlt</td>
                 <td class="right" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Offen</td>
+            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Offen</td>
                 <td class="right" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
           {/if}
         </tfoot>

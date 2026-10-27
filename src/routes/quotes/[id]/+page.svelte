@@ -2,6 +2,8 @@
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { pdfTemplateLabel, unitLabel } from "#lib/labels.ts";
   import { todayBerlin } from "#lib/date.ts";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import {
@@ -78,6 +80,20 @@
   let cancelReasonEl: HTMLTextAreaElement | undefined = $state();
   // Annahmedatum: nicht vor dem Angebotsdatum, nicht in der Zukunft (domain::quote).
   const today = todayBerlin();
+  // ADR 0042 Nr. 3 (V1-R06): Ein Entwurf zeigt den Steuerstatus seines
+  // Angebotsdatums wie der Editor; eingefroren gilt erst der Wert beim
+  // Fertigstellen. Verworfene Entwürfe behalten den gespeicherten Wert.
+  const draftTaxDate = $derived.by(() => {
+    const q = detail?.quote;
+    if (!q || q.lockedAt || q.status !== "draft") return "";
+    return relevantTaxDate(null, q.quoteDate, today);
+  });
+  const draftTaxAt = taxStatusAtDate(() => draftTaxDate);
+  let isKlein = $derived(
+    draftTaxDate && draftTaxAt.date === draftTaxDate && draftTaxAt.isKlein !== null
+      ? draftTaxAt.isKlein
+      : detail?.quote.isKleinunternehmer !== 0,
+  );
   let acceptError = $state("");
   // Warteliste (8): Entwurf nach einer Wiederherstellung vorgemerkt.
   let restoreFlagged = $state(false);
@@ -373,7 +389,7 @@
     return () => ro.disconnect();
   });
   // 6 Spalten (§19) passen ab rund 35rem, 8 Spalten (Regelbesteuerung) ab 45rem.
-  let itemsAsCards = $derived(itemsWidth < (detail?.quote.isKleinunternehmer === 0 ? 720 : 560));
+  let itemsAsCards = $derived(itemsWidth < (!isKlein ? 720 : 560));
 
   function fmtBytes(n: number): string {
     if (n < 1024) return `${n} B`;
@@ -605,7 +621,7 @@
         {#if q.sellerTaxNumber}<small>StNr: {q.sellerTaxNumber}</small><br/>{/if}
         {#if q.sellerVatId}<small>USt-IdNr: {q.sellerVatId}</small>{/if}
       </p>
-      {#if q.isKleinunternehmer === 1}
+      {#if isKlein}
         <p class="klein-note">Kleinunternehmer (§19) — es wird keine Umsatzsteuer ausgewiesen.</p>
       {/if}
     </section>
@@ -665,7 +681,7 @@
           <th class="right">Menge</th>
           <th>Einheit</th>
           <th class="right">Einzelpreis</th>
-          {#if q.isKleinunternehmer === 0}
+          {#if !isKlein}
             <th class="right">USt %</th>
             <th>USt-Art</th>
           {/if}
@@ -680,7 +696,7 @@
             <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
             <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
             <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
-            {#if q.isKleinunternehmer === 0}
+            {#if !isKlein}
               <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
               <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
@@ -689,13 +705,13 @@
         {/each}
       </tbody>
       <tfoot>
-        <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
+        <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Netto</td>
             <td class="right" data-label="Netto">{euro(q.netAmountCents)}</td></tr>
         {#if q.taxAmountCents !== 0}
-          <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
+          <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">USt</td>
               <td class="right" data-label="USt">{euro(q.taxAmountCents)}</td></tr>
         {/if}
-        <tr class="kb-sum"><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
+        <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="right sum-label">
               <strong>Brutto</strong></td>
             <td class="right" data-label="Brutto"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
       </tfoot>

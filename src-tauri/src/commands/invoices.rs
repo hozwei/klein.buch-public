@@ -258,6 +258,9 @@ pub struct PreparedDraft {
     input: InvoiceInput,
     buyer_row: crate::db::models::ContactRow,
     seller_row: crate::db::models::SellerProfileRow,
+    /// §19-Status am maßgeblichen Datum (ADR 0042 Nr. 3), beim Storno der des
+    /// Originals; vorläufig bis zum Festschreiben.
+    is_kleinunternehmer: bool,
     totals: invoice::Totals,
     derived_from_quote_id: Option<String>,
     /// Kein Jahresabschluss, bevor der Entwurf geschrieben ist (Lauf F,
@@ -299,7 +302,8 @@ pub async fn prepare_invoice_draft(
         ));
     }
     crate::commands::packages::enforce_package_provenance(pool, &mut input.items).await?;
-    check_draft_blockers(&input, &seller_row, &buyer_row, today)?;
+    let is_kleinunternehmer = invoice_tax_status(pool, &input).await?;
+    check_draft_blockers(&input, &seller_row, is_kleinunternehmer, &buyer_row, today)?;
 
     // Kein Entwurf (und keine Nummer) in einem abgeschlossenen Geschäftsjahr
     // (Gegenprüfung Lauf E; wie bei Kosten und Privatbewegungen). Die
@@ -320,6 +324,7 @@ pub async fn prepare_invoice_draft(
         input,
         buyer_row,
         seller_row,
+        is_kleinunternehmer,
         totals,
         derived_from_quote_id: derived_from_quote_id.map(str::to_string),
         _year_permit: year_permit,
@@ -358,7 +363,7 @@ pub async fn insert_prepared_draft(
     let payload = invoices::DraftCreatePayload {
         contact_id: prepared.contact_id.clone(),
         fiscal_year: prepared.fiscal_year,
-        is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
+        is_kleinunternehmer: prepared.is_kleinunternehmer,
         input: prepared.input.clone(),
         derived_from_quote_id: prepared.derived_from_quote_id.clone(),
     };
@@ -402,10 +407,11 @@ pub async fn insert_prepared_draft(
 fn check_draft_blockers(
     input: &InvoiceInput,
     seller_row: &crate::db::models::SellerProfileRow,
+    is_kleinunternehmer: bool,
     buyer_row: &crate::db::models::ContactRow,
     today: NaiveDate,
 ) -> Result<()> {
-    let seller_view = make_seller_view(seller_row);
+    let seller_view = make_seller_view(seller_row, is_kleinunternehmer);
     let buyer_view = make_buyer_view(buyer_row);
     let Err(errs) = invoice::validate_for_issue(input, &seller_view, &buyer_view, today) else {
         return Ok(());
@@ -588,7 +594,9 @@ pub async fn update_draft_core(
         .await?
         .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     crate::commands::packages::enforce_package_provenance(pool, &mut input.items).await?;
-    check_draft_blockers(&input, &seller_row, &buyer_row, today)?;
+    // ADR 0042 Nr. 3: Status am Leistungs- bzw. Rechnungsdatum des Entwurfs.
+    let is_kleinunternehmer = invoice_tax_status(pool, &input).await?;
+    check_draft_blockers(&input, &seller_row, is_kleinunternehmer, &buyer_row, today)?;
     // Kein Jahresabschluss, bevor der Entwurf geschrieben ist.
     let _year_permit = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
 
@@ -610,7 +618,7 @@ pub async fn update_draft_core(
         &invoices::DraftUpdate {
             contact_id,
             input: &input,
-            is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
+            is_kleinunternehmer,
             seller: &seller,
             buyer: &buyer_snapshot,
             totals: &totals,
@@ -674,14 +682,9 @@ pub async fn invoices_validate_draft(
         .as_ref()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
     let input = detail_to_input(&detail)?;
-    let mut seller_view = make_seller_view(&seller_row);
-    // Wie beim Festschreiben (KB-0010): ein Storno prüft unter dem §19-Status
-    // des Originals.
-    if let Some(original_id) = detail.invoice.is_storno_for.as_deref() {
-        if let Some(original) = invoices::get(pool, original_id).await? {
-            seller_view.is_kleinunternehmer = original.is_kleinunternehmer == 1;
-        }
-    }
+    // Wie beim Festschreiben (KB-0010, ADR 0042 Nr. 3): Status am Leistungs- bzw.
+    // Rechnungsdatum; ein Storno prüft unter dem §19-Status des Originals.
+    let seller_view = make_seller_view(&seller_row, invoice_tax_status(pool, &input).await?);
     let buyer_view = make_buyer_view(buyer_row);
     let today = today_berlin();
 
@@ -871,7 +874,8 @@ async fn run_lock_pipeline_inner(
     let owner_name = crate::db::repo::app_settings::get(pool, "seller_owner_name")
         .await?
         .filter(|s| !s.trim().is_empty());
-    let mut seller_view = make_seller_view(&seller_row);
+    // §19-Status folgt unten (KB-0010, ADR 0042 Nr. 3).
+    let mut seller_view = make_seller_view(&seller_row, true);
     seller_view.contact_name = owner_name.as_deref();
 
     // Block 19: Generator + PDF aus dem Buyer-SNAPSHOT (nicht dem Live-Kontakt),
@@ -911,15 +915,22 @@ async fn run_lock_pipeline_inner(
         }),
         None => None,
     };
-    // KB-0010: §19-Status, unter dem der Beleg entsteht. Eine Rechnung folgt dem
-    // Profil zum Festschreiben; ein Storno spiegelt das Original (§14c: es hebt
-    // genau dessen Steuerausweis auf — auch nach einem Wechsel des Status). Der
-    // Wert steuert Prüfung, XML, Klausel-Check und PDF und wird beim
-    // Festschreiben am Beleg eingefroren.
+    // KB-0010, ADR 0042 Nr. 3: §19-Status, unter dem der Beleg entsteht. Eine
+    // Rechnung folgt der Statushistorie an ihrem Leistungsdatum, ersatzweise am
+    // Rechnungsdatum; ein Storno spiegelt das Original (§14c: es hebt genau
+    // dessen Steuerausweis auf — auch nach einem Wechsel des Status). Der Wert
+    // steuert Prüfung, XML, Klausel-Check und PDF und wird beim Festschreiben am
+    // Beleg eingefroren. Das Datum geht mit in den Lock, der den Status in seiner
+    // Schreibtransaktion gegen die Historie prüft (V1-R04).
+    let status_day =
+        crate::domain::tax_status::document_date(input.delivery_date, input.invoice_date);
     seller_view.is_kleinunternehmer = match original.as_ref() {
         Some(original) => original.is_kleinunternehmer == 1,
-        None => seller_row.is_kleinunternehmer == 1,
+        None => crate::db::repo::tax_status::history(pool)
+            .await?
+            .is_klein_at(status_day),
     };
+    let tax_status_date = original.is_none().then_some(status_day);
 
     // Summen des Belegs aus den Positionen — dieselbe Rechnung wie Generator
     // (BT-109/110/112) und PDF; beim Festschreiben in den Datensatz übernommen.
@@ -1111,6 +1122,7 @@ async fn run_lock_pipeline_inner(
         pdf_archive_id: &pdf_archive.archive_id,
         xml_archive_id: &xml_archive.archive_id,
         is_kleinunternehmer: Some(seller_view.is_kleinunternehmer),
+        tax_status_date,
         // F5-fix: Summen wie im XML/PDF (USt je Steuergruppe), nicht die beim
         // Speichern des Entwurfs abgelegten (ältere Summenlogik, ältere Backups).
         totals: Some(invoices::LockTotals {
@@ -1403,7 +1415,8 @@ pub async fn invoices_cancel(
         let payload = invoices::DraftCreatePayload {
             contact_id: original.invoice.contact_id.clone(),
             fiscal_year: i64::from(storno_fy),
-            is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
+            // KB-0010: Ein Storno spiegelt den eingefrorenen Status des Originals.
+            is_kleinunternehmer: original.invoice.is_kleinunternehmer == 1,
             input: storno_input,
             derived_from_quote_id: None,
         };
@@ -1772,7 +1785,12 @@ fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
 }
 
-fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
+/// Verkäufer-Sicht mit dem §19-Status des Belegs (ADR 0042 Nr. 3; nie aus dem
+/// Profil).
+fn make_seller_view(
+    row: &crate::db::models::SellerProfileRow,
+    is_kleinunternehmer: bool,
+) -> SellerView<'_> {
     SellerView {
         name: &row.name,
         street: &row.street,
@@ -1786,12 +1804,26 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
-        is_kleinunternehmer: row.is_kleinunternehmer == 1,
-        waived_since: row
-            .waived_paragraph_19_since
-            .as_deref()
-            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        is_kleinunternehmer,
     }
+}
+
+/// §19-Status eines Rechnungsbelegs (ADR 0042 Nr. 3): ein Storno übernimmt den
+/// eingefrorenen Status seines Originals (KB-0010, §14c); sonst gilt der Status
+/// am Leistungsdatum, ersatzweise am Rechnungsdatum. Vor dem Festschreiben
+/// vorläufig; das Festschreiben bestimmt ihn neu und friert ihn ein.
+pub async fn invoice_tax_status(pool: &SqlitePool, input: &InvoiceInput) -> Result<bool> {
+    if let Some(original_id) = input.is_storno_for.as_deref() {
+        if let Some(original) = invoices::get(pool, original_id).await? {
+            return Ok(original.is_kleinunternehmer == 1);
+        }
+    }
+    Ok(crate::db::repo::tax_status::history(pool)
+        .await?
+        .is_klein_at(crate::domain::tax_status::document_date(
+            input.delivery_date,
+            input.invoice_date,
+        )))
 }
 
 /// True, wenn die Position einen nicht-leeren Markdown-Body trägt (Paket-/Rich-Position).

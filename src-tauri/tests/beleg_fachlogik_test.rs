@@ -74,7 +74,7 @@ fn paths_for(dir: &Path) -> Paths {
     }
 }
 
-fn profile(is_kleinunternehmer: bool) -> seller_profile::SellerProfileInput {
+fn profile() -> seller_profile::SellerProfileInput {
     seller_profile::SellerProfileInput {
         name: "Beispiel IT-Service".into(),
         legal_form: None,
@@ -89,10 +89,9 @@ fn profile(is_kleinunternehmer: bool) -> seller_profile::SellerProfileInput {
         iban: None,
         bic: None,
         logo_filename: None,
-        is_kleinunternehmer,
+        is_kleinunternehmer: None,
         default_pdf_template: Some("default".into()),
         default_currency: Some("EUR".into()),
-        confirm_waive_paragraph_19: Some(true),
     }
 }
 
@@ -116,9 +115,10 @@ async fn setup(is_kleinunternehmer: bool) -> Env {
         .await
         .unwrap();
     MIGRATOR.run(&pool).await.unwrap();
-    seller_profile::upsert(&pool, &profile(is_kleinunternehmer))
-        .await
-        .unwrap();
+    seller_profile::upsert(&pool, &profile()).await.unwrap();
+    if !is_kleinunternehmer {
+        regel_from_start(&pool).await;
+    }
     let contact = mk_contact(&pool, "Kunde GmbH").await;
     let ctx = AppCtx::for_tests(paths);
     ctx.set_pool(pool.clone());
@@ -271,7 +271,7 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
         &invoices::DraftCreatePayload {
             contact_id: detail.invoice.contact_id.clone(),
             fiscal_year: i64::from(fy),
-            is_kleinunternehmer: seller.is_kleinunternehmer == 1,
+            is_kleinunternehmer: detail.invoice.is_kleinunternehmer == 1,
             input: storno_input,
             derived_from_quote_id: None,
         },
@@ -293,6 +293,46 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
     )
     .await?;
     Ok(draft.id)
+}
+
+/// Wechsel zur Regelbesteuerung ab heute (Wegfall im laufenden Jahr, ADR 0042).
+async fn regel_ab_heute(pool: &SqlitePool) {
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{ChangeReason, TaxStatus};
+    tax_status::insert(
+        pool,
+        &tax_status::NewEntry {
+            effective_from: today(),
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::WegfallLaufend,
+            binding_until: None,
+            trigger_document: None,
+            note: None,
+        },
+        today(),
+    )
+    .await
+    .unwrap();
+}
+
+/// Regelbesteuerung seit Beginn (Anfangsstand der Statushistorie, ADR 0042).
+async fn regel_from_start(pool: &SqlitePool) {
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{anfang, ChangeReason, TaxStatus};
+    tax_status::insert(
+        pool,
+        &tax_status::NewEntry {
+            effective_from: anfang(),
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::Initial,
+            binding_until: None,
+            trigger_document: None,
+            note: None,
+        },
+        klein_buch_lib::clock::today_berlin(),
+    )
+    .await
+    .unwrap();
 }
 
 async fn flag(pool: &SqlitePool, table: &str, id: &str) -> i64 {
@@ -352,9 +392,7 @@ async fn storno_mirrors_status_of_original_after_switch() {
     let id = create_draft(&env, input(vec![item(1, 1.0, 25_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
     // Wechsel zur Regelbesteuerung nach der Original-Rechnung.
-    seller_profile::upsert(&env.pool, &profile(false))
-        .await
-        .unwrap();
+    regel_ab_heute(&env.pool).await;
     // Der Storno hebt genau die §19-Rechnung auf: E/0 bleibt zulässig, der
     // Storno trägt §19 wie das Original.
     let storno_id = storno(&env, &id).await.expect("Storno nach dem Wechsel");
@@ -756,6 +794,7 @@ async fn package_item_is_a_snapshot_with_provenance_rules() {
         &env.ctx,
         PackageMaterializeItemArgs {
             package_id: pkg.id.clone(),
+            document_date: None,
         },
     )
     .await
@@ -850,7 +889,10 @@ async fn package_item_under_regelbesteuerung_gets_standard_rate() {
     .unwrap();
     let m = pkg_cmd::package_materialize_item(
         &env.ctx,
-        PackageMaterializeItemArgs { package_id: pkg.id },
+        PackageMaterializeItemArgs {
+            package_id: pkg.id,
+            document_date: None,
+        },
     )
     .await
     .unwrap();
@@ -914,9 +956,7 @@ async fn quote_pdf_klausel_check_uses_frozen_status() {
     let env = setup(true).await;
     let id = issued_quote(&env).await;
     // Wechsel zur Regelbesteuerung NACH dem Festschreiben.
-    seller_profile::upsert(&env.pool, &profile(false))
-        .await
-        .unwrap();
+    regel_ab_heute(&env.pool).await;
     // Eigene Angebotsvorlage ohne §19-Marker: das Angebot ist ein §19-Beleg,
     // also greift der Klausel-Check trotz des heutigen Profils.
     let quote_tpl = env
@@ -1105,6 +1145,7 @@ async fn package_provenance_is_enforced_on_quotes_and_templates() {
         &env.ctx,
         PackageMaterializeItemArgs {
             package_id: pkg.id.clone(),
+            document_date: None,
         },
     )
     .await

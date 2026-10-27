@@ -46,6 +46,9 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
 
   let { editId = null }: { editId?: string | null } = $props();
 
@@ -180,11 +183,22 @@
   }
 
   // ---- §19-Hardline: bei is_kleinunternehmer USt-Felder sperren ----
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: maßgeblich ist der Status am Leistungsdatum (sonst
+  // Rechnungsdatum), nicht der von heute. Bis er für das aktuelle Datum geladen
+  // ist, zeigt die Seite den zuletzt bekannten Wert.
+  let taxDate = $derived(relevantTaxDate(deliveryDate, invoiceDate, today));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
   // §19: E/0 erzwingen; Regelbesteuerung: E wird S 19 % (KB-0014). In place
-  // (lib/tax.ts) — eine neue Array-Identität triggerte den Effect endlos.
+  // (lib/tax.ts) — eine neue Array-Identität triggerte den Effect endlos. Nur mit
+  // dem Status genau dieses Datums, sonst schriebe ein veralteter Wert die Sätze
+  // eines geladenen Entwurfs um.
   $effect(() => {
-    applyTaxRules(items as unknown as InvoiceItemInput[], seller ? isKlein : null);
+    applyTaxRules(
+      items as unknown as InvoiceItemInput[],
+      seller && taxAt.date === taxDate ? taxAt.isKlein : null,
+    );
   });
 
   // ---- Totals (live, wie der Server: USt je Steuergruppe) ----
@@ -258,6 +272,8 @@
         const terms = await documentTermsGet();
         dueDate = addDays(invoiceDate, terms.invoiceDueDays);
       }
+      // Status am Belegdatum vor dem ersten Zeichnen (kein Springen der Spalten).
+      await taxAt.load(taxDate).catch(() => {});
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -520,10 +536,12 @@
     Deine Firmendaten fehlen. <a class="kb-link" href="/settings/seller?next=/invoices/new">Jetzt ausfüllen</a>.
   </Banner>
 {:else}
-  {#if isKlein}
-    <Banner kind="info">
-      Du bist als Kleinunternehmer (§19) eingestellt — auf der Rechnung wird keine
-      Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
+  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
+    dateLabel={deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
+  {#if taxAt.error}
+    <Banner kind="warning">
+      Der Steuerstatus am Leistungsdatum ließ sich nicht laden ({taxAt.error}). Klein.Buch prüft
+      ihn beim Speichern und Ausstellen.
     </Banner>
   {/if}
   {#if editId && restoreFlagged}
@@ -850,7 +868,7 @@
         </tfoot>
       </table>
       <TravelLineAdder onAdd={addTravelLine} />
-      <PackageItemAdder onAdd={addPackage} />
+      <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
     </section>
 
     <section class="card">

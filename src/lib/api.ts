@@ -52,6 +52,11 @@ import type {
   EmailLogEntry,
   EmailLogFilter,
   Paragraph19Info,
+  TaxStatusAt,
+  TaxStatusChangeInput,
+  TaxStatusChangePreview,
+  TaxStatusChangeResult,
+  TaxStatusOverview,
   PdfTemplateMeta,
   TravelSettings,
   TravelLine,
@@ -219,6 +224,33 @@ export function sellerProfileUpsert(input: SellerProfileInput): Promise<SellerPr
 
 export function paragraph19Info(): Promise<Paragraph19Info> {
   return invoke<Paragraph19Info>("paragraph_19_info");
+}
+
+// ---- Steuerstatus nach § 19 UStG (ADR 0042) ---------------------------------
+
+/** Historie, Status heute, Bindung, Gesamtumsatz und Grenzhinweise. */
+export function taxStatusOverview(): Promise<TaxStatusOverview> {
+  return invoke<TaxStatusOverview>("tax_status_overview");
+}
+
+/** Status an einem Datum (YYYY-MM-DD): Leistungsdatum, sonst Belegdatum. */
+export function taxStatusAt(date: string): Promise<TaxStatusAt> {
+  return invoke<TaxStatusAt>("tax_status_at", { date });
+}
+
+/** Prüft einen geplanten Eintrag und liefert seine Folgen; schreibt nichts. */
+export function taxStatusChangePreview(input: TaxStatusChangeInput): Promise<TaxStatusChangePreview> {
+  return invoke<TaxStatusChangePreview>("tax_status_change_preview", { input });
+}
+
+/** Trägt einen Wechsel ein (frische Re-Auth). */
+export function taxStatusChangeAdd(input: TaxStatusChangeInput): Promise<TaxStatusChangeResult> {
+  return invoke<TaxStatusChangeResult>("tax_status_change_add", { input });
+}
+
+/** Widerruft den jüngsten gültigen Eintrag mit Grund (frische Re-Auth). */
+export function taxStatusChangeRevoke(id: string, reason: string): Promise<TaxStatusChangeResult> {
+  return invoke<TaxStatusChangeResult>("tax_status_change_revoke", { id, reason });
 }
 
 /** Logo aus einem Upload der Art `logo` (Plan W7). */
@@ -535,9 +567,16 @@ export function packagePreview(
 
 /** Materialisiert eine Beleg-Position aus der aktiven Revision eines Pakets.
  *  Reine Aufbereitung (schreibt nichts) — das Frontend hängt sie an die
- *  Positions-Liste. */
-export function packageMaterializeItem(packageId: string): Promise<MaterializedPackageItem> {
-  return invoke<MaterializedPackageItem>("package_materialize_item", { packageId });
+ *  Positions-Liste. `documentDate` (YYYY-MM-DD): maßgebliches Datum des
+ *  Zielbelegs für den §19-Status (ADR 0042 Nr. 3); ohne Angabe heute. */
+export function packageMaterializeItem(
+  packageId: string,
+  documentDate?: string | null,
+): Promise<MaterializedPackageItem> {
+  return invoke<MaterializedPackageItem>("package_materialize_item", {
+    packageId,
+    documentDate: documentDate ?? null,
+  });
 }
 
 // ---- Paket-Katalog-Broschüre (Block P4) -------------------------------------

@@ -3,7 +3,43 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
 `JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
-## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, 2026-10-27
+## [2026.11.1] — Fachliche Korrekturen und DATEV-Format, in Arbeit
+
+Korrekturen nach 2026.11.0: Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund,
+Leistungszeitraum und Vorausrechnung, Korrektur falsch gebuchter Zahlungen per Gegenbuchung,
+bearbeitbare Angebots-Entwürfe, DATEV-Buchungsstapel nach der Formatbeschreibung sowie die
+offenen Punkte aus Lauf 2026.11.
+
+- **Spezifikationen berichtigt** (`inputs/specs/`): § 19 UStG in der Fassung ab 2025 (Grenzen,
+  Gesamtumsatz nach vereinnahmten Entgelten, Gründungsjahr, Verzicht nach Abs. 3 mit fünf
+  Kalenderjahren ab dem Wirkungsjahr, unrichtiger Steuerausweis nach § 14c Abs. 1), § 13b UStG
+  (auch Kleinunternehmer schulden die Steuer), Pflichtangaben nach § 14 UStG und § 34a UStDV,
+  DATEV-Format (Präfix `EXTF_`, Kopf Version 700, Pflichtnummern).
+- **Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund** (ADR 0042 Nr. 1–6): Statt des
+  Schalters unter „Meine Firmendaten“ führt Klein.Buch eine unveränderliche Historie
+  (Verzicht, Wegfall wegen des Vorjahres, Wegfall im laufenden Jahr bzw. im Gründungsjahr,
+  Rückkehr; ein Irrtum wird mit Grund widerrufen). Die Rückkehr ist nach einem gesetzlichen
+  Wegfall ohne Sperre möglich, nach einem Verzicht nach fünf Kalenderjahren einschließlich des
+  Wirkungsjahres (bisher ein Jahr zu lang). Ein Wechsel mitten im Jahr wirkt ab dem Umsatz,
+  der die Grenze überschreitet. Jeder Beleg nimmt den Status an seinem Leistungsdatum (sonst
+  Rechnungsdatum), Kosten am Belegdatum; EÜR, ELSTER-Ausfüllhilfe und DATEV-Stapel teilen ein
+  Wechseljahr. Klein.Buch zeigt den Gesamtumsatz nach vereinnahmten Entgelten (Vorjahr und
+  laufendes Jahr) und meldet erreichte Grenzen; einen rückwirkenden Wechsel nimmt es nur in
+  offenen Geschäftsjahren an und nennt betroffene festgeschriebene Rechnungen.
+
+### Hinweise für Betreiber (Update von 2026.11.0)
+
+- **Datenbank-Migration:** Beim ersten Entsperren hebt Klein.Buch das Schema an (Migrationen
+  ab 0033) und legt vorher das übliche Pflicht-Backup an. Ein Image 2026.11.0 kann die
+  migrierte Datenbank und danach angelegte Backups nicht öffnen; zurück geht es nur über das
+  Pflicht-Backup.
+- **Steuerstatus:** Der bisherige Stand erscheint als „Wechsel aus dem bisherigen Schalter
+  übernommen“ (Bindung nach § 19 Abs. 3 UStG). War der Wechsel in Wahrheit ein gesetzlicher
+  Wegfall, den Eintrag widerrufen und mit dem richtigen Grund neu eintragen.
+- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`; das Herunterfahren
+  dauert bis zu 75 s, zusammen höchstens 75 s.
+
+## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, veröffentlicht 2026-10-27
 
 Die Oberfläche für Smartphone, Tablet und Desktop (Lauf 2026.11), dazu die Umsetzung der
 Entscheidungen nach v2026.10.0 (Lauf E) sowie Funktion und Technik für den Dauerbetrieb

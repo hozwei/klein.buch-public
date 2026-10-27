@@ -145,17 +145,29 @@ async fn euer_report_carries_paragraph_19_status_and_snapshot_check() {
     assert_eq!(r["fiscalYear"], 2026);
     assert_eq!(r["surplusCents"], 0);
 
-    // Verzicht ab 2026: 2026 Regelbesteuerung, 2025 weiter §19.
-    sqlx::query(
-        "INSERT INTO seller_profile (id, name, street, postal_code, city, tax_number, email,
-                                     is_kleinunternehmer, waived_paragraph_19_since)
-         VALUES (1, 'Verkäufer', 'Beispielweg 1', '84028', 'Landshut', '123/456/78901',
-                 'verkaeufer@example.org', 0, '2026-01-01')",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    // Verzicht ab 2026: 2026 Regelbesteuerung, 2025 weiter §19 (Statushistorie,
+    // ADR 0042).
+    {
+        use klein_buch_lib::db::repo::tax_status;
+        use klein_buch_lib::domain::tax_status::{verzicht_binding_until, ChangeReason, TaxStatus};
+        let jan = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        tax_status::insert(
+            &pool,
+            &tax_status::NewEntry {
+                effective_from: jan,
+                status: TaxStatus::Regelbesteuerung,
+                reason: ChangeReason::Verzicht,
+                binding_until: Some(verzicht_binding_until(jan)),
+                trigger_document: None,
+                note: None,
+            },
+            jan,
+        )
+        .await
+        .unwrap();
+    }
     assert_eq!(report(&ctx, 2026).await["isKleinunternehmer"], false);
+    assert_eq!(report(&ctx, 2026).await["yearStatus"], "regelbesteuerung");
     assert_eq!(report(&ctx, 2025).await["isKleinunternehmer"], true);
 
     // Abgeschlossene Jahre: passender bzw. abweichender Snapshot.

@@ -70,11 +70,6 @@ fn seller(klein: bool) -> SellerView<'static> {
         iban: Some("DE02120300000000202051"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: klein,
-        waived_since: if klein {
-            None
-        } else {
-            NaiveDate::from_ymd_opt(2026, 1, 1)
-        },
     }
 }
 

@@ -102,8 +102,8 @@ Seite, wenn
   Netto-Betrag). Die EÜR nimmt die ganze Kostenposition heraus; ein
   kleinerer Betrag würde den Rest nie abziehen, ein größerer ohne
   Ausgabe abschreiben,
-- das Anschaffungsdatum und das Belegdatum der Kosten in Jahren mit
-  unterschiedlichem Steuerstatus liegen (siehe "Steuerstatus und
+- am Anschaffungsdatum und am Belegdatum der Kosten ein
+  unterschiedlicher Steuerstatus gilt (siehe "Steuerstatus und
   Zahldatum").
 
 Ist nur ein Teil einer Sammelrechnung eine Anlage, teile die Rechnung
@@ -160,8 +160,8 @@ erst im Januar nach dem Verzicht auf §19, bleibt es beim Brutto-Betrag;
 eine Vorsteuer gibt es dafür nicht. Kosten haben kein eigenes
 Leistungsdatum, Klein.Buch nimmt das Belegdatum. Bei einer Anlage ist der
 Leistungsbezug allerdings die Lieferung (§9a EStDV), also das
-Anschaffungsdatum, das Du eingibst. Liegt es in einem Jahr mit anderem
-Steuerstatus als das Belegdatum (zum Beispiel Lieferung im Dezember als
+Anschaffungsdatum, das Du eingibst. Gilt an diesem Tag ein anderer
+Steuerstatus als am Belegdatum (zum Beispiel Lieferung im Dezember als
 Kleinunternehmer, Rechnung im Januar nach dem Verzicht), kann Klein.Buch
 das nicht abbilden und lehnt das Übernehmen oder Bearbeiten mit beiden
 Daten ab. Prüfe dann das Anschaffungsdatum; stimmt es, klärst Du die
@@ -170,19 +170,22 @@ jederzeit nachtragen oder ändern, es ändert am Steuerstatus
 nichts; es bestimmt nur, in welchem Jahr die Ausgabe (bei
 Regelbesteuerung die Vorsteuer) in der EÜR steht.
 
-**Nach einem Wechsel des Steuerstatus.** Ein Verzicht auf §19 gilt ab
-Beginn des Kalenderjahres, ebenso der Wegfall, weil Dein Vorjahresumsatz
-über 25.000 € lag. Hast Du in diesem Jahr schon Kosten als
-Anlage übernommen (brutto), passen deren Anschaffungskosten danach nicht
-mehr (netto wäre richtig). Klein.Buch blockiert den Wechsel nicht, legt
-aber unter "Hinweise" einen Hinweis an, der jede betroffene Anlage mit dem
+**Nach einem Wechsel des Steuerstatus.** Klein.Buch rechnet den Status
+Deiner Kosten datumsgenau nach dem Wirkungsdatum des Wechsels (Kapitel
+"Kleinunternehmer-Regelung"). Trägst Du einen Wechsel rückwirkend ein,
+etwa einen Verzicht auf §19 oder den Wegfall wegen des Vorjahresumsatzes
+zum 1. Januar, und hast Du ab diesem Datum schon Kosten als Anlage
+übernommen (brutto), passen deren Anschaffungskosten danach nicht mehr
+(netto wäre richtig). Klein.Buch blockiert den Wechsel nicht, nennt die
+Anlagen schon in der Vorschau des Dialogs "Statuswechsel eintragen?" und
+legt unter "Hinweise" einen Hinweis an, der jede betroffene Anlage mit dem
 richtigen Betrag nennt; die EÜR-Ausfüllhilfe zeigt sie ebenfalls. Öffne
 die Anschaffung, wähle "Bearbeiten" und korrigiere die
 Anschaffungskosten. Ist schon AfA gebucht, setzt Du die Abschreibung des
 offenen Geschäftsjahres vorher zurück (siehe "Korrektur"). Ist für die Anlage AfA in einem abgeschlossenen Jahr
 festgeschrieben oder die Anlage schon abgegangen, klärst Du die
-Korrektur mit Deiner Steuerberatung, ebenso wenn das Anschaffungsdatum
-in einem Jahr mit anderem Steuerstatus als das Belegdatum liegt. Eine
+Korrektur mit Deiner Steuerberatung, ebenso wenn am Anschaffungsdatum
+ein anderer Steuerstatus gilt als am Belegdatum. Eine
 Vorsteuerberichtigung nach §15a UStG für Anlagen aus früheren Jahren
 (der Wechsel gilt dort als Änderung der Verhältnisse) berechnet
 Klein.Buch nicht; klär sie mit Deiner Steuerberatung.
@@ -190,13 +193,11 @@ Klein.Buch nicht; klär sie mit Deiner Steuerberatung.
 **Wegfall von §19 beim Überschreiten der 100.000-€-Grenze.** Überschreitet
 Dein Umsatz im laufenden Jahr 100.000 €, endet §19 mitten im Jahr (§19
 Abs. 1 UStG); Kosten, die Du vor dem Überschreiten bezogen hast, bleiben
-beim Brutto-Betrag ohne Vorsteuer. Klein.Buch kennt den Steuerstatus nur
-je Kalenderjahr: Legst Du den Schalter um, gilt die Regelbesteuerung für
-das ganze Jahr, und der Hinweis nennt Deine bisher brutto übernommenen
-Anlagen als abweichend. **Korrigiere sie in diesem Fall nicht** — der
-Brutto-Betrag ist für Anlagen, die Du vor dem Überschreiten bekommen hast,
-richtig. Klär die Erfassung des Jahres mit Deiner Steuerberatung; mehr dazu
-im Kapitel "Kleinunternehmer-Regelung".
+beim Brutto-Betrag ohne Vorsteuer. Trägst Du den Wegfall mit dem
+Leistungsdatum der Rechnung ein, mit der Du die Grenze überschritten
+hast, gilt die Regelbesteuerung erst ab diesem Tag: Anlagen mit einem
+früheren Belegdatum bleiben brutto richtig und erscheinen nicht als
+abweichend. Mehr dazu im Kapitel "Kleinunternehmer-Regelung".
 
 Anlagen mit abweichendem Betrag (etwa aus einer älteren Version) ändert
 Klein.Buch nicht von selbst; die EÜR-Ausfüllhilfe nennt die betroffenen

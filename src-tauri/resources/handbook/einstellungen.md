@@ -28,16 +28,19 @@ Klick einen Eintrag an, um den jeweiligen Bereich zu öffnen.
 Hier änderst Du Name, Rechtsform, Inhaber, Anschrift, Steuernummer
 oder USt-IdNr., E-Mail und Telefon. Unter "Standard-Einstellungen"
 legst Du fest, wie viele Tage ein neues Angebot gültig ist und welches
-Zahlungsziel eine neue Rechnung bekommt. In diesem Bereich sitzt auch
-der Schalter "Kleinunternehmer nach §19 UStG". Standardmäßig ist er
-an. Bankverbindung und Logo stehen nicht hier, sondern unter "Konten"
-und "Rechnungs-Layout". Mehr dazu im Kapitel "Verkäuferprofil
-anlegen".
+Zahlungsziel eine neue Rechnung bekommt. Bankverbindung und Logo
+stehen nicht hier, sondern unter "Konten" und "Rechnungs-Layout".
+Mehr dazu im Kapitel "Verkäuferprofil anlegen". Die Angaben speicherst
+Du mit "Speichern" ohne Rückfrage.
 
-Änderst Du den Kleinunternehmer-Status, fragt Klein.Buch zur
-Bestätigung nach Daten-Passwort und App-Code (nicht in den ersten fünf
-Minuten nach der Anmeldung). Alle anderen Angaben speicherst Du ohne
-Rückfrage.
+Unter dem Formular steht der Abschnitt "Steuerstatus": Status heute,
+Gesamtumsatz mit Grenzhinweisen und der Verlauf Deiner Wechsel
+zwischen Kleinunternehmer-Regelung und Regelbesteuerung. Ohne Eintrag
+gilt die Kleinunternehmer-Regelung. Einen Wechsel trägst Du dort mit
+"Statuswechsel eintragen …" ein, mit Grund und Wirkungsdatum; er gilt
+sofort, nicht erst mit "Speichern". Klein.Buch fragt dazu nach
+Daten-Passwort und App-Code (nicht in den ersten fünf Minuten nach
+der Anmeldung). Mehr im Kapitel "Kleinunternehmer-Regelung".
 
 Klein.Buch schreibt zum Zeitpunkt jeder Festschreibung eine Kopie
 der relevanten Profil-Daten in den Beleg. Spätere Profil-Änderungen

@@ -65,7 +65,9 @@
   let snapshotMismatch = $derived(
     report?.snapshotCheck && !report.snapshotCheck.matches ? report.snapshotCheck : null,
   );
-  let isRegular = $derived(!!report && report.isKleinunternehmer === false);
+  // ADR 0042 Nr. 3: Jahresstatus dreiwertig (§19, Regelbesteuerung, Wechsel im Jahr).
+  let isMixed = $derived(!!report && report.yearStatus === "wechsel");
+  let isRegular = $derived(!!report && report.yearStatus === "regelbesteuerung");
 </script>
 
 <PageBar title="Steuer-Übersicht (EÜR)">
@@ -109,7 +111,18 @@
     </Banner>
   {/if}
 
-  {#if isRegular}
+  {#if isMixed}
+    <!-- ADR 0042 Nr. 3: dritter Zustand „Wechsel im Jahr“. -->
+    <Banner kind="info" title="Wechsel des Steuerstatus {report.fiscalYear}.">
+      {report.statusChange}. Jede Einnahme und jede Kostenposition zählt mit dem Steuerstatus ihres
+      Datums (Rechnungen mit dem beim Festschreiben eingefrorenen Status, Kosten nach Belegdatum).
+      Beträge aus der Zeit der Regelbesteuerung sind Zahlungen mit Umsatzsteuer. Nicht enthalten sind
+      die an das Finanzamt gezahlte und die vom Finanzamt erstattete Umsatzsteuer; die
+      Umsatzsteuer-Voranmeldung erstellt Klein.Buch nicht. Die Anlage EÜR im
+      <a class="kb-link" href="/euer/export">Export</a> trennt Netto und Umsatzsteuer und nennt,
+      was du mit deiner Steuerberatung ergänzen musst.
+    </Banner>
+  {:else if isRegular}
     <Banner kind="info" title="Regelbesteuerung {report.fiscalYear}.">
       Die Beträge hier sind Zahlungen mit Umsatzsteuer: Vereinnahmte Umsatzsteuer zählt zu den
       Einnahmen, gezahlte Vorsteuer zu den Ausgaben. Nicht enthalten sind die an das Finanzamt

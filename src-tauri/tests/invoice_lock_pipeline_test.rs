@@ -90,10 +90,10 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer,
+            // ADR 0042: der Status kommt aus der Historie (leer = §19); nur prüfen.
+            is_kleinunternehmer: Some(is_kleinunternehmer),
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await
@@ -218,7 +218,12 @@ async fn create_draft(env: &Env, contact_id: &str, input: InvoiceInput) -> Strin
     let payload = invoices::DraftCreatePayload {
         contact_id: contact_id.to_string(),
         fiscal_year: 2026,
-        is_kleinunternehmer: seller.is_kleinunternehmer == 1,
+        is_kleinunternehmer: klein_buch_lib::db::repo::tax_status::is_klein_at(
+            &env.pool,
+            klein_buch_lib::clock::today_berlin(),
+        )
+        .await
+        .unwrap(),
         input,
         derived_from_quote_id: None,
     };

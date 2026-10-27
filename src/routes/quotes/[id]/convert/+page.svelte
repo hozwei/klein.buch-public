@@ -35,6 +35,9 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { quoteConversionHint, relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge.
@@ -132,7 +135,18 @@
   // Positionen werden aus dem Angebot übernommen und sind anpassbar.
   let items = $state<FormItem[]>([]);
 
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: Status am Leistungsdatum der Rechnung (sonst Rechnungsdatum),
+  // nicht der von heute und nicht der eingefrorene des Angebots.
+  let taxDate = $derived(relevantTaxDate(deliveryDate, invoiceDate, today));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
+  let conversionHint = $derived(
+    quoteConversionHint(
+      detail ? detail.quote.isKleinunternehmer === 1 : null,
+      taxAt.date === taxDate ? taxAt.isKlein : null,
+    ),
+  );
   // Konvertierung nur aus angenommenem Angebot (Hard-Rule). Backend prüft
   // ebenfalls — das hier ist die UI-Sperre.
   let convertible = $derived(detail?.quote.status === "accepted");
@@ -145,7 +159,8 @@
   // In-place pro Property mutieren (keine neue Array-Identität → kein Effect-Loop).
   // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    applyTaxRules(items as unknown as QuoteItemInput[], seller ? isKlein : null);
+    // Nur mit dem Status genau dieses Datums (kein Umschreiben mit einem veralteten Wert).
+    applyTaxRules(items as unknown as QuoteItemInput[], seller && taxAt.date === taxDate ? taxAt.isKlein : null);
   });
 
   // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
@@ -230,6 +245,7 @@
       // Rechnung trüge kein „Fällig am".
       const terms = await documentTermsGet();
       dueDate = addDays(invoiceDate, terms.invoiceDueDays);
+      await taxAt.load(taxDate).catch(() => {});
     } catch (e) {
       error = String(e);
     } finally {
@@ -406,11 +422,10 @@
       <a class="kb-link" href={`/quotes/${id}`}>Zurück zum Angebot</a>.
     </Banner>
   {:else}
-    {#if isKlein}
-      <Banner kind="info">
-        Du bist als Kleinunternehmer (§19) eingestellt — auf der Rechnung wird keine
-        Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
-      </Banner>
+    <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
+      dateLabel={deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
+    {#if conversionHint}
+      <Banner kind="warning" title="Anderer Steuerstatus als im Angebot.">{conversionHint}</Banner>
     {/if}
 
     <form id="convert-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
@@ -685,7 +700,7 @@
           </tfoot>
         </table>
         <TravelLineAdder onAdd={addTravelLine} />
-        <PackageItemAdder onAdd={addPackage} />
+        <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
       </section>
 
       <section class="card">

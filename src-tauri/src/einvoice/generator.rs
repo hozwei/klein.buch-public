@@ -610,7 +610,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 

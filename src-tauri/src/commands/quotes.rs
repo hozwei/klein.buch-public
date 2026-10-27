@@ -191,7 +191,11 @@ pub async fn create_draft_core(
         .await?
         .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
 
-    let seller_view = make_seller_view(&seller_row);
+    // ADR 0042 Nr. 3: Status am Angebotsdatum.
+    let seller_view = make_seller_view(
+        &seller_row,
+        quote_tax_status(pool, args.input.quote_date).await?,
+    );
     let buyer_view = QuoteBuyerView {
         name: &buyer_row.name,
     };
@@ -254,7 +258,7 @@ pub async fn create_draft_core(
     let payload = quotes::DraftCreatePayload {
         contact_id: args.contact_id.clone(),
         fiscal_year,
-        is_kleinunternehmer: seller_row.is_kleinunternehmer == 1,
+        is_kleinunternehmer: seller_view.is_kleinunternehmer,
         input: args.input.clone(),
     };
 
@@ -308,7 +312,8 @@ pub async fn quotes_validate_draft(
         .as_ref()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
     let input = detail_to_input(&detail)?;
-    let seller_view = make_seller_view(&seller_row);
+    let seller_view =
+        make_seller_view(&seller_row, quote_tax_status(pool, input.quote_date).await?);
     let buyer_view = QuoteBuyerView {
         name: &buyer_row.name,
     };
@@ -374,11 +379,14 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
         .buyer
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
-    let seller_view = make_seller_view(&seller_row);
+    let input = detail_to_input(&detail)?;
+    // KB-0010, ADR 0042 Nr. 3: Status am Angebotsdatum, beim Festschreiben
+    // eingefroren.
+    let seller_view =
+        make_seller_view(&seller_row, quote_tax_status(pool, input.quote_date).await?);
     let buyer_view = QuoteBuyerView {
         name: &buyer_row.name,
     };
-    let input = detail_to_input(&detail)?;
 
     quote::validate_quote(&input, &seller_view, &buyer_view, today_berlin()).map_err(|errs| {
         Error::Domain(format!(
@@ -416,6 +424,19 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
         email: buyer_row.email.as_deref(),
     };
     quotes::set_buyer_snapshot_in(&mut tx, &id, &buyer_snapshot).await?;
+    // ADR 0042 Nr. 3 (V1-R04): Status in der Schreibtransaktion erneut prüfen;
+    // ein Statuseintrag seit der Prüfung oben bricht das Fertigstellen ab.
+    if crate::db::repo::tax_status::history_in(&mut tx)
+        .await?
+        .is_klein_at(input.quote_date)
+        != seller_view.is_kleinunternehmer
+    {
+        return Err(Error::Domain(
+            "Der Steuerstatus wurde während des Fertigstellens geändert. Das Angebot ist nicht \
+             fertiggestellt; prüfe die Positionen und stelle es erneut fertig."
+                .into(),
+        ));
+    }
     // KB-0010: §19-Status zum Festschreiben einfrieren (Render und Gate nutzen
     // danach genau diesen Wert).
     quotes::issue_in(&mut tx, &id, Some(seller_view.is_kleinunternehmer)).await?;
@@ -745,7 +766,19 @@ pub async fn quotes_convert_to_invoice(
             .pdf_template
             .unwrap_or_else(|| quote.pdf_template.clone()),
     };
-    let input = quote::convert_to_invoice(&items, &opts);
+    let mut input = quote::convert_to_invoice(&items, &opts);
+    // ADR 0042 Nr. 3: Die Rechnung folgt dem Status an ihrem Leistungs- bzw.
+    // Rechnungsdatum, nicht dem des Angebots. Gilt dort §19, weist sie keine
+    // Umsatzsteuer aus (§14c-Schutz): Positionen werden steuerfrei („E“, 0 %),
+    // der Nettopreis bleibt. Gilt dort die Regelbesteuerung, bleiben „E“-
+    // Positionen eines §19-Angebots stehen; die Prüfung des Entwurfs meldet sie,
+    // den Steuersatz wählt der Nutzer (Klein.Buch rät keinen Satz).
+    if crate::commands::invoices::invoice_tax_status(pool, &input).await? {
+        for it in &mut input.items {
+            it.tax_category_code = crate::domain::kleinunternehmer::EXEMPT_CATEGORY.into();
+            it.tax_rate_percent = 0.0;
+        }
+    }
     // GJ leitet create_invoice_draft_from_input aus dem Rechnungsdatum ab (W1.2).
 
     // Gemeinsamer Draft-Helper: Snapshots, Belegnummer, derived_from_quote_id,
@@ -821,12 +854,11 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         .buyer
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
-    let mut seller_view = make_seller_view(&seller_row);
     // KB-0009/KB-0010: Gerendert wird mit dem beim Festschreiben eingefrorenen
-    // §19-Status des Angebots, nicht mit dem heutigen Profil — und genau dieser
+    // §19-Status des Angebots, nicht mit dem heutigen Stand — und genau dieser
     // Status steuert auch den Klausel-Check unten (Hardline „verifiziert vor
     // jedem Render“).
-    seller_view.is_kleinunternehmer = quote.is_kleinunternehmer == 1;
+    let seller_view = make_seller_view(&seller_row, quote.is_kleinunternehmer == 1);
     // Block 19: festgeschriebenes Angebot → Empfänger aus dem eingefrorenen
     // Snapshot rendern (robust gegen spätere DSGVO-Anonymisierung des Kontakts);
     // Fallback auf den Live-Kontakt nur für Alt-Angebote ohne Snapshot.
@@ -1154,7 +1186,12 @@ fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
 }
 
-fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_> {
+/// Verkäufer-Sicht mit dem §19-Status des Angebots (ADR 0042 Nr. 3; nie aus dem
+/// Profil).
+fn make_seller_view(
+    row: &crate::db::models::SellerProfileRow,
+    is_kleinunternehmer: bool,
+) -> SellerView<'_> {
     SellerView {
         name: &row.name,
         street: &row.street,
@@ -1168,12 +1205,16 @@ fn make_seller_view(row: &crate::db::models::SellerProfileRow) -> SellerView<'_>
         contact_name: None,
         iban: row.iban.as_deref(),
         bic: row.bic.as_deref(),
-        is_kleinunternehmer: row.is_kleinunternehmer == 1,
-        waived_since: row
-            .waived_paragraph_19_since
-            .as_deref()
-            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
+        is_kleinunternehmer,
     }
+}
+
+/// §19-Status eines Angebots (ADR 0042 Nr. 3): Status am Angebotsdatum (ein
+/// Angebot hat kein Leistungsdatum).
+async fn quote_tax_status(pool: &SqlitePool, quote_date: NaiveDate) -> Result<bool> {
+    Ok(crate::db::repo::tax_status::history(pool)
+        .await?
+        .is_klein_at(quote_date))
 }
 
 /// P3: Für Positionen mit Markdown-Body wird `description` aus dem Markup als

@@ -24,6 +24,7 @@ pub mod quotes;
 pub mod recurring;
 pub mod recurring_invoice;
 pub mod seller_profile;
+pub mod tax_status;
 
 #[cfg(test)]
 mod tests {

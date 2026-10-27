@@ -93,8 +93,9 @@ Kapitel "EÜR-Export".
 Nein. Wenn Du es trotzdem tust, schuldest Du die ausgewiesene
 Umsatzsteuer dem Finanzamt, auch wenn Du gar nicht
 umsatzsteuerpflichtig bist (§14c UStG). Klein.Buch sperrt aus
-diesem Grund alle Umsatzsteuer-Felder, solange der
-Kleinunternehmer-Schalter angeschaltet ist.
+diesem Grund alle Umsatzsteuer-Felder, solange am Datum des Belegs
+die Kleinunternehmer-Regelung gilt (Abschnitt "Steuerstatus" unter
+Einstellungen → "Meine Firmendaten").
 
 ## Muss ich als Kleinunternehmer jemals Umsatzsteuer zahlen?
 

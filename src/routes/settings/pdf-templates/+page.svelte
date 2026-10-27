@@ -18,6 +18,7 @@
   import {
     pdfTemplatesList,
     sellerProfileGet,
+    taxStatusOverview,
     sellerDefaultTemplateSet,
     pdfTemplatePreview,
     downloadUrl,
@@ -32,6 +33,7 @@
     quoteSignatureSet,
   } from "#lib/api.ts";
   import type { PdfTemplateMeta } from "#lib/types.ts";
+  import { kleinTodayOrLater } from "#lib/taxStatus.ts";
 
   let templates = $state<PdfTemplateMeta[]>([]);
   let selected = $state<string>("default");
@@ -71,6 +73,15 @@
       if (profile) {
         selected = profile.defaultPdfTemplate;
         isKlein = profile.isKleinunternehmer === 1;
+      }
+      // ADR 0042 Nr. 3: Die Klausel braucht die Standardvorlage auch, wenn §19 erst ab
+      // einem eingetragenen künftigen Wechsel gilt (wie der Server). Ohne Antwort bleibt
+      // der Status von heute.
+      try {
+        const ov = await taxStatusOverview();
+        isKlein = kleinTodayOrLater(ov.entries, ov.today);
+      } catch {
+        // Server prüft beim Wählen selbst.
       }
       logoUrl = await sellerLogoData();
       signatureUrl = await sellerSignatureData();
@@ -161,7 +172,8 @@
   }
 
   function blocked(t: PdfTemplateMeta): boolean {
-    // §19-Schutz: Kleinunternehmer dürfen nur §19-konforme Vorlagen wählen.
+    // §19-Schutz: Kleinunternehmer (heute oder ab einem künftigen Wechsel) dürfen nur
+    // §19-konforme Vorlagen wählen.
     return isKlein && !t.klauselStatus.isKleinCompatible;
   }
 

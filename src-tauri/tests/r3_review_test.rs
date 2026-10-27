@@ -38,7 +38,6 @@ fn seller_kleinunternehmer() -> SellerView<'static> {
         iban: Some("DE02120300000000202051"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
-        waived_since: None,
     }
 }
 

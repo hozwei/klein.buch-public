@@ -1,14 +1,14 @@
 //! Commands für Settings.
 //!
-//! Block 2 implementiert nur `seller_profile_{get,upsert}` inkl. §19-Toggle
-//! mit 5-Jahres-Bindungs-Schutz. Weitere Settings (mail, payment-accounts, pdf,
-//! backup) folgen in Blöcken 4, 5, 9.
+//! Verkäuferprofil (`seller_profile_{get,upsert}`), Logo, Vorlagen und
+//! Anfahrt. Den Steuerstatus nach §19 führt seit ADR 0042 die Historie
+//! ([`crate::commands::tax_status`]); das Profil liefert nur noch den Status
+//! von heute zur Anzeige mit.
 
 use crate::app_ctx::AppCtx;
 use crate::branding;
-use crate::db::models::SellerProfileRow;
-use crate::db::repo::seller_profile::{self, SellerProfileInput};
-use crate::domain::kleinunternehmer::{hinweis_text, waiver_deadline};
+use crate::db::repo::seller_profile::{self, SellerProfileInput, SellerProfileView};
+use crate::domain::kleinunternehmer::hinweis_text;
 use crate::error::{Error, Result};
 use serde::Serialize;
 use std::sync::Arc;
@@ -21,10 +21,10 @@ pub struct SellerProfileGetArgs {}
 pub async fn seller_profile_get(
     ctx: &Arc<AppCtx>,
     _args: SellerProfileGetArgs,
-) -> Result<Option<SellerProfileRow>> {
+) -> Result<Option<SellerProfileView>> {
     let pool = ctx.pool()?;
 
-    seller_profile::get(&pool).await
+    seller_profile::get_view(&pool).await
 }
 
 /// Argumente von [`seller_profile_upsert`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -35,15 +35,15 @@ pub struct SellerProfileUpsertArgs {
 }
 
 /// Speichert das Verkäuferprofil. Bedingte Re-Auth (W14-038, Lauf F4a):
-/// Ändern sich IBAN, BIC oder der §19-Status gegenüber dem gespeicherten
-/// Profil, verlangt der Kern eine frische Bestätigung
-/// ([`crate::commands::reauth::require_fresh`]; als frisch gilt auch eine
-/// Anmeldung der letzten 5 min). Prüfung und Speichern laufen unter
-/// [`crate::locks::SELLER_PROFILE`] am Stück.
+/// Ändern sich IBAN oder BIC gegenüber dem gespeicherten Profil, verlangt der
+/// Kern eine frische Bestätigung ([`crate::commands::reauth::require_fresh`];
+/// als frisch gilt auch eine Anmeldung der letzten 5 min). Prüfung und
+/// Speichern laufen unter [`crate::locks::SELLER_PROFILE`] am Stück. Den
+/// §19-Status ändert das Profil nicht mehr (ADR 0042 Nr. 1).
 pub async fn seller_profile_upsert(
     ctx: &Arc<AppCtx>,
     args: SellerProfileUpsertArgs,
-) -> Result<SellerProfileRow> {
+) -> Result<SellerProfileView> {
     let SellerProfileUpsertArgs { input } = args;
     let pool = ctx.pool()?;
 
@@ -52,16 +52,10 @@ pub async fn seller_profile_upsert(
     if seller_profile::reauth_relevant_change(prev.as_ref(), &input) {
         crate::commands::reauth::require_fresh()?;
     }
-    let row = seller_profile::upsert(&pool, &input).await?;
-    // Lauf F8d (ADR 0039 Nr. 148): Ein Verzicht auf §19 (wirkt ab Jahresbeginn)
-    // oder eine Rückkehr kann den Status bereits aktivierter Kosten ändern.
-    // Nicht blockieren (§ 19 Abs. 1 und 3 UStG), aber die betroffenen Anlagen mit
-    // Handlungsweg in der Inbox nennen.
-    let prev_klein = prev.as_ref().is_none_or(|p| p.is_kleinunternehmer == 1);
-    if prev_klein != (row.is_kleinunternehmer == 1) {
-        crate::commands::assets::notify_capitalized_status_change(&pool).await;
-    }
-    Ok(row)
+    seller_profile::upsert(&pool, &input).await?;
+    seller_profile::get_view(&pool)
+        .await?
+        .ok_or_else(|| Error::Domain("Profil nach dem Speichern nicht gefunden.".into()))
 }
 
 /// Argumente von [`seller_logo_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -77,7 +71,7 @@ pub struct SellerLogoSetArgs {
 pub async fn seller_logo_set(
     ctx: &Arc<AppCtx>,
     args: SellerLogoSetArgs,
-) -> Result<SellerProfileRow> {
+) -> Result<SellerProfileView> {
     let SellerLogoSetArgs { upload_id } = args;
     let pool = ctx.pool()?;
 
@@ -94,7 +88,7 @@ pub async fn seller_logo_set(
     )?;
     seller_profile::set_logo_filename(&pool, Some(&stored)).await?;
     ctx.uploads.consume(&upload_id);
-    seller_profile::get(&pool)
+    seller_profile::get_view(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Logo-Upload nicht gefunden.".into()))
 }
@@ -108,7 +102,7 @@ pub struct SellerLogoClearArgs {}
 pub async fn seller_logo_clear(
     ctx: &Arc<AppCtx>,
     _args: SellerLogoClearArgs,
-) -> Result<SellerProfileRow> {
+) -> Result<SellerProfileView> {
     let pool = ctx.pool()?;
 
     let paths = ctx.paths.clone();
@@ -125,7 +119,7 @@ pub async fn seller_logo_clear(
         }
     }
     seller_profile::set_logo_filename(&pool, None).await?;
-    seller_profile::get(&pool)
+    seller_profile::get_view(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Logo-Entfernen nicht gefunden.".into()))
 }
@@ -207,11 +201,11 @@ pub async fn pdf_template_preview(
     // klausel-lose Vorlage beim Speichern, **wenn** der User §19-Kleinunter-
     // nehmer ist (analoge Seller-aware-Logik). Die Vorschau hat es bisher still
     // gerendert. Symmetrisch zur Speichern-Logik machen: bei §19 vorab prüfen,
-    // bei Regelbesteuerung weiterhin frei vorab-render-bar.
-    let seller_is_klein = seller_profile::get(&pool)
+    // bei Regelbesteuerung weiterhin frei vorab-render-bar. §19 zählt, wenn es
+    // heute oder ab einem künftigen Eintrag gilt (ADR 0042 Nr. 3).
+    let seller_is_klein = crate::db::repo::tax_status::history(&pool)
         .await?
-        .map(|p| p.is_kleinunternehmer == 1)
-        .unwrap_or(true);
+        .klein_today_or_later(crate::clock::berlin_date(ctx.clock().now_utc()));
     if seller_is_klein {
         if let Err(check_err) = crate::pdf::klausel_check::verify_for_kleinunternehmer(&source) {
             return Err(Error::Domain(format!(
@@ -235,7 +229,6 @@ pub async fn pdf_template_preview(
         iban: Some("DE02 1203 0000 0000 2020 51"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
-        waived_since: None,
     };
     let buyer = BuyerView {
         name: "Beispielkunde GmbH",
@@ -371,7 +364,7 @@ pub struct SellerDefaultTemplateSetArgs {
 pub async fn seller_default_template_set(
     ctx: &Arc<AppCtx>,
     args: SellerDefaultTemplateSetArgs,
-) -> Result<SellerProfileRow> {
+) -> Result<SellerProfileView> {
     let SellerDefaultTemplateSetArgs { name } = args;
     let pool = ctx.pool()?;
 
@@ -382,23 +375,29 @@ pub async fn seller_default_template_set(
         .find(|t| t.name == name)
         .ok_or_else(|| Error::Domain(format!("Unbekannte Vorlage: {name}")))?;
 
-    let profile = seller_profile::get(&pool)
+    seller_profile::get(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Bitte zuerst die Firmendaten speichern.".into()))?;
-    if profile.is_kleinunternehmer == 1 && !meta.klausel_status.is_klein_compatible {
+    // §19 heute oder ab einem künftigen Eintrag (ADR 0042 Nr. 3): Die
+    // Standardvorlage muss dann die Klausel tragen.
+    let klein = crate::db::repo::tax_status::history(&pool)
+        .await?
+        .klein_today_or_later(crate::clock::berlin_date(ctx.clock().now_utc()));
+    if klein && !meta.klausel_status.is_klein_compatible {
         return Err(Error::Domain(format!(
             "Vorlage „{name}“ ist nicht §19-konform (ohne Kleinunternehmer-Klausel) und kann nicht gewählt werden, solange du Kleinunternehmer bist."
         )));
     }
 
     seller_profile::set_default_pdf_template(&pool, &name).await?;
-    seller_profile::get(&pool)
+    seller_profile::get_view(&pool)
         .await?
         .ok_or_else(|| Error::Domain("Profil nach Vorlagen-Wahl nicht gefunden.".into()))
 }
 
 /// Liefert dem Frontend die §19-Eckdaten — wortgleicher Hinweis-Text und
-/// (falls relevant) das Rückkehr-Datum. Verhindert, dass das Frontend die
+/// (falls relevant) das frühestmögliche Rückkehr-Datum aus der Historie (nach
+/// einem Verzicht das Bindungsende, sonst der nächste 1. Januar; ADR 0042 Nr. 2). Verhindert, dass das Frontend die
 /// Klausel selbst formuliert.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -418,11 +417,11 @@ pub async fn paragraph_19_info(
 ) -> Result<Paragraph19Info> {
     let pool = ctx.pool()?;
 
-    let profile = seller_profile::get(&pool).await?;
-    let return_date = profile
-        .and_then(|p| p.waived_paragraph_19_since)
-        .and_then(|s| chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
-        .map(|d| waiver_deadline(d).to_string());
+    let today = crate::clock::berlin_date(ctx.clock().now_utc());
+    let return_date = crate::db::repo::tax_status::history(&pool)
+        .await?
+        .earliest_return(today)
+        .map(|d| d.to_string());
     Ok(Paragraph19Info {
         hinweis_text: hinweis_text(),
         return_date_after_waiver: return_date,

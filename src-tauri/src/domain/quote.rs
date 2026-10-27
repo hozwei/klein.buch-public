@@ -261,7 +261,7 @@ pub fn validate_quote(
             tax_rate_percent: it.tax_rate_percent,
         })
         .collect();
-    if let Err(viol) = kleinunternehmer::assert_no_vat(&seller.status(), &checks) {
+    if let Err(viol) = kleinunternehmer::assert_no_vat(seller.is_kleinunternehmer, &checks) {
         errs.push(E::Paragraph19VatViolation(viol));
     }
 
@@ -493,7 +493,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 

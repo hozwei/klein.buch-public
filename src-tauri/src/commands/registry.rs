@@ -87,9 +87,9 @@ pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
 /// Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`).
 fn auth_of(name: &str) -> Auth {
     match name {
-        // W14-038 (Lauf F4a): Re-Auth nur, wenn sich IBAN, BIC oder der
-        // §19-Status (samt Verzicht) gegenüber dem gespeicherten Profil ändern
-        // — Prüfung im Kern (`commands::settings::seller_profile_upsert`).
+        // W14-038 (Lauf F4a): Re-Auth nur, wenn sich IBAN oder BIC gegenüber
+        // dem gespeicherten Profil ändern (der §19-Status hat seit ADR 0042
+        // eigene Commands mit Re-Auth) — Prüfung im Kern (`commands::settings::seller_profile_upsert`).
         "seller_profile_upsert" => Auth::Conditional,
         // W14-009 (Lauf F5c): Versand an einen Empfänger, der von der hinterlegten
         // Adresse des Belegs abweicht — Prüfung in der Vorprüfung und im Kern
@@ -138,7 +138,11 @@ fn auth_of(name: &str) -> Auth {
         | "invoices_void_draft"
         // Lauf F (F3a, W13-BACKUP-DOWNLOAD): die verschlüsselte `.kbk` verlässt
         // den Server (Offline-Angriff auf die Passphrase möglich).
-        | "backup_download" => Auth::Reauth,
+        | "backup_download"
+        // ADR 0042 Nr. 1: Steuerstatus nach §19 eintragen oder widerrufen —
+        // bestimmt, ob künftige Rechnungen Umsatzsteuer ausweisen (§14c).
+        | "tax_status_change_add"
+        | "tax_status_change_revoke" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -247,6 +251,9 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "packages_get"
         | "packages_list"
         | "paragraph_19_info"
+        | "tax_status_at"
+        | "tax_status_change_preview"
+        | "tax_status_overview"
         | "payment_accounts_list"
         | "pdf_template_preview"
         | "pdf_templates_list"
@@ -360,6 +367,8 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "seller_logo_set"
         | "seller_owner_set"
         | "seller_profile_upsert"
+        | "tax_status_change_add"
+        | "tax_status_change_revoke"
         | "seller_signature_clear"
         | "seller_signature_set"
         | "travel_settings_set"
@@ -611,6 +620,11 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::seller_default_template_set,
     ),
     ("paragraph_19_info", h::paragraph_19_info),
+    ("tax_status_overview", h::tax_status_overview),
+    ("tax_status_at", h::tax_status_at),
+    ("tax_status_change_preview", h::tax_status_change_preview),
+    ("tax_status_change_add", h::tax_status_change_add),
+    ("tax_status_change_revoke", h::tax_status_change_revoke),
     ("travel_settings_get", h::travel_settings_get),
     ("travel_settings_set", h::travel_settings_set),
     ("travel_compute", h::travel_compute),
@@ -2092,6 +2106,51 @@ mod h {
             let args: crate::commands::settings::Paragraph19InfoArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::settings::paragraph_19_info(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn tax_status_overview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::tax_status::TaxStatusOverviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::tax_status::tax_status_overview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn tax_status_at(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::tax_status::TaxStatusAtArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::tax_status::tax_status_at(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn tax_status_change_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::tax_status::TaxStatusChangePreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::tax_status::tax_status_change_preview(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn tax_status_change_add(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::tax_status::TaxStatusChangeAddArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::tax_status::tax_status_change_add(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn tax_status_change_revoke(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::tax_status::TaxStatusChangeRevokeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::tax_status::tax_status_change_revoke(&ctx, args).await?,
             )?)
         })
     }

@@ -172,10 +172,9 @@ async fn mk_seller(pool: &SqlitePool) {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: None,
         },
     )
     .await
@@ -1671,14 +1670,26 @@ async fn exempt_template_after_switch_to_regular_taxation_is_blocked() {
     )
     .await
     .unwrap();
-    // Verzicht auf §19 (Regelbesteuerung) nach dem Speichern der Vorlage.
-    sqlx::query(
-        "UPDATE seller_profile SET is_kleinunternehmer = 0,
-                waived_paragraph_19_since = '2026-01-01'",
-    )
-    .execute(&env.pool)
-    .await
-    .unwrap();
+    // Verzicht auf §19 (Regelbesteuerung ab 01.01.2026) nach dem Speichern der
+    // Vorlage — Eintrag in der Statushistorie (ADR 0042).
+    {
+        use klein_buch_lib::db::repo::tax_status;
+        use klein_buch_lib::domain::tax_status::{verzicht_binding_until, ChangeReason, TaxStatus};
+        tax_status::insert(
+            &env.pool,
+            &tax_status::NewEntry {
+                effective_from: d(2026, 1, 1),
+                status: TaxStatus::Regelbesteuerung,
+                reason: ChangeReason::Verzicht,
+                binding_until: Some(verzicht_binding_until(d(2026, 1, 1))),
+                trigger_document: None,
+                note: None,
+            },
+            d(2026, 5, 20),
+        )
+        .await
+        .unwrap();
+    }
     let clock = noon(d(2026, 5, 20));
     let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
         .await
@@ -1739,4 +1750,67 @@ async fn exempt_template_after_switch_to_regular_taxation_is_blocked() {
         .await
         .unwrap();
     assert_eq!(r.created_invoices, 1, "{r:?}");
+}
+
+/// ADR 0042 Nr. 3: Nachgeholte Abo-Termine tragen den §19-Status ihres
+/// Leistungsdatums. Wegfall im laufenden Jahr ab 15.04.2026: Die Termine 01.03.
+/// und 01.04. entstehen als §19-Rechnungen; der Termin 01.05. fiele unter die
+/// Regelbesteuerung — mit Steuerart E entsteht dort keine Rechnung (Hinweis,
+/// keine Nummer), der Termin bleibt offen.
+#[tokio::test]
+async fn catch_up_occurrences_follow_status_at_their_date() {
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{ChangeReason, TaxStatus};
+    let env = setup().await;
+    mk_seller(&env.pool).await;
+    let contact = mk_contact(&env.pool).await;
+    let tmpl = recurring_invoice::create(
+        &env.pool,
+        &tmpl_input(&contact, d(2026, 3, 1), "issue_send"),
+    )
+    .await
+    .unwrap();
+    tax_status::insert(
+        &env.pool,
+        &tax_status::NewEntry {
+            effective_from: d(2026, 4, 15),
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::WegfallLaufend,
+            binding_until: None,
+            trigger_document: Some("RE-2026-0042"),
+            note: None,
+        },
+        d(2026, 5, 20),
+    )
+    .await
+    .unwrap();
+    let clock = noon(d(2026, 5, 20));
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 2, "{r:?}");
+    let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT delivery_date, is_kleinunternehmer FROM invoices ORDER BY delivery_date",
+    )
+    .fetch_all(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (Some("2026-03-01".into()), 1),
+            (Some("2026-04-01".into()), 1)
+        ]
+    );
+    assert_eq!(notices(&env.pool, "recurring_invoice_blocked:").await, 1);
+    assert!(
+        notice_bodies(&env.pool).await.contains("Termin 01.05.2026"),
+        "{}",
+        notice_bodies(&env.pool).await
+    );
+    let t = recurring_invoice::get_row(&env.pool, &tmpl.template.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(t.next_due_date, "2026-05-01", "Termin bleibt offen");
 }

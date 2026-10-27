@@ -58,9 +58,9 @@ vor den Cent und auf Wunsch mit Punkt als Tausendertrenner, zum
 Beispiel 1.234,56. Ein Minuszeichen nimmt das Feld nicht an. Netto
 und Brutto rechnet Klein.Buch automatisch aus.
 
-Wenn Du als Kleinunternehmer arbeitest, blendet Klein.Buch die
-Umsatzsteuer-Felder aus und sagt das in einem Hinweis über dem
-Formular. Das schützt Dich vor einer versehentlichen
+Gilt am Leistungsdatum der Rechnung die Kleinunternehmer-Regelung,
+blendet Klein.Buch die Umsatzsteuer-Felder aus und sagt das in einem
+Hinweis über dem Formular. Das schützt Dich vor einer versehentlichen
 falschen Umsatzsteuer-Angabe, die nach §14c UStG dazu führen
 würde, dass Du die ausgewiesene Umsatzsteuer tatsächlich ans
 Finanzamt abführen musst.

@@ -68,7 +68,6 @@ fn sample_cii_xml() -> String {
         iban: None,
         bic: None,
         is_kleinunternehmer: false,
-        waived_since: None,
     };
     let buyer = BuyerView {
         name: "Beispiel IT-Service",

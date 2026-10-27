@@ -184,25 +184,26 @@ pub async fn assets_suggest_method(
 }
 
 /// §19-Status, unter dem Kosten steuerlich zu behandeln sind (Lauf F8d, ADR 0039
-/// Nr. 148): Status bei Leistungsbezug, d. h. im Jahr des Belegdatums (§ 15
+/// Nr. 148; datumsgenau seit ADR 0042 Nr. 3): Status bei Leistungsbezug, d. h. am Belegdatum (§ 15
 /// Abs. 1 UStG, Abschn. 19.5 UStAE) — nicht im Zahlungsjahr. Dasselbe Kriterium
 /// nutzen EÜR, Ausfüllhilfe und DATEV-Stapel
-/// ([`crate::db::repo::seller_profile::is_klein_for_expense`]). Das Belegdatum
+/// ([`crate::db::repo::tax_status::is_klein_for_expense`]). Das Belegdatum
 /// ist ein festgeschriebenes Kernfeld (`trg_expenses_immutable`); weder ein
 /// Zahldatum noch eine andere Änderung der Kosten kann den Status verschieben.
 async fn expense_is_klein(
     pool: &sqlx::SqlitePool,
     expense: &crate::db::models::ExpenseRow,
 ) -> Result<bool> {
-    let profile = crate::db::repo::seller_profile::get(pool).await?;
-    crate::db::repo::seller_profile::is_klein_for_expense(profile.as_ref(), &expense.expense_date)
+    let hist = crate::db::repo::tax_status::history(pool).await?;
+    crate::db::repo::tax_status::is_klein_for_expense(&hist, &expense.expense_date)
 }
 
 /// §19-Status der Quell-Kosten für `assets_create`/`assets_update` (Lauf F8e,
 /// ADR 0039 Nr. 148 (5)). Bei einer Anlage ist der Leistungsbezug die
 /// Lieferung (§ 9a EStDV), also das eingegebene Anschaffungsdatum; Klein.Buch
-/// bestimmt den Status der Kosten aber nach dem Belegdatum. Liegen beide Daten
-/// in Jahren mit unterschiedlichem Status, lässt sich der Fall nicht abbilden:
+/// bestimmt den Status der Kosten aber nach dem Belegdatum. Fallen beide Daten
+/// unter unterschiedlichen Status (datumsgenau, ADR 0042 Nr. 3), lässt sich der
+/// Fall nicht abbilden:
 /// Ablehnung mit beiden Daten und beiden Status und Verweis an die
 /// Steuerberatung. Sonst der gemeinsame Status.
 async fn expense_status_for_asset(
@@ -210,15 +211,10 @@ async fn expense_status_for_asset(
     expense: &crate::db::models::ExpenseRow,
     acquisition_date: NaiveDate,
 ) -> Result<bool> {
-    let profile = crate::db::repo::seller_profile::get(pool).await?;
-    let doc_klein = crate::db::repo::seller_profile::is_klein_for_expense(
-        profile.as_ref(),
-        &expense.expense_date,
-    )?;
-    let acq_klein = crate::db::repo::seller_profile::is_klein_for_year(
-        profile.as_ref(),
-        acquisition_date.year(),
-    );
+    let hist = crate::db::repo::tax_status::history(pool).await?;
+    let doc_klein =
+        crate::db::repo::tax_status::is_klein_for_expense(&hist, &expense.expense_date)?;
+    let acq_klein = hist.is_klein_at(acquisition_date);
     if doc_klein == acq_klein {
         return Ok(doc_klein);
     }
@@ -237,8 +233,8 @@ async fn expense_status_for_asset(
         .map(|d| d.format("%d.%m.%Y").to_string())
         .unwrap_or_else(|_| expense.expense_date.clone());
     Err(Error::Domain(format!(
-        "Anschaffungsdatum {} ({}) und Belegdatum {doc} der Kosten {} ({}) liegen in \
-         Jahren mit unterschiedlichem Steuerstatus. Für Vorsteuerabzug und \
+        "Anschaffungsdatum {} ({}) und Belegdatum {doc} der Kosten {} ({}) fallen unter \
+         unterschiedlichem Steuerstatus. Für Vorsteuerabzug und \
          Anschaffungskosten ist der Status bei Leistungsbezug maßgeblich, bei einer \
          Anlage die Lieferung (§ 9a EStDV, § 15 Abs. 1 UStG, § 9b Abs. 1 EStG). \
          Klein.Buch bestimmt den Status von Kosten nach dem Belegdatum und kann diesen \
@@ -289,6 +285,16 @@ pub struct CapitalizedCostMismatch {
 pub async fn capitalized_cost_mismatches(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<CapitalizedCostMismatch>> {
+    let hist = crate::db::repo::tax_status::history(pool).await?;
+    capitalized_cost_mismatches_with(pool, &hist).await
+}
+
+/// Wie [`capitalized_cost_mismatches`] unter der Historie `hist` (auch für die
+/// Folgen-Vorschau eines geplanten Eintrags, ADR 0042 Nr. 4).
+pub async fn capitalized_cost_mismatches_with(
+    pool: &sqlx::SqlitePool,
+    hist: &crate::domain::tax_status::TaxStatusHistory,
+) -> Result<Vec<CapitalizedCostMismatch>> {
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
         String,
@@ -301,12 +307,11 @@ pub async fn capitalized_cost_mismatches(
         i64,
         i64,
         i64,
-        i64,
+        String,
     )> = sqlx::query_as(
         "SELECT a.id, a.asset_number, a.acquisition_cost_cents, a.disposed,
                 e.expense_number, e.expense_date, e.net_amount_cents, e.gross_amount_cents,
-                e.reverse_charge_13b, a.acquisition_fiscal_year,
-                CAST(substr(a.acquisition_date, 1, 4) AS INTEGER)
+                e.reverse_charge_13b, a.acquisition_fiscal_year, a.acquisition_date
            FROM assets a
            JOIN expenses e ON e.id = a.expense_id AND e.capitalized_as_asset_id = a.id
           WHERE e.status = 'recorded'
@@ -314,7 +319,6 @@ pub async fn capitalized_cost_mismatches(
     )
     .fetch_all(pool)
     .await?;
-    let profile = crate::db::repo::seller_profile::get(pool).await?;
     let mut out = Vec::new();
     for (
         id,
@@ -327,21 +331,20 @@ pub async fn capitalized_cost_mismatches(
         gross,
         rc,
         acq_year,
-        acq_date_year,
+        acq_date,
     ) in rows
     {
-        let klein =
-            crate::db::repo::seller_profile::is_klein_for_expense(profile.as_ref(), &expense_date)?;
+        let klein = crate::db::repo::tax_status::is_klein_for_expense(hist, &expense_date)?;
         if asset::check_cost_against_expense(cost, net, gross, klein, rc == 1).is_none() {
             continue;
         }
-        // Lauf F8e: Liegt das Anschaffungsdatum (Lieferung, § 9a EStDV) in einem
-        // Jahr mit anderem Status als das Belegdatum, wäre der Soll-Betrag nach
-        // dem Belegdatum kein sicherer Korrekturweg (`expense_status_for_asset`
-        // lehnt ihn ab): nur mit der Steuerberatung.
-        let acq_klein = i32::try_from(acq_date_year)
+        // Lauf F8e: Fällt das Anschaffungsdatum (Lieferung, § 9a EStDV) unter einen
+        // anderen Status als das Belegdatum (datumsgenau, ADR 0042 Nr. 3), wäre der
+        // Soll-Betrag nach dem Belegdatum kein sicherer Korrekturweg
+        // (`expense_status_for_asset` lehnt ihn ab): nur mit der Steuerberatung.
+        let acq_klein = crate::db::repo::tax_status::parse_document_date(&acq_date, "Anlage")
             .ok()
-            .map(|y| crate::db::repo::seller_profile::is_klein_for_year(profile.as_ref(), y));
+            .map(|d| hist.is_klein_at(d));
         let mut correctable =
             disposed == 0 && acq_klein == Some(klein) && !guard::is_closed(pool, acq_year).await?;
         if correctable {
@@ -393,8 +396,8 @@ pub async fn notify_capitalized_status_change(pool: &sqlx::SqlitePool) {
                  offenen Geschäftsjahr zurücksetzen)"
             } else {
                 "Korrektur in Klein.Buch nicht möglich (AfA in einem abgeschlossenen Jahr \
-                 festgeschrieben, Anlage abgegangen oder Anschaffungsdatum in einem Jahr mit \
-                 anderem Steuerstatus als das Belegdatum): mit der Steuerberatung klären"
+                 festgeschrieben, Anlage abgegangen oder Anschaffungsdatum unter einem \
+                 anderen Steuerstatus als das Belegdatum): mit der Steuerberatung klären"
             };
             format!(
                 "Anlage {} (Kosten {}): {} statt {} — {way}.",
@@ -410,14 +413,9 @@ pub async fn notify_capitalized_status_change(pool: &sqlx::SqlitePool) {
          übernommenen Anlagen nicht mehr. Maßgeblich ist der Status bei Leistungsbezug \
          (Belegdatum der Kosten): als Kleinunternehmer der Bruttobetrag, bei \
          Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Klein.Buch \
-         wendet einen Wechsel immer ab Beginn des Kalenderjahres an; das passt zum Verzicht \
-         auf §19 und zum Wegfall, weil der Vorjahresumsatz über 25.000 € lag. {} Ist §19 \
-         dagegen im laufenden Jahr durch Überschreiten der 100.000-€-Grenze weggefallen \
-         (§ 19 Abs. 1 UStG), bleiben Kosten mit Leistungsbezug vor dem Überschreiten beim \
-         Bruttobetrag ohne Vorsteuer: Dann diese Anlagen nicht korrigieren und die \
-         Erfassung des Jahres mit der Steuerberatung klären; einen Wechsel mitten im Jahr \
-         bildet Klein.Buch nicht ab. Eine Vorsteuerberichtigung nach § 15a UStG für Anlagen \
-         aus früheren Jahren berechnet Klein.Buch nicht.",
+         bestimmt den Status taggenau aus der Steuerstatus-Historie (ADR 0042 Nr. 3), auch \
+         bei einem Wechsel mitten im Jahr. {} Eine Vorsteuerberichtigung nach § 15a UStG \
+         für Anlagen aus früheren Jahren berechnet Klein.Buch nicht.",
         lines.join(" ")
     );
     let numbers: Vec<&str> = list.iter().map(|m| m.asset_number.as_str()).collect();

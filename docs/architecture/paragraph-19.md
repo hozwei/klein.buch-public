@@ -17,31 +17,52 @@ aber auch keine Vorsteuer zu ziehen. Eine Rechnung von einem Kleinunternehmer
 hat keinen USt-Block; im XML steht stattdessen die Tax-Category `E` (exempt)
 und eine textuelle Klausel.
 
-**Klein.Buch ist primär ein §19-Tool.** Default: `seller_profile.is_kleinunternehmer
-= true`. Wer auf §19 verzichten will (Option zur Regelbesteuerung nach § 19
-Abs. 3 UStG, bis 2024 Abs. 2), kann das per Settings-Toggle aktivieren — mit
-Warnhinweis auf die **5-Jahres-Bindung**. Datum landet in
-`seller_profile.waived_paragraph_19_since`.
+**Klein.Buch ist primär ein §19-Tool.** Ohne Eintrag gilt §19. Seit Migration
+0033 (ADR 0042) steht der Status in der append-only Historie
+`tax_status_changes`: ab einem Wirkungsdatum gilt ein Status, mit Grund
+(Verzicht, Wegfall wegen des Vorjahres, im laufenden Jahr oder im
+Gründungsjahr, Rückkehr). Maßgeblich ist der Status am Datum des Belegs
+(Leistungsdatum, sonst Rechnungs- bzw. Angebotsdatum; bei Kosten das
+Belegdatum). `seller_profile.is_kleinunternehmer` und
+`waived_paragraph_19_since` sind nur noch Spiegel, die kein Code liest.
 
 ---
 
 ## 2. UI-Sperren
 
-Wenn `is_kleinunternehmer = true`, sperrt das Frontend alle USt-relevanten
-Eingabefelder:
+Gilt am **maßgeblichen Datum des Belegs** §19 (ADR 0042 Nr. 3: Leistungsdatum,
+sonst Rechnungs- bzw. Angebotsdatum; Abo-Vorlage: nächster Termin), sperrt das
+Frontend alle USt-relevanten Eingabefelder. Den Status je Datum holen die
+Editoren über `tax_status_at` (`src/lib/taxStatusAt.svelte.ts`, je Datum
+zwischengespeichert); `applyTaxRules` (`src/lib/tax.ts`) läuft nur mit dem
+Status genau dieses Datums, damit ein veralteter Wert die Sätze eines geladenen
+Entwurfs nicht umschreibt. Weicht der Status vom heutigen ab, zeigt
+`TaxStatusNotice` einen Hinweis („Am Leistungsdatum gilt die Regelbesteuerung.“).
 
-- **Rechnungs- und Angebots-Items.** Tax-Rate-Feld ist disabled, Tax-Category
-  ist auf `E` (Exempt) fest verdrahtet, kein Switch zwischen 19/7/0.
-- **Settings/PDF-Vorlagen.** Templates, die einen USt-Block voraussetzen,
-  werden im Picker durchgestrichen oder ganz ausgeblendet (siehe Klausel-Check
-  in §4).
-- **Recurring-Invoice-Templates.** Beim Speichern wird `tax_category_code = 'E'`
-  serverseitig erzwungen (KB-0053). Wer eine andere Kategorie schickt, kriegt
-  einen Validierungs-Fehler.
+- **Rechnungs- und Angebots-Items.** Tax-Rate-Feld ist ausgeblendet,
+  Tax-Category ist auf `E` (Exempt) fest verdrahtet, kein Switch zwischen
+  19/7/0. Ändert sich das Datum über einen Wechsel, stellt das Formular sofort
+  um (§19 → `E`/0; Regel → `S`/19 % für `E`-Positionen).
+- **Umwandlung Angebot → Rechnung.** Status am Leistungsdatum der Rechnung;
+  weicht er vom eingefrorenen Status des Angebots ab, Hinweis „Anderer
+  Steuerstatus als im Angebot.“ (`quoteConversionHint`).
+- **Pakete.** `PackageItemAdder` übergibt das maßgebliche Datum an
+  `package_materialize_item` (`documentDate`).
+- **Settings/PDF-Vorlagen.** Templates ohne §19-Klausel sind gesperrt, solange
+  §19 heute oder ab einem eingetragenen künftigen Wechsel gilt
+  (`kleinTodayOrLater`, wie der Server).
+- **Recurring-Invoice-Templates.** Beim Speichern prüft der Server die
+  Positionen gegen den Status am ersten Termin, im Lauf je Termin (KB-0053,
+  ADR 0042 Nr. 3).
 
-Wenn der Toggle umgelegt wird (Verzicht), schaltet das UI die Felder frei und
-gibt einen Hinweis aus: „Sie haben auf §19 verzichtet. Die Bindung beträgt
-5 Jahre."
+Der Status selbst ändert sich nur im Abschnitt „Steuerstatus“ von „Meine
+Firmendaten“ (`routes/settings/seller/TaxStatusSection.svelte`): Verlauf,
+Status heute, Gesamtumsatz mit Grenzhinweisen, Gefahr-Dialog „Statuswechsel
+eintragen?“ (`alertdialog`, Grund mit Erklärung, Wirkungsdatum mit Vorschlag
+und 1.-Januar-Prüfung, Bindungshinweis beim Verzicht, Vorschau der Folgen über
+`tax_status_change_preview`, § 15a UStG, Re-Auth) und „Eintrag widerrufen?“ für
+den jüngsten Eintrag. Er löst den Schalter und den §19-Wechseldialog ab
+(ADR 0041 Nr. 21/220/251).
 
 **Beim Lesen alter Belege** bleiben die UI-Sperren *aus*, weil der Beleg-
 Snapshot festgeschriebene `tax_*`-Felder mitbringt, die nicht mehr veränderbar
@@ -115,8 +136,8 @@ mehrfach:
    solange `is_kleinunternehmer = true`.
 2. **Domain-Validierung.** `domain::invoice::validate_for_issue` prüft beim
    Lock, dass für jedes Item `tax_category_code = 'E'` und
-   `tax_rate_per_mille = 0` und `tax_amount_cents = 0` gilt, **wenn** der
-   `seller_profile.is_kleinunternehmer = true` ist. Verstoß ⇒ Lock schlägt fehl.
+   `tax_rate_per_mille = 0` und `tax_amount_cents = 0` gilt, **wenn** am
+   Leistungs- bzw. Rechnungsdatum §19 gilt (Statushistorie, ADR 0042 Nr. 3). Verstoß ⇒ Lock schlägt fehl.
 3. **Generator-Layer.** `einvoice::generator::build_cii` setzt für §19
    automatisch BT-22, Tax-Category `E`, Tax-Amount 0 — selbst wenn ein Item
    versehentlich anderes mitbringen würde, wird es im XML überschrieben (mit
@@ -135,39 +156,69 @@ keinen Eintritt fordert.
 
 ---
 
-## 6. Verzicht auf §19 und 5-Jahres-Bindung
+## 6. Statushistorie, Gründe und Bindung (ADR 0042 Nr. 1–6)
 
-§ 19 Abs. 3 UStG (seit dem JStG 2024; vorher Abs. 2) erlaubt den **Verzicht**
-auf die Kleinunternehmer-Regelung — sinnvoll z. B., wenn überwiegend
-B2B-Kunden Vorsteuer ziehen wollen. Der Verzicht wirkt ab Beginn des
-Kalenderjahres, für das er erklärt wird; wer verzichtet, ist **mindestens
-5 Kalenderjahre an die Regelbesteuerung gebunden**. Davon zu unterscheiden
-ist der gesetzliche Wegfall nach § 19 Abs. 1 UStG (Gesamtumsatz im Vorjahr
-über 25.000 €: ab 1. Januar; im laufenden Jahr über 100.000 €: ab dem
-Umsatz, der die Grenze überschreitet) — ohne Bindung. Jeder Übergang ist bei
-Anlagen eine Änderung der Verhältnisse nach § 15a Abs. 7 UStG
-(Vorsteuerberichtigung); Klein.Buch berechnet sie nicht.
+Der Status ist kein Schalter mehr, sondern eine Folge von Einträgen in
+`tax_status_changes` (Migration 0033): Wirkungsdatum, Status, Grund,
+Bindungsende, auslösender Beleg, Notiz. Kein Löschen, kein Ändern; ein
+irrtümlicher Eintrag wird mit Grund widerrufen (nur der jüngste gültige,
+Trigger `trg_tax_status_changes_revoke_only`).
 
-**Im UI** ist das ein Toggle in den Verkäuferprofil-Einstellungen mit
-**ausführlichem** Warn-Dialog, der die drei Fälle (Verzicht mit Bindung,
-Wegfall durch die 25.000-€- oder die 100.000-€-Grenze ohne Bindung) und
-§ 15a UStG erklärt und nach einer expliziten Bestätigung verlangt (ADR 0041
-Nr. 21, 220; U7). Der Grund des Wechsels wird nicht gespeichert; die
-Rückkehr-Sperre gilt deshalb in allen drei Fällen. Bei Bestätigung wird
-`seller_profile.waived_paragraph_19_since = TODAY` gesetzt.
+| Grund | Status | Wirkungsdatum | Bindung |
+|---|---|---|---|
+| Verzicht (§ 19 Abs. 3 UStG) | Regel | 1. Januar | fünf Kalenderjahre einschließlich des Wirkungsjahres: Verzicht ab 2026 → Rückkehr frühestens 01.01.2031 |
+| Wegfall wegen des Vorjahres (> 25.000 €) | Regel | 1. Januar | keine |
+| Wegfall im laufenden Jahr (> 100.000 €) bzw. im Gründungsjahr (> 25.000 €) | Regel | Tag des Umsatzes, der die Grenze überschreitet | keine |
+| Rückkehr | §19 | 1. Januar | nach einem Verzicht erst ab Bindungsende |
 
-**Im Code** prüft `domain::kleinunternehmer::waiver_window(seller, today)`,
-ob der 5-Jahres-Zeitraum noch läuft (`waived_paragraph_19_since` plus 5 Jahre,
-Kalenderjahre, nicht 1825 Tage). Während der Bindung ist das Zurückschalten
-auf `is_kleinunternehmer = true` über das UI **gesperrt**. Wer das trotzdem
-versucht, bekommt einen Hinweis: „Bindung läuft noch bis $YEAR. Verzicht
-ist bindend."
+**Prüfung** (`domain::tax_status::validate_change`, rein): Grund passt zum
+Status und zum Wirkungsdatum; ein neuer Eintrag wirkt nach dem jüngsten
+gültigen (keine Überschneidung) und ändert den Status; ein Wegfall liegt nicht
+in der Zukunft; die Rückkehr verletzt keine Bindung; kein abgeschlossenes
+Geschäftsjahr ändert seinen Status (der Jahres-Snapshot hängt über die
+Vorsteuer aktivierter Kosten davon ab). Die Commands prüfen über
+`validate_change_with` bzw. `validate_revoke_with` zusätzlich aktivierte
+Kosten, die in einem abgeschlossenen Jahr gezahlt wurden und deren Belegdatum
+danach liegt (`CapitalizedInputTax`): Ändert sich ihr Status, verschöbe sich
+Vorsteuer ins abgeschlossene Jahr (`ClosedYearInputTax`). Warnungen, die
+nicht sperren (`change_warnings`, Feld `warnings` der Vorschau): Verzicht nach
+Ablauf der Erklärungsfrist (Ende Februar des übernächsten Jahres, § 19 Abs. 3
+Satz 1), Rückkehr bei einem Vorjahresumsatz über 25.000 €.
 
-**Nach Ablauf der Bindung** kann der Toggle wieder gesetzt werden — das ist
-eine fachliche Entscheidung des Nutzers; `domain::kleinunternehmer::
-reactivate_check` prüft nur die Bindung, nicht die Berechtigung (die hängt
-am Vorjahres-Umsatz, den Klein.Buch zwar berechnen könnte, aber nicht
-verbindlich vor-prüft — das macht der Steuerberater).
+**Commands** (`commands::tax_status`): `tax_status_overview`, `tax_status_at`,
+`tax_status_change_preview`, `tax_status_change_add`,
+`tax_status_change_revoke`. Eintrag und Widerruf verlangen eine frische
+Re-Auth (Registry) und schreiben Eintrag, Audit (`tax_status.changed` bzw.
+`tax_status.revoked`) und Spiegel in einer Transaktion unter
+`locks::SELLER_PROFILE`; ein Jahresabschluss wartet so lange. Danach meldet die
+Inbox festgeschriebene Rechnungen, deren eingefrorener Status nicht mehr passt
+(nicht geändert; Berichtigung nach § 31 Abs. 5 UStDV bzw. Storno und
+Neuausstellung mit der Steuerberatung), Entwürfe und Abo-Vorlagen mit
+unpassender Steuerart, betroffene Anlagen aus Kosten und rückwirkend geänderte
+Auswertungen offener Jahre. Die Dedup-Schlüssel der Hinweise nennen die
+Aktion (`tax_status_affected:add:<id>` bzw. `…:revoke:<id>`), damit der
+Widerruf eigene Belege meldet. `seller_profile_upsert` ändert den Status nicht;
+ein abweichender `isKleinunternehmer` im Input wird abgelehnt.
+
+**Festschreiben** (Rechnung, Angebot): Der Status wird am maßgeblichen Datum
+bestimmt und in der Schreibtransaktion des Locks gegen die Historie erneut
+geprüft (`LockUpdate::tax_status_date`); ein Statuseintrag dazwischen bricht
+das Festschreiben ab, statt den alten Status einzufrieren. Detailseiten von
+Entwürfen zeigen den Status ihres Datums wie die Editoren, festgeschriebene den
+eingefrorenen Wert.
+
+**Gesamtumsatz und Grenzen** (ADR 0042 Nr. 5): Gesamtumsatz nach
+vereinnahmten Entgelten, netto, ohne Anlagenverkäufe
+(`domain::tax_status::gesamtumsatz`); Grenzprüfung für Vorjahr (25.000 €),
+laufendes Jahr (100.000 €) und vermutetes Gründungsjahr (25.000 €, wenn
+Klein.Buch keinen früheren Umsatz kennt) mit dem auslösenden Beleg als
+Vorschlag. Hinweis über die Regel `rule_tax_threshold` (täglich und nach
+jedem Eintrag); den Wechsel trägt der Nutzer selbst ein.
+
+**Übernahme des Bestands** (Nr. 6): Die Migration bildet den alten Schalter so
+ab, dass jedes Jahr dasselbe Ergebnis behält: Anfangsstand §19 bzw. Regel
+„seit Beginn“, ein Verzicht als Eintrag `legacy` zum 1. Januar seines Jahres,
+Bindung nach Nr. 2.
 
 ---
 
@@ -179,9 +230,11 @@ festgeschrieben und bleiben so, wie sie waren — mit BT-22-Klausel, ohne USt-
 Ausweis. Das ist auch korrekt, denn zum Zeitpunkt ihrer Erzeugung war der
 Aussteller Kleinunternehmer.
 
-Neue Belege ab Verzichts-Datum laufen unter Regelbesteuerung. Der EÜR-Report
-ist mit Datum-Filter pro Geschäftsjahr — wer das Übergangsjahr ansieht, sieht
-beides nebeneinander.
+Neue Belege ab dem Wirkungsdatum laufen unter Regelbesteuerung. Im
+Übergangsjahr zeigen EÜR-Report und Ausfüllhilfe den Jahresstatus „Wechsel im
+Jahr“ (`YearStatus::Wechsel`) mit den Abschnitten; Einnahmen folgen dem
+eingefrorenen Status jeder Rechnung, Kosten dem Status am Belegdatum (vor dem
+Stichtag brutto, danach netto mit Vorsteuer, auch im DATEV-Stapel).
 
 ---
 
@@ -196,12 +249,10 @@ sich am Klausel-Erfordernis nichts.
 
 ### 8.2 Abo-Rechnungen mit §19 (Phase 4)
 
-Wenn die Vorlage `is_kleinunternehmer = true` hat (aus dem aktuellen
-`seller_profile`), wird das in jeden materialisierten Beleg übernommen.
-Wechselt der Nutzer mitten in einer Abo-Periode die §19-Lage (Verzicht),
-gilt für die *nächste* materialisierte Rechnung die neue Lage — Klein.Buch
-warnt nicht aktiv, weil das eine bewusste Entscheidung des Nutzers ist.
-Audit-Eintrag des Verzichts ist im Log; wer es nachvollziehen will, findet es.
+Jeder Termin trägt den Status seines Leistungsdatums (ADR 0042 Nr. 3). Ein
+nachgeholter Termin vor einem Wechsel bleibt §19; passt die Steuerart der
+Vorlage nicht zum Status am Termin, entsteht dort keine Rechnung (Hinweis,
+keine Nummer), bis die Vorlage umgestellt ist.
 
 ### 8.3 E-Rechnung-Empfang von Lieferanten mit USt
 
@@ -215,12 +266,20 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
 
 ## 9. Was im UI explizit kommuniziert wird
 
-- Im Verkäuferprofil: „Kleinunternehmer nach §19 UStG (Default — siehe
-  Hilfe)" mit Link ins Handbuch-Kapitel „Recht & Steuern" (G2-DOC.2.4).
+- In „Meine Firmendaten“, Abschnitt „Steuerstatus“: Status heute, Bindung und
+  frühestmögliche Rückkehr, eingetragener künftiger Wechsel, Gesamtumsatz
+  Vorjahr/laufendes Jahr mit Grenzhinweisen (auslösender Beleg, Vorschlag für
+  das Wirkungsdatum, „Klein.Buch wechselt nie selbst“) und der Verlauf mit
+  Wirkungsdatum, Status, Grund, Bindung und Widerruf; Link ins
+  Handbuch-Kapitel „Kleinunternehmer-Regelung“.
+- In den Editoren: Status am Datum des Belegs, mit Hinweis bei Abweichung
+  von heute.
 - Bei jedem PDF-Render einer §19-Rechnung wird die Klausel sichtbar
   ausgegeben, in der Regel im Fuß des Beleg-Bereichs.
-- Im EÜR-Report wird `is_kleinunternehmer` ausgewiesen, damit der
-  Steuerberater es beim Drüberlesen sofort sieht.
+- Im EÜR-Report wird der Jahresstatus ausgewiesen (`yearStatus`, bei einem
+  Wechsel im Jahr mit den Zeiträumen aus `statusChange`), damit der
+  Steuerberater es beim Drüberlesen sofort sieht; die ELSTER-Ausfüllhilfe
+  nennt den Wechsel über der Tabelle.
 
 ---
 
@@ -235,16 +294,35 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
 - `pdf::klausel_check::tests`: Marker + Variable beide nötig; Variable allein
   reicht nicht; nur Marker reicht nicht; korrekt zugelassenes Template
   passiert.
-- `commands::settings::tests`: Verzicht-Toggle schreibt
-  `waived_paragraph_19_since`; Reaktivierungs-Versuch während der Bindung
-  schlägt fehl; nach Ablauf der Bindung geht es.
+- `domain::tax_status::tests`: Status am Stichtag (inklusiv), 1.-Januar-Regeln
+  je Grund, Bindung bis Wirkungsjahr + 5, Rückkehr nach Wegfall ohne Sperre,
+  mehrfacher Wechsel, Widerruf, abgeschlossene Jahre, Grenzprüfung.
+- `tests/migration_0033_test.rs`: Append-only, CHECKs, Übernahme des Bestands
+  (2000–2040 wie bisher), Spiegel.
+- `tests/tax_status_flow_test.rs`: Wegfall am 15.08. (Rechnung 14.08. §19,
+  15.08. Regel), Verzicht 2026 → Rückkehr 2031, Wegfall Vorjahr → Rückkehr im
+  Folgejahr, Rückwirkung im abgeschlossenen Jahr, Widerruf, Mischjahr in
+  EÜR/ELSTER/DATEV, Grenzhinweis, Paket und Angebot → Rechnung nach Datum;
+  Hinweis nach dem Widerruf, Vorsteuer aktivierter Kosten im abgeschlossenen
+  Jahr, erneute Statusprüfung im Lock, Warnungen der Vorschau.
+- `db::repo::tax_status::tests::mirror_columns_are_written_only_here`: keine
+  Lesestelle der Spiegelspalten.
 - `commands::recurring_invoice::tests` (KB-0053): Speichern einer Abo-
   Vorlage mit `tax_category_code != 'E'` und §19-Seller wird abgelehnt.
+- `src/lib/taxStatus.test.ts` (vitest): maßgebliches Datum, Status am Stichtag,
+  wählbare Gründe nach dem jüngsten Eintrag, Vorschläge für das Wirkungsdatum,
+  1.-Januar- und Zukunftsprüfung, Bindungsende, Texte (Grenzhinweis, Folgen,
+  Editor-Hinweis, Umwandlung), `kleinTodayOrLater`, Zwischenspeicher je Datum.
 
 ---
 
 ## Letzte Verifikation
 
-Stand: 2026-05-26, ADR 0005. Quelle: `domain::kleinunternehmer`,
+Stand: 2026-05-26, ADR 0005; 2026-10-27 (Lauf 2026.11.1, V1): §1, §5, §6, §7,
+§8.2, §10 auf die Statushistorie (ADR 0042) umgestellt; §2 und §9 (Oberfläche) gegen
+`src/lib/taxStatus.ts`, `src/lib/taxStatusAt.svelte.ts`,
+`routes/settings/seller/TaxStatusSection.svelte` und die Editoren geprüft. Quelle:
+`domain::tax_status`, `db::repo::tax_status`, `commands::tax_status`,
+`domain::kleinunternehmer`,
 `domain::invoice::validate_for_issue`, `einvoice::generator::build_cii`,
 `pdf::klausel_check`, `commands::settings::seller_profile_upsert`.

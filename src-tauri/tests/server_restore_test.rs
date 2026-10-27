@@ -954,17 +954,28 @@ async fn pre_migration_backup_on_unlock() {
     let bytes = std::fs::read(&name).unwrap();
     let m = klein_buch_lib::backup::manifest::read_manifest_only(&bytes).unwrap();
     assert_eq!(m.schema_version, old);
-    // Lauf F3c (S1): im Format der Vorversion — v2026.10.0 (Schema 31) liest
-    // Format 1–2 ohne AAD. Mit genau deren Leselogik entschlüsseln und die
-    // Datenbank im Inhalt mit der Passphrase öffnen: Schema `old`.
+    // Lauf F3c (S1): im Format der Vorversion.
     assert_eq!(
         m.format_version,
         klein_buch_lib::backup::manifest::readable_format_for_schema(old)
     );
+    // v2026.10.0 (Schema ≤ 31) liest nur Format 1–2: dann mit genau deren
+    // Leselogik prüfen. Ab Schema 32 liest die Vorversion (2026.11.0) Format 3
+    // wie die laufende Version (Prüfung unten).
     if old <= 31 {
         assert_eq!(m.format_version, 2, "Rückfall auf v2026.10.0");
+        check_like_v2026_10(&srv, &bytes, old).await;
     }
-    let content = decrypt_like_v2026_10(&bytes, PASS);
+    // Die laufende Version liest es weiterhin (Format 1–3).
+    klein_buch_lib::backup::verify_backup_file(std::path::Path::new(&name), PASS)
+        .await
+        .unwrap();
+}
+
+/// Pflicht-Backup mit der Leselogik von v2026.10.0 entschlüsseln und die
+/// Datenbank im Inhalt mit der Passphrase öffnen: Schema `old` (Lauf F3c, S1).
+async fn check_like_v2026_10(srv: &TestServer, bytes: &[u8], old: i32) {
+    let content = decrypt_like_v2026_10(bytes, PASS);
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(content)).unwrap();
     let mut db_bytes = Vec::new();
     std::io::Read::read_to_end(
@@ -991,10 +1002,6 @@ async fn pre_migration_backup_on_unlock() {
             .unwrap();
     pool.close().await;
     assert_eq!(v, old.to_string());
-    // Die laufende Version liest es weiterhin (Format 1–3).
-    klein_buch_lib::backup::verify_backup_file(std::path::Path::new(&name), PASS)
-        .await
-        .unwrap();
 }
 
 /// Leselogik von v2026.10.0 (`backup::restore::decrypt_backup` dort): Format
@@ -1141,19 +1148,45 @@ async fn roll_back_0032(pool: &sqlx::SqlitePool) {
     }
 }
 
+/// Macht Migration 0033 rückgängig (Testhilfe für ein Backup mit Schema 32):
+/// Statushistorie samt Trigger und Index, Regel der Umsatzgrenzen. Die
+/// Audit-Einträge der Übernahme bleiben (audit_log ist append-only); die
+/// Spiegelspalten im Profil hat 0033 nicht geändert.
+async fn roll_back_0033(pool: &sqlx::SqlitePool) {
+    for sql in [
+        "DROP TABLE tax_status_changes",
+        "DELETE FROM notification_rules WHERE id = 'rule_tax_threshold'",
+    ] {
+        sqlx::query(sql)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+}
+
 /// Setzt die Datenbank einer laufenden Test-Instanz auf Schema `target`
-/// zurück (31: ohne 0032; 30: zusätzlich ohne 0031 = Tabelle `secrets`).
+/// zurück (32: ohne 0033; 31: zusätzlich ohne 0032; 30: zusätzlich ohne 0031 =
+/// Tabelle `secrets`).
 async fn roll_back_to(pool: &sqlx::SqlitePool, target: i32) {
     let migrations = &klein_buch_lib::db::MIGRATOR.migrations;
     let last = migrations.last().unwrap();
     assert!(
-        last.description.contains("gobd hardening"),
-        "Test setzt 0032 zurück: {}",
+        last.description.contains("tax status history"),
+        "Test setzt 0033 zurück: {}",
         last.description
     );
-    roll_back_0032(pool).await;
-    if target <= 30 {
+    roll_back_0033(pool).await;
+    if target <= 31 {
         let prev = &migrations[migrations.len() - 2];
+        assert!(
+            prev.description.contains("gobd hardening"),
+            "{}",
+            prev.description
+        );
+        roll_back_0032(pool).await;
+    }
+    if target <= 30 {
+        let prev = &migrations[migrations.len() - 3];
         assert!(prev.description.contains("secrets"), "{}", prev.description);
         sqlx::query("DROP TABLE secrets")
             .execute(pool)
@@ -1162,8 +1195,9 @@ async fn roll_back_to(pool: &sqlx::SqlitePool, target: i32) {
     }
     sqlx::query("DELETE FROM _sqlx_migrations WHERE version > ?")
         .bind(match target {
-            31 => migrations[migrations.len() - 2].version,
-            _ => migrations[migrations.len() - 3].version,
+            32 => migrations[migrations.len() - 2].version,
+            31 => migrations[migrations.len() - 3].version,
+            _ => migrations[migrations.len() - 4].version,
         })
         .execute(pool)
         .await
@@ -1355,10 +1389,13 @@ async fn schema_30_backup_is_restored_and_migrated_forward() {
     );
 }
 
-/// Plan W7/W8 + Lauf F2a: `.kbk` mit Schema 31 → Restore → beim Entsperren
-/// Pflicht-Backup (Schema 31) → Vorwärtsmigration (0032).
+/// Plan W7/W8 + Lauf F2a + ADR 0042 Nr. 6: `.kbk` mit dem Schema vor der letzten
+/// Migration (32) → Restore → beim Entsperren Pflicht-Backup (Schema 32) →
+/// Vorwärtsmigration (0033). Ein Verzicht im Profil der alten Fassung wird zur
+/// Statushistorie (Anfangsstand §19, Regelbesteuerung ab 01.01. des
+/// Verzichtsjahres, Bindung fünf Kalenderjahre).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn schema_31_backup_is_restored_and_migrated_forward() {
+async fn schema_32_backup_is_restored_and_migrated_forward() {
     let old = EXPECTED_SCHEMA_VERSION - 1;
     assert!(old >= MIN_RESTORE_SCHEMA_VERSION);
     // Instanz A auf den Stand vor der letzten Migration zurücksetzen
@@ -1367,6 +1404,16 @@ async fn schema_31_backup_is_restored_and_migrated_forward() {
     {
         let pool = a.state.ctx.pool().unwrap();
         roll_back_to(&pool, old).await;
+        // Profil der Fassung vor 0033: Schalter aus, Verzicht am 15.03.2026.
+        sqlx::query(
+            "INSERT INTO seller_profile (id, name, street, postal_code, city, email,
+                                         is_kleinunternehmer, waived_paragraph_19_since)
+             VALUES (1, 'Beispiel IT-Service', 'Beispielweg 1', '12345', 'Musterstadt',
+                     'kontakt@example.org', 0, '2026-03-15')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     let kbk = backup_bytes(&a, &cookie_a).await;
     let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
@@ -1419,6 +1466,44 @@ async fn schema_31_backup_is_restored_and_migrated_forward() {
         .await,
         1,
         "0032 angewendet (Regel)"
+    );
+    // 0033: Statushistorie aus dem Profil, Regel der Umsatzgrenzen.
+    let history: Vec<(String, String, String, Option<String>)> = {
+        let pool = b.state.ctx.pool().unwrap();
+        sqlx::query_as(
+            "SELECT effective_from, status, reason, binding_until FROM tax_status_changes
+              ORDER BY effective_from",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        history,
+        vec![
+            (
+                "0001-01-01".into(),
+                "kleinunternehmer".into(),
+                "initial".into(),
+                None
+            ),
+            (
+                "2026-01-01".into(),
+                "regelbesteuerung".into(),
+                "legacy".into(),
+                Some("2031-01-01".into())
+            ),
+        ],
+        "0033 angewendet (Übernahme)"
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM notification_rules WHERE id = 'rule_tax_threshold'"
+        )
+        .await,
+        1,
+        "0033 angewendet (Regel)"
     );
     assert_eq!(
         scalar_i64(

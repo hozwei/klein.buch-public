@@ -66,10 +66,9 @@ async fn setup_env() -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await

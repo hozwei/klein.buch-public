@@ -11,7 +11,12 @@
   const selId = `pkg-sel-${randomId()}`;
   const errId = `${selId}-err`;
 
-  let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
+  // ADR 0042 Nr. 3: `documentDate` = maßgebliches Datum des Zielbelegs; die
+  // Position bekommt die Steuerart des Status an diesem Datum (ohne Angabe heute).
+  let {
+    onAdd,
+    documentDate = null,
+  }: { onAdd: (item: MaterializedPackageItem) => void; documentDate?: string | null } = $props();
 
   let packages = $state<Package[]>([]);
   let categories = $state<PackageCategory[]>([]);
@@ -66,7 +71,7 @@
     pkgError = "";
     adding = true;
     try {
-      const item = await packageMaterializeItem(selected);
+      const item = await packageMaterializeItem(selected, documentDate);
       onAdd(item);
       flash(`Paket „${item.packageName}“ eingefügt.`);
       selected = "";

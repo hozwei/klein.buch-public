@@ -174,6 +174,38 @@ Datensatzes (z. B. neue Paket-Revision). `archive_entries` ist seit Migration
 0032 ebenfalls ohne `DELETE` (`trg_archive_no_delete`, KB-0004; Hash, Pfad und
 Größe waren schon unveränderlich).
 
+### 2.8 Steuerstatus nach § 19 UStG (`tax_status_changes`, Migration 0033)
+
+Der Steuerstatus ist eine append-only Historie (ADR 0042 Nr. 1; § 146 Abs. 4 AO,
+GoBD Rz. 58 ff.): Wirkungsdatum, Status, Grund, Bindungsende, auslösender Beleg,
+Notiz. `trg_tax_status_changes_no_delete` verbietet `DELETE`,
+`trg_tax_status_changes_revoke_only` erlaubt `UPDATE` nur einmal und nur als
+Widerruf (`revoked_at` + `revoke_reason`, Grund Pflicht); alle übrigen Spalten
+bleiben danach unveränderlich. Der widerrufene Eintrag bleibt sichtbar (Verlauf
+in „Meine Firmendaten“, durchgestrichen mit Datum und Grund). Höchstens ein
+gültiger Eintrag je Wirkungsdatum (`uq_tax_status_changes_active`).
+
+- **Festgeschriebene Belege bleiben unberührt.** Der Status einer Rechnung bzw.
+  eines Angebots wird beim Festschreiben wie bisher eingefroren
+  (`invoices.is_kleinunternehmer`, `quotes.is_kleinunternehmer`; Trigger 2.1
+  und 2.2 unverändert). Ein späterer Eintrag oder Widerruf ändert sie nicht;
+  Belege, deren eingefrorener Status nicht mehr passt, meldet Klein.Buch als
+  Hinweis (Berichtigung nach § 31 Abs. 5 UStDV bzw. Storno und Neuausstellung,
+  ADR 0042 Nr. 4).
+- **Abgeschlossene Jahre.** Ein Eintrag oder Widerruf, der den Status in einem
+  abgeschlossenen Geschäftsjahr ändern würde, wird abgelehnt
+  (`domain::tax_status::validate_change`/`validate_revoke`): Der
+  Jahres-Snapshot hängt über die Vorsteuer aktivierter Kosten vom Status ab
+  (6.1). Eintrag und Widerruf laufen mit einer Booking-Permit (6.2), damit kein
+  Abschluss dazwischenkommt.
+- **Audit.** Eintrag (`tax_status.changed`), Widerruf (`tax_status.revoked`) und
+  Übernahme des Bestands (`tax_status.migrated`) stehen im Audit-Log, in derselben
+  Transaktion wie der Eintrag; Re-Auth vorher (Registry).
+- **Kein Überschneiden, kein Umschreiben.** Neue Einträge wirken nach dem
+  jüngsten; widerrufen lässt sich nur der jüngste gültige Eintrag. Eine
+  Korrektur älterer Einträge geht nur über Widerruf der jüngeren und neue
+  Einträge — jeder Schritt bleibt nachvollziehbar.
+
 ---
 
 ## 3. Archive
@@ -668,6 +700,12 @@ Unit-Tests in den Modulen):
   `tests/legal_documents_repo_test.rs` (`core_fields_immutable_and_no_delete`).
   `tests/migration_0032_test.rs` (`audit_log_is_append_only`,
   `package_revisions_are_immutable_and_append_only` — W13-TRIGGER-TESTS).
+- **Steuerstatus-Historie:** `tests/migration_0033_test.rs`
+  (`append_only_delete_and_update_blocked_revoke_once`,
+  `checks_reason_status_date_and_binding`,
+  `backfill_matches_old_result_for_every_year`), `tests/tax_status_flow_test.rs`
+  (Eintrag und Widerruf, abgeschlossene Jahre, festgeschriebene Rechnungen
+  bleiben), Unit-Tests in `src/domain/tax_status.rs`.
 - **Archiv:** Unit-Tests in `src/archive/store.rs` (Schreiben mit `0o400`,
   idempotent, Waise beiseitelegen, neue Dateiversion, anderer Inhalt abgelehnt,
   Tamper beim Lesen, Pfadtrenner im Namen) und `src/archive/integrity_check.rs`
@@ -708,4 +746,7 @@ Stand: 2026-10-25 (Lauf F, Blöcke F2a/F2b/F2c; Schema v32). Quellen:
 `src/archive/store.rs`, `src/archive/integrity_check.rs`, `src/db/mod.rs`
 (`prepare_filesystem`), `src/locks.rs`, `src/db/repo/audit_log.rs`,
 `src/fiscal_year/{guard,lock,snapshot}.rs`, `src/commands/euer.rs`; Testliste per Verzeichnis-Listing von
-`src-tauri/tests/` und den Test-Namen geprüft.
+`src-tauri/tests/` und den Test-Namen geprüft. Nachtrag 2026-10-27 (Lauf 2026.11.1, V1; Schema v33):
+§2.8 und §9 um `tax_status_changes` ergänzt, gegen
+`migrations/0033_tax_status_history.sql`, `src/domain/tax_status.rs`,
+`src/commands/tax_status.rs` und `tests/migration_0033_test.rs` geprüft.

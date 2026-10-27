@@ -38,7 +38,6 @@ fn seller_klein() -> SellerView<'static> {
         iban: None,
         bic: None,
         is_kleinunternehmer: true,
-        waived_since: None,
     }
 }
 

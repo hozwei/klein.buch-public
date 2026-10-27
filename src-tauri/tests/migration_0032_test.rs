@@ -59,12 +59,16 @@ async fn setup() -> (SqlitePool, tempfile::TempDir) {
     (pool, dir)
 }
 
-/// Migrator mit allen Migrationen außer 0032 (DB auf Schema 31).
+/// Migrator mit allen Migrationen vor 0032 (DB auf Schema 31; spätere wie 0033
+/// fehlen ebenfalls).
 fn migrator_without_last() -> sqlx::migrate::Migrator {
     let all = &MIGRATOR.migrations;
-    assert!(all.last().unwrap().description.contains("gobd hardening"));
+    let idx = all
+        .iter()
+        .position(|m| m.description.contains("gobd hardening"))
+        .expect("Migration 0032");
     sqlx::migrate::Migrator {
-        migrations: Cow::Owned(all[..all.len() - 1].to_vec()),
+        migrations: Cow::Owned(all[..idx].to_vec()),
         ..sqlx::migrate::Migrator::DEFAULT
     }
 }
@@ -193,8 +197,12 @@ const REASON: &str = "Doppelt angelegt, Kunde hat storniert";
 #[tokio::test]
 async fn schema_32_and_recurring_due_rule_seeded() {
     let (pool, _dir) = setup().await;
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 32);
-    assert_eq!(schema_version(&pool).await, "32");
+    // Seit 0033 (ADR 0042) steht das Schema höher; 0032 ist darin enthalten.
+    const { assert!(EXPECTED_SCHEMA_VERSION >= 32) };
+    assert_eq!(
+        schema_version(&pool).await,
+        EXPECTED_SCHEMA_VERSION.to_string()
+    );
     let (rule_type, enabled, in_app): (String, i64, i64) = sqlx::query_as(
         "SELECT rule_type, enabled, deliver_in_app FROM notification_rules
           WHERE id = 'rule_recurring_due'",
@@ -473,6 +481,7 @@ async fn storno_pair_is_final_and_idempotent() {
         pdf_archive_id: "",
         xml_archive_id: "",
         is_kleinunternehmer: None,
+        tax_status_date: None,
         totals: None,
     };
     // Archiv-IDs sind FKs — echte Einträge anlegen
@@ -1593,10 +1602,9 @@ async fn legacy_half_storno_pair_is_completed_without_second_storno() {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await

@@ -61,7 +61,7 @@ fn paths_for(dir: &Path) -> Paths {
     }
 }
 
-fn profile(klein: bool) -> seller_profile::SellerProfileInput {
+fn profile() -> seller_profile::SellerProfileInput {
     seller_profile::SellerProfileInput {
         name: "Beispiel IT-Service".into(),
         legal_form: None,
@@ -76,14 +76,14 @@ fn profile(klein: bool) -> seller_profile::SellerProfileInput {
         iban: None,
         bic: None,
         logo_filename: None,
-        is_kleinunternehmer: klein,
+        is_kleinunternehmer: None,
         default_pdf_template: Some("default".into()),
         default_currency: Some("EUR".into()),
-        confirm_waive_paragraph_19: (!klein).then_some(true),
     }
 }
 
-/// `klein = false`: Verzicht auf §19 ab heute (Regelbesteuerung im laufenden Jahr).
+/// `klein = false`: Verzicht auf §19 ab Beginn des laufenden Jahres (Eintrag in
+/// der Statushistorie, ADR 0042; Regelbesteuerung im laufenden Jahr).
 async fn setup(klein: bool) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths_for(dir.path());
@@ -98,11 +98,26 @@ async fn setup(klein: bool) -> Env {
         .await
         .unwrap();
     MIGRATOR.run(&pool).await.unwrap();
-    seller_profile::upsert(&pool, &profile(true)).await.unwrap();
+    seller_profile::upsert(&pool, &profile()).await.unwrap();
     if !klein {
-        seller_profile::upsert(&pool, &profile(false))
-            .await
-            .unwrap();
+        use klein_buch_lib::db::repo::tax_status;
+        use klein_buch_lib::domain::tax_status::{verzicht_binding_until, ChangeReason, TaxStatus};
+        let today = klein_buch_lib::clock::today_berlin();
+        let jan = NaiveDate::from_ymd_opt(chrono::Datelike::year(&today), 1, 1).unwrap();
+        tax_status::insert(
+            &pool,
+            &tax_status::NewEntry {
+                effective_from: jan,
+                status: TaxStatus::Regelbesteuerung,
+                reason: ChangeReason::Verzicht,
+                binding_until: Some(verzicht_binding_until(jan)),
+                trigger_document: None,
+                note: None,
+            },
+            today,
+        )
+        .await
+        .unwrap();
     }
     let ctx = AppCtx::for_tests(paths);
     ctx.set_pool(pool.clone());

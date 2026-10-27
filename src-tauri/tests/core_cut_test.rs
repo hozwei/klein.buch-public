@@ -56,12 +56,13 @@ fn registry_matches_frontend_api() {
     let api = api_ts_commands();
     assert_eq!(
         api.len(),
-        178,
-        "api.ts ruft 178 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
+        183,
+        "api.ts ruft 183 Commands auf (Plan W5, W7, W8, W9, W12; Lauf F: +Rückstand ×2, \
          +Pause ×2, −payment_accounts_ensure_defaults, +Tages-Backup-Uhrzeit, \
          +Nummernkreise ×2, F1d: +vorgemerkte Entwürfe ×2, +Restore-Prüfung der Abos, \
          F2a: +Entwurf verwerfen, F3a: +Backup herunterladen, F5a: +Entwurf bearbeiten, F6: −2 doppelte Leser; \
-         Lauf 2026.11 U4: +Abgangs-Vorschau der Anlagen)"
+         Lauf 2026.11 U4: +Abgangs-Vorschau der Anlagen; \
+         Lauf 2026.11.1 V1: +5 Steuerstatus-Commands, ADR 0042)"
     );
     // Lauf F6: die nur noch gesperrt mitgeführten Desktop-Commands samt Kern
     // entfernt (Archiv über GET /files/archive/{id}, Auth über /api/auth/*,

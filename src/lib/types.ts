@@ -108,7 +108,7 @@ export interface SellerProfile {
   iban: string | null;
   bic: string | null;
   logoFilename: string | null;
-  isKleinunternehmer: number;          // 0|1
+  isKleinunternehmer: number;          // 0|1, Status heute aus der Historie (ADR 0042); Belege: Status am Belegdatum
   waivedParagraph19Since: string | null;
   defaultPdfTemplate: string;
   defaultCurrency: string;
@@ -129,11 +129,10 @@ export interface SellerProfileInput {
   iban: string | null;
   bic: string | null;
   logoFilename: string | null;
-  isKleinunternehmer: boolean;
   defaultPdfTemplate: string | null;
   defaultCurrency: string | null;
-  /** Pflicht-`true` beim Wechsel §19 → Regelbesteuerung (5-Jahres-Bindung). */
-  confirmWaiveParagraph19: boolean | null;
+  // Kein Steuerstatus mehr (ADR 0042 Nr. 1): Wechsel nur über
+  // `taxStatusChangeAdd`; ein abweichender `isKleinunternehmer` würde abgelehnt.
 }
 
 /** §19-Kompatibilität einer PDF-Vorlage (Block 17a). */
@@ -159,7 +158,8 @@ export interface PdfTemplateMeta {
 
 export interface Paragraph19Info {
   hinweisText: string;
-  /** Wenn aktuell verzichtet wurde: das früheste Rückkehr-Datum (YYYY-MM-DD). */
+  /** Bei Regelbesteuerung heute: das früheste Rückkehr-Datum (YYYY-MM-DD) aus
+   *  der Statushistorie (nach einem Verzicht das Bindungsende, ADR 0042). */
   returnDateAfterWaiver: string | null;
 }
 
@@ -1393,9 +1393,13 @@ export interface EuerReport {
   disposalGainLossCents: Cents;
   // Ergebnis
   surplusCents: Cents;
-  /** §19 im Jahr aktiv (period-aware wie die Exporte); false = Regelbesteuerung
-   *  (Verzicht ab diesem Jahr). Lauf 2026.11 U4. */
+  /** §19 das ganze Jahr (wie die Exporte); false = Regelbesteuerung oder
+   *  Wechsel im Jahr. Lauf 2026.11 U4, ADR 0042. */
   isKleinunternehmer: boolean;
+  /** Status des Jahres dreiwertig (ADR 0042 Nr. 3). */
+  yearStatus: YearStatus;
+  /** Wechsel im Jahr als Text; null = einheitlicher Status. */
+  statusChange: string | null;
   /** Abgleich mit dem Festschreibungs-Snapshot; null = Jahr offen (U4). */
   snapshotCheck: SnapshotCheck | null;
 }
@@ -1417,7 +1421,10 @@ export interface ElsterLine {
 /** ELSTER-Ausfüllhilfe eines Geschäftsjahres (`euer::elster_csv::ElsterForm`). */
 export interface ElsterForm {
   fiscalYear: number;
+  /** §19 das ganze Jahr; false bei Regelbesteuerung oder Wechsel im Jahr. */
   isKleinunternehmer: boolean;
+  /** Wechsel des Steuerstatus im Jahr als Text (ADR 0042); fehlt sonst. */
+  statusChange?: string | null;
   /** Jahr des Vordrucks, dem die Zeilennummern folgen. */
   formYear: number;
   /** true = Zeilennummern am Vordruck genau dieses Jahres geprüft. */
@@ -1736,4 +1743,113 @@ export interface UpdateCheckSettings {
   enabled: boolean;
   /** Letzte Abfrage (RFC 3339, UTC) oder `null`. */
   lastCheckAt: string | null;
+}
+
+// ---- Steuerstatus nach § 19 UStG (ADR 0042 Nr. 1–6) ------------------------
+
+export type TaxStatus = "kleinunternehmer" | "regelbesteuerung";
+export type TaxStatusReason =
+  | "initial"
+  | "verzicht"
+  | "wegfall_vorjahr"
+  | "wegfall_laufend"
+  | "wegfall_gruendungsjahr"
+  | "rueckkehr"
+  | "legacy";
+/** Status eines Geschäftsjahres; `wechsel` = Wechsel im Jahr. */
+export type YearStatus = "kleinunternehmer" | "regelbesteuerung" | "wechsel";
+
+/** Eintrag der Statushistorie (append-only, Widerruf statt Löschen). */
+export interface TaxStatusChange {
+  id: string;
+  /** YYYY-MM-DD; „0001-01-01“ = seit Beginn. */
+  effectiveFrom: string;
+  status: TaxStatus;
+  reason: TaxStatusReason;
+  /** Nach einem Verzicht: erster Tag der möglichen Rückkehr. */
+  bindingUntil: string | null;
+  triggerDocument: string | null;
+  note: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  revokeReason: string | null;
+}
+
+/** Hinweis zu einer Umsatzgrenze (§ 19 Abs. 1/2 UStG). */
+export interface TaxThresholdHint {
+  kind: "vorjahr" | "laufend" | "gruendungsjahr";
+  year: number;
+  turnoverCents: Cents;
+  limitCents: Cents;
+  /** true = überschritten, false = genau erreicht. */
+  exceeded: boolean;
+  triggerDocument: string | null;
+  suggestedEffectiveFrom: string | null;
+  suggestedReason: TaxStatusReason;
+  /** true = Gründungsjahr nur vermutet. */
+  presumed: boolean;
+}
+
+export interface TaxStatusOverview {
+  entries: TaxStatusChange[];
+  today: string;
+  currentStatus: TaxStatus;
+  bindingUntil: string | null;
+  earliestReturn: string | null;
+  /** Nur der jüngste gültige Eintrag lässt sich widerrufen. */
+  revocableId: string | null;
+  turnover: {
+    previousYear: number;
+    previousYearCents: Cents;
+    currentYear: number;
+    currentYearCents: Cents;
+  };
+  thresholdHints: TaxThresholdHint[];
+  hinweisText: string;
+}
+
+export interface TaxStatusAt {
+  date: string;
+  status: TaxStatus;
+  isKleinunternehmer: boolean;
+}
+
+export interface TaxStatusChangeInput {
+  /** Pflicht außer beim Anfangsstand (`initial`, seit Beginn). */
+  effectiveFrom: string | null;
+  status: TaxStatus;
+  reason: TaxStatusReason;
+  triggerDocument?: string | null;
+  note?: string | null;
+}
+
+export interface TaxStatusAffectedInvoice {
+  id: string;
+  number: string;
+  documentDate: string;
+  lockedAsKleinunternehmer: boolean;
+  nowKleinunternehmer: boolean;
+}
+
+export interface TaxStatusConsequences {
+  firstDifference: string | null;
+  affectedInvoices: TaxStatusAffectedInvoice[];
+  affectedDrafts: string[];
+  recurringTemplates: string[];
+  capitalizedAssets: string[];
+  reexportYears: number[];
+}
+
+export interface TaxStatusChangePreview {
+  ok: boolean;
+  errors: string[];
+  /** Hinweise, die den Eintrag nicht sperren (Erklärungsfrist des Verzichts, Vorjahresumsatz vor einer Rückkehr). */
+  warnings: string[];
+  bindingUntil: string | null;
+  consequences: TaxStatusConsequences;
+}
+
+export interface TaxStatusChangeResult {
+  entry: TaxStatusChange;
+  consequences: TaxStatusConsequences;
 }

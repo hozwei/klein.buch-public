@@ -37,6 +37,9 @@
   import QuantityInput from "#lib/QuantityInput.svelte";
   import Toggle from "#lib/Toggle.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
 
   // Wie in invoices/new: Form-Position = InvoiceItemInput + Markup/Titel als
   // String (für bind:value) + transienter Paket-Name fürs Badge. Menge, Preis
@@ -111,10 +114,17 @@
   }
 
   // §19-Hardline: bei Kleinunternehmer USt-Felder sperren + auf E/0 zwingen.
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: Status am nächsten Termin (Leistungsdatum der nächsten
+  // Rechnung), nicht der von heute. Der Server prüft beim Speichern denselben
+  // Termin und im Lauf jeden Termin einzeln.
+  let taxDate = $derived(relevantTaxDate(nextDueDate, null, todayBerlin()));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
   // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    applyTaxRules(items as unknown as InvoiceItemInput[], seller ? isKlein : null);
+    // Nur mit dem Status genau dieses Datums (kein Umschreiben mit einem veralteten Wert).
+    applyTaxRules(items as unknown as InvoiceItemInput[], seller && taxAt.date === taxDate ? taxAt.isKlein : null);
   });
 
   // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
@@ -194,6 +204,7 @@
     } catch (e) {
       flash("Laden fehlgeschlagen: " + String(e), "error");
     } finally {
+      await taxAt.load(taxDate).catch(() => {});
       loaded = true;
     }
   });
@@ -350,12 +361,8 @@
     Diese Abo-Vorlage gibt es nicht (mehr). <a class="kb-link kb-target" href="/recurring-invoices">Zu den Abo-Rechnungen</a>
   </Banner>
 {:else}
-  {#if isKlein}
-    <Banner kind="info">
-      Kleinunternehmer (§19): auf den erzeugten Rechnungen wird keine Umsatzsteuer
-      ausgewiesen — die USt-Felder sind ausgeblendet.
-    </Banner>
-  {/if}
+  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
+    dateLabel={editId ? "nächsten Termin" : "ersten Termin"} noun="auf den erzeugten Rechnungen" />
 
   <form id="ri-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
     <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
@@ -653,7 +660,7 @@
         </tfoot>
       </table>
       <TravelLineAdder onAdd={addTravelLine} />
-      <PackageItemAdder onAdd={addPackage} />
+      <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
     </section>
 
     <fieldset class="card modepick">

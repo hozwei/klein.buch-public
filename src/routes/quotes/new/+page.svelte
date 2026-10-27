@@ -34,6 +34,9 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge (Backend ignoriert ihn).
@@ -113,12 +116,17 @@
   }
 
   // ---- §19-Hardline: bei is_kleinunternehmer USt-Felder sperren ----
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: Status am Angebotsdatum, nicht der von heute.
+  let taxDate = $derived(relevantTaxDate(null, quoteDate, todayBerlin()));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
   // In-place Mutation pro Property (NICHT items = items.map(...)), siehe
   // invoices/new — sonst Endlos-Effect.
   // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    applyTaxRules(items as unknown as QuoteItemInput[], seller ? isKlein : null);
+    // Nur mit dem Status genau dieses Datums (kein Umschreiben mit einem veralteten Wert).
+    applyTaxRules(items as unknown as QuoteItemInput[], seller && taxAt.date === taxDate ? taxAt.isKlein : null);
   });
 
   // ---- Totals (live) ----
@@ -164,6 +172,7 @@
       ]);
       const terms = await documentTermsGet();
       validUntil = addDays(quoteDate, terms.quoteValidDays);
+      await taxAt.load(taxDate).catch(() => {});
     } catch (e) {
       flash(String(e), "error");
     } finally {
@@ -307,12 +316,7 @@
     Deine Firmendaten fehlen. <a class="kb-link" href="/settings/seller?next=/quotes/new">Jetzt ausfüllen</a>.
   </Banner>
 {:else}
-  {#if isKlein}
-    <Banner kind="info">
-      Du bist als Kleinunternehmer (§19) eingestellt — auf dem Angebot wird keine
-      Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
-    </Banner>
-  {/if}
+  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein} dateLabel="Angebotsdatum" noun="auf dem Angebot" />
 
   <form id="quote-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
     <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
@@ -575,7 +579,7 @@
         </tfoot>
       </table>
       <TravelLineAdder onAdd={addTravelLine} />
-      <PackageItemAdder onAdd={addPackage} />
+      <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
     </section>
 
     <section class="card">

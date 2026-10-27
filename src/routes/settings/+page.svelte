@@ -10,7 +10,7 @@
     {
       title: "Firma und Belege",
       items: [
-        { href: "/settings/seller", title: "Meine Firmendaten", sub: "Name, Adresse, Steuernummer und Kleinunternehmer-Regelung" },
+        { href: "/settings/seller", title: "Meine Firmendaten", sub: "Name, Adresse, Steuernummer und Steuerstatus (§19)" },
         { href: "/settings/payment-accounts", title: "Konten", sub: "Bankkonto, Bargeld und weitere Zahlungswege" },
         { href: "/settings/travel", title: "Anfahrtspauschale", sub: "Kilometersatz für Anfahrten in Angeboten und Rechnungen" },
         { href: "/settings/pdf-templates", title: "Rechnungs-Layout", sub: "Wie deine PDF-Rechnungen aussehen" },

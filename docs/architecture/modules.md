@@ -36,7 +36,8 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 |---|---|---|
 | `domain::invoice` | Rechnungs-Validierung (§14/§19/§33 UStG, §14c-Schutz) und Totals-Berechnung in Cent | `validate_for_issue`, `compute_totals`, `is_kleinbetragsrechnung` |
 | `domain::contact` | Kontakt-Validierung | `validate`, `validate_vat_id` |
-| `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), 5-Jahres-Bindung nach Verzicht, USt-Sperre je Position | `HINWEIS_TEXT`, `KleinunternehmerStatus`, `waiver_deadline`, `assert_no_vat` |
+| `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), USt-Sperre je Position | `HINWEIS_TEXT`, `assert_no_vat` |
+| `domain::tax_status` | Steuerstatus nach § 19 UStG als Historie (ADR 0042): Status an einem Datum und je Jahr, Prüfung neuer Einträge und Widerrufe (Grund, Wirkungsdatum, Bindung, abgeschlossene Jahre), Gesamtumsatz und Grenzprüfung | `TaxStatusHistory`, `validate_change`, `validate_revoke`, `gesamtumsatz`, `grenzpruefung` |
 | `domain::kleinbetragsrechnung` | §33 UStDV — vereinfachte Pflichtangaben bei ≤ 250 € Brutto | `KLEINBETRAG_THRESHOLD_CENTS`, `is_applicable` |
 | `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer); Geschäftsjahr aus dem Storno-Datum, Bezug aufs Original (Nummer, Datum) für XML und PDF (Lauf E) | `build_storno_input`, `storno_fiscal_year`, `PrecedingInvoice` |
 | `domain::numbering` | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) | `DocType`, `format`, `format_invoice`, `format_storno`, `format_quote`, `format_expense` |
@@ -399,8 +400,9 @@ Einzelaufstellungen, Belege, Manifest) baut `commands::euer::euer_export_stb_zip
 in der Download-Ablage.
 
 **Ansicht.** `commands::euer::euer_compute_report` liefert neben dem Report
-(`EuerReportView`, Felder flach) `is_kleinunternehmer` (§19-Status des Jahres,
-Verzicht berücksichtigt, wie die Exporte) und `snapshot_check` (Abgleich mit dem
+(`EuerReportView`, Felder flach) `is_kleinunternehmer` (§19 das ganze Jahr, wie
+die Exporte), `year_status` und `status_change` (Wechsel im Jahr aus der
+Statushistorie, ADR 0042) und `snapshot_check` (Abgleich mit dem
 Festschreibungs-Snapshot, `None` bei offenem Jahr). Die Ansicht liest nur:
 weder Audit noch Hinweis (ADR 0041 Nr. 80). DATEV-Berater- und Mandantennummer
 übergibt die Oberfläche je Export (`consultantNumber`/`clientNumber`; der Browser

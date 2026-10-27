@@ -59,8 +59,10 @@ Fortbildung, Bürobedarf als Arbeitsmittel, Werbung) stehen dort,
 Hardware, Gebühren und Sonstiges unter „übrige Betriebsausgaben“.
 Kommentarzeilen am Anfang der Datei (`# …`) nennen Besonderheiten, etwa
 wenn Storno-Erstattungen die Einnahmen des Jahres übersteigen (der
-Überhang steht dann als Betriebsausgabe in der Ausfüllhilfe) oder bei
-Regelbesteuerung, was Du noch ergänzen musst.
+Überhang steht dann als Betriebsausgabe in der Ausfüllhilfe), bei
+Regelbesteuerung, was Du noch ergänzen musst, und bei einem Wechsel des
+Steuerstatus im Jahr die Zeiträume mit ihrem Status. Die Seite nennt
+den Wechsel auch über der Tabelle der Anlage EÜR.
 
 Zusätzlich kannst Du die vollständige EÜR als PDF herunterladen
 ("PDF herunterladen" bei "Vollständige EÜR (PDF)"), als Beleg für

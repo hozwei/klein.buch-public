@@ -114,8 +114,8 @@ Storno allein.
 2. Falscher Betrag, falsche Menge.
 3. Falsches Leistungsdatum.
 4. Aus Versehen Umsatzsteuer auf der Rechnung gestanden. In
-   Klein.Buch ist das technisch nicht möglich, solange der
-   §19-Schalter an ist: §14c UStG würde sonst dazu führen, dass
+   Klein.Buch ist das technisch nicht möglich, solange am
+   Leistungsdatum die Kleinunternehmer-Regelung gilt: §14c UStG würde sonst dazu führen, dass
    Du die ausgewiesene Umsatzsteuer tatsächlich ans Finanzamt
    abführen musst, obwohl Du als Kleinunternehmer keine schuldest.
 5. Die Leistung wurde gar nicht erbracht.

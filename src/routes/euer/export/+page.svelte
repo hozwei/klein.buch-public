@@ -424,6 +424,10 @@
     <h2 id="form-h">Anlage EÜR — zum Übertragen ins ELSTER-Formular</h2>
     {#if form}
       <p class="muted">Zeilen nach dem Vordruck {form.formYear}; die Kennzahl (Kz) gilt in jedem Jahr.</p>
+      {#if form.statusChange}
+        <!-- ADR 0042 Nr. 3: Wechsel des Steuerstatus im Jahr. -->
+        <p class="muted">Steuerstatus {form.fiscalYear}: Wechsel im Jahr — {form.statusChange}.</p>
+      {/if}
       {#if form.notes.length > 0}
         <Banner kind="warning">
           <ul>

@@ -364,6 +364,15 @@ pub fn constraint_message(raw: &str) -> &'static str {
             "fiscal_year_locks",
             "Ein abgeschlossenes Geschäftsjahr ist unveränderlich.",
         ),
+        // ADR 0042 Nr. 1: Statushistorie nach § 19 UStG (Migration 0033).
+        (
+            "tax_status_changes: nur ein Widerruf",
+            "Einträge des Steuerstatus sind unveränderlich; ein irrtümlicher Eintrag wird einmal mit Grund widerrufen.",
+        ),
+        (
+            "tax_status_changes",
+            "Einträge des Steuerstatus werden nie gelöscht; ein irrtümlicher Eintrag wird mit Grund widerrufen.",
+        ),
         (
             "legal_documents",
             "Rechtstexte sind versioniert und unveränderlich; eine Änderung legt eine neue Version an.",

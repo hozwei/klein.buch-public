@@ -201,7 +201,13 @@ export const AUDIT_ACTION_LABELS_ADDITIONAL: Record<string, string> = {
   "recurring_invoice.deactivate": "Abo-Vorlage pausiert",
   "recurring_invoice.run": "Abo-Rechnung erstellt",
   "recurring_invoice.update": "Abo-Vorlage geändert",
+  "seller_profile_return_to_paragraph_19": "Rückkehr zu §19 (früherer Schalter)",
+  "seller_profile_waive_paragraph_19": "Wechsel zur Regelbesteuerung (früherer Schalter)",
   "settings.travel.update": "Kilometersatz geändert",
+  // ADR 0042 Nr. 1: §19-Statushistorie (Migration 0033).
+  "tax_status.changed": "Steuerstatus eingetragen",
+  "tax_status.migrated": "Steuerstatus übernommen (Migration)",
+  "tax_status.revoked": "Steuerstatus-Eintrag widerrufen",
 };
 
 /** Anzeigename einer PDF-Vorlage (U1: Detailseiten zeigten „default“). */
@@ -356,7 +362,7 @@ export function unitCodeError(code: string | null | undefined, fromPackage = fal
  * Wörter folgen den Knöpfen und Bereichen der Oberfläche.
  */
 const REAUTH_ACTIONS: Record<string, string> = {
-  seller_profile_upsert: "Bankverbindung oder Kleinunternehmer-Status ändern",
+  seller_profile_upsert: "Bankverbindung ändern",
   mail_send_invoice: "Rechnung an eine andere Adresse senden",
   mail_send_quote: "Angebot an eine andere Adresse senden",
   backup_target_add_directory: "Backup-Ziel (Verzeichnis) hinzufügen",
@@ -388,6 +394,8 @@ const REAUTH_ACTIONS: Record<string, string> = {
   numbering_raise: "Nummernkreis anheben",
   numbering_restored_draft_confirm: "Abgleich des Entwurfs bestätigen",
   invoices_void_draft: "Entwurf verwerfen",
+  tax_status_change_add: "Steuerstatus ändern",
+  tax_status_change_revoke: "Steuerstatus-Eintrag widerrufen",
   "/api/auth/sessions/others/revoke": "Andere Sitzungen abmelden",
   "/api/auth/totp/renew": "Authenticator-App neu verbinden",
   "/api/auth/recovery/renew": "Neue Einmal-Codes erzeugen",

@@ -570,10 +570,11 @@ async fn reauth_commands_require_fresh_reauth() {
         .collect();
     assert_eq!(
         reauth_cmds.len(),
-        29,
+        31,
         "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d) \
          + invoices_void_draft (F2a) + backup_download (F3a) + euer_export_datev/_elster/_pdf \
-         + payment_accounts_set_active (F4a) - seller_profile_upsert (F4a: bedingt)"
+         + payment_accounts_set_active (F4a) - seller_profile_upsert (F4a: bedingt) \
+         + tax_status_change_add/_revoke (ADR 0042)"
     );
     // W14-038 (Lauf F4a) und W14-009 (Lauf F5c): bedingte Re-Auth; die Matrizen
     // prüfen `seller_profile_reauth_matrix` und `mail_send_reauth_matrix`.
@@ -1145,7 +1146,7 @@ async fn stored_iban(srv: &TestServer, cookie: &str) -> Option<String> {
 }
 
 /// W14-038 (Lauf F4a): Re-Auth-Matrix des Verkäuferprofils. Re-Auth nur bei
-/// IBAN, BIC oder §19-Status — und nicht in den ersten 5 min nach Einrichtung
+/// IBAN oder BIC (der §19-Status hat seit ADR 0042 eigene Commands) — und nicht in den ersten 5 min nach Einrichtung
 /// bzw. Anmeldung. Eine 403 wird nicht als Idempotenz-Ergebnis gespeichert.
 #[tokio::test]
 async fn seller_profile_reauth_matrix() {
@@ -1204,15 +1205,27 @@ async fn seller_profile_reauth_matrix() {
             "BIC",
             profile_args(Some(IBAN_A), Some("COBADEFFXXX"), true, "Weg 2"),
         ),
-        (
-            "§19-Verzicht",
-            profile_args(Some(IBAN_A), Some(BIC), false, "Weg 2"),
-        ),
     ] {
         let r = call(&srv.app, &cookie, upsert, args).await;
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{what}: {}", r.text());
         assert_eq!(r.json()["code"], "reauth_required", "{what}");
     }
+    // ADR 0042 Nr. 1: Den §19-Status ändert das Profil nicht mehr; ein
+    // abweichender Wert ist ein Fachfehler (eigene Commands mit Re-Auth).
+    let r = call(
+        &srv.app,
+        &cookie,
+        upsert,
+        profile_args(
+            Some("de02120300000000202051"),
+            Some(" BYLADEM1001 "),
+            false,
+            "Weg 2",
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert!(r.text().contains("Statuswechsel eintragen"), "{}", r.text());
     assert_eq!(
         stored_iban(&srv, &cookie).await.as_deref(),
         Some("de02120300000000202051"),
