@@ -87,11 +87,10 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityUnreadable,
                 archive_id,
-                Some(&format!(
-                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
-                    escape(&path),
-                    e.kind()
-                )),
+                Some(serde_json::json!({
+                    "path": &path,
+                    "error_kind": format!("{:?}", e.kind()),
+                })),
             )
             .await?;
             return Ok(VerifyOutcome::Unreadable);
@@ -102,7 +101,7 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
             pool,
             audit::ArchiveAction::IntegrityMissing,
             archive_id,
-            Some(&format!(r#"{{"path":"{}"}}"#, escape(&path))),
+            Some(serde_json::json!({ "path": &path })),
         )
         .await?;
         return Ok(VerifyOutcome::Missing);
@@ -123,11 +122,10 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityUnreadable,
                 archive_id,
-                Some(&format!(
-                    r#"{{"path":"{}","error_kind":"{:?}"}}"#,
-                    escape(&path),
-                    e.kind()
-                )),
+                Some(serde_json::json!({
+                    "path": &path,
+                    "error_kind": format!("{:?}", e.kind()),
+                })),
             )
             .await?;
             Ok(VerifyOutcome::Unreadable)
@@ -140,7 +138,7 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
                 pool,
                 audit::ArchiveAction::IntegrityFail,
                 archive_id,
-                Some(&format!(r#"{{"error":"{}"}}"#, escape(&msg))),
+                Some(serde_json::json!({ "error": &msg })),
             )
             .await?;
             Ok(VerifyOutcome::Tampered)
@@ -148,13 +146,56 @@ pub async fn verify_one(pool: &SqlitePool, archive_id: &str) -> Result<VerifyOut
     }
 }
 
+/// Gemeinsame Sperre für den Vollscan (Lauf F, D-07): Monats-Cron und „Jetzt
+/// prüfen“ laufen nie gleichzeitig. Der Cron wartet, der manuelle Lauf
+/// antwortet bei belegter Sperre „läuft bereits“ ([`try_scan_lock`]).
+pub static SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Fehltext, wenn schon ein Vollscan läuft.
+pub const SCAN_RUNNING: &str =
+    "Die Integritätsprüfung läuft bereits — das Ergebnis erscheint in der Historie.";
+
+/// Sperre für einen manuellen Vollscan oder Fehler „läuft bereits“.
+pub fn try_scan_lock() -> Result<tokio::sync::MutexGuard<'static, ()>> {
+    SCAN_LOCK
+        .try_lock()
+        .map_err(|_| Error::Domain(SCAN_RUNNING.into()))
+}
+
 /// Vollständiger Scan über alle `archive_entries`. Schreibt einen
 /// Eintrag in `archive_integrity_checks` mit aggregiertem Ergebnis.
+/// Aufrufer halten [`SCAN_LOCK`].
 pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
+    run_full_scan_at(pool, crate::clock::now_utc()).await
+}
+
+/// Wie [`run_full_scan`], Beginn (`started_at`) aus der injizierten Uhr des
+/// Aufrufers — dieselbe Zeitbasis, mit der der Monats-Cron „schon gelaufen“
+/// prüft (Lauf F, D-20).
+pub async fn run_full_scan_at(
+    pool: &SqlitePool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<IntegrityCheckSummary> {
+    static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    run_full_scan_until(pool, &NEVER, now)
+        .await?
+        .ok_or_else(|| Error::Domain("Integritätsprüfung abgebrochen".into()))
+}
+
+/// Wie [`run_full_scan_at`], prüft vor jeder Datei die Abbruch-Anforderung
+/// (`stop`, Herunterfahren/Sperren; W14-025b). `Ok(None)` = abgebrochen — der
+/// Kopf bleibt ohne `finished_at` und zählt nicht als Monatslauf.
+pub async fn run_full_scan_until(
+    pool: &SqlitePool,
+    stop: &std::sync::atomic::AtomicBool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<IntegrityCheckSummary>> {
     // Kopf in archive_integrity_checks anlegen
-    let check_id = sqlx::query("INSERT INTO archive_integrity_checks DEFAULT VALUES RETURNING id")
-        .fetch_one(pool)
-        .await?;
+    let check_id =
+        sqlx::query("INSERT INTO archive_integrity_checks (started_at) VALUES (?) RETURNING id")
+            .bind(crate::clock::to_db_utc(now))
+            .fetch_one(pool)
+            .await?;
     use sqlx::Row;
     let check_id: i64 = check_id.try_get("id")?;
 
@@ -170,6 +211,10 @@ pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
     let mut missing_ids: Vec<String> = Vec::new();
     let mut unreadable_ids: Vec<String> = Vec::new();
     for id in &ids {
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::info!("Integritätsprüfung auf Anforderung abgebrochen");
+            return Ok(None);
+        }
         match verify_one(pool, id).await? {
             VerifyOutcome::Pass => passed += 1,
             VerifyOutcome::Tampered => tampered_ids.push(id.clone()),
@@ -185,25 +230,37 @@ pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
     failed_ids.extend(missing_ids.iter().cloned());
     let files_failed = failed_ids.len() as i64;
 
-    let failed_json = serde_json::to_string(&failed_ids).unwrap_or_else(|_| "[]".into());
+    // W2-INTEGRITY-UNREADABLE (Migration 0032): „fehlt“ und „nicht lesbar“
+    // stehen mit in der Historie; die ID-Listen per serde_json.
+    let failed_json = serde_json::to_string(&failed_ids)?;
+    let missing_json = serde_json::to_string(&missing_ids)?;
+    let unreadable_json = serde_json::to_string(&unreadable_ids)?;
     sqlx::query(
         "UPDATE archive_integrity_checks
             SET finished_at = datetime('now','utc'),
                 files_checked = ?,
                 files_passed = ?,
                 files_failed = ?,
-                failed_archive_ids_json = ?
+                failed_archive_ids_json = ?,
+                files_missing = ?,
+                files_unreadable = ?,
+                missing_archive_ids_json = ?,
+                unreadable_archive_ids_json = ?
           WHERE id = ?",
     )
     .bind(ids.len() as i64)
     .bind(passed)
     .bind(files_failed)
     .bind(&failed_json)
+    .bind(missing_ids.len() as i64)
+    .bind(unreadable_ids.len() as i64)
+    .bind(&missing_json)
+    .bind(&unreadable_json)
     .bind(check_id)
     .execute(pool)
     .await?;
 
-    Ok(IntegrityCheckSummary {
+    Ok(Some(IntegrityCheckSummary {
         check_id,
         files_checked: ids.len() as i64,
         files_passed: passed,
@@ -213,11 +270,7 @@ pub async fn run_full_scan(pool: &SqlitePool) -> Result<IntegrityCheckSummary> {
         missing_archive_ids: missing_ids,
         files_unreadable: unreadable_ids.len() as i64,
         unreadable_archive_ids: unreadable_ids,
-    })
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    }))
 }
 
 #[cfg(test)]
@@ -272,7 +325,11 @@ mod tests {
                 files_checked INTEGER NOT NULL DEFAULT 0,
                 files_passed INTEGER NOT NULL DEFAULT 0,
                 files_failed INTEGER NOT NULL DEFAULT 0,
-                failed_archive_ids_json TEXT
+                failed_archive_ids_json TEXT,
+                files_missing INTEGER,
+                files_unreadable INTEGER,
+                missing_archive_ids_json TEXT,
+                unreadable_archive_ids_json TEXT
             ) STRICT",
         )
         .execute(&pool)
@@ -348,6 +405,17 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fails, 0);
+        // Migration 0032: „nicht lesbar“ steht in der Historie
+        let (unreadable, ids): (Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT files_unreadable, unreadable_archive_ids_json FROM archive_integrity_checks
+              ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(unreadable, Some(1));
+        let ids: Vec<String> = serde_json::from_str(&ids.unwrap()).unwrap();
+        assert_eq!(ids, vec![r.archive_id.clone()]);
 
         fs::set_permissions(&r.file_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
@@ -392,6 +460,76 @@ mod tests {
 
         unlock_for_test(Path::new(&r1.file_path)).unwrap();
         unlock_for_test(Path::new(&r2.file_path)).unwrap();
+    }
+
+    /// KB-0038: Eine reine Größenabweichung (Eintrag passt nicht zur Datei,
+    /// Inhalt sonst unverändert) zählt als Manipulation, mit Audit-Detail.
+    #[tokio::test]
+    async fn size_mismatch_alone_is_tampered() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let r = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0001.pdf",
+            "application/pdf",
+            b"intakt",
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE archive_entries SET file_size_bytes = file_size_bytes + 1 WHERE id = ?",
+        )
+        .bind(&r.archive_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            verify_one(&pool, &r.archive_id).await.unwrap(),
+            VerifyOutcome::Tampered
+        );
+        let detail: String = sqlx::query_scalar(
+            "SELECT details_json FROM audit_log WHERE action = 'archive.integrity_fail'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(detail.contains("size mismatch"), "{detail}");
+        unlock_for_test(Path::new(&r.file_path)).unwrap();
+    }
+
+    /// D-07: Abbruch-Anforderung vor der ersten Datei → `None`, der Kopf
+    /// bleibt ohne Abschluss (zählt nicht als Monatslauf).
+    #[tokio::test]
+    async fn stop_request_aborts_scan() {
+        let pool = fresh_pool().await;
+        let dir = TempDir::new().unwrap();
+        let r = store_bytes(
+            &pool,
+            dir.path(),
+            2026,
+            ArchiveKind::InvoicePdf,
+            "RE-2026-0001.pdf",
+            "application/pdf",
+            b"x",
+        )
+        .await
+        .unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        assert!(run_full_scan_until(&pool, &stop, chrono::Utc::now())
+            .await
+            .unwrap()
+            .is_none());
+        let open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM archive_integrity_checks WHERE finished_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1);
+        unlock_for_test(Path::new(&r.file_path)).unwrap();
     }
 
     /// G1-HARDEN.4: eine **fehlende** Archiv-Datei (verwaister Eintrag) wird
@@ -448,6 +586,19 @@ mod tests {
         .unwrap()
         .get("n");
         assert_eq!(cnt, 1);
+        // Migration 0032: „fehlt“ steht in der Historie
+        let (missing, ids, unreadable): (Option<i64>, Option<String>, Option<i64>) =
+            sqlx::query_as(
+                "SELECT files_missing, missing_archive_ids_json, files_unreadable
+                   FROM archive_integrity_checks ORDER BY id DESC LIMIT 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(missing, Some(1));
+        assert_eq!(unreadable, Some(0));
+        let ids: Vec<String> = serde_json::from_str(&ids.unwrap()).unwrap();
+        assert_eq!(ids, vec![r2.archive_id.clone()]);
 
         unlock_for_test(Path::new(&r1.file_path)).unwrap();
     }

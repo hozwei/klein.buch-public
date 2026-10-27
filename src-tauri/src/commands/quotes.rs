@@ -1,4 +1,4 @@
-//! Tauri-Commands für Angebote (Block 6).
+//! Commands für Angebote (Block 6).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::quote::validate_quote`])
@@ -37,8 +37,7 @@ use crate::archive::{self, ArchiveKind};
 use crate::backup;
 use crate::config::Paths;
 use crate::db::models::{
-    AttachmentView, ContactRow, InvoiceDetail, QuoteDetail, QuoteLegalDocumentView, QuoteListItem,
-    QuoteRow,
+    ContactRow, InvoiceDetail, QuoteDetail, QuoteLegalDocumentView, QuoteListItem, QuoteRow,
 };
 use crate::db::numbering;
 use crate::db::repo::audit_log;
@@ -152,23 +151,6 @@ pub async fn quotes_get(ctx: &Arc<AppCtx>, args: QuotesGetArgs) -> Result<Option
     quotes::get_detail(&pool, &id).await
 }
 
-/// Argumente von [`quotes_attachments_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QuotesAttachmentsListArgs {
-    pub quote_id: String,
-}
-
-pub async fn quotes_attachments_list(
-    ctx: &Arc<AppCtx>,
-    args: QuotesAttachmentsListArgs,
-) -> Result<Vec<AttachmentView>> {
-    let QuotesAttachmentsListArgs { quote_id } = args;
-    let pool = ctx.pool()?;
-
-    attachments::list_for_parent(&pool, "quote", &quote_id).await
-}
-
 // =============================================================================
 // Commands — Draft
 // =============================================================================
@@ -190,7 +172,7 @@ pub async fn quotes_create_draft(
     create_draft_core(&pool, args).await
 }
 
-/// Testbarer Kern von [`quotes_create_draft`] (ohne Tauri-State).
+/// Testbarer Kern von [`quotes_create_draft`] (ohne `AppCtx`).
 pub async fn create_draft_core(
     pool: &SqlitePool,
     mut args: CreateDraftArgs,
@@ -198,16 +180,16 @@ pub async fn create_draft_core(
     // P3: Positionen mit Markdown-Body → `description` aus dem Markup als Klartext
     // neu berechnen (konsistente Beschreibung, auch nach Body-Edits).
     recompute_markup_descriptions(&mut args.input.items);
+    // KB-0046 (F5-fix): bearbeitete Paket-Positionen verlieren die Provenienz
+    // auch am Angebot, nicht erst bei der Umwandlung in eine Rechnung.
+    crate::commands::packages::enforce_package_provenance(pool, &mut args.input.items).await?;
 
     let buyer_row = contacts::get(pool, &args.contact_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Empfänger nicht gefunden: {}", args.contact_id)))?;
-    let seller_row = seller_profile::get(pool).await?.ok_or_else(|| {
-        Error::Domain(
-            "Stammdaten (seller_profile) noch nicht gepflegt — bitte unter Einstellungen anlegen."
-                .into(),
-        )
-    })?;
+    let seller_row = seller_profile::get(pool)
+        .await?
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
 
     let seller_view = make_seller_view(&seller_row);
     let buyer_view = QuoteBuyerView {
@@ -233,7 +215,7 @@ pub async fn create_draft_core(
             .collect();
         if !blockers.is_empty() {
             return Err(Error::Domain(format!(
-                "Draft kann nicht angelegt werden: {}",
+                "Der Entwurf kann nicht gespeichert werden: {}",
                 blockers
                     .iter()
                     .map(quote::message)
@@ -291,12 +273,7 @@ pub async fn create_draft_core(
         "quote.draft_create",
         "quote",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"items":{}}}"#,
-            quote_number,
-            totals.gross_amount_cents,
-            args.input.items.len()
-        )),
+        Some(serde_json::json!({ "number": quote_number, "gross": totals.gross_amount_cents, "items": args.input.items.len() })),
     )
     .await?;
 
@@ -325,7 +302,7 @@ pub async fn quotes_validate_draft(
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen — kann nicht validieren".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .as_ref()
@@ -370,15 +347,29 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
     let pool = &pool;
     let paths = ctx.paths.clone();
 
+    // Lauf F3b: je Angebot nie parallel zu Zurückziehen, Umwandeln, Annahme
+    // oder Ablehnung — die Sperre vor dem Lesen des Status.
+    let _quote_guard = crate::locks::QUOTES.lock(&id).await;
     let detail = quotes::get_detail(pool, &id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
+    // Nur Entwürfe — vor dem Auffrischen des Empfänger-Snapshots prüfen, damit
+    // ein zurückgezogener (verworfener) Entwurf unverändert bleibt (W14-032).
+    if detail.quote.locked_at.is_some() || detail.quote.status != "draft" {
+        return Err(Error::Domain(format!(
+            "Angebot {} ist nicht im Entwurf (status={}) — Festschreiben nicht möglich",
+            detail.quote.quote_number, detail.quote.status
+        )));
+    }
     // GJ-Festschreibung (Block 15): kein Angebot mit Datum in einem
     // abgeschlossenen Geschäftsjahr festschreiben.
-    crate::fiscal_year::guard::ensure_year_open(pool, detail.quote.fiscal_year).await?;
+    let _fy = crate::fiscal_year::guard::ensure_year_open(pool, detail.quote.fiscal_year).await?;
+    // F1d: wiederhergestellter Entwurf mit vor dem Restore festgeschriebener
+    // Nummer erst nach Bestätigung.
+    crate::backup::after_restore::ensure_no_conflict(pool, "quote", &id).await?;
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .clone()
@@ -391,19 +382,30 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
 
     quote::validate_quote(&input, &seller_view, &buyer_view, today_berlin()).map_err(|errs| {
         Error::Domain(format!(
-            "Validation failed ({} Fehler): {}",
-            errs.len(),
-            errs.iter()
-                .take(5)
-                .map(quote::message)
-                .collect::<Vec<_>>()
-                .join("; ")
+            "Das Angebot kann nicht fertiggestellt werden: {}",
+            crate::commands::invoices::issue_reasons(&errs, quote::message)
         ))
     })?;
 
     // Block 19: Empfänger-Snapshot beim Festschreiben aus dem aktuellen
     // Live-Kontakt auffrischen (maßgeblicher Stand zur Festschreibung), bevor
     // gelockt wird. Danach rendert `ensure_quote_pdf` aus dem Snapshot.
+    // Lauf F3b: Kontakt frisch lesen, Status prüfen, Snapshot, Festschreiben
+    // und Audit in **einer** Schreib-Transaktion — ein inzwischen
+    // zurückgezogener Entwurf (und mit ihm anonymisierter Kontakt) bekommt
+    // die Personendaten nicht zurück.
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let buyer_row: ContactRow = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
+        .bind(&buyer_row.id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
+    if buyer_row.anonymized_at.is_some() {
+        return Err(Error::Domain(
+            "Der Empfänger ist anonymisiert — an ihn wird kein Angebot mehr festgeschrieben."
+                .into(),
+        ));
+    }
     let buyer_snapshot = BuyerSnapshot {
         name: buyer_row.name.as_str(),
         street: buyer_row.street.as_deref(),
@@ -413,21 +415,22 @@ pub async fn quotes_issue(ctx: &Arc<AppCtx>, args: QuotesIssueArgs) -> Result<Qu
         vat_id: buyer_row.vat_id.as_deref(),
         email: buyer_row.email.as_deref(),
     };
-    quotes::set_buyer_snapshot(pool, &id, &buyer_snapshot).await?;
-
-    quotes::issue(pool, &id).await?;
-
-    audit_log::append(
-        pool,
+    quotes::set_buyer_snapshot_in(&mut tx, &id, &buyer_snapshot).await?;
+    // KB-0010: §19-Status zum Festschreiben einfrieren (Render und Gate nutzen
+    // danach genau diesen Wert).
+    quotes::issue_in(&mut tx, &id, Some(seller_view.is_kleinunternehmer)).await?;
+    audit_log::append_in(
+        &mut tx,
         "quote.issue",
         "quote",
         &id,
-        Some(&format!(r#"{{"number":"{}"}}"#, detail.quote.quote_number)),
+        Some(serde_json::json!({ "number": detail.quote.quote_number })),
     )
     .await?;
+    tx.commit().await?;
 
     // Backup-Hardline: lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, &paths, session, "quote.issue")
+    backup::request_auto_backup(pool, &paths, session, "quote.issue", ctx.clock().now_utc())
         .await
         .ok();
 
@@ -452,6 +455,9 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
     let pool = &pool;
     let paths = ctx.paths.clone();
 
+    // Lauf F3b: je Angebot nie parallel zu Festschreiben, Zurückziehen,
+    // Umwandeln oder Ablehnen (Sperre vor dem Lesen des Status).
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
     let quote_row = quotes::get(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {}", args.quote_id)))?;
@@ -476,12 +482,18 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
             quote_row.status
         )));
     }
+    // R5-S2-QUOTEDATE: Annahmedatum zwischen Angebotsdatum und heute
+    // (Europe/Berlin, Uhr des Servers) — vor dem Archivieren eines Vertrags.
+    let today = ctx.clock().today_berlin();
+    let accepted_date = args.accepted_date.unwrap_or(today);
+    quote::validate_accepted_date(parse_date(&quote_row.quote_date)?, accepted_date, today)
+        .map_err(Error::Domain)?;
     if let Some(contract) = contract.as_ref() {
         // R2-024 (GJ-Guard): Beilagen werden mit `quote_row.fiscal_year` ins
         // write-once-Archiv abgelegt. Liegt das Angebot in einem festgeschrieben
         // GJ, würden wir nachträglich an dessen Archiv anhängen — also den
         // Lock-Snapshot rückwirkend erweitern. Vor dem Archiv-Schreiben blocken.
-        guard::ensure_year_open(pool, quote_row.fiscal_year).await?;
+        let _fy = guard::ensure_year_open(pool, quote_row.fiscal_year).await?;
 
         let original_name = sanitize_filename(&contract.file_name);
         // Eindeutiger Archiv-Dateiname (write-once, UNIQUE-Pfad): mit
@@ -519,18 +531,13 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
             "quote.attachment_added",
             "quote",
             &args.quote_id,
-            Some(&format!(
-                r#"{{"attachment":"{}","archive":"{}","file":"{}"}}"#,
-                attachment_id,
-                stored.archive_id,
-                escape(&file_name)
-            )),
+            Some(serde_json::json!({ "attachment": attachment_id, "archive": stored.archive_id, "file": &file_name })),
         )
         .await?;
     }
 
     // 2. Status-Übergang sent → accepted.
-    let accepted_iso = args.accepted_date.unwrap_or_else(today_berlin).to_string();
+    let accepted_iso = accepted_date.to_string();
     quotes::accept(pool, &args.quote_id, &accepted_iso).await?;
 
     audit_log::append(
@@ -538,12 +545,7 @@ pub async fn quotes_accept(ctx: &Arc<AppCtx>, args: QuotesAcceptArgs) -> Result<
         "quote.accepted",
         "quote",
         &args.quote_id,
-        Some(&format!(
-            r#"{{"number":"{}","accepted_at":"{}","with_contract":{}}}"#,
-            quote_row.quote_number,
-            accepted_iso,
-            contract.is_some()
-        )),
+        Some(serde_json::json!({ "number": quote_row.quote_number, "accepted_at": accepted_iso, "with_contract": contract.is_some() })),
     )
     .await?;
     if let Some(id) = upload_id {
@@ -567,16 +569,15 @@ pub async fn quotes_reject(ctx: &Arc<AppCtx>, args: QuotesRejectArgs) -> Result<
     let pool = ctx.pool()?;
 
     let pool = &pool;
+    // Lauf F3b: je Angebot nie parallel zu den übrigen Statuswechseln.
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
     quotes::reject(pool, &args.quote_id).await?;
     audit_log::append(
         pool,
         "quote.rejected",
         "quote",
         &args.quote_id,
-        Some(&format!(
-            r#"{{"reason":"{}"}}"#,
-            escape(args.reason.as_deref().unwrap_or(""))
-        )),
+        Some(serde_json::json!({ "reason": args.reason.as_deref().unwrap_or("") })),
     )
     .await?;
     quotes::get(pool, &args.quote_id)
@@ -591,20 +592,66 @@ pub struct QuotesCancelArgs {
     pub args: CancelArgs,
 }
 
+/// Mindestlänge des Grundes beim Zurückziehen (Lauf F2c) — wie beim Verwerfen
+/// eines Rechnungs-Entwurfs: Zurückziehen ist endgültig und verwirft einen
+/// Angebots-Entwurf (W14-032), der Grund dokumentiert die verbrauchte Nummer.
+const CANCEL_REASON_MIN_CHARS: usize = 10;
+
+/// Zieht ein Angebot zurück (endgültig, kein Löschen). Grund Pflicht
+/// (mindestens 10 Zeichen); Statuswechsel, Audit `quote.cancel` und das
+/// Erledigen einer Restore-Vormerkung laufen in **einer** Transaktion und je
+/// Angebot nie parallel zur Umwandlung in eine Rechnung (Lauf F2c).
 pub async fn quotes_cancel(ctx: &Arc<AppCtx>, args: QuotesCancelArgs) -> Result<QuoteRow> {
     let QuotesCancelArgs { args } = args;
     let pool = ctx.pool()?;
 
     let pool = &pool;
-    quotes::cancel(pool, &args.quote_id, &args.reason).await?;
-    audit_log::append(
-        pool,
+    let reason: String = args
+        .reason
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(500)
+        .collect();
+    if reason.chars().count() < CANCEL_REASON_MIN_CHARS {
+        return Err(Error::BadRequest(
+            "Bitte einen Grund angeben (mindestens 10 Zeichen) — er steht am Angebot und im \
+             Audit-Log."
+                .into(),
+        ));
+    }
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let number = quotes::cancel_in(&mut tx, &args.quote_id, &reason).await?;
+    let locked: Option<String> = sqlx::query_scalar("SELECT locked_at FROM quotes WHERE id = ?")
+        .bind(&args.quote_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    // Ein zurückgezogener Entwurf ist verworfen (W14-032) und wird nie
+    // festgeschrieben — eine Restore-Vormerkung (F1d) ist damit erledigt.
+    if locked.is_none() {
+        sqlx::query("DELETE FROM app_settings WHERE key = ?")
+            .bind(format!(
+                "{}quote:{}",
+                crate::backup::after_restore::CONFLICT_PREFIX,
+                args.quote_id
+            ))
+            .execute(&mut *tx)
+            .await?;
+    }
+    audit_log::append_in(
+        &mut tx,
         "quote.cancel",
         "quote",
         &args.quote_id,
-        Some(&format!(r#"{{"reason":"{}"}}"#, escape(&args.reason))),
+        Some(serde_json::json!({
+            "number": number,
+            "reason": reason,
+            "draft": locked.is_none(),
+        })),
     )
     .await?;
+    tx.commit().await?;
     quotes::get(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain("cancel: post-UPDATE SELECT leer".into()))
@@ -628,10 +675,11 @@ pub struct QuotesConvertToInvoiceArgs {
 /// (inkl. eines bereits konvertierten Angebots) werden abgelehnt.
 ///
 /// Ablauf: Positionen übernehmen (oder im Frontend angepasst) →
-/// [`quote::convert_to_invoice`] (pure) → gemeinsamer Draft-Helper
-/// [`crate::commands::invoices::create_invoice_draft_from_input`] (setzt
-/// `derived_from_quote_id` + Audit `invoice.draft_create`) → Angebot auf
-/// `converted` setzen ([`quotes::mark_converted`]) → Audit `quote.converted`.
+/// [`quote::convert_to_invoice`] (pure) → Entwurf vorbereiten
+/// ([`crate::commands::invoices::prepare_invoice_draft`]) → in **einer**
+/// Transaktion (Lauf F8): Entwurf mit `derived_from_quote_id` + Audit
+/// `invoice.draft_create`, Angebot auf `converted` ([`quotes::mark_converted_in`])
+/// und Audit `quote.converted`.
 ///
 /// Die erzeugte Rechnung ist ein normaler Draft und wird über die übliche
 /// Invoice-Pipeline (`invoices_lock_and_issue`) festgeschrieben — inkl.
@@ -647,6 +695,10 @@ pub async fn quotes_convert_to_invoice(
 
     let pool = &pool;
 
+    // Lauf F2c: nie parallel zum Zurückziehen desselben Angebots — sonst entstünde
+    // ein Entwurf zu einem zurückgezogenen Angebot (Status wird unter der Sperre
+    // geprüft; `mark_converted` und `trg_quotes_converted_final` sichern in der DB).
+    let _quote_guard = crate::locks::QUOTES.lock(&args.quote_id).await;
     let detail = quotes::get_detail(pool, &args.quote_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {}", args.quote_id)))?;
@@ -697,31 +749,36 @@ pub async fn quotes_convert_to_invoice(
     // GJ leitet create_invoice_draft_from_input aus dem Rechnungsdatum ab (W1.2).
 
     // Gemeinsamer Draft-Helper: Snapshots, Belegnummer, derived_from_quote_id,
-    // Audit invoice.draft_create.
-    let invoice_detail = crate::commands::invoices::create_invoice_draft_from_input(
+    // Audit invoice.draft_create. Lauf F8: Entwurf, Abschluss des Angebots
+    // (accepted → converted) und Audit in **einer** Transaktion — ein Abbruch
+    // dazwischen lässt kein Angebot auf „angenommen“ mit fertigem Entwurf
+    // zurück, eine zweite Umwandlung scheitert an der Status-Bedingung.
+    let prepared = crate::commands::invoices::prepare_invoice_draft(
         pool,
         &quote.contact_id,
         &input,
         Some(&quote.id),
+        ctx.clock().today_berlin(),
     )
     .await?;
-
-    // Angebot abschließen: accepted → converted (Guard im Repo).
-    quotes::mark_converted(pool, &quote.id, &invoice_detail.invoice.id).await?;
-
-    audit_log::append(
-        pool,
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let (invoice_id, invoice_number) =
+        crate::commands::invoices::insert_prepared_draft(&mut tx, &prepared).await?;
+    quotes::mark_converted_in(&mut tx, &quote.id, &invoice_id).await?;
+    audit_log::append_in(
+        &mut tx,
         "quote.converted",
         "quote",
         &quote.id,
-        Some(&format!(
-            r#"{{"quote_number":"{}","invoice":"{}","invoice_number":"{}"}}"#,
-            quote.quote_number, invoice_detail.invoice.id, invoice_detail.invoice.invoice_number
-        )),
+        Some(serde_json::json!({ "quote_number": quote.quote_number, "invoice": &invoice_id, "invoice_number": &invoice_number })),
     )
     .await?;
+    tx.commit().await?;
+    drop(prepared);
 
-    Ok(invoice_detail)
+    crate::db::repo::invoices::get_detail(pool, &invoice_id)
+        .await?
+        .ok_or_else(|| Error::Domain("Umwandlung: Entwurf nicht gefunden".into()))
 }
 
 // =============================================================================
@@ -759,12 +816,17 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
 
     let seller_row = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let buyer_row = detail
         .buyer
         .clone()
         .ok_or_else(|| Error::Domain("Empfänger-Kontakt fehlt".into()))?;
-    let seller_view = make_seller_view(&seller_row);
+    let mut seller_view = make_seller_view(&seller_row);
+    // KB-0009/KB-0010: Gerendert wird mit dem beim Festschreiben eingefrorenen
+    // §19-Status des Angebots, nicht mit dem heutigen Profil — und genau dieser
+    // Status steuert auch den Klausel-Check unten (Hardline „verifiziert vor
+    // jedem Render“).
+    seller_view.is_kleinunternehmer = quote.is_kleinunternehmer == 1;
     // Block 19: festgeschriebenes Angebot → Empfänger aus dem eingefrorenen
     // Snapshot rendern (robust gegen spätere DSGVO-Anonymisierung des Kontakts);
     // Fallback auf den Live-Kontakt nur für Alt-Angebote ohne Snapshot.
@@ -805,7 +867,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         quote.pdf_template.as_str()
     };
     let source = templates::resolve_quote_template(&paths.inputs_dir, template_name);
-    if quote.is_kleinunternehmer == 1 {
+    if seller_view.is_kleinunternehmer {
         klausel_check::verify_for_kleinunternehmer(&source)
             .map_err(|e| Error::Domain(format!("§19-Klausel-Check: {e}")))?;
     }
@@ -896,11 +958,7 @@ pub async fn ensure_quote_pdf(pool: &SqlitePool, paths: &Paths, quote_id: &str) 
         "quote.pdf_generated",
         "quote",
         quote_id,
-        Some(&format!(
-            r#"{{"number":"{}","pdf":"{}"}}"#,
-            escape(&quote.quote_number),
-            stored.archive_id
-        )),
+        Some(serde_json::json!({ "number": &quote.quote_number, "pdf": stored.archive_id })),
     )
     .await?;
 
@@ -920,8 +978,8 @@ pub async fn bind_legal_docs_for_quote(
         let privacy = legal_documents::get_active(pool, "privacy").await?;
         if agb.is_none() || privacy.is_none() {
             return Err(Error::Domain(
-                "Für Versand/Bundle müssen aktive AGB UND Datenschutz hinterlegt sein \
-                 (Einstellungen → Rechtsdokumente)."
+                "Für das Senden und das Druck-PDF mit AGB müssen AGB und Datenschutzerklärung \
+                 hinterlegt sein (Einstellungen → „AGB & Datenschutz“)."
                     .into(),
             ));
         }
@@ -971,8 +1029,8 @@ pub struct QuotesGeneratePdfArgs {
 }
 
 /// Erzeugt (falls nötig) das Angebots-PDF und liefert das aktualisierte Angebot
-/// (mit `pdfArchiveId`). Das Frontend öffnet das PDF danach via
-/// `attachments_open(pdfArchiveId)`.
+/// (mit `pdfArchiveId`). Das Frontend lädt das PDF danach über
+/// `GET /files/archive/{pdfArchiveId}`.
 pub async fn quotes_generate_pdf(
     ctx: &Arc<AppCtx>,
     args: QuotesGeneratePdfArgs,
@@ -1032,7 +1090,7 @@ pub async fn quotes_open_bundle(
         "quote.bundle_opened",
         "quote",
         &id,
-        Some(&format!(r#"{{"parts":{part_count}}}"#)),
+        Some(serde_json::json!({ "parts": part_count })),
     )
     .await?;
     Ok(ticket)
@@ -1166,7 +1224,7 @@ fn detail_to_input(detail: &QuoteDetail) -> Result<QuoteInput> {
 }
 
 fn parse_date(s: &str) -> Result<NaiveDate> {
-    let s = &s[..s.len().min(10)];
+    let s = s.get(..10).unwrap_or(s);
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|e| Error::Domain(format!("ungültiges Datum '{s}': {e}")))
 }
@@ -1192,10 +1250,6 @@ fn sanitize_filename(name: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

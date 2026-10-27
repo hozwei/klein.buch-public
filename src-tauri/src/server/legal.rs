@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -75,17 +76,24 @@ fn legal_dir(st: &ServerState) -> PathBuf {
 
 async fn serve(dir: &Path, name: &str) -> Option<Response> {
     let (path, content_type) = resolve(dir, name)?;
-    let bytes = match tokio::fs::read(&path).await {
-        Ok(b) => b,
+    // Lauf F4b (W12-LEGAL-TIMEOUTS): gestreamt statt je Anfrage komplett in den
+    // Speicher gelesen (die Lizenzseite ist einige MB groß); langsame Leser
+    // begrenzt der Schreib-Leerlauf-Timeout der Verbindung (`http`).
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
         Err(e) => {
             tracing::warn!("/legal/{name} nicht lesbar: {e}");
             return None;
         }
     };
-    let mut response = bytes.into_response();
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    let length = file.metadata().await.ok().map(|m| m.len());
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let mut response = body.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    if let Some(len) = length {
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    }
     response.extensions_mut().insert(ResponseClass::Legal);
     Some(response)
 }

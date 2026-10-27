@@ -12,7 +12,7 @@
   //             Resource-Index geprüft (siehe docs/architecture/handbook.md).
   //   heading — Optional. Tiefer Sprung auf einen H2/H3-Anker innerhalb
   //             der Seite. Wird über denselben Slugifier (`slugifyHeading`)
-  //             gejagt wie der Markdown-Renderer in `$lib/handbook/render`,
+  //             gejagt wie der Markdown-Renderer in `#lib/handbook/render.ts`,
   //             damit der Hash identisch zur Heading-ID ist.
   //   label   — Optional. Überschreibt den Tooltip-Text. Ohne Override
   //             wird der Handbuch-Titel aus dem Index gezogen, mit Fallback
@@ -27,8 +27,8 @@
   //   keine Overlay-Hilfe.
 
   import { goto } from "$app/navigation";
-  import { getEntry } from "$lib/handbook";
-  import { slugifyHeading } from "$lib/handbook/render";
+  import { getEntry } from "#lib/handbook/index.ts";
+  import { slugifyHeading } from "#lib/handbook/render.ts";
 
   let {
     slug,
@@ -81,31 +81,40 @@
 </button>
 
 <style>
+  /* Sichtbar 22 px (Fragezeichen-Konvention), Trefferfläche über
+     Innenabstand mindestens --target; negativer Rand gleicht das
+     vertikal aus, damit Überschriften nicht springen. */
   .help-anchor {
+    --ha-pad: max(0px, calc((var(--target) - 22px) / 2));
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    /* U1: in Flex-Zeilen (z. B. §19-Kopf) nicht unter --target schrumpfen. */
+    flex-shrink: 0;
+    box-sizing: content-box;
     width: 22px;
     height: 22px;
-    padding: 0;
-    margin-left: 6px;
+    padding: var(--ha-pad);
+    margin: calc(var(--ha-pad) * -1) 0 calc(var(--ha-pad) * -1) max(0px, calc(6px - var(--ha-pad)));
     border: 0;
     background: transparent;
-    color: var(--c-primary-600);
+    color: var(--accent);
     border-radius: var(--r-pill);
     cursor: pointer;
     line-height: 0;
     vertical-align: middle;
     transition:
-      background 0.12s,
-      color 0.12s;
+      background var(--t-fast),
+      color var(--t-fast);
   }
-  .help-anchor:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
+  @media (hover: hover) {
+    .help-anchor:hover {
+      background: var(--surface-hover);
+      color: var(--accent-hover);
+    }
   }
   .help-anchor:focus-visible {
-    outline: 2px solid var(--c-primary-500);
-    outline-offset: 2px;
+    outline: var(--focus-width) solid var(--focus-ring);
+    outline-offset: var(--focus-offset);
   }
 </style>

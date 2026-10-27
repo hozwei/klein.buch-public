@@ -27,7 +27,7 @@ festen Pfaden ab `/` aufeinander (etwa `/api/…` oder `/help/…`), und die
 Anmelde-Cookies gelten für die ganze Adresse. Ein Unterpfad wie
 `https://example.org/buchhaltung` funktioniert deshalb nicht. Eine
 Adresse mit Pfad, Abfrage-Teil oder Benutzername lehnt Klein.Buch schon
-beim Start ab. Nimm eine eigene Subdomain, also einen Namen vor Deiner
+beim Containerstart ab. Nimm eine eigene Subdomain, also einen Namen vor Deiner
 Domain wie `buch.` in `buch.example.org`. Ein anderer Port als 443 ist
 erlaubt (`https://buch.example.org:8443`), dann muss der Proxy auf
 diesem Port lauschen.
@@ -85,7 +85,7 @@ der ersten Anmeldung ein Gerätecookie hat. Auch fail2ban (siehe Kapitel
 
 Trag nie `0.0.0.0/0` oder `::/0` ein. Dann vertraut Klein.Buch jedem,
 und die Regeln für HTTPS und Fehlversuche lassen sich umgehen.
-Klein.Buch warnt in diesem Fall beim Start im Log.
+Klein.Buch warnt in diesem Fall beim Containerstart im Log.
 
 ## Was der Proxy tun muss
 
@@ -107,7 +107,21 @@ Klein.Buch warnt in diesem Fall beim Start im Log.
    oder `X-Frame-Options` hinzufügen. Klein.Buch setzt sie selbst,
    auch HSTS (die Anweisung an den Browser, die Adresse ein Jahr lang
    nur über HTTPS aufzurufen), sobald eine Anfrage über einen vertrauten
-   Proxy mit HTTPS kommt.
+   Proxy mit HTTPS kommt. Klein.Buch setzt HSTS bewusst ohne
+   `includeSubDomains`, weil es die übrigen Namen Deiner Domain nicht
+   kennt. Sollen alle Subdomains nur noch über HTTPS erreichbar sein,
+   setzt Du HSTS mit `includeSubDomains` (und bei Bedarf `preload`) für
+   die Hauptdomain an Deinem Proxy oder Webserver.
+7. Die Kopfzeilen `Content-Encoding` und `Vary` unverändert
+   durchreichen. Klein.Buch liefert die Dateien der Oberfläche schon
+   komprimiert aus (seit 2026.11); der Proxy komprimiert sie nicht ein
+   zweites Mal. Für `/api/` und `/files/` schaltest Du am Proxy keine
+   Kompression ein: Klein.Buch liefert sie absichtlich unkomprimiert,
+   weil Antworten mit Sitzungsdaten sonst angreifbar würden (BREACH)
+   und Belege bitgenau ankommen sollen. Caddy komprimiert nur mit der
+   Anweisung `encode` (im Beispiel unten nicht gesetzt), nginx nur mit
+   `gzip on` (in vielen Grundkonfigurationen gesetzt) und nur für die
+   Typen in `gzip_types`; nimm dort kein `application/json` auf.
 
 Bei den Zeitlimits musst Du meist nichts ändern. Klein.Buch beantwortet
 jede Anfrage innerhalb von 30 Sekunden; längere Arbeiten laufen im
@@ -171,8 +185,9 @@ nur über HTTPS (Reverse-Proxy) oder lokal möglich." bedeutet, dass
 der Proxy `X-Forwarded-Proto` nicht setzt. Eine Überwachung von außen
 kann `https://buch.example.org/healthz` abfragen: Die Adresse antwortet
 ohne Anmeldung mit Status 200, solange Klein.Buch läuft, und verrät
-sonst nichts.
+sonst nichts — auch dann nicht, wenn der Proxy auf demselben Rechner
+läuft.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

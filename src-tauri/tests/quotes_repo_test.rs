@@ -46,7 +46,7 @@ async fn mk_contact(pool: &SqlitePool, name: &str) -> String {
         postal_code: "80331".into(),
         city: "München".into(),
         country_code: "DE".into(),
-        email: Some("info@kunde.de".into()),
+        email: Some("info@kunde.example.org".into()),
         phone: None,
         iban: None,
         bic: None,
@@ -58,7 +58,7 @@ async fn mk_contact(pool: &SqlitePool, name: &str) -> String {
 
 fn seller<'a>() -> SellerSnapshot<'a> {
     SellerSnapshot {
-        name: "Wildbach Computerhilfe",
+        name: "Beispiel IT-Service",
         street: "Beispielweg 1",
         postal_code: "84028",
         city: "Landshut",
@@ -98,7 +98,7 @@ fn buyer<'a>() -> BuyerSnapshot<'a> {
         city: Some("München"),
         country_code: "DE",
         vat_id: Some("DE123456789"),
-        email: Some("info@kunde.de"),
+        email: Some("info@kunde.example.org"),
     }
 }
 
@@ -159,7 +159,7 @@ async fn mk_invoice_draft(
         city: Some("München"),
         country_code: "DE",
         vat_id: Some("DE123456789"),
-        email: Some("info@kunde.de"),
+        email: Some("info@kunde.example.org"),
     };
     let payload = invoices::DraftCreatePayload {
         contact_id: contact_id.to_string(),
@@ -472,7 +472,7 @@ async fn buyer_snapshot_persisted_refreshed_and_survives_anonymization() {
         city: Some("Landshut"),
         country_code: "DE",
         vat_id: Some("DE123456789"),
-        email: Some("info@kunde.de"),
+        email: Some("info@kunde.example.org"),
     };
     quotes::set_buyer_snapshot(&pool, &id, &refreshed)
         .await

@@ -67,6 +67,44 @@ pub fn connect_failed(host: &str, port: u16, detail: &dyn std::fmt::Display) -> 
     ))
 }
 
+/// Prüft einen SMTP- bzw. SFTP-Host (W14-017, Lauf F4c): ein Hostname
+/// (Labels aus Buchstaben, Ziffern, `-` und `_`, je höchstens 63 Zeichen, nicht
+/// mit `-` am Rand, optional ein Punkt am Ende) oder eine IPv4-/IPv6-Adresse
+/// ohne Klammern. Leerzeichen, Steuerzeichen und alle anderen Zeichen werden
+/// abgelehnt — so kann ein Host weder Log-Zeilen fälschen noch eine URL oder
+/// einen Port einschleusen. Die Meldung wiederholt den Wert bewusst nicht.
+pub fn check_host(host: &str) -> Result<()> {
+    if is_valid_host(host) {
+        Ok(())
+    } else {
+        Err(Error::Domain(
+            "Ungültiger Server-Name — erlaubt sind ein Hostname (Buchstaben, Ziffern, Punkt, \
+             Bindestrich) oder eine IP-Adresse, ohne Leerzeichen, Port oder Protokoll."
+                .into(),
+        ))
+    }
+}
+
+fn is_valid_host(host: &str) -> bool {
+    if host.is_empty() || host.len() > 253 {
+        return false;
+    }
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let name = host.strip_suffix('.').unwrap_or(host);
+    !name.is_empty()
+        && name.split('.').all(|label| {
+            let chars = label.chars().count();
+            (1..=63).contains(&chars)
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        })
+}
+
 /// Kontingent und Probe-Speicher (im `AppCtx`).
 #[derive(Default)]
 pub struct NetTests {
@@ -176,5 +214,47 @@ mod tests {
             Some("SHA256:x")
         );
         assert_eq!(t.probed_fingerprint("backup.example.org", 2222), None);
+    }
+
+    /// W14-017: nur Hostnamen und IP-Adressen; nichts, was eine Log-Zeile
+    /// fälschen oder eine URL/einen Port einschleusen könnte.
+    #[test]
+    fn host_validation() {
+        for ok in [
+            "smtp.example.org",
+            "smtp.example.org.",
+            "mail-1.example.org",
+            "backup_nas",
+            "localhost",
+            "mail.bücher.example",
+            "192.0.2.10",
+            "2001:db8::25",
+            "::1",
+        ] {
+            assert!(check_host(ok).is_ok(), "{ok}");
+        }
+        let long_label = format!("{}.example.org", "a".repeat(64));
+        let too_long = format!("{}.org", "a.".repeat(130));
+        for bad in [
+            "",
+            ".",
+            " smtp.example.org",
+            "smtp.example.org x",
+            "smtp.example.org\nauth.login.failed ip=192.0.2.1 reason=totp",
+            "smtp.example.org\r",
+            "smtp\u{1b}[31m.example.org",
+            "smtp.example.org:587",
+            "smtp://smtp.example.org",
+            "user@smtp.example.org",
+            "smtp..example.org",
+            "-smtp.example.org",
+            "smtp-.example.org",
+            "[2001:db8::25]",
+            "smtp.example.org/pfad",
+            long_label.as_str(),
+            too_long.as_str(),
+        ] {
+            assert!(check_host(bad).is_err(), "{bad:?}");
+        }
     }
 }

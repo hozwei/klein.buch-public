@@ -2,11 +2,12 @@
 //! Belegdatum aus der Uhr in Europe/Berlin.
 //!
 //! - Feste Uhr 2026-12-31T23:30:00Z → heute in Berlin 2027-01-01 → GJ 2027,
-//!   Belegnummer aus dem Kreis 2027.
+//!   Belegnummer aus dem Kreis 2027 (injizierte [`FixedClock`], Lauf F D-20).
 //! - Je Create-Command (Rechnung, Angebot, Kosten, Kosten aus E-Rechnung,
 //!   Privatbewegung): ein vom Client mitgeschicktes `fiscalYear` wird ignoriert
 //!   (das Feld gibt es seit W9 nicht mehr), GJ und Nummer kommen aus dem
-//!   Belegdatum.
+//!   Belegdatum. Kosten und Privatbewegungen nehmen dafür ein Datum vor heute
+//!   (die Prüfung „nicht in der Zukunft“ läuft gegen die Systemuhr).
 //!
 //! Args werden wie vom Frontend als camelCase-JSON gebaut.
 
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use klein_buch_lib::backup::BackupSession;
-use klein_buch_lib::clock;
+use klein_buch_lib::clock::{Clock, FixedClock};
 use klein_buch_lib::commands::{expenses, invoices, private_movements, quotes};
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::db::repo::{contacts, seller_profile};
@@ -121,8 +122,8 @@ async fn setup() -> Env {
     }
 }
 
-fn silvester_late_evening_utc() -> clock::FixedClockGuard {
-    clock::fix_now_for_tests(Utc.with_ymd_and_hms(2026, 12, 31, 23, 30, 0).unwrap())
+fn silvester_late_evening_utc() -> FixedClock {
+    FixedClock::at(Utc.with_ymd_and_hms(2026, 12, 31, 23, 30, 0).unwrap())
 }
 
 fn invoice_args(
@@ -162,13 +163,13 @@ fn invoice_args(
 #[tokio::test]
 async fn invoice_date_and_fiscal_year_follow_berlin_clock() {
     let env = setup().await;
-    let _clock = silvester_late_evening_utc();
-    let today = clock::today_berlin();
+    let clock = silvester_late_evening_utc();
+    let today = clock.today_berlin();
     assert_eq!(today.to_string(), "2027-01-01");
 
     let args = invoice_args(&env.contact_id, &today.to_string(), None);
     let detail =
-        invoices::create_invoice_draft_from_input(&env.pool, &args.contact_id, &args.input, None)
+        invoices::create_invoice_draft_on(&env.pool, &args.contact_id, &args.input, None, today)
             .await
             .unwrap();
     assert_eq!(detail.invoice.fiscal_year, 2027);
@@ -242,29 +243,33 @@ fn expense_input(date: &str) -> serde_json::Value {
 #[tokio::test]
 async fn expense_fiscal_year_from_expense_date() {
     let env = setup().await;
-    let _clock = silvester_late_evening_utc();
     let args = |fy: Option<i64>| -> expenses::ExpenseCreateArgs {
         serde_json::from_value(json!({
-            "input": expense_input("2027-01-01"),
+            "input": expense_input("2026-01-01"),
             "fiscalYear": fy,
             "receiptUploadId": null
         }))
         .unwrap()
     };
-    let detail = expenses::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
-        .await
-        .unwrap();
-    assert_eq!(detail.expense.fiscal_year, 2027);
-    assert_eq!(detail.expense.expense_number, "KO-2027-0001");
+    let detail = expenses::create_core(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(detail.expense.fiscal_year, 2026);
+    assert_eq!(detail.expense.expense_number, "KO-2026-0001");
 }
 
 #[tokio::test]
 async fn expense_from_einvoice_fiscal_year_from_expense_date() {
     let env = setup().await;
-    let _clock = silvester_late_evening_utc();
     let args = |fy: Option<i64>| -> expenses::EInvoiceCreateArgs {
         let mut a: expenses::EInvoiceCreateArgs = serde_json::from_value(json!({
-            "input": expense_input("2027-01-01"),
+            "input": expense_input("2026-01-01"),
             "fiscalYear": fy,
             "uploadId": "",
             "sourceFormat": "xrechnung-ubl",
@@ -281,22 +286,26 @@ async fn expense_from_einvoice_fiscal_year_from_expense_date() {
         );
         a
     };
-    let detail =
-        expenses::create_from_einvoice_with(&env.pool, &env.paths, &env.session, args(Some(2026)))
-            .await
-            .unwrap();
-    assert_eq!(detail.expense.fiscal_year, 2027);
-    assert_eq!(detail.expense.expense_number, "KO-2027-0001");
+    let detail = expenses::create_from_einvoice_with(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(detail.expense.fiscal_year, 2026);
+    assert_eq!(detail.expense.expense_number, "KO-2026-0001");
 }
 
 #[tokio::test]
 async fn private_movement_fiscal_year_from_movement_date() {
     let env = setup().await;
-    let _clock = silvester_late_evening_utc();
     let args = |fy: Option<i64>| -> private_movements::PrivateMovementCreateArgs {
         serde_json::from_value(json!({
             "input": {
-                "movementDate": "2027-01-01",
+                "movementDate": "2026-01-01",
                 "movementType": "einlage",
                 "amountCents": 5000,
                 "accountId": null,
@@ -308,9 +317,15 @@ async fn private_movement_fiscal_year_from_movement_date() {
         }))
         .unwrap()
     };
-    let row = private_movements::create_core(&env.pool, &env.paths, &env.session, args(Some(2026)))
-        .await
-        .unwrap();
-    assert_eq!(row.fiscal_year, 2027);
-    assert_eq!(row.movement_number, "PV-2027-0001");
+    let row = private_movements::create_core(
+        &env.pool,
+        &env.paths,
+        &env.session,
+        args(Some(2025)),
+        klein_buch_lib::clock::now_utc(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(row.fiscal_year, 2026);
+    assert_eq!(row.movement_number, "PV-2026-0001");
 }

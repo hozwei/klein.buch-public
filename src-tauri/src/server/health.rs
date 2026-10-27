@@ -1,6 +1,7 @@
 //! `GET /healthz` und Subcommand `healthcheck` (Plan W5.10).
 //!
-//! Nach außen nur 200/503 ohne Körper; über Loopback (und damit über den
+//! Nach außen nur 200/503 ohne Körper; über Loopback ohne Weiterleitungs-Header
+//! (W14-006: nicht über einen Reverse-Proxy auf demselben Host; und damit über den
 //! Subcommand, Docker-`HEALTHCHECK`) mit `{"state":"setup|locked|unlocked"}`.
 //! `locked` gilt als gesund — sonst entstünde nach jedem Neustart eine
 //! Neustartschleife, weil erst der Browser entsperrt (E3). 503 nur, solange
@@ -11,13 +12,14 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{ConnectInfo, Request, State};
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use super::config::{healthcheck_addr, listen_from_env_with};
+use super::policy::ClientInfo;
 use super::state::ServerState;
 
 pub async fn healthz(State(st): State<Arc<ServerState>>, req: Request) -> Response {
@@ -26,19 +28,24 @@ pub async fn healthz(State(st): State<Arc<ServerState>>, req: Request) -> Respon
     } else {
         StatusCode::OK
     };
+    // W14-006 (Lauf F4b): „lokal“ nur laut Policy-Middleware — Loopback-
+    // Gegenstelle ohne Weiterleitungs-Header. Ein Reverse-Proxy auf demselben
+    // Host (Gegenstelle 127.0.0.1 mit X-Forwarded-*) bekommt nur den Status.
     let loopback = req
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .is_some_and(|c| c.0.ip().to_canonical().is_loopback());
+        .get::<ClientInfo>()
+        .is_some_and(|c| c.loopback);
     if loopback {
-        // Plan W7: Off-Site-Status (missing | failing | ok), nur entsperrt
-        // lesbar (sonst null).
+        // Plan W7: Off-Site-Status (missing | failing | stale | ok; `stale`
+        // seit Lauf F3a), nur entsperrt lesbar (sonst null).
         let offsite = match st.ctx.pool() {
-            Ok(pool) => {
-                crate::backup::target::offsite_status(&pool, &st.ctx.paths.backup_targets_dir)
-                    .await
-                    .ok()
-            }
+            Ok(pool) => crate::backup::target::offsite_status(
+                &pool,
+                &st.ctx.paths.backup_targets_dir,
+                st.ctx.clock().now_utc(),
+            )
+            .await
+            .ok(),
             Err(_) => None,
         };
         (

@@ -3,7 +3,7 @@ slug: volumes-und-rechte
 title: Volumes und Rechte
 category: betrieb
 order: 30
-keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, seed-manifest, neu, snapshot, data]
+keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, seed-manifest, neu, snapshot, data, browser, datev]
 ---
 
 # Volumes und Rechte
@@ -11,7 +11,7 @@ keywords: [volume, volumes, rechte, uid, chown, dateisystem, nfs, smb, inputs, s
 Ein Volume ist ein Ordner auf Deinem Server, den Docker in den Container
 einblendet. Klein.Buch speichert nichts Dauerhaftes im Container selbst:
 Alles, was bleiben soll, liegt in Volumes. Ein Container lässt sich
-jederzeit wegwerfen und neu anlegen, die Volumes nicht. Fehlt beim Start
+jederzeit wegwerfen und neu anlegen, die Volumes nicht. Fehlt beim Containerstart
 ein Volume, bricht Klein.Buch ab, statt Daten an einer Stelle zu
 schreiben, die mit dem Container verschwinden würde.
 
@@ -42,6 +42,13 @@ eingebunden ist, gibt es nicht.
 `/data` und `/inputs` müssen zwei getrennte Volumes sein, und keiner der
 beiden Ordner auf dem Server darf im anderen liegen. Klein.Buch prüft beim
 Start, dass beide wirklich eingebunden sind.
+
+Drei Einstellungen liegen nicht auf dem Server, sondern im Browser: den
+Kontenrahmen sowie die Berater- und Mandantennummer für den
+DATEV-Export merkt sich jeder Browser selbst. Sie stehen deshalb in
+keinem Backup. In einem anderen Browser, auf einem anderen Gerät oder
+nach einem Wechsel der Adresse in `KLEIN_BUCH_PUBLIC_URL` trägst Du sie
+auf der Seite "EÜR-Export" einmal neu ein.
 
 ## Rechte
 
@@ -103,12 +110,12 @@ Die Backups von Klein.Buch enthalten Datenbank, Archiv und Branding
 zum Beispiel mit den übrigen Sicherungen Deines Servers oder per
 Snapshot. Das ist vor allem wichtig, wenn Du Vorlagen angepasst hast.
 Nach einer Wiederherstellung prüft Klein.Buch, ob die PDF-Vorlagen, die
-Dein Verkäuferprofil, offene Entwürfe und Abo-Rechnungen nennen, in
+Deine Firmendaten, offene Entwürfe und Abo-Rechnungen nennen, in
 `/inputs` vorhanden sind, und meldet fehlende unter "Hinweise".
 
 ## Wie Klein.Buch /inputs aktuell hält
 
-Bei jedem Start vergleicht Klein.Buch `/inputs` mit den Dateien, die das
+Bei jedem Containerstart vergleicht Klein.Buch `/inputs` mit den Dateien, die das
 Image mitbringt. Dafür führt es die Datei `/inputs/.seed-manifest.json`.
 Sie merkt sich zu jeder Datei eine Prüfsumme (SHA-256, eine Art
 Fingerabdruck des Inhalts) der Fassung, die Klein.Buch zuletzt dort
@@ -119,15 +126,17 @@ abgelegt hat. Daraus folgt für jede Datei:
 - Hast Du sie nicht verändert und das Image bringt eine neue Fassung,
   ersetzt Klein.Buch sie und schreibt einen Hinweis.
 - Hast Du sie verändert, fasst Klein.Buch sie nie an. Die neue Fassung
-  legt es daneben als `<Name>.neu` ab, zum Beispiel
+  legt es einmal daneben als `<Name>.neu` ab, zum Beispiel
   `pdf-templates/default.typ.neu`, und schreibt einen Hinweis.
 
 Die Hinweise erscheinen nach der nächsten Anmeldung unter "Hinweise",
-weil die Datenbank beim Start noch verschlossen ist. Vergleiche Deine
-Datei mit der `.neu`-Fassung und übernimm, was Du brauchst. Übernimmst
-Du die neue Fassung ganz, kannst Du die `.neu`-Datei danach löschen.
-Behältst Du Deine eigene Fassung, lass die `.neu`-Datei liegen: Fehlt
-sie, legt der nächste Start sie mit einem neuen Hinweis wieder an.
+weil die Datenbank beim Containerstart noch verschlossen ist. Vergleiche
+Deine Datei mit der `.neu`-Fassung und übernimm, was Du brauchst. Danach
+kannst Du die `.neu`-Datei löschen, egal ob Du die neue Fassung
+übernommen oder Deine eigene behalten hast: Klein.Buch merkt sich in der
+Manifest-Datei, dass es diese Fassung schon angeboten hat, und legt sie
+nicht wieder an. Erst wenn ein späteres Image eine weitere Fassung
+mitbringt, liegt wieder eine `.neu`-Datei daneben, mit neuem Hinweis.
 
 Ändere oder lösche `.seed-manifest.json` nicht. Ohne sie hält Klein.Buch
 jede Datei, die vom Image abweicht, für von Dir verändert und legt
@@ -143,4 +152,4 @@ leeren Ordner an und bewahre den alten samt Backups auf.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

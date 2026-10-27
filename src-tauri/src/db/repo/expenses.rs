@@ -20,7 +20,7 @@ use crate::db::models::{ExpenseDetail, ExpenseListItem, ExpenseRow};
 use crate::domain::expense::ExpenseInput;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,6 +45,34 @@ pub async fn create(
     fiscal_year: i64,
     receipt_archive_id: Option<&str>,
 ) -> Result<ExpenseRow> {
+    let mut conn = pool.acquire().await?;
+    let id = insert_in(
+        &mut conn,
+        input,
+        expense_number,
+        fiscal_year,
+        receipt_archive_id,
+        None,
+    )
+    .await?;
+    drop(conn);
+
+    get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("create: post-INSERT SELECT leer".into()))
+}
+
+/// INSERT einer sofort festgeschriebenen Kosten-Position innerhalb einer
+/// laufenden Transaktion (Abo-Lauf: Nummer, Beleg, Abo-Bezug, Audit und
+/// Vorrücken gemeinsam, Lauf F W14-022). Liefert die neue ID.
+pub async fn insert_in(
+    conn: &mut SqliteConnection,
+    input: &ExpenseInput,
+    expense_number: &str,
+    fiscal_year: i64,
+    receipt_archive_id: Option<&str>,
+    recurring_subscription_id: Option<&str>,
+) -> Result<String> {
     let id = Uuid::now_v7().to_string();
 
     sqlx::query(
@@ -53,9 +81,9 @@ pub async fn create(
             paid_from_account_id, vendor_contact_id, vendor_name_snapshot,
             vendor_invoice_number, category, description,
             net_amount_cents, tax_amount_cents, gross_amount_cents, currency_code,
-            reverse_charge_13b, receipt_archive_id,
+            reverse_charge_13b, receipt_archive_id, recurring_subscription_id,
             status, locked_at, notes
-         ) VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?,  ?, ?,
+         ) VALUES (?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?,
                    'recorded', datetime('now','utc'), ?)",
     )
     .bind(&id)
@@ -75,13 +103,11 @@ pub async fn create(
     .bind(&input.currency_code)
     .bind(if input.reverse_charge_13b { 1i64 } else { 0i64 })
     .bind(receipt_archive_id)
+    .bind(recurring_subscription_id)
     .bind(input.notes.as_deref())
-    .execute(pool)
+    .execute(conn)
     .await?;
-
-    get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain("create: post-INSERT SELECT leer".into()))
+    Ok(id)
 }
 
 // ---- READ ------------------------------------------------------------------
@@ -90,6 +116,15 @@ pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<ExpenseRow>> {
     let row: Option<ExpenseRow> = sqlx::query_as("SELECT * FROM expenses WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// Wie [`get`], auf einer Verbindung bzw. in einer laufenden Transaktion.
+pub async fn get_in(conn: &mut SqliteConnection, id: &str) -> Result<Option<ExpenseRow>> {
+    let row: Option<ExpenseRow> = sqlx::query_as("SELECT * FROM expenses WHERE id = ?")
+        .bind(id)
+        .fetch_optional(conn)
         .await?;
     Ok(row)
 }
@@ -198,14 +233,19 @@ pub async fn cancel(pool: &SqlitePool, id: &str, reason: &str) -> Result<()> {
             status = 'canceled',
             canceled_at = datetime('now','utc'),
             canceled_reason = ?
-         WHERE id = ?",
+         WHERE id = ? AND status = 'recorded' AND capitalized_as_asset_id IS NULL",
     )
     .bind(reason)
     .bind(id)
     .execute(pool)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!("cancel: Kosten {id} nicht gefunden")));
+        // Lauf F8: auch eine inzwischen aktivierte Kostenposition bleibt stehen
+        // (Bedingung im UPDATE gegen ein gleichzeitiges Aktivieren).
+        return Err(Error::Domain(format!(
+            "Die Kosten {id} lassen sich nicht stornieren: nicht gefunden, schon \
+             storniert oder als Anlage aktiviert."
+        )));
     }
     Ok(())
 }
@@ -242,6 +282,34 @@ pub async fn set_payment(
         )));
     }
     get(pool, id)
+        .await?
+        .ok_or_else(|| Error::Domain("set_payment: post-UPDATE SELECT leer".into()))
+}
+
+/// Wie [`set_payment`], in einer laufenden Transaktion (Lauf F8c: Prüfung
+/// aktivierter Kosten und Änderung unter derselben Sperre). Nur für
+/// nicht-stornierte Kosten (Bedingung im UPDATE).
+pub async fn set_payment_in(
+    conn: &mut SqliteConnection,
+    id: &str,
+    paid_date: Option<&str>,
+    paid_from_account_id: Option<&str>,
+) -> Result<ExpenseRow> {
+    let res = sqlx::query(
+        "UPDATE expenses SET paid_date = ?, paid_from_account_id = ?
+          WHERE id = ? AND status = 'recorded'",
+    )
+    .bind(paid_date)
+    .bind(paid_from_account_id)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(format!(
+            "Kosten {id} nicht gefunden oder storniert — keine Zahlungs-Markierung möglich."
+        )));
+    }
+    get_in(&mut *conn, id)
         .await?
         .ok_or_else(|| Error::Domain("set_payment: post-UPDATE SELECT leer".into()))
 }

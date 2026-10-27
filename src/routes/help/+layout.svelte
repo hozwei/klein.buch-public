@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import type { HandbookCategory } from "$lib/handbook/categories";
+  import type { HandbookCategory } from "#lib/handbook/categories.ts";
 
   // G2-DOC.3.4 — Modul-weiter Open/Collapse-State des Sidebar-Kapitelbaums.
   //
@@ -80,17 +80,17 @@
   //   Sidebar und TOC werden ausgeblendet.
 
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
-  import { listByCategory, getEntry } from "$lib/handbook";
+  import { page } from "$app/state";
+  import { listByCategory, getEntry } from "#lib/handbook/index.ts";
   // `HandbookCategory` ist über das `<script module>` oben bereits im Scope —
   // Svelte 5 teilt Identifier zwischen Modul- und Instanz-Skript. Erneuter
   // Import würde svelte-check mit „Duplicate identifier" abbrechen.
-  import type { TocEntry } from "$lib/handbook/render";
+  import type { TocEntry } from "#lib/handbook/render.ts";
   import {
     searchHandbook,
     SEARCH_MIN_QUERY_LENGTH,
     type HandbookHit,
-  } from "$lib/handbook/search";
+  } from "#lib/handbook/search.ts";
 
   const groups = listByCategory();
   let { children } = $props();
@@ -98,7 +98,7 @@
   // TOC ist Page-spezifisch (Slug-Loader). Defensive Lesart, damit das
   // Layout auch auf der Index-Route (`/help` → Redirect) nicht stolpert.
   let toc = $derived<TocEntry[]>(
-    ($page.data as { toc?: TocEntry[] }).toc ?? [],
+    (page.data as { toc?: TocEntry[] }).toc ?? [],
   );
 
   function isActive(pathname: string, slug: string): boolean {
@@ -116,7 +116,7 @@
   // Default-Politik bei jedem Pfadwechsel anwenden (unberührte Sektionen
   // werden zur aktiven Kategorie umgeschaltet).
   $effect(() => {
-    ensureDefaults(activeCategory($page.url.pathname));
+    ensureDefaults(activeCategory(page.url.pathname));
   });
 
   // --- Suche ---------------------------------------------------------------
@@ -164,22 +164,35 @@
 
   let showResults = $derived(query.trim().length >= SEARCH_MIN_QUERY_LENGTH);
   let noResults = $derived(showResults && hits.length === 0);
+
+  // --- Kapitelliste auf dem Handy (U4, U1-066) -------------------------------
+  //
+  // Einspaltig (≤ 760 px Breite oder ≤ 520 px Höhe) stand die ganze Kapitelliste vor
+  // dem Text. Dort ist sie jetzt eingeklappt: „Zur App“, Suchfeld und der Knopf
+  // „Kapitel“ (aria-expanded), dann folgt direkt der Text. Nach einem Seitenwechsel
+  // klappt sie wieder zu. Breitere Ansichten zeigen sie wie bisher (CSS).
+  const chapterCount = groups.reduce((n, g) => n + g.entries.length, 0);
+  let chaptersOpen = $state(false);
+  $effect(() => {
+    void page.url.pathname;
+    chaptersOpen = false;
+  });
 </script>
 
 <div class="help-shell">
   <aside class="help-sidebar" aria-label="Handbuch-Kapitelbaum">
     <a class="back" href="/" aria-label="Zurück zur App">← Zur App</a>
-    <h2 class="help-title">Handbuch</h2>
+    <!-- U4 (V4-09): kein h2 vor dem h1 des Kapitels; die Seitenleiste ist über
+         aria-label benannt, die Überschriften-Navigation beginnt mit dem Kapitel. -->
+    <p class="help-title">Handbuch</p>
 
     <div class="search">
-      <label class="visually-hidden" for="handbook-search">
-        Im Handbuch suchen
-      </label>
+      <label class="search-label" for="handbook-search">Im Handbuch suchen</label>
       <input
         id="handbook-search"
         type="search"
         class="search-input"
-        placeholder="Suchen …"
+        enterkeyhint="search"
         autocomplete="off"
         spellcheck="false"
         bind:value={query}
@@ -191,7 +204,7 @@
           type="button"
           class="search-clear"
           aria-label="Suche leeren"
-          onclick={clearQuery}>×</button
+          onclick={clearQuery}><span aria-hidden="true">×</span></button
         >
       {/if}
     </div>
@@ -212,7 +225,7 @@
                 <button
                   type="button"
                   class="result"
-                  class:active={isActive($page.url.pathname, hit.slug)}
+                  class:active={isActive(page.url.pathname, hit.slug)}
                   onclick={() => openHit(hit.slug)}
                 >
                   <span class="result-title">{hit.title}</span>
@@ -225,7 +238,18 @@
         {/if}
       </div>
     {:else}
-      <nav>
+      <button
+        type="button"
+        class="chapters-toggle"
+        aria-expanded={chaptersOpen}
+        aria-controls="help-chapters"
+        onclick={() => (chaptersOpen = !chaptersOpen)}
+      >
+        <span class="cat-arrow" class:turned={chaptersOpen} aria-hidden="true">▸</span>
+        <span class="cat-label">Kapitel</span>
+        <span class="cat-count">{chapterCount}</span>
+      </button>
+      <nav id="help-chapters" class="chapters" class:open={chaptersOpen} aria-label="Kapitel">
         {#each groups as group (group.category)}
           {#if group.entries.length > 0}
             <section class="cat" class:open={isCategoryOpen(group.category)}>
@@ -246,7 +270,7 @@
                 <ul id="cat-list-{group.category}">
                   {#each group.entries as entry (entry.slug)}
                     <li
-                      class:active={isActive($page.url.pathname, entry.slug)}
+                      class:active={isActive(page.url.pathname, entry.slug)}
                     >
                       <a href="/help/{entry.slug}">{entry.title}</a>
                     </li>
@@ -260,7 +284,9 @@
     {/if}
   </aside>
 
-  <article class="help-content">
+  <!-- U3: Der Text scrollt nirgends mehr in sich (er fließt mit der Seite), daher
+       kein eigener Tab-Halt mehr für einen Scrollbereich. -->
+  <article class="help-content" aria-label="Handbuchtext">
     {@render children?.()}
   </article>
 
@@ -281,20 +307,21 @@
 </div>
 
 <style>
+  /* U3: Der Text fließt mit der Seite (am Desktop scrollt <main>, im Drawer-Band das
+     Dokument); Kapitel-Navigation und Inhaltsverzeichnis kleben daneben (unten).
+     Text höchstens 48rem breit, Absätze höchstens 72ch (tokens.css) — keine Zeilen
+     über die ganze Breite bei 1920/2560 px. */
   .help-shell {
     display: grid;
-    grid-template-columns: 240px 1fr 220px;
+    grid-template-columns: 240px minmax(0, 48rem) 220px;
     gap: 1.5rem;
     align-items: start;
-    /* Wir scrollen die Spalten unabhängig; die äußere `main` scrollt nicht
-       mit. Höhe = Viewport minus den Top-Pad, den die App-Shell setzt. */
-    height: calc(100vh - var(--main-pad));
   }
 
   /* Schmaler werdende Fenster: TOC-Spalte fällt weg, Sidebar wird schmaler. */
   @media (max-width: 1100px) {
     .help-shell {
-      grid-template-columns: 220px 1fr;
+      grid-template-columns: 220px minmax(0, 48rem);
     }
     .help-toc {
       display: none;
@@ -305,44 +332,36 @@
     background: var(--c-surface);
     border: 1px solid var(--c-border);
     border-radius: var(--r-lg);
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     padding: 1rem 0.75rem 1.25rem;
     overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
   }
 
   /* --- Suche ----------------------------------------------------------- */
 
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
   .search {
     position: relative;
     margin: 0 0.4rem 0.85rem;
   }
+  .search-label {
+    display: block;
+    margin: 0 0 var(--sp-1);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  /* Rahmen ≥ 3:1 (--line-control), Fokusring global aus tokens.css. */
   .search-input {
     width: 100%;
     box-sizing: border-box;
-    padding: 0.4rem 1.8rem 0.4rem 0.6rem;
+    min-height: max(var(--target), 32px);
+    padding: 0.4rem calc(max(var(--target), 28px) + 0.25rem) 0.4rem 0.6rem;
     font-size: var(--fs-sm);
-    border: 1px solid var(--c-border);
+    border: 1px solid var(--line-control);
     border-radius: var(--r-md);
-    background: var(--c-surface-2);
-    color: var(--c-text);
-  }
-  .search-input:focus {
-    outline: 2px solid var(--c-primary-300);
-    outline-offset: 1px;
-    border-color: var(--c-primary-400);
+    background: var(--surface-card);
+    color: var(--text);
   }
   /* WebKit blendet das eingebaute „×" beim type=search ein — wir setzen
      unseren eigenen Clear-Button, also nehmen wir das native weg. */
@@ -350,23 +369,30 @@
     -webkit-appearance: none;
     appearance: none;
   }
+  /* Sitzt im Feld rechts unten (Label steht darüber), Trefferfläche ≥ --target. */
   .search-clear {
     position: absolute;
-    top: 50%;
-    right: 0.35rem;
-    transform: translateY(-50%);
+    bottom: 0;
+    right: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: max(var(--target), 28px);
+    height: max(var(--target), 32px);
     border: 0;
     background: transparent;
     cursor: pointer;
-    color: var(--c-text-muted);
+    color: var(--text-muted);
     font-size: 1.1rem;
     line-height: 1;
-    padding: 0.1rem 0.35rem;
-    border-radius: var(--r-sm);
+    padding: 0;
+    border-radius: var(--r-md);
   }
-  .search-clear:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
+  @media (hover: hover) {
+    .search-clear:hover {
+      background: var(--surface-hover);
+      color: var(--accent-on-soft);
+    }
   }
 
   /* --- Trefferliste ---------------------------------------------------- */
@@ -412,9 +438,11 @@
     color: var(--c-text);
     font-family: inherit;
   }
-  .result:hover {
-    background: var(--c-primary-50);
-    border-color: var(--c-primary-100);
+  @media (hover: hover) {
+    .result:hover {
+      background: var(--c-primary-50);
+      border-color: var(--c-primary-100);
+    }
   }
   .result.active {
     background: var(--c-primary-100);
@@ -448,6 +476,9 @@
     color: var(--c-text-muted);
     word-break: break-word;
   }
+  /* U1 (axe color-contrast): Auf dem getönten Aktiv-Hintergrund reicht
+     --c-text-muted nicht (4,27:1) — dort volle Textfarbe. */
+  .result.active .result-snippet { color: var(--c-text); }
   /* Highlight aus `buildSnippet()` — Treffer-Terme stehen in `<mark>`. */
   .result-snippet :global(mark) {
     background: var(--c-primary-100);
@@ -464,6 +495,8 @@
   }
   .help-title {
     font-size: var(--fs-md);
+    font-weight: 700;
+    line-height: var(--lh-snug);
     margin: 0 0 0.75rem;
     color: var(--c-text);
     padding: 0 0.4rem;
@@ -493,9 +526,11 @@
     letter-spacing: 0.05em;
     font-weight: 700;
   }
-  .cat-header:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
+  @media (hover: hover) {
+    .cat-header:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+    }
   }
   .cat-arrow {
     display: inline-block;
@@ -536,10 +571,12 @@
     text-decoration: none;
     line-height: 1.35;
   }
-  .cat a:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-    text-decoration: none;
+  @media (hover: hover) {
+    .cat a:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+      text-decoration: none;
+    }
   }
   .cat li.active a {
     background: var(--c-primary-100);
@@ -551,10 +588,8 @@
     background: var(--c-surface);
     border: 1px solid var(--c-border);
     border-radius: var(--r-lg);
-    box-shadow: var(--sh-sm);
+    box-shadow: var(--shadow-card);
     padding: 1.5rem 1.75rem;
-    overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
     min-width: 0; /* verhindert, dass <pre>-Inhalt das Grid sprengt */
   }
@@ -567,7 +602,6 @@
     color: var(--c-text-muted);
     font-size: var(--fs-sm);
     overflow-y: auto;
-    height: 100%;
     box-sizing: border-box;
   }
   .toc-stub,
@@ -599,19 +633,72 @@
     text-decoration: none;
     line-height: 1.35;
   }
-  .toc-list a:hover {
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-    text-decoration: none;
+  @media (hover: hover) {
+    .toc-list a:hover {
+      background: var(--c-primary-50);
+      color: var(--c-primary-700);
+      text-decoration: none;
+    }
   }
   .toc-list .toc-level-3 a {
     padding-left: 1.2rem;
     font-size: var(--fs-xs);
   }
 
+  /* Trefferflächen im Drawer-Band/Touch (U1): Kategorien, Kapitel und
+     Inhaltsverzeichnis mindestens --target hoch. */
+  .cat-header,
+  .cat a,
+  .toc-list a,
+  .result {
+    min-height: var(--target);
+  }
+  .cat a,
+  .toc-list a {
+    display: flex;
+    align-items: center;
+  }
+
   /* Handy/schmale Tablets (Plan W10): Inhaltsverzeichnis und Text
-     untereinander; die Seite scrollt als Ganzes statt der Spalten. */
-  @media (max-width: 760px) {
+     untereinander; die Seite scrollt als Ganzes statt der Spalten. U1: auch
+     bei niedriger Höhe (Handy quer, 844×390), sonst bleiben für zwei in sich
+     scrollende Spalten nur wenige Zeilen. */
+  /* U4 (U1-066): Knopf „Kapitel“ nur einspaltig; dort ist die Liste eingeklappt. */
+  .chapters-toggle {
+    display: none;
+    width: 100%;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: var(--target);
+    padding: 0.35rem 0.55rem;
+    border: var(--rule-control) var(--line-control);
+    border-radius: var(--radius-control);
+    background: var(--surface-card);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cat-arrow.turned {
+    transform: rotate(90deg);
+  }
+  @media (hover: hover) {
+    .chapters-toggle:hover {
+      background: var(--surface-hover);
+      border-color: var(--line-hover);
+    }
+  }
+  @media (max-width: 760px), (max-height: 520px) {
+    .chapters-toggle {
+      display: flex;
+    }
+    .chapters:not(.open) {
+      display: none;
+    }
+    .chapters.open {
+      margin-top: 0.5rem;
+    }
     .help-shell {
       grid-template-columns: 1fr;
       gap: 1rem;
@@ -620,11 +707,69 @@
     .help-sidebar {
       height: auto;
       max-height: 50vh;
+      max-height: 50dvh;
     }
     .help-content {
       height: auto;
       overflow-y: visible;
       padding: 1rem;
+    }
+  }
+
+  /* Tablet (U2) und Desktop (U3): Statt getrennt scrollender Spalten mit fester Höhe
+     fließt der Text mit der Seite (Drawer-Band: das Dokument unter der klebenden
+     Kopfleiste; Desktop: <main>). Kapitel-Navigation und Inhaltsverzeichnis kleben
+     daneben und scrollen nur selbst, wenn sie höher als der Bildschirm sind. „Zur App“
+     und das Suchfeld bleiben dabei oben in der Navigation stehen. Handy (≤ 760 px) und
+     niedrige Fenster (≤ 520 px) einspaltig, siehe oben. */
+  @media (min-width: 761px) and (min-height: 521px) {
+    .help-sidebar,
+    .help-toc {
+      position: sticky;
+      top: calc(var(--sticky-top) + var(--sp-3));
+      height: auto;
+      max-height: calc(100vh - var(--sticky-top) - 2 * var(--sp-3));
+      max-height: calc(100dvh - var(--sticky-top) - 2 * var(--sp-3));
+    }
+    .help-sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding-bottom: 0;
+    }
+    .help-sidebar > :is(nav, .results) {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      /* Platz für den Fokusring (2 px + 2 px Abstand), den der Scroll-Container sonst
+         an den Seiten abschneidet. */
+      margin: 0 -0.25rem;
+      padding: 0.25rem 0.25rem 1.25rem;
+    }
+    .help-content {
+      height: auto;
+      overflow-y: visible;
+    }
+  }
+
+  /* Suchtreffer in schmaler Navigation (U2-Sichtprüfung, Tablet hoch): Kapitel
+     unter den Titel statt daneben, sonst bricht der Titel Wort für Wort um. */
+  .help-sidebar {
+    container-type: inline-size;
+  }
+  @container (max-width: 20rem) {
+    .result {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .result-cat {
+      grid-column: 1;
+      grid-row: 2;
+      justify-self: start;
+      margin-top: 0.15rem;
+    }
+    .result-snippet {
+      grid-row: 3;
     }
   }
 

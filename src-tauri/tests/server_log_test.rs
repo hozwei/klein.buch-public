@@ -7,6 +7,11 @@
 //! Keine Zeile darf Passphrase, `PRAGMA key`, Sitzungs-ID, Setup-Token oder
 //! TOTP-Code enthalten (Plan W5.9/W6). Der Setup-Token steht nur als eigene
 //! Zeile auf stderr, nie im `tracing`-Log.
+//!
+//! Lauf F4c: auch Backup-Snapshot und Passphrase-Wechsel unter TRACE
+//! (W5-LOG-TESTS), Ablehnung eines SMTP-Hosts mit Zeilenumbruch (W14-017) und
+//! das Zugriffsprotokoll mit `ip=`, `req=` (= `ref` interner Fehler) und
+//! `sess=` (W14-018).
 
 mod server_support;
 
@@ -119,7 +124,7 @@ async fn no_passphrase_or_session_id_in_logs() {
                 "label": "Log-Test", "authType": "smtp_password", "smtpHost": "smtp.example.org",
                 "smtpPort": 587, "smtpUser": "kb@example.org", "smtpUseTls": true,
                 "fromEmail": "rechnung@example.org", "fromName": "Beispiel IT-Service",
-                "isDefault": true, "oauthTenantId": null, "oauthClientId": null
+                "isDefault": true
             },
             "password": smtp_password
         }),
@@ -139,11 +144,151 @@ async fn no_passphrase_or_session_id_in_logs() {
     .await;
     let wrong = login(&srv, "falsche-passphrase-0000000").await;
     assert_eq!(wrong.status.as_u16(), 401);
+    // ASVS V2.8.5 (Lauf F4a): der eben verbrauchte Code noch einmal — gleiche
+    // Antwort, im Log aber `reason=totp_replay`.
+    let used = klein_buch_lib::server::totp::code_for_step(
+        &totp_secret(&srv),
+        klein_buch_lib::server::totp::step_at(srv.state.totp_now()),
+    );
+    let replay = send(
+        &srv.app,
+        post(
+            "/api/auth/login",
+            &serde_json::json!({ "passphrase": PASS, "totpCode": used }).to_string(),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(replay.status.as_u16(), 401);
+
+    // W5-LOG-TESTS (Lauf F4c): Backup-Snapshot (verschlüsselte Kopie der DB)
+    // und Passphrase-Wechsel (Umschlüsseln) unter TRACE — weder die alte noch
+    // die neue Passphrase im Log; danach ein Backup mit der neuen.
+    let backup = call(
+        &srv.app,
+        &cookie3,
+        "backup_create_now",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(backup.json()["state"], "done", "{}", backup.text());
+    let new_pass = "neue-log-passphrase-zum-testen";
+    let changed = {
+        let _serial = kdf_serial().await;
+        send(
+            &srv.app,
+            post(
+                "/api/auth/passphrase",
+                &serde_json::json!({ "newPassphrase": new_pass }).to_string(),
+                Some(&cookie3),
+                None,
+            ),
+        )
+        .await
+    };
+    assert_eq!(changed.status.as_u16(), 200, "{}", changed.text());
+    let backup = call(
+        &srv.app,
+        &cookie3,
+        "backup_create_now",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(backup.json()["state"], "done", "{}", backup.text());
+
+    // W14-017 (Lauf F4c): Ein SMTP-Host mit Zeilenumbruch wird abgelehnt —
+    // beim Anlegen und beim Verbindungstest; die Meldung wiederholt ihn nicht.
+    let forged = "smtp.example.org\n2026-10-25T10:00:00.000000Z  WARN klein_buch_lib::auth: \
+                  auth.login.failed ip=192.0.2.66 reason=totp";
+    let r = call(
+        &srv.app,
+        &cookie3,
+        "mail_account_create",
+        serde_json::json!({
+            "input": {
+                "label": "Fälschung", "authType": "smtp_password", "smtpHost": forged,
+                "smtpPort": 587, "smtpUser": null, "smtpUseTls": true,
+                "fromEmail": "rechnung@example.org", "fromName": "Beispiel IT-Service",
+                "isDefault": false
+            },
+            "password": null
+        }),
+    )
+    .await;
+    assert_eq!(r.status.as_u16(), 422, "{}", r.text());
+    assert!(!r.text().contains("192.0.2.66"), "{}", r.text());
+    let r = call(
+        &srv.app,
+        &cookie3,
+        "mail_account_test_connection",
+        serde_json::json!({ "args": {
+            "smtpHost": forged, "smtpPort": 587, "smtpUseTls": true,
+            "smtpUser": null, "password": null
+        }}),
+    )
+    .await;
+    assert_eq!(r.status.as_u16(), 422, "{}", r.text());
+
+    // W14-018 (Lauf F4c): Zugriffsprotokoll mit ip=, req= und sess=; die `ref`
+    // eines internen Fehlers ist die Kennung der Anfrage.
+    let routes = axum::Router::<std::sync::Arc<klein_buch_lib::server::state::ServerState>>::new()
+        .route(
+            "/api/panik",
+            axum::routing::get(|| async {
+                if std::hint::black_box(true) {
+                    panic!("panik-im-log-test");
+                }
+                "nie"
+            }),
+        );
+    let panic_app = klein_buch_lib::server::layered(routes, srv.state.clone());
+    let boom = send(
+        &panic_app,
+        from_peer(get("/api/panik", Some(&cookie3)), "203.0.113.9:40000"),
+    )
+    .await;
+    assert_eq!(boom.status.as_u16(), 500);
+    let reference = boom.json()["ref"].as_str().unwrap().to_string();
+    let sess = {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_str(&format!("__Host-kb_session={cookie3}")).unwrap(),
+        );
+        klein_buch_lib::server::session::short_id_from_headers(&headers).unwrap()
+    };
 
     let text = String::from_utf8_lossy(&buffer.0.lock().unwrap()).into_owned();
     assert!(text.contains("auth.login.ok"), "Log wird erfasst");
     assert!(text.contains("auth.login.failed"), "Fehlversuch geloggt");
+    assert!(text.contains("reason=totp_replay"), "Replay eigens geloggt");
+    assert!(
+        text.contains("auth.reauth.ok ip="),
+        "Re-Auth mit IP geloggt"
+    );
     assert!(text.contains("/api/auth/status"), "Zugriffsprotokoll");
+    let access = text
+        .lines()
+        .find(|l| l.contains("GET /api/panik 500"))
+        .unwrap_or_else(|| panic!("Zugriffszeile fehlt:\n{text}"));
+    assert!(access.contains("ip=203.0.113.9 "), "{access}");
+    assert!(access.contains(&format!("req={reference} ")), "{access}");
+    assert!(access.ends_with(&format!("sess={sess}")), "{access}");
+    assert!(
+        text.lines()
+            .any(|l| l.contains("interner Fehler") && l.contains(&reference)),
+        "ERROR-Zeile mit derselben ref:\n{text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|l| l.contains("klein_buch_lib::http:") && l.contains(" ms "))
+            .all(|l| l.contains(" ip=") && l.contains(" req=") && l.contains(" sess=")),
+        "jede Zugriffszeile mit ip=, req=, sess="
+    );
+    // Der Panik-Text geht nur über den Panic-Hook nach stderr, nie ins Log.
+    assert!(!text.contains("panik-im-log-test"), "Panik-Text im Log");
+    assert!(!text.contains("192.0.2.66"), "gefälschte Zeile im Log");
     for secret in [
         PASS,
         "falsche-passphrase-0000000",
@@ -159,6 +304,7 @@ async fn no_passphrase_or_session_id_in_logs() {
         recovery[9].as_str(),
         smtp_password,
         totp_b32.as_str(),
+        new_pass,
     ] {
         assert!(!text.contains(secret), "Geheimnis im Log: {secret}");
     }

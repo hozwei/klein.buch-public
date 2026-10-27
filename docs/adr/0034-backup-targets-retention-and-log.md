@@ -244,3 +244,51 @@ Desktops gibt es nicht (ADR 0039, E8).
 - **Entfällt:** OneDrive-/iCloud-Erkennung (Pt. 2) und die Ordner-Dialoge der
   Desktop-App. Das SFTP-Passwort zieht vom OS-Keychain in die verschlüsselte
   Secret-Tabelle (Block W8, Amendment ADR 0011/0028).
+
+## Amendment 2026-10-24 — Dauerbetrieb (Lauf F, ADR 0040)
+
+**Status:** Akzeptiert · Lauf F (Block F1b). Keine Migration. Einzelheiten und
+Begründung in ADR 0040 Nr. 13–16 und den Umsetzungs-Entscheidungen 16–19.
+
+- **Tages-Backup kalenderfest** statt „24 h nach dem letzten Backup“ (die
+  Tier-Tabelle oben mit „täglich beim Start“ ist überholt): genau eines je
+  Berliner Kalendertag ab `app_settings.backup_daily_time` (Standard 02:30),
+  beim ersten Tick danach; Backoff persistiert.
+- **Aufbewahrung nach Kalender-Eimern:** je Ablage das jüngste automatische
+  Backup je Tag, Monat und Jahr für die jüngsten 7/3/1 (Floor bei
+  erfolgreichem Off-Site-Ziel) bzw. 30/12/7 Eimer mit Backup. `retention_tag`
+  bleibt als Information. `manual`/`pre_restore` nie gelöscht.
+- **SFTP: keine Löschung durch Klein.Buch** — weder Dateien noch
+  Historienzeilen (bisher: Zeilen samt Audit „prune“ gelöscht, Dateien nicht).
+  Der Betreiber rotiert serverseitig; Platzbedarf im Handbuch
+  „Speicher und Ressourcen“. Schutz der Off-Site-Kopien vor einer
+  kompromittierten Instanz.
+- **Nach einem Restore:** bis zur Freigabe der Pause (ADR 0040 Nr. 11) nur
+  Floor, keine Spiegelung (`backup.mirror.skipped`); Floor-Backups, die nach
+  dem eingespielten Stand entstanden, kommen als `manual` in die Historie.
+  Während jeder Pause ruht die Rotation.
+
+## Amendment 2026-10-25 — Status „veraltet“, Download, Wurzelprüfung (Lauf F3a)
+
+**Status:** Akzeptiert · Lauf F (Block F3a). Keine Migration. Einzelheiten in ADR 0039
+Nr. 127 und ADR 0040 Nr. 50–53.
+
+- **Status `offsite` = `missing` | `failing` | `stale` | `ok`:** `stale`, wenn ein Ziel noch
+  keine erfolgreiche Kopie hat oder seine letzte älter ist als `max_age_days` der Regel
+  „Backup überfällig“ (Standard 7 Tage).
+- **Download lokaler Backups:** Backups aus dem Floor und aus Verzeichnis-Zielen lassen sich
+  mit Re-Auth als verschlüsselte `.kbk` herunterladen (Umzug, Disaster Recovery ohne externes
+  Ziel); SFTP-Kopien holt der Betreiber auf dem Server.
+- **Rotation nur unter den Wurzeln:** Gelöscht wird nur eine reguläre `.kbk`, die aufgelöst
+  unter dem Floor oder `/backup-targets` liegt; andere Einträge verlieren nur ihre
+  Historienzeile (Audit `file: refused`).
+- **Snapshot-Fehler** stehen wie ein gescheiterter Floor im `backup_log` und erzeugen einen
+  Hinweis.
+
+## Amendment 2026-10-25 — Krypto-Linie mit russh (Lauf F6b)
+
+Die RC-Fläche von russh ist inzwischen stabil (russh 0.64: aes-gcm 0.11, signature 3,
+ed25519-dalek 3). `sha2` teilt Klein.Buch seit Lauf F6b mit russh (0.11, dazu hmac 0.13 und
+sha1 0.11; ADR 0039 Nr. 139); die SHA-256-Hexwerte von Backup-Manifest und -Historie sind
+per Known-Answer-Test bit-genau gleich geblieben. Semver-getrennt bleibt nur `aes-gcm 0.10`
+der Backup-Hülle (ADR 0009) neben `aes-gcm 0.11` im SSH-Transport.

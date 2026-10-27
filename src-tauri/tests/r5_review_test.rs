@@ -8,8 +8,8 @@
 //!   8 Umlaute (`äöüäöüäö` = 16 Bytes, 8 chars) werden korrekt abgelehnt.
 //! - **R5-002**: Pinned die Symmetrie der Fehler-Texte zwischen Invoice- und
 //!   Expense-Pfad für Future-paid-date (Wortlaut + §11-EStG-Verweis).
-//!   Der eigentliche Check sitzt im Command-Layer und ist ohne Tauri-State
-//!   nicht aufrufbar — beim Host-Smoke verifizieren: Rechnung locken,
+//!   Der eigentliche Check sitzt im Command-Layer und war ohne den State der
+//!   Desktop-Fassung nicht aufrufbar — beim Host-Smoke verifizieren: Rechnung locken,
 //!   Zukunfts-Zahldatum eingeben → Backend lehnt mit `Error::Domain` ab.
 //!
 //! R5-001 (Button.svelte Anchor-disabled), R5-006/-007 (Klartext-Lifetime im
@@ -97,8 +97,8 @@ async fn r5_005_setup_passphrase_unicode_aware_floor() {
 // ---------------------------------------------------------------------------
 // R5-002: Symmetrie der Future-paid-date-Errortexte zwischen Invoice und
 // Expense. Dokumentations-Pin — der eigentliche Check sitzt im Command-Layer
-// (`commands::invoices::invoices_record_payment`) und ist ohne Tauri-State
-// nicht direkt aufrufbar. Beim Host-Smoke verifizieren: Rechnung locken,
+// (`commands::invoices::invoices_record_payment`) und war ohne den State der
+// Desktop-Fassung nicht direkt aufrufbar. Beim Host-Smoke verifizieren: Rechnung locken,
 // Zukunfts-Zahldatum eingeben → Backend lehnt mit `Error::Domain` ab.
 // ---------------------------------------------------------------------------
 

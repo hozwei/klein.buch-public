@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { todayBerlin } from "$lib/date";
-  import { onMount } from "svelte";
-  import { page } from "$app/stores";
+  import { todayBerlin } from "#lib/date.ts";
+  import { onMount, tick } from "svelte";
+  import { page } from "$app/state";
   import {
     expensesGet,
     expensesCancel,
@@ -9,16 +9,19 @@
     expensesReceiptXmlText,
     paymentAccountsList,
     saveArchiveFile,
-  } from "$lib/api";
-  import type { ExpenseDetail, AttachmentView, PaymentAccount } from "$lib/types";
-  import { euro, date } from "$lib/format";
-  import { expenseCategoryLabel } from "$lib/labels";
-  import AttachmentUpload from "$lib/AttachmentUpload.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import PageBar from "$lib/PageBar.svelte";
-  import Badge from "$lib/Badge.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { openXmlViewer } from "$lib/xmlViewerModal.svelte";
+  } from "#lib/api.ts";
+  import type { ExpenseDetail, AttachmentView, PaymentAccount } from "#lib/types.ts";
+  import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
+  import { euro, date } from "#lib/format.ts";
+  import { expenseCategoryLabel } from "#lib/labels.ts";
+  import AttachmentUpload from "#lib/AttachmentUpload.svelte";
+  import Banner from "#lib/Banner.svelte";
+  import Button from "#lib/Button.svelte";
+  import PageBar from "#lib/PageBar.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { expenseStatusView } from "../expenseStatus.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { openXmlViewer } from "#lib/xmlViewerModal.svelte.ts";
 
   let detail = $state<ExpenseDetail | null>(null);
   let accounts = $state<PaymentAccount[]>([]);
@@ -27,16 +30,21 @@
   let busy = $state(false);
   let showCancel = $state(false);
   let cancelReason = $state("");
+  let cancelError = $state("");
+  let cancelReasonEl: HTMLInputElement | undefined = $state();
   let showPay = $state(false);
   let payDate = $state(todayBerlin());
   let payAccountId = $state<string>("");
+  let payError = $state("");
+  let payDateEl: HTMLInputElement | undefined = $state();
+  let notFound = $state(false);
 
   // PV1-A5: Roh-XML-Viewer wird global im Root-Layout gemountet
   // (siehe `XmlViewerDialog.svelte`). Lokal nur Lade-Flag, damit der Button
   // nicht doppelt klickbar ist.
   let xmlLoading = $state(false);
 
-  let id = $derived($page.params.id ?? "");
+  let id = $derived(page.params.id ?? "");
 
   /** Beleg ist eine empfangene E-Rechnung mit archiviertem Original — Voraussetzung
    *  für „Roh-XML anzeigen". Coarse-Check über `sourceFormat`; die feine
@@ -81,9 +89,13 @@
   async function load() {
     loading = true;
     error = null;
+    notFound = false;
     try {
       detail = await expensesGet(id);
-      if (!detail) error = "Kosten nicht gefunden.";
+      if (!detail) {
+        notFound = true;
+        error = "Kosten nicht gefunden.";
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -100,16 +112,32 @@
     await load();
   });
 
-  function startPay() {
-    payDate = detail?.expense.paidDate ?? todayBerlin();
+  async function startPay() {
+    if (busy) return;
+    payDate = detail?.expense.paidDate?.slice(0, 10) ?? todayBerlin();
     payAccountId =
       detail?.expense.paidFromAccountId ??
       accounts.find((a) => a.isDefault === 1 && a.active === 1)?.id ??
       "";
+    payError = "";
     showPay = true;
+    await tick();
+    payDateEl?.focus();
   }
 
+  // Übergabe F5 (R1-019): Zahldatum vor dem Belegdatum ist erlaubt, aber auffällig.
+  const payBeforeExpense = $derived(
+    !!payDate && !!detail?.expense.expenseDate && payDate < detail.expense.expenseDate,
+  );
+
   async function markPaid() {
+    if (busy) return;
+    if (!payDate) {
+      payError = "Bitte das Zahldatum angeben.";
+      payDateEl?.focus();
+      return;
+    }
+    payError = "";
     busy = true;
     try {
       await expensesSetPayment({
@@ -127,11 +155,19 @@
     }
   }
 
+  // U4 (V2-12, design.md §5): umkehrbar — ohne Rückfrage, dafür „Rückgängig“ im Toast.
   async function setUnpaid() {
+    if (busy || !detail) return;
+    const prev = {
+      paidDate: detail.expense.paidDate,
+      paidFromAccountId: detail.expense.paidFromAccountId,
+    };
     busy = true;
     try {
       await expensesSetPayment({ expenseId: id, paidDate: null, paidFromAccountId: null });
-      flash("Wieder auf offen gesetzt.");
+      flash("Wieder auf offen gesetzt.", "ok", undefined, {
+        action: { label: "Rückgängig", run: () => void restorePayment(prev) },
+      });
       await load();
     } catch (e) {
       flash("Fehlgeschlagen: " + String(e), "error");
@@ -140,11 +176,35 @@
     }
   }
 
+  async function restorePayment(prev: { paidDate: string | null; paidFromAccountId: string | null }) {
+    if (busy) return;
+    busy = true;
+    try {
+      await expensesSetPayment({ expenseId: id, paidDate: prev.paidDate, paidFromAccountId: prev.paidFromAccountId });
+      flash("Zahlung wiederhergestellt.");
+      await load();
+    } catch (e) {
+      flash("Fehlgeschlagen: " + String(e), "error");
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function openCancel() {
+    showCancel = true;
+    cancelError = "";
+    await tick();
+    cancelReasonEl?.focus();
+  }
+
   async function doCancel() {
+    if (busy) return;
     if (!cancelReason.trim()) {
-      flash("Storno-Grund ist erforderlich.", "error");
+      cancelError = "Bitte einen Grund für das Storno angeben.";
+      cancelReasonEl?.focus();
       return;
     }
+    cancelError = "";
     busy = true;
     try {
       await expensesCancel({ expenseId: id, reason: cancelReason.trim() });
@@ -167,57 +227,76 @@
   function openReceipt(archiveId: string) {
     saveArchiveFile(archiveId);
   }
+
+  // U4 (V2-20, design.md §5 „Detailseiten“, ADR 0041 Nr. 96): Hauptaktion = nächster
+  // Schritt („Als bezahlt markieren“ solange offen; nach einem Storno „Korrigiert neu
+  // erfassen“), Nebenaktionen als `secondary`, Stornieren im Menü „Mehr“ unten. Der
+  // Eintrag öffnet den Storno-Bereich mit Pflichtgrund.
+  let isCanceled = $derived(detail?.expense.status === "canceled");
+  let barSecondary = $derived.by<ActionMenuItem[]>(() => {
+    if (!detail) return [];
+    const items: ActionMenuItem[] = [];
+    if (canShowRawXml) {
+      items.push({ label: xmlLoading ? "Roh-XML wird geladen …" : "Roh-XML anzeigen", onSelect: () => void openRawXml() });
+    }
+    // V1-22: Werte übernehmen (neue Kosten, das Original bleibt unverändert).
+    if (!isCanceled) items.push({ label: "Als Vorlage für neue Kosten", href: `/expenses/new?from=${detail.expense.id}` });
+    return items;
+  });
+  let barMore = $derived<ActionMenuItem[]>(
+    detail && !isCanceled ? [{ label: "Stornieren", onSelect: () => void openCancel(), danger: true }] : [],
+  );
 </script>
 
-<PageBar back="/expenses" backLabel="Kosten" title={detail?.expense.expenseNumber}>
+<PageBar
+  back="/expenses"
+  backLabel="Kosten"
+  title={detail ? `Kosten ${detail.expense.expenseNumber}` : notFound ? "Kosten nicht gefunden" : "Kosten"}
+  secondary={barSecondary}
+  more={barMore}
+>
   {#snippet actions()}
-    {#if canShowRawXml}
-      <button
-        type="button"
-        class="btn-secondary btn-sm"
-        onclick={openRawXml}
-        disabled={xmlLoading}
-      >
-        {xmlLoading ? "Lade Roh-XML …" : "Roh-XML anzeigen"}
-      </button>
+    {#if detail && isCanceled}
+      <Button variant="primary" href={`/expenses/new?from=${detail.expense.id}`}>Korrigiert neu erfassen</Button>
+    {:else if detail && !detail.expense.paidDate && !showPay}
+      <Button variant="primary" onclick={() => void startPay()} ariaDisabled={busy}>Als bezahlt markieren</Button>
     {/if}
   {/snippet}
 </PageBar>
 
 {#if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else if error}
-  <Banner>{error}</Banner>
+  <Banner>{error}{#if notFound}{" "}<a class="kb-link" href="/expenses">Zur Kostenliste</a>{/if}</Banner>
 {:else if detail}
   {@const e = detail.expense}
+  <!-- U4 (V3-09): Status aus expenseStatus.ts, wie in der Liste. -->
+  {@const st = expenseStatusView(e)}
   <p class="sub">
-    {#if e.status === "canceled"}
-      <Badge tone="neutral" strike>storniert</Badge>
-    {:else}
-      <Badge tone="success">erfasst</Badge>
-    {/if}
+    <Badge tone={st.tone} strike={st.strike}>{st.label}</Badge>
   </p>
 
   {#if e.status === "canceled"}
     <p class="caveat">
       Diese Kosten wurden storniert{e.canceledReason ? ` — Grund: ${e.canceledReason}` : ""}.
-      Stornierte Kosten zählen nicht für die Steuer.
+      Stornierte Kosten zählen nicht für die Steuer. Mit „Korrigiert neu erfassen“ legst du
+      neue Kosten mit diesen Werten an.
     </p>
   {/if}
 
   <section class="card">
     <dl>
-      <div><dt>Lieferant</dt><dd>{e.vendorNameSnapshot}{#if detail.vendor} <span class="muted">(Kontakt verknüpft)</span>{/if}</dd></div>
+      <div><dt>Lieferant</dt><dd>{e.vendorNameSnapshot}{#if detail.vendor}{" "}<span class="muted">(Kontakt verknüpft)</span>{/if}</dd></div>
       <div><dt>Beleg-Datum</dt><dd>{date(e.expenseDate)}</dd></div>
       <div><dt>Bezahlt am</dt><dd>{e.paidDate ? date(e.paidDate) : "noch offen"}</dd></div>
       <div><dt>Kategorie</dt><dd>{expenseCategoryLabel(e.category)}</dd></div>
       <div><dt>Rechnungs-Nr. (Lieferant)</dt><dd>{e.vendorInvoiceNumber ?? "—"}</dd></div>
       <div><dt>Beschreibung</dt><dd>{e.description}</dd></div>
-      <div><dt>Netto</dt><dd>{euro(e.netAmountCents)}</dd></div>
-      <div><dt>USt</dt><dd>{euro(e.taxAmountCents)}</dd></div>
-      <div><dt>Brutto (zählt fürs Finanzamt)</dt><dd><strong>{euro(e.grossAmountCents)}</strong></dd></div>
+      <div><dt>Netto</dt><dd class="amt">{euro(e.netAmountCents)}</dd></div>
+      <div><dt>USt</dt><dd class="amt">{euro(e.taxAmountCents)}</dd></div>
+      <div><dt>Brutto (zählt fürs Finanzamt)</dt><dd class="amt"><strong>{euro(e.grossAmountCents)}</strong></dd></div>
       <div><dt>§13b Reverse-Charge</dt><dd>{e.reverseCharge13b === 1 ? "ja" : "nein"}</dd></div>
-      {#if e.notes}<div><dt>Notiz</dt><dd>{e.notes}</dd></div>{/if}
+      {#if e.notes}<div><dt>Notiz</dt><dd class="pre">{e.notes}</dd></div>{/if}
     </dl>
   </section>
 
@@ -226,33 +305,55 @@
       <h2>Zahlung</h2>
       {#if showPay}
         <div class="pay-grid">
-          <label>
-            Bezahlt am
-            <input type="date" bind:value={payDate} max={todayBerlin()} />
-          </label>
-          <label>
-            Konto
-            <select bind:value={payAccountId}>
+          <div class="field">
+            <label for="pay-date">Bezahlt am<span class="req" aria-hidden="true">*</span></label>
+            <input
+              id="pay-date"
+              class="kb-input kb-w-date"
+              type="date"
+              bind:this={payDateEl}
+              bind:value={payDate}
+              oninput={() => (payError = "")}
+              max={todayBerlin()}
+              required
+              aria-required="true"
+              aria-invalid={payError ? "true" : undefined}
+              aria-describedby={[payError ? "pay-date-err" : "", payBeforeExpense ? "pay-date-note" : ""].filter(Boolean).join(" ") || undefined}
+            />
+            {#if payError}<p id="pay-date-err" class="msg err">{payError}</p>{/if}
+          </div>
+          <div class="field">
+            <label for="pay-account">Zahlungs-Konto</label>
+            <select id="pay-account" class="kb-input kb-w-medium" bind:value={payAccountId}>
               <option value="">— keines —</option>
               {#each accounts.filter((a) => a.active === 1 || a.id === payAccountId) as a (a.id)}
                 <option value={a.id}>{a.label}</option>
               {/each}
             </select>
-          </label>
-          <div class="row">
-            <button class="btn-primary btn-sm" onclick={markPaid} disabled={busy || !payDate}>Speichern</button>
-            <button class="btn-secondary btn-sm" onclick={() => (showPay = false)}>Abbrechen</button>
           </div>
+          <!-- design.md §5: „Abbrechen“ zuerst, Hauptaktion zuletzt. -->
+          <div class="row">
+            <button type="button" class="btn-secondary btn-sm" onclick={() => (showPay = false)}>Abbrechen</button>
+            <button type="button" class="btn-primary btn-sm" onclick={markPaid} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>Zahlung speichern</button>
+          </div>
+          {#if payBeforeExpense}
+            <p id="pay-date-note" class="note">
+              Das Zahldatum liegt vor dem Belegdatum ({date(e.expenseDate)}), z. B. bei Vorkasse.
+              Das ist erlaubt — prüfe nur kurz, ob beide Daten stimmen.
+            </p>
+          {/if}
         </div>
       {:else if e.paidDate}
         <p>Bezahlt am <strong>{date(e.paidDate)}</strong> · Konto: {accountLabel(e.paidFromAccountId)}</p>
         <div class="row">
-          <button class="btn-secondary btn-sm" onclick={startPay} disabled={busy}>Zahlung korrigieren</button>
-          <button class="btn-secondary btn-sm" onclick={setUnpaid} disabled={busy}>Als unbezahlt markieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={startPay} aria-disabled={busy ? "true" : undefined}>Zahlung korrigieren</button>
+          <button type="button" class="btn-secondary btn-sm" onclick={setUnpaid} aria-disabled={busy ? "true" : undefined}>Als unbezahlt markieren</button>
         </div>
       {:else}
+        <!-- Hauptaktion steht in der PageBar (V2-20); hier dieselbe Aktion als `secondary`
+             im Zusammenhang (Handy: PageBar klebt nicht). -->
         <p class="muted">Noch nicht als bezahlt markiert (zählt erst mit dem Zahldatum für die Steuer).</p>
-        <button class="btn-primary btn-sm" onclick={startPay} disabled={busy}>Als bezahlt markieren</button>
+        <button type="button" class="btn-secondary btn-sm" onclick={startPay} aria-disabled={busy ? "true" : undefined}>Als bezahlt markieren</button>
       {/if}
     </section>
   {/if}
@@ -261,10 +362,16 @@
     <h2>Beleg</h2>
     {#if e.receiptArchiveId}
       <div class="row">
-        <button class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
+        <button type="button" class="btn-secondary btn-sm" onclick={() => openReceipt(e.receiptArchiveId!)}>Beleg herunterladen</button>
       </div>
     {:else}
-      <p class="muted">Kein primärer Beleg hinterlegt.</p>
+      <!-- U6-012: Ein Anhang ersetzt den beim Erfassen fehlenden Beleg; die Liste kennt
+           Anhänge nicht und zeigt weiter „Kein Beleg“ (eigenes Lesefeld nötig). -->
+      {#if detail.attachments.length > 0}
+        <p class="muted">Beim Erfassen wurde kein Beleg hochgeladen; deine Anhänge stehen unter „Zusätzliche Anhänge“.</p>
+      {:else}
+        <p class="muted">Kein primärer Beleg hinterlegt. Unter „Zusätzliche Anhänge“ kannst du ein Foto oder PDF ergänzen.</p>
+      {/if}
     {/if}
   </section>
 
@@ -273,8 +380,8 @@
       <h2>Anlagevermögen</h2>
       {#if e.capitalizedAsAssetId}
         <p>
-          Aus dieser Position wurde eine Anlage aktiviert.
-          <a href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anlage →</a>
+          Diese Kosten sind als Anlage übernommen.
+          <a class="kb-link kb-target" href={`/assets/${e.capitalizedAsAssetId}`}>Zur Anschaffung <span aria-hidden="true">→</span></a>
         </p>
       {:else}
         <p class="muted">
@@ -297,41 +404,69 @@
     />
   </section>
 
-  {#if e.status !== "canceled"}
-    <section class="card danger">
-      <h2>Stornieren</h2>
+  <!-- U4 (V2-20): geöffnet über „Mehr“ → „Stornieren“; GoBD: Storno mit Pflichtgrund. -->
+  {#if e.status !== "canceled" && showCancel}
+    <section class="card danger" aria-labelledby="exp-cancel-h">
+      <h2 id="exp-cancel-h">Stornieren</h2>
       <p class="muted">
-        Gespeicherte Kosten werden nicht gelöscht, sondern storniert — so verlangt
-        es das Gesetz. Für eine Korrektur danach einfach neue Kosten erfassen.
+        Festgeschriebene Kosten werden nicht gelöscht, sondern storniert — so verlangt
+        es das Gesetz. Danach kannst du sie mit „Korrigiert neu erfassen“ neu anlegen.
       </p>
-      {#if showCancel}
-        <div class="row">
-          <input type="text" bind:value={cancelReason} placeholder="Storno-Grund" />
-          <button class="btn-danger btn-sm" onclick={doCancel} disabled={busy}>Storno bestätigen</button>
-          <button class="btn-secondary btn-sm" onclick={() => (showCancel = false)}>Abbrechen</button>
-        </div>
-      {:else}
-        <button class="btn-danger btn-sm" onclick={() => (showCancel = true)}>Kosten stornieren</button>
-      {/if}
+      <div class="cancel-form">
+          <div class="field grow">
+            <label for="cancel-reason">Storno-Grund<span class="req" aria-hidden="true">*</span></label>
+            <input
+              id="cancel-reason"
+              class="kb-input"
+              type="text"
+              autocomplete="off"
+              bind:this={cancelReasonEl}
+              bind:value={cancelReason}
+              oninput={() => (cancelError = "")}
+              required
+              aria-required="true"
+              aria-invalid={cancelError ? "true" : undefined}
+              aria-describedby={cancelError ? "cancel-reason-err" : "cancel-reason-hint"}
+            />
+            {#if cancelError}
+              <p id="cancel-reason-err" class="msg err">{cancelError}</p>
+            {:else}
+              <p id="cancel-reason-hint" class="msg hint">z. B. „doppelt erfasst“ oder „falscher Betrag“</p>
+            {/if}
+          </div>
+          <div class="row">
+            <button type="button" class="btn-secondary btn-sm" onclick={() => (showCancel = false)}>Abbrechen</button>
+            <button type="button" class="btn-danger btn-sm" onclick={doCancel} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>Kosten stornieren</button>
+          </div>
+      </div>
     </section>
   {/if}
 {/if}
 
 <style>
   .sub { margin: 0 0 1rem; }
-  /* .card / .card.danger entfernt — globale Definitionen aus tokens.css. */
-  dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1.5rem; margin: 0; }
-  dl div { display: flex; flex-direction: column; }
-  dt { font-size: 0.78rem; color: #6b7280; }
-  dd { margin: 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+  /* .card / .card.danger / .caveat / .kb-input: globale Definitionen aus tokens.css. */
+  dl { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2) var(--sp-5); margin: 0; }
+  dl div { display: flex; flex-direction: column; min-width: 0; }
+  dt { font-size: var(--fs-xs); color: var(--text-muted); }
+  dd { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+  dd.amt { font-variant-numeric: tabular-nums; }
+  dd.pre { white-space: pre-wrap; }
   @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  input[type="text"] { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; min-width: 16rem; max-width: 100%; }
-  .pay-grid { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
-  .pay-grid label { display: flex; flex-direction: column; font-size: 0.85rem; color: #4b5563; gap: 0.25rem; }
-  .pay-grid input, .pay-grid select { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
-  /* .caveat entfernt — globale Definition aus tokens.css greift. */
-  /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .muted { color: #6b7280; }
+  .row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+  .pay-grid { display: flex; gap: var(--sp-4); align-items: end; flex-wrap: wrap; }
+  .cancel-form { display: flex; gap: var(--sp-3); align-items: end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+  .field.grow { flex: 1 1 16rem; }
+  .field > label { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+  .req { color: var(--status-danger-fg); margin-left: 2px; }
+  .msg { font-size: var(--fs-sm); margin: 0; line-height: 1.4; }
+  .msg.err { color: var(--status-danger-fg); font-weight: 600; }
+  .msg.hint { color: var(--text-muted); }
+  .note {
+    flex-basis: 100%; margin: 0; font-size: var(--fs-sm);
+    color: var(--status-warning-fg); background: var(--status-warning-bg);
+    border-left: 3px solid var(--status-warning-line); padding: var(--sp-1) var(--sp-2);
+  }
+  .muted { color: var(--text-muted); }
 </style>

@@ -19,6 +19,8 @@ pub struct NotificationRule {
     pub enabled: i64,
     pub config_json: String,
     pub deliver_in_app: i64,
+    /// Spalte aus Migration 0012 (OS-Benachrichtigung der Desktop-Fassung);
+    /// bleibt forward-only bestehen, wird seit Lauf F nicht mehr gelesen.
     pub deliver_os_native: i64,
     pub created_at: String,
 }

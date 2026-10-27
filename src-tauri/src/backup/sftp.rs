@@ -97,6 +97,13 @@ struct HostKeyVerifier {
     seen: Arc<Mutex<Option<String>>>,
 }
 
+/// Sperrt den gesehenen Fingerprint ohne Panik bei Poisoning (KB-0034): der
+/// Wert (`Option<String>`) bleibt nach der Panik eines anderen Halters gültig.
+fn lock_seen(seen: &Mutex<Option<String>>) -> std::sync::MutexGuard<'_, Option<String>> {
+    seen.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl client::Handler for HostKeyVerifier {
     type Error = russh::Error;
 
@@ -107,7 +114,7 @@ impl client::Handler for HostKeyVerifier {
         // Gepinnt wird der Host-Key selbst; bei einem Zertifikat dessen Schlüssel
         // (die Signatur des Schlüsseltauschs hat russh davor schon geprüft).
         let fp = fingerprint_of(&server_public_key.public_key());
-        *self.seen.lock().expect("seen mutex poisoned") = Some(fp.clone());
+        *lock_seen(&self.seen) = Some(fp.clone());
         Ok(match &self.pinned {
             Some(p) => *p == fp,
             None => self.accept_unknown,
@@ -127,6 +134,8 @@ async fn open(
     password: &str,
     handler: HostKeyVerifier,
 ) -> Result<(Handle<HostKeyVerifier>, SftpSession)> {
+    // W14-017: auch gespeicherte Ziele aus älteren Ständen.
+    crate::nettest::check_host(host)?;
     let config = Arc::new(client::Config::default());
     let mut session = client::connect(config, (host, port), handler)
         .await
@@ -290,9 +299,7 @@ pub async fn probe(
                 ))
             })??;
 
-    let fingerprint = seen
-        .lock()
-        .expect("seen mutex poisoned")
+    let fingerprint = lock_seen(&seen)
         .clone()
         .ok_or_else(|| Error::Backup("SFTP-Host-Key konnte nicht gelesen werden.".into()))?;
 
@@ -344,7 +351,7 @@ pub async fn upload(
         })?;
     let password = password
         .filter(|p| !p.is_empty())
-        .map(str::to_string)
+        .map(|p| zeroize::Zeroizing::new(p.to_string()))
         .ok_or_else(|| {
             Error::Backup(
                 "Kein SFTP-Passwort gespeichert — bitte das SFTP-Ziel neu anlegen.".into(),
@@ -373,7 +380,7 @@ pub async fn upload(
             // Host-Key-Abweichung erkennbar machen (MITM-Schutz): wir haben den
             // Key gesehen, aber er passte nicht zum Pin → Verbindung wurde
             // abgelehnt.
-            if let Some(seen_fp) = seen.lock().expect("seen mutex poisoned").clone() {
+            if let Some(seen_fp) = lock_seen(&seen).clone() {
                 if seen_fp != pinned {
                     return Err(Error::Backup(format!(
                         "SFTP-Host-Schlüssel weicht vom hinterlegten Fingerprint ab! \
@@ -395,6 +402,24 @@ pub async fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KB-0034: ein vergifteter Mutex (Panik eines anderen Halters) führt nicht
+    /// zur Panik; der Wert bleibt lesbar und setzbar.
+    #[test]
+    fn poisoned_seen_mutex_does_not_panic() {
+        let seen = Arc::new(Mutex::new(Some("SHA256:alt".to_string())));
+        let clone = seen.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = clone.lock().unwrap();
+            panic!("Halter stirbt mit Sperre");
+        })
+        .join();
+        assert!(seen.is_poisoned());
+        assert_eq!(lock_seen(&seen).as_deref(), Some("SHA256:alt"));
+        *lock_seen(&seen) = Some("SHA256:neu".into());
+        assert_eq!(lock_seen(&seen).as_deref(), Some("SHA256:neu"));
+    }
+
     #[test]
     fn normalize_remote_dir_cases() {
         assert_eq!(normalize_remote_dir(""), ".");
@@ -415,13 +440,13 @@ mod tests {
     #[test]
     fn sftp_uri_format() {
         assert_eq!(
-            sftp_uri("kb", "host.de", 22, "backups/a.kbk"),
-            "sftp://kb@host.de:22/backups/a.kbk"
+            sftp_uri("kb", "backup.example.org", 22, "backups/a.kbk"),
+            "sftp://kb@backup.example.org:22/backups/a.kbk"
         );
         // Absoluter Remote-Pfad bekommt keinen doppelten Slash.
         assert_eq!(
-            sftp_uri("kb", "host.de", 2222, "/srv/a.kbk"),
-            "sftp://kb@host.de:2222/srv/a.kbk"
+            sftp_uri("kb", "backup.example.org", 2222, "/srv/a.kbk"),
+            "sftp://kb@backup.example.org:2222/srv/a.kbk"
         );
     }
 }

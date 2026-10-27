@@ -72,3 +72,33 @@ Kontext gilt nicht mehr; Unlock-Gate (Pt. 2) und Catch-up (Pt. 4) bleiben.
   Compare-and-Swap (`UPDATE … WHERE id = ? AND next_due_date = ?`).
 - **Drop-Folder-Job entfällt** (ADR 0039, E11; Amendment ADR 0037): Er verlässt
   `run_tick` in Block W5, der Code entfällt in Block W11.
+
+## Amendment 2026-10-24 — Dauerbetrieb (ADR 0040, Lauf F)
+
+**Status:** Akzeptiert. Pt. 4 (Catch-up) und der Satz „holt der Tick alles
+Fällige nach“ im Amendment 2026-10-23 gelten nur noch mit Grenze:
+
+- **Nachholen begrenzt.** Bis drei fällige Termine je Abo bucht der Lauf selbst
+  (je Termin eine Position mit dem Stichtag als Belegdatum, Sammelhinweis); bei
+  mehr Terminen nur nach Bestätigung des Inhabers („Rückstand …“: nachholen,
+  höchstens 24, oder ab heute fortsetzen). Das Fortsetzen eines pausierten
+  Auto-Abos mit verpassten Terminen verlangt dieselbe Wahl.
+- **Sperre, Compare-and-Swap, Transaktion** je Abo wie bei den Abo-Rechnungen;
+  ein Fehler betrifft nur sein Abo (Hinweis), das Backup entsteht trotzdem.
+- **Abgeschlossenes Geschäftsjahr:** Hinweis statt Warnung bei jedem Tick;
+  „nachholen“ überspringt Termine in abgeschlossenen Jahren ohne Beleg (Audit).
+- **Modus „Erinnerung“** (`auto_create_expense = 0`) erzeugt am Stichtag einen
+  Hinweis „Abo fällig“ (einmal je Abo und Stichtag).
+- **Pause** bei unplausibler Uhr bzw. nach einem Restore (ADR 0040 Nr. 5/6).
+- Die Uhr kommt aus dem `AppCtx` (`clock::Clock`); der Abbruch-Token des
+  Amendments 2026-10-23 ist die kooperative Abbruch-Anforderung
+  `AppCtx::scheduler_stop` (ADR 0040 Nr. 9).
+- **Tages-Backup kalenderfest** statt „fällig, sobald das letzte Backup älter
+  als 24 h ist“ (Amendment 2026-10-23): genau eines je Berliner Kalendertag ab
+  einer einstellbaren Uhrzeit (Standard 02:30), Backoff persistiert (ADR 0040
+  Nr. 15).
+- **Kein Job hängt am Start.** Der Kontext „Automatik läuft nur, während die App
+  offen ist“ und der Catch-up „beim nächsten Start“ (Konsequenzen) beschreiben
+  die Desktop-Fassung; im Server bestimmt jeder Job seine Fälligkeit aus
+  persistierten Werten und der Uhr, der erste Tick folgt 60 s nach dem
+  Entsperren (ADR 0040 Nr. 18).

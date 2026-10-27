@@ -10,6 +10,9 @@ pub mod templates;
 pub mod typst_render;
 
 #[cfg(test)]
+pub(crate) mod snapshot;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn it_compiles() {}

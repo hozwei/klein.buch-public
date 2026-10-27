@@ -1,16 +1,19 @@
 # Mitwirken
 
-## Beiträge Dritter: vorerst nicht
+## Beiträge Dritter: vorerst keine Code-Beiträge
 
-Pull Requests und Patches von Dritten werden **vorerst nicht angenommen**. Der
-Rechteinhaber hat noch nicht über eine Beitragsvereinbarung (CLA) bzw. eine
-Rechteübertragung entschieden; ohne sie ließe sich die Option einer zusätzlichen
-kommerziellen Lizenz (Dual-Licensing) nicht offenhalten (ADR 0014, Amendment vom
-2026-10-23).
+Code-Beiträge — Pull Requests, Patches und Code in Issues — werden **nicht
+angenommen und nicht übernommen**. Klein.Buch hat einen einzigen Urheber und
+Rechteinhaber; so bleiben spätere Lizenzentscheidungen, auch eine zusätzliche
+kommerzielle Lizenz, ohne Zustimmung Dritter möglich (ADR 0014, Amendment vom
+2026-10-24).
 
-Änderungen entstehen im Entwicklungsstand des Rechteinhabers und kommen von dort
-in dieses Repository. Auf GitHub wird nichts gemergt, auch keine Pull Requests von
-Dependabot; die gelten nur als Hinweis.
+Fehlerberichte, Funktionswünsche und Sicherheitsmeldungen sind willkommen. Bitte das
+Problem oder die Idee beschreiben, ohne längeren Code beizulegen — umgesetzt
+wird im Entwicklungsstand des Rechteinhabers, von dort kommen die Änderungen in
+dieses Repository. Auf GitHub wird nichts gemergt, auch keine Pull Requests von
+Dependabot; die gelten nur als Hinweis (übernommen werden Versionsnummern, kein
+fremder Code).
 
 ## Fehler und Wünsche
 

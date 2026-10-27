@@ -23,6 +23,23 @@ pub struct OriginalInvoiceView<'a> {
     pub items: Vec<OriginalItemView<'a>>,
 }
 
+/// Bezug eines Storno-Belegs auf die stornierte Rechnung: Nummer (BT-25) und
+/// Rechnungsdatum (BT-26) des Originals, auf dem PDF als „Storno zur Rechnung
+/// <Nr> vom <Datum>“ (§31 Abs. 5 UStDV, GoBD Rz. 64; Lauf E). Die interne ID
+/// (`is_storno_for`) taugt dafür nicht — der Empfänger kennt nur die Nummer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrecedingInvoice {
+    pub number: String,
+    pub issue_date: NaiveDate,
+}
+
+/// Geschäftsjahr und Nummernkreis eines Storno-Belegs folgen dem
+/// Storno-Datum, nicht dem Original (GoBD Rz. 51: Zuordnung zum
+/// Geschäftsjahr, in dem der Vorgang anfällt; Lauf E, ADR 0039 Nr. 122).
+pub fn storno_fiscal_year(storno_date: &NaiveDate) -> i32 {
+    crate::domain::fiscal_year::fiscal_year_for(storno_date)
+}
+
 #[derive(Debug, Clone)]
 pub struct OriginalItemView<'a> {
     pub position: u32,
@@ -188,6 +205,79 @@ mod tests {
         assert_eq!(storno_totals.tax_amount_cents, 0);
     }
 
+    // R1-S2-TESTS: Storno einer regelbesteuerten Rechnung (19 % und 7 %,
+    // Bruchteil-Mengen mit Halbcent-Rundung) ergibt exakt die negierten Netto-,
+    // Steuer- und Bruttowerte.
+    #[test]
+    fn storno_with_vat_mirrors_original_exactly() {
+        let items = vec![
+            OriginalItemView {
+                position: 1,
+                description: "Beratung",
+                quantity: 2.5,
+                unit_code: "HUR",
+                unit_price_cents: 1_999,
+                tax_rate_percent: 19.0,
+                tax_category_code: "S",
+            },
+            OriginalItemView {
+                position: 2,
+                description: "Material",
+                quantity: 0.333,
+                unit_code: "C62",
+                unit_price_cents: 333,
+                tax_rate_percent: 19.0,
+                tax_category_code: "S",
+            },
+            OriginalItemView {
+                position: 3,
+                description: "Buch",
+                quantity: 1.0,
+                unit_code: "C62",
+                unit_price_cents: 50,
+                tax_rate_percent: 7.0,
+                tax_category_code: "S",
+            },
+        ];
+        let original = OriginalInvoiceView {
+            invoice_number: "RE-2026-0002",
+            currency_code: "EUR",
+            pdf_template: "default",
+            items,
+        };
+        let original_items: Vec<InvoiceItemInput> = original
+            .items
+            .iter()
+            .map(|it| InvoiceItemInput {
+                position: it.position,
+                description: it.description.into(),
+                quantity: it.quantity,
+                unit_code: it.unit_code.into(),
+                unit_price_cents: it.unit_price_cents,
+                tax_rate_percent: it.tax_rate_percent,
+                tax_category_code: it.tax_category_code.into(),
+                description_title: None,
+                description_markup: None,
+                source_package_id: None,
+                source_package_revision: None,
+            })
+            .collect();
+        let o = compute_totals(&original_items);
+        let storno = build_storno_input(
+            &original,
+            "uuid".into(),
+            NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
+            None,
+        );
+        let s = compute_totals(&storno.items);
+        assert!(o.tax_amount_cents > 0);
+        assert_eq!(s.net_amount_cents, -o.net_amount_cents);
+        assert_eq!(s.tax_amount_cents, -o.tax_amount_cents);
+        assert_eq!(s.gross_amount_cents, -o.gross_amount_cents);
+        assert_eq!(storno.items[0].tax_category_code, "S");
+        assert_eq!(storno.items[2].tax_rate_percent, 7.0);
+    }
+
     #[test]
     fn storno_description_carries_original_reference() {
         let storno = build_storno_input(
@@ -211,5 +301,14 @@ mod tests {
         );
         assert_eq!(storno.is_storno_for.as_deref(), Some("uuid-orig"));
         assert_eq!(storno.cancel_reason.as_deref(), Some("Reason"));
+    }
+
+    #[test]
+    fn storno_fiscal_year_follows_the_storno_date() {
+        // Original vom Dezember, Storno im Januar: Geschäftsjahr des Stornos.
+        let jan = NaiveDate::from_ymd_opt(2027, 1, 15).unwrap();
+        assert_eq!(storno_fiscal_year(&jan), 2027);
+        let dec = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+        assert_eq!(storno_fiscal_year(&dec), 2026);
     }
 }

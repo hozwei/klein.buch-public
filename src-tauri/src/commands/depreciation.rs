@@ -1,4 +1,4 @@
-//! Tauri-Commands für AfA-Buchungen (Block 12, Phase 2C).
+//! Commands für AfA-Buchungen (Block 12, Phase 2C).
 //!
 //! - [`depreciation_accrue_year`] — „AfA für Jahr X jetzt buchen" (Erstanwendung
 //!   + manuelles Nachbuchen). Ruft die Shell [`crate::depreciation::accrue_yearly`].
@@ -35,8 +35,11 @@ pub async fn depreciation_accrue_year(
 
     let pool = &pool;
     let paths = ctx.paths.clone();
-    let today = crate::clock::today_berlin();
-    accrue_yearly::accrue_for_year(pool, &paths, session, fiscal_year, today).await
+    let now = ctx.clock().now_utc();
+    // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss während der Buchung; ein
+    // schon abgeschlossenes Jahr überspringt `accrue_yearly` in der Transaktion.
+    let _fy = crate::fiscal_year::guard::booking_permit().await;
+    accrue_yearly::accrue_for_year(pool, &paths, session, fiscal_year, now).await
 }
 
 /// Argumente von [`depreciation_reset_asset`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -58,7 +61,10 @@ pub async fn depreciation_reset_asset(
 
     let pool = &pool;
     let paths = ctx.paths.clone();
-    accrue_yearly::reset_asset(pool, &paths, session, &asset_id).await?;
+    // Lauf F (R2-S2-GJLOCK): kein Jahresabschluss zwischen Zurücksetzen und
+    // Festschreiben (die AfA des Jahres fehlte sonst im Snapshot).
+    let _fy = crate::fiscal_year::guard::booking_permit().await;
+    accrue_yearly::reset_asset(pool, &paths, session, &asset_id, ctx.clock().now_utc()).await?;
     assets::get_detail(pool, &asset_id)
         .await?
         .ok_or_else(|| Error::Domain("reset: detail-load leer".into()))

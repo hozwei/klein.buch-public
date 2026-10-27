@@ -1,4 +1,4 @@
-//! Tauri-Commands für Kosten (Block 9; E-Rechnung-Empfang folgt in Block 11).
+//! Commands für Kosten (Block 9; E-Rechnung-Empfang folgt in Block 11).
 //!
 //! Orchestriert:
 //! - Domain-Validation ([`crate::domain::expense::validate_expense`]) — Hard-Block.
@@ -14,10 +14,12 @@
 //!   ([`expenses_cancel`]), nie Edit/Löschung.
 //! - §19 betrifft NUR Ausgangsbelege — Eingangsrechnungen DÜRFEN USt enthalten.
 //!   Diese Pipeline erzwingt daher keine USt-Freiheit (siehe domain::expense).
-//! - §13b ist ein reines Hinweis-Flag (keine USt-Auto-Berechnung).
+//! - §13b-Flag (ADR 0039 Nr. 143): Mit Flag muss die USt der Kosten 0 sein
+//!   (`ReverseChargeWithTax`); die selbst geschuldete Steuer berechnet Klein.Buch
+//!   nicht, sie geht über die Umsatzsteuer-Voranmeldung.
 
 use crate::app_ctx::AppCtx;
-use chrono::{Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
@@ -169,19 +171,21 @@ pub async fn expenses_create(ctx: &Arc<AppCtx>, args: ExpensesCreateArgs) -> Res
         args.receipt = Some(ctx.uploads.read(id, &[UploadKind::Receipt])?);
     }
     let paths = ctx.paths.clone();
-    let detail = create_core(&pool, &paths, session, args).await?;
+    let detail = create_core(&pool, &paths, session, args, ctx.clock().now_utc()).await?;
     if let Some(id) = upload_id.as_deref() {
         ctx.uploads.consume(id);
     }
     Ok(detail)
 }
 
-/// Testbarer Kern von [`expenses_create`] (ohne Tauri-State).
+/// Testbarer Kern von [`expenses_create`] (ohne `AppCtx`).
+/// `now` (Backup-Vermerk) aus der Uhr des Aufrufers (D-20).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,
     session: &backup::BackupSession,
     args: ExpenseCreateArgs,
+    now: DateTime<Utc>,
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
@@ -212,9 +216,9 @@ pub async fn create_core(
     ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     if let Some(pd) = input.paid_date {
-        crate::fiscal_year::guard::ensure_year_open(pool, pd.year() as i64).await?;
+        crate::fiscal_year::guard::check_open(pool, &fy, pd.year() as i64).await?;
     }
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
@@ -253,19 +257,18 @@ pub async fn create_core(
         "expense.create",
         "expense",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"category":"{}","reverse_charge_13b":{},"receipt":{}}}"#,
-            expense_number,
-            row.gross_amount_cents,
-            escape(&row.category),
-            row.reverse_charge_13b == 1,
-            receipt_archive_id.is_some()
-        )),
+        Some(serde_json::json!({
+            "number": expense_number,
+            "gross": row.gross_amount_cents,
+            "category": &row.category,
+            "reverse_charge_13b": row.reverse_charge_13b == 1,
+            "receipt": receipt_archive_id.is_some(),
+        })),
     )
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
+    backup::request_auto_backup(pool, paths, session, "expense.lock", now)
         .await
         .ok();
 
@@ -303,11 +306,27 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
     let existing = expenses::get(pool, &args.expense_id)
         .await?
         .ok_or_else(|| Error::Domain("cancel: Kostenbeleg nicht gefunden.".into()))?;
-    guard::ensure_year_open(pool, existing.fiscal_year).await?;
+    let fy = guard::ensure_year_open(pool, existing.fiscal_year).await?;
     if let Some(paid) = existing.paid_date.as_deref() {
         if let Ok(d) = NaiveDate::parse_from_str(paid, "%Y-%m-%d") {
-            guard::ensure_year_open(pool, d.year() as i64).await?;
+            guard::check_open(pool, &fy, d.year() as i64).await?;
         }
+    }
+    // Lauf F8: Aktivierte Kosten wirken seit F5b nur noch über die AfA der
+    // Anlage; ein Storno ließe die Anlage mit voller AfA stehen (EÜR) und das
+    // DATEV-Anlagekonto ohne Zugang. Eine Rückabwicklung des Kaufs ist ein
+    // Abgang der Anlage.
+    if let Some(asset_id) = existing.capitalized_as_asset_id.as_deref() {
+        let number = crate::db::repo::assets::get(pool, asset_id)
+            .await?
+            .map(|a| a.asset_number)
+            .unwrap_or_else(|| asset_id.to_string());
+        return Err(Error::Domain(format!(
+            "Diese Kosten sind als Anlage {number} aktiviert und lassen sich nicht \
+             stornieren. Einen rückabgewickelten Kauf erfasst Du als Abgang der Anlage \
+             (Art „Verkauf“, Erlös = Erstattung); die Kosten bleiben als Anschaffung \
+             bestehen."
+        )));
     }
 
     expenses::cancel(pool, &args.expense_id, args.reason.trim()).await?;
@@ -316,13 +335,19 @@ pub async fn expenses_cancel(ctx: &Arc<AppCtx>, args: ExpensesCancelArgs) -> Res
         "expense.cancel",
         "expense",
         &args.expense_id,
-        Some(&format!(r#"{{"reason":"{}"}}"#, escape(args.reason.trim()))),
+        Some(serde_json::json!({ "reason": args.reason.trim() })),
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, &paths, session, "expense.cancel")
-        .await
-        .ok();
+    backup::request_auto_backup(
+        pool,
+        &paths,
+        session,
+        "expense.cancel",
+        ctx.clock().now_utc(),
+    )
+    .await
+    .ok();
 
     expenses::get(pool, &args.expense_id)
         .await?
@@ -363,41 +388,52 @@ pub async fn expenses_set_payment(
     let existing = expenses::get(pool, &args.expense_id)
         .await?
         .ok_or_else(|| Error::Domain("set_payment: Kostenbeleg nicht gefunden.".into()))?;
+    let fy = guard::booking_permit().await;
     if let Some(old_paid) = existing.paid_date.as_deref() {
         if let Ok(d) = NaiveDate::parse_from_str(old_paid, "%Y-%m-%d") {
-            guard::ensure_year_open(pool, d.year() as i64).await?;
+            guard::check_open(pool, &fy, d.year() as i64).await?;
         }
     }
     if let Some(new_paid) = args.paid_date {
-        guard::ensure_year_open(pool, new_paid.year() as i64).await?;
+        guard::check_open(pool, &fy, new_paid.year() as i64).await?;
     }
 
+    // Lauf F8c/F8d (ADR 0039 Nr. 147, 148): Änderung und Audit in **einer**
+    // Transaktion; das Zahldatum muss noch dem Stand der Jahresprüfung oben
+    // entsprechen (sonst gleichzeitig geändert). Den §19-Status der Kosten
+    // ändert das Zahldatum nicht mehr: maßgeblich ist der Status bei
+    // Leistungsbezug (Belegdatum, ein festgeschriebenes Kernfeld), § 15 Abs. 1
+    // UStG. Anschaffungskosten aktivierter Kosten bleiben damit passend.
     let paid = args.paid_date.map(|d| d.to_string());
-    let row = expenses::set_payment(
-        pool,
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let current = expenses::get_in(&mut tx, &args.expense_id)
+        .await?
+        .ok_or_else(|| Error::Domain("set_payment: Kostenbeleg nicht gefunden.".into()))?;
+    if current.paid_date != existing.paid_date {
+        return Err(Error::Domain(
+            "Die Kosten wurden inzwischen geändert. Bitte neu laden.".into(),
+        ));
+    }
+    let row = expenses::set_payment_in(
+        &mut tx,
         &args.expense_id,
         paid.as_deref(),
         args.paid_from_account_id.as_deref(),
     )
     .await?;
-    audit_log::append(
-        pool,
+    audit_log::append_in(
+        &mut tx,
         "expense.payment_set",
         "expense",
         &args.expense_id,
-        Some(&format!(
-            r#"{{"paid_date":{},"account":{}}}"#,
-            match paid.as_deref() {
-                Some(d) => format!("\"{d}\""),
-                None => "null".to_string(),
-            },
-            match args.paid_from_account_id.as_deref() {
-                Some(a) => format!("\"{}\"", escape(a)),
-                None => "null".to_string(),
-            }
-        )),
+        Some(serde_json::json!({
+            "paid_date": paid.as_deref(),
+            "account": args.paid_from_account_id.as_deref(),
+        })),
     )
     .await?;
+    tx.commit().await?;
+    drop(fy);
     Ok(row)
 }
 
@@ -434,7 +470,7 @@ pub async fn expenses_parse_einvoice(
 }
 
 /// Headless-Helfer hinter [`expenses_parse_einvoice`]: identische Logik, aber
-/// ohne `AppHandle`/`State`-Abhaengigkeit — damit der Drop-Folder-Scheduler
+/// ohne `AppCtx`-Abhängigkeit — damit der Drop-Folder-Scheduler
 /// (Block PV1-DROP) **dieselbe** Pipeline benutzt wie der UI-Pfad und nicht
 /// gabelt. Aufrufer reicht eine fertige [`Paths`]-Instanz.
 pub async fn parse_einvoice_with_paths(
@@ -532,20 +568,22 @@ pub async fn expenses_create_from_einvoice(
     let upload_id = std::mem::take(&mut args.upload_id);
     args.original = Some(ctx.uploads.read(&upload_id, &[UploadKind::EInvoice])?);
     let paths = ctx.paths.clone();
-    let detail = create_from_einvoice_with(pool, &paths, session, args).await?;
+    let detail =
+        create_from_einvoice_with(pool, &paths, session, args, ctx.clock().now_utc()).await?;
     ctx.uploads.consume(&upload_id);
     Ok(detail)
 }
 
 /// Headless-Helfer hinter [`expenses_create_from_einvoice`]: identische
 /// Pipeline (Validate → Belegnummer → Archive → Expense → Audit → Auto-Backup),
-/// aber ohne `AppHandle`/`State`. Verwendet vom Drop-Folder-Scheduler (Block
+/// aber ohne `AppCtx`. Verwendet vom Drop-Folder-Scheduler (Block
 /// PV1-DROP) — UI-Pfad und automatischer Pfad teilen sich genau diese Funktion.
 pub async fn create_from_einvoice_with(
     pool: &SqlitePool,
     paths: &Paths,
     session: &backup::BackupSession,
     args: EInvoiceCreateArgs,
+    now: DateTime<Utc>,
 ) -> Result<ExpenseDetail> {
     let mut input = args.input;
 
@@ -581,9 +619,9 @@ pub async fn create_from_einvoice_with(
     ));
     // GJ-Festschreibung (Block 15): keine neue Buchung mit Datum in einem
     // abgeschlossenen Geschäftsjahr — weder Beleg- noch Zahlungs-Datum.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     if let Some(pd) = input.paid_date {
-        crate::fiscal_year::guard::ensure_year_open(pool, pd.year() as i64).await?;
+        crate::fiscal_year::guard::check_open(pool, &fy, pd.year() as i64).await?;
     }
     let expense_number = numbering::next_number(pool, DocType::Expense, fiscal_year as i32).await?;
 
@@ -629,25 +667,18 @@ pub async fn create_from_einvoice_with(
         "expense.import_einvoice",
         "expense",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","gross":{},"source_format":"{}","vendor_invoice_number":{},"validation":{}}}"#,
-            expense_number,
-            row.gross_amount_cents,
-            escape(&args.source_format),
-            match input.vendor_invoice_number.as_deref() {
-                Some(v) => format!("\"{}\"", escape(v)),
-                None => "null".to_string(),
-            },
-            match status_str.as_deref() {
-                Some(s) => format!("\"{s}\""),
-                None => "null".to_string(),
-            }
-        )),
+        Some(serde_json::json!({
+            "number": expense_number,
+            "gross": row.gross_amount_cents,
+            "source_format": &args.source_format,
+            "vendor_invoice_number": input.vendor_invoice_number.as_deref(),
+            "validation": status_str.as_deref(),
+        })),
     )
     .await?;
 
     // Lock-Event → Auto-Critical-Backup (best-effort).
-    backup::auto_backup_if_unlocked(pool, paths, session, "expense.lock")
+    backup::request_auto_backup(pool, paths, session, "expense.lock", now)
         .await
         .ok();
 
@@ -659,10 +690,6 @@ pub async fn create_from_einvoice_with(
 /// Heutiges Datum in Europe/Berlin (`crate::clock`, Plan W1.8).
 fn today_berlin() -> NaiveDate {
     crate::clock::today_berlin()
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 // =============================================================================
@@ -787,7 +814,7 @@ pub struct ExpensesReceiptXmlTextArgs {
     pub expense_id: String,
 }
 
-/// Tauri-Wrapper um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
+/// Command um [`load_receipt_xml`]: hängt den echten Mustang-Sidecar
 /// für ZUGFeRD-PDF-Extraktion ein.
 pub async fn expenses_receipt_xml_text(
     ctx: &Arc<AppCtx>,

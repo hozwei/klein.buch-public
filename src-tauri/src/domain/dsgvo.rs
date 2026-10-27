@@ -24,13 +24,19 @@
 use serde::Serialize;
 
 use crate::db::models::{
-    ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow, QuoteRow,
+    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow,
+    QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
 };
 
 /// Steuert, ob rein interne `notes`-Felder (Kontakt/Rechnung/Angebot/Kosten) in
 /// die Auskunft aufgenommen werden. Manuel-Entscheidung Block 18: **false**.
 /// Bewusst eine sichtbare Konstante statt einer stillen Auslassung.
 pub const INCLUDE_INTERNAL_NOTES: bool = false;
+
+/// Status eines verworfenen, nie ausgestellten Rechnungs-Entwurfs in der
+/// Auskunft (Lauf F2c). In der Datenbank bleibt `status = 'draft'` mit
+/// `voided_at`; die betroffene Person soll keinen „offenen Entwurf“ lesen.
+pub const VOIDED_STATUS: &str = "voided";
 
 // ============================================================================
 // Eingabe (von der Shell befüllt) — Borrows, damit der Core nichts kopiert.
@@ -46,6 +52,12 @@ pub struct RawInvoice<'a> {
 pub struct RawQuote<'a> {
     pub quote: &'a QuoteRow,
     pub items: &'a [QuoteItemRow],
+}
+
+/// Eine Abo-Rechnungs-Vorlage samt Positionen (Lauf F2c).
+pub struct RawRecurringInvoice<'a> {
+    pub template: &'a RecurringInvoiceRow,
+    pub items: &'a [RecurringInvoiceItemRow],
 }
 
 /// Metadaten eines archivierten Dokuments (PDF/XML/Beleg/Anhang). Die Bytes
@@ -78,6 +90,9 @@ pub struct RawData<'a> {
     pub invoices: &'a [RawInvoice<'a>],
     pub quotes: &'a [RawQuote<'a>],
     pub expenses: &'a [ExpenseRow],
+    pub recurring_invoices: &'a [RawRecurringInvoice<'a>],
+    pub subscriptions: &'a [RecurringSubscriptionRow],
+    pub assets: &'a [AssetRow],
     pub documents: &'a [RawDocument],
     pub emails: &'a [EmailLogRow],
     pub audit: &'a [RawAudit],
@@ -106,6 +121,12 @@ pub struct DataSubjectReport {
     pub quotes: Vec<QuoteEntry>,
     /// Kosten, bei denen der Kontakt **Lieferant** ist (Eingangsseite).
     pub expenses: Vec<ExpenseEntry>,
+    /// Abo-Rechnungs-Vorlagen an die Person (Lauf F2c).
+    pub recurring_invoices: Vec<RecurringInvoiceEntry>,
+    /// Kosten-Abos mit der Person als Lieferant (Lauf F2c).
+    pub subscriptions: Vec<SubscriptionEntry>,
+    /// Anlagen mit der Person als Lieferant (Lauf F2c).
+    pub assets: Vec<AssetEntry>,
     /// Archivierte Dokumente (PDF/XML/Belege/Anhänge) — Metadaten.
     pub documents: Vec<DocumentEntry>,
     /// Versandprotokoll-Einträge mit Bezug zur Person.
@@ -253,7 +274,13 @@ pub struct InvoiceEntry {
     pub invoice_date: String,
     pub delivery_date: Option<String>,
     pub due_date: Option<String>,
+    /// Status wie in der Datenbank; ein verworfener Entwurf steht als
+    /// `voided` (Lauf F2c), nicht als `draft`.
     pub status: String,
+    /// Zeitpunkt (UTC) und Grund des Verwerfens eines nie ausgestellten
+    /// Entwurfs (W14-032, Lauf F2c).
+    pub voided_at: Option<String>,
+    pub void_reason: Option<String>,
     pub net_amount_cents: i64,
     pub tax_amount_cents: i64,
     pub gross_amount_cents: i64,
@@ -312,6 +339,53 @@ pub struct ExpenseEntry {
     pub reverse_charge_13b: bool,
     pub status: String,
     pub canceled_at: Option<String>,
+}
+
+/// Abo-Rechnungs-Vorlage (Lauf F2c). Ohne interne Notiz
+/// ([`INCLUDE_INTERNAL_NOTES`]).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringInvoiceEntry {
+    pub label: String,
+    pub frequency: String,
+    pub day_of_period: i64,
+    pub next_due_date: String,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub auto_mode: String,
+    pub payment_terms_days: i64,
+    pub active: bool,
+    pub last_executed_at: Option<String>,
+    pub created_at: String,
+    pub items: Vec<ItemEntry>,
+}
+
+/// Kosten-Abo mit der Person als Lieferant (Lauf F2c).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionEntry {
+    pub label: String,
+    pub frequency: String,
+    pub next_due_date: String,
+    pub expected_amount_cents: i64,
+    pub category: String,
+    pub description_template: String,
+    pub active: bool,
+    pub last_executed_at: Option<String>,
+    pub created_at: String,
+}
+
+/// Anlage mit der Person als Lieferant (Lauf F2c). Ohne interne Notiz.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEntry {
+    pub asset_number: String,
+    pub label: String,
+    pub acquisition_date: String,
+    pub acquisition_cost_cents: i64,
+    pub disposed: bool,
+    pub disposal_date: Option<String>,
+    pub disposal_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -449,7 +523,13 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 invoice_date: inv.invoice_date.clone(),
                 delivery_date: inv.delivery_date.clone(),
                 due_date: inv.due_date.clone(),
-                status: inv.status.clone(),
+                status: if inv.voided_at.is_some() {
+                    VOIDED_STATUS.to_string()
+                } else {
+                    inv.status.clone()
+                },
+                voided_at: inv.voided_at.clone(),
+                void_reason: inv.void_reason.clone(),
                 net_amount_cents: inv.net_amount_cents,
                 tax_amount_cents: inv.tax_amount_cents,
                 gross_amount_cents: inv.gross_amount_cents,
@@ -516,6 +596,71 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
         })
         .collect();
 
+    let recurring_invoices = raw
+        .recurring_invoices
+        .iter()
+        .map(|rt| {
+            let t = rt.template;
+            RecurringInvoiceEntry {
+                label: t.label.clone(),
+                frequency: t.frequency.clone(),
+                day_of_period: t.day_of_period,
+                next_due_date: t.next_due_date.clone(),
+                start_date: t.start_date.clone(),
+                end_date: t.end_date.clone(),
+                auto_mode: t.auto_mode.clone(),
+                payment_terms_days: t.payment_terms_days,
+                active: flag(t.active),
+                last_executed_at: t.last_executed_at.clone(),
+                created_at: t.created_at.clone(),
+                items: rt
+                    .items
+                    .iter()
+                    .map(|it| ItemEntry {
+                        position: it.position,
+                        description: it.description.clone(),
+                        quantity: it.quantity,
+                        unit_code: it.unit_code.clone(),
+                        unit_price_cents: it.unit_price_cents,
+                        net_amount_cents: it.net_amount_cents,
+                        tax_rate_percent: it.tax_rate_percent,
+                        tax_category_code: it.tax_category_code.clone(),
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
+    let subscriptions = raw
+        .subscriptions
+        .iter()
+        .map(|s| SubscriptionEntry {
+            label: s.label.clone(),
+            frequency: s.frequency.clone(),
+            next_due_date: s.next_due_date.clone(),
+            expected_amount_cents: s.expected_amount_cents,
+            category: s.category.clone(),
+            description_template: s.description_template.clone(),
+            active: flag(s.active),
+            last_executed_at: s.last_executed_at.clone(),
+            created_at: s.created_at.clone(),
+        })
+        .collect();
+
+    let assets = raw
+        .assets
+        .iter()
+        .map(|a| AssetEntry {
+            asset_number: a.asset_number.clone(),
+            label: a.label.clone(),
+            acquisition_date: a.acquisition_date.clone(),
+            acquisition_cost_cents: a.acquisition_cost_cents,
+            disposed: flag(a.disposed),
+            disposal_date: a.disposal_date.clone(),
+            disposal_type: a.disposal_type.clone(),
+        })
+        .collect();
+
     let documents = raw
         .documents
         .iter()
@@ -568,6 +713,9 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
         invoices,
         quotes,
         expenses,
+        recurring_invoices,
+        subscriptions,
+        assets,
         documents,
         emails,
         audit_events,
@@ -592,7 +740,7 @@ mod tests {
             postal_code: Some("84028".into()),
             city: Some("Landshut".into()),
             country_code: "DE".into(),
-            email: Some("erika@example.de".into()),
+            email: Some("erika@example.org".into()),
             phone: Some("0871 12345".into()),
             iban: None,
             bic: None,
@@ -615,7 +763,7 @@ mod tests {
             delivery_date: Some("2026-02-28".into()),
             due_date: Some("2026-03-15".into()),
             contact_id: "c1".into(),
-            seller_name: "Wildbach".into(),
+            seller_name: "Beispiel IT".into(),
             seller_street: "Weg 2".into(),
             seller_postal_code: "84028".into(),
             seller_city: "Landshut".into(),
@@ -652,9 +800,11 @@ mod tests {
             buyer_city: Some("Landshut".into()),
             buyer_country_code: Some("DE".into()),
             buyer_vat_id: Some("DE123456789".into()),
-            buyer_email: Some("erika@example.de".into()),
+            buyer_email: Some("erika@example.org".into()),
             derived_from_quote_id: None,
             paid_to_account_id: None,
+            voided_at: None,
+            void_reason: None,
         }
     }
 
@@ -719,8 +869,8 @@ mod tests {
             related_kind: "invoice".into(),
             related_id: Some("i1".into()),
             related_number: Some("RE-2026-0001".into()),
-            from_email: "info@wildbach.de".into(),
-            to_email: "erika@example.de".into(),
+            from_email: "info@beispiel-it.example.org".into(),
+            to_email: "erika@example.org".into(),
             subject: "Ihre Rechnung RE-2026-0001".into(),
             attachment_count: 2,
             status: "success".into(),
@@ -746,11 +896,11 @@ mod tests {
 
     fn controller() -> ControllerInfo {
         ControllerInfo {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             address: "Weg 2, 84028 Landshut".into(),
             tax_number: Some("123/456/789".into()),
             vat_id: None,
-            email: Some("info@wildbach.de".into()),
+            email: Some("info@beispiel-it.example.org".into()),
             phone: Some("0871 99999".into()),
         }
     }
@@ -778,6 +928,9 @@ mod tests {
             invoices: &invoices,
             quotes: &[],
             expenses: &exps,
+            recurring_invoices: &[],
+            subscriptions: &[],
+            assets: &[],
             documents: &docs,
             emails: &mails,
             audit: &audit,
@@ -806,6 +959,53 @@ mod tests {
         assert!(report.processing_info.retention.contains("147"));
     }
 
+    /// Referenz-PDF der DSGVO-Auskunft für Typst-Updates (siehe `pdf::snapshot`).
+    #[test]
+    #[ignore = "erzeugt Referenz-PDFs nach KB_PDF_SNAPSHOT_DIR (Typst-Update)"]
+    fn pdf_snapshot_dsgvo() {
+        let Some(dir) = crate::pdf::snapshot::out_dir() else {
+            return;
+        };
+        let c = contact();
+        let inv = invoice();
+        let items = vec![invoice_item()];
+        let invoices = vec![RawInvoice {
+            invoice: &inv,
+            items: &items,
+        }];
+        let exps = vec![expense()];
+        let docs = vec![raw_doc()];
+        let mails = vec![email()];
+        let audit = vec![RawAudit {
+            timestamp_utc: "2026-03-01 12:00:00".into(),
+            action: "invoice.lock".into(),
+            entity_type: Some("invoice".into()),
+            entity_id: Some("i1".into()),
+        }];
+        let raw = RawData {
+            contact: &c,
+            invoices: &invoices,
+            quotes: &[],
+            expenses: &exps,
+            recurring_invoices: &[],
+            subscriptions: &[],
+            assets: &[],
+            documents: &docs,
+            emails: &mails,
+            audit: &audit,
+            controller: controller(),
+            generated_at: "2026-05-24 12:00:00".into(),
+        };
+        let report = assemble(&raw);
+        let pdf = crate::pdf::typst_render::render_pdf(
+            crate::pdf::templates::DEFAULT_DSGVO_TEMPLATE,
+            &serde_json::to_string(&report).unwrap(),
+            None,
+        )
+        .expect("DSGVO-PDF");
+        crate::pdf::snapshot::write(&dir, "dsgvo-auskunft", &pdf);
+    }
+
     #[test]
     fn assemble_omits_internal_notes() {
         const {
@@ -827,6 +1027,9 @@ mod tests {
             invoices: &invoices,
             quotes: &[],
             expenses: &exps,
+            recurring_invoices: &[],
+            subscriptions: &[],
+            assets: &[],
             documents: &[],
             emails: &[],
             audit: &[],
@@ -865,6 +1068,9 @@ mod tests {
             invoices: &invoices,
             quotes: &[],
             expenses: &[],
+            recurring_invoices: &[],
+            subscriptions: &[],
+            assets: &[],
             documents: &[],
             emails: &[],
             audit: &[],

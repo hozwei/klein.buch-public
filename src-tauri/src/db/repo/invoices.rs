@@ -16,11 +16,18 @@
 //!   Kernfelder gesperrt.
 //! - **Storno** wird als **neue** Rechnung mit `is_storno_for = original_id`
 //!   angelegt; die Original-Rechnung bekommt `status='canceled'`,
-//!   `canceled_at`, `canceled_by_storno_id`.
+//!   `canceled_at`, `canceled_by_storno_id` — genau einmal
+//!   (`trg_invoices_canceled_final`, höchstens ein festgeschriebener Storno je
+//!   Original über `ux_invoices_one_locked_storno`, Migration 0032).
+//! - **Verwerfen** eines Entwurfs ([`void_draft_in`], Migration 0032): kein
+//!   DELETE — `voided_at` + `void_reason` werden gesetzt, die Nummer bleibt
+//!   verbraucht und der Entwurf ist danach unveränderlich
+//!   (`trg_invoices_voided_final`).
 
 use crate::db::models::{InvoiceDetail, InvoiceItemRow, InvoiceListItem, InvoiceRow};
 use crate::domain::invoice::{InvoiceInput, Totals};
 use crate::error::{Error, Result};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -85,8 +92,8 @@ pub struct ListFilter {
 /// Vergibt `invoice_number` über `db::numbering::next_number` — das
 /// "verbraucht" eine Nummer schon im Draft. Das ist Absicht: lückenlose
 /// Buchhaltung bedeutet, dass Drafts dieselbe Sequenz teilen wie
-/// gelockte Rechnungen. Wenn ein Draft gelöscht wird, bleibt die Lücke;
-/// das ist GoBD-dokumentierbar.
+/// gelockte Rechnungen. Ein Entwurf wird nie gelöscht; ein nicht benötigter
+/// wird verworfen ([`void_draft_in`]) und dokumentiert so die Nummer.
 pub async fn create_draft(
     pool: &SqlitePool,
     payload: &DraftCreatePayload,
@@ -95,13 +102,31 @@ pub async fn create_draft(
     buyer: &BuyerSnapshot<'_>,
     totals: &Totals,
 ) -> Result<InvoiceRow> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let id = create_draft_in(&mut tx, payload, invoice_number, seller, buyer, totals).await?;
+    tx.commit().await?;
+
+    get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+}
+
+/// Draft-INSERT (Kopf + Positionen) innerhalb einer laufenden Transaktion;
+/// liefert die neue ID. Nummer und Audit vergibt bzw. schreibt der Aufrufer in
+/// derselben Transaktion (Lauf F).
+pub async fn create_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    payload: &DraftCreatePayload,
+    invoice_number: &str,
+    seller: &SellerSnapshot<'_>,
+    buyer: &BuyerSnapshot<'_>,
+    totals: &Totals,
+) -> Result<String> {
     let id = Uuid::now_v7().to_string();
     let direction_str = match payload.input.direction {
         crate::domain::invoice::InvoiceDirection::Issued => "issued",
         crate::domain::invoice::InvoiceDirection::Received => "received",
     };
-
-    let mut tx = crate::db::begin_immediate(pool).await?;
 
     sqlx::query(
         "INSERT INTO invoices (
@@ -149,10 +174,21 @@ pub async fn create_draft(
     .bind(buyer.vat_id)
     .bind(buyer.email)
     .bind(payload.derived_from_quote_id.as_deref())
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
 
-    for (item, computed) in payload.input.items.iter().zip(totals.items.iter()) {
+    insert_items_in(conn, &id, &payload.input, totals).await?;
+    Ok(id)
+}
+
+/// Schreibt die Positionen eines Entwurfs (Anlegen und Bearbeiten).
+async fn insert_items_in(
+    conn: &mut sqlx::SqliteConnection,
+    invoice_id: &str,
+    input: &InvoiceInput,
+    totals: &Totals,
+) -> Result<()> {
+    for (item, computed) in input.items.iter().zip(totals.items.iter()) {
         let item_id = Uuid::now_v7().to_string();
         sqlx::query(
             "INSERT INTO invoice_items (
@@ -162,7 +198,7 @@ pub async fn create_draft(
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)",
         )
         .bind(&item_id)
-        .bind(&id)
+        .bind(invoice_id)
         .bind(item.position as i64)
         .bind(&item.description)
         .bind(item.quantity)
@@ -175,15 +211,89 @@ pub async fn create_draft(
         .bind(item.description_markup.as_deref())
         .bind(item.source_package_id.as_deref())
         .bind(item.source_package_revision)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
+    Ok(())
+}
 
-    tx.commit().await?;
+/// Neuer Stand eines Rechnungs-Entwurfs für [`update_draft_in`].
+pub struct DraftUpdate<'a> {
+    pub contact_id: &'a str,
+    pub input: &'a InvoiceInput,
+    pub is_kleinunternehmer: bool,
+    pub seller: &'a SellerSnapshot<'a>,
+    pub buyer: &'a BuyerSnapshot<'a>,
+    pub totals: &'a Totals,
+}
 
-    get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+/// Überschreibt einen offenen Rechnungs-Entwurf (Neuer Fund F2a, Lauf F5):
+/// Kopf, Verkäufer- und Empfänger-Snapshot und Summen, die Positionen werden
+/// ersetzt. Nummer, Geschäftsjahr, Richtung, Storno-Bezug und Angebots-Bezug
+/// bleiben. Nur für `status = 'draft'`, nicht festgeschrieben, nicht verworfen
+/// und kein Storno-Entwurf — die Bedingung steht im `WHERE`, die Trigger
+/// (`trg_invoices_voided_final`, `trg_invoice_items_frozen_*`) sichern ab.
+/// Läuft in der Transaktion des Aufrufers (mit Audit).
+pub async fn update_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    update: &DraftUpdate<'_>,
+) -> Result<()> {
+    let input = update.input;
+    let res = sqlx::query(
+        "UPDATE invoices SET
+            invoice_date = ?, delivery_date = ?, due_date = ?, contact_id = ?,
+            seller_name = ?, seller_street = ?, seller_postal_code = ?, seller_city = ?,
+            seller_tax_number = ?, seller_vat_id = ?,
+            net_amount_cents = ?, tax_amount_cents = ?, gross_amount_cents = ?,
+            currency_code = ?, is_kleinunternehmer = ?, pdf_template = ?,
+            notes = ?, payment_note = ?,
+            buyer_name = ?, buyer_street = ?, buyer_postal_code = ?, buyer_city = ?,
+            buyer_country_code = ?, buyer_vat_id = ?, buyer_email = ?,
+            updated_at = datetime('now','utc')
+         WHERE id = ? AND status = 'draft' AND locked_at IS NULL AND voided_at IS NULL
+           AND is_storno_for IS NULL",
+    )
+    .bind(input.invoice_date.to_string())
+    .bind(input.delivery_date.map(|d| d.to_string()))
+    .bind(input.due_date.map(|d| d.to_string()))
+    .bind(update.contact_id)
+    .bind(update.seller.name)
+    .bind(update.seller.street)
+    .bind(update.seller.postal_code)
+    .bind(update.seller.city)
+    .bind(update.seller.tax_number)
+    .bind(update.seller.vat_id)
+    .bind(update.totals.net_amount_cents)
+    .bind(update.totals.tax_amount_cents)
+    .bind(update.totals.gross_amount_cents)
+    .bind(&input.currency_code)
+    .bind(i64::from(update.is_kleinunternehmer))
+    .bind(&input.pdf_template)
+    .bind(input.notes.as_deref())
+    .bind(input.payment_note.as_deref())
+    .bind(update.buyer.name)
+    .bind(update.buyer.street)
+    .bind(update.buyer.postal_code)
+    .bind(update.buyer.city)
+    .bind(update.buyer.country_code)
+    .bind(update.buyer.vat_id)
+    .bind(update.buyer.email)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Der Entwurf lässt sich nicht mehr ändern (festgeschrieben, verworfen oder ein \
+             Storno-Entwurf)."
+                .into(),
+        ));
+    }
+    sqlx::query("DELETE FROM invoice_items WHERE invoice_id = ?")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    insert_items_in(conn, id, input, update.totals).await
 }
 
 // ---- READ ------------------------------------------------------------------
@@ -268,7 +378,7 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<InvoiceL
         "SELECT i.id, i.invoice_number, i.fiscal_year, i.invoice_date, i.due_date,
                 i.contact_id, c.name AS contact_name,
                 i.gross_amount_cents, i.paid_amount_cents, i.currency_code, i.status,
-                i.is_storno_for
+                i.is_storno_for, i.voided_at
            FROM invoices i
            JOIN contacts c ON c.id = i.contact_id
           WHERE 1=1",
@@ -312,6 +422,24 @@ pub struct LockUpdate<'a> {
     pub validation_report: Option<&'a str>,
     pub pdf_archive_id: &'a str,
     pub xml_archive_id: &'a str,
+    /// §19-Status, unter dem der Beleg erzeugt wurde (KB-0010): wird im selben
+    /// UPDATE wie `locked_at` eingefroren (danach sperrt ihn
+    /// `trg_invoices_immutable`). `None` behält den gespeicherten Wert.
+    pub is_kleinunternehmer: Option<bool>,
+    /// Summen (netto, USt, brutto) des ausgestellten Belegs — aus denselben
+    /// Positionen gerechnet wie XML (BT-109/110/112) und PDF und im selben
+    /// UPDATE wie `locked_at` gesetzt, damit der festgeschriebene Datensatz dem
+    /// archivierten Beleg entspricht (F5-fix: Entwürfe mit älterer Summenlogik
+    /// oder aus älteren Backups). `None` behält die gespeicherten Summen.
+    pub totals: Option<LockTotals>,
+}
+
+/// Summen eines Belegs zum Festschreiben (Integer-Cent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockTotals {
+    pub net_amount_cents: i64,
+    pub tax_amount_cents: i64,
+    pub gross_amount_cents: i64,
 }
 
 /// Storno-Paar-Operation: beim Lock einer Storno-Rechnung gleichzeitig die
@@ -355,7 +483,7 @@ pub async fn lock_with_pair_cancel(
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?
-        .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
+        .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
     let locked_at: Option<String> = row.try_get("locked_at")?;
     if locked_at.is_some() {
         return Err(Error::Domain(format!(
@@ -374,20 +502,28 @@ pub async fn lock_with_pair_cancel(
             validated_at = datetime('now','utc'),
             pdf_archive_id = ?,
             xml_archive_id = ?,
+            is_kleinunternehmer = COALESCE(?, is_kleinunternehmer),
+            net_amount_cents = COALESCE(?, net_amount_cents),
+            tax_amount_cents = COALESCE(?, tax_amount_cents),
+            gross_amount_cents = COALESCE(?, gross_amount_cents),
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL",
     )
     .bind(update.validation_status)
     .bind(update.validation_report)
     .bind(update.pdf_archive_id)
     .bind(update.xml_archive_id)
+    .bind(update.is_kleinunternehmer.map(i64::from))
+    .bind(update.totals.map(|t| t.net_amount_cents))
+    .bind(update.totals.map(|t| t.tax_amount_cents))
+    .bind(update.totals.map(|t| t.gross_amount_cents))
     .bind(id)
     .execute(&mut *tx)
     .await?;
 
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
-            "lock: invoice {id} nicht gefunden oder bereits gelockt (Race)"
+            "lock: invoice {id} nicht gefunden, bereits gelockt oder verworfen (Race)"
         )));
     }
 
@@ -409,7 +545,7 @@ pub async fn lock_with_pair_cancel(
         .await?;
         if res.rows_affected() == 0 {
             return Err(Error::Domain(format!(
-                "mark_canceled: invoice {} nicht gefunden oder bereits storniert",
+                "Storno-Paar: Rechnung {} nicht gefunden oder bereits storniert",
                 pair.original_id
             )));
         }
@@ -435,28 +571,64 @@ pub async fn record_payment(
     paid_date_iso: &str,
     note: Option<&str>,
 ) -> Result<InvoiceRow> {
+    record_payment_to_account(pool, id, amount_cents, paid_date_iso, note, None).await
+}
+
+/// Wie [`record_payment`], mit dem Zahlungskonto, auf dem das Geld einging
+/// (R2-011, Lauf F5b). Das Konto steht im Eintrag der Zahlungshistorie —
+/// `paid_to_account_id` ist nach dem Festschreiben gesperrt und bleibt
+/// unberührt. Ein angegebenes Konto muss existieren und aktiv sein.
+pub async fn record_payment_to_account(
+    pool: &SqlitePool,
+    id: &str,
+    amount_cents: i64,
+    paid_date_iso: &str,
+    note: Option<&str>,
+    account_id: Option<&str>,
+) -> Result<InvoiceRow> {
     if amount_cents <= 0 {
         return Err(Error::Domain(format!(
             "record_payment: amount_cents muss > 0 sein, got {amount_cents}"
         )));
     }
+    // F5-fix: Domänengrenze statt Überlauf (overflow-checks im Release-Profil).
+    if !crate::domain::money::amount_in_range(amount_cents) {
+        return Err(Error::Domain(
+            crate::domain::money::amount_out_of_range_message(),
+        ));
+    }
 
     let mut tx = crate::db::begin_immediate(pool).await?;
 
     let invoice = sqlx::query(
-        "SELECT gross_amount_cents, paid_amount_cents, payment_history_json, status, locked_at
+        "SELECT gross_amount_cents, paid_amount_cents, paid_at, payment_history_json, status,
+                locked_at
          FROM invoices WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| Error::Domain(format!("invoice nicht gefunden: {id}")))?;
+    .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
+
+    if let Some(acc) = account_id {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM payment_accounts WHERE id = ? AND active = 1")
+                .bind(acc)
+                .fetch_one(&mut *tx)
+                .await?;
+        if n == 0 {
+            return Err(Error::Domain(
+                "Das gewählte Zahlungskonto gibt es nicht oder es ist deaktiviert.".into(),
+            ));
+        }
+    }
 
     let gross: i64 = invoice.try_get("gross_amount_cents")?;
     let prev_paid: i64 = invoice.try_get("paid_amount_cents")?;
     let locked: Option<String> = invoice.try_get("locked_at")?;
     let status: String = invoice.try_get("status")?;
     let history_str: Option<String> = invoice.try_get("payment_history_json")?;
+    let prev_paid_at: Option<String> = invoice.try_get("paid_at")?;
 
     if locked.is_none() {
         return Err(Error::Domain(format!(
@@ -469,23 +641,52 @@ pub async fn record_payment(
         )));
     }
 
-    let new_paid = prev_paid + amount_cents;
+    let new_paid = prev_paid.saturating_add(amount_cents);
     if new_paid > gross {
         return Err(Error::Domain(format!(
             "record_payment: Summe {new_paid} > gross {gross} (Überzahlung)"
         )));
     }
 
-    // History pflegen
-    let mut history: Vec<PaymentEntry> = match history_str {
-        Some(s) => serde_json::from_str(&s).unwrap_or_default(),
-        None => Vec::new(),
-    };
+    // History pflegen (R1-S2-PAYHIST): kaputtes JSON ist ein Fehler, kein stiller
+    // Neuanfang, und die Summe der Historie muss `paid_amount_cents` ergeben.
+    let mut history = parse_payment_history(history_str.as_deref())?;
+    if history.is_empty() && prev_paid > 0 {
+        // Altbestand: bezahlt ohne Historie. Die bisherige Zahlung wird als
+        // erster Eintrag übernommen — sonst fiele sie aus der EÜR, sobald die
+        // Historie nicht mehr leer ist (die EÜR liest dann nur noch sie).
+        let paid_date = prev_paid_at
+            .as_deref()
+            .and_then(|s| s.get(..10))
+            .ok_or_else(|| {
+                Error::Domain(format!(
+                    "record_payment: Rechnung {id} ist bezahlt, aber ohne Zahldatum und Historie"
+                ))
+            })?
+            .to_string();
+        history.push(PaymentEntry {
+            amount_cents: prev_paid,
+            paid_date,
+            note: Some("Übernommen aus dem Altbestand (ohne Zahlungshistorie)".into()),
+            recorded_at: crate::clock::now_utc().to_rfc3339(),
+            account_id: None,
+        });
+    }
+    let history_sum = history
+        .iter()
+        .try_fold(0i64, |acc, e| acc.checked_add(e.amount_cents));
+    if history_sum != Some(prev_paid) {
+        return Err(Error::Domain(format!(
+            "Die Zahlungshistorie der Rechnung {id} stimmt nicht mit dem gezahlten Betrag überein \
+             (Historie {history_sum:?}, gezahlt {prev_paid}). Bitte die Daten prüfen lassen."
+        )));
+    }
     history.push(PaymentEntry {
         amount_cents,
         paid_date: paid_date_iso.to_string(),
         note: note.map(|s| s.to_string()),
-        recorded_at: chrono::Utc::now().to_rfc3339(),
+        recorded_at: crate::clock::now_utc().to_rfc3339(),
+        account_id: account_id.map(str::to_string),
     });
     let history_json = serde_json::to_string(&history)?;
 
@@ -526,39 +727,23 @@ pub struct PaymentEntry {
     pub paid_date: String,
     pub note: Option<String>,
     pub recorded_at: String,
+    /// Zahlungskonto des Eingangs (R2-011); fehlt bei älteren Einträgen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
-// ---- CANCEL ----------------------------------------------------------------
-
-/// Markiert eine Original-Rechnung als storniert. Erlaubt durch
-/// `trg_invoices_immutable`, weil `canceled_at` + `canceled_by_storno_id`
-/// nicht in der Trigger-Whitelist sind (siehe Migration 0001).
-pub async fn mark_canceled(
-    pool: &SqlitePool,
-    original_id: &str,
-    storno_id: &str,
-    reason: Option<&str>,
-) -> Result<()> {
-    let res = sqlx::query(
-        "UPDATE invoices SET
-            status = 'canceled',
-            canceled_at = datetime('now','utc'),
-            canceled_by_storno_id = ?,
-            cancel_reason = COALESCE(?, cancel_reason),
-            updated_at = datetime('now','utc')
-         WHERE id = ?",
-    )
-    .bind(storno_id)
-    .bind(reason)
-    .bind(original_id)
-    .execute(pool)
-    .await?;
-    if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!(
-            "mark_canceled: invoice {original_id} nicht gefunden"
-        )));
+/// Liest `payment_history_json` (R1-S2-PAYHIST). `None` → leere Historie;
+/// kaputtes JSON ist ein Fehler statt eines stillen Rückfalls (sonst
+/// verschwänden Einnahmen aus der EÜR oder die Historie würde überschrieben).
+pub fn parse_payment_history(json: Option<&str>) -> Result<Vec<PaymentEntry>> {
+    match json {
+        None => Ok(Vec::new()),
+        Some(s) => serde_json::from_str(s).map_err(|e| {
+            Error::Domain(format!(
+                "Die Zahlungshistorie einer Rechnung ist beschädigt und lässt sich nicht lesen ({e})."
+            ))
+        }),
     }
-    Ok(())
 }
 
 // ---- SEND ------------------------------------------------------------------
@@ -593,6 +778,155 @@ pub async fn mark_sent(pool: &SqlitePool, id: &str, sent_at_iso: &str) -> Result
 // ---- Re-Export für Bequemlichkeit ------------------------------------------
 
 pub use crate::db::models::{ContactRow as Buyer, InvoiceDetail as Detail};
+
+/// Offener (nicht festgeschriebener) Storno-Entwurf zu einer Rechnung — bleibt
+/// liegen, wenn die Lock-Pipeline eines Stornos scheitert. `invoices_cancel`
+/// verwendet ihn wieder, statt eine neue ST-Nummer zu ziehen (Lauf E).
+/// Liefert `(id, invoice_number, fiscal_year)` des ältesten.
+pub async fn open_storno_draft(
+    pool: &SqlitePool,
+    original_id: &str,
+) -> Result<Option<(String, String, i64)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, invoice_number, fiscal_year FROM invoices
+          WHERE is_storno_for = ? AND locked_at IS NULL AND voided_at IS NULL
+          ORDER BY created_at, invoice_number LIMIT 1",
+    )
+    .bind(original_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Der festgeschriebene Storno-Beleg zu einer Rechnung, falls es einen gibt
+/// (höchstens einen, `ux_invoices_one_locked_storno`). Lauf F2c: erkennt das
+/// halbe Storno-Paar aus dem Altbestand (Storno fest, Original nicht storniert).
+pub async fn locked_storno_for(pool: &SqlitePool, original_id: &str) -> Result<Option<InvoiceRow>> {
+    Ok(sqlx::query_as(
+        "SELECT * FROM invoices
+          WHERE is_storno_for = ? AND locked_at IS NOT NULL
+          ORDER BY locked_at, invoice_number LIMIT 1",
+    )
+    .bind(original_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// Frischt Datum und Grund eines offenen Storno-Entwurfs auf (Wiederholung
+/// eines gescheiterten Stornos). Nur für nicht festgeschriebene Storno-Belege.
+pub async fn refresh_storno_draft(
+    pool: &SqlitePool,
+    id: &str,
+    storno_date: NaiveDate,
+    reason: &str,
+) -> Result<()> {
+    let date = storno_date.to_string();
+    let res = sqlx::query(
+        "UPDATE invoices
+            SET invoice_date = ?, delivery_date = ?, cancel_reason = ?, notes = ?,
+                updated_at = datetime('now','utc')
+          WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL
+            AND is_storno_for IS NOT NULL",
+    )
+    .bind(&date)
+    .bind(&date)
+    .bind(reason)
+    .bind(reason)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    if res.rows_affected() != 1 {
+        return Err(Error::Domain(format!(
+            "Storno-Entwurf {id} ist nicht mehr offen"
+        )));
+    }
+    Ok(())
+}
+
+// ---- VOID (Entwurf verwerfen, kein Löschen) ---------------------------------
+
+/// Ergebnis von [`void_draft_in`].
+#[derive(Debug, Clone)]
+pub struct Voided {
+    pub invoice_number: String,
+    pub fiscal_year: i64,
+    pub gross_amount_cents: i64,
+    pub is_storno_for: Option<String>,
+}
+
+/// Verwirft einen offenen Rechnungs-Entwurf in einer laufenden Transaktion
+/// (W14-032, Migration 0032): setzt `voided_at` (UTC, aus der Uhr des
+/// Aufrufers) und `void_reason`. Kein DELETE — die Nummer bleibt verbraucht und
+/// am Beleg nachvollziehbar; danach ist der Entwurf unveränderlich
+/// (`trg_invoices_voided_final`). Festgeschriebene Rechnungen korrigiert nur
+/// ein Storno. Audit schreibt der Aufrufer in derselben Transaktion.
+pub async fn void_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    reason: &str,
+    voided_at_db_utc: &str,
+) -> Result<Voided> {
+    #[derive(sqlx::FromRow)]
+    struct Current {
+        invoice_number: String,
+        fiscal_year: i64,
+        gross_amount_cents: i64,
+        is_storno_for: Option<String>,
+        locked_at: Option<String>,
+        voided_at: Option<String>,
+    }
+    let current: Option<Current> = sqlx::query_as(
+        "SELECT invoice_number, fiscal_year, gross_amount_cents, is_storno_for,
+                locked_at, voided_at
+           FROM invoices WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(Current {
+        invoice_number,
+        fiscal_year,
+        gross_amount_cents,
+        is_storno_for,
+        locked_at,
+        voided_at: voided,
+    }) = current
+    else {
+        return Err(Error::Domain(format!("Rechnung nicht gefunden: {id}")));
+    };
+    if locked_at.is_some() {
+        return Err(Error::Domain(format!(
+            "Rechnung {invoice_number} ist festgeschrieben — verwerfen lassen sich nur Entwürfe. \
+             Eine festgeschriebene Rechnung korrigiert ein Storno."
+        )));
+    }
+    if voided.is_some() {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {invoice_number} ist bereits verworfen."
+        )));
+    }
+    let res = sqlx::query(
+        "UPDATE invoices
+            SET voided_at = ?, void_reason = ?, updated_at = ?
+          WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL",
+    )
+    .bind(voided_at_db_utc)
+    .bind(reason)
+    .bind(voided_at_db_utc)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() != 1 {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {invoice_number} ist nicht mehr offen."
+        )));
+    }
+    Ok(Voided {
+        invoice_number,
+        fiscal_year,
+        gross_amount_cents,
+        is_storno_for,
+    })
+}
 
 #[cfg(test)]
 mod tests {

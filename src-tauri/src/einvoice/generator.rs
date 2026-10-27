@@ -41,6 +41,7 @@ use crate::domain::invoice::{
     compute_totals, is_supported_currency, BuyerView, InvoiceInput, InvoiceItemInput, SellerView,
 };
 use crate::domain::kleinunternehmer::HINWEIS_TEXT;
+use crate::domain::storno::PrecedingInvoice;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GenerationError {
@@ -106,6 +107,29 @@ pub fn to_xrechnung(
     buyer_reference: &str,
     bank_accounts: &[(&str, Option<&str>)],
 ) -> Result<String, GenerationError> {
+    to_xrechnung_with_preceding(
+        invoice_number,
+        input,
+        seller,
+        buyer,
+        buyer_reference,
+        bank_accounts,
+        None,
+    )
+}
+
+/// Wie [`to_xrechnung`], für einen Storno-Beleg mit dem Bezug auf die
+/// stornierte Rechnung: BT-25 = deren Nummer, BT-26 = deren Rechnungsdatum
+/// (Lauf E). Ohne `preceding` fällt BT-25 auf `input.is_storno_for` zurück.
+pub fn to_xrechnung_with_preceding(
+    invoice_number: &str,
+    input: &InvoiceInput,
+    seller: &SellerView<'_>,
+    buyer: &BuyerView<'_>,
+    buyer_reference: &str,
+    bank_accounts: &[(&str, Option<&str>)],
+    preceding: Option<&PrecedingInvoice>,
+) -> Result<String, GenerationError> {
     if buyer_reference.trim().is_empty() {
         return Err(GenerationError::BuyerReferenceEmpty);
     }
@@ -131,6 +155,7 @@ pub fn to_xrechnung(
     x.push_str("<rsm:CrossIndustryInvoice");
     x.push_str(" xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"");
     x.push_str(" xmlns:ram=\"urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100\"");
+    x.push_str(" xmlns:qdt=\"urn:un:unece:uncefact:data:standard:QualifiedDataType:100\"");
     x.push_str(" xmlns:udt=\"urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100\">\n");
 
     // === ExchangedDocumentContext ===
@@ -188,6 +213,14 @@ pub fn to_xrechnung(
 
     // --- Lines ---
     for (it, t) in input.items.iter().zip(totals.items.iter()) {
+        // BR-27: Der Einzelpreis (BT-146) darf nicht negativ sein. Stornos (und
+        // jede Position mit negativem Preis) tragen das Vorzeichen deshalb in der
+        // Menge (BT-129); der Zeilenbetrag (BT-131) bleibt Menge × Preis (Lauf E).
+        let (price_cents, quantity) = if it.unit_price_cents < 0 {
+            (-it.unit_price_cents, -it.quantity)
+        } else {
+            (it.unit_price_cents, it.quantity)
+        };
         x.push_str("    <ram:IncludedSupplyChainTradeLineItem>\n");
         x.push_str("      <ram:AssociatedDocumentLineDocument>\n");
         x.push_str(&format!(
@@ -205,7 +238,7 @@ pub fn to_xrechnung(
         x.push_str("        <ram:NetPriceProductTradePrice>\n");
         x.push_str(&format!(
             "          <ram:ChargeAmount>{}</ram:ChargeAmount>\n",
-            fmt_amount(it.unit_price_cents)
+            fmt_amount(price_cents)
         ));
         x.push_str("        </ram:NetPriceProductTradePrice>\n");
         x.push_str("      </ram:SpecifiedLineTradeAgreement>\n");
@@ -213,7 +246,7 @@ pub fn to_xrechnung(
         x.push_str(&format!(
             "        <ram:BilledQuantity unitCode=\"{}\">{}</ram:BilledQuantity>\n",
             esc(&it.unit_code),
-            fmt_quantity(it.quantity)
+            fmt_quantity(quantity)
         ));
         x.push_str("      </ram:SpecifiedLineTradeDelivery>\n");
         x.push_str("      <ram:SpecifiedLineTradeSettlement>\n");
@@ -510,14 +543,26 @@ pub fn to_xrechnung(
         fmt_amount(totals.gross_amount_cents)
     ));
     x.push_str("      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>\n");
-    // BG-3 Preceding Invoice Reference (Storno, BR-DE-26 Pflicht bei 384).
+    // BG-3 Preceding Invoice Reference (Storno, BR-DE-26 Pflicht bei 384):
+    // BT-25 Nummer und BT-26 Rechnungsdatum der stornierten Rechnung.
     if is_storno {
-        if let Some(ref_id) = &input.is_storno_for {
+        let reference = preceding
+            .map(|p| p.number.as_str())
+            .or(input.is_storno_for.as_deref());
+        if let Some(ref_id) = reference {
             x.push_str("      <ram:InvoiceReferencedDocument>\n");
             x.push_str(&format!(
                 "        <ram:IssuerAssignedID>{}</ram:IssuerAssignedID>\n",
                 esc(ref_id)
             ));
+            if let Some(p) = preceding {
+                x.push_str("        <ram:FormattedIssueDateTime>\n");
+                x.push_str(&format!(
+                    "          <qdt:DateTimeString format=\"102\">{}</qdt:DateTimeString>\n",
+                    fmt_date(p.issue_date)
+                ));
+                x.push_str("        </ram:FormattedIssueDateTime>\n");
+            }
             x.push_str("      </ram:InvoiceReferencedDocument>\n");
         }
     }
@@ -528,37 +573,20 @@ pub fn to_xrechnung(
     Ok(x)
 }
 
-/// Pro (Tax-Category, Rate) gruppiert.
-#[derive(Debug, Clone)]
-struct TaxGroup {
-    category_code: String,
-    rate: f64,
-    taxable_amount_cents: i64,
-    tax_amount_cents: i64,
-}
-
+/// Steueraufschlüsselung je (Kategorie, Satz): Steuer aus der Gruppensumme
+/// (BR-CO-17), dieselbe Rechnung wie die USt-Summe in
+/// [`crate::domain::invoice::compute_totals`].
 fn group_tax(
     inputs: &[InvoiceItemInput],
     totals: &[crate::domain::invoice::ItemTotals],
-) -> Vec<TaxGroup> {
-    use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, TaxGroup> = BTreeMap::new();
-    for (it, t) in inputs.iter().zip(totals.iter()) {
-        let key = format!("{}|{:.4}", it.tax_category_code, it.tax_rate_percent);
-        groups
-            .entry(key)
-            .and_modify(|g| {
-                g.taxable_amount_cents += t.net_amount_cents;
-                g.tax_amount_cents += t.tax_amount_cents;
-            })
-            .or_insert(TaxGroup {
-                category_code: it.tax_category_code.clone(),
-                rate: it.tax_rate_percent,
-                taxable_amount_cents: t.net_amount_cents,
-                tax_amount_cents: t.tax_amount_cents,
-            });
-    }
-    groups.into_values().collect()
+) -> Vec<crate::domain::invoice::TaxGroupTotal> {
+    crate::domain::invoice::tax_groups(inputs.iter().zip(totals.iter()).map(|(it, t)| {
+        (
+            it.tax_category_code.as_str(),
+            it.tax_rate_percent,
+            t.net_amount_cents,
+        )
+    }))
 }
 
 #[cfg(test)]
@@ -569,14 +597,14 @@ mod tests {
 
     fn seller_klein() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: Some("+49 000 000000"),
             contact_name: None,
             iban: None,
@@ -594,7 +622,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 
@@ -745,8 +773,7 @@ mod tests {
         // BT-1 Nummer
         assert!(xml.contains("<ram:ID>RE-2026-0001</ram:ID>"));
         // BT-34 Seller electronic address
-        assert!(xml
-            .contains("<ram:URIID schemeID=\"EM\">schmidm@wildbach-computerhilfe.de</ram:URIID>"));
+        assert!(xml.contains("<ram:URIID schemeID=\"EM\">inhaber@example.org</ram:URIID>"));
         // BG-16 Payment Instructions
         assert!(xml.contains("<ram:SpecifiedTradeSettlementPaymentMeans>"));
     }
@@ -761,6 +788,42 @@ mod tests {
         assert!(xml.contains("<ram:TypeCode>384</ram:TypeCode>"));
         assert!(xml.contains("<ram:InvoiceReferencedDocument>"));
         assert!(xml.contains("<ram:IssuerAssignedID>RE-2026-0001</ram:IssuerAssignedID>"));
+    }
+
+    #[test]
+    fn storno_references_number_and_date_of_the_original_not_the_internal_id() {
+        // Lauf E: In der Pipeline steht in `is_storno_for` die interne ID; BT-25
+        // muss die Rechnungsnummer tragen, BT-26 das Rechnungsdatum.
+        let mut inv = invoice_simple();
+        inv.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+        inv.items[0].unit_price_cents = -10_000;
+        let preceding = PrecedingInvoice {
+            number: "RE-2025-0042".into(),
+            issue_date: NaiveDate::from_ymd_opt(2025, 12, 10).unwrap(),
+        };
+        let xml = to_xrechnung_with_preceding(
+            "ST-2026-0001",
+            &inv,
+            &seller_klein(),
+            &buyer(),
+            "N/A",
+            &[],
+            Some(&preceding),
+        )
+        .unwrap();
+        assert!(xml.contains("<ram:IssuerAssignedID>RE-2025-0042</ram:IssuerAssignedID>"));
+        assert!(!xml.contains("019a0000-0000-7000-8000-000000000001"));
+        // BR-27: Preis positiv, Vorzeichen in der Menge, Zeilenbetrag negativ.
+        assert!(xml.contains("<ram:ChargeAmount>100.00</ram:ChargeAmount>"));
+        assert!(!xml.contains("<ram:ChargeAmount>-"));
+        assert!(xml.contains(">-2.0000</ram:BilledQuantity>"));
+        assert!(xml.contains("<ram:LineTotalAmount>-200.00</ram:LineTotalAmount>"));
+        assert!(xml.contains(
+            "<ram:FormattedIssueDateTime>\n          <qdt:DateTimeString format=\"102\">20251210</qdt:DateTimeString>"
+        ));
+        assert!(
+            xml.contains("xmlns:qdt=\"urn:un:unece:uncefact:data:standard:QualifiedDataType:100\"")
+        );
     }
 
     #[test]
@@ -864,10 +927,10 @@ mod tests {
         assert!(pos("<ram:ID>123/456/78901</ram:ID>") < pos("<ram:Name>"));
         assert!(pos("<ram:Name>") < pos("<ram:DefinedTradeContact>"));
         assert!(pos("<ram:DefinedTradeContact>") < pos("<ram:PostalTradeAddress>"));
-        assert!(party.contains("<ram:PersonName>Wildbach Computerhilfe</ram:PersonName>"));
+        assert!(party.contains("<ram:PersonName>Beispiel IT-Service</ram:PersonName>"));
         assert!(party.contains("<ram:CompleteNumber>+49 000 000000</ram:CompleteNumber>"));
         assert!(party.contains(
-            "<ram:EmailURIUniversalCommunication>\n            <ram:URIID>schmidm@wildbach-computerhilfe.de</ram:URIID>"
+            "<ram:EmailURIUniversalCommunication>\n            <ram:URIID>inhaber@example.org</ram:URIID>"
         ));
         assert!(party.contains("<ram:ID schemeID=\"FC\">123/456/78901</ram:ID>"));
     }
@@ -925,7 +988,7 @@ mod tests {
         // BT-84 IBAN — Leerzeichen entfernt
         assert!(xml.contains("<ram:IBANID>DE02120300000000202051</ram:IBANID>"));
         // BT-85 Kontoinhaber + BT-86 BIC
-        assert!(xml.contains("<ram:AccountName>Wildbach Computerhilfe</ram:AccountName>"));
+        assert!(xml.contains("<ram:AccountName>Beispiel IT-Service</ram:AccountName>"));
         assert!(xml.contains("<ram:BICID>BYLADEM1001</ram:BICID>"));
         // Reihenfolge: PaymentReference vor InvoiceCurrencyCode (CII-Schema)
         let pr = xml.find("PaymentReference").expect("PaymentReference");

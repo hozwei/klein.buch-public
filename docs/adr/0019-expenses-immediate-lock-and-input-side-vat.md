@@ -60,3 +60,29 @@ Kosten-Erfassung.
 `domain::expense`, `db::repo::expenses`, `commands::expenses`,
 `0007_expenses.sql`; `memory/klein-buch/block-9-notes.md`,
 `memory/klein-buch/euer-cash-basis.md`.
+
+## Amendment 2026-10-25 — §13b und aktivierte Kosten (Lauf F7b/F8)
+
+- **§13b ist kein reines Hinweis-Flag mehr:** Mit `reverse_charge_13b` muss die USt der
+  Kosten 0 sein (`ExpenseValidationError::ReverseChargeWithTax`); auch Kleinunternehmer
+  schulden die Steuer nach § 13b UStG und melden sie per Voranmeldung, Klein.Buch berechnet
+  sie nicht. Die Sätze oben („erzwingt KEINE USt-Freiheit“, „reines Hinweis-Flag“) gelten
+  insoweit nicht mehr. Einzelheiten: ADR 0039 Nr. 143.
+- **Aktivierte Kosten** (Verweis `capitalized_as_asset_id`) lassen sich nicht stornieren;
+  eine Rückabwicklung des Kaufs ist ein Abgang der Anlage (ADR 0039 Nr. 145).
+
+## Amendment 2026-10-25 — Steuerstatus der Kosten nach dem Leistungsbezug (Lauf F8d)
+
+- **Vorsteuer und Anschaffungskosten folgen dem Status bei Leistungsbezug:** Brutto
+  (Kleinunternehmer) bzw. netto mit abziehbarer Vorsteuer (Regelbesteuerung) richtet sich
+  nach dem §19-Status im Jahr des **Belegdatums** der Kosten, nicht nach dem Zahlungsjahr
+  (§ 15 Abs. 1 Satz 1 Nr. 1 UStG; Abschn. 19.5 UStAE zum Wechsel der Besteuerungsform).
+  Kosten haben kein eigenes Leistungsdatum; das Belegdatum ist ein festgeschriebenes
+  Kernfeld (`trg_expenses_immutable`), deshalb kann keine spätere Änderung der Kosten den
+  Status verschieben. Das Jahr der Ausgabe bleibt das Zahlungsjahr (§ 11 Abs. 2 EStG).
+  Einzelheiten: ADR 0039 Nr. 148. Die Konsequenz oben („bei späterem §19-Verzicht müsste
+  die Vorsteuer-Logik ergänzt werden“) ist seit Lauf F5b/F8b/F8d umgesetzt.
+- **Aktivierte Kosten (Lauf F8e):** Liegen Anschaffungsdatum der Anlage (Lieferung, § 9a
+  EStDV) und Belegdatum in Jahren mit unterschiedlichem Status, wird das Aktivieren
+  abgelehnt (Steuerberatung). Einen Wegfall von §19 mitten im Jahr (100.000-€-Grenze)
+  bildet Klein.Buch nicht ab; ADR 0039 Nr. 148 (5) und Bekannte Grenze (b).

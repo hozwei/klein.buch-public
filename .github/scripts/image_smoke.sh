@@ -101,7 +101,10 @@ curl -fsS -o "$WORK/tpl.html" "$URL/legal/third-party-licenses.html" || fail "/l
 for marker in "SIL OPEN FONT LICENSE" "GUST Font License" "Zetetic" "BY-SA 3.0"; do
   grep -qi -- "$marker" "$WORK/tpl.html" || fail "Lizenzseite ohne „$marker“"
 done
-for js in svelte @sveltejs/kit marked minisearch; do
+# Genau die JS-Pakete im SPA-Bundle (build/legal/js-licenses.json; seit Kit 3 mit
+# devalue, ohne esm-env). Der Frontend-Job in ci.yml vergleicht diese Zeile mit der
+# Liste aus dem Build (Lauf F7a).
+for js in svelte @sveltejs/kit devalue clsx marked minisearch; do
   grep -q -- "$js" "$WORK/tpl.html" || fail "Lizenzseite ohne JS-Paket $js"
 done
 if grep -q "Dev-Build-Platzhalter" "$WORK/tpl.html"; then fail "Lizenzseite ist der Dev-Build-Platzhalter"; fi
@@ -115,6 +118,19 @@ echo "$info" | jq -e '.version and .commit and .sourceUrl and .licenseSpdx' >/de
 if [ -n "$EXPECT_COMMIT" ]; then
   test "$(echo "$info" | jq -r .commit)" = "$EXPECT_COMMIT" || fail "Commit in /api/public/info ≠ $EXPECT_COMMIT"
 fi
+
+step "SPA vorkomprimiert nach Accept-Encoding, API nie (ADR 0041 Nr. 212)"
+curl -fsS -H 'Accept-Encoding: br' -D "$WORK/spa-br.h" -o /dev/null "$URL/" || fail "/ mit br"
+grep -qi '^content-encoding: br' "$WORK/spa-br.h" || fail "/ ohne Content-Encoding: br"
+grep -qi '^vary: .*accept-encoding' "$WORK/spa-br.h" || fail "/ ohne Vary: Accept-Encoding"
+curl -fsS -H 'Accept-Encoding: gzip' -D "$WORK/spa-gz.h" -o "$WORK/index.html.gz" "$URL/invoices" \
+  || fail "/invoices mit gzip"
+grep -qi '^content-encoding: gzip' "$WORK/spa-gz.h" || fail "/invoices ohne Content-Encoding: gzip"
+gzip -dc "$WORK/index.html.gz" > "$WORK/index.html" && grep -q '<html' "$WORK/index.html" \
+  || fail "index.html.gz nicht lesbar"
+curl -fsS -H 'Accept-Encoding: gzip, br' -D "$WORK/api.h" -o /dev/null "$URL/api/public/info" \
+  || fail "/api/public/info mit gzip, br"
+if grep -qi '^content-encoding' "$WORK/api.h"; then fail "API-Antwort komprimiert"; fi
 
 step "Smoke über HTTP (Einrichtung, Festschreiben, Rechnungseingang)"
 token=$(docker logs "$NAME" 2>&1 | sed -n 's/^Setup-Token: \([A-Z0-9]*\).*/\1/p' | head -1 || true)

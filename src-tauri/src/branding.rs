@@ -113,11 +113,12 @@ pub fn clear_logo(dir: &Path, filename: &str) -> Result<()> {
             "Ungültiger Branding-Dateiname „{filename}“."
         )));
     }
-    let path = dir.join(filename);
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| Error::Config(format!("Datei löschen: {e}")))?;
+    match std::fs::remove_file(dir.join(filename)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(Error::Config(format!("Datei löschen: {e}")))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Findet `<stem>.*` im Branding-Ordner und liest es als `(Dateiname, Bytes)`.

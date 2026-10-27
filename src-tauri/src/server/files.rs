@@ -121,7 +121,10 @@ pub async fn download(
         Ok(f) => f,
         Err(_) => return ApiError::not_found().into_response(),
     };
-    let guard = DeleteOnDrop((entry.kind == DownloadKind::Export).then(|| entry.path.clone()));
+    // Ein geliehenes Backup (Verzeichnis-Ziel, Lauf F3c) bleibt liegen.
+    let guard = DeleteOnDrop(
+        (entry.kind == DownloadKind::Export && entry.owned).then(|| entry.path.clone()),
+    );
     let stream = tokio_util::io::ReaderStream::new(file);
     let stream = futures_util::StreamExt::map(stream, move |chunk| {
         let _keep = &guard;

@@ -151,10 +151,23 @@ pub async fn create_draft(
 }
 
 /// Schreibt/aktualisiert den Buyer-Snapshot eines Angebots (Block 19, Refresh
-/// beim Festschreiben). Nur auf nicht-festgeschriebenen Angeboten erlaubt
-/// (`locked_at IS NULL`) — gelockte Angebote sind unveränderlich (GoBD).
+/// beim Festschreiben). Nur auf **Entwürfen** erlaubt (`locked_at IS NULL`
+/// und `status = 'draft'`) — gelockte Angebote sind unveränderlich (GoBD), und
+/// ein zurückgezogener Entwurf bekäme sonst die Daten eines inzwischen
+/// anonymisierten Kontakts zurück (Lauf F3b).
 pub async fn set_buyer_snapshot(
     pool: &SqlitePool,
+    id: &str,
+    buyer: &BuyerSnapshot<'_>,
+) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    set_buyer_snapshot_in(&mut conn, id, buyer).await
+}
+
+/// [`set_buyer_snapshot`] in einer laufenden Schreib-Transaktion (Lauf F3b:
+/// `quotes_issue` frischt den Snapshot und schreibt fest in einem Schritt).
+pub async fn set_buyer_snapshot_in(
+    conn: &mut sqlx::SqliteConnection,
     id: &str,
     buyer: &BuyerSnapshot<'_>,
 ) -> Result<()> {
@@ -163,7 +176,7 @@ pub async fn set_buyer_snapshot(
             buyer_name = ?, buyer_street = ?, buyer_postal_code = ?, buyer_city = ?,
             buyer_country_code = ?, buyer_vat_id = ?, buyer_email = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND status = 'draft'",
     )
     .bind(buyer.name)
     .bind(buyer.street)
@@ -173,11 +186,11 @@ pub async fn set_buyer_snapshot(
     .bind(buyer.vat_id)
     .bind(buyer.email)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
-            "set_buyer_snapshot: Angebot nicht gefunden oder bereits festgeschrieben: {id}"
+            "Angebot {id} ist nicht (mehr) im Entwurf — der Empfänger wird nicht übernommen."
         )));
     }
     Ok(())
@@ -231,7 +244,7 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<QuoteLis
     let mut sql = String::from(
         "SELECT q.id, q.quote_number, q.fiscal_year, q.quote_date, q.valid_until,
                 q.contact_id, c.name AS contact_name,
-                q.gross_amount_cents, q.currency_code, q.status
+                q.gross_amount_cents, q.currency_code, q.status, q.locked_at
            FROM quotes q
            JOIN contacts c ON c.id = q.contact_id
           WHERE 1=1",
@@ -270,9 +283,23 @@ pub async fn list(pool: &SqlitePool, filter: &ListFilter) -> Result<Vec<QuoteLis
 /// Nur aus `draft` erlaubt (Doppel-Lock-Schutz). Macht das Angebot GoBD-
 /// unveränderlich. PDF + tatsächlicher Mail-Versand: Block 8.
 pub async fn issue(pool: &SqlitePool, id: &str) -> Result<()> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    issue_in(&mut tx, id, None).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`issue`] in einer laufenden Schreib-Transaktion (Lauf F3b). `is_kleinunternehmer`
+/// friert den §19-Status zum Festschreiben ein (KB-0010; danach sperrt ihn
+/// `trg_quotes_immutable`); `None` behält den gespeicherten Wert.
+pub async fn issue_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    is_kleinunternehmer: Option<bool>,
+) -> Result<()> {
     let row = sqlx::query("SELECT status, locked_at FROM quotes WHERE id = ?")
         .bind(id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
     let status: String = row.try_get("status")?;
@@ -288,14 +315,18 @@ pub async fn issue(pool: &SqlitePool, id: &str) -> Result<()> {
             locked_at = datetime('now','utc'),
             sent_at = datetime('now','utc'),
             status = 'sent',
+            is_kleinunternehmer = COALESCE(?, is_kleinunternehmer),
             updated_at = datetime('now','utc')
-         WHERE id = ? AND locked_at IS NULL",
+         WHERE id = ? AND locked_at IS NULL AND status = 'draft'",
     )
+    .bind(is_kleinunternehmer.map(i64::from))
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!("issue: Angebot {id} nicht gefunden")));
+        return Err(Error::Domain(format!(
+            "Angebot {id} ist nicht (mehr) im Entwurf — Festschreiben nicht möglich"
+        )));
     }
     Ok(())
 }
@@ -356,15 +387,43 @@ pub async fn reject(pool: &SqlitePool, id: &str) -> Result<()> {
 
 /// Zurückziehen (GoBD-konform, kein Löschen): `status → 'canceled'`,
 /// `canceled_at`, `canceled_reason`. Nicht für bereits konvertierte Angebote.
+/// Eigene Transaktion; der Command [`crate::commands::quotes::quotes_cancel`]
+/// nutzt [`cancel_in`] mit dem Audit in derselben Transaktion.
 pub async fn cancel(pool: &SqlitePool, id: &str, reason: &str) -> Result<()> {
-    let status = current_status(pool, id).await?;
-    if status == "canceled" {
-        return Err(Error::Domain(format!("Angebot {id} ist bereits storniert")));
-    }
-    if status == "converted" {
-        return Err(Error::Domain(format!(
-            "Angebot {id} wurde bereits in eine Rechnung konvertiert — Storno der Rechnung erfolgt über den Rechnungs-Storno"
-        )));
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    cancel_in(&mut tx, id, reason).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Kern von [`cancel`] auf einer Verbindung in einer Schreib-Transaktion
+/// (Lauf F2c): Status geprüft und im UPDATE erneut bedingt
+/// (`status NOT IN ('canceled','converted')`), sodass eine parallele Umwandlung
+/// oder ein zweites Zurückziehen nicht durchgreift. Liefert die Angebotsnummer.
+pub async fn cancel_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    reason: &str,
+) -> Result<String> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT quote_number, status FROM quotes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let (number, status) =
+        row.ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
+    let already = |status: &str| match status {
+        "canceled" => Some(format!(
+            "Angebot {number} ist bereits verworfen oder storniert."
+        )),
+        "converted" => Some(format!(
+            "Angebot {number} wurde bereits in eine Rechnung umgewandelt — die Rechnung \
+             korrigiert ein Storno bzw. das Verwerfen ihres Entwurfs."
+        )),
+        _ => None,
+    };
+    if let Some(msg) = already(&status) {
+        return Err(Error::Domain(msg));
     }
     let res = sqlx::query(
         "UPDATE quotes SET
@@ -372,18 +431,22 @@ pub async fn cancel(pool: &SqlitePool, id: &str, reason: &str) -> Result<()> {
             canceled_at = datetime('now','utc'),
             canceled_reason = ?,
             updated_at = datetime('now','utc')
-         WHERE id = ?",
+         WHERE id = ? AND status NOT IN ('canceled', 'converted')",
     )
     .bind(reason)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!(
-            "cancel: Angebot {id} nicht gefunden"
-        )));
+        let now: String = sqlx::query_scalar("SELECT status FROM quotes WHERE id = ?")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+        return Err(Error::Domain(already(&now).unwrap_or_else(|| {
+            format!("Angebot {number} wurde nicht verworfen oder storniert (Status {now}).")
+        })));
     }
-    Ok(())
+    Ok(number)
 }
 
 /// Konvertierung in eine Rechnung abschließen (Block 7): `status='accepted'
@@ -420,6 +483,36 @@ pub async fn mark_converted(pool: &SqlitePool, id: &str, invoice_id: &str) -> Re
         return Err(Error::Domain(format!(
             "mark_converted: Angebot {id} nicht aktualisiert"
         )));
+    }
+    Ok(())
+}
+
+/// [`mark_converted`] innerhalb einer laufenden Transaktion (Lauf F8): Entwurf
+/// der Rechnung und Abschluss des Angebots werden zusammen committet. Die
+/// Status-Bedingung im UPDATE verhindert eine zweite Umwandlung.
+pub async fn mark_converted_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    invoice_id: &str,
+) -> Result<()> {
+    let res = sqlx::query(
+        "UPDATE quotes SET
+            status = 'converted',
+            converted_at = datetime('now','utc'),
+            converted_invoice_id = ?,
+            updated_at = datetime('now','utc')
+         WHERE id = ? AND status = 'accepted'",
+    )
+    .bind(invoice_id)
+    .bind(id)
+    .execute(conn)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Umwandeln geht nur bei angenommenen Angeboten — das Angebot ist \
+             inzwischen umgewandelt, verworfen oder storniert."
+                .into(),
+        ));
     }
     Ok(())
 }

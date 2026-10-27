@@ -9,10 +9,10 @@
 //! - **R3-008** Parser meldet fehlende EN-16931-Pflichtfelder (BT-1/-2/-5).
 //! - **R3-009** Parser-Currency-Whitelist (single-currency EUR).
 //!
-//! R3-004 (klausel_check in Vorschau) verlangt Tauri-`AppHandle` und ist nur
-//! per Host-Smoke verifizierbar — siehe Done-Report. R3-006 (UTF-8-Härtung im
-//! Receive-Pfad) lebt im Tauri-Command und ist hier nicht integrationstestbar
-//! ohne `AppHandle`; das pinned Verhalten wird per Host-Smoke verifiziert.
+//! R3-004 (klausel_check in Vorschau) verlangte das `AppHandle` der
+//! Desktop-Fassung und war nur per Host-Smoke verifizierbar — siehe
+//! Done-Report. R3-006 (UTF-8-Härtung im Receive-Pfad) lebt im Command und war
+//! hier ohne `AppHandle` nicht integrationstestbar; das pinned Verhalten wird per Host-Smoke verifiziert.
 
 use chrono::NaiveDate;
 use klein_buch_lib::domain::invoice::{
@@ -25,14 +25,14 @@ use klein_buch_lib::einvoice::parser::{self, ParseError};
 
 fn seller_kleinunternehmer() -> SellerView<'static> {
     SellerView {
-        name: "Wildbach Computerhilfe",
-        street: "Wildbachstraße 2",
+        name: "Beispiel IT-Service",
+        street: "Beispielweg 2",
         postal_code: "84036",
         city: "Landshut",
         country_code: "DE",
         tax_number: Some("133/456/7890"),
         vat_id: None,
-        email: "schmidm@wildbach-computerhilfe.de",
+        email: "inhaber@example.org",
         phone: Some("+49 000 000000"),
         contact_name: None,
         iban: Some("DE02120300000000202051"),

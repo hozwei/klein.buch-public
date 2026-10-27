@@ -13,7 +13,7 @@
 //! | `BadRequest` | 400 | `bad_request` |
 //! | `Locked` | 423 | `locked` |
 //! | `SchemaMismatch` | 409 | `schema_mismatch` |
-//! | `Db` mit `SQLITE_CONSTRAINT_TRIGGER` (RAISE in den Migrationen) | 409 | `constraint` |
+//! | `Db` mit `SQLITE_CONSTRAINT_TRIGGER` (RAISE in den Migrationen) | 409 | `constraint` (deutsche Meldung + `ref`, Trigger-Text nur im Log) |
 //! | `Sidecar` | 503 | `sidecar` (fester Text + `ref`) |
 //! | `Db` (sonst), `Migrate`, `Io`, `Json`, `Zip`, `Config`, `Other` | 500 | `internal` (+ `ref`) |
 
@@ -75,7 +75,7 @@ impl ApiError {
         Self::new(
             StatusCode::FORBIDDEN,
             "reauth_required",
-            "Bitte zur Bestätigung erneut anmelden (Passphrase und TOTP).",
+            "Diese Aktion ist geschützt: Bestätige sie mit Daten-Passwort und App-Code.",
         )
     }
 
@@ -139,8 +139,12 @@ impl ApiError {
         Self::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "timeout",
-            "Zeitüberschreitung. Eine begonnene Aktion läuft im Hintergrund zu Ende; \
-             mit demselben Idempotenz-Schlüssel liefert eine Wiederholung ihr Ergebnis.",
+            // U7 (R1-07): Kein bloßes „noch einmal versuchen“ — ein erneuter Klick
+            // erzeugt einen neuen Idempotenz-Schlüssel, und Anlage-Commands sind
+            // nicht idempotent (zweite festgeschriebene Buchung).
+            "Der Server braucht gerade länger als üblich. Eine begonnene Aktion läuft im \
+             Hintergrund zu Ende. Prüf in einem Moment in der Liste, ob sie schon ausgeführt \
+             wurde, bevor du sie wiederholst.",
         )
         .with_retry_after(5)
     }
@@ -154,14 +158,31 @@ impl ApiError {
         .with_retry_after(10)
     }
 
-    /// Interner Fehler: Text nur ins Log, nach außen `ref`.
+    /// Interner Fehler: Text nur ins Log, nach außen `ref`. Die `ref` ist die
+    /// Kennung der Anfrage aus dem Zugriffsprotokoll (`req=`, W14-018), außerhalb
+    /// einer Anfrage eine neue UUID.
     pub fn internal(detail: &dyn std::fmt::Display) -> Self {
-        let reference = uuid::Uuid::new_v4().to_string();
+        let reference = new_reference();
         tracing::error!(target: "klein_buch_lib::http", reference = %reference, "interner Fehler: {detail}");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal",
             message: format!("Interner Fehler (Ref {reference})."),
+            reference: Some(reference),
+            retry_after: None,
+        }
+    }
+
+    /// Schutzregel der Datenbank (RAISE in einem Trigger, R1-S3-TRIGGERTEXT): nach
+    /// außen eine deutsche, verständliche Meldung, der englische Trigger-Text nur
+    /// ins Log unter derselben `ref`.
+    pub fn constraint(raw: &str) -> Self {
+        let reference = new_reference();
+        tracing::warn!(target: "klein_buch_lib::http", reference = %reference, "Schutzregel der Datenbank: {raw}");
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "constraint",
+            message: constraint_message(raw).to_string(),
             reference: Some(reference),
             retry_after: None,
         }
@@ -176,16 +197,17 @@ impl ApiError {
             Error::Crypto(m) => Self::new(StatusCode::BAD_REQUEST, "crypto", m.clone()),
             Error::BadRequest(_) => Self::bad_request(err.to_string()),
             Error::Locked => Self::new(StatusCode::LOCKED, "locked", err.to_string()),
+            Error::ReauthRequired => Self::reauth_required(),
             Error::SchemaMismatch { .. } => {
                 Self::new(StatusCode::CONFLICT, "schema_mismatch", err.to_string())
             }
             Error::Db(sqlx::Error::Database(db))
                 if db.code().as_deref() == Some(SQLITE_CONSTRAINT_TRIGGER) =>
             {
-                Self::new(StatusCode::CONFLICT, "constraint", db.message().to_string())
+                Self::constraint(db.message())
             }
             Error::Sidecar(_) => {
-                let reference = uuid::Uuid::new_v4().to_string();
+                let reference = new_reference();
                 tracing::error!(target: "klein_buch_lib::http", reference = %reference, "Sidecar: {err}");
                 Self {
                     status: StatusCode::SERVICE_UNAVAILABLE,
@@ -229,6 +251,141 @@ impl From<Error> for ApiError {
     }
 }
 
+/// Deutsche Meldung zu einem Trigger-Text aus den Migrationen (Präfix-Abgleich,
+/// spezifischere Präfixe zuerst). Unbekannte Texte ergeben eine allgemeine
+/// Meldung — nie den englischen Rohtext.
+pub fn constraint_message(raw: &str) -> &'static str {
+    const TABLE: &[(&str, &str)] = &[
+        (
+            "invoice draft is voided",
+            "Der Rechnungs-Entwurf ist verworfen und lässt sich nicht mehr ändern.",
+        ),
+        (
+            "invoice is canceled",
+            "Die Rechnung ist storniert; das Storno-Paar ist endgültig.",
+        ),
+        (
+            "invoice is locked or voided",
+            "Die Rechnung ist festgeschrieben oder verworfen; ihre Positionen sind unveränderlich (GoBD).",
+        ),
+        (
+            "invoice is locked",
+            "Die Rechnung ist festgeschrieben und kann nicht mehr geändert werden (GoBD). Korrigieren lässt sie sich nur mit einem Storno.",
+        ),
+        (
+            "invoice records are immutable",
+            "Rechnungen werden nie gelöscht (GoBD). Eine festgeschriebene Rechnung korrigiert ein Storno, einen Entwurf verwirfst du.",
+        ),
+        (
+            "invoices are created as drafts",
+            "Rechnungen entstehen als Entwurf; verworfen wird ein Entwurf erst danach.",
+        ),
+        (
+            "only unlocked invoice drafts can be voided",
+            "Verwerfen geht nur für nicht festgeschriebene Entwürfe und nur mit Begründung.",
+        ),
+        (
+            "quote_legal_documents",
+            "Die einem Angebot zugeordneten Rechtstexte sind unveränderlich.",
+        ),
+        (
+            "quote is canceled",
+            "Das Angebot ist verworfen oder storniert und lässt sich nicht mehr ändern.",
+        ),
+        (
+            "quote is converted",
+            "Das Angebot ist in eine Rechnung umgewandelt. Zurück geht es nur, indem du den Rechnungs-Entwurf verwirfst.",
+        ),
+        (
+            "quote is locked or canceled",
+            "Das Angebot ist festgeschrieben, verworfen oder storniert; seine Positionen sind unveränderlich.",
+        ),
+        (
+            "quote is locked",
+            "Das Angebot ist festgeschrieben und kann nicht mehr geändert werden.",
+        ),
+        (
+            "quote records are immutable",
+            "Angebote werden nie gelöscht: Einen Entwurf verwirfst du, ein festgeschriebenes Angebot stornierst du.",
+        ),
+        (
+            "expense is locked",
+            "Diese Kosten sind festgeschrieben und können nicht mehr geändert werden (GoBD). Korrigieren lassen sie sich nur mit einem Storno.",
+        ),
+        (
+            "expense records are immutable",
+            "Kosten werden nie gelöscht (GoBD); falsch erfasste Kosten stornierst du.",
+        ),
+        (
+            "private_movement is locked",
+            "Die Privatbewegung ist festgeschrieben und kann nicht mehr geändert werden (GoBD).",
+        ),
+        (
+            "private_movement records are append-only",
+            "Privatbewegungen werden nie gelöscht (GoBD); korrigiert wird mit einer Gegenbuchung.",
+        ),
+        (
+            "asset is disposed",
+            "Die Anlage ist veräußert; Abgang und AfA-Buchungen sind endgültig.",
+        ),
+        (
+            "asset is locked",
+            "Die Anlage ist festgeschrieben und kann nicht mehr geändert werden (GoBD).",
+        ),
+        (
+            "asset records are append-only",
+            "Anlagen werden nie gelöscht (GoBD); einen Abgang buchst du über „Veräußern“.",
+        ),
+        (
+            "depreciation entry is locked",
+            "Die AfA-Buchung ist festgeschrieben und unveränderlich.",
+        ),
+        (
+            "locked depreciation entries are immutable",
+            "Die AfA-Buchung ist festgeschrieben und unveränderlich.",
+        ),
+        (
+            "archive_entries",
+            "Archivierte Belegdateien sind unveränderlich und werden nie gelöscht (GoBD).",
+        ),
+        (
+            "audit_log",
+            "Das Audit-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "backup_log",
+            "Das Backup-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "email_log",
+            "Das E-Mail-Protokoll ist unveränderlich; Einträge werden nur angefügt.",
+        ),
+        (
+            "fiscal_year_locks",
+            "Ein abgeschlossenes Geschäftsjahr ist unveränderlich.",
+        ),
+        (
+            "legal_documents",
+            "Rechtstexte sind versioniert und unveränderlich; eine Änderung legt eine neue Version an.",
+        ),
+        (
+            "package_revisions",
+            "Paket-Revisionen sind unveränderlich; „Bearbeiten“ legt eine neue Revision an.",
+        ),
+    ];
+    TABLE
+        .iter()
+        .find(|(prefix, _)| raw.starts_with(prefix))
+        .map(|(_, de)| *de)
+        .unwrap_or("Die Änderung verstößt gegen eine Schutzregel der Buchhaltung (GoBD) und wurde abgelehnt.")
+}
+
+/// `ref` eines Fehlers: die Kennung der laufenden Anfrage (korreliert mit
+/// `req=` im Zugriffsprotokoll), sonst eine neue UUID.
+fn new_reference() -> String {
+    super::logging::current_request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
 /// 404 für alles außerhalb der Routen bzw. der Allowlist.
 pub async fn not_found() -> ApiError {
     ApiError::not_found()
@@ -237,6 +394,33 @@ pub async fn not_found() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R1-S3-TRIGGERTEXT: Jeder RAISE-Text der Migrationen hat eine eigene
+    /// deutsche Meldung (kein Rückfall auf die allgemeine), und keine enthält
+    /// den englischen Rohtext.
+    #[test]
+    fn every_trigger_text_has_a_german_message() {
+        let fallback = constraint_message("unbekannter Text");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let sql = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for part in sql.split("RAISE(ABORT,").skip(1) {
+                let raw = part.trim_start().trim_start_matches('\'');
+                let raw = &raw[..raw.find('\'').unwrap()];
+                let de = constraint_message(raw);
+                assert_ne!(de, fallback, "keine Meldung für {raw:?}");
+                assert!(!de.contains(raw), "{de}");
+                seen += 1;
+            }
+        }
+        assert!(seen >= 40, "nur {seen} RAISE-Texte gefunden");
+        let api =
+            ApiError::constraint("invoice is locked: immutable fields cannot change after lock");
+        assert_eq!(api.status, StatusCode::CONFLICT);
+        assert!(api.reference.is_some());
+        assert!(api.message.contains("Storno"), "{}", api.message);
+    }
 
     /// Statustabelle für jede Variante aus `error.rs` (Plan W5 Done-Check).
     #[test]
@@ -294,6 +478,11 @@ mod tests {
             ),
             (Error::Backup("b".into()), StatusCode::CONFLICT, "backup"),
             (Error::Locked, StatusCode::LOCKED, "locked"),
+            (
+                Error::ReauthRequired,
+                StatusCode::FORBIDDEN,
+                "reauth_required",
+            ),
             (
                 Error::BadRequest("x".into()),
                 StatusCode::BAD_REQUEST,

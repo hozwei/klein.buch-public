@@ -9,7 +9,9 @@ Abnahme-Ablauf (W14): Zahlung, Backup, Restore samt Neustart und Anmeldung,
 Export als Download. Der Container braucht dafür eine Restart-Policy, die auch
 nach Exit 0 neu startet. Nur Standardbibliothek.
 Aufruf: image_smoke.py <setup-token>  (SMOKE_COOKIE_FILE: Sitzungs-Cookie am
-Ende in diese Datei schreiben, z. B. für den ZAP-Scan)
+Ende in diese Datei schreiben, z. B. für den ZAP-Scan; SMOKE_PDF_OUT: das
+festgeschriebene Rechnungs-PDF in diese Datei schreiben, für die
+PDF/A-3b-Prüfung mit veraPDF im Trockenlauf, R3-018)
 """
 
 import base64
@@ -58,6 +60,27 @@ def request(method, path, body=None, cookie=None, headers=None, raw=False):
         except ValueError:
             parsed = payload.decode(errors="replace")
         return e.code, e.headers, parsed
+
+
+def finish_pending(status, headers, body):
+    """W14-037 (Lauf F4a): Antwortet Einrichtung bzw. Anmeldung mit 202 (lange
+    Umstellung der Datenbank), das Ergebnis mit dem Ticket-Cookie abholen."""
+    if status != 202:
+        return status, headers, body
+    ticket = None
+    for v in headers.get_all("Set-Cookie") or []:
+        first = v.split(";", 1)[0]
+        if first.startswith("__Host-kb_login="):
+            ticket = first.split("=", 1)[1]
+    if not ticket:
+        fail("202 ohne Ticket-Cookie")
+    for _ in range(1800):
+        time.sleep(1)
+        status, headers, body = request(
+            "POST", "/api/auth/login/poll", {}, headers={"Cookie": f"__Host-kb_login={ticket}"})
+        if status != 202:
+            return status, headers, body
+    fail("Anmeldung nach 30 min nicht abgeschlossen")
 
 
 def session_from(headers):
@@ -159,17 +182,16 @@ def main():
     if s != 200:
         fail(f"Setup Schritt 1: {s} {offer}")
     secret = offer["secret"]
-    s, h, done = request(
+    s, h, done = finish_pending(*request(
         "POST", "/api/auth/setup",
         {"setupToken": token, "passphrase": PASS, "totpCode": fresh_totp(secret)},
-    )
+    ))
     if s != 200:
         fail(f"Setup Schritt 2: {s} {done}")
     cookie = session_from(h)
     print("Einrichtung ok", flush=True)
-    # Firmendaten (Zahlungsdaten, §19) verlangen seit W14 eine Re-Auth; sie
-    # rotiert die Sitzungs-ID.
-    cookie = reauth(secret, cookie)
+    # Firmendaten ohne Zahlungsdaten und mit §19: seit Lauf F4a ohne Re-Auth
+    # (bedingte Re-Auth nur bei IBAN, BIC oder §19-Status, W14-038).
 
     today = time.strftime("%Y-%m-%d")
     due = time.strftime("%Y-%m-%d", time.gmtime(time.time() + 14 * 86400))
@@ -206,6 +228,10 @@ def main():
         fail(f"PDF aus dem Archiv: {s}")
     if b"pdfaid:part>3<" not in pdf and b'pdfaid:part="3"' not in pdf:
         fail("PDF ist kein PDF/A-3")
+    pdf_out = os.environ.get("SMOKE_PDF_OUT")
+    if pdf_out:
+        with open(pdf_out, "wb") as f:
+            f.write(pdf)
     s, _, xml = request("GET", f"/files/archive/{locked['xmlArchiveId']}", cookie=cookie, raw=True)
     if s != 200 or b"CrossIndustryInvoice" not in xml:
         fail(f"XML aus dem Archiv: {s}")
@@ -225,6 +251,35 @@ def main():
     if validation.get("status") != "failed":
         fail(f"ungültige XRechnung nicht abgelehnt: {validation}")
     print(f"ungültige XRechnung abgelehnt ({validation.get('errorCount')} Fehler)", flush=True)
+
+    # Storno mit echtem Validator (Lauf E): zweite Rechnung festschreiben und
+    # stornieren; Storno-XML trägt Nummer und Datum des Originals (BT-25/BT-26).
+    draft2 = cmd("invoices_create_draft", {"args": {
+        "contactId": contact["id"], "buyerReference": None, "input": {
+            "direction": "issued", "invoiceDate": today, "deliveryDate": today, "dueDate": due,
+            "currencyCode": "EUR", "items": [{
+                "position": 1, "description": "Fehlbuchung", "quantity": 1,
+                "unitCode": "HUR", "unitPriceCents": 1000, "taxRatePercent": 0,
+                "taxCategoryCode": "E"}],
+            "notes": None, "paymentNote": None, "pdfTemplate": "default",
+            "isStornoFor": None, "cancelReason": None}}}, cookie)
+    locked2 = cmd("invoices_lock_and_issue", {"id": draft2["invoice"]["id"], "buyerReference": None}, cookie)
+    number2 = locked2["invoice"]["invoiceNumber"]
+    canceled = cmd("invoices_cancel", {"args": {
+        "invoiceId": locked2["invoice"]["id"], "reason": "Abnahme-Storno", "stornoDate": today}}, cookie)
+    storno = canceled["storno"]
+    if storno.get("validationStatus") not in ("passed", "warning"):
+        fail(f"Storno ohne gültige Prüfung: {storno.get('validationStatus')}")
+    if not storno["invoice"]["invoiceNumber"].startswith(f"ST-{today[:4]}-"):
+        fail(f"Storno-Nummer: {storno['invoice']['invoiceNumber']}")
+    if canceled["original"].get("status") != "canceled":
+        fail(f"Original nicht storniert: {canceled['original'].get('status')}")
+    s, _, sxml = request("GET", f"/files/archive/{storno['xmlArchiveId']}", cookie=cookie, raw=True)
+    if s != 200 or f"<ram:IssuerAssignedID>{number2}</ram:IssuerAssignedID>".encode() not in sxml:
+        fail("Storno-XML ohne Nummer des Originals (BT-25)")
+    if f'format="102">{today.replace("-", "")}</qdt:DateTimeString>'.encode() not in sxml:
+        fail("Storno-XML ohne Datum des Originals (BT-26)")
+    print(f"Storno {storno['invoice']['invoiceNumber']} zu {number2} ({storno['validationStatus']})", flush=True)
 
     # Abnahme (W14): Zahlung → Backup → Restore (Neustart, Anmeldung) → Export
     invoice_id = locked["invoice"]["id"]
@@ -250,7 +305,8 @@ def main():
     s, _, st = request("GET", "/api/auth/status")
     if s != 200 or (st or {}).get("state") != "login_required":
         fail(f"Zustand nach dem Neustart: {s} {st}")
-    s, h, body = request("POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)})
+    s, h, body = finish_pending(*request(
+        "POST", "/api/auth/login", {"passphrase": PASS, "totpCode": fresh_totp(secret)}))
     if s != 200:
         fail(f"Anmeldung nach Restore: {s} {body}")
     cookie = session_from(h)

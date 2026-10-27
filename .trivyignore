@@ -13,9 +13,10 @@ GHSA-vv5m-jxxh-4627 exp:2027-04-30
 GHSA-4v9h-p7m9-rh26 exp:2027-04-30
 GHSA-4684-h2q9-2vcp exp:2027-04-30
 
-# quick-xml 0.36.2 (Rust, über typst 0.13 → hayagriva → citationberg): parst nur die
-# eingebetteten CSL-Daten und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt.
-# Der E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben). Weg mit typst ≥ 0.14.
+# quick-xml 0.38.4 (Rust, über typst 0.15 → hayagriva 0.10 → citationberg 0.7, neueste
+# Fassung mit quick-xml ^0.38; behoben erst ab 0.41): parst nur die eingebetteten CSL-Daten
+# und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt (keine eingebaute Vorlage
+# nutzt bibliography/cite). Der E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben).
 RUSTSEC-2026-0194 exp:2027-04-30
 RUSTSEC-2026-0195 exp:2027-04-30
 
@@ -25,6 +26,10 @@ RUSTSEC-2026-0195 exp:2027-04-30
 # sidecar_real-Tests) lädt keine Klasse aus Jackson, veraPDF oder AssertJ — die Lücken
 # sind im Betrieb nicht erreichbar. Mustang 2.26 bündelt veraPDF 1.30.2 und Jackson
 # 2.22.2 (behebt nur einen Teil); Update prüfen, sobald Jackson ≥ 2.22.3 enthalten ist.
+# Geprüft 25.10.2026 (Lauf F4c, repo1.maven.org): neueste Fassung ist 2.26.0
+# (org.mustangproject:core-2.26.0.pom: version.com.fasterxml.jackson.core = 2.22.2) —
+# kein Update, die Ausnahmen bleiben. Nächste Prüfung bis 01.03.2027 (vor dem Ablauf
+# am 30.04.2027); dann übernehmen, wenn eine Fassung Jackson ≥ 2.22.3 bündelt.
 # jackson-core 2.17.3 (DoS beim Parsen von JSON; Mustang liest bei uns kein JSON)
 CVE-2026-68494 exp:2027-04-30
 CVE-2026-89407 exp:2027-04-30

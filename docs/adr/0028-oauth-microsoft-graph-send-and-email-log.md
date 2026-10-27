@@ -72,3 +72,24 @@ Commands `mail_oauth_{status,connect,disconnect}` + `email_log_*`, Migrationen
   Token-Ablage per eigenem Amendment neu entschieden.
 - **`email_log` bleibt** unverändert append-only und protokolliert weiter jeden Versuch
   (Erfolg und Fehler) mit Provider-Antwort, im Server-Betrieb also die SMTP-Codes.
+
+## Amendment 2026-10-25 — Graph-Code entfernt (Lauf F6, ADR 0039 Nr. 138)
+
+**Status:** Akzeptiert · 2026-10-25 · Lauf F, Block F6a.
+
+- **Entfernt:** `mail::oauth_ms` (PKCE, Token-Tausch und -Refresh, `graph_send`,
+  Loopback-Capture), die Commands `mail_oauth_{status,connect,disconnect}` samt Registry-
+  Einträgen, der Graph-Zweig in `dispatch_send`, `ensure_access_token`, die Repo-Funktionen
+  `set_oauth_session`/`set_oauth_token_expiry`/`clear_oauth_session` und
+  `tests/oauth_ms_test.rs`. Die Felder `oauthTenantId`/`oauthClientId` entfallen aus der
+  Eingabe eines Mailkontos. Der Code war seit W5 nur noch unerreichbar mitkompiliert (ASVS
+  14.2.2: keine toten Funktionen im ausgelieferten Binary).
+- **Bestandsdaten:** Die Spalten aus Migration `0014` bleiben (forward-only). Ein aus der
+  Desktop-Fassung übernommenes Konto mit `auth_type = oauth_microsoft` versendet nicht: Test-
+  und Belegversand lehnen es vor jedem Verbindungsaufbau mit dem Hinweis auf SMTP ab (kein
+  stilles Umdeuten als SMTP-Konto, denn ihm fehlen Server und Zugangsdaten). Beim Umstellen
+  auf SMTP leert `mail_accounts::update` alle `oauth_*`-Spalten, und der Command löscht einen
+  gespeicherten Token (`secrets` `oauth:{id}`); Löschen des Kontos entfernt ihn ebenfalls.
+- **`email_log`:** Neue Einträge tragen den Kanal `smtp`; ältere Einträge mit `graph` bleiben
+  unverändert (append-only) und werden weiter angezeigt.
+- Kommt Graph zurück, gilt weiter: Redirect und Token-Ablage per eigenem Amendment.

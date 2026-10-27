@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """OpenAPI-Beschreibung der Command-API für den ZAP-API-Scan (Plan W14).
 
-Liest `src-tauri/src/commands/registry.rs` und beschreibt jeden über
-`POST /api/cmd/{name}` erreichbaren Kern (Route::Cmd) mit einem freien
-JSON-Körper. Ersetzte, entfallene und gesperrte Kerne (route_of) fehlen.
-Nur Standardbibliothek.
+Liest `src-tauri/src/commands/registry.rs` und beschreibt jeden Eintrag der
+Registry (`ENTRIES`, Paare `("name", h::name)`) als `POST /api/cmd/{name}` mit
+einem freien JSON-Körper. Die Registry ist seit Lauf F6 genau die Allowlist des
+Dispatchers (keine gesperrten Einträge mehr, ADR 0039 Nr. 138); jeder andere
+Name ergibt 404. Den Abgleich der Anzahl mit `REGISTRY.len()` prüft
+`core_cut_test::registry_source_matches_openapi_pattern`. Nur Standardbibliothek.
 
 Aufruf aus der Wurzel des öffentlichen Repos:
     python3 .github/scripts/openapi_from_registry.py http://localhost:8080 > openapi.json
@@ -29,9 +31,7 @@ def main() -> None:
     server = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
     src = find_registry().read_text(encoding="utf-8")
     names = re.findall(r'\(\s*"([a-z0-9_]+)",\s*h::[a-z0-9_]+,?\s*\)', src)
-    route_block = src[src.index("fn route_of"):src.index("_ => Route::Cmd")]
-    not_cmd = set(re.findall(r'"([a-z0-9_]+)"', route_block))
-    cmds = sorted(n for n in set(names) if n not in not_cmd)
+    cmds = sorted(set(names))
     if len(cmds) < 100:
         sys.exit(f"nur {len(cmds)} Commands gefunden — Registry-Format geändert?")
     paths = {

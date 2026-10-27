@@ -1,46 +1,197 @@
 <script lang="ts">
-  import "$lib/styles/tokens.css";
-  import { goto, onNavigate } from "$app/navigation";
-  import { page } from "$app/stores";
-  import BackupGate from "$lib/BackupGate.svelte";
-  import ToastHost from "$lib/ToastHost.svelte";
-  import ConfirmDialog from "$lib/ConfirmDialog.svelte";
-  import AboutDialog from "$lib/AboutDialog.svelte";
-  import XmlViewerDialog from "$lib/XmlViewerDialog.svelte";
-  import PdfPreviewDialog from "$lib/PdfPreviewDialog.svelte";
-  import ReauthDialog from "$lib/ReauthDialog.svelte";
-  import { confirmDialog } from "$lib/confirm.svelte";
-  import { flash } from "$lib/toast.svelte";
-  import { appState } from "$lib/stores.svelte";
-  import { modalStack } from "$lib/modalStack.svelte";
-  import { notificationsUnreadCount, appInfo, authLogout, authLock } from "$lib/api";
-  import { openAboutDialog } from "$lib/aboutModal.svelte";
-  import { formatVersionDisplay } from "$lib/version";
+  import "#lib/styles/tokens.css";
+  import { untrack } from "svelte";
+  import { afterNavigate, goto, onNavigate } from "$app/navigation";
+  import { page } from "$app/state";
+  import BackupGate from "#lib/BackupGate.svelte";
+  import ToastHost from "#lib/ToastHost.svelte";
+  import ConfirmDialog from "#lib/ConfirmDialog.svelte";
+  import AboutDialog from "#lib/AboutDialog.svelte";
+  import XmlViewerDialog from "#lib/XmlViewerDialog.svelte";
+  import PdfPreviewDialog from "#lib/PdfPreviewDialog.svelte";
+  import ReauthDialog from "#lib/ReauthDialog.svelte";
+  import { confirmDialog } from "#lib/confirm.svelte.ts";
+  import { clearToasts, flash } from "#lib/toast.svelte.ts";
+  import { appState, notificationsState } from "#lib/stores.svelte.ts";
+  import { modalStack } from "#lib/modalStack.svelte.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
+  import {
+    notificationsUnreadCount,
+    notificationsList,
+    appInfo,
+    authLogout,
+    authLock,
+    schedulerHoldStatus,
+    schedulerReleaseHold,
+  } from "#lib/api.ts";
+  import type { SchedulerHoldStatus } from "#lib/types.ts";
+  import Banner from "#lib/Banner.svelte";
+  import { openAboutDialog } from "#lib/aboutModal.svelte.ts";
+  import { formatVersionDisplay } from "#lib/version.ts";
+  import { documentTitle, routeTitle, titleState } from "#lib/pageTitle.svelte.ts";
+  import { helpSlugForRoute } from "#lib/routeHelp.ts";
   let { children } = $props();
 
-  // Plan W10: Unter 900 px ist die Navigation ein Drawer (Menü-Knopf in der
-  // oberen Leiste); er schließt sich bei jedem Seitenwechsel und mit Escape.
-  let navOpen = $state(false);
-  $effect(() => {
-    $page.url.pathname;
-    navOpen = false;
+  // U4 (2.4.2, ADR 0041 Nr. 160): ein Seitentitel je Seite, „<Seite> – Klein.Buch“.
+  // Reihenfolge der Quellen in pageTitle.svelte.ts; SvelteKits Routen-Ansage liest
+  // ihn nach jeder Navigation vor.
+  const docTitle = $derived.by(() => {
+    if (!appState.ready) return documentTitle(titleState.gate);
+    if (page.error) return documentTitle(page.status === 404 ? "Seite nicht gefunden" : "Fehler");
+    if (titleState.page) return documentTitle(titleState.page);
+    const chapter = page.data?.title;
+    if (typeof chapter === "string" && page.route.id?.startsWith("/help")) {
+      return documentTitle(`${chapter} – Handbuch`);
+    }
+    return documentTitle(routeTitle(page.route.id));
   });
 
-  // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert.
+  // Plan W10 / U1: Im Drawer-Band (≤ 900 px oder Touch-Gerät, Plan §8.2) ist
+  // die Navigation ein Drawer (Menü-Knopf in der Kopfleiste). Dieselbe
+  // Bedingung steht in den Media Queries unten und in tokens.css.
+  // Offen: Fokusfalle im Drawer, Hintergrund `inert`, Escape/Tippen daneben/
+  // „Menü schließen“ schließen, der Fokus kehrt zum Menü-Knopf zurück
+  // (nach einem Seitenwechsel nicht — dann gehört er der neuen Seite).
+  const DRAWER_MQ = "(max-width: 900px), (pointer: coarse)";
+  let navOpen = $state(false);
+  let drawerMode = $state(false);
+  let navEl = $state<HTMLElement | null>(null);
+  let menuToggleEl = $state<HTMLButtonElement | null>(null);
+  let mainEl = $state<HTMLElement | null>(null);
+  let navClosedByRoute = false;
+
+  $effect(() => {
+    const mq = matchMedia(DRAWER_MQ);
+    const update = () => {
+      drawerMode = mq.matches;
+      if (!mq.matches) navOpen = false;
+    };
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  });
+
+  $effect(() => {
+    void page.url.pathname;
+    untrack(() => {
+      if (navOpen) navClosedByRoute = true;
+      navOpen = false;
+    });
+  });
+
+  const drawerOpen = $derived(navOpen && drawerMode);
+  $effect(() => {
+    const el = navEl;
+    if (!drawerOpen || !el) return;
+    // returnTo: Der Menü-Knopf wird beim Öffnen `inert` (Kopfleiste) und
+    // verliert in Chromium dabei den Fokus — ausdrücklich dorthin zurück.
+    const opts = { onEscape: () => (navOpen = false), returnTo: menuToggleEl };
+    const trap = focusTrap(el, opts);
+    return () => {
+      trap.update({ ...opts, returnFocus: !navClosedByRoute });
+      navClosedByRoute = false;
+      trap.destroy();
+    };
+  });
+
+  // U3: Am Desktop scrollt <main> selbst (nicht das Fenster). SvelteKit setzt beim
+  // Seitenwechsel nur das Fenster nach oben — ohne diesen Schritt öffnete z. B. die
+  // Rechnung aus einer weit gescrollten Liste mitten auf der Seite. Sprungziele
+  // (#anker) und Wechsel innerhalb derselben Adresse bleiben unberührt.
+  afterNavigate(({ from, to, type }) => {
+    if (type === "enter" || !to || to.url.hash) return;
+    if (from && from.url.pathname === to.url.pathname && from.url.search === to.url.search) return;
+    mainEl?.scrollTo({ top: 0 });
+  });
+
+  function skipToContent(e: MouseEvent) {
+    e.preventDefault();
+    mainEl?.focus();
+    mainEl?.scrollIntoView({ block: "start" });
+  }
+
+  // U7 (R2-02): Verlässt die App den Zustand „bereit“ (Sperre, Sitzungsablauf), werden
+  // alle Toasts samt „Rückgängig“ verworfen — ihr Inhalt (Abo-Namen, Belegnummern)
+  // stünde sonst unter der Anmelde-Maske. Die Maske zeigt ihre Meldungen selbst.
+  let wasReady = false;
+  $effect(() => {
+    const ready = appState.ready;
+    if (wasReady && !ready) untrack(clearToasts);
+    wasReady = ready;
+  });
+
+  // Badge mit der Anzahl offener Hinweise. Wird beim Navigieren aktualisiert und
+  // (U7, R3-06) nach Abhaken/Prüfen auf der Hinweise-Seite (`notificationsChanged`).
+  // U4 (V3-16): Der Zähler steht in Akzentfarbe; Gefahrfarbe nur, wenn mindestens ein
+  // dringender Hinweis offen ist (Statusfarbe nur für Status, design.md §2 Nr. 3). Die
+  // Liste (nur lesend) wird dafür nur geholt, wenn überhaupt etwas offen ist.
   let unread = $state(0);
+  let unreadUrgent = $state(false);
   async function refreshUnread() {
     try {
       unread = await notificationsUnreadCount();
+      unreadUrgent = unread > 0 && (await notificationsList(false)).some((n) => n.severity === "urgent");
     } catch {
       // vor dem Entsperren / Bootstrap noch nicht verfügbar — ignorieren.
     }
   }
   $effect(() => {
-    $page.url.pathname; // bei Navigation neu laden
+    page.url.pathname; // bei Navigation neu laden
+    void notificationsState.version; // nach Abhaken/Prüfen neu laden (R3-06)
     // Erst nach dem Entsperren (G1-ENC Schritt 2) liegt der DB-Pool im State —
     // vorher keine Command-Aufrufe absetzen.
-    if (appState.ready) refreshUnread();
+    if (appState.ready) {
+      refreshUnread();
+      refreshHold();
+    }
   });
+
+  // Lauf F (ADR 0040): Pause der automatischen Belegerzeugung (Uhrsprung,
+  // Restore) sichtbar machen; Freigabe nur mit Re-Auth (Server).
+  let hold = $state<SchedulerHoldStatus | null>(null);
+  let releasing = $state(false);
+  async function refreshHold() {
+    try {
+      hold = await schedulerHoldStatus();
+    } catch {
+      hold = null;
+    }
+  }
+  async function releaseHold() {
+    // Nach einer Wiederherstellung (D-23): Freigabe heißt auch, dass Backups
+    // wieder auf die externen Ziele gehen — nur auf der produktiven Instanz.
+    const afterRestore = hold?.reason === "restore";
+    const ok = await confirmDialog({
+      title: afterRestore
+        ? "Ist dies die produktive Instanz?"
+        : "Automatische Abo-Läufe freigeben?",
+      body:
+        (hold?.message ?? "") +
+        "\n\nNach der Freigabe erstellt Klein.Buch fällige Abo-Rechnungen und -Kosten wieder " +
+        "selbst (größere Rückstände nur nach Rückfrage) und versendet Rechnungen im Modus " +
+        "„Ausstellen + senden“." +
+        (afterRestore
+          ? "\n\nAußerdem gehen Backups wieder auf die externen Ziele — auf einer Probe-Instanz " +
+            "würden dort Dateien mit älterem Datenstand neben den echten Backups landen. " +
+            "Vorher prüfen (Links im Banner oben): Rechnungen und Kosten, Nummernkreise und " +
+            "vorgemerkte Entwürfe (Einstellungen → „Backups“, Karte „Nummernkreise“), " +
+            "Abo-Rechnungen und Kosten-Abos mit ihren nächsten Terminen (Hinweis „Abo-Termine " +
+            "nach der Wiederherstellung“)."
+          : ""),
+      confirmLabel: afterRestore ? "Ja, produktiv — freigeben" : "Freigeben",
+      cancelLabel: "Abbrechen",
+    });
+    if (!ok) return;
+    releasing = true;
+    try {
+      hold = await schedulerReleaseHold();
+      flash("Automatische Abo-Läufe freigegeben.");
+    } catch (e) {
+      flash(String(e), "error");
+    } finally {
+      releasing = false;
+    }
+  }
 
   // G4.1-Fix (Manuel 2026-05-26): App-Version im Sidebar-Footer und als
   // Suffix am „Über"-Eintrag. Format kommt aus `formatVersionDisplay`
@@ -70,19 +221,30 @@
     return new Promise((resolve) => {
       // TS-Cast: startViewTransition ist in lib.dom (.experimental) deklariert,
       // aber nicht in jedem TS-Target. Feature-Check oben schützt zur Laufzeit.
-      (document as Document & {
-        startViewTransition: (cb: () => Promise<void>) => unknown;
+      const vt = (document as Document & {
+        startViewTransition: (cb: () => Promise<void>) => {
+          ready?: Promise<unknown>;
+          finished?: Promise<unknown>;
+          updateCallbackDone?: Promise<unknown>;
+        };
       }).startViewTransition(async () => {
         resolve();
         await navigation.complete;
       });
+      // Ein Übergang, den der Browser abbricht (Viewport-Änderung, schnelle
+      // zweite Navigation), lehnt diese Promises ab — kein Fehler der App,
+      // daher abfangen statt als unbehandelte Ablehnung zu melden.
+      const ignore = () => {};
+      vt?.ready?.catch(ignore);
+      vt?.finished?.catch(ignore);
+      vt?.updateCallbackDone?.catch(ignore);
     });
   });
 
   // Sidebar-Icons (Manuel 2026-05-26): Inline-SVG-Paths im Lucide-Stil,
   // 24x24-viewBox, currentColor-stroke (greift das Sidebar-Weiß).
   // Hardcoded Konstanten, daher ist `{@html}` weiter unten unkritisch
-  // (kein User-Input). Falls die Sammlung wächst, in $lib/NavIcon.svelte
+  // (kein User-Input). Falls die Sammlung wächst, in #lib/NavIcon.svelte
   // ausziehen — für 14 Einträge ist Inline ok.
   const ICONS: Record<string, string> = {
     home: '<path d="M3 12L12 4l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
@@ -149,7 +311,7 @@
     { href: "/packages", label: "Pakete", icon: "package" },
     { href: "/expenses", label: "Kosten", icon: "receipt" },
     { href: "/assets", label: "Anschaffungen", icon: "briefcase" },
-    { href: "/private-movements", label: "Privat-Geld", icon: "wallet" },
+    { href: "/private-movements", label: "Privatbewegungen", icon: "wallet" },
     { href: "/euer", label: "Steuer (EÜR)", icon: "calculator" },
     { href: "/fiscal-year", label: "Geschäftsjahr", icon: "calendar" },
     { href: "/notifications", label: "Hinweise", icon: "bell" },
@@ -167,7 +329,7 @@
 
   // --- F1-Keybinding (G2-DOC.3.4) ------------------------------------------
   //
-  // F1 öffnet `/help`. In Eingabefeldern (input/textarea/contenteditable
+  // F1 öffnet das Handbuch (U4: das Kapitel zur Route, sonst `/help`). In Eingabefeldern (input/textarea/contenteditable
   // oder eine Combobox-Rolle) wird F1 NICHT abgefangen, damit der Nutzer
   // ein etwaiges OS-/Browser-Default-Verhalten dort behält und das
   // Tippen nicht durcheinandergeht.
@@ -183,7 +345,9 @@
     return false;
   }
   function onWindowKeydown(ev: KeyboardEvent): void {
-    if (ev.key === "Escape" && navOpen) {
+    // Escape im offenen Drawer übernimmt die Fokusfalle; Rückfallebene, falls
+    // die Taste sie nicht erreicht hat (kein Dialog darüber).
+    if (ev.key === "Escape" && drawerOpen && modalStack.count === 0 && !ev.defaultPrevented) {
       navOpen = false;
       return;
     }
@@ -192,8 +356,10 @@
     // Modifikatoren ignorieren — Ctrl+F1 / Shift+F1 sind nicht „unser" F1.
     if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
     ev.preventDefault();
-    if (!$page.url.pathname.startsWith("/help")) {
-      void goto("/help");
+    // U4 (V1-19, ADR 0041 Nr. 161): F1 öffnet das Kapitel zur aktuellen Seite.
+    if (!page.url.pathname.startsWith("/help")) {
+      const slug = helpSlugForRoute(page.route.id);
+      void goto(slug ? `/help/${slug}` : "/help");
     }
   }
   $effect(() => {
@@ -202,6 +368,8 @@
     return () => window.removeEventListener("keydown", onWindowKeydown);
   });
 </script>
+
+<svelte:head><title>{docTitle}</title></svelte:head>
 
 <!-- App-Shell (Nav + Seiteninhalt) erst nach dem Entsperren rendern. Vorher
      existiert kein DB-Pool, und die Seiten würden ins Leere laufen. Das
@@ -217,11 +385,21 @@
   <!-- R5-014: `inert` solange ein Modal offen ist — Tab kann nicht aus dem
        Modal in die Sidebar springen. `|| undefined` weil Svelte `inert=false`
        sonst als String-Attribut rendert, was die a11y-Semantik invertiert. -->
-  <header class="mobilebar" inert={modalStack.count > 0 || undefined}>
+  <!-- U3: Bei offenem Dialog gehört auch der Sprunglink zum gesperrten Hintergrund
+       (sonst einziges Tab-Ziel außerhalb eines Dialogs, z. B. nach dem PDF-iframe). -->
+  <a
+    class="skip-link"
+    href="#main-content"
+    onclick={skipToContent}
+    inert={modalStack.count > 0 || drawerOpen || undefined}>Zum Inhalt</a
+  >
+  <header class="mobilebar" inert={modalStack.count > 0 || drawerOpen || undefined}>
     <button
       type="button"
+      bind:this={menuToggleEl}
       class="menu-toggle"
-      aria-label={navOpen ? "Menü schließen" : "Menü öffnen"}
+      aria-label={(navOpen ? "Menü schließen" : "Menü öffnen") +
+        (unread > 0 ? `, ${unread} ${unread === 1 ? "offener Hinweis" : "offene Hinweise"}${unreadUrgent ? ", dringend" : ""}` : "")}
       aria-expanded={navOpen}
       aria-controls="app-nav"
       onclick={() => (navOpen = !navOpen)}
@@ -235,11 +413,11 @@
         aria-hidden="true"
         ><path d="M4 7h16M4 12h16M4 17h16" /></svg
       >
-      {#if unread > 0}<span class="nav-badge menu-badge">{unread}</span>{/if}
+      {#if unread > 0}<span class="nav-badge menu-badge" class:urgent={unreadUrgent} aria-hidden="true">{unread}</span>{/if}
     </button>
     <a class="mobile-brand" href="/">Klein.Buch</a>
   </header>
-  {#if navOpen}
+  {#if drawerOpen}
     <!-- Schließt den Drawer per Tipp daneben (Tastatur: Escape). -->
     <button
       type="button"
@@ -249,11 +427,21 @@
       onclick={() => (navOpen = false)}
     ></button>
   {/if}
-  <nav id="app-nav" class="sidebar" class:open={navOpen} inert={modalStack.count > 0 || undefined}>
+  <nav
+    id="app-nav"
+    class="sidebar"
+    class:open={navOpen}
+    aria-label="Hauptnavigation"
+    bind:this={navEl}
+    inert={modalStack.count > 0 || (drawerMode && !navOpen) || undefined}
+  >
+    <button type="button" class="nav-close" onclick={() => (navOpen = false)}>
+      <span aria-hidden="true">×</span> Menü schließen
+    </button>
     <ul>
       {#each nav as item}
-        <li class:active={isActive($page.url.pathname, item.href)}>
-          <a href={item.href}>
+        <li class:active={isActive(page.url.pathname, item.href)}>
+          <a href={item.href} aria-current={isActive(page.url.pathname, item.href) ? "page" : undefined}>
             <svg
               class="nav-icon"
               viewBox="0 0 24 24"
@@ -265,16 +453,18 @@
               aria-hidden="true">{@html ICONS[item.icon]}</svg>
             <span class="nav-label">{item.label}</span>
             {#if item.href === "/notifications" && unread > 0}
-              <span class="nav-badge">{unread}</span>
+              <span class="nav-badge" class:urgent={unreadUrgent}>{unread}<span class="kb-visually-hidden"> offen{unreadUrgent ? ", dringend" : ""}</span></span>
             {/if}
           </a>
         </li>
       {/each}
-      <!--
-        G2-DOC.3.5 — „Über"-Eintrag neben „Hilfe".
-        Bewusst Button statt Link, weil der Über-Dialog ein Modal ist
-        (keine eigene Route, kein URL-State zu reflektieren).
-      -->
+    </ul>
+    <!--
+      U4 (U3-040): Über, Datenbank sperren und Abmelden als eigene Gruppe unten,
+      abgesetzt von den Bereichen. „Über“ ist bewusst ein Knopf (Modal, keine Route;
+      G2-DOC.3.5).
+    -->
+    <ul class="nav-session" aria-label="Sitzung">
       <li>
         <button type="button" class="nav-button" onclick={openAboutDialog}>
           <svg
@@ -331,7 +521,43 @@
     </footer>
   </nav>
 
-  <main inert={modalStack.count > 0 || undefined}>
+  <main
+    id="main-content"
+    tabindex="-1"
+    bind:this={mainEl}
+    inert={modalStack.count > 0 || drawerOpen || undefined}
+  >
+    {#if hold?.held}
+      <!-- U6-007: nach einer Wiederherstellung die Prüfpunkte als Links; der Knopf steht
+           wie in jedem Banner am Ende (`actions`). -->
+      <Banner kind="warning" title="Automatische Abo-Läufe angehalten.">
+        {hold.message}
+        {#if hold.reason === "restore"}
+          <span class="hold-checks-label" id="hold-checks-h">Prüfen:</span>
+          <ul class="hold-checks" aria-labelledby="hold-checks-h">
+            <li><a class="kb-link kb-target" href="/invoices">Rechnungen</a></li>
+            <li><a class="kb-link kb-target" href="/expenses">Kosten</a></li>
+            <li><a class="kb-link kb-target" href="/settings/backup#bk-numbering-h">Nummernkreise und vorgemerkte Entwürfe</a></li>
+            <li><a class="kb-link kb-target" href="/recurring-invoices">Abo-Rechnungen</a></li>
+            <li><a class="kb-link kb-target" href="/expenses/recurring">Kosten-Abos</a></li>
+            <li><a class="kb-link kb-target" href="/notifications">Hinweis „Abo-Termine nach der Wiederherstellung“</a></li>
+          </ul>
+        {/if}
+        {#snippet actions()}
+          <button
+            type="button"
+            class="btn-secondary"
+            onclick={() => {
+              if (!releasing) releaseHold();
+            }}
+            aria-disabled={releasing || undefined}
+            aria-busy={releasing || undefined}
+          >
+            {releasing ? "Gebe frei …" : "Prüfen und freigeben"}
+          </button>
+        {/snippet}
+      </Banner>
+    {/if}
     {@render children?.()}
   </main>
 {/if}
@@ -351,19 +577,42 @@
   :global(body) {
     display: flex;
   }
+  /* Sprunglink „Zum Inhalt“: erst bei Tastaturfokus sichtbar. */
+  .skip-link {
+    position: fixed;
+    left: calc(var(--sp-2) + env(safe-area-inset-left, 0px));
+    top: calc(var(--sp-2) + env(safe-area-inset-top, 0px));
+    z-index: 3000;
+    padding: var(--sp-2) var(--sp-4);
+    min-height: var(--target);
+    display: inline-flex;
+    align-items: center;
+    background: var(--surface-card);
+    color: var(--accent-on-soft);
+    font-weight: 600;
+    border: 1px solid var(--line-control);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow-overlay);
+    transform: translateY(calc(-100% - 2 * var(--sp-2) - env(safe-area-inset-top, 0px)));
+  }
+  .skip-link:focus,
+  .skip-link:focus-visible {
+    transform: none;
+  }
   .sidebar {
     width: 208px;
-    background: var(--c-primary-800);
-    color: #cfe0e6;
+    background: var(--surface-inverse);
+    color: var(--text-inverse-muted);
     /* Padding-top etwas großzügiger, weil der frühere h1-Marken-Header
        weggefallen ist und der erste Nav-Eintrag sonst direkt am
        Fensterrand kleben würde. */
     padding: 1.5rem 0.75rem 1rem;
     box-sizing: border-box;
     height: 100vh;
+    height: 100dvh;
     overflow-y: auto;
-    /* G4.1-Fix: flex-column, damit der Versions-Footer per
-       `margin-top: auto` an den unteren Sidebar-Rand gepinnt wird. */
+    overscroll-behavior: contain;
+    /* flex-column, damit Sitzungs-Gruppe und Versions-Footer per `margin-top: auto` unten sitzen. */
     display: flex;
     flex-direction: column;
   }
@@ -373,33 +622,63 @@
     margin: 0;
   }
   .sidebar li {
-    margin: 0.15rem 0;
+    margin: 2px 0;
+  }
+  /* U4 (U3-040): Sitzungs-Gruppe unten, über der Version, mit Trennlinie. */
+  .sidebar .nav-session {
+    margin-top: auto;
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--line-inverse);
   }
   .sidebar a,
   .sidebar .nav-button {
-    color: #bcd4dc;
+    color: var(--text-inverse-muted);
     text-decoration: none;
     display: flex;
     align-items: center;
-    gap: 0.7rem;
-    padding: 0.5rem 0.6rem;
-    border-radius: var(--r-md);
-    font-size: 0.9rem;
+    /* U4 (U3-040): Abstände aus der Skala, Schrift --type-body — „Datenbank sperren“
+       passt in die 208 px breite Leiste in eine Zeile (DejaVu 134,5 px von 142 px);
+       umbrechen darf es weiterhin (Textabstände 1.4.12, andere Schriften). */
+    gap: var(--sp-2);
+    min-height: max(var(--target), 36px);
+    padding: var(--sp-2);
+    border-radius: var(--radius-control);
+    font-size: var(--type-body);
+    line-height: var(--lh-snug);
     font-weight: 500;
   }
-  .sidebar a:hover,
-  .sidebar .nav-button:hover {
-    background: rgba(255, 255, 255, 0.07);
-    color: #fff;
-    text-decoration: none;
+  @media (hover: hover) {
+    .sidebar a:hover,
+    .sidebar .nav-button:hover {
+      background: var(--surface-inverse-hover);
+      color: var(--text-inverse);
+      text-decoration: none;
+    }
+    .sidebar a:hover .nav-icon,
+    .sidebar .nav-button:hover .nav-icon {
+      opacity: 1;
+    }
   }
+  /* Aktuelle Seite (U4, V4-12, 1.4.11): Fläche allein hob sich nur 1,46:1 ab. Dazu
+     ein 3-px-Balken links in --text-inverse (11,1:1 gegen die Leiste, 7,59:1 gegen
+     die aktive Fläche) und halbfette Schrift; der Balken ist eine echte Kante
+     (bleibt im Kontrastmodus sichtbar), der Innenabstand gleicht ihn aus. */
   .sidebar li.active a {
-    background: rgba(255, 255, 255, 0.13);
-    color: #fff;
+    background: var(--surface-inverse-active);
+    color: var(--text-inverse);
+    font-weight: 600;
+    border-left: 3px solid var(--text-inverse);
+    padding-left: calc(var(--sp-2) - 3px);
   }
-  /* Pro-Eintrag-Icon (Manuel 2026-05-26). Etwas gedimmt im Ruhezustand,
-     volle Deckkraft bei Hover/Active — gibt der Sidebar visuelle Tiefe
-     ohne von den Labels abzulenken. */
+  /* Fokus auf Petrol: heller Ring (Weiß, 11,1:1 gegen --surface-inverse). */
+  .sidebar a:focus-visible,
+  .sidebar button:focus-visible,
+  .mobilebar a:focus-visible,
+  .mobilebar button:focus-visible {
+    outline: var(--focus-width) solid var(--focus-ring-inverse);
+    outline-offset: var(--focus-offset-tight);
+  }
+  /* Icon gedimmt im Ruhezustand, voll bei Hover/Aktiv. */
   .sidebar .nav-icon {
     width: 18px;
     height: 18px;
@@ -407,8 +686,6 @@
     opacity: 0.78;
     transition: opacity var(--t-fast) var(--ease-apple);
   }
-  .sidebar a:hover .nav-icon,
-  .sidebar .nav-button:hover .nav-icon,
   .sidebar li.active .nav-icon {
     opacity: 1;
   }
@@ -416,8 +693,7 @@
     flex: 1 1 auto;
     min-width: 0;
   }
-  /* Sidebar-„Über"-Eintrag (G2-DOC.3.5): visuell wie ein Nav-Link, technisch
-     Button — Modal hat keine eigene Route, also keinen `href`. */
+  /* „Über"-Eintrag: visuell wie ein Nav-Link, technisch Button (Modal, keine Route). */
   .sidebar .nav-button {
     width: 100%;
     background: transparent;
@@ -426,10 +702,16 @@
     text-align: left;
     font-family: inherit;
   }
+  /* „Menü schließen“ nur im Drawer. */
+  .nav-close {
+    display: none;
+  }
+  /* Zähler (V3-16): Weiß auf --accent (6,02:1); mit dringendem Hinweis Weiß auf
+     --danger-solid (7,38:1). */
   .nav-badge {
-    background: var(--c-danger-500);
-    color: #fff;
-    font-size: 0.7rem;
+    background: var(--accent);
+    color: var(--text-on-accent);
+    font-size: var(--type-caption);
     font-weight: 700;
     line-height: 1;
     padding: 0.15rem 0.4rem;
@@ -437,13 +719,14 @@
     min-width: 1rem;
     text-align: center;
   }
+  .nav-badge.urgent {
+    background: var(--danger-solid);
+  }
   .sidebar footer {
-    color: #7fa3ae;
-    font-size: 0.75rem;
-    /* G4.1-Fix: an den unteren Rand pinnen (sidebar ist flex-column). */
-    margin-top: auto;
-    padding: 0.75rem 0.5rem 0.25rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    color: var(--text-inverse-muted);
+    font-size: var(--type-caption);
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-2) var(--sp-1);
   }
   /* Reine Versions-Anzeige, nicht klickbar (G4.1-Fix). */
   .sidebar .version-label {
@@ -455,18 +738,32 @@
   }
   main {
     flex: 1;
-    /* G2-UX.3.1b: Ziel der View-Transition. Sidebar (<nav> nebenan) hat
-       absichtlich KEINEN Namen — sie bleibt beim Seitenwechsel ruhig stehen.
-       Keyframes liegen in tokens.css unter „Page-Transitions". */
+    min-width: 0;
+    /* U2: Container für Breitenabfragen der Seiten (tokens.css: Spaltenauswahl
+       breiter Listen) — misst den Inhaltsbereich ohne Seitenleiste statt des
+       Viewports. Alle Dialoge und Toasts liegen außerhalb von <main> bzw. hängen
+       per `portal` an <body>. */
+    container: kb-main / inline-size;
+    /* Ziel der View-Transition; die Seitenleiste bleibt ruhig stehen. */
     view-transition-name: page-content;
-    /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt
-       (kein Streifen, in dem Inhalt darüber durchscrollt). Seiten ohne PageBar
-       bekommen den oberen Abstand über die :first-child-Regel unten zurück. */
-    padding: 0 var(--main-pad) var(--main-pad);
+    /* Kein Padding oben: damit eine sticky PageBar bündig am oberen Rand klebt.
+       Seiten ohne PageBar bekommen den oberen Abstand über :first-child zurück. */
+    /* U7 (R3-02, 2.4.11): unten so viel Platz wie der Toast-Stapel belegt, damit
+       scroll-padding-bottom auch am Seitenende greift und ein stehender Toast die
+       Hauptaktion am Formularende nicht verdeckt. */
+    padding: 0 var(--main-pad) calc(var(--main-pad) + var(--toast-h));
     overflow-y: auto;
     height: 100vh;
+    height: 100dvh;
     box-sizing: border-box;
-    background: var(--c-bg);
+    background: var(--surface-page);
+    /* Desktop: <main> scrollt selbst — 2.4.11 wie in tokens.css für <html>. */
+    scroll-padding-top: calc(var(--pagebar-h) + var(--sp-2));
+    scroll-padding-bottom: calc(var(--toast-h) + var(--sp-2));
+  }
+  /* Programmatischer Fokus (Sprunglink) ohne Ring um die ganze Seite. */
+  main:focus {
+    outline: none;
   }
   /* Erster Inhalt einer Seite bekommt oben Luft … */
   main > :global(:first-child) {
@@ -477,13 +774,14 @@
     margin-top: 0;
   }
 
-  /* --- Mobil / schmale Fenster (Plan W10) --------------------------------
-     Unter 900 px: obere Leiste mit Menü-Knopf, Navigation als Drawer von
-     links, Inhalt scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). */
+  /* --- Drawer-Band: ≤ 900 px oder Touch (Plan W10, §8.2) ------------------
+     Kopfleiste mit Menü-Knopf, Navigation als Drawer von links, Inhalt
+     scrollt im Dokument (mobile Browserleisten, Zurück-Wischen). Wegen
+     viewport-fit=cover (app.html) mit Safe-Area-Abständen. */
   .mobilebar {
     display: none;
   }
-  @media (max-width: 900px) {
+  @media screen and (max-width: 900px), screen and (pointer: coarse) {
     :global(body) {
       display: block;
     }
@@ -494,15 +792,16 @@
       position: sticky;
       top: 0;
       z-index: 40;
-      height: var(--mobilebar-h);
-      padding: 0 0.5rem;
-      background: var(--c-primary-800);
-      color: #fff;
+      height: var(--sticky-top);
+      padding: env(safe-area-inset-top, 0px) max(0.5rem, env(safe-area-inset-right, 0px)) 0
+        max(0.5rem, env(safe-area-inset-left, 0px));
+      background: var(--surface-inverse);
+      color: var(--text-inverse);
     }
     .menu-toggle {
       position: relative;
-      width: 44px;
-      height: 44px;
+      width: var(--target-touch);
+      height: var(--target-touch);
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -522,7 +821,11 @@
       right: 2px;
     }
     .mobile-brand {
-      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      min-height: var(--target-touch);
+      padding: 0 var(--sp-2);
+      color: var(--text-inverse);
       font-weight: 700;
       text-decoration: none;
     }
@@ -532,7 +835,7 @@
       z-index: 45;
       border: 0;
       padding: 0;
-      background: rgba(10, 25, 32, 0.4);
+      background: var(--overlay);
     }
     .sidebar {
       position: fixed;
@@ -540,7 +843,10 @@
       left: 0;
       z-index: 50;
       width: min(280px, 85vw);
+      height: 100vh;
       height: 100dvh;
+      padding: calc(0.75rem + env(safe-area-inset-top, 0px)) 0.75rem
+        calc(1rem + env(safe-area-inset-bottom, 0px)) calc(0.75rem + env(safe-area-inset-left, 0px));
       transform: translateX(-100%);
       visibility: hidden;
       transition:
@@ -550,30 +856,54 @@
     .sidebar.open {
       transform: none;
       visibility: visible;
-      box-shadow: var(--sh-xl);
+      box-shadow: var(--shadow-modal);
       transition: transform var(--t-base) var(--ease-apple);
+    }
+    .nav-close {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--sp-2);
+      align-self: flex-start;
+      min-height: var(--target-touch);
+      margin: 0 0 var(--sp-2);
+      padding: 0 var(--sp-3);
+      background: transparent;
+      border: 1px solid var(--line-inverse-control);
+      border-radius: var(--r-md);
+      color: var(--text-inverse);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .nav-close span {
+      font-size: 1.25rem;
+      line-height: 1;
     }
     .sidebar a,
     .sidebar .nav-button {
-      min-height: 44px;
+      min-height: var(--target-touch);
     }
     main {
       height: auto;
-      min-height: calc(100dvh - var(--mobilebar-h));
+      min-height: calc(100vh - var(--sticky-top));
+      min-height: calc(100dvh - var(--sticky-top));
       overflow: visible;
+      padding-left: calc(var(--main-pad) + env(safe-area-inset-left, 0px));
+      padding-right: calc(var(--main-pad) + env(safe-area-inset-right, 0px));
+      /* --toast-h enthält die Safe-Area schon, solange ein Toast steht (R3-02). */
+      padding-bottom: calc(var(--main-pad) + max(env(safe-area-inset-bottom, 0px), var(--toast-h)));
     }
   }
 
-  /* --- Druck (G2-DOC.3.4) -----------------------------------------------
-     Beim Drucken aus einem Handbuch-Kapitel (oder einer beliebigen Seite)
-     fallen die App-Nav und das overflow-Scroll-Verhalten weg. Sonst würde
-     der Browser entweder die Sidebar mitdrucken oder nur den sichtbaren
-     Viewport-Ausschnitt aufs Papier bringen. */
+  /* --- Druck -------------------------------------------------------------
+     Beim Drucken fallen Navigation, Kopfleiste und das Scroll-Verhalten weg. */
   @media print {
     :global(body) {
       display: block;
     }
-    .sidebar {
+    .sidebar,
+    .mobilebar,
+    .skip-link {
       display: none;
     }
     main {
@@ -584,5 +914,19 @@
     main > :global(:first-child) {
       margin-top: 0;
     }
+  }
+  /* U6-007: Prüfpunkte nach einer Wiederherstellung als Linkzeile (Ziel ≥ --target). */
+  .hold-checks-label {
+    display: block;
+    margin-top: var(--sp-2);
+    font-weight: 600;
+  }
+  .hold-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--sp-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 </style>

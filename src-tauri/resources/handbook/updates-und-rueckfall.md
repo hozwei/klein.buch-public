@@ -11,7 +11,7 @@ keywords: [update, aktualisieren, version, image-tag, migration, rückfall, roll
 Klein.Buch aktualisiert sich nie selbst. Du entscheidest, wann eine neue
 Version läuft, indem Du in Deiner Container-Verwaltung das Image-Tag
 änderst, also die Versionsnummer hinter dem Doppelpunkt in
-`ghcr.io/hozwei/klein-buch:2026.10.0`. Einen Update-Knopf in der App
+`ghcr.io/hozwei/klein-buch:2026.11.0`. Einen Update-Knopf in der App
 gibt es absichtlich nicht: Dafür bräuchte der Container Zugriff auf
 Docker selbst und damit praktisch volle Rechte über Deinen Server. Bei
 einem Dienst, der aus dem Internet erreichbar ist, wäre das zu
@@ -46,7 +46,10 @@ zu jeder Version, was sich geändert hat.
    Versionen. Du kannst Versionen überspringen; nötige Umstellungen
    der Datenbank laufen dann nacheinander in einem Schritt.
 2. Prüfe unter "Einstellungen" und "Backups" im Backup-Protokoll, dass
-   das letzte Backup auf Deinem externen Ziel geklappt hat.
+   das letzte Backup auf Deinem externen Ziel geklappt hat. Am
+   sichersten legst Du direkt vor dem Update mit der alten Version noch
+   ein Backup an ("Jetzt sichern"): Das kann die alte Version bei einem
+   Rückfall in jedem Fall einspielen.
 3. Wenn Du willst, prüfe die Signatur des neuen Images (siehe unten).
 4. Trag die neue Nummer in der Compose-Datei ein, zum Beispiel
    `image: ghcr.io/hozwei/klein-buch:2026.11.0`.
@@ -57,14 +60,19 @@ docker compose pull
 docker compose up -d
 ```
 
-Docker ersetzt dabei den Container. Angefangene Aufgaben dürfen bis zu
-60 Sekunden zu Ende laufen (`stop_grace_period`). Danach ist Klein.Buch
-gesperrt, bis Du Dich anmeldest.
+Docker ersetzt dabei den Container. Klein.Buch hält zuerst seine
+geplanten Aufgaben an; angefangene Aufgaben dürfen bis zu 30 Sekunden zu
+Ende laufen, und ein noch ausstehendes Backup eines eben
+festgeschriebenen Belegs wird noch geschrieben (zusammen höchstens
+40 Sekunden, innerhalb der `stop_grace_period` von 90 Sekunden). Danach
+ist Klein.Buch gesperrt, bis Du Dich anmeldest.
 
 Bringt die neue Version eine Umstellung der Datenbank mit (eine
 Migration), passiert sie bei Deiner ersten Anmeldung. Vorher schreibt
 Klein.Buch ein Backup des alten Stands, liest es vollständig zurück und
-prüft es. Erst wenn das gelungen ist, stellt es die Datenbank um. Im
+prüft es. Erst wenn das gelungen ist, stellt es die Datenbank um. Bei
+einem großen Archiv dauert das eine Weile; die Anmeldemaske wartet, bis
+es fertig ist (auch über Zeitlimits des Reverse-Proxys hinweg). Im
 Backup-Protokoll erscheint dieses Backup als manuell ausgelöst; es wird
 nie automatisch gelöscht. Scheitert das Backup, etwa weil der Platz
 nicht reicht, stellt Klein.Buch nichts um und bleibt gesperrt. Du siehst
@@ -74,8 +82,10 @@ Backup schreiben."; die Einzelheiten stehen im Container-Log (Zeile
 Platz oder korrigiere die Rechte von `/data` und melde Dich erneut an.
 
 Bringt das Image neue Fassungen der Vorlagen in `/inputs` mit, gleicht
-Klein.Buch sie beim Start ab und meldet das unter "Hinweise" (Kapitel
-"Volumes und Rechte").
+Klein.Buch sie beim Containerstart ab und meldet das unter "Hinweise"
+(Kapitel "Volumes und Rechte"). Eine `.neu`-Datei neben einer von Dir
+geänderten Vorlage legt es je Fassung nur einmal an; Du darfst sie nach
+dem Vergleich löschen.
 
 ## Signatur prüfen
 
@@ -85,7 +95,7 @@ GitHub gebaut wurde und unterwegs nicht verändert wurde. Prüfen kannst
 Du sie mit dem Werkzeug cosign:
 
 ```
-cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 Ersetze `<v>` durch die Version, zum Beispiel `2026.11.0`. Meldet cosign
@@ -117,6 +127,9 @@ Backup, das Klein.Buch vor der Umstellung geschrieben hat:
    umbenannten Ordner unter `backups/` (Dateiname
    `klein-buch-<Zeitpunkt>-<Kennung>.kbk`, Zeitpunkt kurz vor Deiner
    ersten Anmeldung nach dem Update) und auf Deinem externen Ziel.
+   Klein.Buch schreibt es so, dass die vorherige Version es lesen kann.
+   Spätere Backups der neuen Version liest die alte unter Umständen
+   nicht (sie meldet dann "Backup-Format … wird nicht unterstützt").
 3. Leg einen neuen, leeren Ordner für `/data` an, gib ihn dem
    Klein.Buch-Benutzer und trag die alte Versionsnummer ein.
 4. Starte Klein.Buch, richte es mit dem neuen Setup-Token ein und spiel
@@ -137,4 +150,4 @@ neueren Version nimmt eine ältere dagegen nie an.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

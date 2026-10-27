@@ -32,13 +32,31 @@ fasst die Fakten zusammen und verweist dorthin:
 - **Zustände:** `setup` (leeres `/data`) → `locked` (Datenbank zu, kein
   Scheduler) ↔ `unlocked`. Nach **jedem** Start ist die Instanz `locked`, bis sich
   der Nutzer im Browser anmeldet (E3). Bis dahin laufen weder Tages-Backup noch
-  Abo-Rechnungen oder Integritätsprüfung; der Scheduler holt Fälliges nach dem
-  Entsperren nach.
+  Abo-Rechnungen oder Integritätsprüfung (Log-Zeile „Instanz gesperrt …“ beim
+  Serverstart und alle 6 h); der Scheduler holt Fälliges ab einer Minute nach dem
+  Entsperren gestaffelt nach (ein Backup je Tick, Vollscan frühestens im
+  zweiten Tick). Mehr als zwei Tage ohne Aktivität meldet ein Hinweis (Seite
+  „Hinweise“ in der App).
 - **TLS** terminiert ein Reverse-Proxy des Betreibers; der Container spricht nur
   HTTP auf Port 8080.
 - **Verbindungen nach außen** nur für Versand (SMTP), Off-Site-Backup (SFTP) und
   die opt-in Versionsprüfung (GitHub-Releases). Keine Telemetrie, kein
   Auto-Update.
+- **Oberfläche** (seit 2026.11, ADR 0041): für Smartphone, Tablet und Desktop
+  ausgelegt; sie orientiert sich an WCAG 2.2 AA. Das Web-App-Manifest
+  (`/manifest.webmanifest`, `display: standalone`) erlaubt „Zum Startbildschirm“;
+  es gibt **keinen Service Worker und keine Offline-Funktion**, ohne Verbindung
+  zur Instanz geht nichts. Die CSP bleibt unverändert (`default-src 'self'`
+  deckt das Manifest ab). Eine Startbildschirm-App unter iOS hat eigene Cookies:
+  Dort meldet sich der Nutzer einmal neu an (eigene Sitzung in der
+  Sitzungsübersicht), und es gibt keine Zurück-Taste des Browsers.
+- **Vorkomprimierte Oberfläche** (seit 2026.11, ADR 0041 Nr. 212): Die Dateien der
+  Oberfläche liegen im Image zusätzlich als `.br` und `.gz` vor; der Server wählt sie
+  nach `Accept-Encoding` und setzt `Vary: Accept-Encoding`. Der Reverse-Proxy muss
+  `Content-Encoding` und `Vary` unverändert durchreichen und darf diese Antworten nicht
+  erneut komprimieren (Caddy `encode`, nginx `gzip on`, Traefik `compress` überspringen
+  kodierte Antworten). Für `/api/` und `/files/` keine Proxy-Kompression einschalten —
+  der Server liefert sie absichtlich unkomprimiert (BREACH, Belege bitgenau).
 
 ## 2. Voraussetzungen
 
@@ -70,7 +88,7 @@ Einstellungen darin und ihr Zweck:
 | `read_only: true`, `tmpfs: /tmp` | Root-Dateisystem schreibgeschützt; Temp-Dateien der Anwendung liegen unter `/data/tmp` (`TMPDIR`), `/tmp` ist `HOME` |
 | `cap_drop: [ALL]`, `no-new-privileges`, `ulimits.core: 0` | keine Capabilities, keine Rechteausweitung, keine Core-Dumps (der Server setzt zusätzlich `PR_SET_DUMPABLE` 0) |
 | `pids_limit: 256`, `mem_limit: 2g` | Grenzen gegen Ausreißer; Speicher siehe §10 |
-| `stop_grace_period: 60s` | laufende Jobs (Festschreiben, Backup) dürfen zu Ende laufen; der Server wartet beim Herunterfahren auf abgekoppelte Aufgaben (höchstens 10 min). Der Docker-Standard von 10 s ist zu kurz. |
+| `stop_grace_period: 90s` | Herunterfahren (ADR 0040): Scheduler sofort anhalten (Abo-Lauf beendet den Termin), offene Verbindungen höchstens 30 s, laufende Jobs und Tick höchstens 30 s, danach ein noch ausstehendes Lock-Backup (eben festgeschriebener Beleg) — beides zusammen höchstens 40 s —, Pool schließen höchstens 5 s: zusammen höchstens 75 s. Ein abgebrochenes Backup ist unkritisch (Temp-Datei + rename, Reste räumt der Start). Der Docker-Standard von 10 s ist zu kurz. |
 | `logging: json-file`, `max-size`/`max-file` | Log-Rotation |
 
 Erster Start: `docker compose up -d`, dann den Setup-Token aus dem Log lesen
@@ -96,9 +114,9 @@ zurück.
 | `KLEIN_BUCH_BACKUP_TARGETS_DIR` | `/backup-targets` | Wurzel der Ordner-Ziele; nicht `/`, nicht in oder über `/data` bzw. `/inputs`. |
 | `KLEIN_BUCH_MIN_FREE_BYTES` | `2147483648` (2 GiB) | Mindest-Platzreserve auf `/data` für Uploads und Restore (ganze Byte-Zahl, keine Einheiten). |
 | `KLEIN_BUCH_MAX_RESTORE_BYTES` | `4294967296` (4 GiB) | Höchstgröße einer hochgeladenen Backup-Datei und ihres entpackten Inhalts. |
-| `KLEIN_BUCH_ALLOWED_TEST_PORTS` | SMTP 25, 465, 587, 2525; SFTP 22, 2222 | Ports für Verbindungstests (Komma-Liste); ersetzt die Standardlisten beider Arten. |
+| `KLEIN_BUCH_ALLOWED_TEST_PORTS` | SMTP 25, 465, 587, 2525; SFTP 22, 2222 | Freigegebene Ports (Komma-Liste) für Verbindungstests **und** für gespeicherte Postfächer und SFTP-Ziele (neue Konten, Wechsel von Server oder Port; ein unveränderter Bestandsport bleibt nutzbar); ersetzt die Standardlisten beider Arten. Private und Loopback-Adressen sind erlaubt. |
 | `KLEIN_BUCH_SMTP_HELO_NAME` | Hostname des Containers | EHLO-Name beim SMTP-Versand. |
-| `KLEIN_BUCH_SMTP_CA_FILE` | – | eigene CA als PEM-Datei (in einem Volume), ergänzt die eingebauten Wurzeln. Eine Option „Zertifikat ignorieren“ gibt es nicht. |
+| `KLEIN_BUCH_SMTP_CA_FILE` | – | eigene CA als PEM-Datei (in einem Volume, mindestens ein Block `-----BEGIN CERTIFICATE-----`), ergänzt die eingebauten Wurzeln; eine Datei ohne Zertifikat wird beim Versand mit Meldung abgelehnt. Eine Option „Zertifikat ignorieren“ gibt es nicht. |
 | `KLEIN_BUCH_SOURCE_URL` | Build-Wert, sonst `https://github.com/hozwei/klein.buch-public` | Quell-URL für den §13-Hinweis (Forks); nur `http(s)` ohne Benutzerangaben, Query oder Fragment, sonst Warnung und ignoriert. |
 | `KLEIN_BUCH_UPDATE_URL` | aus der Quell-URL abgeleitet (`…/releases/latest` der GitHub-API) | Abfrage-URL der opt-in Versionsprüfung. |
 | `RUST_LOG` | `info` | Log-Filter (`tracing`-Syntax); `sqlx::query=off` wird immer angehängt. |
@@ -135,7 +153,7 @@ Alle Volumes müssen der UID aus `user:` gehören und für sie beschreibbar sein
 | `backups/` | lokale Backups (Floor), verschlüsselt |
 | `auth/totp.json` | TOTP-Geheimnis, gehashte Einmal-Codes (Datei 0600, Ordner 0700); nicht Teil der Backups |
 | `auth/device.key` | Schlüssel für die Gerätecookies des Rate-Limits; nicht Teil der Backups |
-| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Start geleert |
+| `tmp/` | Uploads, Downloads, Snapshots, Java-Temp; wird beim Serverstart geleert, im Betrieb stündlich von Resten älter als 6 h befreit (Uploads nach 1 h, Exporte mit dem ersten Abruf bzw. nach 10 min) |
 | `.klein-buch-instance`, `.klein-buch.lock` | Instanz-Marker; Sperre gegen einen zweiten Prozess |
 | `restore-staging/`, `RESTORE_*.json`, `*.rollback` | nur während bzw. nach einem Restore |
 
@@ -148,13 +166,15 @@ es sich nur aus Backups oder Snapshots (`docs/architecture/security.md`,
 „Write-once unter Linux“).
 
 **`/inputs`** — vom Menschen gepflegte Dateien: PDF-Vorlagen
-(`pdf-templates/`), Mail-Vorlagen, AfA-Tabelle, Beispiele. Beim Start ergänzt der
-Container fehlende Dateien aus dem Image. `/inputs/.seed-manifest.json` merkt
+(`pdf-templates/`), Mail-Vorlagen, AfA-Tabelle, Beispiele. Beim Containerstart ergänzt
+Klein.Buch fehlende Dateien aus dem Image. `/inputs/.seed-manifest.json` merkt
 sich die zuletzt kopierte Fassung: Eine unveränderte Datei ersetzt ein Update
 durch die neue Fassung; eine vom Nutzer geänderte bleibt unangetastet, die neue
-Fassung liegt daneben als `<name>.neu` (Hinweis in der Inbox nach dem
-Entsperren). **`/inputs` ist nicht Teil der Klein.Buch-Backups** und braucht eine
-eigene Sicherung beim Betreiber. Nach einem Restore meldet die Inbox Vorlagen, die
+Fassung liegt einmal daneben als `<name>.neu` (Hinweis unter „Hinweise“ nach dem
+Entsperren). Das Manifest merkt sich angebotene Fassungen (`offered`): Eine
+gelöschte `.neu`-Datei kommt erst mit einer weiteren Image-Fassung wieder
+(Lauf F, D-10). **`/inputs` ist nicht Teil der Klein.Buch-Backups** und braucht eine
+eigene Sicherung beim Betreiber. Nach einem Restore meldet ein Hinweis Vorlagen, die
 in der Datenbank referenziert sind, aber in `/inputs` fehlen.
 
 **`/backup-targets/<Name>`** — je Off-Site-Ordner ein eigenes Volume (z. B.
@@ -169,7 +189,13 @@ angewendet, sondern verweigert den Start; Datenbank und Instanz-Marker passen
 zusammen (ohne beide muss `archive/` leer sein); keine unverschlüsselte
 Datenbank; Selbsttest des Schreibschutzes im Archiv (scheitert als root, mit
 NFSv4-ACLs und auf ungeeigneten Dateisystemen). Beim Entsperren prüft eine
-Stichprobe, ob die Archivpfade der Datenbank unter `/data/archive` liegen.
+Stichprobe, ob die Archivpfade der Datenbank unter `/data/archive` liegen, und
+`PRAGMA foreign_key_check` die Fremdschlüssel der ganzen Datenbank — nach einem
+Update schon vor der Umstellung und vor dem Pflicht-Backup (die Datenbank bleibt
+dann auf dem alten Schema, das vorige Image öffnet sie), danach erneut. Ein
+Treffer (oder eine gescheiterte Vorab-Prüfung einer Migration) lässt die
+Instanz gesperrt (409 `db_integrity_failed`, Einzelheiten im Log, Handbuch
+`fehlersuche-im-container`).
 
 Kapitel: `volumes-und-rechte`.
 
@@ -198,6 +224,8 @@ Kapitel: `volumes-und-rechte`.
 - Der Server setzt die Sicherheits-Header selbst (CSP mit Skript-Hashes, HSTS bei
   HTTPS ohne `includeSubDomains`, `nosniff`, `frame-ancestors 'none'`). Der Proxy
   sollte sie nicht überschreiben.
+  `includeSubDomains`/`preload` gehören, falls gewünscht, an den Proxy bzw. die
+  Hauptdomain (die Instanz kennt die übrigen Subdomains nicht).
 - Uploads: Belege 20 MiB, E-Rechnungen 10 MiB, Logo/Unterschrift 2 MiB,
   Backup-Dateien bis `KLEIN_BUCH_MAX_RESTORE_BYTES`. Das Upload-Limit des Proxys
   (bei nginx `client_max_body_size`) und seine Timeouts müssen dazu passen, sonst
@@ -214,29 +242,70 @@ und dem Daten-Passwort zum Zeitpunkt des Backups. **Nicht** enthalten:
 `/inputs`, `/data/auth/totp.json` und die Compose-Datei bzw. Umgebung — die sichert
 der Betreiber selbst.
 
-**Wann.** Bei jedem Festschreiben (Rechnung, Storno, Kosten, Privatbewegung),
-täglich über den Scheduler (fällig nach 24 h, nach einem Fehlschlag frühestens
-nach 1 h erneut; nur entsperrt), manuell, vor jedem Restore (Pre-Restore), vor
-jeder Datenbank-Umstellung (§8) und nach einem Passphrase-Wechsel.
+**Wann.** Bei jedem Festschreiben (Rechnung, Storno, Kosten, Privatbewegung;
+Abo-Läufe eines Ticks ergeben zusammen genau ein Backup) — seit Lauf F3a
+kurz nach der Antwort im Hintergrund: Das Festschreiben vermerkt das Backup in
+der Datenbank, der Scheduler legt es nach etwa zwei Sekunden an (mehrere
+Festschreibungen kurz hintereinander ergeben ein Backup; fällt es durch Sperren
+oder Neustart aus, holt es der erste Tick danach nach) —, einmal je
+Kalendertag (Europe/Berlin) ab der eingestellten Uhrzeit (Standard 02:30,
+Einstellungen → Backups; beim ersten Tick danach, nach einer Sperre genau
+eines; nach einem Fehlschlag frühestens nach 1 h erneut, persistiert; nur
+entsperrt), manuell, vor jedem Restore (Pre-Restore), vor jeder
+Datenbank-Umstellung (§8) und nach einem Passphrase-Wechsel. Das Erst-Backup
+der Einrichtung zählt als Tages-Backup dieses Tages.
 
 **Wohin.**
 
-- **Floor** unter `/data/backups`, immer. Aufbewahrung 7 tägliche / 3 monatliche
-  / 1 jährliches, solange ein Off-Site-Ziel zuletzt erfolgreich war, sonst
-  30 / 12 / 7.
+- **Floor** unter `/data/backups`, immer. Aufbewahrung nach Kalender-Eimern
+  (ADR 0040): je das jüngste Backup der letzten 7 Tage mit Backup, der
+  letzten 3 Monate und des letzten Jahres, solange ein Off-Site-Ziel zuletzt
+  erfolgreich war, sonst 30 / 12 / 7.
 - **Off-Site-Ziele**, beliebig kombinierbar (höchstens 10): Ordner unter
   `/backup-targets/…` und SFTP-Server (Passwort-Anmeldung, Host-Key-Fingerprint
   wird beim Anlegen aus dem Verbindungstest übernommen und danach geprüft). Jedes
-  Backup geht an jedes Ziel, je Ziel mit Zeitlimit; Aufbewahrung je Ziel
-  30 / 12 / 7. SFTP-Ziele lassen sich nicht ändern, nur entfernen und neu anlegen.
-- Manuelle Backups (dazu zählt das Backup vor einer Umstellung) und
-  Pre-Restore-Backups werden **nie** automatisch gelöscht; der Platz auf `/data`
-  und den Zielen wächst damit.
+  Backup geht an jedes Ziel, je Ziel mit Zeitlimit; Aufbewahrung je Ordner-Ziel
+  30 Tage / 12 Monate / 7 Jahre. **Auf SFTP-Zielen löscht Klein.Buch nichts**
+  (Schutz der Off-Site-Kopien vor einer kompromittierten Instanz); dort rotiert
+  der Betreiber selbst (Snapshots oder zeitgesteuertes Aufräumen, Platzbedarf im
+  Handbuch „Speicher und Ressourcen“). SFTP-Ziele lassen sich nicht ändern, nur
+  entfernen und neu anlegen.
+- Manuelle Backups (dazu zählt das Backup vor einer Umstellung), Pre-Restore-
+  Backups und nach einem Restore übernommene Backups werden **nie** automatisch
+  gelöscht; der Platz auf `/data` und den Zielen wächst damit.
+- Während einer Pause der automatischen Abläufe (nach einem Restore oder einem
+  Uhrsprung, ADR 0040) ruht die Rotation; nach einem Restore gehen Backups bis
+  zur Freigabe nur in den Floor.
+- Die Rotation löscht nur `.kbk`-Dateien, die (aufgelöst) im Floor oder unter
+  `/backup-targets` liegen; Historienzeilen, die woandershin zeigen, verlieren
+  nur ihren Eintrag.
+
+**Herunterladen** (seit Lauf F3a): Einstellungen → Backups → Backup-Verlauf →
+„Herunterladen“ (Re-Auth) liefert die verschlüsselte `.kbk` aus dem Floor oder
+einem Ordner-Ziel — etwa für einen Umzug oder als zusätzliche Kopie ohne
+externes Ziel. Der Link gilt einmal und höchstens 10 Minuten; ein abgebrochener
+Download muss neu angefordert werden (Re-Auth). Audit `backup.downloaded`.
+Der Floor wird per Hardlink bereitgestellt, ein Ordner-Ziel auf einem anderen
+Dateisystem direkt von seinem Platz (keine Kopie unter `/data/tmp`, seit
+Lauf F3c). Kopien auf SFTP-Zielen holt der Betreiber auf dem Server.
+
+**Format.** Seit Lauf F3a schreibt Klein.Buch Backup-Format 3: Der lesbare
+Kopf (Versionen, Zeitpunkt, Prüfsumme) ist an die Verschlüsselung gebunden und
+lässt sich nicht unbemerkt ändern. Ältere Backups (Format 1 und 2) bleiben
+einspielbar; ein Format-3-Backup lässt sich mit einer älteren Version nicht
+einspielen. Ausnahme: Das Pflicht-Backup vor einer Datenbank-Umstellung hat das
+Format der vorherigen Version (für den Rückfall, §8; seit Lauf F3c).
 
 **Überwachung.** Ein gescheitertes Ziel steht im append-only Backup-Protokoll
-und als Hinweis in der Inbox; ohne Ziel kommt wöchentlich ein Hinweis, die
+und als Hinweis unter „Hinweise“; ohne Ziel kommt wöchentlich ein Hinweis, die
 Übersicht zeigt eine Aufgabe. Das Festschreiben blockiert das nie. Den Status
-`offsite` (`missing` | `failing` | `ok`) liefert auch der Healthcheck (§11).
+`offsite` (`missing` | `failing` | `stale` | `ok`; `stale` = ein Ziel hat noch keine
+Kopie oder seine letzte ist älter als die Frist der Regel „Backup überfällig“,
+Standard 7 Tage) liefert auch der Healthcheck (§11). Konnte ein Backup Einträge
+nicht sichern (symbolischer Link im Archiv, Archivdatei beim Lesen verschwunden),
+steht das im Detail der `ok`-Zeile des Protokolls und als Hinweis „Backup
+unvollständig“ (seit Lauf F3c); das Archiv enthält nur echte Dateien, ein
+ausgelagerter Ordner gehört als Volume eingebunden, nicht verlinkt.
 
 Off-Site ist Pflicht: Die lokalen Backups liegen auf demselben Volume wie die
 Daten. Kapitel: `backup-ziel-einrichten`, `backup-und-wiederherstellen`,
@@ -253,14 +322,20 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
 
 1. `CHANGELOG.md` bzw. Release-Notizen lesen; Signatur prüfen (`SECURITY.md`).
 2. Sicherstellen, dass ein aktuelles Off-Site-Backup und eine Sicherung von
-   `/inputs` existieren.
+   `/inputs` existieren. Empfohlen: mit der **alten** Version unmittelbar vor
+   dem Update „Jetzt sichern“ — dieses Backup liest die alte Version in jedem
+   Fall.
 3. In der Compose-Datei das Tag ändern, dann
    `docker compose pull && docker compose up -d`.
 4. Im Browser anmelden. Bringt die neue Version eine Datenbank-Umstellung mit,
    legt Klein.Buch **vor** der Migration ein Backup an, liest es vollständig
-   zurück und migriert erst danach (Audit `backup.pre_migration`). Scheitert
-   das Backup, wird nicht migriert und die Instanz bleibt gesperrt (Meldung im Log
-   und in der Inbox).
+   zurück und migriert erst danach (Audit `backup.pre_migration`). Dieses
+   Backup hat das Format, das die vorherige Version einspielt (für ein Update
+   von 2026.10 Format 2, ADR 0039 Nr. 129). Scheitert es, wird nicht migriert
+   und die Instanz bleibt gesperrt (Meldung im Log und unter „Hinweise“). Dauert
+   das Entsperren länger als 25 s (großes Archiv), antwortet der Server mit 202
+   und der Browser wartet, bis die Umstellung fertig ist (Abholung über
+   `POST /api/auth/login/poll`, Lauf F4a) — ein Proxy-Timeout von 60 s reicht.
 5. Neue Fassungen der mitgelieferten Vorlagen landen in `/inputs` (§5).
 
 **Rückfall** nach einem gescheiterten Update: vorheriges Tag starten und das
@@ -269,7 +344,10 @@ das ältere Image nicht (Schema-Check, keine Down-Migration). Dann: Container
 stoppen, das bisherige `/data` beiseitelegen (nicht löschen), mit leerem `/data`
 und dem vorherigen Tag neu einrichten und das Backup per Upload wiederherstellen
 (§9). Die Backup-Datei liegt im beiseitegelegten `/data/backups` und auf den
-Off-Site-Zielen.
+Off-Site-Zielen. Spätere Backups der neuen Version kann die ältere unter
+Umständen nicht lesen (neues Backup-Format, z. B. Format 3 ab 2026.11 — die
+ältere meldet dann „Backup-Format 3 wird nicht unterstützt“); für den Rückfall
+zählen das Backup von vor der Migration und das manuelle Backup aus Schritt 2.
 
 Kapitel: `updates-und-rueckfall`.
 
@@ -277,23 +355,42 @@ Kapitel: `updates-und-rueckfall`.
 
 **Restore** (Einstellungen → Backups → Wiederherstellen; Re-Auth): Backup-Datei
 hochladen oder ein lokales Backup aus der Liste wählen und das Daten-Passwort
-**dieses Backups** eingeben. Ablauf: Manifest und Format prüfen → Schema
+**dieses Backups** eingeben. Ein ungültiger Aufruf (keine oder zwei Quellen,
+unbekannter Upload, leere Passphrase) wird mit 400 abgelehnt, bevor der Server
+Änderungen sperrt. Ablauf: Manifest und Format (1–3) prüfen → Schema
 `30 ≤ Version ≤ aktuelle Version` (neuere Backups werden abgelehnt) →
-entschlüsseln (eine falsche Passphrase verändert nichts) → Pre-Restore-Backup des
-aktuellen Stands → Platzprüfung → gehärtet entpacken → gestagte Datenbank prüfen.
+entschlüsseln (eine falsche Passphrase verändert nichts) → Audit
+`backup.restore.requested` → Platzprüfung → gehärtet entpacken und gestagte
+Datenbank prüfen → Pre-Restore-Backup des aktuellen Stands → zweite Platzprüfung →
+Marker. Ein Backup, das schon bei der Prüfung der gestagten Datenbank scheitert,
+erzeugt kein Pre-Restore-Backup (Lauf F3c, ADR 0039 Nr. 129 (2)).
 Danach lehnt der Server Änderungen ab, beendet sich geordnet (Exit 0), und die
 Container-Verwaltung startet ihn neu; der Tausch läuft vor dem Port-Bind. Danach
 gilt das Daten-Passwort des Backups; der zweite Faktor (TOTP) bleibt der der
 Instanz.
+
+Nach dem Restore (erstes Entsperren, ADR 0040): Die **automatischen Abläufe
+pausieren** (Abo-Rechnungen, Abo-Kosten, Auto-AfA, Versand; Grund `restore`),
+Backups gehen **nur in den Floor**, die Rotation ruht — bis der Inhaber im
+Browser freigibt (Re-Auth, Frage „produktive Instanz?“). Eine Probe-Instanz
+wird nie freigegeben. Die **Nummernkreise** der ersetzten Datenbank werden
+übernommen, wo sie höher waren (keine Doppelvergabe, Audit
+`numbering.raised_after_restore`); bei Disaster Recovery in eine leere Instanz
+— oder in eine Instanz mit Testdaten bzw. aus dem Backup eines anderen Servers,
+was der Hinweis erkennt — hebt der Inhaber sie unter Einstellungen → Backups →
+Nummernkreise an (Re-Auth, Begründung, nur aufwärts). Backups im Floor, die nach dem eingespielten Stand
+entstanden, stehen wieder in der Historie (als manuell).
 
 Voraussetzungen und Grenzen:
 
 - Restart-Policy, die auch nach Exit 0 neu startet (`unless-stopped`, §3).
 - Freier Platz auf `/data`: das Doppelte der entpackten Größe plus
   `KLEIN_BUCH_MIN_FREE_BYTES`.
-- RAM: etwa das Dreifache der Backup-Größe (§10).
+- RAM: etwa die Größe des eingespielten Backups beim Entschlüsseln, danach
+  (nicht gleichzeitig) so viel wie ein Backup der laufenden Instanz für das
+  Pre-Restore-Backup (§10).
 - Backups der Desktop-Fassung mit festgeschriebenen Belegen werden abgelehnt
-  (Windows-Archivpfade; kein Datenumzug, E17). Backups ab Schema 30 einer
+  (Archivpfade der Desktop-Fassung; kein Datenumzug, E17). Backups ab Schema 30 einer
   Server-Instanz sind einspielbar.
 
 **Disaster Recovery** (Host verloren, Off-Site-Backup vorhanden): neuen Host mit
@@ -310,28 +407,50 @@ Kapitel: `backup-und-wiederherstellen`, `disaster-recovery`.
 
 **Arbeitsspeicher** — größte Posten:
 
-- **Backup erstellen:** Das Backup entsteht im Speicher (Inhalts-ZIP,
-  verschlüsselte Kopie, fertige Datei): etwa das **Dreifache der Archivgröße**.
-- **Restore:** Die Backup-Datei wird zum Entschlüsseln ganz gelesen (Datei,
-  Ciphertext-Kopie, Klartext): etwa das **Dreifache der Backup-Größe**.
+- **Backup erstellen:** Das Inhalts-ZIP entsteht im Speicher und wird im selben
+  Puffer verschlüsselt; Floor und Ziele schreiben ihn ohne weitere Kopie (seit
+  Lauf F3a): etwa das **Ein- bis Zweifache der Backup-Größe** (der Puffer wächst
+  beim Packen).
+- **Restore:** Die Backup-Datei wird ganz gelesen und im selben Puffer
+  entschlüsselt (seit Lauf F3a): etwa **einmal die Backup-Größe**. Der Inhalt
+  wird dann entpackt und freigegeben, erst danach entsteht das
+  Pre-Restore-Backup der laufenden Instanz (wie „Backup erstellen“; seit
+  Lauf F3c nacheinander, vorher gleichzeitig: etwa dreimal). Die Spitze liegt
+  damit beim Größeren von beidem.
 - **Java-Sidecar** (Validierung, ZUGFeRD): je Lauf höchstens 512 MiB Heap
   (`-Xmx512m`), höchstens zwei Läufe gleichzeitig.
 - **Passphrase-Ableitung** (Argon2id): 64 MiB je Ableitung, höchstens eine
   gleichzeitig.
 
 `compose.example.yaml` setzt `mem_limit: 2g` mit der Faustregel „512 MiB
-Grundbedarf + 3 × größtes Backup“. Mit wachsendem Archiv `mem_limit` mitziehen,
-sonst beendet der Kernel den Prozess mitten im Backup.
+Grundbedarf + 1 GiB Java-Sidecar (zwei Läufe) + 2 × größtes Backup“ (Java-Anteil
+seit Lauf F8: Lock-Backups laufen seit F3a im Hintergrund unter dem Scheduler,
+ohne Kostenklassen-Semaphore, also gleichzeitig mit einem Festschreiben; Backup-
+Anteil seit F3a 2 ×, vorher 3 ×); sie deckt auch den Restore (seit Lauf F3c).
+2g reichen damit für Backups bis etwa 250 MiB, 3g bis etwa 750 MiB. Mit wachsendem
+Archiv `mem_limit` mitziehen, sonst beendet der Kernel den Prozess mitten im
+Backup, Restore oder Festschreiben (`"OOMKilled": true` in `docker inspect`).
 
 **Plattenplatz** auf `/data`: Datenbank + Archiv + lokale Backups (Floor, plus
 nie rotierte manuelle und Pre-Restore-Backups) + Reserve
 `KLEIN_BUCH_MIN_FREE_BYTES`; für einen Restore zusätzlich das Doppelte der
-entpackten Größe. Uploads unter der Reserve lehnt der Server mit 507 ab.
+entpackten Größe. Uploads unter der Reserve lehnt der Server mit 507 ab. Die
+Platzprüfung reserviert keinen Platz für gleichzeitig laufende Uploads; zwei
+parallele große Uploads können die Reserve also gemeinsam unterschreiten. Das
+ist im Einbenutzerbetrieb bewusst so: Die Größe je Upload ist begrenzt (20 MiB),
+die Reserve beträgt 2 GiB, und ein Upload, dem der Platz ausgeht, scheitert
+sauber ohne halbe Datei im Archiv (Lauf F4b).
 
 **Lastgrenzen** (fest): höchstens 64 Anfragen gleichzeitig; je Kostenklasse
 PDF-Erzeugung 2, Java 2, Passphrase-Ableitung 1, Backup/Export 1; je Sitzung
 höchstens 30 PDF-/Java-Aufrufe pro Minute; 30 s Timeout je API-Aufruf (lange
-Arbeiten laufen als Job weiter).
+Arbeiten laufen als Job weiter). Höchstens 256 offene Verbindungen (darüber nimmt
+der Server erst nach dem Ende einer Verbindung wieder an), davon höchstens 32 je
+Gegenstelle (IPv4-Adresse bzw. IPv6-/64; weitere werden sofort geschlossen,
+vertraute Proxys aus `TRUSTED_PROXIES` sind davon ausgenommen); eine Verbindung, auf
+der der Server 30 s lang nichts schreiben kann (Gegenstelle liest nicht), wird
+getrennt (Lauf F4b). Nicht leere Anfragekörper an die API müssen
+`application/json` sein, sonst 415.
 
 Kapitel: `speicherbedarf`.
 
@@ -340,26 +459,93 @@ Kapitel: `speicherbedarf`.
 **Logs** gehen nach stdout/stderr (`docker compose logs klein-buch`). Standard
 ist `info`; `RUST_LOG` ändert den Filter. Nie im Log: Passphrase, TOTP- und
 Einmal-Codes, Sitzungs-IDs, Zugangsdaten; der Setup-Token steht nur als eigene
-Zeile auf stderr. Das Zugriffsprotokoll nennt Methode, Pfad ohne Query, Status
-und Dauer.
+Zeile auf stderr. Jedes Ereignis ist genau eine Zeile: Zeilenumbrüche und
+Steuerzeichen innerhalb eines Ereignisses erscheinen als `\n`, `\r` bzw.
+`\u{..}` (Schutz vor gefälschten Zeilen, Lauf F4c). Empfängeradressen stehen nur
+auf DEBUG, nie auf INFO/WARN.
+
+Das **Zugriffsprotokoll** (Ziel `klein_buch_lib::http`) nennt je Anfrage Methode,
+Pfad ohne Query, Status, Dauer, Client-IP, Kennung der Anfrage und eine gekürzte
+Sitzungskennung:
+
+```text
+POST /api/cmd/invoices_lock 500 41 ms ip=203.0.113.7 req=<UUID> sess=1a2b3c4d
+```
+
+`ip` ist die Adresse des Browsers nach `KLEIN_BUCH_TRUSTED_PROXIES` (sonst die
+des Proxys), auch bei abgewiesenen Anfragen. `req` ist zugleich die `ref`, die
+eine Fehlermeldung „Interner Fehler (Ref …)“ dem Nutzer zeigt — mit
+`docker compose logs klein-buch | grep <ref>` findet man Zugriffszeile und
+Fehlertext. `sess` sind die ersten 4 Byte des SHA-256 des Sitzungs-Cookies (wie
+in Einstellungen → Sicherheit & Anmeldung → „Angemeldete Sitzungen“), `-` ohne Cookie; das
+Cookie selbst lässt sich daraus nicht ableiten. Die IP ist ein personenbezogenes
+Datum: Sie steht im Log aus berechtigtem Interesse an der Sicherheit des Dienstes
+(Art. 6 Abs. 1 lit. f DSGVO, Erkennen und Sperren von Angriffen); die
+Aufbewahrung begrenzt die Log-Rotation der Compose-Datei (`max-size`/`max-file`,
+Beispiel 5 × 10 MB). Wer kürzer aufbewahren will, verkleinert diese Werte.
 
 Fehlversuche stehen nur im Log (nicht im Audit-Log), als `WARN` mit Ziel
 `klein_buch_lib::auth`:
 
 ```text
-auth.login.failed ip=<Client-IP> reason=totp|passphrase|rate_limited
-auth.setup.failed ip=<Client-IP> reason=token|passphrase
-auth.reauth.failed ip=<Client-IP> reason=totp|passphrase
+auth.login.failed ip=<Client-IP> reason=totp|totp_replay|passphrase|rate_limited|totp_locked
+auth.setup.failed ip=<Client-IP> reason=token|totp|passphrase
+auth.reauth.failed ip=<Client-IP> reason=totp|totp_replay|passphrase|totp_locked
+auth.totp_locked ip=<Client-IP> failures=100 …
 ```
 
-Die Zeilen eignen sich für fail2ban (Regex auf `auth\.\w+\.failed ip=<HOST>`).
+`totp_replay` = ein schon verbrauchter Code (Wiederholung), `totp_locked` = die
+Anmeldung mit TOTP ohne Gerätecookie ist nach 100 Fehlversuchen in Folge
+gesperrt (§12).
+
+Die Zeilen eignen sich für fail2ban. Der Filter muss auf Zeilenanfang, Ziel und
+Zeilenende verankert sein (Lauf F4c, W14-017); er passt auf das Format von
+`docker logs` und auf den Log-Treiber `json-file`:
+
+```ini
+failregex = ^(?:\{"log":")?\S*\s+WARN klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=[a-z_]+(?:\\n"|$)
+```
+
+`\S*` deckt den Zeitstempel ab, ob fail2ban ihn vor dem Vergleich herausschneidet
+oder nicht. Handbuch-Kapitel `fehlersuche-im-container` (mit Jail).
+
 Klein.Buch selbst antwortet ab dem fünften Fehlversuch je Client mit Wartezeiten
-(429 mit `Retry-After`, verdoppelnd bis 1 h, keine Dauersperre).
+(429 mit `Retry-After`, verdoppelnd bis 1 h). Eine Dauersperre gibt es nur für
+TOTP-Anmeldungen von unbekannten Geräten nach 100 Fehlversuchen in Folge (§12);
+bekannte Geräte und Einmal-Codes sind davon nie betroffen.
+
+**Monitoring und Alarmierung.** Klein.Buch begrenzt Lastspitzen und
+Fehlversuche selbst, alarmiert aber nicht: Es gibt einen Inhaber und keinen Kanal
+außerhalb der Instanz (ASVS 8.1.4, V11.1.7, V11.1.8 entschieden, ADR 0039
+Nr. 142). Wer benachrichtigt werden oder auf Netzebene sperren will, wertet das
+Log mit fail2ban oder einem Log-/Container-Monitoring aus. Lohnende Zeilen:
+
+| Zeile (Ziel) | Bedeutung | Vorschlag |
+|---|---|---|
+| `auth.login.failed`, `auth.setup.failed`, `auth.reauth.failed` (`klein_buch_lib::auth`, WARN) | Fehlversuch mit IP und Grund | fail2ban (Filter oben); Alarm bei Häufung |
+| `auth.login.failed … reason=rate_limited` | Client wird schon gebremst | Alarm, wenn es anhält |
+| `auth.totp_locked` (WARN) | TOTP-Anmeldung ohne Gerätecookie nach 100 Fehlversuchen gesperrt | sofort benachrichtigen |
+| Zugriffsprotokoll mit Status `429` (`klein_buch_lib::http`) | Anfrage von einem Limit abgewiesen (Anmeldung, PDF-/Java-Aufrufe je Sitzung) | Alarm bei Häufung je `ip` |
+| `Verbindung von … abgewiesen: mehr als 32 offene Verbindungen dieser Gegenstelle` (`klein_buch_lib::server::http`, WARN, höchstens einmal je Minute) | eine Gegenstelle (IPv4-Adresse bzw. IPv6-/64) hält mehr als 32 Verbindungen; die Verbindung wird ohne Antwort geschlossen und erscheint nicht im Zugriffsprotokoll. Hinter einem nicht vertrauten Proxy ist die Gegenstelle dessen IP (vertraute Proxys zählen nur gegen die globale Grenze) | Alarm bei Häufung |
+| Zugriffsprotokoll mit Status `5xx`, Zeilen auf `ERROR` | interner Fehler (`req` = angezeigte `ref`) | benachrichtigen |
+| Healthcheck `unhealthy` bzw. `state` dauerhaft `locked` | Container hängt bzw. nach einem Neustart nicht entsperrt (Jobs ruhen) | benachrichtigen |
+
+Die globale Grenze von 256 offenen Verbindungen schreibt keine Zeile: Ist sie erreicht,
+nimmt Klein.Buch keine neue Verbindung an, bis eine endet; weitere warten im Backlog des
+Kernels. Von außen zeigt sich das an langsamen oder ausbleibenden Antworten des
+Healthchecks bzw. an den Metriken des Reverse-Proxys (Upstream-Timeouts, offene
+Verbindungen).
+
+Nach jeder Anmeldung zeigt Klein.Buch zudem die Zahl der Fehlversuche seit der
+letzten erfolgreichen Anmeldung; das `audit_log` hält jede Buchung append-only
+fest (Einstellungen → Protokoll & Datensicherheit → Audit-Protokoll).
 
 **Healthcheck.** Das Image prüft sich selbst (`HEALTHCHECK`, alle 30 s, über den
 Subcommand `klein-buch-server healthcheck`). `GET /healthz` antwortet von außen
 nur 200 bzw. 503 (Herunterfahren, Neustart nach Restore) ohne Inhalt; über
-Loopback zusätzlich mit Zustand und Off-Site-Status:
+Loopback ohne Weiterleitungs-Header zusätzlich mit Zustand und Off-Site-Status.
+Ein Reverse-Proxy auf demselben Host (Gegenstelle `127.0.0.1` mit
+`X-Forwarded-*`) bekommt wie jeder externe Abruf nur den Status (Lauf F4b):
 
 ```sh
 docker compose exec klein-buch klein-buch-server healthcheck
@@ -368,7 +554,7 @@ docker compose exec klein-buch klein-buch-server healthcheck
 
 `state` ist `setup`, `locked` oder `unlocked`; `locked` gilt als gesund (sonst
 entstünde nach jedem Neustart eine Neustartschleife). `offsite` (`missing` |
-`failing` | `ok`) ist nur entsperrt lesbar, sonst `null`. Wer überwachen will, ob
+`failing` | `stale` | `ok`) ist nur entsperrt lesbar, sonst `null`. Wer überwachen will, ob
 nach einem Neustart jemand entsperrt hat, wertet `state` aus.
 
 **Subcommands** des Binaries: `serve` (Standard), `healthcheck`, `totp-reset`,
@@ -392,6 +578,15 @@ nach einem Neustart jemand entsperrt hat, wertet `state` aus.
 Beim Entsperren: `Archiv-Eintrag … liegt nicht unter …` → das Datenverzeichnis
 passt nicht zur Datenbank (Entsperren verweigert, Anmeldung antwortet 409).
 
+**Sidecar-Prüfung** (Lauf F4b): Direkt nach dem Start prüft der Server im
+Hintergrund die Java-Komponente für E-Rechnungen (Launcher, JARs,
+XRechnung-Konfiguration, `java -version`). Im Log steht dann
+`Sidecar bereit (KoSIT-Validator, Mustang)` oder als `ERROR`
+`Sidecar nicht einsatzbereit (…): …` mit den fehlenden Teilen; zusätzlich
+erscheint nach dem Entsperren ein dringender Hinweis unter „Hinweise“. Der Server
+läuft trotzdem weiter — nur Festschreiben sowie Prüfen und Einlesen von
+E-Rechnungen scheitern. Abhilfe: Image neu ziehen (Container neu erstellen).
+
 Kapitel: `fehlersuche-im-container`.
 
 ## 12. Anmeldung und zweiter Faktor
@@ -400,8 +595,40 @@ Kapitel: `fehlersuche-im-container`.
   ein Code gilt nur einmal, auch über Neustarts. Sitzungen enden nach 30 min ohne
   Nutzung bzw. nach 12 h; Re-Auth gilt 5 min. Sitzungen leben nur im Speicher:
   Ein Neustart meldet alle Geräte ab.
-- „Datenbank sperren“ (in der Oberfläche) schließt die Datenbank, meldet alle
-  Geräte ab und pausiert den Scheduler.
+- „Datenbank sperren“ (in der Oberfläche) meldet sofort alle Geräte ab,
+  schließt die Datenbank und pausiert den Scheduler. Ein laufender Abo-Lauf
+  beendet den aktuellen Termin, der Archiv-Vollscan die aktuelle Datei;
+  gesperrt wird spätestens nach 10 s. Dabei verwirft der Server auch
+  gespeicherte Antworten, Job-Ergebnisse und offene Anmeldungen.
+- **Sitzungen:** Einstellungen → Sicherheit & Anmeldung zeigt alle angemeldeten Sitzungen
+  (Anmeldezeit, letzte Nutzung, gekürzte Kennung) und meldet auf Wunsch alle
+  anderen ab (mit Bestätigung, Audit `auth.sessions_revoked`).
+- **Neue Daten-Passwörter** (Einrichtung, Wechsel) prüft der Server gegen eine
+  eingebettete Sperrliste bekannter Passwörter und Sätze, gegen einfache Muster
+  und gegen Firmenname und E-Mail aus dem Profil (Meldung „zu leicht zu
+  erraten“). Bestehende Passwörter bleiben gültig.
+- **Anmeldung mit App-Code gesperrt** (`totp_locked`, WARN
+  `auth.totp_locked`, Hinweis in der App): Nach 100 Fehlversuchen in Folge ohne
+  Gerätecookie nimmt der Server keine TOTP-Anmeldung von unbekannten Geräten
+  mehr an — unabhängig von der Zeit und auch nach einem Neustart
+  (`/data/auth/totp-lock.json`). Aufgehoben wird die Sperre durch eine
+  Anmeldung von einem bereits benutzten Browser (Gerätecookie) oder mit einem
+  Einmal-Code, notfalls durch `totp-reset` und Neueinrichtung. Die Sperre zeigt
+  massenhaftes Durchprobieren, nicht dass das Daten-Passwort bekannt ist: Schon
+  falsche App-Codes zählen mit (der zweite Faktor wird vor der Passphrase
+  geprüft), auslösen kann sie also jeder, der die Anmeldeseite erreicht. Sie
+  kostet den Inhaber auf neuen Geräten je einen Einmal-Code; bereits benutzte
+  Browser sind nicht betroffen. Danach Sitzungen und die Zahl der restlichen
+  Einmal-Codes prüfen, bei Bedarf den App-Code neu einrichten (neue
+  Einmal-Codes).
+- **Gültiger App-Code mit falschem Daten-Passwort** (WARN
+  `auth.factor_suspect`, dringender Hinweis in der App): Drei Anmeldungen bzw.
+  Re-Auths in Folge mit gültigem App-Code oder Einmal-Code, aber falschem
+  Daten-Passwort (ohne erfolgreiche Anmeldung dazwischen). Warst du das nicht,
+  kennt jemand womöglich das TOTP-Geheimnis oder einen Einmal-Code: App-Code
+  unter Einstellungen → Sicherheit & Anmeldung neu einrichten und die Sitzungen prüfen. Bei
+  gesperrter Instanz (nach einem Neustart) erscheint der Hinweis mit der
+  nächsten erfolgreichen Anmeldung; der Zähler liegt nur im Speicher.
 - **Gerät mit der Authenticator-App verloren** und keine Einmal-Codes mehr:
 
   ```sh
@@ -422,11 +649,26 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
   ZIP mit einer JSON-Datei je Tabelle, dem Archiv, dem Schema, `erd.md`,
   `manifest.json` und `read_export.py` zum Sichten ohne Klein.Buch. Zugangsdaten
   sind nicht enthalten. Wie alle Exporte entsteht er unter `/data/tmp` und kommt
-  als Browser-Download (einmal abrufbar, nach 1 h gelöscht).
-- **Geschäftsjahres-Abschluss** (Menü → Geschäftsjahr): nur für
+  als Browser-Download: einmal abrufbar, die Datei wird mit dem Abruf gelöscht
+  (auch bei Abbruch — dann neu erzeugen), spätestens nach 10 min. Snapshots von
+  `/data` können einen Export nur in diesem kurzen Fenster im Klartext enthalten.
+- **Geschäftsjahres-Abschluss** (Seitenleiste → Geschäftsjahr): nur für
   abgelaufene Jahre, unumkehrbar; Korrekturen danach nur per Storno-Beleg.
-- **E-Mail-Versandprotokoll:** jeder Versandversuch append-only mit
-  Provider-Antwort (Einstellungen → E-Mail-Versand). Eine angenommene Mail ist
+- **DATEV-Berater- und Mandantennummer** (EÜR-Export, seit 2026.11) stehen nicht
+  in der Datenbank: Der Browser merkt sie sich wie den Kontenrahmen (Local
+  Storage, je Browser und Gerät). Sie sind deshalb nicht Teil der Backups und auf
+  einem anderen Gerät neu einzutragen; die Grenzen prüft der Server beim Export.
+- **Meldungstexte der API** (seit 2026.11 in der Sprache der Oberfläche: feste
+  Vorsätze wie „Die Rechnung kann nicht ausgestellt werden: …“, Gründe mit „; “
+  getrennt, Daten als TT.MM.JJJJ, „Firmendaten“, keine Regel-Kennungen der
+  XRechnung; ADR 0041 Nr. 168). Diese Texte gehen nur an den Browser (Feld
+  `message` der Fehlerantwort), nicht ins Log; wer API-Antworten auswertet,
+  prüft das stabile Feld `code`. Im Log hat sich nur eine Zeile geändert:
+  `Hinweis „E-Mail-Protokoll unvollständig“ fehlgeschlagen` (vorher
+  „Versandprotokoll unvollständig“). Die Zeilen für fail2ban und Monitoring (§11)
+  sind unverändert.
+- **E-Mail-Protokoll:** jeder Versandversuch append-only mit
+  Provider-Antwort (Einstellungen → E-Mail-Protokoll). Eine angenommene Mail ist
   beim Provider eingeliefert, nicht zwingend im Posteingang des Empfängers.
 - **Sidecar-Versionen** (KoSIT-Validator, Mustang, XRechnung-Konfiguration) sind
   Teil des Images; ein Update kommt mit einem neuen Release
@@ -439,9 +681,14 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13; Version 2026.5.1, Schema v31). Quellen:
+Stand: 2026-10-25 (Phase W, Block W13; Lauf F4b: Verbindungsgrenzen, Exporte, /healthz, Sidecar-Prüfung; Schema v32). Quellen:
 `Dockerfile`, `compose.example.yaml`, `src-tauri/src/server/` (`config.rs`,
 `startup.rs`, `health.rs`, `auth.rs`, `policy.rs`, `logging.rs`, `mod.rs`),
 `src-tauri/src/config.rs`, `src-tauri/src/uploads.rs`, `src-tauri/src/nettest.rs`,
 `src-tauri/src/mail/smtp.rs`, `src-tauri/src/build_info.rs`,
 `src-tauri/src/scheduler/update_check.rs`, `src-tauri/src/backup/`, ADR 0039.
+Nachtrag 2026-10-27 (Lauf 2026.11, U6): §1 Oberfläche und Web-App-Manifest
+(`static/manifest.webmanifest`, ADR 0041 Nr. 72), §13 DATEV-Nummern im Browser
+und Meldungstexte (`src-tauri/src/server/errors.rs`, `src/routes/euer/export`),
+Begriffe der Oberfläche („Hinweise“, „Sicherheit & Anmeldung“, „E-Mail-Protokoll“,
+„Protokoll & Datensicherheit“).

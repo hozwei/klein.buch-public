@@ -18,10 +18,17 @@
 //! Eingangsrechnung eines Lieferanten DARF Umsatzsteuer enthalten — der
 //! Kleinunternehmer zahlt sie, kann aber keine Vorsteuer ziehen. Für die EÜR
 //! (Cash-Basis, Block 13) ist deshalb der **Brutto**-Betrag die
-//! Betriebsausgabe. Diese Domain erzwingt daher **keine** USt-Freiheit.
+//! Betriebsausgabe. Diese Domain erzwingt daher **keine** USt-Freiheit (Ausnahme
+//! §13b, unten).
 //!
-//! §13b (Reverse-Charge) ist nur ein **Hinweis-Flag** — keine USt-Auto-
-//! Berechnung (PRD G16: "Berechnung extern").
+//! §13b (Reverse-Charge): Der Lieferant stellt **netto** in Rechnung, die
+//! Steuer schuldet der Leistungsempfänger — auch ein Kleinunternehmer
+//! (§13b Abs. 5 Satz 1 und Abs. 8 UStG). Klein.Buch
+//! berechnet und meldet sie nicht (PRD G16: "Berechnung extern"); das Flag
+//! markiert die Kosten. Erzwungen wird nur: bei gesetztem Flag ist
+//! `tax_amount_cents == 0` (eine Lieferantenrechnung mit §13b weist keine USt
+//! aus; R1-S2-13B, Lauf F7). Die selbst geschuldete USt ist bei Zahlung an das
+//! Finanzamt eine eigene Betriebsausgabe (Abflussprinzip, §11 Abs. 2 EStG).
 //!
 //! ## Geld-Konvention
 //!
@@ -75,7 +82,7 @@ pub struct ExpenseInput {
     pub tax_amount_cents: i64,
     pub gross_amount_cents: i64,
     pub currency_code: String,
-    /// §13b Reverse-Charge Hinweis-Flag.
+    /// §13b Reverse-Charge: mit Flag muss `tax_amount_cents` 0 sein (ADR 0039 Nr. 143).
     pub reverse_charge_13b: bool,
     pub notes: Option<String>,
 }
@@ -114,8 +121,16 @@ pub enum ExpenseValidationError {
         tax: i64,
         gross: i64,
     },
+    /// §13b gesetzt, aber ein USt-Betrag erfasst: bei Reverse-Charge weist der
+    /// Lieferant keine Umsatzsteuer aus (R1-S2-13B).
+    ReverseChargeWithTax {
+        tax: i64,
+    },
     /// Kosten ohne jeden Betrag (alles 0) sind vermutlich ein Eingabefehler.
     AmountZero,
+    /// Ein Betrag liegt über der Domänengrenze
+    /// ([`crate::domain::money::MAX_AMOUNT_CENTS`]); F5-fix.
+    AmountOutOfRange,
     /// Beleg-Datum liegt in der Zukunft (ein erfasster Beleg kann nicht aus der
     /// Zukunft stammen).
     ExpenseDateInFuture {
@@ -185,11 +200,28 @@ pub fn validate_expense(
             tax: input.tax_amount_cents,
         });
     }
-    if input.gross_amount_cents != input.net_amount_cents + input.tax_amount_cents {
+    let amounts = [
+        input.net_amount_cents,
+        input.tax_amount_cents,
+        input.gross_amount_cents,
+    ];
+    if !amounts
+        .iter()
+        .all(|a| crate::domain::money::amount_in_range(*a))
+    {
+        errs.push(E::AmountOutOfRange);
+    }
+    if input.net_amount_cents.checked_add(input.tax_amount_cents) != Some(input.gross_amount_cents)
+    {
         errs.push(E::GrossMismatch {
             net: input.net_amount_cents,
             tax: input.tax_amount_cents,
             gross: input.gross_amount_cents,
+        });
+    }
+    if input.reverse_charge_13b && input.tax_amount_cents != 0 {
+        errs.push(E::ReverseChargeWithTax {
+            tax: input.tax_amount_cents,
         });
     }
     if input.net_amount_cents == 0 && input.tax_amount_cents == 0 && input.gross_amount_cents == 0 {
@@ -206,10 +238,8 @@ pub fn validate_expense(
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI). `variant_name`
 /// bleibt der maschinenlesbare Code.
 pub fn message(e: &ExpenseValidationError) -> String {
+    use crate::domain::money::eur;
     use ExpenseValidationError as E;
-    fn eur(c: i64) -> String {
-        format!("{:.2} €", c as f64 / 100.0).replace('.', ",")
-    }
     match e {
         E::VendorNameMissing => "Lieferant (Name) ist erforderlich.".into(),
         E::DescriptionMissing => "Beschreibung ist erforderlich.".into(),
@@ -226,7 +256,12 @@ pub fn message(e: &ExpenseValidationError) -> String {
             eur(*net),
             eur(*tax)
         ),
+        E::ReverseChargeWithTax { tax } => format!(
+            "§13b (Reverse-Charge): Der Lieferant weist keine Umsatzsteuer aus, der USt-Betrag muss 0 sein (erfasst {}). Die Steuer meldest du selbst in der Umsatzsteuer-Voranmeldung an.",
+            eur(*tax)
+        ),
         E::AmountZero => "Der Betrag muss größer als 0 sein.".into(),
+        E::AmountOutOfRange => crate::domain::money::amount_out_of_range_message(),
         E::ExpenseDateInFuture { expense_date, today } => format!(
             "Beleg-Datum ({expense_date}) liegt in der Zukunft (heute {today})."
         ),
@@ -248,7 +283,9 @@ pub fn variant_name(e: &ExpenseValidationError) -> &'static str {
         E::NetNegative { .. } => "NetNegative",
         E::TaxNegative { .. } => "TaxNegative",
         E::GrossMismatch { .. } => "GrossMismatch",
+        E::ReverseChargeWithTax { .. } => "ReverseChargeWithTax",
         E::AmountZero => "AmountZero",
+        E::AmountOutOfRange => "AmountOutOfRange",
         E::ExpenseDateInFuture { .. } => "ExpenseDateInFuture",
         E::PaidDateInFuture { .. } => "PaidDateInFuture",
     }
@@ -257,6 +294,22 @@ pub fn variant_name(e: &ExpenseValidationError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
+    #[test]
+    fn message_formats_amounts_without_float() {
+        let m = message(&ExpenseValidationError::NetNegative { net: -1 });
+        assert!(m.contains("(-0,01 €)"), "{m}");
+        let m = message(&ExpenseValidationError::GrossMismatch {
+            net: 10_000,
+            tax: 1_900,
+            gross: 11_901,
+        });
+        assert!(
+            m.contains("Brutto (119,01 €)") && m.contains("USt (19,00 €)"),
+            "{m}"
+        );
+    }
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 5, 20).unwrap()
@@ -387,15 +440,34 @@ mod tests {
     }
 
     #[test]
-    fn reverse_charge_13b_is_just_a_flag() {
-        // §13b setzt keine USt-Logik in Gang — Brutto bleibt = Netto wenn der
-        // Lieferant (Reverse-Charge) keine USt ausweist; das Flag ändert nichts
-        // an der Betrags-Validierung.
+    fn reverse_charge_13b_net_invoice_is_valid() {
+        // §13b setzt keine USt-Berechnung in Gang — der Lieferant stellt netto
+        // in Rechnung, Brutto = Netto.
         let mut e = good();
         e.reverse_charge_13b = true;
         e.net_amount_cents = 10_000;
         e.tax_amount_cents = 0;
         e.gross_amount_cents = 10_000;
+        assert!(validate_expense(&e, today()).is_ok());
+    }
+
+    /// R1-S2-13B (Lauf F7): §13b mit ausgewiesener USt ist ein Erfassungsfehler.
+    #[test]
+    fn reverse_charge_13b_rejects_tax_amount() {
+        let mut e = good();
+        e.reverse_charge_13b = true;
+        e.net_amount_cents = 10_000;
+        e.tax_amount_cents = 1_900;
+        e.gross_amount_cents = 11_900;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert_eq!(
+            err,
+            vec![ExpenseValidationError::ReverseChargeWithTax { tax: 1_900 }]
+        );
+        assert_eq!(variant_name(&err[0]), "ReverseChargeWithTax");
+        assert!(message(&err[0]).contains("19,00 €"), "{}", message(&err[0]));
+        // Ohne Flag ist dieselbe Rechnung (Vorsteuer nicht abziehbar) gültig.
+        e.reverse_charge_13b = false;
         assert!(validate_expense(&e, today()).is_ok());
     }
 
@@ -432,5 +504,30 @@ mod tests {
         assert!(validate_expense(&e, today()).is_ok());
         e.currency_code = "eur".into(); // case-sensitive Whitelist
         assert!(validate_expense(&e, today()).is_err());
+    }
+
+    /// F5-fix: Beträge über 1 Mrd. € sind ein Validierungsfehler; `net + tax`
+    /// läuft auch an der i64-Grenze nicht über (keine Panik).
+    #[test]
+    fn amounts_above_limit_are_rejected_without_overflow() {
+        use crate::domain::money::MAX_AMOUNT_CENTS;
+        let mut e = good();
+        e.net_amount_cents = MAX_AMOUNT_CENTS;
+        e.tax_amount_cents = 0;
+        e.gross_amount_cents = MAX_AMOUNT_CENTS;
+        assert!(validate_expense(&e, today()).is_ok());
+        e.net_amount_cents = MAX_AMOUNT_CENTS + 1;
+        e.gross_amount_cents = MAX_AMOUNT_CENTS + 1;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert!(err.contains(&ExpenseValidationError::AmountOutOfRange));
+        e.net_amount_cents = i64::MAX;
+        e.tax_amount_cents = 1;
+        e.gross_amount_cents = i64::MIN;
+        let err = validate_expense(&e, today()).unwrap_err();
+        assert!(err.contains(&ExpenseValidationError::AmountOutOfRange));
+        assert!(err
+            .iter()
+            .any(|x| matches!(x, ExpenseValidationError::GrossMismatch { .. })));
+        assert!(message(&ExpenseValidationError::AmountOutOfRange).contains("1000000000 €"));
     }
 }

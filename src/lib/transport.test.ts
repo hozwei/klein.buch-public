@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   IDEMPOTENCY_HEADER,
   REQUEST_HEADER,
+  PassphraseChangeUnclear,
+  REAUTH_CANCELED,
+  RETRY_503_MS,
+  TIMEOUT_UNCLEAR,
+  authChangePassphrase,
   authLogin,
+  authRevokeOtherSessions,
+  authSessions,
   invoke,
   newIdempotencyKey,
   onAuthRequired,
@@ -100,6 +107,16 @@ describe("transport.invoke", () => {
     expect(header(calls[0], IDEMPOTENCY_HEADER)).toBe(header(calls[1], IDEMPOTENCY_HEADER));
   });
 
+  // U7 (R1-07): nach Ablauf der Wiederholungen kein „bitte noch einmal versuchen“.
+  it("rät nach dauerhaftem 503 timeout zum Prüfen statt zum Wiederholen", async () => {
+    const t0 = Date.now();
+    let calls = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => (calls++ === 0 ? t0 : t0 + RETRY_503_MS + 1));
+    mockFetch([json(503, { code: "timeout", message: "… bitte in einem Moment noch einmal versuchen." })]);
+    await expect(invoke("expenses_create", {})).rejects.toBe(TIMEOUT_UNCLEAR);
+    now.mockRestore();
+  });
+
   it("wiederholt 503 restarting nicht", async () => {
     mockFetch([json(503, { code: "restarting", message: "Der Server startet neu" })]);
     await expect(invoke("contacts_create", {})).rejects.toBe("Der Server startet neu");
@@ -131,8 +148,10 @@ describe("transport.auth", () => {
 
   it("403 reauth_required: Dialog, dann Wiederholung mit demselben Schlüssel", async () => {
     let asked = 0;
-    setReauthHandler(async () => {
+    let askedFor = "";
+    setReauthHandler(async (url) => {
       asked++;
+      askedFor = url;
       return true;
     });
     const calls = mockFetch([
@@ -141,17 +160,95 @@ describe("transport.auth", () => {
     ]);
     await invoke("dsgvo_export", { contactId: "c1" });
     expect(asked).toBe(1);
+    expect(askedFor).toBe("/api/cmd/dsgvo_export");
     expect(calls).toHaveLength(2);
     expect(header(calls[0], IDEMPOTENCY_HEADER)).toBe(header(calls[1], IDEMPOTENCY_HEADER));
 
     setReauthHandler(async () => false);
     mockFetch([json(403, { code: "reauth_required", message: "Bitte bestätigen" })]);
-    await expect(invoke("dsgvo_export", {})).rejects.toBe("Bitte bestätigen");
+    // U4 (V1-09): Abbruch ist kein Server-Fehler, sondern „nichts geändert“.
+    await expect(invoke("dsgvo_export", {})).rejects.toBe(REAUTH_CANCELED);
     setReauthHandler(null);
   });
 
   it("erzeugt unterschiedliche Schlüssel", () => {
     expect(newIdempotencyKey()).not.toBe(newIdempotencyKey());
+  });
+
+  // W14-037 (Lauf F4a): lange Anmeldung → 202, Abholung ohne Passphrase.
+  it("authLogin: 202 → Ergebnis über /api/auth/login/poll", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls = mockFetch([
+        json(202, { state: "pending" }),
+        json(202, { state: "pending" }),
+        json(200, { state: "ok", failedAttempts: 0, recoveryLeft: 10, usedRecoveryCode: false }),
+        json(202, { state: "pending" }),
+        json(401, { code: "auth_failed", message: "Anmeldung fehlgeschlagen." }),
+      ]);
+      const ok = authLogin("richtig", { totpCode: "654321" });
+      await vi.advanceTimersByTimeAsync(2500);
+      await expect(ok).resolves.toMatchObject({ ok: true, recoveryLeft: 10 });
+      expect(calls.map((c) => c.url)).toEqual([
+        "/api/auth/login",
+        "/api/auth/login/poll",
+        "/api/auth/login/poll",
+      ]);
+      expect(JSON.parse(String(calls[1].init.body))).toEqual({});
+      expect(header(calls[1], REQUEST_HEADER)).toBe("1");
+      const failed = authLogin("falsch", { totpCode: "123456" });
+      await vi.advanceTimersByTimeAsync(1500);
+      await expect(failed).resolves.toEqual({ ok: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // W14-005 (Lauf F4a): Sitzungsübersicht und „andere abmelden“ (Re-Auth).
+  it("authSessions und authRevokeOtherSessions", async () => {
+    const session = {
+      id: "a1b2c3d4",
+      loginAt: "2026-10-25 08:00:00",
+      lastSeenAt: "2026-10-25 08:05:00",
+      current: true,
+      reauthActive: false,
+    };
+    let asked = 0;
+    setReauthHandler(async () => {
+      asked++;
+      return true;
+    });
+    const calls = mockFetch([
+      json(200, { count: 1, sessions: [session] }),
+      json(403, { code: "reauth_required", message: "Bitte bestätigen" }),
+      json(200, { state: "ok", revoked: 2 }),
+    ]);
+    expect(await authSessions()).toEqual([session]);
+    expect(calls[0].url).toBe("/api/auth/sessions");
+    expect(await authRevokeOtherSessions()).toBe(2);
+    expect(asked).toBe(1);
+    expect(calls[2].url).toBe("/api/auth/sessions/others/revoke");
+    setReauthHandler(null);
+  });
+
+  // Lauf F8: `timeout` beim Passphrase-Wechsel ist kein Fehler, sondern ein
+  // unklarer Ausgang (eigene Fehlerklasse, die Seite verwirft nichts).
+  it("authChangePassphrase: 503 timeout → PassphraseChangeUnclear, 503 busy → Meldung", async () => {
+    mockFetch([
+      json(503, { code: "timeout", message: "Eine begonnene Aktion läuft im Hintergrund zu Ende" }),
+      json(503, { code: "busy", message: "Gerade beschäftigt" }),
+      json(200, { state: "ok", backupStarted: true }),
+    ]);
+    await expect(authChangePassphrase("eine-neue-lange-passphrase")).rejects.toBeInstanceOf(
+      PassphraseChangeUnclear,
+    );
+    await expect(authChangePassphrase("eine-neue-lange-passphrase")).rejects.toBe(
+      "Gerade beschäftigt",
+    );
+    expect(await authChangePassphrase("eine-neue-lange-passphrase")).toEqual({
+      state: "ok",
+      backupStarted: true,
+    });
   });
 });
 

@@ -18,7 +18,7 @@ use crate::db::models::{RecurringInvoiceDetail, RecurringInvoiceItemRow, Recurri
 use crate::domain::invoice::compute_totals;
 use crate::domain::recurring_invoice::RecurringInvoiceInput;
 use crate::error::{Error, Result};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 // ---- CREATE ----------------------------------------------------------------
@@ -226,19 +226,41 @@ pub async fn advance(
     last_invoice_id: &str,
     next_due_date: &str,
 ) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    advance_in(
+        &mut conn,
+        id,
+        expected_due_date,
+        Some(last_invoice_id),
+        next_due_date,
+    )
+    .await
+}
+
+/// [`advance`] innerhalb einer laufenden Transaktion (Entwurf, Audit und
+/// Vorrücken gemeinsam, Lauf F W14-025). `last_invoice_id = None` rückt ohne
+/// Rechnung vor („ab heute fortsetzen“).
+pub async fn advance_in(
+    conn: &mut SqliteConnection,
+    id: &str,
+    expected_due_date: &str,
+    last_invoice_id: Option<&str>,
+    next_due_date: &str,
+) -> Result<()> {
     let res = sqlx::query(
         "UPDATE recurring_invoices SET
-            last_executed_at = datetime('now','utc'),
-            last_invoice_id = ?,
-            next_due_date = ?,
+            last_executed_at = CASE WHEN ?1 IS NULL THEN last_executed_at
+                                    ELSE datetime('now','utc') END,
+            last_invoice_id = COALESCE(?1, last_invoice_id),
+            next_due_date = ?2,
             updated_at = datetime('now','utc')
-         WHERE id = ? AND next_due_date = ?",
+         WHERE id = ?3 AND next_due_date = ?4",
     )
     .bind(last_invoice_id)
     .bind(next_due_date)
     .bind(id)
     .bind(expected_due_date)
-    .execute(pool)
+    .execute(conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(

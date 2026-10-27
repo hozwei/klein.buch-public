@@ -1,4 +1,4 @@
-# Klein.Buch — Architektur (Stand Phase W, Server-Betrieb)
+# Klein.Buch — Architektur (Stand Lauf 2026.11, Server-Betrieb)
 
 Klein.Buch ist eine selbst gehostete EÜR-Buchhaltung für deutsche
 §19-Kleinunternehmer: ein Docker-Image, ein Nutzer pro Instanz, bedient im
@@ -10,13 +10,18 @@ Sidecar-Bridge, Scheduler-Modell und die nicht verhandelbaren Hard-Rules.
 **Implementierungs-Stand:** Phasen 1–2D (Blöcke 0–17) + Phase 3 (Pakete/Anfahrt,
 ADR 0031) + DSGVO Auskunft/Anonymisierung (ADR 0032) + Phase 4 (Abo-Rechnungen,
 ADR 0033) + G1 Security/Backup-Härtung (ADRs 0034–0036) + Phase 7
-(E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039):
-Tauri, Desktop-Shell und Windows-Installer sind entfallen; ein HTTP-Server
+(E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039) + **Lauf E/F** (Entscheidungen,
+Funktion und Technik vor dem UI/UX-Lauf; ADR 0040) + **Lauf 2026.11**
+(Oberfläche für Smartphone, Tablet und Desktop; ADR 0041, §2g):
+Tauri und die Desktop-Fassung sind entfallen; ein HTTP-Server
 `klein-buch-server` (axum) liefert API und SPA aus.
 
-**Schema-Stand v31** (Migrationen 0001–0031 forward-only; 0031 = Tabelle
-`secrets` für Zugangsdaten). **ADRs 0001–0039** in `docs/adr/`; ADR 0039 löst
-ADR 0002 (Tauri) und ADR 0038 (NSIS) ab und ändert zwölf weitere per Amendment.
+**Schema-Stand v32** (Migrationen 0001–0032 forward-only; 0031 = Tabelle
+`secrets` für Zugangsdaten, 0032 = GoBD-Absicherungen aus Lauf F). **ADRs
+0001–0041** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038
+(Desktop-Release-Bundle) ab und ändert zwölf weitere per Amendment; ADR 0040 regelt
+Dauerbetrieb, Start- und Zeitlogik (Lauf F); ADR 0041 legt die UI/UX-Standards fest
+(Lauf 2026.11, in Arbeit bis U7).
 Betrieb: `docs/operations-guide.md`; Build und Release:
 `docs/architecture/build-and-release.md`.
 
@@ -85,10 +90,13 @@ des Cores laufen ohne DB/Sidecar/Filesystem.
 `commands::`; die Args-Structs übernehmen die camelCase-Schlüssel des
 Frontends. `AppCtx` hält Pfade, den schließbaren Pool samt Passphrase
 (`BackupSession`), Inbox, Upload- und Download-Ablage, Scheduler-Gate und die
-Ablage eines angewendeten Restores. `commands::registry` listet alle Kerne mit
-Weg (`Cmd` = über `POST /api/cmd/{name}` erreichbar; `Replaced`, `Dropped`,
-`Blocked`), Auth-Klasse (`public`/`session`/`reauth`), Kostenklasse und
-Körperlimit.
+Ablage eines angewendeten Restores. `commands::registry` ist die Allowlist für
+`POST /api/cmd/{name}` und listet jeden Kern mit Auth-Klasse
+(`public`/`session`/`reauth`/`conditional`; bedingte Re-Auth prüft der Kern,
+Lauf F4a), Art (`Read`/`Write`/`Job`), Kostenklasse und Körperlimit. Die bis
+Lauf F6 nur gesperrt mitgeführten Desktop-Commands (Dateimanager-Funktionen,
+Lizenzpfad, MS-Graph, Vorgänger der Auth-Routen) sind samt Kern entfernt; Desktop-
+Nebenwirkungen (`DesktopActions`) kennt `AppCtx` nicht mehr (ADR 0039 Nr. 138).
 
 **Verschlüsselung at Rest** (ADR 0035). Die SQLite-Datei ist
 SQLCipher-verschlüsselt; der Schlüssel wird per PBKDF2-HMAC-SHA512 (Salt im
@@ -133,12 +141,11 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `domain::depreciation` | Core | AfA-Berechnung (linear/GWG/Computer/Privatanteil), idempotent (ADR 0025) |
 | `domain::fiscal_year` | Core | GJ-Grenzen, Cash-Basis-Periodisierung; GJ immer aus dem Belegdatum (Nr. 89) |
 | `euer::aggregate` | Core | EÜR-Aggregation Cash-Basis §11 EStG (ADR 0022) |
-| `euer::{elster_csv, datev_csv, detail, stb_package}` | Core/Shell | ELSTER-Zeilen-Mapping, DATEV-EXTF (SKR03/04), Einzelaufstellungen, Steuerberater-Paket (ADR 0026) |
+| `euer::{elster_csv, datev_csv, detail}` | Core | ELSTER-Ausfüllhilfe (Kennzahl + Zeile je Vordruck), DATEV-EXTF (SKR03/04), Einzelaufstellungen; das Steuerberater-Paket baut `commands::euer` (ADR 0026, ADR 0039 Nr. 135) |
 | `einvoice::parser` | Core | XRechnung CII+UBL + ZUGFeRD-Extract (Empfang, ADR 0024), Profil-Whitelist (ADR 0037) |
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |
-| `mail::oauth_ms` | Core+Shell | Microsoft-Graph-Versand (ADR 0028); im Server gesperrt (E9), Code noch vorhanden |
-| `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht (`InboxOnly`) |
+| `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit und einziger Kanal), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht |
 | `fiscal_year::{lock,transition,guard}` | Shell | prüfungssicherer GJ-Abschluss + `ensure_year_open`-Guard (ADR 0027) |
 | `scheduler::{tick,recurring,reminders,integrity_check_cron,depreciation_year_close,recurring_invoice,update_check}` | Shell | 5-Min-Tick, nur entsperrt, Catch-up (ADR 0023/0027, §5) |
 | `assets::afa_tabellen` | Shell | AfA-Tabellen-Laden aus `inputs/afa-tabellen.json` |
@@ -169,7 +176,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `db::rekey_db_file` | Shell | Neuverschlüsseln mit neuer Passphrase: `ATTACH … KEY` + `sqlcipher_export` in eine Temp-Datei, Probe-Read, atomarer Tausch (gemeinsamer Kern `reencrypt_db_file`; Passphrase-Wechsel, W6) |
 | `backup::target` | Shell | Floor + Off-Site: Ordner unter `/backup-targets` (`canonicalize`) und SFTP, höchstens 10 Ziele, Status `offsite` (ADR 0034 + Amendment, Nr. 77) |
 | `backup::sftp` | Shell | `russh`/`russh-sftp`, Host-Key-Pinning (SHA-256), Passwort je Ziel im `secrets`-Store, Upload unter `.<name>.part` + `rename` |
-| `backup::rotation` | Shell | Floor 7/3/1 (bei erfolgreichem Off-Site-Ziel, sonst 30/12/7), Off-Site je Ziel 30/12/7; `manual`/`pre_restore` nie rotiert |
+| `backup::rotation` | Shell | Kalender-Eimer (Europe/Berlin): Floor 7/3/1 Tage/Monate/Jahre (bei erfolgreichem Off-Site-Ziel, sonst 30/12/7), Ordner-Ziele je Ziel 30/12/7, SFTP nie; `manual`/`pre_restore` nie rotiert (ADR 0040) |
 | `db::repo::backup_log` | Shell | Append-only `backup_log` (Migration 0026): Datum, Name, Größe, Pfad, Ziel-Typ, Status, Auslöser. **Keine Passphrase.** |
 | `notify::rules::rule_backup_result` | Shell | Off-Site-bewusster `backup_overdue` + Erfolg/Fehler-Hinweis, Inbox-only (Migration 0027) |
 
@@ -194,18 +201,42 @@ entfallen (E11, Code entfernt in W11); Eingangsrechnungen kommen per Upload
 | `server::startup` | fail-closed-Prüfungen vor dem Port-Bind, Archivpfad-Stichprobe beim Entsperren |
 | `server::instance` | Instanz-Marker `/data/.klein-buch-instance` |
 | `server::state` | Zustand `setup`/`locked`/`unlocked`, Sitzungen, Jobs, Lastgrenzen, Setup-Token (nur stderr) |
-| `server::auth`, `server::totp`, `server::session`, `server::ratelimit` | Einrichtung, Anmeldung, Re-Auth, Sperren, Passphrase-/TOTP-Wechsel; TOTP (RFC 6238) + Einmal-Codes in `/data/auth/`; Cookie `__Host-kb_session`; Wartezeiten je Gerät/IP |
+| `server::auth`, `server::totp`, `server::session`, `server::ratelimit`, `server::pending`, `server::passphrase_policy` | Einrichtung, Anmeldung (202 + Abholung bei langer Umstellung), Re-Auth, Sperren, Passphrase-/TOTP-Wechsel, Sitzungsübersicht; TOTP (RFC 6238) + Einmal-Codes in `/data/auth/`; Cookie `__Host-kb_session`; Wartezeiten je Gerät/IP, Obergrenze in Folge; Prüfung neuer Passphrasen |
 | `server::dispatch`, `server::jobs`, `server::idempotency` | `POST /api/cmd/{name}` nach Registry; Jobs `202` + `GET /api/jobs/{id}`; Idempotenz-Schlüssel |
 | `server::uploads`, `server::files` | `POST /api/upload/{art}`; `GET /files/download/{id}`, `GET /files/archive/{id}` (hash-geprüft, auditiert) |
-| `server::headers`, `server::limits`, `server::http`, `server::errors`, `server::logging` | CSP mit Skript-Hashes, HSTS, Cache-Control; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout und geordnetem Herunterfahren; Fehlerabbildung; Log ohne Geheimnisse |
-| `server::health`, `server::legal` | `/healthz` (Loopback mit Zustand und `offsite`); `/legal/` ohne Sitzung |
+| `server::headers`, `server::limits`, `server::http`, `server::errors`, `server::logging` | CSP mit Skript-Hashes, HSTS, Cache-Control; Semaphoren je Kostenklasse, globale Grenze, Timeouts; Annahme-Schleife mit Header-Timeout und geordnetem Herunterfahren; Fehlerabbildung (`ref` = Aufruf-Kennung); Log ohne Geheimnisse, eine Zeile je Ereignis, Zugriffsprotokoll mit `ip=`/`req=`/`sess=` |
+| `server::health`, `server::legal` | `/healthz` (Loopback ohne Weiterleitungs-Header mit Zustand und `offsite`); `/legal/` ohne Sitzung, gestreamt |
 | `app_ctx` | Anwendungskontext der Kerne (Nr. 19–23) |
 | `config` | `Paths::from_env` (Pflicht: `KLEIN_BUCH_DATA_DIR`, `…_INPUTS_DIR`, `…_RESOURCE_DIR`, `…_WEB_DIR`; optional `…_BACKUP_TARGETS_DIR`) |
 | `seed` | Seed von `/inputs` mit `.seed-manifest.json` (nie überschreiben, was der Nutzer geändert hat) |
 | `uploads`, `downloads` | Ablagen mit Ticket unter `<data>/tmp`, Typprüfung am Inhalt, Platzprüfung |
-| `nettest` | Port-Allowlist und Kontingent für Verbindungstests, SFTP-Probe-Speicher |
+| `nettest` | Port-Allowlist und Kontingent für Verbindungstests, SFTP-Probe-Speicher, Prüfung von SMTP-/SFTP-Hosts (`check_host`) |
 | `build_info` | Version, Commit, Tag, Quell-URL (AGPL §13, `/api/public/info`) |
 | `clock`, `limits`, `locks` | Uhr Europe/Berlin; CPU-Arbeit außerhalb der Runtime; Sperren je Beleg/Pfad/Vorlage (W1/W2) |
+
+### 2g. Lauf 2026.11 — Oberfläche (ADR 0041)
+
+Das Frontend (`src/`, SvelteKit 3 mit adapter-static, Svelte 5 Runes) ist eine SPA, die der
+Server ausliefert; Backend-Aufrufe laufen nur über `src/lib/api.ts` → `transport.ts`. Lauf
+2026.11 hat die Oberfläche für Smartphone, Tablet und Desktop überarbeitet; sie orientiert sich
+an WCAG 2.2 AA und wurde mit axe-core, eigenen Messungen und manuell geprüft (Prüf-Harness
+außerhalb des Repositorys). Maßgeblich sind ADR 0041 (Einzelentscheidungen ab Nr. 1) und die
+Designleitlinie `architecture/design.md`; dieser Abschnitt nennt nur die Bausteine.
+
+| Bereich | Ort | Verantwortung |
+|---|---|---|
+| Tokens | `src/lib/styles/tokens.css` | Palette `--c-*`, darüber Rollen (`--text*`, `--surface-*`, `--line*`, `--status-*`, `--focus-*`) und Skalen (Abstände, Typo-Rollen `--type-*`, Bedienhöhe `--control-h`, Trefferflächen `--target*`, Radien, Schatten); globale Regeln für Feldrahmen, Fokusring, Druckansicht und reduzierte Bewegung. Bausteine nutzen nur Rollen (Nr. 5–8, 60–75). |
+| Bausteine | `src/lib/*.svelte` | `PageBar` (Seitentitel als h1, Hauptaktion, Nebenaktionen, Menü „Mehr“), `ActionMenu` (Menu-Button-Muster, Popover-API), `Button`, `Card`, `Table` (Karten bis 820 px, Kartenraster), `Badge` (Status mit Punkt bzw. neutrales Merkmal), `Banner`, `ToastHost`, `FormField`, `MoneyInput`/`QuantityInput` (Leseregel in `money.ts`, Ziffern-Strings und `bigint`), `ContactSelect` (Suchfeld plus natives Auswahlfeld), `DocNo`, `Toggle`, `LoadingState`, `RequiredLegend`, Dialoge über `focusTrap`, `modalStack` und `portal` |
+| Layout und Container Queries | `src/routes/+layout.svelte` | Seitenleiste mit Gruppe „Sitzung“; auf Touch-Geräten und bis 900 px Breite ein Drawer (Hintergrund `inert`). `<main>` ist der Container `kb-main`: Seiten und Tabellen fragen die Inhaltsbreite ab, nicht den Viewport (Spaltenpriorität `.kb-col-opt1..3`, Formular-Raster `.kb-form-grid`; Nr. 40–43, 53). Sprunglink „Zum Inhalt“, `scroll-padding` gegen verdeckten Fokus (Nr. 10). |
+| Seitentitel | `src/lib/pageTitle.svelte.ts` | `document.title` = „<Titel> – Klein.Buch“; Quellen: Anmelde-Maske, Fehlerseite, PageBar-Titel, Handbuch-Kapitel, sonst Ersatztitel je Route; gesetzt vor dem Zeichnen, damit die Routen-Ansage von SvelteKit den neuen Titel liest (Nr. 160) |
+| Hilfe und F1 | `src/lib/routeHelp.ts`, `src/lib/handbook/`, `src/routes/help/` | F1 öffnet das Handbuch-Kapitel zur Route (Präfixtabelle, Test gegen die Slugs), sonst die Startseite des Handbuchs; nicht in Eingabefeldern (Nr. 161). Das Handbuch (`src-tauri/resources/handbook/*.md`) wird beim Build eingebunden (`architecture/handbook.md`). |
+| Begriffe und Status | `src/lib/labels.ts`, Status-Helfer je Bereich (`routes/{invoices,quotes,expenses,assets}/*Status.ts`) | Ein Wort je Zustand auf allen Seiten, Einheiten im Klartext (Codes nach UN/ECE Rec 20 bleiben gespeichert), Re-Auth-Titel je Command (Test gegen die Registry; Nr. 73, 163, 185, 201) |
+| Formate | `src/lib/format.ts`, `src/lib/date.ts`, `src/lib/money.ts` | DIN 5008 (geschütztes Leerzeichen vor „€“ und „%“, IBAN in Vierergruppen, echtes Minuszeichen), Datum TT.MM.JJJJ in Europe/Berlin, deutsche Betragseingabe „1.234,56“ ohne Float (Nr. 15–19, 206) |
+| Fehlerseite, Manifest | `src/routes/+error.svelte`, `static/manifest.webmanifest` | deutsche Fehlerseite mit Weg zurück (Nr. 162); Web-App-Manifest für „Zum Startbildschirm“ ohne Service Worker und ohne Offline-Funktion, CSP unverändert (Nr. 72) |
+
+Server-Seite: neue Lesefelder ohne Migration und der Lese-Command `assets_disposal_preview`
+(Nr. 80–86, `architecture/modules.md` §14, `architecture/data-model.md` §2g); Meldungen des
+Servers in der Sprache der Oberfläche, nur Texte, keine Logik (Nr. 168).
 
 ---
 
@@ -230,7 +261,9 @@ Zeitstempel, Nr. 94), OpenSSL ohne `atexit` (Nr. 98), `PR_SET_DUMPABLE` 0. Dann
    `db::prepare_filesystem` (Seed von `/inputs`; vorgemerkter Factory Reset →
    Abbruch, E7; Reste eines Restore-Stagings aufräumen, vorgemerkten Restore
    anwenden, §4.4); Datenbank und Instanz-Marker passen zusammen; keine
-   Klartext-DB; Selbsttest `0o400` im Archiv; `<data>/tmp` leeren.
+   Klartext-DB; Selbsttest `0o400` im Archiv; `<data>/tmp` leeren, abgebrochene
+   Backup-Teildateien entfernen (im Betrieb räumt der Sweeper stündlich Reste
+   älter als 6 h, D-13).
 4. Gerätecookie-Schlüssel laden, Setup-Token erzeugen, falls keine DB oder kein
    TOTP vorhanden ist (eigene Zeile auf stderr, nie im `tracing`-Log).
 5. Port binden. Erst jetzt ist der Server erreichbar; `/healthz` meldet `locked`
@@ -258,9 +291,12 @@ Scheduler-Tick nach.
    Audit, ggf. `backup.restore.applied`.
 
 Ist die DB schon entsperrt, prüft die Anmeldung nur die Faktoren (Passphrase
-über den Verifier in `app_settings`) und legt eine Sitzung an. **„Datenbank
-sperren"** schließt den Pool, löscht die Passphrase (`zeroize`), beendet alle
-Sitzungen und pausiert den Scheduler.
+über den Verifier in `app_settings`) und legt eine Sitzung an. Dauert die
+Anmeldung länger als 25 s (Pflicht-Backup und Migration), antwortet sie mit 202
+und einem Ticket-Cookie; `POST /api/auth/login/poll` liefert das Ergebnis samt
+Sitzung (Lauf F4a, W14-037). **„Datenbank sperren"** schließt den Pool, löscht
+die Passphrase (`zeroize`), beendet alle Sitzungen, verwirft gespeicherte
+Antworten, Job-Ergebnisse und offene Anmeldungen und pausiert den Scheduler.
 
 **Konsequenz:** Kein DB-Command läuft vor dem Entsperren; die Registry
 verlangt für alles außer den öffentlichen Routen eine Sitzung, DB-Commands
@@ -276,7 +312,8 @@ Belegdatum) → *Festschreiben* läuft als Job (`202`, `GET /api/jobs/{id}`) →
 `run_lock_pipeline`: Domain-Validate → CII-XML generieren → KoSIT validate
 (Sidecar) → §19-Klausel-Check → Typst-PDF/A-3b → Mustang ZUGFeRD → Archive write
 (PDF + XML, SHA-256, `0o400`) → DB-Lock (`status='issued'`, `locked_at`) →
-Audit-Log → Auto-Critical-Backup (Floor + Off-Site, §4.5). Sperre je Rechnung
+Audit-Log → Auto-Critical-Backup angefordert (Vermerk, im Scheduler kurz nach
+der Antwort; Floor + Off-Site, §4.5). Sperre je Rechnung
 und je Archivpfad; ein abgebrochener Request läuft als Task zu Ende, die
 Wiederholung mit demselben Idempotenz-Schlüssel liefert dasselbe Ergebnis.
 
@@ -296,33 +333,47 @@ Lock-Pipeline, markiert das Original `canceled`. Keine Löschung (ADR 0006).
 ### 4.4 Restore (Block 4, W2, W7)
 Zweiphasig: Die DB-Datei wird nie unter einem offenen Pool getauscht.
 
-**Phase A (Job, Re-Auth):** Backup per Upload (`POST /api/upload/restore`) oder
-aus der lokalen Historie → Manifest, Format (1–2), Schema
-`30 ≤ s ≤ EXPECTED` → Entschlüsseln (falsche Passphrase schreibt nichts) → Audit
-`backup.restore.requested` → Pre-Restore-Backup → Platzprüfung → gehärtet ins
-Staging entpacken → gestagte DB prüfen (Schema, Archivpfade,
-Migrations-Prüfsummen) → Marker. Ab der Annahme lehnt der Server Änderungen mit
-503 ab und pausiert den Scheduler; nach Erfolg fährt er geordnet herunter
+**Phase A (Job, Re-Auth):** Vorprüfung im Dispatcher vor der Annahme (Quelle,
+Passphrase; ungültig → 400 ohne Sperre, W14-039) → Backup per Upload (`POST /api/upload/restore`) oder
+aus der lokalen Historie → Manifest, Format (1–3), Schema
+`30 ≤ s ≤ EXPECTED` → Entschlüsseln in place (falsche Passphrase oder
+veränderter Kopf schreibt nichts) → Audit
+`backup.restore.requested` → Platzprüfung → gehärtet ins Staging entpacken →
+gestagte DB prüfen (Schema, Archivpfade, Migrations-Prüfsummen) → Inhalt
+freigegeben, dann Pre-Restore-Backup (Lauf F3c) → zweite Platzprüfung →
+Nummernkreise der laufenden DB festhalten (D-24) → Marker. Ab der Annahme lehnt der Server Änderungen mit 503 ab und pausiert den
+Scheduler; nach Erfolg fährt er geordnet herunter
 (Exit 0), die Container-Verwaltung startet ihn neu.
 
 **Phase B (nächster Start, `db::prepare_filesystem`, vor dem Port-Bind):**
-`restore::apply_pending` tauscht DB, `archive/` und `branding/` in drei Stufen
+`restore::apply_pending` tauscht DB (samt WAL), `archive/` und `branding/` in drei Stufen
 mit Zustandsdatei und Rückabwicklung; die Angaben landen in
-`RESTORE_APPLIED.json`. Das erste Entsperren schreibt `backup.restore.applied`
-in die wiederhergestellte DB und übernimmt das Pre-Restore-Backup in die
-Historie. `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
+`RESTORE_APPLIED.json`. Das erste Entsperren schreibt in **einer** Transaktion
+`backup.restore.applied`, die Pause `scheduler_hold = restore` (W14-023) und das
+Anheben der Nummernkreise auf die festgehaltenen Stände, wo diese höher waren
+(D-24, Audit `numbering.raised_after_restore`), legt Hinweise an und übernimmt
+das Pre-Restore-Backup und die nach dem eingespielten Stand entstandenen
+Floor-Backups in die Historie (D-22). `/inputs` bleibt unberührt. Einzelheiten: `architecture/security.md`
 §6.
 
-### 4.5 Backup erstellen (G1, W2, W7)
+### 4.5 Backup erstellen (G1, W2, W7, Lauf F3a)
 `backup::create_now` (prozessweit serialisiert) → Snapshot per `VACUUM INTO`
 über eine eigene Verbindung (verschlüsselt wie das Original) + `archive/` +
-`branding/` → Content-ZIP → Argon2id-Schlüssel + AES-256-GCM (außerhalb der
-Runtime, KDF-Semaphore) → `.kbk` mit Klartext-Manifest → Floor
-`/data/backups` (Temp-Datei, `fsync`, `rename`) und jedes Off-Site-Ziel (Ordner
-unter `/backup-targets`, SFTP) mit Zeitlimit je Ziel → `backup_log` je Ziel
-(**niemals** Passphrase) → Rotation je Ablage → Hinweis über
-`rule_backup_result`. Ein gescheitertes Ziel ist nicht fatal (Status
-`offsite = failing`, Inbox).
+`branding/` (ohne versteckte Temp-Dateien) → Content-ZIP → Argon2id-Schlüssel +
+AES-256-GCM in place mit dem Klartext-Kopf als AAD (Format 3; außerhalb der
+Runtime, KDF-Semaphore) → `.kbk` → Floor `/data/backups` (Temp-Datei, `fsync`,
+`rename`) und jedes Off-Site-Ziel (Ordner unter `/backup-targets`, SFTP) mit
+Zeitlimit je Ziel, ein Puffer für alle → `backup_log` je Ziel, auch ein
+gescheiterter Snapshot (**niemals** Passphrase) → Rotation je Ablage
+(Kalender-Eimer; nur `.kbk` unter den Wurzeln; SFTP nie; ruht während einer
+Pause) → Hinweis über `rule_backup_result`. Ein gescheitertes Ziel ist nicht
+fatal (Status `offsite = failing`, Inbox; `stale` bei fehlender oder zu alter
+Kopie). Nach einem Restore geht bis zur Freigabe nichts auf die Off-Site-Ziele
+(D-23). **Lock-Backups** fordern die festschreibenden Commands nur an
+(`backup::request_auto_backup`: Vermerk, Audit `backup.requested`, Wecksignal);
+die Scheduler-Schleife legt sie nach zwei Sekunden unter der Tick-Sperre an
+(ADR 0040 Nr. 50). **Download** einer `.kbk` aus Floor oder Ordner-Ziel mit
+Re-Auth über ein einmaliges Ticket (`backup_download`).
 
 ### 4.6 Im Server entfallene Abläufe
 - **Factory Reset** (ADR 0036): im Server abgeschaltet (E7), Code entfernt
@@ -336,7 +387,8 @@ unter `/backup-targets`, SFTP) mit Zeitlimit je Ziel → `backup_log` je Ziel
 
 ### 4.7 Passphrase und zweiter Faktor ändern (W6)
 Re-Auth, dann `POST /api/auth/passphrase`: warten auf laufende Commands/Jobs
-(`db_gate`, höchstens 60 s) → `db::rekey_db_file` mit der neuen
+(`db_gate`, höchstens 60 s) und auf den Scheduler-Tick (höchstens 10 s, sonst
+503) → `db::rekey_db_file` mit der neuen
 Passphrase (Probe, `quick_check`, `fsync`, Tausch) → andere Sitzungen abmelden →
 Backup (`manual`) als nachverfolgter Task. Ältere Backups bleiben mit der alten
 Passphrase einspielbar. TOTP und Einmal-Codes erneuert `POST
@@ -388,12 +440,16 @@ Anlagen + Abschreibung sperren → EÜR-Snapshot ins Festschreibungsprotokoll
 `guard::ensure_year_open` in den Kernen (Storno bleibt erlaubt).
 Scheduler-Jobs siehe §5.
 
-### 4.13 Microsoft-Graph-Versand (Block 16) — im Server gesperrt
+### 4.13 Microsoft-Graph-Versand (Block 16) — entfernt
 Der Desktop-Flow nutzte eine Loopback-Weiterleitung auf dem eigenen Rechner
-(ADR 0028). Im Server sind `mail_oauth_*` gesperrt (404, E9), neue oder
-geänderte Konten mit `auth_type = oauth_microsoft` werden abgelehnt; ein
-übernommenes Konto lässt sich auf SMTP umstellen oder löschen. Microsoft 365
-läuft über SMTP. Das append-only `email_log` bleibt.
+(ADR 0028). Im Server gab es ihn nie (E9); seit Lauf F6 sind `mail::oauth_ms`,
+die Commands `mail_oauth_*` und ihr Test entfernt (ADR 0039 Nr. 138). Neue oder
+geänderte Konten mit `auth_type = oauth_microsoft` werden abgelehnt, ein
+übernommenes Konto versendet nicht (Meldung ohne Verbindungsaufbau) und lässt
+sich auf SMTP umstellen (Token und OAuth-Spalten werden dabei geleert) oder
+löschen. Die Spalten aus Migration 0014 bleiben (forward-only). Microsoft 365
+läuft über SMTP. Das append-only `email_log` bleibt; ältere Einträge mit Kanal
+`graph` werden weiter angezeigt.
 
 ### 4.14 PDF-Vorlagen-Auswahl (Block 17a)
 Globale Auswahl in `settings/pdf-templates` (`seller_default_template_set`,
@@ -425,14 +481,17 @@ offenen Entwürfe; einmalig + irreversibel. ADR 0032.
 
 ### 4.17 Abo-Rechnungen / Ausgangsseite (Phase 4)
 Abo-Vorlage (`recurring_invoices`, Stammdatum) → der Scheduler-Job im Tick (nur
-entsperrt, plus Fälligkeits-Check beim Öffnen der Abo-Seite) materialisiert am
+entsperrt; die Seite löst beim Öffnen keinen Lauf aus) materialisiert am
 Stichtag über **dieselbe** draft→lock-Pipeline (§4.1): Belegdatum = **heute**
 (nie rückdatiert, §14 Abs. 4 Nr. 3), Leistungszeitraum als `delivery_date`.
 `auto_mode` steuert je Vorlage Entwurf / Festschreiben / Festschreiben+Versand.
-§19 wird beim Vorlagen-Speichern serverseitig erzwungen. Catch-up holt
-verpasste Perioden nach (alle mit heutigem Belegdatum) — auch die Zeit, in der
-die Instanz nach einem Neustart gesperrt war. Gegen Doppel: Sperre je Vorlage
-plus Compare-and-Swap (Nr. 8). ADR 0033.
+§19 wird beim Speichern und vor jeder Materialisierung serverseitig erzwungen.
+Nummer, Entwurf, Audit und Vorrücken committen in einer Transaktion;
+Festschreiben/Versand setzt ein Lauf nach einem Abbruch fort (Marker). Bis drei
+fällige Termine holt der Lauf selbst nach (nur der jüngste nach `auto_mode`,
+ältere als Entwurf), mehr nur nach Bestätigung („Rückstand …“). Gegen Doppel:
+Sperre je Vorlage (auch Bearbeiten/Pausieren) plus Compare-and-Swap. ADR 0033,
+ADR 0040.
 
 ### 4.18 Rechnungseingang per Upload (E11, ersetzt den Drop-Folder)
 Eingangsrechnungen lädt der Nutzer im Browser hoch (`POST /api/upload/erechnung`,
@@ -462,8 +521,9 @@ werfen `ParseError::UnsupportedProfile(<URN>)` (D-73).
 Kein Command nimmt einen Server-Pfad an. Exporte und Vorschauen entstehen in
 `<data>/tmp/downloads/<uuid>/<Dateiname>`; der Kern liefert
 `{downloadId, fileName, sizeBytes}`, der Browser holt die Datei über
-`GET /files/download/{id}` (Sitzung). Exporte sind einmal abrufbar und
-verfallen nach 1 h, Vorschauen sind 10 min mehrfach abrufbar. Archivdateien
+`GET /files/download/{id}` (Sitzung). Exporte sind einmal abrufbar (die Datei
+wird mit dem Abruf gelöscht) und verfallen nach 10 min (Lauf F4b, W14-014),
+Vorschauen sind 10 min mehrfach abrufbar. Archivdateien
 liefert `GET /files/archive/{id}` nach Hash-Prüfung (Audit `archive.read`);
 inline nur eigene PDFs (Rechnung, Angebot), alles andere als `attachment` mit
 CSP `sandbox`.
@@ -475,37 +535,81 @@ CSP `sandbox`.
 Ein Hintergrund-Task (`scheduler::tick::start`), Tokio-Interval **5 Minuten**
 (`TICK_INTERVAL_SECS = 300`). Verpasste Ticks werden **nicht nachgefeuert**
 (`MissedTickBehavior::Skip`) — der nächste reguläre Tick deckt den Rückstand
-ab, weil alle Jobs idempotent über ihr Stichtags-Raster sind.
+ab, weil alle Jobs ihre Fälligkeit aus persistierten Werten bestimmen. Die Zeit
+kommt aus der Uhr des `AppCtx` (`clock::Clock`, in Tests `FixedClock`); Jobs
+bekommen sie mit Pool, Pfaden, Sitzung und Abbruch-Anforderung über
+`scheduler::JobCtx` (ADR 0040).
 
 **Gating.** Der Scheduler startet erst **nach** dem ersten erfolgreichen
-Entsperren (§3), einmal pro Prozess. Ohne Pool (gesperrt) tut ein Tick nichts.
-Restore, Herunterfahren und „Datenbank sperren" pausieren ihn über ein Gate
-(ein laufender Tick wird abgewartet). Nach einem Neustart läuft nichts, bis
-jemand entsperrt (E3); fällige Jobs holt der erste Tick nach.
+Entsperren (§3), einmal pro Prozess. Ohne Pool (gesperrt) tut ein Tick nichts;
+das Log meldet den gesperrten Zustand beim Serverstart und alle 6 h.
+Restore, Herunterfahren und „Datenbank sperren" pausieren ihn über ein Gate;
+vorher setzen sie die kooperative Abbruch-Anforderung (`AppCtx::scheduler_stop`),
+damit ein laufender Abo-Lauf nach dem aktuellen Termin und der Archiv-Vollscan
+nach der aktuellen Datei aufhört. „Datenbank sperren“ wartet darauf höchstens
+10 s und sperrt dann trotzdem; „Passphrase ändern“ antwortet nach dieser Frist
+mit 503. Das Herunterfahren setzt die Abbruch-Anforderung schon beim Signal und
+wartet dann gleichzeitig höchstens 25 s auf den Tick und 30 s auf abgekoppelte
+Tasks (`stop_grace_period` 90 s, ADR 0040). Ein noch ausstehendes Lock-Backup
+schreiben beide vor dem Schließen des Pools (`tick::flush_pending_backup`,
+Sperren höchstens 60 s, Herunterfahren im Rest von 40 s; ADR 0040 Nr. 57). Nach einem Neustart läuft nichts,
+bis jemand entsperrt (E3); der erste Tick nach dem Entsperren wartet 60 s
+(`tick::UNLOCK_SETTLE`), lässt den Vollscan aus und holt Fälliges nach —
+Abo-Läufe mit Grenze (bis drei Termine selbst, mehr nach Bestätigung), genau
+ein Tages-Backup. Mehr als zwei Tage ohne Aktivität meldet das Entsperren als
+Hinweis.
+
+**Pause.** `app_settings.scheduler_hold` hält Abo-Rechnungen, Abo-Kosten und
+Auto-AfA an (Tick und manuelle Auslöser), bis der Inhaber im Browser freigibt
+(`scheduler_release_hold`, Re-Auth). Gesetzt bei unplausibler Uhr (mehr als 1 h
+zurück oder mehr als 400 Tage vor dem zuletzt gesehenen Lauf) und nach einem
+Restore (in der Transaktion des Restore-Audits). Backups, Integritätsprüfung und
+Hinweise laufen weiter; die Backup-Rotation ruht, und nach einem Restore gehen
+Backups bis zur Freigabe nur in den Floor. In derselben Transaktion rückt
+`backup::after_restore` die Abo-Reihen nur vorwärts auf ihre Termine vor dem
+Restore, merkt Reihen ohne bekannten Stand zur Entscheidung vor (nur solche,
+für die ein Lauf etwas erzeugen würde; F3b), verwirft
+Fortsetzungs- und Nachhol-Marker aus dem Backup und merkt Entwürfe vor, deren
+Nummer vor dem Restore schon festgeschrieben war (ADR 0040, F1d). Die Pause des
+Schedulers selbst (`AppCtx::scheduler_paused`) hebt das Entsperren auf, ohne auf
+einen beim Sperren noch laufenden Tick zu warten.
 
 **Jobs pro Tick (in dieser Reihenfolge, jeder Job isoliert):**
 
-0. **Tages-Backup** (`backup::auto_daily_if_due`) — fällig, wenn das letzte
-   Backup älter als 24 h ist; nach einem Fehlschlag 1 h Pause (W2).
-1. **`scheduler::recurring`** — fällige eingangsseitige Recurring-Kosten
-   materialisieren (Block 10).
-2. **`scheduler::depreciation_year_close`** — Auto-AfA zur GJ-Wende, default-an
-   per `app_settings.depreciation_auto_year_close` (Commands `fiscal_year_auto_close_get`/`_set`), abschaltbar (Block 15).
-3. **`scheduler::integrity_check_cron`** — monatlicher Archiv-Hash-Verify;
-   manipuliert, fehlt und nicht lesbar getrennt (`archive.integrity_fail`,
-   `_missing`, `_unreadable`).
-4. **`scheduler::reminders`** — Regel-getriebene Hinweise (`notify::rules`),
-   inkl. Off-Site-bewusstem `backup_overdue` und Hinweis ohne Off-Site-Ziel.
-5. **`scheduler::recurring_invoice`** — fällige Abo-Rechnungen materialisieren
+1. **`scheduler::recurring`** — fällige Kosten-Abos buchen (Block 10): je Abo
+   unter Sperre, Beleg + Audit + Vorrücken in einer Transaktion, Fehler je Abo.
+2. **`scheduler::recurring_invoice`** — fällige Abo-Rechnungen materialisieren
    (Phase 4).
-6. **`scheduler::update_check`** — opt-in Versionsprüfung (Standard aus;
+3. **`scheduler::depreciation_year_close`** — Auto-AfA zur GJ-Wende, default-an
+   per `app_settings.depreciation_auto_year_close` (Schalter über `fiscal_year_auto_close_set`, Stand in `fiscal_year_overview`), abschaltbar (Block 15);
+   je Anlage und Jahr eine Transaktion, Fehler mit Hinweis und 6 h Backoff.
+4. **Backup** — Tages-Backup (`backup::auto_daily_if_due`): genau eines je
+   Berliner Kalendertag ab `backup_daily_time` (Standard 02:30; fällig ist der
+   zuletzt fällige Slot, ein verpasster wird beim ersten Tick nachgeholt), nach
+   einem Fehlschlag 1 h Backoff (persistiert). Es deckt die Lock-Ereignisse der
+   Schritte 1 und 2 mit ab; sonst legt der Tick genau ein Lock-Backup an
+   (D-19, Backup-Hardline). Ein ausgefallenes Lock-Backup (Vermerk
+   `backup_pending_since`) holt der erste Tick danach nach
+   (`backup::pending_backup_if_due`). Zwischen den Ticks weckt ein
+   Lock-Ereignis der Commands die Schleife für sein Backup (Lauf F3a,
+   `tick::BACKUP_COALESCE`), auch während der Wartezeit nach dem Entsperren.
+5. **`scheduler::integrity_check_cron`** — monatlicher Archiv-Hash-Verify
+   (nicht im ersten Tick nach dem Entsperren); gemeinsame Sperre mit „Jetzt
+   prüfen“, 6 h Backoff nach Fehlschlag; manipuliert, fehlt und nicht lesbar
+   getrennt (`archive.integrity_fail`, `_missing`, `_unreadable`).
+6. **`scheduler::reminders`** — Regel-getriebene Hinweise (`notify::rules`),
+   inkl. Off-Site-bewusstem `backup_overdue` (Alter in Europe/Berlin), Hinweis
+   ohne Off-Site-Ziel und „Abo fällig“ für Kosten-Abos im Modus Erinnerung.
+7. **`scheduler::update_check`** — opt-in Versionsprüfung (Standard aus;
    höchstens alle 24 h, nur GET, ohne Weiterleitungen, Hinweis nur als Text;
    Nr. 111). Läuft außerhalb der DB-Jobs, damit deren Tests nie ins Netz gehen.
 
 Manuelle Trigger: Seiten, die einen Job kennen, bieten „Jetzt prüfen"
 (`recurring_run_due_check`, `recurring_invoices_run_due_check`,
 `archive_integrity_run`, `notifications_run_checks`). Diese Wege rufen die
-Job-Funktionen direkt auf, unabhängig vom Tick.
+Job-Funktionen direkt auf, unabhängig vom Tick, mit denselben Sperren, Grenzen
+und Pausen. Seiten lösen beim Öffnen keinen Lauf und keinen Schreib-Command aus
+(Vitest `no-side-effects-on-open`).
 
 ---
 
@@ -562,7 +666,8 @@ den verlinkten ADRs.
   USt-Felder im UI gesperrt, BT-22-Klausel Pflicht im XML + sichtbar im PDF,
   §14c-Schutz im Backend, Verzicht-Toggle mit 5-Jahres-Bindungs-Warn-Dialog.
 - **Backup** (ADR 0009 + 0034 + 0035 + 0039). Passphrase bei der Einrichtung
-  erzwungen; Auto-Backup bei jedem Lock + täglich im Scheduler; Pflicht-Backup
+  erzwungen; Auto-Backup bei jedem Lock (vermerkt, kurz danach im Scheduler)
+  + täglich im Scheduler; Pflicht-Backup
   vor jeder Migration und vor jedem Restore; Floor + mehrere Off-Site-Ziele
   (Off-Site Pflicht, Warnung statt Blockade); `backup_log` append-only;
   Passphrase **niemals** in DB, Logs, Audit oder Backup-Log.
@@ -571,7 +676,9 @@ den verlinkten ADRs.
   (Argon2id). Passphrase vor Pool-Open; kein Auto-Unlock (E3). Verlust =
   Totalverlust by design.
 - **Anmeldung** (ADR 0039, E5). Passphrase + TOTP, Einmal-Codes, Re-Auth für
-  kritische Aktionen, Fehlversuche nur im Log.
+  kritische Aktionen (Verkäuferprofil bedingt), Fehlversuche nur im Log; neue
+  Passphrasen gegen Sperrliste und Muster, Obergrenze von 100 Fehlversuchen in
+  Folge ohne Gerätecookie, Sitzungsübersicht (Lauf F4a, Nr. 130).
 - **Credentials** (ADR 0011/0028 + Amendment, E6). SMTP- und SFTP-Passwörter nur
   in der Tabelle `secrets` der verschlüsselten DB, gebunden an
   (Host, Port, Benutzer); nie in Log, Audit, Migrations- oder DSGVO-Export.
@@ -579,7 +686,7 @@ den verlinkten ADRs.
   (no-update/no-delete-Trigger), Abschluss nur für abgelaufene Jahre,
   unumkehrbar; Storno als Korrektur bleibt möglich.
 - **Schema-Disziplin** (ADR 0003). STRICT-Tabellen, forward-only Migrationen
-  (0001–0031, Version v31, LF-Zeilenenden), Schema-Version-Check beim
+  (0001–0032, Version v32, LF-Zeilenenden), Schema-Version-Check beim
   Entsperren (neuere DB ⇒ kein Entsperren), Geld als Integer-Cents, UUIDv7-PKs.
   Restore nimmt Backups mit `30 ≤ schema ≤ EXPECTED` und migriert vorwärts.
 - **`inputs/` tabu.** Vom Menschen gepflegt; der Container ergänzt das Volume
@@ -592,6 +699,11 @@ den verlinkten ADRs.
   die opt-in Versionsprüfung.
 - **Zeitzone** (E12). Fachliche Daten immer Europe/Berlin (`crate::clock`,
   `src/lib/date.ts`); das Geschäftsjahr bestimmt der Server aus dem Belegdatum.
+  Zeitabhängige Abläufe lesen die Uhr aus dem `AppCtx` (ADR 0040). Die DB
+  speichert Zeitpunkte in UTC (`YYYY-MM-DD HH:MM:SS`); die Oberfläche zeigt sie
+  über `date()`/`dateTime()` aus `src/lib/format.ts` mit Berliner Tag und
+  Uhrzeit, Tage bis zur Fälligkeit über `daysUntilBerlin` — unabhängig von der
+  Zeitzone des Geräts (Lauf F, D-15/D-25).
 
 ---
 
@@ -613,7 +725,17 @@ den verlinkten ADRs.
   Downloads, Restore, mehrere Off-Site-Ziele (W7), Zugangsdaten in der DB (W8),
   Frontend ohne Tauri (W9), responsiv (W10), Linux-Sidecar und Image (W11),
   Lizenzen, Quellen und Release-Infrastruktur (W12), Handbuch und Betriebsdoku
-  (W13), Security-Review (W14).
+  (W13), Security-Review (W14). Veröffentlicht als v2026.10.0.
+- **Lauf E und Lauf F.** Entscheidungen (Storno im Folgejahr u. a.) und alles
+  Funktionale, Technische und GoBD-Relevante vor dem UI/UX-Lauf: Start- und
+  Zeitlogik (ADR 0040), Migration 0032, Backup-Format 3 mit Lock-Backup im
+  Hintergrund, Anmeldung und Härtung, Fachlogik, Tauri-Altcode entfernt,
+  SvelteKit 3 / Vite 8 / Node 24 / Typst 0.15, CI und Doku. Erscheint mit
+  2026.11.0 nach dem UI/UX-Lauf.
+- **Lauf 2026.11 (U0–U7, ADR 0041).** Oberfläche für Smartphone, Tablet und
+  Desktop: Tokens und Bausteine, deutsche Betragseingabe, Fehler am Feld, Menü
+  „Mehr“, Seitentitel, F1 zum Kapitel, Begriffe der Oberfläche in Handbuch und
+  Server-Meldungen, Lesefelder ohne Migration (§2g). Version 2026.11.0.
 
 **Auslieferung** ist das signierte Image `ghcr.io/hozwei/klein-buch:<CalVer>`
 aus dem öffentlichen Repository, mit SBOM und Quellarchiv je Release; betrieben
@@ -630,14 +752,15 @@ Dateien in `docs/architecture/`:
 
 | Datei | Inhalt | Stand |
 |---|---|---|
-| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | Phase W (W13) |
-| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | Phase W (W13) |
+| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | 2026-10-25 (Lauf F, inkl. §11 ASVS-Entscheidungen) |
+| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | 2026-10-25 (Lauf F2) |
 | [`architecture/build-and-release.md`](architecture/build-and-release.md) | Image-Build (`Dockerfile`), Sidecar aus geprüften Quellen, CI-Gates, Trockenlauf, Release mit Signatur/SBOM/Quellarchiv, Veröffentlichen | Phase W (W13) |
 | [`architecture/paragraph-19.md`](architecture/paragraph-19.md) | §19-Logik: UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Verzicht/5-Jahres-Bindung, §14c-Schutz | 2026-05-26 |
-| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0039) mit Querverweisen | 2026-10-23 |
-| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16) |
-| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste | 2026-10-24, Schema v31 (inkl. 0031 `secrets`) |
+| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0041) mit Querverweisen | 2026-10-27 (Lauf 2026.11, U6) |
+| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F und Lauf 2026.11 (Lesefelder, `assets_disposal_preview`) |
+| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste, abgeleitete Lesefelder (§2g) | 2026-10-27, Schema v32 (inkl. 0032 GoBD-Absicherungen, ON DELETE; Lesefelder Lauf 2026.11) |
 | [`architecture/handbook.md`](architecture/handbook.md) | Aufbau und Konventionen des eingebauten Handbuchs | — |
+| [`architecture/design.md`](architecture/design.md) | Designleitlinie: Tokens, Bausteine, Status-Wörter, Muster (Listen, Detailseiten, Editoren, Bestätigungen), Responsive, deutsche Formate | 2026-10-26 (Lauf 2026.11, U4) |
 | [`architecture/conventions.md`](architecture/conventions.md) | Doku-Konventionen (Sprache, Aufbau, „Letzte Verifikation") | 2026-05-26 |
 
 **Lese-Reihenfolge.** Wer das System zum ersten Mal versteht, liest diese Datei
@@ -649,9 +772,13 @@ Betrieb `docs/operations-guide.md`. Wer ein Modul ändert, springt in den Code,
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13; Version 2026.5.1, Schema v31, ADRs
-0001–0039). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
+Stand: 2026-10-25 (Lauf F, Block F7; Version 2026.10.0, Schema v32, ADRs
+0001–0040; Zähl- und Versionsangaben nachgezogen, Inhalte von Phase W wie
+W13 geprüft). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
 `auth.rs`, `policy.rs`, `health.rs`), `src-tauri/src/{app_ctx,config,seed,uploads,downloads,secrets}.rs`,
 `src-tauri/src/scheduler/tick.rs`, `src-tauri/src/db/mod.rs`,
 `src-tauri/src/commands/{registry,backup}.rs`, `src-tauri/src/einvoice/`,
-`Dockerfile`, ADR 0039.
+`Dockerfile`, ADR 0039. Nachtrag 2026-10-27 (Lauf 2026.11, U6; Version 2026.11.0,
+ADRs 0001–0041): Stand-Zeile, ADR-Zählung, §2g Oberfläche (gegen `src/lib/`,
+`src/lib/styles/tokens.css`, `src/routes/+layout.svelte`, `pageTitle.svelte.ts`,
+`routeHelp.ts`, `static/manifest.webmanifest` und ADR 0041 geprüft), §8 und §9.

@@ -3,7 +3,7 @@ slug: erste-rechnung-schreiben
 title: Erste Rechnung schreiben
 category: erste-schritte
 order: 50
-keywords: [rechnung, erste rechnung, kunde, position, ausstellen, festschreiben, xrechnung, zugferd, pdf]
+keywords: [rechnung, erste rechnung, kunde, position, einheit, fälligkeit, entwurf, ausstellen, festschreiben, leitweg-id, xrechnung, zugferd, pdf]
 ---
 
 # Erste Rechnung schreiben
@@ -12,58 +12,91 @@ Du hast die Passphrase eingerichtet, das Verkäuferprofil angelegt
 und ein Backup-Ziel gewählt. Jetzt schreibst Du Deine erste
 Rechnung. Dauer: etwa fünf Minuten.
 
+Fehlen Deine Firmendaten noch, zeigt das Rechnungs-Formular statt
+der Felder den Hinweis "Deine Firmendaten fehlen." mit dem Link
+"Jetzt ausfüllen" (siehe Kapitel "Verkäuferprofil anlegen").
+
 ## Schritt 1: Kunde anlegen
 
 Klick im Hauptmenü auf "Kontakte" und dann auf "+ Neuer Kontakt".
-Trage Name (oder Firmenbezeichnung), Anschrift und mindestens eine
-E-Mail-Adresse ein. Speichere.
+Trage Name (oder Firmenbezeichnung), Anschrift und eine
+E-Mail-Adresse ein, an die Klein.Buch die Rechnung schicken kann.
+Klick auf "Kontakt anlegen".
 
-Du kannst Kontakte auch direkt aus dem Rechnungs-Formular heraus
-anlegen, wenn der Kunde dort noch nicht in der Auswahl-Liste steht.
+Leg den Kunden vorher an: Im Rechnungs-Formular wählst Du nur aus
+den vorhandenen Kontakten aus.
 
 ## Schritt 2: Rechnung anlegen
 
 Klick im Hauptmenü auf "Rechnungen" und dann auf "+ Neue
-Rechnung". Klein.Buch zeigt das Rechnungs-Formular: Kopfdaten oben,
-Positionen in der Mitte, Aktionen unten.
+Rechnung". Klein.Buch zeigt das Formular "Neue Rechnung" mit den
+Karten "Allgemein", "Positionen", "Notiz" und "Bezahlung".
+Pflichtfelder tragen einen Stern.
 
-In den Kopfdaten wählst Du den Kunden aus der Auswahl-Liste. Das
-Belegdatum steht standardmäßig auf heute. Das Leistungsdatum ist
-Pflichtfeld nach §14 UStG — wenn Du es leer lässt, übernimmt
-Klein.Buch automatisch das Belegdatum als Fallback. Die
-Rechnungsnummer vergibt Klein.Buch automatisch in der Form
-`JJJJ-NNNN` (zum Beispiel `2026-0001`, fortlaufend pro
-Geschäftsjahr).
+In "Allgemein" wählst Du den Empfänger aus der Auswahl-Liste. Ab acht
+Kontakten steht darüber ein Suchfeld ("Suchen: Name oder Ort"), das
+die Liste eingrenzt. Das Rechnungsdatum steht auf heute. Das
+Leistungsdatum ist Pflichtfeld nach §14 UStG; Klein.Buch belegt es
+mit dem Rechnungsdatum vor und zieht es mit, bis Du es selbst
+änderst. Es darf nicht nach dem Rechnungsdatum liegen. Auch die
+Fälligkeit ist Pflicht, weil die E-Rechnung sie verlangt; Klein.Buch
+schlägt sie aus dem Zahlungsziel in Deinen Firmendaten vor. Die
+Währung steht fest auf "Euro (EUR)".
+
+Die Rechnungsnummer vergibt Klein.Buch automatisch beim Speichern des
+Entwurfs in der Form `RE-JJJJ-NNNN` (zum Beispiel `RE-2026-0001`,
+fortlaufend pro Geschäftsjahr).
 
 ## Schritt 3: Positionen hinzufügen
 
-Klick auf "+ Position". Trage Titel, Beschreibung, Menge und
-Einzelpreis ein. Die Summe rechnet Klein.Buch automatisch aus.
+In der Karte "Positionen" steht schon eine leere Position. Trage
+Beschreibung, Menge, Einheit und Einzelpreis ein. Die Menge steht
+auf 1, die Einheit auf "Stück"; zur Wahl stehen Einheiten im
+Klartext wie "Stunde", "Tag", "Pauschale" oder "Kilometer". Der
+Einzelpreis ist anfangs leer. Beträge tippst Du wie gewohnt mit Komma
+vor den Cent und auf Wunsch mit Punkt als Tausendertrenner, zum
+Beispiel 1.234,56. Ein Minuszeichen nimmt das Feld nicht an. Netto
+und Brutto rechnet Klein.Buch automatisch aus.
 
-Wenn Du als Kleinunternehmer arbeitest, bleibt das Feld
-"Umsatzsteuer" gesperrt und auf 0. Versuchst Du, es zu öffnen,
-warnt Klein.Buch Dich. Das schützt Dich vor einer versehentlichen
+Wenn Du als Kleinunternehmer arbeitest, blendet Klein.Buch die
+Umsatzsteuer-Felder aus und sagt das in einem Hinweis über dem
+Formular. Das schützt Dich vor einer versehentlichen
 falschen Umsatzsteuer-Angabe, die nach §14c UStG dazu führen
 würde, dass Du die ausgewiesene Umsatzsteuer tatsächlich ans
 Finanzamt abführen musst.
 
-Klick erneut auf "+ Position" für jede weitere Position. Du kannst
-Positionen mit Pfeil-Knöpfen umsortieren oder mit dem
-Papierkorb-Knopf entfernen, solange die Rechnung Entwurf ist.
+Klick auf "+ Position" für jede weitere Position. Mit dem Knopf
+"×" am Ende einer Zeile entfernst Du eine Position, solange es mehr
+als eine gibt.
 
-Wenn Du bereits Pakete oder eine Anfahrt-Vorlage angelegt hast,
-findest Du die Knöpfe **"+ Paket"** und **"+ Anfahrt"** über der
-Positions-Liste.
+Wenn Du bereits Pakete oder einen Kilometersatz für die Anfahrt
+angelegt hast, findest Du unter der Positions-Liste die Auswahl
+"Paket" mit dem Knopf **"+ Paket"** und das Feld "Anfahrt (km)" mit
+dem Knopf **"+ Anfahrt"**. Trägt eine Position aus einem älteren
+Paket eine Einheit, die nicht in der Liste steht (etwa "Pauschal"),
+meldet Klein.Buch das am Feld und schlägt eine passende Einheit vor,
+zum Beispiel "Pauschale". Die E-Rechnung kennt nur die Einheiten der
+Liste.
 
-## Schritt 4: Pflichtangaben prüfen
+## Schritt 4: Entwurf speichern und Pflichtangaben prüfen
 
-Klein.Buch prüft die wichtigsten Pflichtangaben automatisch, sobald
-Du auf "Rechnung ausstellen" klickst (Verkäufer-Daten samt
-Steuernummer und Telefonnummer, Empfänger-Daten, Datum,
-Fälligkeitsdatum, mindestens eine Position). Mit dem Knopf "Prüfen"
-kannst Du das auch schon vorher testen. Falls etwas
-fehlt, benennt die App das fehlende Feld in einem roten
-Hinweis-Toast. Korrigiere und versuche erneut.
+Klick auf **"Als Entwurf speichern"**, oben auf der Seite oder am
+Ende des Formulars. Fehlt etwas oder passt etwas nicht, steht die
+Meldung direkt am Feld, und der Cursor springt zum ersten
+betroffenen Feld. Ein leerer Einzelpreis oder ein Gesamtbetrag von
+0 € ist ein Fehler am Preisfeld.
+
+Nach dem Speichern öffnet Klein.Buch den Entwurf. Unter den
+Positionen steht die Karte "Ausstellen". Dort prüft Klein.Buch sofort
+die wichtigsten Pflichtangaben (Firmendaten samt Steuernummer und
+Telefonnummer, Empfänger-Daten, Datum, Fälligkeitsdatum, mindestens
+eine Position) und nennt, was noch fehlt, jeweils mit einem Link zur
+Korrektur ("Firmendaten ergänzen", "Kontakt ergänzen" oder "Entwurf
+bearbeiten"). Nach einer Korrektur prüfst Du mit "Prüfen" oben auf
+der Seite erneut. Telefon und Steuernummer (oder USt-IdNr.) brauchst
+Du erst zum Ausstellen: Die Firmendaten lassen sich auch ohne sie
+speichern, Klein.Buch weist dann am Feld darauf hin; das Feld
+"Telefon" trägt den Zusatz "(Pflicht für die E-Rechnung)".
 
 Die §19-Klausel "Gemäß §19 UStG wird keine Umsatzsteuer
 ausgewiesen." setzt Klein.Buch automatisch in das PDF und in die
@@ -71,10 +104,15 @@ XRechnung-XML. Du musst sie nicht selbst eintippen.
 
 ## Schritt 5: Ausstellen (Festschreiben)
 
-Klick auf **"Rechnung ausstellen"**. Klein.Buch fragt einmal nach,
-ob Du sicher bist. Bestätige. Ab diesem Moment kannst Du Beträge,
-Kunde, Datum und Positionen nicht mehr ändern. Eine Korrektur geht
-nur noch über einen Storno (siehe Kapitel "Storno statt Löschung").
+In der Karte "Ausstellen" steht das Feld "Leitweg-ID (optional)".
+Die Leitweg-ID brauchst Du nur, wenn Dein Auftraggeber eine Behörde
+ist; sonst lässt Du das Feld leer.
+
+Klick auf **"Rechnung ausstellen"**. Klein.Buch fragt einmal nach
+("Rechnung jetzt ausstellen?"). Bestätige mit "Ausstellen". Ab
+diesem Moment kannst Du Beträge, Kunde, Datum und Positionen nicht
+mehr ändern. Eine Korrektur geht nur noch über einen Storno (siehe
+Kapitel "Storno statt Löschung").
 
 Klein.Buch erzeugt jetzt das endgültige PDF inklusive eingebetteter
 XRechnung-XML (ZUGFeRD-PDF/A-3). Beides liegt ab sofort im
@@ -83,23 +121,26 @@ den neuen Stand.
 
 ## Schritt 6: PDF prüfen und versenden
 
-Nach dem Ausstellen siehst Du in der PageBar die Knöpfe **"PDF
-öffnen"** (zeigt die fertige Rechnung in einer Vorschau) und **"PDF
-herunterladen"** (Dein Browser speichert die Datei in seinem
-Download-Ordner). Schau, ob alle Angaben stimmen. Auf dem Handy
-öffnet "PDF öffnen" die PDF-Ansicht Deines Browsers.
+Nach dem Ausstellen steht oben auf der Seite **"Senden"** als
+nächster Schritt, daneben **"PDF öffnen"** (zeigt die fertige
+Rechnung in einer Vorschau). **"PDF herunterladen"** (Dein Browser
+speichert die Datei in seinem Download-Ordner) findest Du im Menü
+"Mehr". Schau, ob alle Angaben stimmen. Auf dem Handy öffnet "PDF
+öffnen" die PDF-Ansicht Deines Browsers.
 
 Zum Versenden hast Du zwei Möglichkeiten:
 
 **Per Klein.Buch.** Wenn Du in den Einstellungen ein Postfach
 eingerichtet hast (siehe Kapitel "Konten und Mail-Versand"), klick
 auf **"Senden"**. Klein.Buch öffnet die Versand-Seite, schlägt
-Betreff und Text vor und hängt die ZUGFeRD-PDF automatisch an.
+Betreff und Text vor und hängt die ZUGFeRD-PDF automatisch an. Klick
+dort noch einmal auf "Senden".
 
-**Per Mail-Programm.** Klick auf "PDF herunterladen". Dein Browser
-speichert die fertige ZUGFeRD-PDF. Hänge die Datei in Deinem
-normalen Mail-Programm an und verschicke sie. Eine
-separate XRechnung-XML brauchst Du nicht — die XML steckt im PDF.
+**Per Mail-Programm.** Wähl im Menü "Mehr" den Eintrag "PDF
+herunterladen". Dein Browser speichert die fertige ZUGFeRD-PDF. Hänge
+die Datei in Deinem normalen Mail-Programm an und verschicke sie.
+Eine separate XRechnung-XML brauchst Du nicht — die XML steckt im
+PDF.
 
 ## Was Klein.Buch im Hintergrund tut
 
@@ -113,4 +154,4 @@ vor dem Vorwurf, Du hättest Belege nachträglich verändert.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

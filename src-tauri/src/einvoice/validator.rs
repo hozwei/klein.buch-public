@@ -40,10 +40,9 @@ pub(crate) fn launcher_command(launcher: &Path) -> tokio::process::Command {
 /// Argumente für den Validator-Aufruf. Pure Funktion — testbar ohne I/O.
 ///
 /// `output_dir` ist Pflicht: KoSIT schreibt sein `<filename>-report.xml`
-/// per Default ins cwd. Wenn das cwd zufällig das Sidecar-Bundle ist,
-/// triggert Tauri-Dev-Mode beim File-Watching einen Rebuild der App
-/// mitten in der Pipeline → Crash. Daher leiten wir die Reports explizit
-/// in ein Temp-Verzeichnis um.
+/// per Default ins cwd. Das Sidecar-Verzeichnis ist im Image read-only (in der
+/// Desktop-Fassung löste ein Report dort einen Rebuild aus); daher leiten wir
+/// die Reports explizit in ein Temp-Verzeichnis um.
 pub fn build_args(xml_path: &Path, scenarios_path: &Path, output_dir: &Path) -> Vec<String> {
     vec![
         "validator".to_string(),
@@ -228,8 +227,7 @@ pub async fn validate(xml: &str, sidecar_dir: &Path) -> Result<ValidationReport>
     let mut cmd = launcher_command(&launcher);
     cmd.args(&args)
         // cwd auf tmpdir — verhindert dass etwaige relative File-Outputs
-        // des Java-Sidecars im Sidecar-Bundle landen (Tauri-Dev-Mode-
-        // Watcher würde rebuilten und die App mitten in der Pipeline killen).
+        // des Java-Sidecars im (read-only) Sidecar-Verzeichnis landen.
         .current_dir(tmpdir.path())
         // Bei Timeout (Future-Drop) den hängenden Java-Prozess mit beenden.
         .kill_on_drop(true);

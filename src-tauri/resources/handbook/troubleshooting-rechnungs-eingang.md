@@ -12,8 +12,10 @@ Eingehende E-Rechnungen lädst Du über "Kosten" und "E-Rechnung
 importieren" im Browser hoch. Wie das im Normalfall abläuft, steht im
 Kapitel "Rechnungseingang per Upload". Dieses Kapitel sammelt die
 Meldungen, die dabei auftauchen können, und was Du dagegen tust.
-Die Meldungen erscheinen als kurze Einblendung am Bildschirm, meist
-mit dem Anfang "E-Rechnung konnte nicht gelesen werden".
+Meldungen beim Einlesen stehen direkt unter dem Datei-Feld und beginnen
+mit "E-Rechnung konnte nicht gelesen werden". Scheitert erst das
+Festschreiben, erscheint die Meldung als kurze Einblendung am
+Bildschirm mit dem Anfang "Festschreiben fehlgeschlagen".
 
 ## "Dateityp nicht erlaubt"
 
@@ -73,7 +75,7 @@ Absender die Rechnung neu ausstellen.
 ## "Upload nicht gefunden oder abgelaufen"
 
 Eine hochgeladene Datei hält Klein.Buch eine Stunde lang bereit.
-Liegt zwischen "Einlesen & prüfen" und "Als Kosten festschreiben"
+Liegt zwischen "Einlesen und prüfen" und "Kosten festschreiben"
 mehr Zeit, oder wurde der Server zwischendurch neu gestartet, ist sie
 weg. Klick auf "Andere Datei" und lade die Rechnung noch einmal hoch.
 
@@ -107,8 +109,9 @@ kannst.
 Klein.Buch prüft nicht, ob Du dieselbe Rechnung schon einmal
 hochgeladen hast. Jede Übernahme ist ein neuer Eingangsbeleg. Lösche
 keinen davon (Belege löschen ist gesetzlich verboten), sondern
-storniere den überzähligen Beleg in der Kosten-Position über "Kosten
-stornieren". Willst Du eine schon übernommene Rechnung nur noch einmal
+storniere den überzähligen Beleg: In der Kosten-Position im Menü "Mehr"
+auf "Stornieren", als Grund zum Beispiel "doppelt erfasst" eintragen und
+"Kosten stornieren" klicken. Willst Du eine schon übernommene Rechnung nur noch einmal
 ansehen, nimm in der Kosten-Position "Roh-XML anzeigen" oder "Beleg
 herunterladen" statt eines neuen Uploads.
 
@@ -116,9 +119,9 @@ herunterladen" statt eines neuen Uploads.
 
 Kopiere die Meldung und melde den Fall im Klein.Buch-Repository auf
 GitHub. Den Link zum Quellcode findest Du im "Über"-Dialog (Hauptmenü
-unten neben "Hilfe"). Hänge die Rechnung selbst nicht an, sie enthält
+ganz unten, unter "Hilfe"). Hänge die Rechnung selbst nicht an, sie enthält
 persönliche Daten.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

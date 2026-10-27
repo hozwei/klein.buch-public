@@ -9,7 +9,7 @@ keywords: [backup, fehler, ziel, schreibrecht, speicher voll, sftp, fingerprint,
 # Backup-Fehler
 
 Wenn Klein.Buch ein Backup nicht schreiben kann, steht im
-Backup-Protokoll eine Zeile mit "fehlgeschlagen" und der Fehlermeldung.
+Backup-Protokoll eine Zeile mit "Fehlgeschlagen" und der Fehlermeldung.
 Auf der Seite "Backups" steht unter dem betroffenen Ziel
 "Fehlgeschlagen" mit Zeitpunkt und Meldung, und unter "Hinweise"
 erscheint ein Eintrag.
@@ -30,7 +30,7 @@ den Server und den Container verwaltet.
 Diese Meldung (oder "Backup-Ziel-Wurzel /backup-targets fehlt") heißt:
 Der Ordner, der als Ziel eingetragen ist, kommt im Container nicht an.
 Meist wurde der Container ohne die passende Zeile unter `volumes:` neu
-erzeugt, oder der Ordner auf dem Server war beim Start nicht da, etwa
+erzeugt, oder der Ordner auf dem Server war beim Containerstart nicht da, etwa
 weil das NAS noch nicht verbunden war.
 
 Lösung für den Betreiber: In der Compose-Datei prüfen, ob die Zeile für
@@ -124,7 +124,7 @@ ein SFTP-Ziel aus der früheren Desktop-Fassung mit einem Backup
 
 ## Sync-Ordner lädt nicht hoch
 
-Das Protokoll meldet "gesichert", aber im Cloud-Speicher fehlt die
+Das Protokoll meldet "Gesichert", aber im Cloud-Speicher fehlt die
 Datei. Klein.Buch legt die Datei nur in den Ordner. Das Hochladen
 erledigt ein Sync-Programm auf dem Server, und das läuft gerade nicht
 richtig. Lösung für den Betreiber: Das Sync-Programm prüfen.
@@ -148,18 +148,40 @@ Rückfall](/help/updates-und-rueckfall)".
 
 Nach jedem Neustart des Servers ist Klein.Buch gesperrt, bis sich jemand
 anmeldet. Solange laufen keine geplanten Aufgaben, auch nicht das
-tägliche Backup. Nach der Anmeldung holt Klein.Buch es nach. Melde Dich
-nach einem Neustart deshalb bald wieder an.
+tägliche Backup. Nach der Anmeldung holt Klein.Buch es nach (genau eines,
+auch nach mehreren Tagen und auch, wenn Du Dich vor der eingestellten
+Uhrzeit anmeldest). Ein Backup nach dem Festschreiben, das wegen "Datenbank
+sperren" oder eines Neustarts ausfiel, holt es ebenfalls kurz nach der
+Anmeldung nach. Melde Dich nach einem Neustart deshalb bald wieder an; das
+Container-Log meldet den gesperrten Zustand alle sechs Stunden.
+
+## Nach einer Wiederherstellung kommt nichts auf den externen Zielen an
+
+Das ist Absicht: Bis Du oben im Hinweis "Automatische Abo-Läufe
+angehalten." mit "Prüfen und freigeben" bestätigst, dass dies die
+produktive Instanz ist, schreibt Klein.Buch Backups nur in den lokalen
+Ordner (siehe "[Backup und
+Wiederherstellen](/help/backup-und-wiederherstellen)"). Nach "Jetzt
+sichern" stehen die Ziele in der Karte "Backup jetzt erstellen" deshalb
+als "Ausgesetzt" mit dem Zusatz "Ausgesetzt bis zur Freigabe nach der
+Wiederherstellung (nur lokale Kopie).", und die Meldung "Backup
+erstellt: …" kommt als Warnung. Das ist kein Fehler der Ziele. Ist die
+letzte externe Kopie älter als sieben Tage, melden Seite "Backups" und
+Startseite das ebenfalls; nach der Freigabe bringt das nächste Backup
+die Ziele wieder auf den neuesten Stand.
 
 ## Wenn nichts hilft
 
-Klick auf "Jetzt sichern". Klein.Buch zeigt den Fehler dann sofort an.
+Klick auf "Jetzt sichern". Scheitert schon die lokale Kopie, erscheint
+die Meldung "Backup fehlgeschlagen: …" mit dem Grund. Scheitert ein
+externes Ziel, steht es in der Karte "Backup jetzt erstellen" als
+"Fehlgeschlagen" mit dem Grund daneben.
 Der Betreiber findet weitere Einzelheiten im Server-Log, zum Beispiel mit
 `docker compose logs klein-buch` (siehe Kapitel "[Fehlersuche im
 Container](/help/fehlersuche-im-container)"). Notiere die genaue
 Fehlermeldung und die Klein.Buch-Version und melde den Fall im
 öffentlichen Klein.Buch-Repository. Den Link findest Du im Hauptmenü
-unter "Über". Hänge keine Inhalte aus Deiner Datenbank an, nur den Text
+ganz unten unter "Über". Hänge keine Inhalte aus Deiner Datenbank an, nur den Text
 der Fehlermeldung und die Version.
 
 In der Zwischenzeit kann der Betreiber die vorhandenen Backup-Dateien
@@ -170,4 +192,4 @@ verschlüsselt.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

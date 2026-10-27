@@ -43,6 +43,14 @@ pub struct InvoiceCtx {
     pub gross_amount_formatted: String,
     pub due_date: Option<String>,
     pub is_kleinunternehmer: bool,
+    /// Nur bei Storno-Belegen: Nummer und Datum der stornierten Rechnung.
+    pub storno_of: Option<StornoRefCtx>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StornoRefCtx {
+    pub number: String,
+    pub date: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -87,6 +95,7 @@ pub fn build_invoice_context(
             ),
             due_date: invoice.due_date.as_deref().map(format_german_date),
             is_kleinunternehmer: invoice.is_kleinunternehmer == 1,
+            storno_of: None,
         },
         seller: SellerCtx {
             name: seller.name.clone(),
@@ -114,6 +123,40 @@ fn render_ctx<C: Serialize>(template_source: &str, ctx: &C) -> Result<RenderedMa
     let rendered = tera::Tera::one_off(template_source, &context, false)
         .map_err(|e| Error::Mail(format!("Mail-Template-Render fehlgeschlagen: {e}")))?;
     split_subject_body(&rendered)
+}
+
+// ---- Storno-Mail (Lauf E) --------------------------------------------------
+
+/// Eingebettetes Mailtemplate für Storno-Belege (statt des Rechnungstextes mit
+/// negativem Betrag). `inputs/` ist für Maschinen tabu — Override per
+/// `inputs/mail-templates/storno-de.txt` (menschen-maintained).
+pub const DEFAULT_STORNO_MAIL: &str = r#"Subject: Stornorechnung {{ invoice.number }} zu Rechnung {{ invoice.storno_of.number }} von {{ seller.name }}
+
+Sehr geehrte Damen und Herren,
+
+anbei erhalten Sie unsere Stornorechnung {{ invoice.number }} vom {{ invoice.date }}.
+Sie storniert unsere Rechnung {{ invoice.storno_of.number }} vom {{ invoice.storno_of.date }} vollständig.
+
+Der Beleg liegt im ZUGFeRD-Format vor (PDF mit eingebettetem XRechnung-XML),
+sodass eine maschinelle Verarbeitung möglich ist.
+
+{% if invoice.is_kleinunternehmer -%}
+{{ kleinunternehmer.hinweis_text }}
+{% endif -%}
+
+Bei Rückfragen melden Sie sich gerne.
+
+Mit freundlichen Grüßen
+{{ seller.name }}
+
+{{ seller.email }}
+{% if seller.phone -%}{{ seller.phone }}{% endif -%}
+"#;
+
+/// Lädt `inputs/mail-templates/storno-de.txt`, sonst [`DEFAULT_STORNO_MAIL`].
+pub fn load_storno_template(inputs_dir: &Path) -> String {
+    let path = inputs_dir.join("mail-templates").join("storno-de.txt");
+    std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_STORNO_MAIL.to_string())
 }
 
 // ---- Angebots-Mail (Block 8) -----------------------------------------------
@@ -286,10 +329,11 @@ mod tests {
                 gross_amount_formatted: "595,00 €".into(),
                 due_date: Some("19.06.2026".into()),
                 is_kleinunternehmer: true,
+                storno_of: None,
             },
             seller: SellerCtx {
-                name: "Wildbach Computerhilfe".into(),
-                email: "schmidm@wildbach-computerhilfe.de".into(),
+                name: "Beispiel IT-Service".into(),
+                email: "inhaber@example.org".into(),
                 phone: Some("+49 871 1234567".into()),
             },
             kleinunternehmer: KleinCtx {
@@ -310,10 +354,7 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
     #[test]
     fn render_splits_subject_and_body() {
         let r = render(TEMPLATE, &ctx()).unwrap();
-        assert_eq!(
-            r.subject,
-            "Rechnung RE-2026-0001 von Wildbach Computerhilfe"
-        );
+        assert_eq!(r.subject, "Rechnung RE-2026-0001 von Beispiel IT-Service");
         assert!(r.body.starts_with("Sehr geehrte Damen und Herren,"));
         assert!(r.body.contains("595,00 €"));
         assert!(r
@@ -321,6 +362,31 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
             .contains("Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."));
         // Subject darf nicht im Body auftauchen.
         assert!(!r.body.contains("Subject:"));
+    }
+
+    #[test]
+    fn storno_mail_names_the_original_and_no_negative_amount() {
+        // Lauf E: Storno-Belege bekommen eigenen Text statt „Rechnung über -595,00 €“.
+        let mut c = ctx();
+        c.invoice.number = "ST-2026-0001".into();
+        c.invoice.gross_amount_formatted = "-595,00 €".into();
+        c.invoice.due_date = None;
+        c.invoice.storno_of = Some(StornoRefCtx {
+            number: "RE-2025-0042".into(),
+            date: "10.12.2025".into(),
+        });
+        let r = render(DEFAULT_STORNO_MAIL, &c).unwrap();
+        assert_eq!(
+            r.subject,
+            "Stornorechnung ST-2026-0001 zu Rechnung RE-2025-0042 von Beispiel IT-Service"
+        );
+        assert!(r
+            .body
+            .contains("Sie storniert unsere Rechnung RE-2025-0042 vom 10.12.2025 vollständig."));
+        assert!(!r.body.contains("-595,00"));
+        assert!(r
+            .body
+            .contains("Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."));
     }
 
     #[test]
@@ -356,8 +422,8 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
                 is_kleinunternehmer: true,
             },
             seller: SellerCtx {
-                name: "Wildbach Computerhilfe".into(),
-                email: "schmidm@wildbach-computerhilfe.de".into(),
+                name: "Beispiel IT-Service".into(),
+                email: "inhaber@example.org".into(),
                 phone: None,
             },
             kleinunternehmer: KleinCtx {
@@ -365,7 +431,7 @@ anbei Rechnung {{ invoice.number }} über {{ invoice.gross_amount_formatted }}.\
             },
         };
         let r = render_quote_mail(DEFAULT_QUOTE_MAIL, &ctx).unwrap();
-        assert_eq!(r.subject, "Angebot AN-2026-0001 von Wildbach Computerhilfe");
+        assert_eq!(r.subject, "Angebot AN-2026-0001 von Beispiel IT-Service");
         assert!(r.body.contains("gültig bis 19.06.2026"));
         assert!(r.body.contains("AGB"));
         assert!(r

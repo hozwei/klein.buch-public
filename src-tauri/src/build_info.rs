@@ -62,7 +62,7 @@ pub fn clean_tag(raw: Option<&str>) -> Option<String> {
 
 /// Quell-URL: `http://` bzw. `https://` mit Host, ohne Benutzerangaben, Query
 /// und Fragment; zurück kommt die normalisierte Form ohne abschließenden
-/// Schrägstrich. Sonst `None` (Tippfehler wie `https:/…` warnen beim Start).
+/// Schrägstrich. Sonst `None` (Tippfehler wie `https:/…` warnen beim Serverstart).
 pub fn clean_source_url(raw: Option<&str>) -> Option<String> {
     let v = raw?.trim();
     if v.is_empty() || v.len() > 512 || v.chars().any(|c| c.is_whitespace() || c.is_control()) {

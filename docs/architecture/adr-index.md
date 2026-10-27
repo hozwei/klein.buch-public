@@ -1,15 +1,15 @@
 # ADR-Index
 
 > Vertiefung zu „ADR-Liste in `docs/adr/`" aus `../ARCHITECTURE.md`. Diese
-> Datei ist die navigations-freundliche Sicht auf alle 39 Architecture
+> Datei ist die navigations-freundliche Sicht auf alle 40 Architecture
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0039-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0041-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** alle 39 ADRs sind **akzeptiert** (Stand 2026-10-23);
+**Status-Konvention:** die ADRs 0001–0041 sind **akzeptiert** (Stand 2026-10-27);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -42,15 +42,15 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0018 | Rechtsdokumente (AGB/Datenschutz): Versionierung + Angebots-Bundle | Legal-Docs | `data-model.md` §2d + `../ARCHITECTURE.md` §4.9 |
 | 0019 | Kosten: Sofort-Festschreiben + Eingangsseitige USt | Kosten | `gobd.md` §2.3 + `modules.md` §1 (domain/expense) |
 | 0020 | Privatbewegungen: EÜR-neutral, append-only, kein Storno | Privatbewegungen | `gobd.md` §2.6 + `modules.md` §1 |
-| 0021 | UI-Feedback & Interaktions-Konventionen (Block DS, Feedback-Teil) | UX-Konventionen | Frontend-`src/lib/components/` |
+| 0021 | UI-Feedback & Interaktions-Konventionen (Block DS, Feedback-Teil); Amendment 2026-10-27: Feldfehler am Feld, stehende Fehler-Toasts, ActionMenu (ADR 0041) | UX-Konventionen | Frontend-`src/lib/components/` |
 | 0022 | EÜR-Einnahmen-Erfassung: Zufluss/Abfluss + Storno als negative Einnahme | EÜR-Cash-Basis | `modules.md` §13 + `../ARCHITECTURE.md` §4.11 |
 | 0023 | Wiederkehrende Belege + In-App-Scheduler | Scheduler | `../ARCHITECTURE.md` §5 + `modules.md` §6 |
 | 0024 | E-Rechnung-Empfang: CII+UBL-Parser, KoSIT beratend, Import als Kosten | E-Rechnung-Empfang | `modules.md` §2 + `../ARCHITECTURE.md` §4.10 |
 | 0025 | Anlagenverzeichnis + AfA als Functional Core | Anlagen/AfA | `modules.md` §12 (assets/+depreciation/) |
 | 0026 | EÜR-Export: ELSTER-Ausfüllhilfe, DATEV-Buchungsstapel, Steuerberater-Paket | EÜR-Export | `modules.md` §13 + `reference/datev-format.md` + `reference/elster-euer-formular-schema.md` |
 | 0027 | Notifications, prüfungssicherer GJ-Abschluss, Integritäts-Cron | Notifications + GJ-Lock | `gobd.md` §2.4 + `modules.md` §6 + §11 |
-| 0028 | Versand via Microsoft Graph (OAuth/PKCE) + append-only E-Mail-Protokoll | OAuth / Mail | `security.md` §9 + `modules.md` §8 |
-| 0029 | Design-System: zentrale Tokens, wiederverwendbare Komponenten, Toast-Default | Design-System | Frontend-`src/lib/styles/tokens.css` |
+| 0028 | Versand via Microsoft Graph (OAuth/PKCE; Code seit Lauf F6 entfernt) + append-only E-Mail-Protokoll | OAuth / Mail | `security.md` §9 + `modules.md` §8 |
+| 0029 | Design-System: zentrale Tokens, wiederverwendbare Komponenten, Toast-Default; Amendment 2026-10-27: Rollen-Tokens, `!important`-Rückbau (ADR 0041) | Design-System | Frontend-`src/lib/styles/tokens.css` |
 | 0030 | Wählbare PDF-Vorlagen: eingebettete Unified-Built-ins + inputs-Override + Sentinel-Auflösung | PDF-Templates | `modules.md` §3 + `../ARCHITECTURE.md` §4.14 |
 | 0031 | Pakete (versioniert) + Anfahrt | Pakete/Anfahrt | `modules.md` §1 (domain/package, domain/travel) + `../ARCHITECTURE.md` §4.15 |
 | 0032 | DSGVO: Auskunft (Art. 15) + Anonymisierung (Art. 17) | DSGVO | `modules.md` §1 (domain/dsgvo, domain/anonymize) + `../ARCHITECTURE.md` §4.16 |
@@ -61,6 +61,8 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0037 | E-Rechnungs-Empfangs-Politur + Drop-Folder (PV1-A2/A5/DROP) | E-Rechnung-Empfang + Drop-Folder | `modules.md` §2 (einvoice/); Drop-Folder im Server entfallen (E11, §6 Hinweis) |
 | 0038 | Release-Bundle NSIS only (MSI verworfen wg. CalVer-Jahr vs. MAJOR-255-Cap) (abgelöst durch 0039) | Release / Build | `build-and-release.md` (G4.3) |
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
+| 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
+| 0041 | UI/UX-Standards (2026.11): Orientierung an WCAG 2.2 AA (keine Konformitätsaussage), Prüf-Harness mit axe-core und Abdeckungsbericht über Mobil, Tablet und Desktop, Design über Rollen-Tokens und Bausteine (PageBar mit Menü „Mehr“, DocNo, ContactSelect, MoneyInput/QuantityInput), Container Queries, deutsche Formate und Betragseingabe, Fehler am Feld, Seitentitel je Route, F1 zum passenden Handbuch-Kapitel, Begriffe der Oberfläche, Lesefelder ohne Migration | UX / Frontend | `design.md`, `../ARCHITECTURE.md` §2g, `modules.md` §14, `data-model.md` §2g |
 
 ---
 
@@ -84,7 +86,7 @@ Viewer). Plus Sidecar: 0001 (Sidecar-Bundle-Block), 0008.
 **Backup + Security:** 0009 (Basis), 0034 (Tiers + Log), 0035 (At-Rest-
 Encryption), 0036 (Factory Reset), 0039 (Bedrohungsmodell Internetbetrieb).
 Plus Mail-Credentials: 0011, 0028
-(OAuth-Refresh-Token-Chunking).
+(OAuth-Refresh-Token-Chunking der Desktop-Fassung; Graph-Code seit Lauf F6 entfernt).
 
 **EÜR + Export:** 0010 (Cash-Basis), 0022 (Zufluss/Abfluss), 0026 (Export).
 Plus AfA: 0025.
@@ -95,11 +97,12 @@ Plus AfA: 0025.
 
 **DSGVO:** 0032.
 
-**UX/Design:** 0021, 0029.
+**UX/Design:** 0021, 0029, 0041.
 
 **Scheduler/Notifications:** 0023, 0027, 0037 (Drop-Folder als sechster
 Tick-Job, Inbox-only-Regeln; im Server-Betrieb entfällt der Drop-Folder-Job,
-Amendment 0037 / ADR 0039 E11).
+Amendment 0037 / ADR 0039 E11), 0040 (Dauerbetrieb: Sperre/CAS/Transaktion,
+Nachhol-Grenze, Pause, injizierte Uhr; nur noch die Inbox, Amendment 0027).
 
 ---
 
@@ -122,9 +125,11 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
 - **ADR 0001 / 0008** — Sidecar nur noch für Linux; Bezugsquellen mit SHA-256
   in `sidecar/versions.json`.
 - **ADR 0009** — Backup-`FORMAT_VERSION` 2 (Branding aus `data_dir` im
-  Content-ZIP; Restore nimmt Format 1 und 2).
+  Content-ZIP; Restore nimmt Format 1 und 2). Seit Lauf F3a (Amendment
+  2026-10-25) Format 3 mit dem Klartext-Kopf als AAD; Restore nimmt 1–3.
 - **ADR 0011 / 0028** — Secrets in einer STRICT-Tabelle in SQLCipher statt im
-  OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP).
+  OS-Keychain; MS-Graph im Server-Betrieb ausgeblendet (nur SMTP), der Graph-Code ist
+  seit Lauf F6 entfernt (Amendment 2026-10-25).
 - **ADR 0013** — eingehender Listener, opt-in Versionsprüfung, keine
   Auto-Updates.
 - **ADR 0014** — Verteilung als öffentliches Image (Lizenzseite, Quellarchiv
@@ -140,6 +145,66 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
   Netzwerk-Angreifer; Klartext-Übergangspfad entfällt.
 - **ADR 0036** — Factory Reset im Server-Betrieb abgeschaltet.
 - **ADR 0037** — Rechnungseingang per Upload im Browser statt Drop-Folder.
+
+**Amendments 2026-10-24 — Dauerbetrieb (Lauf F, ADR 0040):**
+
+- **ADR 0009 / 0034** — Tages-Backup kalenderfest, Aufbewahrung nach
+  Kalender-Eimern, keine Löschung auf SFTP-Zielen, nach einem Restore bis zur
+  Freigabe nur Floor; übernommene Floor-Backups als `manual`.
+- **ADR 0023 / 0033** — Abo-Läufe mit Sperre, Transaktion und Nachhol-Grenze,
+  Pause nach Uhrsprung und Restore (Teil F1a, dort beschrieben); Tages-Backup
+  kalenderfest, kein Job am Start, Tests ohne OS-Notification-Bridge (F1c).
+- **ADR 0027** — nur noch die Inbox (Trait `Notifier` entfernt), Integritäts-Cron
+  mit Sperre und Backoff, Auto-AfA atomar, Erinnerungen in Europe/Berlin.
+- **ADR 0003** — Schema-Prüfung beim Entsperren: eine neuere Datenbank lässt sich
+  nicht entsperren, die Instanz bleibt gesperrt.
+- **ADR 0039** — Verweise der überholten Einträge (E3, Nr. 13, 33, 44, 45, 54,
+  65, 77, 91, 103, 120, E12 in der Oberfläche) auf ADR 0040.
+- **ADR 0014** (Lauf E, ADR 0039 Nr. 122/123) — vorerst keine Code-Beiträge Dritter
+  (Entscheidung statt offener Frage), Quellangebot für Bestandteile Dritter.
+
+**Amendments 2026-10-25 — Lauf F3–F7:**
+
+- **ADR 0003** (F5a) — Rechenregeln für Cent-Beträge: `i64`, USt je Steuergruppe aus der
+  Nettosumme (BR-CO-17), ganzzahlige AfA, Domänengrenzen und `overflow-checks`; Obergrenze
+  1 Mrd. € je einzeln erfasstem Betrag (F5-fix).
+- **ADR 0008** (F5c) — ZUGFeRD-Profil XRECHNUNG passend zum eingebetteten XRechnung-XML.
+- **ADR 0008** (F6b) — Typst 0.15: Daten über `json(bytes(…))`, Hinweis bei alten eigenen
+  Vorlagen, Warnungstest der eingebauten Vorlagen.
+- **ADR 0009** (F3a) — Backup-Format 3 mit dem Klartext-Kopf als AAD; Restore nimmt 1–3;
+  Lock-Backups im Hintergrund.
+- **ADR 0009** (F3c) — Pflicht-Backup vor einer Migration im Format der Vorversion.
+- **ADR 0011** (F7a) — SMTP-E2E-Test gegen Mailpit (per Digest) statt MailHog.
+- **ADR 0024** (F5c) — strenger Parser (abgeschnittenes XML), alle Gutschrift-Codes
+  abgelehnt, Rundung auf Cent.
+- **ADR 0025** (F5b) — aktivierte Kosten sind keine Betriebsausgabe mehr, nur die AfA.
+- **ADR 0026** (F5b) — Ausfüllhilfe nach dem Vordruck des Jahres mit Kennzahl, DATEV-Geldkonto
+  je Zahlungskonto, Anlagenverkauf mit Restbuchwert.
+- **ADR 0028** (F6a) — Graph-Code (`mail::oauth_ms`, OAuth-Commands) entfernt.
+- **ADR 0034** (F3a) — Off-Site-Status „veraltet“, Download lokaler Backups, Rotation nur
+  unter den Wurzeln.
+- **ADR 0034** (F6b) — Krypto-Linie mit russh 0.64, `sha2`/`hmac`/`sha1` neu mit gleichen
+  Hexwerten.
+
+**Amendments 2026-10-25 — Lauf F7b/F8:**
+
+- **ADR 0019** (F7b/F8) — §13b-Flag verlangt USt 0 (ADR 0039 Nr. 143); aktivierte Kosten
+  nicht stornierbar (Nr. 145).
+- **ADR 0025** (F8) — Anschaffungskosten nach § 9b Abs. 1 EStG (bei §19 brutto), GWG-Grenze
+  netto, Aktivieren nur in offenen Jahren und in einer Transaktion, Privatentnahme mit
+  Entnahmewert (ADR 0039 Nr. 145).
+- **ADR 0040** Nr. 62/63 (F8) — Restore hält abgeschlossene Geschäftsjahre; „Datenbank
+  sperren“ sperrt nach dem Beenden der Sitzungen immer zu Ende, „Passphrase ändern“ mit
+  Wartebudget unter dem Antwort-Timeout und Backup-Sperre.
+
+**Amendments 2026-10-25 — Lauf F8d:**
+
+- **ADR 0019** (F8d) — Vorsteuer und Anschaffungskosten aus Kosten nach dem §19-Status bei
+  Leistungsbezug (Jahr des Belegdatums), nicht nach dem Zahlungsjahr; das Jahr der Ausgabe
+  bleibt das Zahlungsjahr (ADR 0039 Nr. 148).
+- **ADR 0025** (F8d) — Anschaffungskosten aus Kosten nach dem Status bei Leistungsbezug; ein
+  §19-Wechsel wird nicht blockiert, Inbox und Ausfüllhilfe nennen betroffene Anlagen
+  (ADR 0039 Nr. 148).
 
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
@@ -159,11 +224,12 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 **Für Security-Audit:** 0039, 0009, 0011, 0013, 0028, 0034, 0035, 0036.
 
-**Für UX-/Frontend-Arbeit:** 0021, 0029, 0030.
+**Für UX-/Frontend-Arbeit:** 0041, 0021, 0029, 0030.
 
 ---
 
 ## Letzte Verifikation
 
-Stand: 2026-10-23, ADR-Files 0001–0039. Bei einer neuen ADR diese Tabelle
-am Ende verlängern und das passende Vertiefungs-Dokument verlinken.
+Stand: 2026-10-27, ADR-Files 0001–0041 (Amendments bis Lauf 2026.11: ADR 0021, 0029). Bei einer neuen
+ADR diese Tabelle am Ende verlängern und das passende Vertiefungs-Dokument verlinken;
+bei einem neuen Amendment eine Zeile in Abschnitt 3 ergänzen.

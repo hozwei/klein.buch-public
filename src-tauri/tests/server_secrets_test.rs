@@ -43,9 +43,7 @@ fn account_input(host: &str, user: Option<&str>, tls: bool) -> serde_json::Value
         "smtpUseTls": tls,
         "fromEmail": "rechnung@example.org",
         "fromName": "Beispiel IT-Service",
-        "isDefault": true,
-        "oauthTenantId": null,
-        "oauthClientId": null
+        "isDefault": true
     })
 }
 
@@ -150,7 +148,7 @@ async fn mail_password_is_encrypted_and_never_exported() {
     let _draft = draft_invoice(&srv).await;
     let cookie = reauth_cookie(&srv, &cookie).await;
 
-    // Migration 0031: STRICT-Tabelle, Schema 31
+    // Migration 0031: STRICT-Tabelle; Schema-Version der Binary (ab 0031)
     {
         let pool = srv.state.ctx.pool().unwrap();
         let sql: String = sqlx::query_scalar(
@@ -165,7 +163,10 @@ async fn mail_password_is_encrypted_and_never_exported() {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        assert_eq!(v, "31");
+        assert_eq!(
+            v,
+            klein_buch_lib::db::schema_version::EXPECTED_SCHEMA_VERSION.to_string()
+        );
     }
 
     let id = create_account(&srv, &cookie).await;
@@ -380,7 +381,6 @@ async fn credentials_are_bound_to_host_port_user() {
     // Microsoft-Konten (Graph) gibt es im Server nicht (E9)
     let mut oauth = account_input("smtp.example.org", None, true);
     oauth["authType"] = serde_json::json!("oauth_microsoft");
-    oauth["oauthClientId"] = serde_json::json!("11111111-2222-3333-4444-555555555555");
     let r = call(
         &srv.app,
         &cookie,
@@ -630,4 +630,149 @@ async fn sftp_target_with_probed_fingerprint() {
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(secret(&srv, &format!("sftp:{id}")).await, None);
+}
+
+/// ASVS V5.2.6/V12.6.1 (Lauf F5c): Gespeicherte SMTP-Ports unterliegen derselben
+/// Allowlist wie die Verbindungstests; private und Loopback-Adressen bleiben
+/// erlaubt (Relay im LAN bzw. auf dem Docker-Host). Ein unveränderter
+/// Bestandsport bleibt nutzbar, ein neuer muss freigegeben sein.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saved_smtp_port_follows_allowlist() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let with_port = |host: &str, port: u16| {
+        let mut input = account_input(host, None, true);
+        input["smtpPort"] = serde_json::json!(port);
+        input
+    };
+
+    // Nicht freigegebener Port (z. B. ein interner Dienst) → abgelehnt.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_create",
+        serde_json::json!({ "input": with_port("smtp.example.org", 6379), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert!(r.text().contains("nicht freigegeben"), "{}", r.text());
+
+    // Loopback und Standardport → erlaubt (kein Verbindungsaufbau beim Speichern).
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_create",
+        serde_json::json!({ "input": with_port("127.0.0.1", 25), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let id = r.json()["id"].as_str().unwrap().to_string();
+
+    // Wechsel auf einen nicht freigegebenen Port → abgelehnt.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": with_port("127.0.0.1", 6379), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+
+    // Betreiber gibt den Port frei (`KLEIN_BUCH_ALLOWED_TEST_PORTS`) → erlaubt.
+    srv.state.ctx.net_tests.set_allowed_ports(Some(vec![1025]));
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": with_port("127.0.0.1", 1025), "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+
+    // Bestandsport nach Änderung der Freigabe: nur Umbenennen bleibt möglich.
+    srv.state.ctx.net_tests.set_allowed_ports(None);
+    let mut renamed = with_port("127.0.0.1", 1025);
+    renamed["label"] = serde_json::json!("Relay im LAN");
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({ "id": id, "input": renamed, "password": null }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+}
+
+/// Lauf F6 (ADR 0039 Nr. 138): Ein aus der Desktop-Fassung übernommenes
+/// Microsoft-Konto (Graph, E9) versendet im Server nicht — ohne Verbindungsaufbau
+/// und mit klarer Meldung — und verliert beim Umstellen auf SMTP den
+/// gespeicherten Token samt OAuth-Metadaten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_microsoft_account_is_refused_and_cleared_on_switch_to_smtp() {
+    let srv = test_server();
+    let cookie = setup(&srv).await;
+    let cookie = reauth_cookie(&srv, &cookie).await;
+    let pool = srv.state.ctx.pool().unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    sqlx::query(
+        "INSERT INTO mail_accounts (
+            id, label, auth_type, from_email, from_name, is_default,
+            oauth_tenant_id, oauth_client_id, oauth_account_email, oauth_scopes,
+            oauth_token_expires_at
+         ) VALUES (?, 'Desktop-Konto', 'oauth_microsoft', 'rechnung@example.org',
+                   'Beispiel IT-Service', 1, 'common',
+                   '11111111-2222-3333-4444-555555555555', 'rechnung@example.org',
+                   'offline_access Mail.Send User.Read', '2026-06-01T00:00:00+00:00')",
+    )
+    .bind(&id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let token_key = format!("oauth:{id}");
+    klein_buch_lib::secrets::set(&pool, &token_key, "F6-Test-Refresh-Token")
+        .await
+        .unwrap();
+
+    // Testversand: abgelehnt, bevor ein Kanal gewählt wird; kein Protokolleintrag.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_send_test",
+        serde_json::json!({ "accountId": id, "to": "kunde@example.org" }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.text());
+    assert!(r.text().contains("Microsoft-Anmeldung"), "{}", r.text());
+    let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM email_log")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(logged, 0);
+
+    // Umstellen auf SMTP: Token und alle OAuth-Spalten weg.
+    let r = call(
+        &srv.app,
+        &cookie,
+        "mail_account_update",
+        serde_json::json!({
+            "id": id,
+            "input": account_input("smtp.example.org", None, true),
+            "password": null
+        }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    let row = r.json();
+    assert_eq!(row["authType"], "smtp_password");
+    for field in [
+        "oauthTenantId",
+        "oauthClientId",
+        "oauthAccountEmail",
+        "oauthScopes",
+        "oauthTokenExpiresAt",
+    ] {
+        assert!(row[field].is_null(), "{field}: {row}");
+    }
+    assert_eq!(secret(&srv, &token_key).await, None);
 }

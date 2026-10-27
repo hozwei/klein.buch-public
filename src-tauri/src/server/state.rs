@@ -5,7 +5,7 @@
 //! sie entstehen beim Einrichten und Anmelden, enden per Timeout oder Abmelden;
 //! „Datenbank sperren“ schließt den Pool und beendet alle Sitzungen.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -19,6 +19,7 @@ use super::headers::Csp;
 use super::idempotency::IdempotencyStore;
 use super::jobs::JobRegistry;
 use super::limits::Admission;
+use super::pending::PendingAuths;
 use super::policy::HttpPolicy;
 use super::ratelimit::{PublicRateLimiter, RateLimiter};
 use super::session::{SessionId, SessionStore};
@@ -46,11 +47,47 @@ impl InstanceState {
 /// Wie lange der Server nach einem erfolgreichen Restore noch antwortet, damit
 /// der Browser das Job-Ergebnis abholen kann, bevor er neu startet.
 pub const RESTART_GRACE: Duration = Duration::from_secs(10);
-/// Höchstens so lange wartet das Herunterfahren auf laufende Jobs.
-pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(600);
-/// So lange warten „Datenbank sperren“ und „Passphrase ändern“ auf laufende
-/// Aktionen, bevor sie mit 503 abbrechen.
+/// Höchstens so lange wartet das Herunterfahren auf laufende Commands und Jobs
+/// (W5-STOP-GRACE, W14-025b). Zusammen mit dem Abwarten offener Verbindungen
+/// (`http::CONNECTION_DRAIN_TIMEOUT`, 30 s), dem Nachholen eines ausstehenden
+/// Lock-Backups (innerhalb von [`SHUTDOWN_WORK_BUDGET`]) und dem Schließen des
+/// Pools ([`POOL_CLOSE_WAIT`]) bleibt das Herunterfahren bei 75 s — unter
+/// `stop_grace_period: 90s` im Compose-Beispiel. Ein abgebrochenes Backup ist
+/// unkritisch (Temp-Datei + rename, Reste räumt der Sweeper).
+pub const JOB_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// So lange wartet das Herunterfahren auf den laufenden Scheduler-Tick
+/// (gleichzeitig mit [`JOB_DRAIN_TIMEOUT`]); die Abbruch-Anforderung steht
+/// schon seit dem Signal.
+pub const SCHEDULER_SHUTDOWN_WAIT: Duration = Duration::from_secs(25);
+/// Gesamtfrist des Herunterfahrens für Tick, Tasks und das Nachholen eines
+/// ausstehenden Lock-Backups (Lauf F3c, ADR 0040 Nr. 57): Das Nachholen bekommt
+/// den Rest nach dem Abwarten von Tick und Tasks, mindestens
+/// [`SHUTDOWN_BACKUP_MIN`].
+pub const SHUTDOWN_WORK_BUDGET: Duration = Duration::from_secs(40);
+/// Mindestfrist für das Nachholen eines ausstehenden Lock-Backups beim
+/// Herunterfahren (Tick und Tasks dürfen zusammen höchstens
+/// `SHUTDOWN_WORK_BUDGET − SHUTDOWN_BACKUP_MIN` brauchen).
+pub const SHUTDOWN_BACKUP_MIN: Duration = Duration::from_secs(10);
+/// Höchstens so lange wartet das Herunterfahren auf das Schließen des Pools
+/// (WAL-Checkpoint, ausgeliehene Verbindungen).
+pub const POOL_CLOSE_WAIT: Duration = Duration::from_secs(5);
+/// Wartetakt von „Datenbank sperren“ auf laufende Aktionen: Nach dem Beenden der
+/// Sitzungen wartet das Sperren ohne Abbruch weiter und schreibt je Takt eine
+/// WARN-Zeile (Lauf F8). Zugleich Frist für das Nachholen eines Lock-Backups
+/// und das Schließen des Pools beim Sperren. „Passphrase ändern“ nutzt
+/// [`REKEY_WAIT_BUDGET`].
 pub const DB_GATE_WAIT: Duration = Duration::from_secs(60);
+/// So lange warten „Datenbank sperren“ und „Passphrase ändern“ darauf, dass ein
+/// laufender Scheduler-Tick nach dem aktuellen Termin aufhört (W14-027, ADR
+/// 0040). Danach sperrt „Datenbank sperren“ trotzdem (der Tick läuft ohne Pool
+/// und Passphrase leer); „Passphrase ändern“ bricht mit 503 ab.
+pub const SCHEDULER_STOP_WAIT: Duration = Duration::from_secs(10);
+/// Lauf F8: Gesamtfrist, in der „Passphrase ändern“ auf laufende Aktionen, den
+/// Tick und ein laufendes Backup wartet. Sie liegt mit dem Neuverschlüsseln
+/// unter dem Antwort-Timeout ([`crate::server::limits::REQUEST_TIMEOUT`], 30 s):
+/// Das Ergebnis steht fest, bevor der Browser eine Antwort bekommt — sonst
+/// meldete er `timeout`, während der Wechsel im Hintergrund doch wirksam würde.
+pub const REKEY_WAIT_BUDGET: Duration = Duration::from_secs(20);
 
 /// Setup-Token und ausstehende TOTP-Geheimnisse (Plan W6).
 #[derive(Default)]
@@ -96,6 +133,11 @@ pub struct ServerState {
     pub db_gate: tokio::sync::RwLock<()>,
     /// Verschiebung der TOTP-Uhr in Sekunden (nur Tests).
     totp_clock_offset: AtomicI64,
+    /// Anmeldungen bzw. Einrichtungen über die Antwortzeit hinaus (W14-037).
+    pub pending_auth: PendingAuths,
+    /// Wartezeit der Anmelde-Route vor der Antwort 202 in ms
+    /// ([`super::pending::LOGIN_SYNC_WAIT`]; in Tests verkürzbar).
+    login_sync_wait_ms: AtomicU64,
 }
 
 impl ServerState {
@@ -127,6 +169,8 @@ impl ServerState {
             setup: Mutex::new(SetupState::default()),
             db_gate: tokio::sync::RwLock::new(()),
             totp_clock_offset: AtomicI64::new(0),
+            pending_auth: PendingAuths::default(),
+            login_sync_wait_ms: AtomicU64::new(super::pending::LOGIN_SYNC_WAIT.as_millis() as u64),
         })
     }
 
@@ -193,6 +237,24 @@ impl ServerState {
 
     pub fn set_pending_renew(&self, session: SessionId, secret: Vec<u8>) {
         self.setup_state().pending_renew = Some((session, secret));
+    }
+
+    /// Verwirft ein ausstehendes Geheimnis einer TOTP-Neueinrichtung
+    /// („Datenbank sperren“: die Sitzung ist beendet, W14-015).
+    pub fn clear_pending_renew(&self) {
+        self.setup_state().pending_renew = None;
+    }
+
+    /// Wartezeit der Anmelde-Route vor der Antwort 202 (W14-037).
+    pub fn login_sync_wait(&self) -> Duration {
+        Duration::from_millis(self.login_sync_wait_ms.load(Ordering::SeqCst))
+    }
+
+    /// Verkürzt die Wartezeit vor der Antwort 202 (nur Tests).
+    #[doc(hidden)]
+    pub fn set_login_sync_wait_for_tests(&self, wait: Duration) {
+        self.login_sync_wait_ms
+            .store(wait.as_millis() as u64, Ordering::SeqCst);
     }
 
     /// Ausstehendes Geheimnis einer TOTP-Neueinrichtung dieser Sitzung.
@@ -285,25 +347,50 @@ impl ServerState {
         });
     }
 
-    /// Nach dem Ende der Annahme-Schleife: abgekoppelte Tasks und Jobs
-    /// abwarten, Scheduler-Tick abwarten und anhalten, Pool schließen
-    /// (WAL-Checkpoint).
+    /// Nach dem Ende der Annahme-Schleife (W5-STOP-GRACE, W14-025b, ADR 0040):
+    /// zuerst den Scheduler anhalten (Abbruch-Anforderung — laufende Abo-Läufe
+    /// beenden ihren Termin, der Vollscan die Datei), dann gleichzeitig den
+    /// Tick ([`SCHEDULER_SHUTDOWN_WAIT`]) und abgekoppelte Tasks und Jobs
+    /// ([`JOB_DRAIN_TIMEOUT`]) abwarten, dann ein ausstehendes Lock-Backup
+    /// schreiben (Lauf F3c, Rest von [`SHUTDOWN_WORK_BUDGET`]), zuletzt den
+    /// Pool schließen (WAL-Checkpoint, [`POOL_CLOSE_WAIT`]). Alle Fristen
+    /// zusammen liegen unter der `stop_grace_period` des Compose-Beispiels.
     pub async fn finish_shutdown(&self) {
+        let started = std::time::Instant::now();
+        crate::scheduler::tick::request_stop(&self.ctx);
         self.tasks.close();
-        if tokio::time::timeout(JOB_DRAIN_TIMEOUT, self.tasks.wait())
-            .await
-            .is_err()
-        {
+        let (scheduler_stopped, tasks_done) = tokio::join!(
+            crate::scheduler::tick::stop_within(&self.ctx, SCHEDULER_SHUTDOWN_WAIT),
+            tokio::time::timeout(JOB_DRAIN_TIMEOUT, self.tasks.wait()),
+        );
+        if !scheduler_stopped {
             tracing::warn!(
-                "Herunterfahren: {} Task(s), davon {} Job(s), nach {} s noch aktiv",
+                "Herunterfahren: Scheduler-Tick nach {} s noch aktiv — wird abgebrochen",
+                SCHEDULER_SHUTDOWN_WAIT.as_secs()
+            );
+        }
+        if tasks_done.is_err() {
+            tracing::warn!(
+                "Herunterfahren: {} Task(s), davon {} Job(s), nach {} s noch aktiv — werden abgebrochen",
                 self.tasks.len(),
                 self.jobs.active(),
                 JOB_DRAIN_TIMEOUT.as_secs()
             );
         }
-        crate::scheduler::tick::stop(&self.ctx).await;
+        // Lauf F3c: ein ausstehendes Lock-Backup (auch eines, das ein eben
+        // beendeter Command angefordert hat) vor dem Schließen des Pools —
+        // im Rest von SHUTDOWN_WORK_BUDGET, mindestens SHUTDOWN_BACKUP_MIN.
+        let budget = SHUTDOWN_WORK_BUDGET
+            .saturating_sub(started.elapsed())
+            .max(SHUTDOWN_BACKUP_MIN);
+        crate::scheduler::tick::flush_pending_backup(&self.ctx, budget).await;
         if let Some(pool) = self.ctx.take_pool() {
-            pool.close().await;
+            if tokio::time::timeout(POOL_CLOSE_WAIT, pool.close())
+                .await
+                .is_err()
+            {
+                tracing::warn!("Herunterfahren: Pool schließt verzögert");
+            }
         }
         self.ctx.session.clear();
         self.sessions.clear();

@@ -9,14 +9,16 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::Router;
-use klein_buch_lib::app_ctx::{AppCtx, NoDesktop};
+use klein_buch_lib::app_ctx::AppCtx;
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::server::config::{ServerConfig, StartupOptions};
 use klein_buch_lib::server::policy::{HttpPolicy, PublicUrl};
 use klein_buch_lib::server::state::ServerState;
 use tower::ServiceExt as _;
 
-pub const PASS: &str = "korrekt-pferd-batterie-klammer";
+/// Passphrase der Test-Instanzen (darf nicht auf der Sperrliste stehen; das
+/// Beispiel der Anmelde-Maske steht dort, Lauf F4a).
+pub const PASS: &str = "tinte-gletscher-moped-ahorn";
 /// Öffentliche Adresse der Test-Instanz (Host-Header aller Test-Anfragen).
 pub const HOST: &str = "kb.example.org";
 pub const INDEX_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
@@ -25,7 +27,7 @@ pub const INDEX_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"
 /// Testvorlage mit §19-Marker (wie `cores_test.rs`).
 pub const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 #data.kleinunternehmer.hinweis_text
 "#;
@@ -55,12 +57,7 @@ pub fn prepare_dirs(root: &Path) -> Paths {
 }
 
 pub fn ctx_for(paths: Paths) -> Arc<AppCtx> {
-    Arc::new(AppCtx::new(
-        paths,
-        Arc::new(klein_buch_lib::notify::InboxOnly),
-        Arc::new(NoDesktop),
-        "test",
-    ))
+    Arc::new(AppCtx::new(paths, "test"))
 }
 
 pub fn local_config() -> ServerConfig {
@@ -94,12 +91,22 @@ pub fn test_server() -> TestServer {
 
 /// Wie [`test_server`], mit angepasster Konfiguration (z. B. Policy).
 pub fn test_server_with(adjust: impl FnOnce(&mut ServerConfig)) -> TestServer {
+    test_server_with_paths(|_| {}, adjust)
+}
+
+/// Wie [`test_server_with`], zusätzlich mit angepassten Pfaden (z. B. eine
+/// Wurzel der Backup-Ziele auf einem anderen Dateisystem, Lauf F3c).
+pub fn test_server_with_paths(
+    adjust_paths: impl FnOnce(&mut Paths),
+    adjust: impl FnOnce(&mut ServerConfig),
+) -> TestServer {
     // Einmal je Prozess: `set_var` neben laufenden Threads anderer Tests ist
     // riskant (glibc-Umgebung ohne Sperre für nativen Code).
     static MOCK_ENV: std::sync::Once = std::sync::Once::new();
     MOCK_ENV.call_once(|| std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1"));
     let dir = tempfile::tempdir().unwrap();
-    let paths = prepare_dirs(dir.path());
+    let mut paths = prepare_dirs(dir.path());
+    adjust_paths(&mut paths);
     let mut cfg = local_config();
     adjust(&mut cfg);
     let state = klein_buch_lib::server::prepare(ctx_for(paths), &cfg).unwrap();
@@ -269,6 +276,40 @@ pub fn next_totp(srv: &TestServer) -> String {
     )
 }
 
+/// Folgt einer Antwort 202 der Anmelde-Routen wie das Frontend (W14-037,
+/// Lauf F4a): holt das Ergebnis mit dem Ticket-Cookie ab, bis es fertig ist.
+/// Andere Antworten kommen unverändert zurück.
+pub async fn follow_pending(app: &Router, reply: Reply) -> Reply {
+    if reply.status != StatusCode::ACCEPTED {
+        return reply;
+    }
+    let ticket = reply
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|raw| {
+            raw.split(';')
+                .next()
+                .and_then(|c| c.strip_prefix("__Host-kb_login="))
+                .map(str::to_string)
+        })
+        .expect("202 ohne Ticket-Cookie");
+    for _ in 0..2400 {
+        let mut req = post("/api/auth/login/poll", "{}", None, None);
+        req.headers_mut().insert(
+            header::COOKIE,
+            format!("__Host-kb_login={ticket}").parse().unwrap(),
+        );
+        let r = send(app, req).await;
+        if r.status != StatusCode::ACCEPTED {
+            return r;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("Anmeldung nach 120 s nicht abgeschlossen");
+}
+
 /// Serialisiert die KDF-lastigen Abläufe (Einrichtung, Anmeldung, Re-Auth)
 /// innerhalb eines Test-Binaries: parallel im Debug-Build reißen Argon2 und
 /// PBKDF2 sonst den 30-s-Timeout der Auth-Routen.
@@ -276,6 +317,50 @@ static KDF_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub async fn kdf_serial() -> tokio::sync::MutexGuard<'static, ()> {
     KDF_SERIAL.lock().await
+}
+
+/// Lauf F4d (CI 23ede89): Wartet deterministisch auf das Ende ausstehender
+/// Lock-Backups, statt mit `sleep` auf den Hintergrund zu hoffen (ADR 0040
+/// Nr. 50/51: das Lock-Backup entsteht nach ~2 s Bündelung im geweckten
+/// Scheduler-Lauf). Wartet auf die Tick-Sperre (ein laufendes Backup endet
+/// zuerst) und legt ein noch vermerktes Backup unter derselben Sperre an —
+/// genau das, was der geweckte Lauf täte (Akteur `scheduler`); der spätere
+/// geweckte Lauf findet dann keinen Vermerk mehr und legt kein zweites an.
+/// Für Tests, die nach Festschreiben/Storno Backups zählen oder prüfen.
+pub async fn settle_lock_backups(srv: &TestServer) {
+    use std::sync::atomic::Ordering;
+    let ctx = &srv.state.ctx;
+    let pool = ctx.pool().expect("Instanz entsperrt");
+    // Argon2id des Backups; nicht parallel zu Anmeldungen anderer Tests.
+    let _serial = kdf_serial().await;
+    let run = async {
+        let _gate = ctx.scheduler_gate.lock().await;
+        assert!(
+            !ctx.scheduler_paused.load(Ordering::SeqCst)
+                && !ctx.scheduler_stop.load(Ordering::SeqCst),
+            "Scheduler pausiert — ein ausstehendes Lock-Backup entstünde nicht"
+        );
+        klein_buch_lib::db::repo::audit_log::with_actor(
+            klein_buch_lib::db::repo::audit_log::ACTOR_SCHEDULER,
+            klein_buch_lib::backup::requested_backup_now(
+                &pool,
+                &ctx.paths,
+                &ctx.session,
+                ctx.clock().now_utc(),
+            ),
+        )
+        .await
+        .expect("ausstehendes Lock-Backup");
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(120), run)
+        .await
+        .expect("ausstehendes Lock-Backup nach 120 s nicht fertig");
+    assert!(
+        !klein_buch_lib::backup::is_backup_pending(&pool)
+            .await
+            .unwrap(),
+        "Lock-Backup steht nach dem Abwarten noch aus"
+    );
 }
 
 /// Einrichtung (Setup-Token + TOTP + [`PASS`]); liefert die Antwort.
@@ -305,7 +390,7 @@ pub async fn setup_reply_with(srv: &TestServer, pass: &str) -> Reply {
         &secret,
         klein_buch_lib::server::totp::step_at(srv.state.totp_now()),
     );
-    send(
+    let reply = send(
         &srv.app,
         post(
             "/api/auth/setup",
@@ -315,7 +400,8 @@ pub async fn setup_reply_with(srv: &TestServer, pass: &str) -> Reply {
             None,
         ),
     )
-    .await
+    .await;
+    follow_pending(&srv.app, reply).await
 }
 
 /// Einrichtung; liefert den Sitzungs-Cookie.
@@ -361,7 +447,7 @@ pub async fn restart(srv: TestServer) -> TestServer {
 pub async fn login(srv: &TestServer, pass: &str) -> Reply {
     let _serial = kdf_serial().await;
     let code = next_totp(srv);
-    send(
+    let reply = send(
         &srv.app,
         post(
             "/api/auth/login",
@@ -370,7 +456,8 @@ pub async fn login(srv: &TestServer, pass: &str) -> Reply {
             None,
         ),
     )
-    .await
+    .await;
+    follow_pending(&srv.app, reply).await
 }
 
 /// Re-Auth der Sitzung (Passphrase + nächster TOTP-Code).

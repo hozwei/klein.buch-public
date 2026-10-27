@@ -1,4 +1,4 @@
-//! Tauri-Commands für Privatentnahmen / -einlagen (Block 9).
+//! Commands für Privatentnahmen / -einlagen (Block 9).
 //!
 //! Privatbewegungen sind EÜR-neutral (siehe domain::private_movement) und dienen
 //! nur der Vollständigkeit der Kasse. Erfassung schreibt sofort fest (Lock-Event
@@ -90,19 +90,21 @@ pub async fn private_movements_create(
         );
     }
     let paths = ctx.paths.clone();
-    let row = create_core(&pool, &paths, session, args).await?;
+    let row = create_core(&pool, &paths, session, args, ctx.clock().now_utc()).await?;
     if let Some(id) = upload_id.as_deref() {
         ctx.uploads.consume(id);
     }
     Ok(row)
 }
 
-/// Testbarer Kern von [`private_movements_create`] (ohne Tauri-State).
+/// Testbarer Kern von [`private_movements_create`] (ohne `AppCtx`).
+/// `now` (Backup-Vermerk) aus der Uhr des Aufrufers (D-20).
 pub async fn create_core(
     pool: &SqlitePool,
     paths: &Paths,
     session: &backup::BackupSession,
     args: PrivateMovementCreateArgs,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<PrivateMovementRow> {
     let input = args.input;
 
@@ -122,7 +124,7 @@ pub async fn create_core(
     ));
     // GJ-Festschreibung (Block 15): keine neue Privatbewegung mit Datum in einem
     // abgeschlossenen Geschäftsjahr.
-    crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+    let _fy = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     let movement_number =
         numbering::next_number(pool, DocType::PrivateMovement, fiscal_year as i32).await?;
 
@@ -160,14 +162,11 @@ pub async fn create_core(
         "private_movement.create",
         "private_movement",
         &row.id,
-        Some(&format!(
-            r#"{{"number":"{}","type":"{}","amount":{}}}"#,
-            row.movement_number, row.movement_type, row.amount_cents
-        )),
+        Some(serde_json::json!({ "number": row.movement_number, "type": row.movement_type, "amount": row.amount_cents })),
     )
     .await?;
 
-    backup::auto_backup_if_unlocked(pool, paths, session, "private_movement.lock")
+    backup::request_auto_backup(pool, paths, session, "private_movement.lock", now)
         .await
         .ok();
 

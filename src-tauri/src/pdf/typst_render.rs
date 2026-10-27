@@ -16,20 +16,21 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use chrono::Datelike;
+use chrono::{Datelike, Timelike};
 use serde_json::json;
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Dict, Str, Value};
-use typst::layout::PagedDocument;
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
-use typst::{Library, World};
+use typst::{Library, LibraryExt, World};
+use typst_layout::PagedDocument;
 
 use crate::domain::invoice::{compute_totals, BuyerView, InvoiceInput, SellerView};
 use crate::domain::kleinunternehmer::HINWEIS_TEXT;
 use crate::domain::package;
 use crate::domain::quote::{compute_totals as quote_compute_totals, QuoteItemInput};
+use crate::domain::storno::PrecedingInvoice;
 use crate::error::{Error, Result};
 
 #[derive(Debug, thiserror::Error)]
@@ -107,6 +108,39 @@ pub fn invoice_job(
     accounts: &serde_json::Value,
     service_date_fallback: bool,
 ) -> Result<PdfJob> {
+    invoice_job_with_storno(
+        template_source,
+        invoice_number,
+        input,
+        seller,
+        buyer,
+        branding_dir,
+        logo,
+        owner_name,
+        accounts,
+        service_date_fallback,
+        None,
+    )
+}
+
+/// Wie [`invoice_job`], für einen Storno-Beleg mit `data.invoice.storno_of =
+/// {number, date}` (Nummer und Rechnungsdatum der stornierten Rechnung). Die
+/// Vorlagen zeigen dann „Stornorechnung“ und „Storno zur Rechnung … vom …“ und
+/// keinen Überweisungshinweis (Lauf E).
+#[allow(clippy::too_many_arguments)]
+pub fn invoice_job_with_storno(
+    template_source: &str,
+    invoice_number: &str,
+    input: &InvoiceInput,
+    seller: &SellerView<'_>,
+    buyer: &BuyerView<'_>,
+    branding_dir: Option<&Path>,
+    logo: Option<(&str, &[u8])>,
+    owner_name: Option<&str>,
+    accounts: &serde_json::Value,
+    service_date_fallback: bool,
+    storno_of: Option<&PrecedingInvoice>,
+) -> Result<PdfJob> {
     let data = build_data_json(
         invoice_number,
         input,
@@ -117,6 +151,10 @@ pub fn invoice_job(
         accounts,
         service_date_fallback,
     )?;
+    let data = match storno_of {
+        Some(p) => with_storno_of(&data, p)?,
+        None => data,
+    };
     // PDF/A-3b erzwingen: Mustang's ZUGFeRDExporterFromPDFA liest die
     // PDF/A-Kennung aus den XMP-Metadaten. Ein Plain-PDF (keine Kennung)
     // wird mit "PDF-A version not supported" abgelehnt — auch mit
@@ -136,7 +174,7 @@ pub fn invoice_job(
 /// Renderiert ein **Angebot** als Standard-PDF (Block 8). Anders als die
 /// Rechnung läuft hier keine Mustang-/ZUGFeRD-Stufe (Angebote sind keine
 /// E-Rechnungen) — daher ein einfaches PDF (kein PDF/A-3b erzwungen). Das
-/// Template liest die Daten via `json.decode(sys.inputs.at("data-json"))` aus
+/// Template liest die Daten via `json(bytes(sys.inputs.at("data-json")))` aus
 /// dem `data.quote.*`-Schema (siehe Embedded-Template in
 /// [`crate::pdf::templates`]).
 #[allow(clippy::too_many_arguments)]
@@ -214,7 +252,7 @@ pub fn quote_job(
 /// Renderiert die **Anlage-EÜR-Übersicht** als Standard-PDF (Block 14a, Schritt 2).
 /// Reines Anzeige-/Archivdokument (kein PDF/A-3, keine E-Rechnung). Die Daten
 /// werden vom Caller fertig aufbereitet (Beträge als formatierte Strings) und via
-/// `json.decode(sys.inputs.at("data-json"))` ins EÜR-Template injiziert.
+/// `json(bytes(sys.inputs.at("data-json")))` ins EÜR-Template injiziert.
 pub fn render_euer(
     template_source: &str,
     data_json: &str,
@@ -224,7 +262,7 @@ pub fn render_euer(
 }
 
 /// Generisches Plain-PDF-Rendering aus einem Typst-Template + Daten-JSON
-/// (`json.decode(sys.inputs.at("data-json"))`). Für einfache Dokumente wie das
+/// (`json(bytes(sys.inputs.at("data-json")))`). Für einfache Dokumente wie das
 /// Steuerberater-Paket-Deckblatt (Block 14c).
 pub fn render_pdf(
     template_source: &str,
@@ -295,6 +333,28 @@ impl PdfJob {
         )
     }
 
+    /// Warnungen der Typst-Kompilation (Tests: veraltete Funktionen erkennen).
+    #[cfg(test)]
+    pub(crate) fn compile_warnings(&self) -> Vec<String> {
+        let embedded: Vec<(&str, &[u8])> = self
+            .embedded
+            .iter()
+            .map(|(p, b)| (p.as_str(), b.as_slice()))
+            .collect();
+        let world = TemplateWorld::new(
+            &self.template_source,
+            &self.data_json,
+            self.branding_dir.as_deref(),
+            &embedded,
+        )
+        .expect("world");
+        typst::compile::<PagedDocument>(&world)
+            .warnings
+            .iter()
+            .map(|w| w.message.to_string())
+            .collect()
+    }
+
     /// Kompiliert in `spawn_blocking` unter der Render-Semaphore.
     pub async fn compile_async(self) -> Result<Vec<u8>> {
         crate::limits::run_blocking(&crate::limits::RENDER, move || self.compile()).await
@@ -318,17 +378,27 @@ fn compile_pdf(
             .map(|d| d.message.to_string())
             .collect::<Vec<_>>()
             .join("; ");
-        PdfRenderError::Compile(msg)
+        PdfRenderError::Compile(with_upgrade_hint(msg))
     })?;
+    // Erstellungsdatum der PDF-Metadaten (UTC): PDF/A verlangt es seit Typst
+    // 0.14 („missing document date“), für die übrigen Dokumente ist es die
+    // übliche Angabe. Das Rechnungsbild bleibt unberührt (Lauf F6b).
+    let timestamp = pdf_timestamp();
     let options = if pdf_a3b {
-        let standards = typst_pdf::PdfStandards::new(&[typst_pdf::PdfStandard::A_3b])
-            .map_err(|e| PdfRenderError::Export(format!("PDF/A-3b-Standards-Setup: {e}")))?;
+        let standards =
+            typst_pdf::PdfStandards::new(&[typst_pdf::PdfStandard::A_3b]).map_err(|e| {
+                PdfRenderError::Export(format!("PDF/A-3b-Standards-Setup: {}", e.message()))
+            })?;
         typst_pdf::PdfOptions {
             standards,
+            timestamp,
             ..Default::default()
         }
     } else {
-        typst_pdf::PdfOptions::default()
+        typst_pdf::PdfOptions {
+            timestamp,
+            ..Default::default()
+        }
     };
     let pdf_bytes = typst_pdf::pdf(&document, &options).map_err(|errs| {
         let msg = errs
@@ -339,6 +409,19 @@ fn compile_pdf(
         PdfRenderError::Export(msg)
     })?;
     Ok(pdf_bytes)
+}
+
+/// Ergänzt Typst-Fehler, die auf eine mit Typst 0.15 entfernte Funktion in einer
+/// eigenen Vorlage hindeuten, um den Ersatz (Lauf F6b, ADR 0039 Nr. 139).
+fn with_upgrade_hint(msg: String) -> String {
+    if msg.contains("does not contain field `decode`") {
+        format!(
+            "{msg} — Hinweis: Die Vorlage nutzt `json.decode(…)`, das es seit Typst 0.15 \
+             nicht mehr gibt. Bitte `json(bytes(sys.inputs.at(\"data-json\")))` verwenden."
+        )
+    } else {
+        msg
+    }
 }
 
 /// Bequemer Wrapper, der das Default-Template aus dem inputs-Ordner lädt.
@@ -462,6 +545,21 @@ pub fn build_data_json(
         "payment_accounts": accounts.clone(),
     });
     serde_json::to_string(&data)
+}
+
+/// Ergänzt die Daten-JSON einer Rechnung um `invoice.storno_of`.
+fn with_storno_of(
+    data: &str,
+    p: &PrecedingInvoice,
+) -> std::result::Result<String, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_str(data)?;
+    if let Some(inv) = value.get_mut("invoice").and_then(|v| v.as_object_mut()) {
+        inv.insert(
+            "storno_of".into(),
+            json!({ "number": p.number, "date": p.issue_date.to_string() }),
+        );
+    }
+    serde_json::to_string(&value)
 }
 
 /// Eingabe für [`render_quote`] — analog [`InvoiceInput`], aber mit
@@ -728,6 +826,39 @@ fn load_branding_fonts(dir: &Path) -> Vec<Font> {
     fonts
 }
 
+/// Gesetzter Text (alle Text-Läufe aller Seiten) eines Plain-Dokuments — nur
+/// für Tests anderer Module (z. B. Datumsformat im EÜR-PDF, KB-0018).
+#[cfg(test)]
+pub(crate) fn laid_out_text(template_source: &str, data_json: &str) -> String {
+    fn collect(frame: &typst::layout::Frame, out: &mut String) {
+        for (_, item) in frame.items() {
+            match item {
+                typst::layout::FrameItem::Group(g) => collect(&g.frame, out),
+                typst::layout::FrameItem::Text(t) => out.push_str(&t.text),
+                _ => {}
+            }
+        }
+    }
+    let world = TemplateWorld::new(template_source, data_json, None, &[]).expect("world");
+    let warned = typst::compile::<PagedDocument>(&world);
+    // Lauf F6b: keine veralteten Typst-Funktionen in den geprüften Vorlagen.
+    let deprecated: Vec<_> = warned
+        .warnings
+        .iter()
+        .map(|w| w.message.to_string())
+        .filter(|m| m.contains("deprecated"))
+        .collect();
+    assert!(deprecated.is_empty(), "Typst-Warnungen: {deprecated:?}");
+    let document = warned
+        .output
+        .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
+    let mut text = String::new();
+    for page in document.pages() {
+        collect(&page.frame, &mut text);
+    }
+    text
+}
+
 struct TemplateWorld {
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,
@@ -755,20 +886,15 @@ impl TemplateWorld {
         inputs.insert(Str::from("data-json"), Value::Str(Str::from(data_json)));
         let library = Library::builder().with_inputs(inputs).build();
 
-        let main = FileId::new(None, VirtualPath::new(MAIN_VPATH));
+        let main = file_id(MAIN_VPATH)?;
         let source = Source::new(main, template_source.to_string());
 
         let today = today_de_local();
 
         let files = embedded
             .iter()
-            .map(|&(vpath, bytes)| {
-                (
-                    FileId::new(None, VirtualPath::new(vpath)),
-                    Bytes::new(bytes.to_vec()),
-                )
-            })
-            .collect();
+            .map(|&(vpath, bytes)| Ok((file_id(vpath)?, Bytes::new(bytes.to_vec()))))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             library: LazyHash::new(library),
@@ -780,6 +906,27 @@ impl TemplateWorld {
             files,
         })
     }
+}
+
+/// Datei-ID im Projekt-Wurzelverzeichnis der Vorlage (`/main.typ`, `/branding/…`).
+fn file_id(vpath: &str) -> Result<FileId> {
+    let path = VirtualPath::new(vpath)
+        .map_err(|_| PdfRenderError::Compile(format!("ungültiger Vorlagenpfad: {vpath}")))?;
+    Ok(RootedPath::new(VirtualRoot::Project, path).intern())
+}
+
+/// Erstellungszeitpunkt fürs PDF (UTC, über `crate::clock`).
+fn pdf_timestamp() -> Option<typst_pdf::Timestamp> {
+    let now = crate::clock::now_utc();
+    Datetime::from_ymd_hms(
+        now.year(),
+        now.month() as u8,
+        now.day() as u8,
+        now.hour() as u8,
+        now.minute() as u8,
+        now.second() as u8,
+    )
+    .map(typst_pdf::Timestamp::new_utc)
 }
 
 /// Typst-`datetime.today()` in Europe/Berlin (Plan W1.8).
@@ -803,7 +950,7 @@ impl World for TemplateWorld {
         if id == self.main {
             Ok(self.source.clone())
         } else {
-            Err(FileError::NotFound(id.vpath().as_rootless_path().into()))
+            Err(FileError::NotFound(id.vpath().get_without_slash().into()))
         }
     }
     fn file(&self, id: FileId) -> FileResult<Bytes> {
@@ -812,12 +959,12 @@ impl World for TemplateWorld {
                 return Ok(bytes.clone());
             }
         }
-        Err(FileError::NotFound(id.vpath().as_rootless_path().into()))
+        Err(FileError::NotFound(id.vpath().get_without_slash().into()))
     }
     fn font(&self, index: usize) -> Option<Font> {
         self.fonts.get(index).cloned()
     }
-    fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
+    fn today(&self, _offset: Option<typst::foundations::Duration>) -> Option<Datetime> {
         Some(self.today)
     }
 }
@@ -905,7 +1052,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Typst-Fehler für {src:?}: {e:?}"));
 
             let mut laid_out = String::new();
-            for page in &document.pages {
+            for page in document.pages() {
                 frame_text(&page.frame, &mut laid_out);
             }
             assert_eq!(without_whitespace(&laid_out), expected, "Satz: {src:?}");
@@ -917,14 +1064,14 @@ mod tests {
 
     fn seller() -> SellerView<'static> {
         SellerView {
-            name: "Wildbach Computerhilfe",
+            name: "Beispiel IT-Service",
             street: "Beispielweg 1",
             postal_code: "84028",
             city: "Landshut",
             country_code: "DE",
             tax_number: Some("123/456/78901"),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de",
+            email: "inhaber@example.org",
             phone: None,
             contact_name: None,
             iban: None,
@@ -942,7 +1089,7 @@ mod tests {
             city: Some("München"),
             country_code: "DE",
             vat_id: Some("DE111111111"),
-            email: Some("info@kunde.de"),
+            email: Some("info@kunde.example.org"),
         }
     }
 
@@ -1232,10 +1379,10 @@ mod tests {
             "isKleinunternehmer": true,
             "kleinunternehmerHinweis": "Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen.",
             "seller": {
-                "name": "Wildbach Computerhilfe", "street": "Weg 1",
+                "name": "Beispiel IT-Service", "street": "Weg 1",
                 "postalCode": "84028", "city": "Landshut",
                 "taxNumber": "123/456/7890", "vatId": serde_json::Value::Null,
-                "email": "schmidm@wildbach-computerhilfe.de",
+                "email": "inhaber@example.org",
             },
             "form": {
                 "lines": [
@@ -1324,7 +1471,7 @@ mod tests {
             &entries,
             &seller(),
             Some("Kunde GmbH"),
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             None,
             "2026-05-24",
         )
@@ -1350,7 +1497,7 @@ mod tests {
             &one,
             &seller(),
             None,
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             "2026-05-24",
             None,
             None,
@@ -1370,7 +1517,7 @@ mod tests {
             &many,
             &seller(),
             Some("Kunde GmbH"),
-            Some("Manuel Schmid"),
+            Some("Max Mustermann"),
             "2026-05-24",
             None,
             None,
@@ -1500,10 +1647,10 @@ mod tests {
             "expenseTotal": "4.000,00 €",
             "surplus": "6.000,00 €",
             "seller": {
-                "name": "Wildbach Computerhilfe", "street": "Weg 1",
+                "name": "Beispiel IT-Service", "street": "Weg 1",
                 "postalCode": "84028", "city": "Landshut",
                 "taxNumber": "123/456/7890", "vatId": serde_json::Value::Null,
-                "email": "a@b.de",
+                "email": "a@b.example.org",
             },
             "contents": [
                 "00-deckblatt.pdf — dieses Deckblatt",
@@ -1521,10 +1668,10 @@ mod tests {
     #[test]
     fn render_minimal_typst_produces_pdf_bytes() {
         // Minimales Template, das NICHT klausel_check bestehen muss (eigener Test).
-        // `json.decode()` für In-Memory-Strings; `json()` lädt vom Filesystem
-        // und würde den JSON-Inhalt als Pfad interpretieren.
+        // `json(bytes(..))` für In-Memory-Strings; `json("..")` allein lädt vom
+        // Filesystem und würde den JSON-Inhalt als Pfad interpretieren.
         let tpl = r#"
-            #let data = json.decode(sys.inputs.at("data-json"))
+            #let data = json(bytes(sys.inputs.at("data-json")))
             #set page(paper: "a4")
             = Test-Rechnung #data.invoice.number
             #data.invoice.is_kleinunternehmer
@@ -1562,8 +1709,8 @@ mod tests {
         };
         // Bank-Konto (IBAN) + PayPal → übt Fuß-Iteration, §19-Beträge, Zahlungshinweis.
         let accounts = serde_json::json!([
-            {"type":"bank","label":"Geschäftskonto","holder":"Manuel Schmid","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null},
-            {"type":"paypal","label":"PayPal","holder":"Manuel Schmid","iban":null,"bic":null,"details":"paypal.me/ich"}
+            {"type":"bank","label":"Geschäftskonto","holder":"Max Mustermann","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null},
+            {"type":"paypal","label":"PayPal","holder":"Max Mustermann","iban":null,"bic":null,"details":"paypal.me/ich"}
         ]);
         let regel = SellerView {
             is_kleinunternehmer: false,
@@ -1588,7 +1735,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1609,7 +1756,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1625,7 +1772,7 @@ mod tests {
                 &buyer(),
                 None,
                 None,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
                 true,
             )
@@ -1643,7 +1790,7 @@ mod tests {
                 None,
                 None,
                 true,
-                Some("Manuel Schmid"),
+                Some("Max Mustermann"),
                 &accounts,
             )
             .unwrap_or_else(|e| panic!("{name} Angebot §19: {e}"));
@@ -1681,5 +1828,120 @@ mod tests {
         )
         .expect("Angebot-Default Regel");
         ok(&pdf, "angebot-default Regel");
+    }
+
+    /// Lauf E: Storno-Belege tragen in allen vier Rechnungsvorlagen die
+    /// Überschrift „Stornorechnung“, den Bezug „Storno zur Rechnung <Nr> vom
+    /// <Datum>“ und „Stornobetrag“, aber keinen Überweisungshinweis; eine
+    /// normale Rechnung bleibt unverändert.
+    #[test]
+    fn storno_pdfs_show_title_reference_and_no_transfer_request() {
+        use crate::pdf::templates::{TEMPLATE_KLASSISCH, TEMPLATE_MINIMAL, TEMPLATE_MODERN};
+        let default_src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../inputs/pdf-templates/default.typ"
+        ))
+        .expect("default.typ");
+        let accounts = serde_json::json!([
+            {"type":"bank","label":"Geschäftskonto","holder":"Max Mustermann","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
+        ]);
+        let mut storno = invoice();
+        storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+        storno.items[0].unit_price_cents = -10_000;
+        let preceding = PrecedingInvoice {
+            number: "RE-2025-0042".into(),
+            issue_date: NaiveDate::from_ymd_opt(2025, 12, 10).unwrap(),
+        };
+        let laid_out = |tpl: &str, input: &InvoiceInput, p: Option<&PrecedingInvoice>| {
+            let job = invoice_job_with_storno(
+                tpl,
+                "ST-2026-0001",
+                input,
+                &seller(),
+                &buyer(),
+                None,
+                None,
+                Some("Max Mustermann"),
+                &accounts,
+                true,
+                p,
+            )
+            .unwrap();
+            let world = TemplateWorld::new(tpl, &job.data_json, None, &[]).unwrap();
+            let document = typst::compile::<PagedDocument>(&world)
+                .output
+                .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
+            let mut text = String::new();
+            for page in document.pages() {
+                frame_text(&page.frame, &mut text);
+            }
+            without_whitespace(&text)
+        };
+        for (name, tpl) in [
+            ("default", default_src.as_str()),
+            ("modern", TEMPLATE_MODERN),
+            ("klassisch", TEMPLATE_KLASSISCH),
+            ("minimal", TEMPLATE_MINIMAL),
+        ] {
+            let t = laid_out(tpl, &storno, Some(&preceding));
+            assert!(
+                t.contains("Stornorechnung") || t.contains("STORNORECHNUNG"),
+                "{name}: Überschrift"
+            );
+            assert!(
+                t.contains(&without_whitespace(
+                    "Storno zur Rechnung RE-2025-0042 vom 10.12.2025"
+                )),
+                "{name}: Bezug aufs Original"
+            );
+            assert!(t.contains("Stornobetrag:"), "{name}: Betragslabel");
+            assert!(
+                t.contains("DieserBelegstorniertdiegenannteRechnungvollständig."),
+                "{name}: Schlusssatz"
+            );
+            assert!(
+                !t.contains("VielenDank"),
+                "{name}: kein Dank für einen Auftrag"
+            );
+            assert!(
+                !t.contains("Bitteüberweisen"),
+                "{name}: kein Überweisungshinweis"
+            );
+            assert!(
+                t.contains(&without_whitespace(HINWEIS_TEXT)),
+                "{name}: §19-Hinweis auch auf dem Storno"
+            );
+
+            let normal = laid_out(tpl, &invoice(), None);
+            assert!(
+                !normal.contains("Storno"),
+                "{name}: normale Rechnung ohne Storno"
+            );
+            assert!(
+                normal.contains("Bitteüberweisen"),
+                "{name}: Überweisungshinweis"
+            );
+        }
+    }
+
+    /// Lauf F6b (LE-TYPST): Eine eigene Vorlage aus der Zeit vor Typst 0.15 mit
+    /// `json.decode` scheitert mit einem Hinweis auf den Ersatz statt nur mit der
+    /// Typst-Meldung; dieselbe Vorlage mit `json(bytes(..))` rendert.
+    #[test]
+    fn legacy_json_decode_template_fails_with_upgrade_hint() {
+        let legacy = "#let data = json.decode(sys.inputs.at(\"data-json\"))\n= #data.title";
+        let err = render_pdf(legacy, r#"{"title":"Test"}"#, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("json.decode"), "{msg}");
+        assert!(
+            msg.contains("json(bytes(sys.inputs.at(\"data-json\")))"),
+            "{msg}"
+        );
+        let current = legacy.replace(
+            "json.decode(sys.inputs.at(\"data-json\"))",
+            "json(bytes(sys.inputs.at(\"data-json\")))",
+        );
+        let pdf = render_pdf(&current, r#"{"title":"Test"}"#, None).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
     }
 }

@@ -6,10 +6,10 @@
 > in `klein-buch/src-tauri/migrations/*.sql` und sind die kanonische Quelle —
 > diese Doku ist die navigationsfreundliche Sicht darauf.
 
-**Schema-Stand: v31.** Migrationen 0001–0031, forward-only. Schema-Version
-liegt in `app_settings.schema_version`; geprüft wird beim Entsperren gegen
-`EXPECTED_SCHEMA_VERSION` (31) — eine neuere DB lässt sich nicht entsperren
-(Down-Migration-Schutz, §4).
+**Schema-Stand: v32.** Migrationen 0001–0032, forward-only; nächste freie
+Migration 0033. Schema-Version liegt in `app_settings.schema_version`; geprüft
+wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (32) — eine neuere DB
+lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 
 **Globale Konventionen** (ADR 0003):
 
@@ -17,6 +17,16 @@ liegt in `app_settings.schema_version`; geprüft wird beim Entsperren gegen
 - **`PRAGMA foreign_keys = ON`** für jeden Pool.
 - **UUIDv7-PKs** als `TEXT` (kanonische 36-Zeichen-Form, zeitlich sortierbar).
 - **Geld als Integer-Cents** (`INTEGER NOT NULL`). Niemals `REAL` für Beträge.
+  Gerechnet wird in `i64` (`domain::money`). Einzige dokumentierte Ausnahme:
+  `Menge × Einzelpreis` und `Netto × Satz` laufen über `f64` mit einmaliger
+  kaufmännischer Rundung je Position bzw. Steuergruppe — die Menge ist kein
+  Geldbetrag (höchstens 4 Nachkommastellen, wie CII sie überträgt), bis 2^53
+  Cent ist das Produkt exakt. AfA, betrieblicher Anteil und Fehlertexte sind
+  ganzzahlig (ADR 0039 Nr. 134, R1-S2-FLOAT). Die USt eines Belegs entsteht je
+  (Steuerart, Satz) aus der Nettosumme (EN 16931 BR-CO-17). Grenzen: Menge
+  ≤ 1 000 000, Einzelpreis (Betrag) ≤ 1 Mrd. €, Satz ≤ 100 %, Summen geprüft;
+  jeder einzeln erfasste Betrag (Kosten, Zahlung, Anschaffung, Abgangserlös,
+  Privatbewegung, Kosten-Abo) ≤ 1 Mrd. € (ADR 0039 Nr. 137).
 - **Datum/Zeit als ISO-8601-`TEXT`** (`YYYY-MM-DD` bzw. `YYYY-MM-DDTHH:MM:SS`).
 - **Booleans als `INTEGER NOT NULL CHECK (… IN (0,1))`**.
 - **Forward-only-Migrationen** mit aufsteigender Nummer; Down-Migrations
@@ -59,6 +69,7 @@ liegt in `app_settings.schema_version`; geprüft wird beim Entsperren gegen
 | 0029 | `0029_drop_folder.sql` | Drop-Folder-Settings (`drop_folder_enabled`, `drop_folder_path`) + Notification-Regeln `rule_drop_folder_import_ok` (default off, Inbox-only) und `rule_drop_folder_import_failed` (default on, Inbox + OS-Toast) — ADR 0037. Im Server ohne Wirkung: Drop-Folder entfallen (E11, Code entfernt in W11), OS-Benachrichtigungen gibt es nicht; die Zeilen bleiben (forward-only). |
 | 0030 | `0030_rename_drop_folder_labels.sql` | UI-Label-Update auf den Notification-Regeln aus 0029 (Block PV1-RENAME): „Drop-Folder: …" → „Rechnungs-Eingang: …" (CLAUDE.md-UI-Sprachregel, Plain-Language-Hardline). Code-Identifier (rule_id, Settings-Keys, Route, Module) bleiben englisch. Im Server wie 0029 ohne Wirkung. |
 | 0031 | `0031_secrets.sql` | `secrets` (STRICT) — Zugangsdaten in der verschlüsselten DB statt im OS-Keychain (Plan W8, ADR 0039 E6, Amendment ADR 0011/0028): Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie im Migrations- oder DSGVO-Export, nie in Log oder Audit |
+| 0032 | `0032_gobd_hardening.sql` | GoBD- und Schema-Absicherungen (Lauf F, Block F2a; ADR 0039 Nr. 124): Unique-Index `ux_invoices_one_locked_storno` (höchstens ein festgeschriebener Storno je Original; Vorab-Prüfung bricht bei Bestandsduplikaten mit klarer Meldung ab), `invoices.voided_at`/`void_reason` (Entwurf verwerfen ohne Löschen), `archive_integrity_checks.files_missing`/`files_unreadable`/`missing_archive_ids_json`/`unreadable_archive_ids_json`, Trigger für Positionen festgeschriebener Belege, Archiv ohne DELETE, endgültigen Storno, zurückgezogene Angebote, verworfene Entwürfe und den Anlagen-Abgang, Partial Unique Index `uq_payment_accounts_default` (Bestand mit Audit bereinigt), Seed `rule_recurring_due` |
 
 **Down-Migrations gibt es nicht.** Wer eine Migration „rückgängig" braucht,
 muss eine neue, höher nummerierte Migration schreiben, die den Zustand
@@ -102,12 +113,15 @@ oder Benutzer, verfällt das gespeicherte Passwort (Amendment ADR 0011).
 **`invoices`** — Ausgangsrechnungen. Felder: `id`, `invoice_number`
 (`RE-{YYYY}-{NNNN}` oder `ST-…` für Storno), `date`, `delivery_date`,
 `contact_id`, `is_kleinunternehmer`, `direction` (`outgoing`/`incoming`),
-`fiscal_year`, `status` (`draft`/`issued`/`sent`/`canceled`), `is_storno_for`
-(FK, NULL bei Original), `derived_from_quote_id`, `subtotal_cents`,
+`fiscal_year` (Jahr des Belegdatums, auch beim Storno — ADR 0039 Nr. 122), `status`
+(`draft`/`issued`/`sent`/`canceled`), `is_storno_for` (FK, NULL bei Original;
+höchstens ein festgeschriebener Storno je Original, Migration 0032), `derived_from_quote_id`, `subtotal_cents`,
 `tax_amount_cents`, `total_cents`, `paid_amount_cents`, `paid_at`, `sent_at`,
 `canceled_at`, `locked_at`, `pdf_archive_id`, `xml_archive_id`, Buyer-Snapshot
 (`buyer_name`, `buyer_address_*`, `buyer_tax_number`, `buyer_vat_id`, …),
-`payment_account_id`, `payment_note`.
+`payment_account_id`, `payment_note`, `voided_at`/`void_reason` (Migration
+0032: verworfener Entwurf — `status` bleibt `draft`, die Nummer bleibt
+verbraucht, danach unveränderlich; kein DELETE).
 
 **`invoice_items`** — Rechnungs-Positionen. Felder: `id`, `invoice_id`,
 `position`, `description`, `description_title`, `quantity_thousandths`,
@@ -117,6 +131,11 @@ oder Benutzer, verfällt das gespeicherte Passwort (Amendment ADR 0011).
 
 **`quotes`** + **`quote_items`** — analog zu Rechnungen, eigener Belegkreis
 `AN-…`, eigener Lifecycle (`draft → sent → accepted → converted`/`rejected`/`canceled`).
+Ein zurückgezogener Entwurf (`canceled`, `locked_at` NULL) gilt als verworfen;
+`canceled` ist endgültig (Migration 0032). Die Angebotsliste liefert dafür
+`locked_at` mit (§2g). Der Status `sent` bedeutet festgeschrieben, nicht
+versendet; die Oberfläche nennt ihn „Fertiggestellt“ und liest den Versand aus
+`email_log` (ADR 0041 Nr. 170).
 
 **`expenses`** — Kosten (Eingangsseite). Felder: `id`, `expense_number`,
 `date`, `paid_date`, `category` (z. B. `office`, `travel`, `equipment`,
@@ -181,21 +200,32 @@ GoBD-relevanten Nachweise „welche Version ging an welches Angebot".
 
 ### 2e. Protokolle (append-only)
 
-**`audit_log`** — Generische Audit-Ereignisse. Felder: `id`, `at`, `actor`
-(meist `system` oder Command-Name), `event` (z. B. `invoice.issued`,
-`expense.created`, `archive.integrity_tamper`, `dsgvo.export`), `target_type`,
-`target_id`, `details` (JSON). **Trigger:** `trg_audit_no_update`,
-`trg_audit_no_delete`. Diese Tabelle ist die mit Abstand am häufigsten
-geschriebene; **niemals** Passphrase oder Token im `details`.
+**`audit_log`** — Generische Audit-Ereignisse. Felder: `id`, `timestamp_utc`,
+`actor` (Lauf F: `owner` für Aufrufe über die Sitzung des Inhabers,
+`scheduler` für Abläufe des Schedulers, `system` für Start, Migrationen und
+Restore-Nacharbeit; ältere Einträge tragen durchweg `system`), `action` (z. B.
+`invoice.lock`, `expense.create`, `archive.integrity_fail`, `dsgvo.export`,
+`euer.pdf_export`), `entity_type`, `entity_id`, `details_json` (JSON, seit
+Lauf F immer per `serde_json` serialisiert). **Trigger:**
+`trg_audit_no_update`, `trg_audit_no_delete`. Diese Tabelle ist die mit
+Abstand am häufigsten geschriebene; **niemals** Passphrase oder Token in
+`details_json`.
 
 **`fiscal_year_locks`** — EÜR-Snapshot pro abgeschlossenes Jahr. Felder:
-`fiscal_year`, `closed_at`, `snapshot_json` (komplette aggregate EÜR zum
-Zeitpunkt des Abschlusses). **Trigger:**
+`fiscal_year`, `closed_at`, `income_total_cents`, `expense_total_cents`,
+`afa_total_cents`, `surplus_cents`, `assets_locked`,
+`depreciation_entries_locked`, `app_version`, `schema_version`, `notes`.
+Auswertungen und Exporte abgeschlossener Jahre gleichen die live gerechneten
+Eckwerte damit ab (Lauf F, KB-0031, `gobd.md` §6.1); die EÜR-Ansicht zeigt den
+Abgleich als Lesefeld `snapshotCheck` (§2g). **Trigger:**
 `trg_fiscal_year_locks_no_update`/`_no_delete`.
 
-**`email_log`** — Versand-Protokoll. Felder: `id`, `sent_at`, `mail_account_id`,
-`recipient`, `subject`, `attachment_archive_ids` (JSON-Array), `status`
-(`ok`/`failed`), `provider_response` (kanonisiert). **Trigger:**
+**`email_log`** — Versand-Protokoll. Felder: `id`, `created_at`, `account_id`,
+`account_label`, `channel`, `related_kind` (`invoice`/`quote`/`test`/
+`package_catalog`), `related_id` (Rechnung bzw. Angebot; beim Katalogversand
+seit Lauf F der Kontakt, KB-0049), `related_number`, `from_email`, `to_email`,
+`subject`, `attachment_count`, `status` (`success`/`failed`), `provider_code`,
+`provider_message`, `request_id`, `error`. **Trigger:**
 `trg_email_log_no_update`/`_no_delete`.
 
 **`backup_log`** (G1-LOG, Migration 0026) — Backup-Protokoll, eine Zeile je
@@ -205,7 +235,8 @@ Lauf und Ablage (Erfolg und Fehlschlag). Felder: `id`, `created_at`,
 SFTP-Host), `file_name`, `full_path` (voller Pfad bzw. `sftp://`-URI),
 `size_bytes`, `status` (`ok`/`failed`), `detail` (Fehlertext bei `failed`).
 **Trigger:** `trg_backup_log_no_update`/`_no_delete`. **Niemals** die
-Passphrase.
+Passphrase. Aus `backup_log` stammt die letzte gute Kopie eines Ziels, dessen
+letzter Lauf scheiterte (Lesefeld `offsiteLastCopyAt`, §2g).
 
 ### 2f. Infrastruktur
 
@@ -217,6 +248,14 @@ Hash der Passphrase), `backup_targets` (JSON-Liste der Off-Site-Ziele, W7),
 `backup_offsite_results` (Ergebnis je Ziel für den Status `offsite`),
 `update_check_enabled`/`update_check_last_at` (opt-in Versionsprüfung, W12),
 `invoice_due_days`, `quote_valid_days`, `travel_cost_per_km_cents`.
+Dauerbetrieb (Lauf F, ADR 0040, ohne Migration): `scheduler_hold`/
+`scheduler_hold_since` (Pause der automatischen Belegerzeugung, Grund
+`clock_backwards`/`clock_jump`/`restore`), `scheduler_last_seen_at`
+(Uhr-Bremse), `recurring_invoice_pending:<vorlage>` (Fortsetzungs-Marker einer
+Abo-Rechnung), `backup_daily_time`/`backup_daily_last_on`/
+`backup_daily_last_failure_at` (kalenderfestes Tages-Backup),
+`integrity_last_failure_at` und `depreciation_auto_last_failure_at` (Backoff),
+`payment_accounts_defaults_seeded` (Standardkonten einmal je Instanz).
 `drop_folder_enabled`/`drop_folder_path` (Migration 0029) bleiben aus der
 Desktop-Fassung stehen, werden im Server aber nicht mehr gelesen (E11).
 Zugangsdaten stehen **nicht** hier, sondern in `secrets`.
@@ -235,9 +274,12 @@ DSGVO-Export ausgenommen. Lesen und Schreiben nur über `crate::secrets`.
 unveränderlich).
 
 **`archive_integrity_checks`** — Re-Hash-Läufe. Felder: `id`, `started_at`,
-`finished_at`, `files_total`, `files_ok`, `files_failed`, `files_missing`
-(G1-HARDEN.4: getrennt von `files_failed`), `missing_archive_ids` (JSON),
-`tamper_archive_ids` (JSON).
+`finished_at`, `files_checked`, `files_passed`, `files_failed` (Manipulation +
+fehlende Dateien), `failed_archive_ids_json`; seit Migration 0032 zusätzlich
+`files_missing` (Teilmenge von `files_failed`), `files_unreadable`
+(vorhanden, aber nicht lesbar — kein Manipulationsbefund),
+`missing_archive_ids_json`, `unreadable_archive_ids_json` (JSON-Listen per
+`serde_json`). Bei Läufen vor 0032 sind die neuen Spalten NULL (nicht erfasst).
 
 **`backup_history`** (Migration 0001) — Bestand der vorhandenen
 Backup-Dateien, eine Zeile je erfolgreich geschriebener Datei (Floor und jedes
@@ -260,9 +302,34 @@ keine Race-Conditions.
 `category`, `title`, `body`, `severity`, `dismissed_at`, `target_route` (für
 Deeplink).
 
-**`notification_rules`** — Schaltbare Regel-Engine. Felder: `key`
-(z. B. `backup_overdue`, `rule_backup_result`, `recurring_due_soon`,
-`integrity_warning`), `is_enabled`, `threshold_days`.
+**`notification_rules`** — Schaltbare Regel-Engine. Felder: `id`
+(z. B. `rule_backup_overdue`, `rule_backup_result`, `rule_recurring_due` —
+Kosten-Abo im Modus „Erinnerung“ fällig, Migration 0032), `rule_type`, `label`,
+`enabled`, `config_json`, `deliver_in_app`, `deliver_os_native` (ohne Wirkung).
+
+**`payment_accounts`** — höchstens ein Konto mit `is_default = 1`
+(`uq_payment_accounts_default`, Migration 0032); ein inaktives Konto ist nie
+Standard (`ensure_one_default`).
+
+### 2g. Abgeleitete Lesefelder (Lauf 2026.11, ohne Migration)
+
+Für die Oberfläche liefern einige Lese-Commands Felder, die keine eigene Spalte
+haben, sondern aus bestehenden Daten abgeleitet werden (ADR 0041 Nr. 80–86).
+Schema und Schreibwege bleiben unverändert (Schema v32).
+
+| Feld (Frontend-Typ) | Command | Quelle | ADR 0041 |
+|---|---|---|---|
+| `QuoteListItem.lockedAt` | `quotes_list` | `quotes.locked_at`: `canceled` ohne Wert = verworfener Entwurf, mit Wert = zurückgezogenes Angebot | Nr. 83 |
+| `PdfTemplateMeta.supportsStorno`, `stornoFallback` | `pdf_templates_list` | Quelltext der Vorlage (nutzt sie `storno_of`?) bzw. die eingebaute Ersatzvorlage, mit der Stornos entstehen | Nr. 84 |
+| `OffsiteResult.suspended` | `backup_create_now` | Pause nach einem Restore bis zur Freigabe: Spiegelung ausgesetzt, kein Fehlschlag (`error` nennt dann den Grund) | Nr. 85 |
+| `BackupSettings.offsiteLastCopyAt`, `offsiteAgeDays` | `backup_get_settings` | älteste der je Ziel jüngsten Kopien: letztes Ergebnis je Ziel (`app_settings.backup_offsite_results`), war es ein Fehlschlag, der jüngste erfolgreiche Eintrag in `backup_log`; Alter in Berliner Kalendertagen wie der Status `stale` | Nr. 86 |
+| `EuerReport.isKleinunternehmer`, `snapshotCheck` | `euer_compute_report` | `seller_profile` (§19 je Jahr, Verzicht berücksichtigt) bzw. `fiscal_year_locks` (Abgleich, `null` bei offenem Jahr); ohne Audit und Hinweis | Nr. 80 |
+| `ParsedEInvoice.taxCategories`, `intraCommunity` | `expenses_parse_einvoice` | Steuerkategorien der eingelesenen Rechnung (UNTDID 5305), Kennzeichen für Kategorie K; nicht gespeichert, nur Hinweis | Nr. 82 |
+| `AssetDisposalPreview` (neuer Command) | `assets_disposal_preview` | `assets` und `depreciation_entries` über `plan_disposal`, ohne zu buchen; `blockedReason` mit den Texten von `assets_dispose` | Nr. 81 |
+
+Berater- und Mandantennummer für den DATEV-Export stehen nicht in der Datenbank:
+Die Oberfläche merkt sie im Browser (`localStorage`) und übergibt sie je Export
+(ADR 0041 Nr. 113).
 
 ---
 
@@ -277,11 +344,24 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_audit_no_update` | `audit_log` | UPDATE verboten |
 | `trg_audit_no_delete` | `audit_log` | DELETE verboten |
 | `trg_archive_no_update` | `archive_entries` | UPDATE auf `hash`/`path`/`size` verboten |
+| `trg_archive_no_delete` | `archive_entries` | DELETE verboten (0032, KB-0004) |
 | `trg_invoices_immutable` | `invoices` | nach `locked_at`: UPDATE auf Kernfelder verboten (`invoice_number`, `date`, Beträge, `contact_id`, `fiscal_year`, `is_kleinunternehmer`, `direction`). Erlaubt: State-Transitions (`status`, `paid_*`, `sent_*`, `canceled_*`, `notes`, `archive_ids`). |
+| `trg_invoices_no_delete` | `invoices` | DELETE verboten (0028) |
+| `trg_invoices_voided_final` | `invoices` | verworfener Entwurf: jede Änderung verboten, auch das Festschreiben; einzige Ausnahme: Anonymisierung des Kontakts setzt `buyer_*` (außer Land) und `notes` auf Platzhalter bzw. `NULL` (0032, F2c) |
+| `trg_invoices_void_draft_only` | `invoices` | `voided_at` nur auf offenen Entwürfen, nur mit Grund, nie zugleich mit `locked_at` (0032) |
+| `trg_invoices_void_not_on_insert` | `invoices` | INSERT mit `voided_at`/`void_reason` verboten (0032) |
+| `trg_invoices_canceled_final` | `invoices` | `status = 'canceled'` endgültig; `canceled_at`, `canceled_by_storno_id`, `cancel_reason` unveränderlich (0032) |
+| `trg_invoice_items_frozen_insert`/`_update`/`_delete` | `invoice_items` | Positionen festgeschriebener oder verworfener Rechnungen unveränderlich (0032, KB-0002) |
 | `trg_quotes_immutable` | `quotes` | nach `locked_at`: analog zu Invoices |
+| `trg_quotes_no_delete` | `quotes` | DELETE verboten (0028) |
+| `trg_quotes_canceled_final` | `quotes` | zurückgezogen bleibt zurückgezogen (`status`, `locked_at`, `canceled_*`) (0032) |
+| `trg_quotes_converted_final` | `quotes` | umgewandelt bleibt umgewandelt (Status, `converted_*`); Rücknahme auf `accepted` nur, wenn der Rechnungs-Entwurf verworfen ist (0032, F2c) |
+| `trg_quote_items_frozen_insert`/`_update`/`_delete` | `quote_items` | Positionen festgeschriebener oder zurückgezogener Angebote unveränderlich (0032, KB-0002) |
 | `trg_expenses_immutable` | `expenses` | nach `locked_at`: UPDATE auf Kernfelder verboten (Kosten sind sofort gelockt) |
 | `trg_private_movements_immutable` | `private_movements` | UPDATE auf Kernfelder verboten (sofort immutable) |
 | `trg_assets_immutable` | `assets` | nach `locked_after_year`-Setzung (GJ-Lock): UPDATE auf Kernfelder verboten |
+| `trg_assets_disposal_final` | `assets` | nach der Veräußerung (`disposed = 1`): `disposed`, `disposal_*`, Bezeichnung, Anschaffung, AfA-Grundlage und Restbuchwert unveränderlich (0032, F2c) |
+| `trg_depreciation_entries_no_delete_disposed` | `depreciation_entries` | AfA-Buchungen einer veräußerten Anlage nicht löschbar (0032, F2c) |
 | `trg_depreciation_immutable` | `depreciation_entries` | nach `is_locked=1`: UPDATE verboten |
 | `trg_fiscal_year_locks_no_update`/`_no_delete` | `fiscal_year_locks` | append-only |
 | `trg_legal_documents_immutable` | `legal_documents` | UPDATE auf Kernfelder verboten (Versionierung statt Update) |
@@ -290,6 +370,12 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_package_revisions_immutable`/`_no_delete` | `package_revisions` | append-only Revisionen |
 | `trg_email_log_no_update`/`_no_delete` | `email_log` | append-only |
 | `trg_backup_log_no_update`/`_no_delete` | `backup_log` | append-only |
+
+**Indizes mit Hardline-Wirkung (0032):** `ux_invoices_one_locked_storno`
+(`invoices(is_storno_for) WHERE is_storno_for IS NOT NULL AND locked_at IS NOT
+NULL`), `uq_payment_accounts_default` (`payment_accounts(is_default) WHERE
+is_default = 1`). Tests: `tests/migration_0028_test.rs`,
+`tests/migration_0032_test.rs`.
 
 **Reason-Mapping.** `backup::db_trigger_reason` (privat in `backup/mod.rs`)
 bildet die Auslöser-Labels der Lock-Events auf die vom CHECK erlaubten Werte
@@ -305,16 +391,33 @@ Jede Migration setzt die `app_settings.schema_version`-Zeile auf ihre Nummer.
 Geprüft wird beim **Entsperren** (`server::auth`, `commands::backup::
 migrate_with_backup`), nicht beim Prozessstart — vorher ist die DB zu:
 
-- **DB-Version < EXPECTED:** zuerst ein Pflicht-Backup (`manual`) mit der
+- **DB-Version < EXPECTED:** zuerst die Vorab-Prüfung
+  `db::precheck_before_migration` (Fremdschlüssel per `PRAGMA
+  foreign_key_check`, für Schema < 32 auch doppelte festgeschriebene Stornos;
+  Lauf F2c): ein Altfehler lehnt mit 409 `db_integrity_failed` ab, solange die
+  DB unverändert auf dem alten Schema steht — das vorige Image öffnet sie
+  weiter. Dann ein Pflicht-Backup (`manual`) mit der
   alten Version, vollständig gelesen und geprüft, Audit `backup.pre_migration`
   (ADR 0039 E15, W7). Scheitert es, wird nicht migriert und die Instanz bleibt
   gesperrt (409 `pre_migration_backup_failed`). Danach läuft
   `db::run_migrations` (`sqlx::migrate!`) die fehlenden Migrationen.
+- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 32): `db::run_migrations`
+  lehnt vor dem Migrations-Runner mit `Error::SchemaMismatch` und dem Hinweis
+  auf das Image der passenden Version ab, kein Entsperren (ein älteres Programm
+  liest keine neuere DB — unklar, welche neuen Constraints existieren; Lauf F).
 - **Danach** vergleicht `db::schema_version::check_compatible` den Stand mit
-  dem einkompilierten `EXPECTED_SCHEMA_VERSION` (31). **DB-Version >
-  EXPECTED** ⇒ `Error::SchemaMismatch` mit Update-Hinweis, kein Entsperren
-  (alte App liest neue DB — verboten, weil unklar, welche neuen Constraints
-  existieren).
+  dem einkompilierten `EXPECTED_SCHEMA_VERSION`, und
+  `db::foreign_key_violations` prüft die ganze DB erneut mit `PRAGMA
+  foreign_key_check` (R1-012). Ein verletzter Fremdschlüssel oder eine
+  gescheiterte Vorab-Prüfung einer Migration (benannter CHECK „Migration 00NN
+  abgebrochen: …“, z. B. 0032, zweite Linie hinter der Rust-Vorabprüfung)
+  blockiert das Entsperren mit 409 `db_integrity_failed`; Einzelheiten
+  (Tabelle, rowid, Zieltabelle, keine Inhalte) stehen im Server-Log. Ohne
+  Umstellung sind die Daten unangetastet; schlägt die Prüfung erst **nach**
+  einer gespeicherten Umstellung an (ein Fehler der Migration selbst), sagt
+  die Meldung das („nach der Umstellung“) und nennt den Rückweg über das
+  Pflicht-Backup in einer neuen Instanz mit dem vorigen Image (Handbuch
+  „Fehlersuche im Container“).
 - **Restore** nimmt Backups mit `MIN_RESTORE_SCHEMA_VERSION` (30) ≤ Schema ≤
   EXPECTED an und migriert sie beim nächsten Entsperren vorwärts.
 
@@ -344,6 +447,18 @@ FKs gibt es für Stammdaten-Beziehungen (`contact_id`, `payment_account_id`,
 am FK; gelöscht wird ohnehin selten — DSGVO-Anonymisierung ist ein **UPDATE
 auf NULL**, keine Löschung des Datensatzes.
 
+**`ON DELETE CASCADE`** steht im Schema an genau drei Stellen (R1-S2-ONDELETE,
+dokumentiert in Lauf F7):
+
+| Fremdschlüssel | Migration | Wirkung |
+|---|---|---|
+| `invoice_items.invoice_id → invoices(id)` | 0001 | tot: `trg_invoices_no_delete` (0028) verbietet jedes DELETE auf `invoices`, die Kaskade kann nie auslösen. Positionen eines Entwurfs ersetzt der Repo-Layer per DELETE auf `invoice_items` selbst; bei festgeschriebenen oder verworfenen Rechnungen sperren das `trg_invoice_items_frozen_*` (0032). |
+| `quote_items.quote_id → quotes(id)` | 0005 | tot: `trg_quotes_no_delete` (0028); Positionen festgeschriebener Angebote schützt `trg_quote_items_frozen_*` (0032). |
+| `recurring_invoice_items.recurring_invoice_id → recurring_invoices(id)` | 0024 | gewollt: Positionen einer Abo-**Vorlage** sind kein Beleg und gehören nur zu ihrer Vorlage. Derzeit löscht kein Code eine Vorlage (Pausieren bzw. Laufzeit-Ende über `active` und `end_date`); käme ein Löschen dazu, gingen die Vorlagen-Positionen mit. Die daraus erzeugten Rechnungen sind eigenständige Kopien und hängen nicht an der Vorlage. |
+
+Neue Kaskaden auf Beleg-Tabellen sind nicht zulässig (GoBD: Storno statt
+Löschung); neue Fremdschlüssel bekommen das Standardverhalten (DELETE scheitert).
+
 ---
 
 ## 6. Sensible Felder — was steht nirgends drin
@@ -367,12 +482,13 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13), Schema v31. Quelle:
-`klein-buch/src-tauri/migrations/0001..0031.sql`,
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). Quelle:
+`klein-buch/src-tauri/migrations/0001..0032.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
-`src/commands/{mail,backup}.rs`. Gegen den Code geprüft: Migrations-Liste,
-`mail_accounts`, `app_settings`, `secrets`, `backup_log`, `backup_history`,
-§4 und §6. Die übrigen Feldlisten in §2 stammen vom Stand 2026-05-27 und sind
+`src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:
+Migrations-Liste, `mail_accounts`, `app_settings`, `secrets`, `backup_log`,
+`backup_history`, `archive_integrity_checks`, `notification_rules`, die
+Trigger-Übersicht (§3), §4 und §6. Die übrigen Feldlisten in §2 stammen vom Stand 2026-05-27 und sind
 nicht neu abgeglichen; maßgeblich sind die Migrationen. Bei
 Schema-Erweiterungen diese Datei in der entsprechenden Sektion ergänzen und
 die Migrations-Tabelle verlängern.

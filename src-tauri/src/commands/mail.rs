@@ -1,5 +1,4 @@
-//! Tauri-Commands für den Mail-Versand (Block 5, SMTP) und später OAuth
-//! (Block 16).
+//! Commands für den Mail-Versand (Block 5, SMTP).
 //!
 //! Orchestriert:
 //! - Mail-Account-Verwaltung ([`crate::db::repo::mail_accounts`])
@@ -30,15 +29,16 @@ use crate::db::repo::{
 use crate::domain::kleinunternehmer;
 use crate::error::{Error, Result};
 use crate::mail::templates::RenderedMail;
-use crate::mail::{oauth_ms, smtp, templates};
+use crate::mail::{smtp, templates};
 use crate::nettest::{self, TestKind};
+use crate::redact::redacted_debug;
 use crate::secrets;
 
 // =============================================================================
 // DTOs
 // =============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestConnectionArgs {
     pub smtp_host: String,
@@ -49,6 +49,7 @@ pub struct TestConnectionArgs {
     /// gespeichert. Bei `None` wird ohne Auth getestet.
     pub password: Option<String>,
 }
+redacted_debug!(TestConnectionArgs { smtp_host, smtp_port, smtp_use_tls, smtp_user } secret { password });
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +70,11 @@ pub struct SendResult {
     pub to: String,
     pub subject: String,
     pub attachment_count: u32,
+    /// R4-S2-EMAILLOG (Lauf F5c): gesetzt, wenn die Mail hinausging, der Eintrag im
+    /// Versandprotokoll aber nicht geschrieben werden konnte (Hinweis in der Inbox,
+    /// Audit `mail.log_failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,17 +96,11 @@ pub struct SendQuoteResult {
     pub subject: String,
     /// Angebot-PDF + AGB + Datenschutz = i. d. R. 3.
     pub attachment_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OauthStatus {
-    pub account_id: String,
-    /// True, wenn ein Token-Bundle in `secrets` liegt.
-    pub connected: bool,
-    pub account_email: Option<String>,
-    pub scopes: Option<String>,
-    pub token_expires_at: Option<String>,
+    /// R4-S2-EMAILLOG (Lauf F5c): gesetzt, wenn die Mail hinausging, der Eintrag im
+    /// Versandprotokoll aber nicht geschrieben werden konnte (Hinweis in der Inbox,
+    /// Audit `mail.log_failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 // =============================================================================
@@ -122,13 +122,14 @@ pub async fn mail_accounts_list(
 }
 
 /// Argumente von [`mail_account_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountCreateArgs {
     pub input: mail_accounts::MailAccountInput,
     #[serde(default)]
     pub password: Option<String>,
 }
+redacted_debug!(MailAccountCreateArgs { input } secret { password });
 
 /// Legt einen Mail-Account an und speichert (falls vorhanden) das Passwort in
 /// `secrets` (verschlüsselte DB), nie im Konto-Datensatz.
@@ -136,11 +137,16 @@ pub async fn mail_account_create(
     ctx: &Arc<AppCtx>,
     args: MailAccountCreateArgs,
 ) -> Result<MailAccountRow> {
-    let MailAccountCreateArgs { input, password } = args;
+    let MailAccountCreateArgs {
+        mut input,
+        password,
+    } = args;
+    normalize_smtp_host(&mut input)?;
     let pool = ctx.pool()?;
 
     let pool = &pool;
     check_smtp_only(&input)?;
+    check_saved_port(ctx, &input)?;
     check_plaintext(&input, password.as_deref())?;
     let row = mail_accounts::create(pool, &input).await?;
 
@@ -155,13 +161,7 @@ pub async fn mail_account_create(
         "mail_account.create",
         "mail_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","auth_type":"{}","from_email":"{}","has_password":{}}}"#,
-            escape(&row.label),
-            escape(&row.auth_type),
-            escape(&row.from_email),
-            password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
-        )),
+        Some(serde_json::json!({ "label": &row.label, "auth_type": &row.auth_type, "from_email": &row.from_email, "has_password": password.as_deref().map(|p| !p.is_empty()).unwrap_or(false) })),
     )
     .await?;
 
@@ -169,7 +169,7 @@ pub async fn mail_account_create(
 }
 
 /// Argumente von [`mail_account_update`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountUpdateArgs {
     pub id: String,
@@ -177,6 +177,7 @@ pub struct MailAccountUpdateArgs {
     #[serde(default)]
     pub password: Option<String>,
 }
+redacted_debug!(MailAccountUpdateArgs { id, input } secret { password });
 
 /// Aktualisiert einen Mail-Account. Ein nicht-leeres `password` überschreibt
 /// das gespeicherte Passwort; bleibt das Feld leer, bleibt das bestehende
@@ -187,19 +188,30 @@ pub async fn mail_account_update(
 ) -> Result<MailAccountRow> {
     let MailAccountUpdateArgs {
         id,
-        input,
+        mut input,
         password,
     } = args;
     let pool = ctx.pool()?;
 
+    normalize_smtp_host(&mut input)?;
     let pool = &pool;
     let before = mail_accounts::get(pool, &id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {id}")))?;
     check_smtp_only(&input)?;
+    // Neuer Server oder Port: Port-Allowlist wie beim Test (ASVS V12.6.1); ein
+    // unveränderter Bestandswert bleibt nutzbar.
+    if before.smtp_host.as_deref().map(str::trim) != input.smtp_host.as_deref()
+        || before.smtp_port != input.smtp_port
+    {
+        check_saved_port(ctx, &input)?;
+    }
     let new_password = password.as_deref().filter(|p| !p.is_empty());
     let stored = secrets::get(pool, &secrets::smtp_key(&id)).await?;
-    check_plaintext(&input, new_password.or(stored.as_deref()))?;
+    check_plaintext(
+        &input,
+        new_password.or(stored.as_deref().map(String::as_str)),
+    )?;
     // Plan W8: Zugangsdaten gelten nur für (Host, Port, Benutzer). Ändert sich
     // eins davon, wird das gespeicherte Passwort gelöscht; mit Benutzer ist
     // dann ein neues Pflicht (sonst ginge es an den neuen Host).
@@ -243,12 +255,7 @@ pub async fn mail_account_update(
         "mail_account.update",
         "mail_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","from_email":"{}","password_changed":{}}}"#,
-            escape(&row.label),
-            escape(&row.from_email),
-            password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
-        )),
+        Some(serde_json::json!({ "label": &row.label, "from_email": &row.from_email, "password_changed": password.as_deref().map(|p| !p.is_empty()).unwrap_or(false) })),
     )
     .await?;
 
@@ -283,7 +290,7 @@ pub async fn mail_account_delete(ctx: &Arc<AppCtx>, args: MailAccountDeleteArgs)
         "mail_account.delete",
         "mail_account",
         &id,
-        Some(&format!(r#"{{"label":"{}"}}"#, escape(&account.label))),
+        Some(serde_json::json!({ "label": &account.label })),
     )
     .await?;
 
@@ -307,6 +314,7 @@ pub async fn mail_account_test_connection(
     // Plan W8: nie ein gespeichertes Passwort an einen frei gewählten Host —
     // gespeicherte Konten testet `mail_account_test_saved`.
     ctx.net_tests.check_port(TestKind::Smtp, args.smtp_port)?;
+    crate::nettest::check_host(args.smtp_host.trim())?;
     let has_user = args
         .smtp_user
         .as_deref()
@@ -327,7 +335,7 @@ pub async fn mail_account_test_connection(
         port: args.smtp_port,
         use_tls: args.smtp_use_tls,
         username: args.smtp_user,
-        password: args.password,
+        password: args.password.map(zeroize::Zeroizing::new),
     };
     smtp::test_connection(&config)
         .await
@@ -362,12 +370,49 @@ pub async fn mail_account_test_saved(
 
 /// Im Server-Betrieb nur SMTP-Postfächer (E9: MS-Graph ausgeblendet).
 fn check_smtp_only(input: &mail_accounts::MailAccountInput) -> Result<()> {
-    if input.auth_type != "smtp_password" {
+    ensure_smtp_auth(&input.auth_type)
+}
+
+/// Nur Konten mit SMTP-Anmeldung versenden (E9). Ein aus der Desktop-Fassung
+/// übernommenes Microsoft-Konto (`oauth_microsoft`, Graph) lehnt der Versand mit
+/// derselben Meldung ab, bis es in den Einstellungen auf SMTP umgestellt ist
+/// (ADR 0039 Nr. 138).
+fn ensure_smtp_auth(auth_type: &str) -> Result<()> {
+    if auth_type != "smtp_password" {
         return Err(Error::Domain(
             "Die Microsoft-Anmeldung (Graph) ist im Server-Betrieb nicht verfügbar — bitte das \
              Postfach per SMTP einrichten."
                 .into(),
         ));
+    }
+    Ok(())
+}
+
+/// Gespeicherte Ports unterliegen derselben Allowlist wie die Verbindungstests
+/// (ASVS V5.2.6/V12.6.1, Lauf F5c; Standard 25/465/587/2525, Betreiber:
+/// `KLEIN_BUCH_ALLOWED_TEST_PORTS`): was nicht getestet werden darf, wird auch nicht
+/// für den Versand gespeichert. Private und Loopback-Adressen bleiben erlaubt
+/// (Relay im LAN oder auf dem Docker-Host, ADR 0039 Nr. 136).
+fn check_saved_port(ctx: &AppCtx, input: &mail_accounts::MailAccountInput) -> Result<()> {
+    match input.smtp_port {
+        None => Ok(()),
+        Some(p) => ctx
+            .net_tests
+            .check_port(TestKind::Smtp, u16::try_from(p).unwrap_or(0)),
+    }
+}
+
+/// SMTP-Host getrimmt speichern und prüfen (W14-017, Lauf F4c): nur Hostname
+/// oder IP-Adresse; ein leerer Host wird zu `None`.
+fn normalize_smtp_host(input: &mut mail_accounts::MailAccountInput) -> Result<()> {
+    input.smtp_host = input
+        .smtp_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    if let Some(host) = input.smtp_host.as_deref() {
+        crate::nettest::check_host(host)?;
     }
     Ok(())
 }
@@ -416,192 +461,6 @@ async fn smtp_config_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<
         username: account.smtp_user.clone(),
         password,
     })
-}
-
-// =============================================================================
-// Commands — OAuth (Block 16, Microsoft Exchange Online)
-// =============================================================================
-
-/// Argumente von [`mail_oauth_status`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthStatusArgs {
-    pub account_id: String,
-}
-
-/// Liest den OAuth-Verbindungsstatus eines Accounts (verbunden? Postfach? Ablauf?).
-pub async fn mail_oauth_status(
-    ctx: &Arc<AppCtx>,
-    args: MailOauthStatusArgs,
-) -> Result<OauthStatus> {
-    let MailOauthStatusArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let account = mail_accounts::get(&pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    oauth_status_for(&pool, &account).await
-}
-
-/// Argumente von [`mail_oauth_connect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthConnectArgs {
-    pub account_id: String,
-}
-
-/// Startet den OAuth-Auth-Code-Flow (PKCE) für ein Microsoft-Konto: öffnet den
-/// Browser zur Microsoft-Anmeldung, fängt den Redirect über einen lokalen
-/// Loopback-Server, tauscht den Code gegen Token, legt sie in `secrets` ab und
-/// speichert die nicht-geheimen Metadaten (Postfach, Scopes, Ablauf) in der DB.
-///
-/// Blockiert bis zum Abschluss bzw. bis zur Zeitüberschreitung (5 min).
-pub async fn mail_oauth_connect(
-    ctx: &Arc<AppCtx>,
-    args: MailOauthConnectArgs,
-) -> Result<OauthStatus> {
-    let MailOauthConnectArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let pool = &pool;
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    if account.auth_type != "oauth_microsoft" {
-        return Err(Error::Mail(
-            "Dieses Postfach ist nicht als Microsoft-Konto angelegt.".into(),
-        ));
-    }
-    let client_id = account
-        .oauth_client_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            Error::Mail("Es fehlt die Client-ID (Anwendungs-ID) deiner Azure-App.".into())
-        })?;
-    let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-    let service_id = account
-        .keychain_service_id
-        .as_deref()
-        .ok_or_else(|| Error::Mail("Account ohne Keychain-Service-ID.".into()))?;
-
-    let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-    let (verifier, challenge) = oauth_ms::gen_pkce();
-    let state = oauth_ms::random_urlsafe(24);
-
-    // Loopback-Server binden → ergibt redirect_uri http://localhost:{port}.
-    let (listener, port) = oauth_ms::bind_loopback().await?;
-    let redirect_uri = oauth_ms::loopback_redirect_uri(port);
-    let auth_url = oauth_ms::build_authorize_url(
-        &endpoints.authorize,
-        client_id,
-        &redirect_uri,
-        &state,
-        &challenge,
-        oauth_ms::GRAPH_SCOPES,
-    )?;
-
-    // Browser zur Microsoft-Anmeldung öffnen.
-    ctx.open_url(&auth_url)?;
-
-    // Auf den Redirect warten (max. 5 Minuten), Query parsen, state prüfen.
-    let query = oauth_ms::capture_redirect(&listener, std::time::Duration::from_secs(300)).await?;
-    let cb = oauth_ms::parse_callback_query(&query)?;
-    if cb.state != state {
-        return Err(Error::Mail(
-            "Sicherheitsprüfung fehlgeschlagen (state stimmt nicht überein).".into(),
-        ));
-    }
-
-    // Code → Token. Bundle in `secrets`.
-    let resp = oauth_ms::exchange_code(
-        &endpoints.token,
-        client_id,
-        &redirect_uri,
-        &cb.code,
-        &verifier,
-    )
-    .await?;
-    let bundle = oauth_ms::bundle_from_response(&resp, chrono::Utc::now(), None)?;
-
-    // Postfach-Adresse best-effort (Fallback: Absender-Adresse des Accounts).
-    let email = oauth_ms::graph_me_email(&endpoints.graph, &bundle.access_token)
-        .await
-        .or_else(|| Some(account.from_email.clone()));
-
-    // Nur den (langlebigen) Refresh-Token persistieren. Der Access-Token (großes
-    // JWT) wird bei jedem Versand frisch geholt — sonst sprengt access+refresh das
-    // 2560-Zeichen-Limit des Windows Credential Managers.
-    let _ = service_id;
-    secrets::set(
-        pool,
-        &secrets::oauth_key(&account_id),
-        &bundle.refresh_token,
-    )
-    .await?;
-
-    let scopes = resp
-        .scope
-        .clone()
-        .unwrap_or_else(|| oauth_ms::GRAPH_SCOPES.to_string());
-    mail_accounts::set_oauth_session(
-        pool,
-        &account_id,
-        email.as_deref(),
-        Some(scopes.as_str()),
-        Some(bundle.expires_at.as_str()),
-    )
-    .await?;
-    mail_accounts::touch_last_used(pool, &account_id).await.ok();
-
-    audit_log::append(
-        pool,
-        "mail_account.oauth_connect",
-        "mail_account",
-        &account_id,
-        Some(&format!(
-            r#"{{"email":"{}","scopes":"{}"}}"#,
-            escape(email.as_deref().unwrap_or("")),
-            escape(&scopes)
-        )),
-    )
-    .await?;
-
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail("Account nach Connect nicht lesbar.".into()))?;
-    oauth_status_for(pool, &account).await
-}
-
-/// Argumente von [`mail_oauth_disconnect`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MailOauthDisconnectArgs {
-    pub account_id: String,
-}
-
-/// Trennt die Microsoft-Verbindung eines Accounts: löscht das Token-Bundle aus
-/// `secrets` und die Session-Metadaten aus der DB.
-pub async fn mail_oauth_disconnect(ctx: &Arc<AppCtx>, args: MailOauthDisconnectArgs) -> Result<()> {
-    let MailOauthDisconnectArgs { account_id } = args;
-    let pool = ctx.pool()?;
-
-    let pool = &pool;
-    let account = mail_accounts::get(pool, &account_id)
-        .await?
-        .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
-    secrets::delete(pool, &secrets::oauth_key(&account.id)).await?;
-    mail_accounts::clear_oauth_session(pool, &account_id).await?;
-    audit_log::append(
-        pool,
-        "mail_account.oauth_disconnect",
-        "mail_account",
-        &account_id,
-        None,
-    )
-    .await?;
-    Ok(())
 }
 
 // =============================================================================
@@ -724,8 +583,7 @@ pub struct MailSendTestArgs {
 
 /// Sendet eine kurze Test-Mail über ein **gespeichertes** Konto an `to`.
 /// Im Gegensatz zu `mail_account_test_connection` (nur Connect/Login) prüft das
-/// den vollständigen echten Pfad: Credential aus `secrets` → Versandkanal
-/// (SMTP oder Microsoft Graph) → Zustellung.
+/// den vollständigen echten Pfad: Passwort aus `secrets` → SMTP → Zustellung.
 pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result<()> {
     let MailSendTestArgs { account_id, to } = args;
     let pool = ctx.pool()?;
@@ -739,14 +597,13 @@ pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result
     let account = mail_accounts::get(pool, &account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
+    ensure_smtp_auth(&account.auth_type)?;
     // Testversand wie ein Verbindungstest begrenzt (Plan W8).
-    if account.auth_type != "oauth_microsoft" {
-        let port = account
-            .smtp_port
-            .and_then(|p| u16::try_from(p).ok())
-            .unwrap_or(0);
-        ctx.net_tests.check_port(TestKind::Smtp, port)?;
-    }
+    let port = account
+        .smtp_port
+        .and_then(|p| u16::try_from(p).ok())
+        .unwrap_or(0);
+    ctx.net_tests.check_port(TestKind::Smtp, port)?;
     ctx.net_tests.admit()?;
     let now = crate::clock::now_berlin()
         .format("%d.%m.%Y %H:%M")
@@ -782,7 +639,7 @@ pub async fn mail_send_test(ctx: &Arc<AppCtx>, args: MailSendTestArgs) -> Result
         "mail_account.test_send",
         "mail_account",
         &account_id,
-        Some(&format!(r#"{{"to":"{}"}}"#, escape(recipient))),
+        Some(serde_json::json!({ "to": recipient })),
     )
     .await?;
 
@@ -841,7 +698,7 @@ pub async fn mail_send_quote(
 }
 
 // =============================================================================
-// Core (ohne Tauri-State — für Integration-/E2E-Tests aufrufbar)
+// Core (ohne `AppCtx` — für Integration-/E2E-Tests aufrufbar)
 // =============================================================================
 
 /// Rendert Betreff + Body einer Rechnungs-Mail aus dem `invoice-de`-Template.
@@ -853,16 +710,11 @@ pub async fn render_invoice_mail(
     let invoice = invoices::get(pool, invoice_id)
         .await?
         .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {invoice_id}")))?;
-    let seller = seller_profile::get(pool)
-        .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
-    let ctx = templates::build_invoice_context(&invoice, &seller, kleinunternehmer::hinweis_text());
-    let source = templates::load_template(&paths.inputs_dir, "invoice-de")?;
-    templates::render(&source, &ctx)
+    render_invoice_mail_from(pool, paths, &invoice).await
 }
 
 /// Kern-Pipeline für den Rechnungsversand. Public, damit E2E-Tests sie ohne
-/// Tauri-AppHandle treiben können (Paths kommen aus tempdir).
+/// Server treiben können (Paths kommen aus tempdir).
 #[allow(clippy::too_many_arguments)]
 pub async fn send_invoice_core(
     pool: &SqlitePool,
@@ -873,8 +725,7 @@ pub async fn send_invoice_core(
     subject_override: Option<&str>,
     body_override: Option<&str>,
 ) -> Result<SendResult> {
-    // 1. Account laden. Der Versand-Kanal (SMTP oder Microsoft Graph) wird in
-    //    dispatch_send anhand von auth_type gewählt.
+    // 1. Account laden (Versand nur per SMTP, dispatch_send).
     let account = mail_accounts::get(pool, account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
@@ -898,10 +749,15 @@ pub async fn send_invoice_core(
         .clone()
         .ok_or_else(|| Error::Domain("Rechnung hat kein archiviertes ZUGFeRD-PDF.".into()))?;
 
-    // 3. Empfänger bestimmen: Override → Buyer-Snapshot → Live-Kontakt.
-    let recipient = match to_override {
-        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => resolve_recipient(pool, &invoice).await?,
+    // 3. Empfänger bestimmen: Override → Buyer-Snapshot → Live-Kontakt. Ein
+    //    abweichender Empfänger verlangt eine frische Bestätigung (W14-009).
+    let stored = resolve_recipient(pool, &invoice).await;
+    let recipient = match to_override.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            require_step_up_for_recipient(t, stored.as_deref().ok())?;
+            t.to_string()
+        }
+        None => stored?,
     };
 
     // 4. Betreff + Body: Overrides gewinnen, sonst Template.
@@ -921,7 +777,7 @@ pub async fn send_invoice_core(
         bytes: pdf_bytes,
     };
 
-    // 6. Mail bauen + über den Kanal des Accounts versenden (SMTP oder Graph).
+    // 6. Mail bauen + per SMTP versenden.
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),
@@ -930,7 +786,7 @@ pub async fn send_invoice_core(
         body_text: body,
         attachments: vec![attachment],
     };
-    send_and_log(
+    let receipt = send_and_log(
         pool,
         &account,
         &mail,
@@ -943,7 +799,7 @@ pub async fn send_invoice_core(
     .await?;
 
     // 8. GoBD: Status → 'sent', Audit-Log. Account-Nutzung tracken.
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = crate::clock::to_db_utc(crate::clock::now_utc());
     invoices::mark_sent(pool, invoice_id, &now).await?;
     mail_accounts::touch_last_used(pool, account_id).await.ok();
 
@@ -952,12 +808,7 @@ pub async fn send_invoice_core(
         "invoice.sent",
         "invoice",
         invoice_id,
-        Some(&format!(
-            r#"{{"account":"{}","to":"{}","subject":"{}","attachments":1}}"#,
-            escape(account_id),
-            escape(&recipient),
-            escape(&subject)
-        )),
+        Some(serde_json::json!({ "account": account_id, "to": &recipient, "subject": &subject, "attachments": 1 })),
     )
     .await?;
 
@@ -966,6 +817,7 @@ pub async fn send_invoice_core(
         to: recipient,
         subject,
         attachment_count: 1,
+        warning: receipt.warning(),
     })
 }
 
@@ -980,14 +832,14 @@ pub async fn render_quote_mail(
         .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {quote_id}")))?;
     let seller = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
     let ctx = templates::build_quote_context(&quote, &seller, kleinunternehmer::hinweis_text());
     let source = templates::load_quote_template(&paths.inputs_dir);
     templates::render_quote_mail(&source, &ctx)
 }
 
 /// Kern-Pipeline für den Angebotsversand (Bundle als Multi-Attachment). Public,
-/// damit E2E-Tests sie ohne Tauri-AppHandle treiben können.
+/// damit E2E-Tests sie ohne Server treiben können.
 #[allow(clippy::too_many_arguments)]
 pub async fn send_quote_core(
     pool: &SqlitePool,
@@ -998,22 +850,30 @@ pub async fn send_quote_core(
     subject_override: Option<&str>,
     body_override: Option<&str>,
 ) -> Result<SendQuoteResult> {
-    // 1. Account laden. Der Versand-Kanal (SMTP oder Microsoft Graph) wird in
-    //    dispatch_send anhand von auth_type gewählt.
+    // 1. Account laden (Versand nur per SMTP, dispatch_send).
     let account = mail_accounts::get(pool, account_id)
         .await?
         .ok_or_else(|| Error::Mail(format!("Mail-Account nicht gefunden: {account_id}")))?;
 
-    // 2. Bundle vorbereiten: Angebots-PDF sicherstellen + aktive Legal-Versionen
+    // 2. Empfänger: Override → E-Mail des verknüpften Kontakts. Ein abweichender
+    //    Empfänger verlangt eine frische Bestätigung (W14-009) — vor dem
+    //    Binden der Rechtsdokumente, damit eine Ablehnung nichts schreibt.
+    let quote_row = quotes::get(pool, quote_id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {quote_id}")))?;
+    let stored = resolve_quote_recipient(pool, &quote_row).await;
+    let recipient = match to_override.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            require_step_up_for_recipient(t, stored.as_deref().ok())?;
+            t.to_string()
+        }
+        None => stored?,
+    };
+
+    // 3. Bundle vorbereiten: Angebots-PDF sicherstellen + aktive Legal-Versionen
     //    append-only ans Angebot binden (Pflicht für Versand). Liefert die
     //    Archiv-IDs für die Anhänge.
     let dispatch = crate::commands::quotes::prepare_quote_dispatch(pool, paths, quote_id).await?;
-
-    // 3. Empfänger: Override → E-Mail des verknüpften Kontakts.
-    let recipient = match to_override {
-        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => resolve_quote_recipient(pool, &dispatch.quote).await?,
-    };
 
     // 4. Betreff + Body: Overrides gewinnen, sonst Template.
     let rendered = render_quote_mail(pool, paths, quote_id).await?;
@@ -1042,7 +902,7 @@ pub async fn send_quote_core(
     }
     let attachment_count = attachments.len() as u32;
 
-    // 6. Mail bauen + über den Kanal des Accounts versenden (SMTP oder Graph).
+    // 6. Mail bauen + per SMTP versenden.
     let mail = smtp::OutgoingMail {
         from_name: account.from_name.clone(),
         from_email: account.from_email.clone(),
@@ -1051,7 +911,7 @@ pub async fn send_quote_core(
         body_text: body,
         attachments,
     };
-    send_and_log(
+    let receipt = send_and_log(
         pool,
         &account,
         &mail,
@@ -1067,25 +927,23 @@ pub async fn send_quote_core(
     //    'sent'). Audit-Log mit den gebundenen Legal-Versionen (Nachweis,
     //    welche Fassung an wen ging). Account-Nutzung tracken.
     mail_accounts::touch_last_used(pool, account_id).await.ok();
-    let legal_audit = dispatch
+    let legal_audit: serde_json::Map<String, serde_json::Value> = dispatch
         .legal
         .iter()
-        .map(|l| format!(r#""{}":{}"#, escape(&l.doc_type), l.version))
-        .collect::<Vec<_>>()
-        .join(",");
+        .map(|l| (l.doc_type.clone(), serde_json::Value::from(l.version)))
+        .collect();
     audit_log::append(
         pool,
         "quote.sent",
         "quote",
         quote_id,
-        Some(&format!(
-            r#"{{"account":"{}","to":"{}","subject":"{}","attachments":{},"legal":{{{}}}}}"#,
-            escape(account_id),
-            escape(&recipient),
-            escape(&subject),
-            attachment_count,
-            legal_audit
-        )),
+        Some(serde_json::json!({
+            "account": account_id,
+            "to": &recipient,
+            "subject": &subject,
+            "attachments": attachment_count,
+            "legal": legal_audit,
+        })),
     )
     .await?;
 
@@ -1094,25 +952,13 @@ pub async fn send_quote_core(
         to: recipient,
         subject,
         attachment_count,
+        warning: receipt.warning(),
     })
 }
 
 // =============================================================================
-// Versand-Dispatch (SMTP vs. Microsoft Graph)
+// Versand-Dispatch (SMTP)
 // =============================================================================
-
-async fn oauth_status_for(pool: &SqlitePool, account: &MailAccountRow) -> Result<OauthStatus> {
-    let connected = secrets::get(pool, &secrets::oauth_key(&account.id))
-        .await?
-        .is_some();
-    Ok(OauthStatus {
-        account_id: account.id.clone(),
-        connected,
-        account_email: account.oauth_account_email.clone(),
-        scopes: account.oauth_scopes.clone(),
-        token_expires_at: account.oauth_token_expires_at.clone(),
-    })
-}
 
 /// Vereinheitlichte Provider-Antwort eines Versands — Grundlage für das
 /// E-Mail-Protokoll (Block 16b).
@@ -1121,31 +967,33 @@ pub(crate) struct SendReceipt {
     provider_code: Option<String>,
     provider_message: Option<String>,
     request_id: Option<String>,
+    /// Der Eintrag im `email_log` konnte nicht geschrieben werden (R4-S2-EMAILLOG).
+    log_failed: bool,
 }
 
-/// Versendet eine fertig zusammengebaute Mail über den Kanal des Accounts:
-/// SMTP (Passwort aus `secrets`) oder Microsoft Graph (OAuth-Token aus `secrets`,
-/// bei Bedarf still erneuert). Liefert die Provider-Antwort zurück.
+impl SendReceipt {
+    /// Warnung für den Aufrufer, wenn das Versandprotokoll unvollständig ist.
+    pub(crate) fn warning(&self) -> Option<String> {
+        self.log_failed.then(|| LOG_FAILED_WARNING.to_string())
+    }
+}
+
+/// Warnung an den Aufrufer bei unvollständigem Versandprotokoll.
+pub(crate) const LOG_FAILED_WARNING: &str =
+    "Die E-Mail wurde versendet, der Eintrag im E-Mail-Protokoll fehlt aber (siehe Hinweise; \
+     der Versand steht im Audit-Protokoll).";
+
+/// Versendet eine fertig zusammengebaute Mail per SMTP (Passwort aus `secrets`).
+/// Liefert die Provider-Antwort zurück. Microsoft Graph gibt es im Server nicht
+/// (E9); ältere Konten dieser Art lehnt [`ensure_smtp_auth`] ab.
 async fn dispatch_send(
     pool: &SqlitePool,
     account: &MailAccountRow,
     mail: &smtp::OutgoingMail,
 ) -> Result<SendReceipt> {
-    if account.auth_type == "oauth_microsoft" {
-        let access_token = ensure_access_token(pool, account).await?;
-        let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-        let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-        let g = oauth_ms::graph_send(&endpoints.graph, &access_token, mail).await?;
-        return Ok(SendReceipt {
-            channel: "graph",
-            provider_code: Some(g.status.to_string()),
-            provider_message: Some("Accepted (Microsoft Graph)".to_string()),
-            request_id: g.request_id,
-        });
-    }
-
+    ensure_smtp_auth(&account.auth_type)?;
     // smtp_password (Default). Ohne gespeichertes Passwort wird ohne Auth
-    // gesendet (Open-Relay/MailHog).
+    // gesendet (interner Relay, Mailpit im E2E-Test).
     let config = smtp_config_for(pool, account).await?;
     let info = smtp::send(&config, mail).await?;
     Ok(SendReceipt {
@@ -1153,6 +1001,7 @@ async fn dispatch_send(
         provider_code: info.code,
         provider_message: info.message,
         request_id: None,
+        log_failed: false,
     })
 }
 
@@ -1165,8 +1014,9 @@ pub(crate) struct SendContext<'a> {
 
 /// Versendet eine Mail UND protokolliert den Versuch (Block 16b): schreibt JEDEN
 /// Versand — Erfolg wie Fehlschlag — in das append-only `email_log` und reicht
-/// das Versand-Ergebnis unverändert durch. Ein Fehler beim Protokollieren wird
-/// nur geloggt, überschreibt aber nie das eigentliche Versand-Ergebnis.
+/// das Versand-Ergebnis durch. Ein Fehler beim Protokollieren überschreibt nie das
+/// Versand-Ergebnis; er landet im Audit-Log und in der Inbox und setzt
+/// [`SendReceipt::warning`] ([`report_log_failure`]).
 pub(crate) async fn send_and_log(
     pool: &SqlitePool,
     account: &MailAccountRow,
@@ -1174,11 +1024,6 @@ pub(crate) async fn send_and_log(
     ctx: SendContext<'_>,
 ) -> Result<SendReceipt> {
     let result = dispatch_send(pool, account, mail).await;
-    let channel_guess = if account.auth_type == "oauth_microsoft" {
-        "graph"
-    } else {
-        "smtp"
-    };
     let entry = match &result {
         Ok(rc) => email_log::EmailLogEntry {
             account_id: Some(account.id.clone()),
@@ -1200,7 +1045,7 @@ pub(crate) async fn send_and_log(
         Err(e) => email_log::EmailLogEntry {
             account_id: Some(account.id.clone()),
             account_label: Some(account.label.clone()),
-            channel: channel_guess.to_string(),
+            channel: "smtp".to_string(),
             related_kind: ctx.related_kind.to_string(),
             related_id: ctx.related_id.map(str::to_string),
             related_number: ctx.related_number.map(str::to_string),
@@ -1215,53 +1060,138 @@ pub(crate) async fn send_and_log(
             error: Some(e.to_string()),
         },
     };
-    if let Err(log_err) = email_log::insert(pool, &entry).await {
-        tracing::error!(error = %log_err, "E-Mail-Protokoll konnte nicht geschrieben werden");
-    }
-    result
-}
-
-/// Liefert einen frischen Access-Token für ein OAuth-Konto: holt ihn bei jedem
-/// Aufruf über den (in `secrets` abgelegten) Refresh-Token. Schreibt
-/// einen rotierten Refresh-Token zurück und aktualisiert den Ablauf in der DB.
-async fn ensure_access_token(pool: &SqlitePool, account: &MailAccountRow) -> Result<String> {
-    // Gespeichert ist NUR der Refresh-Token (s. mail_oauth_connect). Der
-    // Access-Token wird bei jedem Versand frisch geholt — nie ein stale Token.
-    let stored_refresh = secrets::get(pool, &secrets::oauth_key(&account.id))
-        .await?
-        .ok_or_else(|| {
-        Error::Mail(
-            "Postfach ist nicht mit Microsoft verbunden. Bitte in den E-Mail-Einstellungen verbinden."
-                .into(),
-        )
-    })?;
-    let client_id = account
-        .oauth_client_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            Error::Mail("Es fehlt die Client-ID der Azure-App für die Token-Erneuerung.".into())
-        })?;
-    let tenant = account.oauth_tenant_id.as_deref().unwrap_or("common");
-    let endpoints = oauth_ms::Endpoints::for_tenant(tenant);
-
-    let resp = oauth_ms::refresh_tokens(&endpoints.token, client_id, &stored_refresh).await?;
-
-    // Rotierten Refresh-Token (falls Microsoft einen neuen mitschickt) persistieren.
-    if let Some(new_refresh) = resp.refresh_token.as_deref().filter(|r| !r.is_empty()) {
-        if new_refresh != stored_refresh {
-            secrets::set(pool, &secrets::oauth_key(&account.id), new_refresh).await?;
+    match email_log::insert(pool, &entry).await {
+        Ok(_) => result,
+        Err(log_err) => {
+            report_log_failure(pool, &entry, &log_err).await;
+            result.map(|mut rc| {
+                rc.log_failed = true;
+                rc
+            })
         }
     }
-    // Ablauf nur für die Anzeige aktualisieren.
-    let expires_at =
-        (chrono::Utc::now() + chrono::Duration::seconds(resp.expires_in.max(0))).to_rfc3339();
-    mail_accounts::set_oauth_token_expiry(pool, &account.id, &expires_at)
-        .await
-        .ok();
+}
 
-    Ok(resp.access_token)
+/// R4-S2-EMAILLOG (Lauf F5c): Der Versand ist nicht rückholbar; fehlt sein Eintrag im
+/// append-only `email_log`, hält Klein.Buch ihn im Audit-Log fest (`mail.log_failed`,
+/// mit Empfänger, Betreff und Beleg — wie `invoice.sent`) und legt einen Hinweis in
+/// die Inbox. Beides nach bestem Bemühen: ein weiterer Fehler wird nur geloggt.
+async fn report_log_failure(pool: &SqlitePool, entry: &email_log::EmailLogEntry, err: &Error) {
+    tracing::error!(
+        error = %err,
+        related_kind = %entry.related_kind,
+        "E-Mail-Protokoll konnte nicht geschrieben werden"
+    );
+    let sent = entry.status == "success";
+    if let Err(e) = audit_log::append(
+        pool,
+        "mail.log_failed",
+        "email_log",
+        entry.related_id.as_deref().unwrap_or("-"),
+        Some(serde_json::json!({
+            "related_kind": &entry.related_kind,
+            "related_number": &entry.related_number,
+            "status": &entry.status,
+            "account": &entry.account_id,
+            "to": &entry.to_email,
+            "subject": &entry.subject,
+            "error": err.to_string(),
+        })),
+    )
+    .await
+    {
+        tracing::error!(error = %e, "Audit mail.log_failed konnte nicht geschrieben werden");
+    }
+    let what = match entry.related_number.as_deref() {
+        Some(n) => format!("Die E-Mail zu {n}"),
+        None => "Eine E-Mail".to_string(),
+    };
+    let outcome = if sent {
+        "wurde versendet"
+    } else {
+        "konnte nicht versendet werden"
+    };
+    let body = format!(
+        "{what} {outcome}, der Eintrag im E-Mail-Protokoll fehlt aber ({err}). Den Versuch \
+         belegt das Audit-Protokoll. Prüfe die Ursache (z. B. freien Speicherplatz)."
+    );
+    if let Err(e) = crate::notify::store::create(
+        pool,
+        crate::notify::store::NewNotification {
+            title: "E-Mail-Protokoll unvollständig",
+            body: &body,
+            severity: "warning",
+            related_entity_type: Some(entry.related_kind.as_str()),
+            related_entity_id: entry.related_id.as_deref(),
+            action_url: Some("/settings/mail-log"),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        tracing::error!(error = %e, "Hinweis „E-Mail-Protokoll unvollständig“ fehlgeschlagen");
+    }
+}
+
+// =============================================================================
+// Step-up beim Versand an einen abweichenden Empfänger (W14-009, Lauf F5c)
+// =============================================================================
+
+/// Verlangt eine frische Bestätigung (Passphrase + zweiter Faktor, bzw. eine
+/// Anmeldung der letzten 5 min), wenn `recipient` nicht die hinterlegte Adresse
+/// des Belegs ist (Rechnung: Käufer-Snapshot, sonst Kontakt; Angebot: Kontakt).
+/// Groß-/Kleinschreibung zählt nicht. Ohne hinterlegte Adresse ist jeder
+/// eingegebene Empfänger „abweichend“. Betreff und Text bleiben frei (ADR 0039
+/// Nr. 136): Abwägung BEC-Risiko gegen Bedienbarkeit, Begründung in security.md.
+pub(crate) fn require_step_up_for_recipient(recipient: &str, stored: Option<&str>) -> Result<()> {
+    if stored.is_some_and(|s| s.trim().eq_ignore_ascii_case(recipient.trim())) {
+        Ok(())
+    } else {
+        crate::commands::reauth::require_fresh()
+    }
+}
+
+/// Vorprüfung von [`mail_send_invoice`] vor der Annahme des Jobs: ein
+/// abweichender Empfänger ergibt sofort 403 `reauth_required` (Dialog im
+/// Frontend, danach dieselbe Anfrage). Fehlt die Rechnung, meldet das der Kern.
+pub async fn mail_send_invoice_precheck(
+    ctx: &Arc<AppCtx>,
+    args: &MailSendInvoiceArgs,
+) -> Result<()> {
+    let Some(to) = args
+        .args
+        .to
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(());
+    };
+    let pool = ctx.pool()?;
+    let Some(invoice) = invoices::get(&pool, &args.args.invoice_id).await? else {
+        return Ok(());
+    };
+    let stored = resolve_recipient(&pool, &invoice).await.ok();
+    require_step_up_for_recipient(to, stored.as_deref())
+}
+
+/// Vorprüfung von [`mail_send_quote`] (wie [`mail_send_invoice_precheck`]).
+pub async fn mail_send_quote_precheck(ctx: &Arc<AppCtx>, args: &MailSendQuoteArgs) -> Result<()> {
+    let Some(to) = args
+        .args
+        .to
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return Ok(());
+    };
+    let pool = ctx.pool()?;
+    let Some(quote) = quotes::get(&pool, &args.args.quote_id).await? else {
+        return Ok(());
+    };
+    let stored = resolve_quote_recipient(&pool, &quote).await.ok();
+    require_step_up_for_recipient(to, stored.as_deref())
 }
 
 // =============================================================================
@@ -1315,6 +1245,8 @@ async fn resolve_recipient(
 }
 
 /// Wie [`render_invoice_mail`], aber mit bereits geladener Rechnung.
+/// Storno-Belege bekommen den Storno-Text (`storno-de` bzw. eingebettet) mit
+/// Nummer und Datum der stornierten Rechnung (Lauf E).
 async fn render_invoice_mail_from(
     pool: &SqlitePool,
     paths: &Paths,
@@ -1322,18 +1254,42 @@ async fn render_invoice_mail_from(
 ) -> Result<RenderedMail> {
     let seller = seller_profile::get(pool)
         .await?
-        .ok_or_else(|| Error::Domain("Stammdaten (seller_profile) fehlen".into()))?;
-    let ctx = templates::build_invoice_context(invoice, &seller, kleinunternehmer::hinweis_text());
-    let source = templates::load_template(&paths.inputs_dir, "invoice-de")?;
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
+    let mut ctx =
+        templates::build_invoice_context(invoice, &seller, kleinunternehmer::hinweis_text());
+    let source = match invoice.is_storno_for.as_deref() {
+        Some(original_id) => {
+            let original = invoices::get(pool, original_id)
+                .await?
+                .ok_or_else(|| Error::Domain("Storno: Original-Rechnung fehlt".into()))?;
+            ctx.invoice.storno_of = Some(templates::StornoRefCtx {
+                number: original.invoice_number,
+                date: templates::format_german_date(&original.invoice_date),
+            });
+            templates::load_storno_template(&paths.inputs_dir)
+        }
+        None => templates::load_template(&paths.inputs_dir, "invoice-de")?,
+    };
     templates::render(&source, &ctx)
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Lauf F4d (S3): SMTP-Passwörter erscheinen nicht in der Debug-Ausgabe.
     #[test]
-    fn it_compiles() {}
+    fn debug_output_of_password_args_is_redacted() {
+        let args = TestConnectionArgs {
+            smtp_host: "smtp.example.org".into(),
+            smtp_port: 587,
+            smtp_use_tls: true,
+            smtp_user: Some("kb@example.org".into()),
+            password: Some("smtp-geheim-4711".into()),
+        };
+        let out = format!("{:?}", MailAccountTestConnectionArgs { args });
+        assert!(!out.contains("smtp-geheim-4711"), "{out}");
+        assert!(out.contains("password: Some(***)"), "{out}");
+        assert!(out.contains("smtp.example.org"), "{out}");
+    }
 }

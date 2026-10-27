@@ -6,9 +6,9 @@
 //! ## `inputs/` — Zwei-Welten-Modell (R7-INPUTS)
 //!
 //! - **Seed-Quelle (read-only):** `resource_dir/inputs/` — im Image
-//!   `KLEIN_BUCH_RESOURCE_DIR/inputs`, auf dem Desktop der Bundle-Mirror.
+//!   `KLEIN_BUCH_RESOURCE_DIR/inputs`, in der Entwicklung das Repo-`inputs/`.
 //! - **User-editable:** `inputs_dir` — im Container das Volume `/inputs`. Beim
-//!   Start gleicht [`ensure_inputs_seeded`] mit der Quelle ab (Seed-Manifest, W11);
+//!   Serverstart gleicht [`ensure_inputs_seeded`] mit der Quelle ab (Seed-Manifest, W11);
 //!   vom Nutzer geänderte Dateien bleiben unangetastet (`inputs/`-Hardline).
 
 use std::ffi::OsString;

@@ -9,7 +9,7 @@ keywords: [fehlersuche, docker logs, log, healthcheck, startfehler, fail2ban, fe
 # Fehlersuche im Container
 
 Fast jede Störung im Betrieb erklärt das Container-Log. Dort schreibt
-Klein.Buch beim Start jede Prüfung, die scheitert, und im Betrieb alle
+Klein.Buch beim Containerstart jede Prüfung, die scheitert, und im Betrieb alle
 Fehler, die es der Oberfläche aus Sicherheitsgründen nur allgemein
 meldet. Dieses Kapitel zeigt, wo Du nachsiehst und was die häufigsten
 Meldungen bedeuten.
@@ -23,7 +23,38 @@ mit Datum und Uhrzeit in UTC (koordinierte Weltzeit, im Winter eine
 Stunde und im Sommer zwei Stunden hinter der deutschen Uhrzeit), dann
 folgen die Stufe (`INFO`, `WARN`, `ERROR`) und der Bereich. Mehr
 Einzelheiten bekommst Du mit der Umgebungsvariable `RUST_LOG=debug`;
-Dein Daten-Passwort steht auch dann nicht im Log.
+Dein Daten-Passwort steht auch dann nicht im Log. E-Mail-Adressen von
+Kunden stehen nur bei `debug` im Log.
+
+Jeder Aufruf der Oberfläche hinterlässt eine Zeile im Bereich
+`klein_buch_lib::http`, etwa:
+
+```
+2026-10-25T09:15:02.123456Z  INFO klein_buch_lib::http: POST /api/cmd/invoices_lock 500 41 ms ip=203.0.113.7 req=0d4e…-…-… sess=1a2b3c4d
+```
+
+`ip` ist die Adresse des Browsers, `sess` eine Kurzkennung der
+Sitzung. Dieselbe Kurzkennung siehst Du unter Einstellungen →
+Sicherheit & Anmeldung im Abschnitt "Angemeldete Sitzungen". `req` ist die Kennung des
+Aufrufs. Meldet die Oberfläche "Interner Fehler (Ref …)", ist die Ref
+genau diese Kennung. Mit
+`docker compose logs klein-buch | grep <Ref>` findest Du die
+Zugriffszeile und den eigentlichen Fehler. Die IP-Adressen bleiben nur
+so lange im Log, wie die Log-Rotation der Compose-Datei es zulässt
+(`max-size` und `max-file`, im Beispiel 5 Dateien zu 10 MB).
+
+Fachliche Ablehnungen, die Du im Browser liest, schreibt Klein.Buch
+nicht ins Log; dort steht nur die Zugriffszeile mit dem Status, etwa
+422 oder 409. Ins Log gelangen solche Meldungen bei geplanten Läufen,
+zum Beispiel als "Abo-Rechnung …: automatisches Festschreiben
+fehlgeschlagen: …" mit dem Grund dahinter. Seit 2026.11 sind diese
+Meldungen in der Sprache der Oberfläche geschrieben: mit festen
+Vorsätzen wie "Die Rechnung kann nicht ausgestellt werden: …" statt
+"Validation failed (… Fehler): …", mit Daten im Format TT.MM.JJJJ und
+ohne die Regel-Kennungen der XRechnung (etwa BR-DE-6), die im
+Prüfbericht stehen. Überwachst oder filterst Du das Log auf den alten
+Wortlaut, passe das an. Zugriffszeilen und die Zeilen zu
+Fehlversuchen (siehe unten) bleiben, wie sie sind.
 
 Ob Klein.Buch läuft, prüft Docker alle 30 Sekunden selbst. Das Ergebnis
 zeigt `docker ps` in der Spalte "STATUS" (`healthy` oder `unhealthy`).
@@ -51,13 +82,18 @@ stiehlt, hätte dann Deine Daten im Klartext.
 
 Solange Klein.Buch gesperrt ist, läuft nichts Geplantes: kein
 Tages-Backup, keine Abo-Rechnungen, keine Prüfung des Archivs, keine
-Versionsprüfung. Nach der Anmeldung holt Klein.Buch Fälliges nach. Der
-Healthcheck zählt "gesperrt" als gesund, damit Docker den Container nicht
-endlos neu startet. Willst Du gewarnt werden, wenn Klein.Buch nach einem
-nächtlichen Neustart gesperrt bleibt, lass Deine Überwachung die Ausgabe
-des Healthcheck-Befehls auf `locked` prüfen.
+Versionsprüfung. Das Log sagt das beim Containerstart und danach alle sechs
+Stunden mit der Zeile "Instanz gesperrt — Backups, Abo-Läufe und
+Prüfungen ruhen bis zur Anmeldung im Browser". Eine bis fünf Minuten nach
+der Anmeldung holt Klein.Buch Fälliges nach, gestaffelt: zuerst Abo-Läufe und
+genau ein Backup, die Archiv-Prüfung frühestens fünf Minuten später. War
+die Instanz länger als zwei Tage gesperrt, steht unter "Hinweise", wie
+lange. Der Healthcheck zählt "gesperrt" als gesund, damit Docker den
+Container nicht endlos neu startet. Willst Du gewarnt werden, wenn
+Klein.Buch nach einem nächtlichen Neustart gesperrt bleibt, lass Deine
+Überwachung die Ausgabe des Healthcheck-Befehls auf `locked` prüfen.
 
-## Typische Fehler beim Start
+## Typische Fehler beim Containerstart
 
 Scheitert eine Prüfung, steht im Log eine Zeile der Stufe `ERROR` mit
 "Start abgebrochen:" und dem Grund, und Docker startet den Container
@@ -110,6 +146,50 @@ dass die Pfade im Archiv nicht zur Datenbank passen. Klein.Buch prüft beim
 Entsperren einige Archiveinträge; liegen sie nicht unter
 `/data/archive`, gehört der Datenordner nicht zu dieser Datenbank.
 
+"Entsperren abgebrochen: Die Prüfung der Datenbank hat Unstimmigkeiten
+gefunden" bedeutet, dass die Datenbank nicht in sich stimmig ist.
+Klein.Buch hat dann nichts verändert und bleibt gesperrt. Im Log steht
+eine Zeile `ERROR` mit "Datenbank-Prüfung beim Entsperren fehlgeschlagen"
+und dem Grund:
+
+- "verletzte(r) Fremdschlüssel": Ein Eintrag verweist auf einen Datensatz,
+  den es nicht gibt, etwa nach einer Bearbeitung der Datenbank von Hand.
+  Die Zeilen davor nennen Tabelle und Zeilennummer, aber keine Inhalte.
+- "Migration 0032 abgebrochen: Zu mindestens einer Rechnung gibt es mehr
+  als einen festgeschriebenen Storno-Beleg": Das Update hätte eine Regel
+  eingeführt, gegen die Deine Daten schon verstoßen. Festgeschriebene
+  Belege ändert Klein.Buch nie, auch nicht zur Reparatur.
+
+Nach einem Update prüft Klein.Buch beides, bevor es die Datenbank auf das
+neue Format umstellt, und auch vor dem Backup, das jeder Umstellung
+vorausgeht. Steht in der Meldung "Die Datenbank steht unverändert auf
+Schema …", ist also nichts umgestellt. Dann gilt: Setz wieder das Image
+der Version ein, mit der die Datenbank zuletzt lief (Kapitel "Updates
+und Rückfall"). Es öffnet die Datenbank wie vorher. Ohne Update, also
+ohne anstehende Umstellung, gilt dasselbe: Die Daten sind unverändert.
+
+Schlägt die Prüfung erst nach der Umstellung an, sagt die Meldung im
+Browser "Nach der Umstellung der Datenbank hat die Prüfung
+Unstimmigkeiten gefunden", und im Log steht "nach der Umstellung von
+Schema …". Das ist ein Fehler der Umstellung selbst und sollte nicht
+vorkommen. Klein.Buch meldet das bei jedem weiteren Anmeldeversuch
+wieder so, bis ein Entsperren gelingt. Die Umstellung ist dann schon
+gespeichert, das vorige Image öffnet die Datenbank nicht mehr, und ohne
+Anmeldung lässt sich in dieser Instanz kein Backup einspielen. Der Rückweg führt über eine neue Instanz:
+
+1. Kopiere das Backup, das Klein.Buch unmittelbar vor der Umstellung
+   angelegt hat (die neueste `.kbk`-Datei im Backup-Ordner
+   `/data/backups`), an einen sicheren Ort, ebenso den ganzen Ordner
+   `/data` als Sicherung.
+2. Richte mit dem Image der vorigen Version und einem leeren Ordner für
+   `/data` eine neue Instanz ein und spiel dieses Backup ein (Kapitel
+   "Notfall: Instanz neu aufsetzen und wiederherstellen").
+3. Wende Dich mit den Log-Zeilen an den Support, bevor Du das Update
+   erneut versuchst.
+
+Lässt sich die Ursache in keinem der Fälle klären, wende Dich mit den
+Log-Zeilen an den Support.
+
 Lehnt Klein.Buch einen Upload mit dem Hinweis auf zu wenig Platz ab
 (HTTP-Status 507), liegt der freie Platz in `/data` unter
 `KLEIN_BUCH_MIN_FREE_BYTES` (Standard 2 GiB) plus der Größe der Datei.
@@ -155,9 +235,18 @@ Ein passender Filter für fail2ban, zum Beispiel als
 
 ```
 [Definition]
-failregex = klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=
+failregex = ^(?:\{"log":")?\S*\s+WARN klein_buch_lib::auth: auth\.(?:login|setup|reauth)\.failed ip=<HOST> reason=[a-z_]+(?:\\n"|$)
 ignoreregex =
 ```
+
+Der Filter ist am Zeilenanfang und am Zeilenende verankert und verlangt
+das Ziel `klein_buch_lib::auth` direkt hinter dem Zeitstempel. So zählt
+nur eine echte Fehlversuch-Zeile, nie ein Text, der zufällig in einer
+anderen Zeile steht. Klein.Buch schreibt außerdem jedes Ereignis als
+genau eine Zeile; Zeilenumbrüche in Werten erscheinen als `\n`. Der
+Filter passt auf beide Formen: auf die Zeilen von `docker logs` und auf
+die Dateien des Log-Treibers `json-file`. Ältere, nicht verankerte
+Filter solltest Du durch diesen ersetzen.
 
 Und eine Jail dazu, zum Beispiel `/etc/fail2ban/jail.d/klein-buch.local`:
 
@@ -182,4 +271,4 @@ Firewall nicht. Bei iptables gehört sie dann in die Kette `DOCKER-USER`
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

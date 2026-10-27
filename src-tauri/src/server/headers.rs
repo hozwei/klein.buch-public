@@ -17,6 +17,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
+use tower::util::MapResponse;
+use tower_http::services::fs::ServeFileSystemResponseBody;
 use tower_http::services::{ServeDir, ServeFile};
 
 use super::state::ServerState;
@@ -206,21 +208,113 @@ pub async fn security_headers(
         .extensions()
         .get::<super::policy::ClientInfo>()
         .is_some_and(|c| c.https);
+    ensure_utf8_charset(response.headers_mut());
     let class = classify(&path, &response);
     apply(class, response.headers_mut(), &st.csp, https);
     response
 }
 
+/// ASVS 14.4.1 (Lauf F4b): Textantworten ohne Zeichensatz (`ServeDir` liefert
+/// `text/html`, `text/css`, `text/javascript` ohne Parameter) bekommen
+/// `charset=utf-8` — alle ausgelieferten Texte sind UTF-8 (Build der SPA,
+/// eigene Antworten). Vorhandene Parameter bleiben unangetastet.
+pub fn ensure_utf8_charset(headers: &mut HeaderMap) {
+    let Some(current) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return;
+    };
+    let lower = current.to_ascii_lowercase();
+    let textual = lower.starts_with("text/")
+        || lower.starts_with("application/javascript")
+        || lower.starts_with("image/svg+xml");
+    if !textual || lower.contains("charset=") {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!("{current}; charset=utf-8")) {
+        headers.insert(header::CONTENT_TYPE, value);
+    }
+}
+
+/// Antwort der statischen Auslieferung (`ServeDir`/`ServeFile`).
+pub type StaticResponse = axum::http::Response<ServeFileSystemResponseBody>;
+/// [`spa_service`]: `ServeDir` mit `Vary: Accept-Encoding` auf jeder Antwort.
+pub type SpaService = MapResponse<ServeDir<ServeFile>, fn(StaticResponse) -> StaticResponse>;
+
 /// Statische Auslieferung der SPA; unbekannte Pfade bekommen `index.html`
 /// (Client-Routing).
-pub fn spa_service(web_dir: &Path) -> ServeDir<ServeFile> {
-    ServeDir::new(web_dir).fallback(ServeFile::new(web_dir.join("index.html")))
+///
+/// Lauf 2026.11 U4 (ADR 0041 Nr. 212): Liegt neben einer Datei eine
+/// vorkomprimierte Variante aus dem Frontend-Build (`<datei>.br`,
+/// `<datei>.gz`, `vite.config.js`), geht sie an Clients, die sie laut
+/// `Accept-Encoding` annehmen — auch für den `index.html`-Fallback.
+/// Inhaltstyp und Header-Klasse richten sich weiter nach der Originaldatei.
+/// Der Server komprimiert nichts selbst: API (`/api/`), Belege und Archive
+/// (`/files/`) und `/legal/` laufen nicht über diesen Dienst und bleiben
+/// unkomprimiert (BREACH, unveränderte Bytes der Archive).
+pub fn spa_service(web_dir: &Path) -> SpaService {
+    let index = ServeFile::new(web_dir.join("index.html"))
+        .precompressed_br()
+        .precompressed_gzip();
+    let dir = ServeDir::new(web_dir)
+        .precompressed_br()
+        .precompressed_gzip()
+        .fallback(index);
+    MapResponse::new(
+        dir,
+        vary_accept_encoding as fn(StaticResponse) -> StaticResponse,
+    )
+}
+
+/// Jede statische Antwort hängt von `Accept-Encoding` ab (vorkomprimierte
+/// Variante oder roh): Caches dürfen sie nur je Kodierung wiederverwenden.
+fn vary_accept_encoding(mut response: StaticResponse) -> StaticResponse {
+    response
+        .headers_mut()
+        .append(header::VARY, HeaderValue::from_static("accept-encoding"));
+    response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): CSP-Hash eines Inline-Skripts bit-genau.
+    #[test]
+    fn csp_hash_known_answer() {
+        assert_eq!(
+            inline_script_hashes("<script>console.log(1)</script>"),
+            vec!["sha256-CihokcEcBW4atb/CW/XWsvWwbTjqwQlE9nj9ii5ww5M=".to_string()]
+        );
+    }
+
+    /// ASVS 14.4.1 (Lauf F4b): Textantworten bekommen `charset=utf-8`.
+    #[test]
+    fn text_responses_get_utf8_charset() {
+        let run = |ct: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap());
+            ensure_utf8_charset(&mut h);
+            h.get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(run("text/html"), "text/html; charset=utf-8");
+        assert_eq!(run("text/css"), "text/css; charset=utf-8");
+        assert_eq!(run("text/javascript"), "text/javascript; charset=utf-8");
+        assert_eq!(run("image/svg+xml"), "image/svg+xml; charset=utf-8");
+        assert_eq!(run("text/html; charset=utf-8"), "text/html; charset=utf-8");
+        assert_eq!(run("text/csv; Charset=UTF-8"), "text/csv; Charset=UTF-8");
+        for unchanged in ["application/json", "application/pdf", "image/png"] {
+            assert_eq!(run(unchanged), unchanged);
+        }
+        let mut none = HeaderMap::new();
+        ensure_utf8_charset(&mut none);
+        assert!(none.get(header::CONTENT_TYPE).is_none());
+    }
     #[test]
     fn hashes_only_inline_scripts() {
         let html = r#"<html><head><script type="module" src="/_app/a.js"></script>

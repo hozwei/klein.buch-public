@@ -6,8 +6,8 @@
 //! zurück. Die Commands nehmen nur noch die `uploadId`, lesen die Datei über
 //! [`UploadStore::read`] und geben sie nach Erfolg mit [`UploadStore::consume`]
 //! frei (ein fehlgeschlagener Versuch kann dieselbe Datei erneut verwenden).
-//! Nicht verbrauchte Uploads verfallen nach [`UPLOAD_TTL`], Reste beim Start
-//! (`<data>/tmp`).
+//! Nicht verbrauchte Uploads verfallen nach [`UPLOAD_TTL`], Reste beim
+//! Serverstart und durch den stündlichen Sweeper (`<data>/tmp`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

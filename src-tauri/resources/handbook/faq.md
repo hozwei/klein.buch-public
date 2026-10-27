@@ -3,7 +3,7 @@ slug: faq
 title: Häufige Fragen
 category: faq
 order: 400
-keywords: [faq, häufige fragen, antworten, hilfe, fragen, antworten]
+keywords: [faq, häufige fragen, antworten, hilfe, fragen, antworten, startbildschirm, verwerfen, mandantennummer]
 ---
 
 # Häufige Fragen
@@ -14,10 +14,13 @@ Steuern" oder "Troubleshooting".
 
 ## Wie ändere ich eine fertige Rechnung?
 
-Gar nicht. Festgeschriebene Rechnungen sind nach GoBD unveränderlich.
-Du erzeugst einen Storno-Beleg, der die fehlerhafte Rechnung
-neutralisiert, und schreibst gegebenenfalls eine neue korrekte
-Rechnung. Mehr im Kapitel "Storno statt Löschung".
+Gar nicht. Ausgestellte Rechnungen sind nach GoBD unveränderlich.
+Du stornierst die Rechnung (in der Rechnung im Menü "Mehr" unter
+"Stornieren"). Dabei entsteht ein Storno-Beleg, der die fehlerhafte
+Rechnung neutralisiert, und Du schreibst gegebenenfalls eine neue
+korrekte Rechnung. Einen Entwurf, der noch nicht ausgestellt ist,
+änderst Du dagegen jederzeit mit "Bearbeiten". Mehr im Kapitel
+"Storno statt Löschung".
 
 ## Was passiert, wenn ich meine Passphrase vergesse?
 
@@ -54,13 +57,32 @@ abgeglichen werden. Eine Instanz ist für genau ein Unternehmen und
 eine Person gedacht. Mehrere Benutzer mit eigenen Zugängen gibt es
 nicht.
 
+Auf Handy und Tablet kannst Du Klein.Buch über das Menü des Browsers
+auf den Startbildschirm legen. Es öffnet sich dann wie eine App, lädt
+aber jede Seite von Deinem Server und funktioniert ohne Verbindung zu
+ihm nicht. Auf iPhone und iPad meldest Du Dich in der
+Startbildschirm-App einmal gesondert an, weil sie ihre eigenen Cookies
+hat.
+
+## In welcher Zeitzone zeigt Klein.Buch Datum und Uhrzeit?
+
+Immer in deutscher Zeit (Europe/Berlin), egal wo Dein Gerät gerade
+steht oder welche Zeitzone es eingestellt hat. Das gilt für Belegdaten,
+"heute fällig" bei Abos, Zeitpunkte in den Protokollen und Hinweisen und
+für das Alter des letzten Backups. Bist Du auf Reisen, siehst Du also
+dieselben Tage und Uhrzeiten wie auf Deinen Belegen.
+
 ## Wie kommt meine Rechnung zum Steuerberater?
 
-Am bequemsten über das Steuerberater-Paket. Klick im Hauptmenü auf
-"Steuer (EÜR)", dann auf "Für die Steuererklärung exportieren →" und
-bei "Steuerberater-Paket (ZIP, alles in einem)" auf "Paket
-herunterladen". Klein.Buch fragt vorher noch einmal Dein
-Daten-Passwort und den App-Code ab. Dein Browser speichert dann ein
+Am bequemsten über das Steuerberater-Paket. Klick in der Navigation
+auf "Steuer (EÜR)", dann auf "Für die Steuererklärung exportieren →"
+und bei "Steuerberater-Paket (ZIP, alles in einem)" auf "Paket
+herunterladen". Im Abschnitt "Für die Steuerberatung" kannst Du
+vorher Kontenrahmen, Beraternummer und Mandantennummer für den
+DATEV-Stapel eintragen. Klein.Buch merkt sie sich in Deinem Browser,
+nicht auf dem Server; auf einem anderen Gerät oder in einem anderen
+Browser trägst Du sie neu ein. Vor dem Herunterladen fragt Klein.Buch
+noch einmal Dein Daten-Passwort und den App-Code ab. Dein Browser speichert dann ein
 ZIP mit PDFs, XRechnung-XMLs, DATEV-Stapel, ELSTER-Ausfüllhilfe als
 CSV und einem Manifest mit SHA-256-Prüfwerten. Das ZIP sendest Du
 Deinem Steuerberater per E-Mail oder Daten-Übergabe-Dienst. Mehr im
@@ -74,9 +96,21 @@ umsatzsteuerpflichtig bist (§14c UStG). Klein.Buch sperrt aus
 diesem Grund alle Umsatzsteuer-Felder, solange der
 Kleinunternehmer-Schalter angeschaltet ist.
 
+## Muss ich als Kleinunternehmer jemals Umsatzsteuer zahlen?
+
+Ja, wenn Du Leistungen beziehst, für die Du als Empfänger die
+Umsatzsteuer schuldest (§13b UStG, "Reverse-Charge"). Häufige Fälle
+sind Online-Werbung und Software von Anbietern mit Sitz im
+EU-Ausland. Du gibst dann für den betreffenden Monat eine
+Umsatzsteuer-Voranmeldung ab und zahlst die Steuer; Vorsteuer darfst
+Du nicht abziehen. Klein.Buch berechnet diese Steuer nicht. Das
+Vorgehen steht im Kapitel "Kosten erfassen".
+
 ## Kann ich Klein.Buch auf einen anderen Server umziehen?
 
-Ja, über ein Backup. Du richtest auf dem neuen Server eine neue
+Ja, über ein Backup. Die Datei holst Du auf dem alten Server unter
+"Einstellungen → Backups" mit "Herunterladen" im Backup-Verlauf (oder
+von einem externen Ziel). Dann richtest Du auf dem neuen Server eine neue
 Instanz ein und spielst dort unter "Einstellungen → Backups" im
 Abschnitt "Wiederherstellen" die Backup-Datei (Endung `.kbk`) ein.
 Dafür brauchst Du die Passphrase, mit der das Backup verschlüsselt
@@ -102,15 +136,16 @@ richtigen E-Rechnung. Notfalls trägst Du die Position selbst über
 
 Per Upload im Browser. Speichere den Anhang aus der E-Mail auf dem
 Gerät, an dem Du gerade sitzt. Klick dann in der Kosten-Liste auf
-"E-Rechnung importieren", wähle die Datei aus und klick auf
-"Einlesen & prüfen". Einen Ordner, den Klein.Buch selbst überwacht,
+"E-Rechnung importieren" (auf dem Handy im Menü "Mehr"), wähle die
+Datei aus und klick auf "Einlesen und prüfen". Einen Ordner, den Klein.Buch selbst überwacht,
 gibt es nicht. Details im Kapitel "Rechnungseingang per Upload".
 
 ## Kann ich die Original-XML einer empfangenen Rechnung sehen?
 
 Ja. Öffne den Eingangsbeleg in der Kosten-Liste, dort gibt es den
-Button "Roh-XML anzeigen". Klein.Buch öffnet ein Fenster mit der
-ursprünglichen XML-Datei, formatiert und mit Copy-Button. Das ist
+Knopf "Roh-XML anzeigen" (auf dem Handy im Menü "Mehr"). Klein.Buch
+öffnet ein Fenster mit der ursprünglichen XML-Datei, formatiert und
+mit dem Knopf "XML kopieren". Das ist
 praktisch, wenn Dein Steuerberater oder ein Prüfer in die
 maschinenlesbaren Felder schauen will. Das Anzeigen ändert nichts am
 Beleg.
@@ -120,8 +155,10 @@ Beleg.
 Klein.Buch zeigt die Meldungen des KoSIT-Validators. Bei Deinen
 eigenen Rechnungen bricht das Ausstellen ab, wenn KoSIT die Rechnung
 ablehnt; sie bleibt dann ein Entwurf. Fehlende Angaben wie die
-Telefonnummer in Deinen Firmendaten oder das Fälligkeitsdatum meldet
-Klein.Buch schon vorher mit einem klaren Satz. Kommt trotzdem eine
+Telefonnummer in Deinen Firmendaten meldet Klein.Buch schon vorher:
+Öffnest Du einen Entwurf, prüft ihn die Karte "Ausstellen" unter den
+Positionen und nennt, was fehlt, mit einem Link zu der Stelle, an der
+Du es ergänzt. Kommt trotzdem eine
 KoSIT-Ablehnung, ist das ein Klein.Buch-Fehler, den Du melden
 solltest. Bei Eingangs-Rechnungen: Du erfasst die Datei trotzdem.
 Der Fehler liegt beim Absender; Du bist nicht verpflichtet, eine
@@ -134,7 +171,9 @@ fehlerhafte Rechnung, lässt sie aber sichtbar. Löschen würde die
 Original-Rechnung aus der Datenbank entfernen. Letzteres ist
 gesetzlich verboten, weil das Finanzamt sonst nicht mehr
 nachvollziehen könnte, was passiert ist. Klein.Buch erlaubt nur
-das Storno.
+das Storno. Einen Entwurf, den Du nicht mehr brauchst, verwirfst Du
+mit "Entwurf verwerfen" im Menü "Mehr". Auch er verschwindet nicht,
+sondern bleibt mit dem Status "Verworfen" und Deinem Grund sichtbar.
 
 ## Wie oft macht Klein.Buch ein Backup?
 
@@ -152,7 +191,8 @@ Schlüssel zur Datenbank. Nach jedem Neustart des Containers kann
 Klein.Buch die Datenbank erst öffnen, wenn Du Dich im Browser mit
 Daten-Passwort und App-Code anmeldest. Bis dahin laufen auch keine
 Hintergrund-Aufgaben. Fällige Arbeiten wie das Tages-Backup oder
-Abo-Rechnungen holt Klein.Buch nach der Anmeldung nach.
+Abo-Rechnungen holt Klein.Buch eine bis fünf Minuten nach der Anmeldung nach
+(genau ein Tages-Backup, größere Abo-Rückstände nur nach Rückfrage).
 
 ## Wie spiele ich ein Update ein?
 
@@ -177,10 +217,10 @@ einen Aktenschrank.
 
 ## Kann ich Rechnungen in fremde Sprachen schreiben?
 
-In Version 1.0 ist die Sprache des PDF-Templates Deutsch. Du
+Derzeit ist die Sprache des PDF-Templates Deutsch. Du
 kannst die Texte in den Positionen frei wählen (also auch eine
 englische Leistungs-Beschreibung), aber die Klein.Buch-Labels
-("Rechnungs-Nummer", "Leistungsdatum") sind Deutsch. Volle
+("Rechnungsnummer", "Leistungsdatum") sind Deutsch. Volle
 Mehrsprachigkeit kommt in einer späteren Version.
 
 ## Was bedeutet "Prüf- und Konvertierungsdienst nicht verfügbar"?
@@ -227,7 +267,7 @@ Im Klein.Buch-Repository auf GitHub gibt es Issues. Dort beschreibst
 Du Schritt für Schritt, was Du getan hast und was schief gegangen
 ist. Hänge möglichst keine echten Kunden-Daten an; nutze
 Demo-Daten oder schwärze Personen-Daten. Den Link zum Repository
-findest Du im Hauptmenü unter "Über".
+findest Du unten in der Navigation unter "Über".
 
 ## Funktioniert Klein.Buch ohne Internet?
 
@@ -248,7 +288,7 @@ Belege nachtragen.
 ## Was wenn das Finanzamt die Datenbank sehen will?
 
 Bei einer Betriebsprüfung darf das Finanzamt Einsicht verlangen.
-Du übergibst dann den Steuerberater-ZIP. Klein.Buch lässt keine
+Du übergibst dann das Steuerberater-Paket (ZIP). Klein.Buch lässt keine
 Direkt-Anbindung an Prüfungs-Software zu (das nennt sich Z3-Zugriff
 und ist die "Datenträger-Überlassung"). Der ZIP-Export erfüllt
 diese Form: PDF, XML, DATEV-CSV und Inhalts-Übersicht.
@@ -258,7 +298,7 @@ diese Form: PDF, XML, DATEV-CSV und Inhalts-Übersicht.
 Fast alle Steuerberater nutzen DATEV-kompatible Software. Der
 DATEV-Stapel aus Klein.Buch funktioniert dort direkt. Wenn Dein
 Berater eine andere Software hat, frag ihn nach dem akzeptierten
-Format. Klein.Buch unterstützt in Version 1.0 keine weiteren
+Format. Klein.Buch unterstützt derzeit keine weiteren
 Format-Adapter, aber die Roh-PDFs und XMLs aus dem ZIP kann jede
 seriöse Software lesen.
 
@@ -267,11 +307,11 @@ seriöse Software lesen.
 In Deutschland gibt es für Buchhaltungs-Software keine offizielle
 GoBD-Zertifizierung. Es gibt nur die Möglichkeit, ein
 GoBD-Testat (eine Bestätigung durch einen Wirtschafts-Prüfer) zu
-erwerben. Klein.Buch in Version 1.0 hat noch kein solches Testat.
+erwerben. Klein.Buch hat bisher kein solches Testat.
 Die App ist nach den GoBD-Anforderungen gebaut, aber die formale
 Bestätigung steht aus. Bei einer Prüfung wäge das mit Deinem
 Steuerberater ab.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

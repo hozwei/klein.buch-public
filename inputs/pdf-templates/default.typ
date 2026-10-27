@@ -4,6 +4,7 @@
 //   data.invoice.{number, date, delivery_date, due_date, currency,
 //                 is_kleinunternehmer, net_amount, tax_amount, gross_amount}
 //   data.invoice.items[].{position, description, quantity, unit, unit_price, net_amount, tax_rate, tax_category}
+//   data.invoice.storno_of = {number, date} nur bei Storno-Belegen (sonst fehlt das Feld)
 //   data.seller.{name, street, postal_code, city, tax_number, vat_id, email, phone, iban, bic}
 //   data.buyer.{name, street, postal_code, city, vat_id, email}
 //   data.kleinunternehmer.{hinweis_text}
@@ -30,9 +31,11 @@
   if p.len() == 3 { p.at(2) + "." + p.at(1) + "." + p.at(0) } else { str(d) }
 }
 
-// Block-3a-Hotfix: `json.decode(...)` parst In-Memory-Strings; `json(...)`
-// würde den Inhalt als Dateipfad missinterpretieren.
-#let data = json.decode(sys.inputs.at("data-json"))
+// Daten als In-Memory-JSON: `json(bytes(...))` (seit Typst 0.15 der einzige Weg;
+// `json.decode(...)` ist entfernt, `json("...")` allein läse einen Dateipfad).
+#let data = json(bytes(sys.inputs.at("data-json")))
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum).
+#let storno_of = data.invoice.at("storno_of", default: none)
 
 #set page(
   paper: "a4",
@@ -100,9 +103,12 @@
   columns: (1fr, auto),
   align: (left, right),
   [
-    = Rechnung
+    #if storno_of != none [= Stornorechnung] else [= Rechnung]
     Rechnungsnummer: *#data.invoice.number* \
     Rechnungsdatum: #format_date(data.invoice.date) \
+    #if storno_of != none [
+      Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \
+    ]
     #if data.invoice.at("delivery_date", default: none) != none [
       Leistungsdatum: #format_date(data.invoice.delivery_date) \
     ] else if data.invoice.at("delivery_date_fallback", default: none) != none [
@@ -153,7 +159,7 @@
       columns: (auto, auto),
       align: (left, right),
       stroke: none,
-      [*Rechnungsbetrag:*], [*#format_euro(data.invoice.gross_amount)*],
+      [*#if storno_of != none [Stornobetrag:] else [Rechnungsbetrag:]*], [*#format_euro(data.invoice.gross_amount)*],
     )
   ] else [
     #table(
@@ -185,9 +191,9 @@
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if data.invoice.at("due_date", default: none) != none [ bis zum #format_date(data.invoice.due_date)] auf das unten genannte Konto. Verwendungszweck: *#data.invoice.number*.]
 ]
 
 #v(0.6cm)
-#text(size: 9pt, fill: luma(110))[Vielen Dank für Ihren Auftrag.]
+#text(size: 9pt, fill: luma(110))[#if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else [Vielen Dank für Ihren Auftrag.]]

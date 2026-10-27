@@ -5,7 +5,7 @@
 //! (`related_kind = 'package_catalog'`) protokolliert — und zwar je Versuch
 //! GENAU EINMAL, auch wenn der eigentliche Versand fehlschlägt.
 //!
-//! Damit der Test ohne MailHog/SMTP-Server deterministisch läuft, zeigt der
+//! Damit der Test ohne Mailpit/SMTP-Server deterministisch läuft, zeigt der
 //! Mail-Account auf einen geschlossenen Port (Connection refused). Der Versand
 //! schlägt fehl → `send_and_log` schreibt genau einen `failed`-Eintrag. So wird
 //! die GoBD-relevante Garantie „ein Protokolleintrag pro Versuch, kein Archiv"
@@ -56,7 +56,7 @@ async fn setup_env() -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -64,7 +64,7 @@ async fn setup_env() -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "inhaber@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -155,11 +155,9 @@ async fn create_unreachable_account(pool: &SqlitePool) -> String {
             smtp_port: Some(59999),
             smtp_user: None,
             smtp_use_tls: false,
-            from_email: "schmidm@wildbach-computerhilfe.de".into(),
-            from_name: "Wildbach Computerhilfe".into(),
+            from_email: "inhaber@example.org".into(),
+            from_name: "Beispiel IT-Service".into(),
             is_default: true,
-            oauth_tenant_id: None,
-            oauth_client_id: None,
         },
     )
     .await
@@ -172,9 +170,10 @@ async fn create_unreachable_account(pool: &SqlitePool) -> String {
 #[tokio::test]
 async fn catalog_send_writes_exactly_one_email_log_and_no_archive() {
     let env = setup_env().await;
-    let contact_id = create_contact(&env.pool, Some("empfaenger@kunde-test.de")).await;
+    let contact_id = create_contact(&env.pool, Some("empfaenger@kunde.example.org")).await;
     let package_id = create_package(&env.pool).await;
     let account_id = create_unreachable_account(&env.pool).await;
+    let contact_id_for_log = contact_id.clone();
 
     let args = SendPackageCatalogArgs {
         account_id,
@@ -196,9 +195,16 @@ async fn catalog_send_writes_exactly_one_email_log_and_no_archive() {
     let e = &entries[0];
     assert_eq!(e.related_kind, "package_catalog");
     assert_eq!(e.status, "failed");
-    assert_eq!(e.to_email, "empfaenger@kunde-test.de");
+    assert_eq!(e.to_email, "empfaenger@kunde.example.org");
     assert_eq!(e.attachment_count, 1);
-    assert!(e.related_id.is_none(), "Broschüre hat keinen Beleg-Bezug");
+    // Kein Beleg-Bezug; seit Lauf F (KB-0049) zeigt `related_id` auf den
+    // Kontakt, damit die DSGVO-Auskunft den Versand auch nach einem
+    // Adresswechsel findet.
+    assert_eq!(
+        e.related_id.as_deref(),
+        Some(contact_id_for_log.as_str()),
+        "Katalogversand verweist auf den Kontakt"
+    );
 
     // KEIN write-once-Archiv: die Broschüre ist kein §14-Beleg.
     let archive_count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM archive_entries")
@@ -214,7 +220,7 @@ async fn catalog_send_writes_exactly_one_email_log_and_no_archive() {
 #[tokio::test]
 async fn catalog_send_rejects_empty_selection() {
     let env = setup_env().await;
-    let contact_id = create_contact(&env.pool, Some("empfaenger@kunde-test.de")).await;
+    let contact_id = create_contact(&env.pool, Some("empfaenger@kunde.example.org")).await;
     let account_id = create_unreachable_account(&env.pool).await;
 
     let args = SendPackageCatalogArgs {

@@ -255,16 +255,21 @@ pub async fn unarchive(pool: &SqlitePool, id: &str) -> Result<()> {
 /// Anonymisierungs-Sperre (Block 19, Manuel-Entscheidung "Nur ohne offene
 /// Entwürfe"): solange offene Entwürfe existieren, ist die Anonymisierung
 /// blockiert (Entwürfe nutzen den Live-Kontakt, nicht den Snapshot).
+/// Verworfene Rechnungs-Entwürfe und zurückgezogene Angebots-Entwürfe zählen
+/// nicht (W14-032, Migration 0032): sie sind endgültig und werden nie mehr
+/// festgeschrieben.
 /// Rückgabe: `(offene_rechnungs_entwuerfe, offene_angebots_entwuerfe)`.
 pub async fn count_open_drafts(pool: &SqlitePool, contact_id: &str) -> Result<(i64, i64)> {
     let invoice_drafts: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM invoices WHERE contact_id = ? AND locked_at IS NULL",
+        "SELECT COUNT(*) FROM invoices
+          WHERE contact_id = ? AND locked_at IS NULL AND voided_at IS NULL",
     )
     .bind(contact_id)
     .fetch_one(pool)
     .await?;
     let quote_drafts: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM quotes WHERE contact_id = ? AND locked_at IS NULL",
+        "SELECT COUNT(*) FROM quotes
+          WHERE contact_id = ? AND locked_at IS NULL AND status = 'draft'",
     )
     .bind(contact_id)
     .fetch_one(pool)
@@ -298,20 +303,91 @@ pub async fn count_locked_documents(pool: &SqlitePool, contact_id: &str) -> Resu
 /// nicht personenbezogen).
 ///
 /// **Kein DELETE** — die rechnungsgebundenen Daten bleiben über den
-/// Buyer-Snapshot (invoices/quotes) 10 Jahre erhalten (§147 AO / GoBD).
+/// Buyer-Snapshot festgeschriebener Belege 10 Jahre erhalten (§147 AO / GoBD).
+/// Verworfene Rechnungs-Entwürfe und zurückgezogene, nie ausgestellte
+/// Angebote verlieren ihren Snapshot (Lauf F2c, siehe
+/// [`anonymize_with_pauses`]).
 ///
 /// Blockiert (Err), solange offene Entwürfe existieren (siehe
 /// [`crate::domain::anonymize::anonymization_blocker`]) oder der Kontakt bereits
 /// anonymisiert ist.
 pub async fn anonymize(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
-    let existing = get(pool, id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {id}")))?;
+    Ok(anonymize_with_pauses(pool, id).await?.contact)
+}
+
+/// Ergebnis von [`anonymize_with_pauses`] — Zählwerte und Belegnummern (keine
+/// personenbezogenen Inhalte) stehen auch im Audit `contact.anonymize`.
+#[derive(Debug, Clone)]
+pub struct Anonymized {
+    pub contact: ContactRow,
+    /// Festgeschriebene Rechnungen/Angebote, deren Empfänger-Snapshot bleibt.
+    pub retained_invoices: i64,
+    pub retained_quotes: i64,
+    pub paused_templates: u64,
+    pub paused_subscriptions: u64,
+    /// Verworfene Rechnungs-Entwürfe, deren Empfänger-Snapshot entfernt wurde.
+    pub scrubbed_voided_invoices: Vec<String>,
+    /// Zurückgezogene, nie ausgestellte Angebote, deren Snapshot entfernt wurde.
+    pub scrubbed_withdrawn_quotes: Vec<String>,
+    /// Abo-Vorlagen, deren Bezeichnung und Notiz ersetzt wurden.
+    pub scrubbed_templates: u64,
+    /// Kosten-Abos (Kontakt als Lieferant), deren Bezeichnung ersetzt wurde
+    /// (Lauf F3b).
+    pub scrubbed_subscriptions: u64,
+}
+
+/// Bezeichnung einer Abo-Vorlage nach der Anonymisierung ihres Kontakts (die
+/// Bezeichnung nennt oft den Kunden, z. B. „Wartung – Müller“).
+pub const ANONYMIZED_TEMPLATE_LABEL: &str = "Abo-Vorlage (Kontakt anonymisiert)";
+
+/// Bezeichnung (und ggf. Buchungsvorlage) eines Kosten-Abos nach der
+/// Anonymisierung seines Lieferanten (Lauf F3b).
+pub const ANONYMIZED_SUBSCRIPTION_LABEL: &str = "Kosten-Abo (Lieferant anonymisiert)";
+
+/// Wie [`anonymize`], alles in **einer** Transaktion samt Audit
+/// `contact.anonymize`:
+///
+/// * pausiert alle aktiven Abo-Rechnungs-Vorlagen an diesen Kontakt und
+///   Kosten-Abos dieses Lieferanten (Lauf F, W14-031: an einen anonymisierten
+///   Kontakt entstehen keine Belege mehr) und ersetzt Bezeichnung und Notiz
+///   seiner Vorlagen (Lauf F2c; Positionen beschreiben die Leistung und
+///   bleiben) sowie die Bezeichnung seiner Kosten-Abos, deren Buchungsvorlage
+///   nur, wenn sie den Namen nennt (Lauf F3b);
+/// * entfernt den Empfänger-Snapshot (Name → Platzhalter, Anschrift, USt-IdNr.,
+///   E-Mail, interne Notiz → leer) aus seinen **verworfenen Rechnungs-Entwürfen**
+///   und **zurückgezogenen, nie festgeschriebenen Angeboten** (Lauf F2c, ADR 0039
+///   Nr. 124 (3)): nie ausgestellte Belege sind weder Buchungsbeleg noch
+///   Handelsbrief (§147 Abs. 1 AO, §14b UStG), Art. 17 Abs. 3 lit. b DSGVO trägt
+///   ihre Aufbewahrung nicht. Nummer, Datum, Betrag, Positionen sowie Zeitpunkt
+///   und Grund des Verwerfens bleiben — sie dokumentieren die verbrauchte
+///   Nummer. Die DB lässt bei verworfenen Entwürfen nur genau diese Änderung zu
+///   (`trg_invoices_voided_final`).
+pub async fn anonymize_with_pauses(pool: &SqlitePool, id: &str) -> Result<Anonymized> {
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let existing: Option<ContactRow> = sqlx::query_as("SELECT * FROM contacts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let existing =
+        existing.ok_or_else(|| Error::Domain(format!("Kontakt nicht gefunden: {id}")))?;
     if existing.anonymized_at.is_some() {
         return Err(Error::Domain("Kontakt ist bereits anonymisiert.".into()));
     }
 
-    let (inv_drafts, quote_drafts) = count_open_drafts(pool, id).await?;
+    let inv_drafts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invoices
+          WHERE contact_id = ? AND locked_at IS NULL AND voided_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let quote_drafts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM quotes
+          WHERE contact_id = ? AND locked_at IS NULL AND status = 'draft'",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
     if let Some(msg) = anonymize_domain::anonymization_blocker(inv_drafts, quote_drafts) {
         return Err(Error::Domain(msg));
     }
@@ -331,17 +407,141 @@ pub async fn anonymize(pool: &SqlitePool, id: &str) -> Result<ContactRow> {
     )
     .bind(&placeholder)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
             "Anonymisierung fehlgeschlagen (Kontakt nicht gefunden oder bereits anonymisiert): {id}"
         )));
     }
-
-    get(pool, id)
+    let paused_templates = sqlx::query(
+        "UPDATE recurring_invoices SET active = 0, updated_at = datetime('now','utc')
+          WHERE contact_id = ? AND active = 1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let scrubbed_templates = sqlx::query(
+        "UPDATE recurring_invoices SET label = ?, notes = NULL,
+                updated_at = datetime('now','utc')
+          WHERE contact_id = ?",
+    )
+    .bind(ANONYMIZED_TEMPLATE_LABEL)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let paused_subscriptions = sqlx::query(
+        "UPDATE recurring_subscriptions SET active = 0 WHERE vendor_contact_id = ? AND active = 1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    // Lauf F3b: Kosten-Abos dieses Lieferanten sind Stammdaten wie Abo-Vorlagen
+    // (kein Beleg, Art. 17 Abs. 3 lit. b DSGVO trägt sie nicht): Bezeichnung
+    // ersetzt (sie nennt oft die Person, z. B. „Miete Büro – Hans Müller“), die
+    // Buchungsvorlage nur, wenn sie den Namen nennt — sonst beschreibt sie die
+    // eingekaufte Leistung und bleibt wie die Positionen einer Vorlage. Bereits
+    // gebuchte Kosten sind Belege und bleiben unverändert.
+    let subscriptions: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, description_template FROM recurring_subscriptions
+          WHERE vendor_contact_id = ? ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut scrubbed_subscriptions: u64 = 0;
+    let mut scrubbed_subscription_templates: u64 = 0;
+    for (sub_id, template) in &subscriptions {
+        let new_template = if anonymize_domain::mentions_name(template, &existing.name) {
+            scrubbed_subscription_templates += 1;
+            ANONYMIZED_SUBSCRIPTION_LABEL
+        } else {
+            template.as_str()
+        };
+        scrubbed_subscriptions += sqlx::query(
+            "UPDATE recurring_subscriptions SET label = ?, description_template = ? WHERE id = ?",
+        )
+        .bind(ANONYMIZED_SUBSCRIPTION_LABEL)
+        .bind(new_template)
+        .bind(sub_id)
+        .execute(&mut *tx)
         .await?
-        .ok_or_else(|| Error::Domain("anonymize: post-UPDATE SELECT leer".into()))
+        .rows_affected();
+    }
+    // Verworfene Entwürfe: nur die Empfänger-Felder (Land bleibt) und die
+    // interne Notiz, `updated_at` unverändert — genau die Änderung, die
+    // `trg_invoices_voided_final` zulässt.
+    let scrubbed_voided_invoices: Vec<String> = sqlx::query_scalar(
+        "UPDATE invoices
+            SET buyer_name = ?, buyer_street = NULL, buyer_postal_code = NULL,
+                buyer_city = NULL, buyer_vat_id = NULL, buyer_email = NULL, notes = NULL
+          WHERE contact_id = ? AND voided_at IS NOT NULL AND locked_at IS NULL
+         RETURNING invoice_number",
+    )
+    .bind(&placeholder)
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let scrubbed_withdrawn_quotes: Vec<String> = sqlx::query_scalar(
+        "UPDATE quotes
+            SET buyer_name = ?, buyer_street = NULL, buyer_postal_code = NULL,
+                buyer_city = NULL, buyer_vat_id = NULL, buyer_email = NULL, notes = NULL
+          WHERE contact_id = ? AND status = 'canceled' AND locked_at IS NULL
+         RETURNING quote_number",
+    )
+    .bind(&placeholder)
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let retained_invoices: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM invoices WHERE contact_id = ? AND locked_at IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let retained_quotes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM quotes WHERE contact_id = ? AND locked_at IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::db::repo::audit_log::append_in(
+        &mut tx,
+        "contact.anonymize",
+        "contact",
+        id,
+        Some(serde_json::json!({
+            "retainedInvoices": retained_invoices,
+            "retainedQuotes": retained_quotes,
+            "pausedRecurringInvoices": paused_templates,
+            "pausedRecurringSubscriptions": paused_subscriptions,
+            "scrubbedRecurringInvoices": scrubbed_templates,
+            "scrubbedRecurringSubscriptions": scrubbed_subscriptions,
+            "scrubbedSubscriptionTemplates": scrubbed_subscription_templates,
+            "scrubbedVoidedInvoices": scrubbed_voided_invoices,
+            "scrubbedWithdrawnQuotes": scrubbed_withdrawn_quotes,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+
+    let contact = get(pool, id)
+        .await?
+        .ok_or_else(|| Error::Domain("anonymize: post-UPDATE SELECT leer".into()))?;
+    Ok(Anonymized {
+        contact,
+        retained_invoices,
+        retained_quotes,
+        paused_templates,
+        paused_subscriptions,
+        scrubbed_voided_invoices,
+        scrubbed_withdrawn_quotes,
+        scrubbed_templates,
+        scrubbed_subscriptions,
+    })
 }
 
 /// Case-insensitive Substring-Suche über `name`, `email`, `vat_id`,

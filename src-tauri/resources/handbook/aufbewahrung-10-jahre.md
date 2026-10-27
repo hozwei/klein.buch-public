@@ -96,6 +96,31 @@ verlässlich: Bei einer späteren Prüfung kannst Du dem Finanzamt
 zeigen, dass Du die 10-Jahres-Frist von Anfang an architektonisch
 nicht brechen konntest.
 
+## Nach Ablauf der Frist
+
+Klein.Buch löscht auch nach zehn Jahren nichts von selbst. Die Frist
+verlängert sich nämlich, solange die Unterlagen für eine noch offene
+Steuerfestsetzung gebraucht werden, etwa während einer Außenprüfung
+oder eines Einspruchs (§147 Abs. 3 AO). Das kann Klein.Buch nicht
+beurteilen, und eine Automatik könnte gerade benötigte Belege
+vernichten. Ist die Frist für Dich sicher abgelaufen, entscheidest Du
+selbst.
+
+Die Anonymisierung eines Kontakts (Kapitel "DSGVO-Auskunft und
+Anonymisierung") entfernt dabei nur einen Teil: die Kontaktdaten
+selbst, den Empfänger in verworfenen Rechnungs- und
+Angebots-Entwürfen, Bezeichnung und Notiz seiner Abo-Vorlagen und die
+Bezeichnung seiner Kosten-Abos. Was Klein.Buch unveränderlich
+aufbewahrt, bleibt auch nach der Frist: die ausgestellten Rechnungen
+und Storno-Belege und die fertiggestellten Angebote mit dem damaligen
+Empfänger, ihre PDF- und XML-Dateien im Archiv, das E-Mail-Protokoll
+mit den Empfängeradressen und das Audit-Protokoll.
+Einzelne Belege oder eine einzelne Person lassen sich daraus nicht
+löschen. Den ganzen Datenbestand beendest Du, indem Du die Instanz
+stilllegst und ihr Volume samt Backups löschst; vorher sicherst Du, was
+noch aufbewahrt werden muss, zum Beispiel jüngere Jahre in einem
+Export.
+
 ## Was beim Server-Wechsel passieren muss
 
 Wenn Du mit Klein.Buch auf einen neuen Server umziehst:
@@ -118,4 +143,4 @@ Kapitel "Notfall: Instanz neu aufsetzen und wiederherstellen".
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

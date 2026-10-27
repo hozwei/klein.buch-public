@@ -309,7 +309,7 @@ fn no_exposed_command_takes_a_path() {
         }
     }
     let mut offenders = Vec::new();
-    for spec in REGISTRY.iter().filter(|c| c.exposed()) {
+    for spec in REGISTRY.iter() {
         let struct_name: String = spec
             .name
             .split('_')

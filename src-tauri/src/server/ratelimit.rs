@@ -17,6 +17,13 @@
 //! - Der Serverschlüssel liegt in `/data/auth/device.key` (32 Byte, 0600).
 //! - Fehlversuche seit der letzten erfolgreichen Anmeldung (für den Hinweis
 //!   nach dem Login).
+//! - Obergrenze in Folge (W14-004, NIST SP 800-63B §5.2.2, Lauf F4a): Nach
+//!   [`TOTP_LOCK_AFTER`] Fehlversuchen ohne Gerätecookie (Anmeldung und Re-Auth
+//!   mit TOTP) ohne zwischenzeitliche erfolgreiche Anmeldung ist die Anmeldung
+//!   mit TOTP ohne Gerätecookie gesperrt — unabhängig von der Zeit, bis eine
+//!   Anmeldung von einem bekannten Gerät (Gerätecookie) oder mit Einmal-Code
+//!   gelingt bzw. die Einrichtung (`totp-reset`) abgeschlossen ist. Der Zähler
+//!   liegt in `/data/auth/totp-lock.json` (übersteht Neustarts).
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -31,7 +38,7 @@ use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
 use base64::Engine as _;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore as _;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -51,6 +58,18 @@ pub const MAX_WAIT: Duration = Duration::from_secs(3600);
 pub const EXPIRY: Duration = Duration::from_secs(24 * 3600);
 pub const DEVICE_COOKIE: &str = "__Host-kb_device";
 pub const DEVICE_KEY_FILE: &str = "device.key";
+/// Fehlversuche in Folge ohne Gerätecookie, nach denen die Anmeldung mit TOTP
+/// ohne Gerätecookie gesperrt ist (W14-004, NIST SP 800-63B §5.2.2: höchstens
+/// 100 aufeinanderfolgende Fehlversuche je Konto).
+pub const TOTP_LOCK_AFTER: u32 = 100;
+/// Zähler der Fehlversuche in Folge (`/data/auth/totp-lock.json`, 0600).
+pub const TOTP_LOCK_FILE: &str = "totp-lock.json";
+/// Falsche Passphrase nach **gültigem** zweitem Faktor in Folge, ab der ein
+/// Hinweis „App-Code womöglich bekannt“ entsteht (Lauf F4d). Anders als die
+/// Obergrenze [`TOTP_LOCK_AFTER`] (auch ohne jede Kenntnis auslösbar) setzt
+/// dieser Fall einen gültigen App-Code bzw. Einmal-Code voraus. Drei, damit
+/// ein einzelner Tippfehler des Inhabers keinen Alarm auslöst.
+pub const SUSPECT_FACTOR_AFTER: u32 = 3;
 const MAX_ENTRIES: usize = 10_000;
 
 struct Entry {
@@ -59,10 +78,38 @@ struct Entry {
     blocked_until: Option<Instant>,
 }
 
+/// Ergebnis von [`RateLimiter::streak_failure`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Streak {
+    /// Weiter unter der Grenze.
+    Counted(u32),
+    /// Dieser Fehlversuch hat die Grenze erreicht: ab jetzt gesperrt.
+    Tripped,
+    /// Schon gesperrt (ein Versuch, der vor dem Erreichen der Grenze
+    /// angenommen wurde).
+    AlreadyLocked,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct StreakFile {
+    failures: u32,
+}
+
 pub struct RateLimiter {
     entries: Mutex<HashMap<String, Entry>>,
     failed_since_success: AtomicU64,
     device_key: [u8; 32],
+    /// Fehlversuche in Folge ohne Gerätecookie (W14-004).
+    streak: Mutex<u32>,
+    /// Ablage des Zählers; `None` in Unit-Tests ohne Datenverzeichnis.
+    streak_file: Option<std::path::PathBuf>,
+    /// Falsche Passphrase nach gültigem zweitem Faktor in Folge (Lauf F4d;
+    /// nur im Speicher, eine erfolgreiche Anmeldung bzw. Re-Auth setzt ihn
+    /// zurück): (Anzahl, Kennung der Folge). Die Kennung ist eine UUIDv7 je
+    /// Folge (F5-fix): ein Zeitstempel in Sekunden kollidierte, wenn zwei
+    /// Folgen — etwa vor und nach einem Neustart — in derselben Sekunde
+    /// begannen, und der zweite Hinweis fiel dem `dedup_key` zum Opfer.
+    factor_suspect: Mutex<(u32, String)>,
 }
 
 /// Schlüssel für das Rate-Limit (IPv6 zusammengefasst je /64).
@@ -83,6 +130,9 @@ impl RateLimiter {
             entries: Mutex::new(HashMap::new()),
             failed_since_success: AtomicU64::new(0),
             device_key,
+            streak: Mutex::new(0),
+            streak_file: None,
+            factor_suspect: Mutex::new((0, String::new())),
         }
     }
 
@@ -118,11 +168,134 @@ impl RateLimiter {
                 std::fs::rename(&tmp, &path)?;
             }
         }
-        Ok(Self::new(key))
+        let streak_file = dir.join(TOTP_LOCK_FILE);
+        // Unlesbar oder kaputt: wie gesperrt behandeln wäre eine Aussperrung
+        // ohne Anlass; der Zähler beginnt neu (Log-WARN).
+        let failures = match std::fs::read(&streak_file) {
+            Ok(bytes) => match serde_json::from_slice::<StreakFile>(&bytes) {
+                Ok(f) => f.failures,
+                Err(e) => {
+                    tracing::warn!("{TOTP_LOCK_FILE} unlesbar ({e}) — Zähler beginnt neu");
+                    0
+                }
+            },
+            Err(_) => 0,
+        };
+        let mut limiter = Self::new(key);
+        limiter.streak = Mutex::new(failures);
+        limiter.streak_file = Some(streak_file);
+        Ok(limiter)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn streak_guard(&self) -> std::sync::MutexGuard<'_, u32> {
+        self.streak.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Schreibt den Zähler (Temp-Datei + rename, 0600). Ein Fehler wird
+    /// geloggt; der Zähler im RAM gilt weiter.
+    fn persist_streak(&self, failures: u32) {
+        let Some(path) = self.streak_file.as_deref() else {
+            return;
+        };
+        let write = || -> std::io::Result<()> {
+            let dir = path.parent().unwrap_or(Path::new("."));
+            let tmp = dir.join(format!(
+                ".{TOTP_LOCK_FILE}.{}.tmp",
+                uuid::Uuid::new_v4().simple()
+            ));
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                opts.mode(0o600);
+            }
+            let mut f = opts.open(&tmp)?;
+            f.write_all(&serde_json::to_vec(&StreakFile { failures }).unwrap_or_default())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)
+        };
+        if let Err(e) = write() {
+            tracing::error!("{TOTP_LOCK_FILE} nicht geschrieben: {e}");
+        }
+    }
+
+    /// Ist die Anmeldung mit TOTP ohne Gerätecookie gesperrt (W14-004)?
+    pub fn totp_locked(&self) -> bool {
+        *self.streak_guard() >= TOTP_LOCK_AFTER
+    }
+
+    /// Fehlversuche in Folge ohne Gerätecookie.
+    pub fn streak(&self) -> u32 {
+        *self.streak_guard()
+    }
+
+    /// Zählt einen Fehlversuch ohne Gerätecookie (Anmeldung bzw. Re-Auth mit
+    /// TOTP; nicht Einmal-Codes, nicht die Einrichtung).
+    pub fn streak_failure(&self) -> Streak {
+        let mut g = self.streak_guard();
+        if *g >= TOTP_LOCK_AFTER {
+            return Streak::AlreadyLocked;
+        }
+        *g += 1;
+        let now = *g;
+        drop(g);
+        self.persist_streak(now);
+        if now >= TOTP_LOCK_AFTER {
+            Streak::Tripped
+        } else {
+            Streak::Counted(now)
+        }
+    }
+
+    /// Erfolgreiche Anmeldung bzw. Einrichtung: Zähler auf 0; liefert den
+    /// vorigen Stand (≥ [`TOTP_LOCK_AFTER`] = war gesperrt).
+    pub fn streak_success(&self) -> u32 {
+        let mut g = self.streak_guard();
+        let before = *g;
+        *g = 0;
+        drop(g);
+        if before > 0 {
+            self.persist_streak(0);
+        }
+        before
+    }
+
+    /// Zählt eine falsche Passphrase nach gültigem zweitem Faktor (Lauf F4d);
+    /// liefert den neuen Stand und die Kennung der Folge (eindeutig je Folge,
+    /// für einen Hinweis genau einmal je Folge).
+    pub fn factor_suspect_failure(&self) -> (u32, String) {
+        let mut g = self
+            .factor_suspect
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if g.0 == 0 {
+            g.1 = uuid::Uuid::now_v7().to_string();
+        }
+        g.0 = g.0.saturating_add(1);
+        g.clone()
+    }
+
+    /// Erfolgreiche Anmeldung bzw. Re-Auth: beendet die Folge der falschen
+    /// Passphrasen nach gültigem zweitem Faktor; liefert den vorigen Stand.
+    pub fn factor_suspect_clear(&self) -> (u32, String) {
+        std::mem::take(
+            &mut *self
+                .factor_suspect
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    /// Setzt den Zähler (nur Tests: Sperre ohne 100 echte Fehlversuche).
+    #[doc(hidden)]
+    pub fn set_streak_for_tests(&self, failures: u32) {
+        *self.streak_guard() = failures;
+        self.persist_streak(failures);
     }
 }
 
@@ -319,6 +492,35 @@ pub async fn public_limit(
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): Signatur des Gerätecookies (HMAC-SHA256,
+    /// base64url) bleibt bit-genau — sonst verlören alle Geräte ihr Cookie.
+    /// RFC 4231 Fall 2 prüft die HMAC-Konstruktion selbst.
+    #[test]
+    fn device_cookie_signature_known_answer() {
+        let rl = RateLimiter::new([7u8; 32]);
+        assert_eq!(
+            rl.sign("geraet-1"),
+            "UxowOKKcqTMlhCU3A9IWvrIjWluhyHKGDh-GiMReu1Q"
+        );
+        assert_eq!(
+            rl.device_id("geraet-1.UxowOKKcqTMlhCU3A9IWvrIjWluhyHKGDh-GiMReu1Q")
+                .as_deref(),
+            Some("geraet-1")
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"Jefe").unwrap();
+        mac.update(b"what do ya want for nothing?");
+        let hex: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn public_window_per_key() {
         let rl = PublicRateLimiter::default();
@@ -410,6 +612,58 @@ mod tests {
         assert!(device_cookie_header(&cookie).contains("Max-Age=31536000"));
     }
 
+    /// W14-004 (Lauf F4a): Sperre nach 100 Fehlversuchen in Folge,
+    /// Erfolg setzt zurück und meldet den vorigen Stand.
+    #[test]
+    fn streak_locks_after_limit_and_success_resets() {
+        let rl = RateLimiter::new([3u8; 32]);
+        for i in 1..TOTP_LOCK_AFTER {
+            assert_eq!(rl.streak_failure(), Streak::Counted(i));
+        }
+        assert!(!rl.totp_locked(), "99 Fehlversuche: noch frei");
+        assert_eq!(rl.streak_failure(), Streak::Tripped);
+        assert!(rl.totp_locked());
+        assert_eq!(rl.streak_failure(), Streak::AlreadyLocked);
+        assert_eq!(rl.streak(), TOTP_LOCK_AFTER, "zählt gesperrt nicht weiter");
+        assert_eq!(rl.streak_success(), TOTP_LOCK_AFTER);
+        assert!(!rl.totp_locked());
+        assert_eq!(rl.streak_success(), 0);
+        // Erfolg zwischendurch: wieder von vorn.
+        for _ in 0..50 {
+            rl.streak_failure();
+        }
+        rl.streak_success();
+        assert_eq!(rl.streak_failure(), Streak::Counted(1));
+    }
+
+    /// Der Zähler übersteht einen Neustart (Datei 0600); eine kaputte Datei
+    /// sperrt nicht aus.
+    #[test]
+    fn streak_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = RateLimiter::load_or_create(dir.path()).unwrap();
+        a.set_streak_for_tests(TOTP_LOCK_AFTER - 1);
+        assert_eq!(a.streak_failure(), Streak::Tripped);
+        let b = RateLimiter::load_or_create(dir.path()).unwrap();
+        assert!(b.totp_locked(), "Neustart hebt die Sperre nicht auf");
+        let path = dir
+            .path()
+            .join(super::super::totp::AUTH_DIR)
+            .join(TOTP_LOCK_FILE);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        b.streak_success();
+        assert!(!RateLimiter::load_or_create(dir.path())
+            .unwrap()
+            .totp_locked());
+        std::fs::write(&path, b"kaputt").unwrap();
+        assert_eq!(RateLimiter::load_or_create(dir.path()).unwrap().streak(), 0);
+    }
+
     #[test]
     fn key_is_persisted() {
         let dir = tempfile::tempdir().unwrap();
@@ -420,5 +674,25 @@ mod tests {
             b.device_id(&cookie).is_some(),
             "Neustart behält den Schlüssel"
         );
+    }
+
+    /// F5-fix (CI 40184691919): Jede Folge falscher Passphrasen nach gültigem
+    /// zweitem Faktor hat eine eigene Kennung — auch zwei Folgen im selben
+    /// Augenblick und über einen Neustart (neuer Limiter) hinweg. Innerhalb
+    /// einer Folge bleibt sie gleich (ein Hinweis je Folge).
+    #[test]
+    fn factor_suspect_streak_ids_are_unique_per_streak() {
+        let rl = RateLimiter::new([7u8; 32]);
+        let (n1, first) = rl.factor_suspect_failure();
+        let (n2, same) = rl.factor_suspect_failure();
+        assert_eq!((n1, n2), (1, 2));
+        assert_eq!(first, same);
+        assert_eq!(rl.factor_suspect_clear(), (2, first.clone()));
+        let (_, second) = rl.factor_suspect_failure();
+        assert_ne!(second, first);
+        let restarted = RateLimiter::new([7u8; 32]);
+        let (_, third) = restarted.factor_suspect_failure();
+        assert_ne!(third, first);
+        assert_ne!(third, second);
     }
 }

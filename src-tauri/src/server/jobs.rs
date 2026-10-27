@@ -148,6 +148,16 @@ impl JobRegistry {
         })
     }
 
+    /// Verwirft die Ergebnisse beendeter Jobs („Datenbank sperren“,
+    /// W14-015/W14-033): Ergebnisse (z. B. Download-Tickets von Exporten)
+    /// überdauern das Sperren nicht. Laufende Jobs bleiben eingetragen.
+    pub fn clear_finished(&self) -> usize {
+        let mut map = self.lock();
+        let before = map.len();
+        map.retain(|_, j| matches!(j.state, JobState::Running));
+        before - map.len()
+    }
+
     pub fn active(&self) -> usize {
         self.lock()
             .values()
@@ -201,6 +211,10 @@ mod tests {
             Some(JobView::Failed { status: 503, .. })
         ));
         assert!(reg.reserve("x").is_ok(), "Platz wieder frei");
+        // Lauf F4a: Sperren verwirft beendete Ergebnisse, laufende bleiben.
+        assert_eq!(reg.clear_finished(), 2);
+        assert!(reg.view(ids[0]).is_none());
+        assert!(matches!(reg.view(ids[2]), Some(JobView::Running { .. })));
 
         let waiter = tokio::spawn({
             let reg = Arc::new(reg);

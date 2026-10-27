@@ -45,9 +45,9 @@ fn offsite_failed(trigger: &str, file_name: &str) -> BackupLogEntry {
     BackupLogEntry {
         trigger: trigger.into(),
         target_kind: "sftp".into(),
-        target_label: Some("backup.example.de".into()),
+        target_label: Some("backup.example.org".into()),
         file_name: file_name.into(),
-        full_path: format!("sftp://manuel@backup.example.de:22/klein-buch/{file_name}"),
+        full_path: format!("sftp://kb@backup.example.org:22/klein-buch/{file_name}"),
         size_bytes: 12_345,
         status: "failed".into(),
         detail: Some("Off-Site-Spiegelung fehlgeschlagen: connection refused".into()),
@@ -74,7 +74,7 @@ async fn insert_and_list_newest_first() {
     assert_eq!(all[0].trigger, "auto_critical");
     assert_eq!(all[0].target_kind, "sftp");
     assert_eq!(all[0].status, "failed");
-    assert_eq!(all[0].target_label.as_deref(), Some("backup.example.de"));
+    assert_eq!(all[0].target_label.as_deref(), Some("backup.example.org"));
     assert_eq!(
         all[0].detail.as_deref(),
         Some("Off-Site-Spiegelung fehlgeschlagen: connection refused")
@@ -146,7 +146,7 @@ async fn search_filters_by_status_trigger_target_and_text() {
     let by_host = backup_log::search(
         &pool,
         &BackupLogFilter {
-            search: Some("example.de".into()),
+            search: Some("backup.example.org".into()),
             ..Default::default()
         },
     )

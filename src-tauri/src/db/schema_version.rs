@@ -1,11 +1,12 @@
 //! Schema-Version-Check.
 //!
-//! `EXPECTED_SCHEMA_VERSION` ist in der Binary einkompiliert. Bei jedem App-Start
-//! liest `check_compatible()` den aktuellen Wert aus `app_settings` und vergleicht.
+//! `EXPECTED_SCHEMA_VERSION` ist in der Binary einkompiliert. Bei jedem Entsperren
+//! (nach den Migrationen) liest `check_compatible()` den aktuellen Wert aus `app_settings` und vergleicht;
+//! bei Abweichung bleibt die Instanz gesperrt.
 //!
 //! - Wert gleich → ok
 //! - Wert kleiner → Migration-Runner hat eine Migration ausgelassen (sollte nicht passieren) → Error
-//! - Wert größer → DB stammt von einer neueren App-Version → Error mit Update-Hint
+//! - Wert größer → DB stammt von einer neueren Klein.Buch-Version → Error mit Update-Hint
 //!
 //! Bei jedem neuen Migrations-File MUSS die `INSERT INTO app_settings` für
 //! `schema_version` aktualisiert werden, und `EXPECTED_SCHEMA_VERSION` hochgesetzt.
@@ -13,7 +14,7 @@
 use crate::error::{Error, Result};
 use sqlx::{Row, SqlitePool};
 
-pub const EXPECTED_SCHEMA_VERSION: i32 = 31;
+pub const EXPECTED_SCHEMA_VERSION: i32 = 32;
 
 /// Älteste Schema-Version, die ein Restore annimmt (ADR 0039 E15/E17):
 /// ältere Backups stammen aus der Desktop-Fassung vor v2026.5.
@@ -57,8 +58,9 @@ pub async fn check_compatible(pool: &SqlitePool) -> Result<()> {
         Err(Error::SchemaMismatch {
             expected: EXPECTED_SCHEMA_VERSION,
             found,
-            hint: "Diese Klein.Buch-Version ist zu alt für deine Datenbank. \
-                   Bitte aktualisiere die App."
+            hint: "Diese Klein.Buch-Version ist zu alt für die Datenbank; die Instanz \
+                   bleibt gesperrt. Bitte das Image der Version einsetzen, mit der die \
+                   Datenbank zuletzt lief, oder eine neuere (Handbuch: Updates und Rückfall)."
                 .into(),
         })
     } else {

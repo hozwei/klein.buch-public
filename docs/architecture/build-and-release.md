@@ -22,7 +22,7 @@ Repositorys (= Inhalt des Produktordners `klein-buch/` plus `.github/`).
 | Rust | Server `klein-buch-server` | `src-tauri/rust-toolchain.toml` (1.99.1); im Image `rust:1.99.1-trixie` mit Digest |
 | cargo-auditable | Abhängigkeitsliste im Binary (für Scanner) | 0.7.7 |
 | SQLCipher + OpenSSL | DB-Verschlüsselung | `libsqlite3-sys = "=0.30.1"` mit `bundled-sqlcipher-vendored-openssl`; braucht `perl`, `make` |
-| Node + pnpm | SPA (SvelteKit, `adapter-static`) | Node 22 (`node:22-trixie-slim` mit Digest), pnpm aus `packageManager` in `package.json` |
+| Node + pnpm | SPA (SvelteKit 3, Vite 8, `adapter-static`; Konfiguration in `vite.config.js`) | Node 24 LTS (`node:24-trixie-slim` mit Digest), pnpm aus `packageManager` in `package.json` |
 | Eclipse Temurin JDK + `jlink` | Java-Laufzeit für den Sidecar | `eclipse-temurin:21.0.12_8-jdk` mit Digest; Module aus `versions.json` (`jlink_modules`) |
 | cargo-about | Rust-Teil der Lizenzseite `/legal/` | 0.9.2 (`--features cli`) |
 | Debian | Laufzeit-Basis | `debian:trixie-slim` mit Digest |
@@ -103,17 +103,26 @@ Repository `hozwei/klein.buch-public`.
 
 | Job | Schritte |
 |---|---|
-| `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst MailHog (SMTP 1025, API 8025) für den SMTP-E2E-Test. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
-| `frontend` | pnpm + Node 22; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
+| `rust` | Plattenplatz freigeben; Toolchain aus `rust-toolchain.toml`; `Swatinem/rust-cache`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; `cargo test --all-features`. Dienst Mailpit (`axllent/mailpit` per Digest, SMTP 1025, API 8025; bis Lauf F7a MailHog) für den SMTP-E2E-Test `tests/e2e_test.rs`. Keine System-Pakete (seit W5 ohne WebKit, seit W8 ohne libdbus, seit W12 ohne lzma). |
+| `frontend` | pnpm + Node 24; `pnpm install --frozen-lockfile`; `pnpm lint` (svelte-check); `pnpm test` (vitest, `TZ=UTC`); `pnpm build` mit Prüfung von `build/index.html` und `build/legal/js-licenses.json` (wie die Stufe `web`) und Vergleich der Paketliste mit der Prüfliste der Lizenzseite in `image_smoke.sh`; `openapi_from_registry.py` (ZAP-Scan); Prüfsumme von `LICENSE` (AGPL-3.0-Volltext), `COPYRIGHT` vorhanden |
 | `rust-supply-chain` | `cargo deny --locked check advisories licenses` (`src-tauri/deny.toml`); `cargo audit` über das ganze `Cargo.lock` mit denselben begründeten Ausnahmen |
-| `js-audit` | `pnpm audit --prod --audit-level high` |
+| `js-audit` | `pnpm audit --prod --audit-level high` und `pnpm audit --audit-level high` (mit Entwicklungsabhängigkeiten, blockierend; Lauf F7a, ADR 0039 Nr. 142 (5)); Ausnahmen nur über `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` mit Begründung und Ablaufdatum |
 | `secrets` | `gitleaks dir` über den Arbeitsbaum (Funde geschwärzt) |
-| `java-inventory` | `legal/check_java_inventory.py` (Java-Inventar ↔ JARs), `legal/check_base_images.py` (Basis-Images ↔ `versions.json`) |
+| `java-inventory` | `legal/check_java_inventory.py` (Java-Inventar ↔ JARs), `legal/check_base_images.py` (Basis-Images ↔ `versions.json`; dazu jedes Image der Workflows und CI-Skripte mit Digest, Lauf F7a) |
 
 Die Rust-Tests laufen mit dem Sidecar-Mock (`KLEIN_BUCH_SIDECAR_MOCK`, nur in
 Debug-Builds wirksam). Die echten Validator-Tests (`tests/sidecar_real_test.rs`,
 `#[ignore]`) laufen lokal gegen eine jlink-JRE; im Image decken die
 HTTP-Schritte des Smoke-Tests dieselben Wege ab.
+
+Abhängigkeiten übersetzt Cargo im Dev-/Test-Profil mit `opt-level = 2`
+(`[profile.dev.package."*"]` in `Cargo.toml`, Lauf F3c; der eigene Crate bleibt
+bei 0, Debug-Prüfungen bleiben an, das Release-Profil ist unberührt). Ohne das
+liefen Argon2id, SQLite/SQLCipher, Deflate und Typst in den Tests so langsam, dass
+Server-Tests unter Volllast die 30-s-Grenze der Anfragen rissen. Der Cache von
+`Swatinem/rust-cache` hängt an `Cargo.toml` und `Cargo.lock`; nach einer Änderung
+übersetzt der erste Lauf die Abhängigkeiten einmal neu (lokal etwa 2–3 Minuten
+mehr), `cargo clippy` erzeugt keinen Code und ist davon kaum betroffen.
 
 ---
 
@@ -142,19 +151,27 @@ HTTP-Schritte des Smoke-Tests dieselben Wege ab.
    Seed-Manifest; über HTTP Einrichtung mit Setup-Token und TOTP, Festschreiben
    mit echtem KoSIT + Mustang (PDF/A-3), ZUGFeRD-Extraktion im Rechnungseingang,
    Ablehnung einer manipulierten XRechnung; Lizenz- und Quelldateien,
-   `/legal/`, `/api/public/info` mit dem Build-Commit.
-5. SBOM mit syft (SPDX-JSON).
-6. trivy: CRITICAL/HIGH mit verfügbarem Fix brechen ab; Ausnahmen begründet und
+   `/legal/` (Prüfliste der JS-Pakete), `/api/public/info` mit dem Build-Commit;
+   das Rechnungs-PDF geht nach `SMOKE_PDF_OUT`.
+5. PDF/A-3b mit veraPDF (R3-018, Lauf F7a): veraPDF 1.30.3 (Installationspaket per SHA-256 geprüft,
+   Java 21 des Runners) prüft das Rechnungs-PDF mit `--flavour 3b`; nicht konform
+   bricht ab, der Bericht kommt ins Artefakt. Nur im Trockenlauf.
+6. SBOM mit syft (SPDX-JSON).
+7. trivy: CRITICAL/HIGH mit verfügbarem Fix brechen ab; Ausnahmen begründet und
    befristet in `.trivyignore`.
-7. Quellarchiv „Quellen Dritter“ (`.github/scripts/build_sources_archive.sh`).
-8. SBOM und Quellarchiv als Workflow-Artefakt (14 Tage).
+8. Quellarchiv „Quellen Dritter“ (`.github/scripts/build_sources_archive.sh`).
+9. SBOM, veraPDF-Bericht und Quellarchiv als Workflow-Artefakt (14 Tage).
 
 ---
 
-## 6. Release (`release-image.yml`, Job `release`)
+## 6. Release (`release-image.yml`, Jobs `release` und `publish`)
 
-**Auslöser:** ein Tag `v*` im öffentlichen Repository. Rechte nur hier:
-`contents: write`, `packages: write`, `id-token: write` (für cosign keyless).
+**Auslöser:** ein Tag `v*` im öffentlichen Repository. Zwei Jobs (Lauf F): `release` baut und
+prüft **nur lesend** (`contents: read`) und übergibt OCI-Layout, Quellarchiv und SBOM als
+Artefakt; `publish` (`contents: write`, `packages: write`, `id-token: write` für cosign keyless)
+holt genau diesen Build, prüft dessen Digest gegen den geprüften Index und veröffentlicht.
+„Re-run failed jobs“ wiederholt nur `publish` mit demselben Build. Schritte 1–4 laufen in
+`release`, ab 5 in `publish`.
 
 1. **Tag-Commit liegt auf `main`**, sonst Abbruch: Ein Tag auf einem
    Arbeitszweig baut kein Image.
@@ -163,22 +180,40 @@ HTTP-Schritte des Smoke-Tests dieselben Wege ab.
    Tags mit Zusatz (z. B. `-rc.1`) ergeben kein Release.
 3. Build **ohne Cache** mit `pull: true`, SBOM- und Provenance-Attestierung,
    Build-Argumente mit Commit und Tag.
-4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf.
-5. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
+4. Laden, Smoke-Test, SBOM, trivy, Quellarchiv — wie im Trockenlauf (ohne veraPDF:
+   der Stand von `main` ist vorher als `phase-w` geprüft).
+5. **Release zuerst** (Lauf E, ADR 0039 Nr. 123): `gh release create --verify-tag
+   --latest` — veröffentlicht, kein Entwurf — mit Notizen (Einleitung des
+   CHANGELOG-Abschnitts, Tag und Digest, Prüfbefehl, Quellen) und den Assets
+   `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
+   `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Der Digest steht
+   vor dem Push fest (gebauter Index). Bei einer Wiederholung werden nur fehlende
+   Assets hochgeladen, vorhandene nie ersetzt — außer das Release stammt aus einem
+   früheren Lauf, zu dessen Build nie ein Image veröffentlicht wurde (etwa „Re-run all
+   jobs“ nach einem gescheiterten Push: der neue Build hat einen anderen Digest); dann
+   werden Assets und Notes neu geschrieben (`--clobber`). Gehört das Release zu einem
+   Build, dessen Image schon öffentlich ist, bricht der Lauf ab (Quellen und Image
+   gehören zusammen). Ist das Release danach noch ein Entwurf, bricht der Lauf vor dem
+   Push ab.
+6. **Push nur mit Quellarchiv:** `skopeo copy --all --preserve-digests` nach
    `ghcr.io/<owner>/klein-buch:<Version>`; der gepushte Digest muss dem
    gebauten Index entsprechen. Gibt es das Tag schon mit anderem Inhalt, bricht
-   der Lauf ab; mit gleichem Inhalt wird nicht erneut gepusht.
-6. **Signatur:** `cosign sign` auf den Digest, danach `cosign verify` mit der
+   der Lauf ab; mit gleichem Inhalt wird nicht erneut gepusht. Das Image trägt
+   die direkte Adresse seines Quellarchivs im Label `de.klein-buch.source-archive`.
+7. **Signatur:** `cosign sign` auf den Digest, danach `cosign verify` mit der
    genauen Workflow-Identität.
-7. **Release-Entwurf** (`gh release create --draft --verify-tag`) mit Notizen
-   (Tag und Digest, Prüfbefehl, Quellen) und den Assets
-   `klein-buch-<Version>-image.txt`, `klein-buch-<Version>-sbom.spdx.json`,
-   `klein-buch-<Version>-quellen-dritter.tar.zst` (+ `.sha256`). Veröffentlicht
-   wird der Entwurf von Hand nach Durchsicht.
 
 Feste Regeln (E15): nur volle Versionen als Tag, kein `:latest`, kein gleitender
 Minor-Tag; Images und Tags `v*` werden nie gelöscht oder verschoben — sie sind
 Quellbezug älterer Images und der Rückfall nach einem gescheiterten Update.
+
+**Quellangebot (Lauf E, ADR 0039 Nr. 123):** Der Quelltext der Komponenten Dritter liegt je
+Version als Release-Asset bereit, **bevor** das Image öffentlich wird, und bleibt so lange,
+wie ein zugehöriges Image abrufbar ist (GPLv2 §3 „from the same place“, GPLv3 §6(d)). Deshalb:
+Release-Assets nie löschen oder ersetzen; wenn überhaupt, erst Image-Versionen in GHCR
+löschen, dann frühestens das Archiv. Das Repository bleibt öffentlich. In die Registry gehen
+nur Tag-Builds von `main` (`phase-w` pusht nie). Wird das Image auf einem Datenträger oder
+vorinstalliert weitergegeben, gehört der Quelltext mit dazu.
 
 Beim ersten Release: Existiert das Paket `ghcr.io/hozwei/klein-buch` schon, ohne
 mit dem Repository verknüpft zu sein, braucht der Workflow Schreibrechte unter
@@ -220,8 +255,9 @@ Entwicklungsordner (`CONTRIBUTING.md`).
 3. Auf `phase-w` veröffentlichen; CI, `image.yml` und Trockenlauf grün (Smoke,
    Scan, Quellarchiv).
 4. Stand nach `main` bringen und mit `-Tag v<Version>` veröffentlichen.
-5. Release-Lauf grün, Signatur mit dem Befehl aus `SECURITY.md` prüfen,
-   Release-Entwurf durchsehen und veröffentlichen.
+5. Release-Lauf grün; Release-Seite (Notes, vier Assets, Digest in
+   `image.txt`) und Signatur mit dem Befehl aus `SECURITY.md` prüfen. Das Release
+   ist schon veröffentlicht (vor dem Image, ADR 0039 Nr. 123).
 
 ---
 

@@ -29,14 +29,19 @@ deshalb ab und zu nach und passe die Werte unten an.
 
 ## Arbeitsspeicher
 
-Klein.Buch baut ein Backup vollständig im Arbeitsspeicher zusammen: erst
-den gepackten Inhalt, dann die verschlüsselte Fassung, dann die fertige
-Datei. Für einen kurzen Moment liegen alle drei gleichzeitig im
-Speicher. Ein Backup braucht deshalb etwa das Dreifache seiner Größe an
-Arbeitsspeicher. Dasselbe gilt für die Wiederherstellung (die Datei, ihre
-verschlüsselte Kopie und der entschlüsselte Inhalt) und für die Prüfung
-des Backups, das Klein.Buch vor einer Datenbank-Umstellung nach einem
-Update anlegt. Backups laufen immer nacheinander, nie zwei gleichzeitig.
+Klein.Buch baut ein Backup vollständig im Arbeitsspeicher zusammen: Es
+packt den Inhalt und verschlüsselt ihn danach an derselben Stelle im
+Speicher. Die fertige Datei geht ohne weitere Kopie in den lokalen
+Backup-Ordner und an die externen Ziele. Beim Packen wächst der Speicher
+in Schritten, deshalb rechnet man mit etwa dem Doppelten der Backup-Größe.
+Die Wiederherstellung und die Prüfung des Backups, das Klein.Buch vor
+einer Datenbank-Umstellung nach einem Update anlegt, lesen die Datei
+einmal und entschlüsseln sie an derselben Stelle: etwa einmal die
+Backup-Größe. Die Wiederherstellung packt den Inhalt danach aus, gibt
+den Speicher frei und legt erst dann das Sicherheits-Backup des
+bisherigen Stands an, das wie jedes Backup bis zum Doppelten seiner
+Größe braucht. Beides läuft nacheinander; es zählt das Größere. Backups
+laufen immer nacheinander, nie zwei gleichzeitig.
 
 Dazu kommen:
 
@@ -49,10 +54,15 @@ Dazu kommen:
    64 MiB, immer nur eine gleichzeitig.
 
 Die Faustregel aus dem Compose-Beispiel lautet: 512 MiB Grundbedarf plus
-das Dreifache des größten Backups. Die Grenze setzt der Betreiber in der
-Compose-Datei mit `mem_limit`. Im Beispiel steht `mem_limit: 2g`. Nach
-der Faustregel reicht das für Backups bis etwa 500 MiB. Werden die
-Backups größer, hebt der Betreiber die Grenze an.
+1 GiB für die Java-Komponente (zwei Läufe) plus das Doppelte des größten
+Backups. Die Java-Komponente gehört dazu, weil ein Backup nach dem
+Festschreiben im Hintergrund läuft, während Du schon die nächste Rechnung
+festschreibst. Die Regel gilt für das Anlegen eines Backups und für die
+Wiederherstellung. Die Grenze setzt der Betreiber in der Compose-Datei mit
+`mem_limit`. Im Beispiel steht `mem_limit: 2g`. Nach der Faustregel reicht
+das für Backups bis etwa 250 MiB; für Backups bis etwa 750 MiB braucht es
+`mem_limit: 3g`. Werden die Backups größer, hebt der Betreiber die Grenze
+weiter an.
 
 Ist die Grenze zu klein, beendet das Betriebssystem Klein.Buch mitten im
 Backup oder in der Wiederherstellung, weil der Speicher ausgeht. Der
@@ -72,15 +82,19 @@ Im Daten-Ordner (`/data`) liegen:
 
 1. Die Datenbank und das Beleg-Archiv. Beide wachsen mit jedem Beleg.
 2. Die lokalen Backups in `/data/backups`. Solange mindestens ein
-   externes Ziel funktioniert, behält Klein.Buch dort die 7 neuesten
-   gewöhnlichen Backups, die 3 neuesten Monats-Backups und das neueste
-   Jahres-Backup. Ohne funktionierendes externes Ziel sind es bis zu 30,
-   12 und 7. Manuelle Backups und Sicherheits-Backups vor einer
-   Wiederherstellung löscht Klein.Buch nie, sie kommen jedes Mal dazu.
-3. Zwischendateien in `/data/tmp`: Exporte bis zum Herunterladen (höchstens
-   eine Stunde), hochgeladene Dateien bis zu ihrer Verarbeitung (ebenfalls
-   höchstens eine Stunde) und die Kopie der Datenbank, die beim Backup
-   kurz entsteht.
+   externes Ziel funktioniert, behält Klein.Buch dort je ein Backup für
+   die letzten 7 Tage mit Backup, die letzten 3 Monate und das letzte
+   Jahr. Ohne funktionierendes externes Ziel sind es bis zu 30 Tage,
+   12 Monate und 7 Jahre. Manuelle Backups, Sicherheits-Backups vor einer
+   Wiederherstellung und die nach einer Wiederherstellung übernommenen
+   Backups löscht Klein.Buch nie, sie kommen jedes Mal dazu. Während die
+   automatischen Abläufe angehalten sind (nach einer Wiederherstellung),
+   sortiert Klein.Buch nichts aus.
+3. Zwischendateien in `/data/tmp`: Exporte bis zum ersten Herunterladen
+   (höchstens zehn Minuten), hochgeladene Dateien bis zu ihrer Verarbeitung
+   (höchstens eine Stunde) und die Kopie der Datenbank, die beim Backup
+   kurz entsteht. Reste abgebrochener Läufe räumt Klein.Buch stündlich auf,
+   sobald sie älter als sechs Stunden sind, und beim Containerstart vollständig.
 
 Bevor Klein.Buch eine hochgeladene Datei annimmt, prüft es den freien
 Platz. Nach dem Hochladen muss eine Reserve frei bleiben. Ihre Größe
@@ -110,20 +124,34 @@ und auch eine Datenbank-Umstellung nach einem Update unterbleibt.
 
 ## Platz auf den Backup-Zielen
 
-Auf jedem Ordner-Ziel behält Klein.Buch die 30 neuesten gewöhnlichen
-Backups, die 12 neuesten Monats-Backups und die 7 neuesten
-Jahres-Backups. Auf Dauer sind das bis zu 49 Backups, dazu alle
-manuellen Backups und Sicherheits-Backups, die Klein.Buch nie löscht. Auf
-SFTP-Servern löscht Klein.Buch überhaupt nichts. Dort wächst der Bestand
-mit jedem Backup, und der Betreiber räumt selbst auf.
+Auf jedem Ordner-Ziel behält Klein.Buch je ein Backup für die letzten
+30 Tage mit Backup, die letzten 12 Monate und die letzten 7 Jahre. Auf
+Dauer sind das höchstens 49 Backups (oft weniger, weil ein Backup
+zugleich für Tag, Monat und Jahr steht), dazu alle manuellen Backups und
+Sicherheits-Backups, die Klein.Buch nie löscht.
+
+Auf SFTP-Servern löscht Klein.Buch bewusst nichts: Eine kompromittierte
+Instanz soll die externen Kopien nicht vernichten können. Dort wächst der
+Bestand mit jedem Backup — mit einem Tages-Backup und einigen
+Festschreibungen am Tag sind das grob 400 bis 1 000 Backups im Jahr. Bei
+300 MiB je Backup wären das 120 bis 300 GiB im Jahr. Der Betreiber des
+SFTP-Servers räumt deshalb selbst auf, am besten nach demselben Muster
+(zum Beispiel die letzten 30 Tage vollständig, danach ein Backup je Monat,
+nach einem Jahr eines je Jahr), oder er nutzt Snapshots des Servers mit
+eigener Aufbewahrung. Steht für den SFTP-Benutzer eine Speichergrenze
+(Quota), schlägt die Spiegelung fehl, sobald sie erreicht ist; das zeigt
+das Backup-Protokoll.
 
 ## Ein Rechenbeispiel
 
 Angenommen, Datenbank und Archiv sind zusammen 300 MiB groß. Dann ist ein
 Backup ebenfalls etwa 300 MiB groß.
 
-Arbeitsspeicher: 512 MiB plus dreimal 300 MiB ergibt rund 1,4 GiB. Die
-2 GiB aus dem Compose-Beispiel reichen.
+Arbeitsspeicher: 512 MiB plus zweimal 300 MiB ergibt rund 1,1 GiB. Die
+2 GiB aus dem Compose-Beispiel reichen. Eine Wiederherstellung eines
+300-MiB-Backups über eine Instanz derselben Größe braucht zuerst etwa
+300 MiB zum Entschlüsseln, danach bis zu 600 MiB für das
+Sicherheits-Backup, nie beides zugleich: ebenfalls rund 1,1 GiB.
 
 Daten-Ordner: 300 MiB für Datenbank und Archiv, elf lokale Backups mit
 zusammen rund 3,2 GiB, dazu manuelle Backups und die Reserve von 2 GiB.
@@ -137,14 +165,16 @@ manuellen Backups.
 ## Weitere Grenzen im Compose-Beispiel
 
 `pids_limit: 256` begrenzt die Zahl der Prozesse und Threads im
-Container. `stop_grace_period: 60s` ist die Zeit, die Docker Klein.Buch
-beim Anhalten gibt, um laufende Arbeiten wie ein Festschreiben oder ein
-Backup zu Ende zu bringen. Klein.Buch selbst wartet beim Herunterfahren
-bis zu zehn Minuten auf laufende Arbeiten. Dauert ein Backup auf ein
-langsames Ziel länger als die 60 Sekunden, bricht Docker es ab. Dann
-lohnt es sich, die Frist zu erhöhen. Die Angaben unter `logging:` sorgen
-dafür, dass das Container-Log höchstens fünf Dateien mit je 10 MB belegt.
+Container. `stop_grace_period: 90s` ist die Zeit, die Docker Klein.Buch
+beim Anhalten gibt. Klein.Buch selbst bleibt darunter: höchstens 30
+Sekunden für offene Verbindungen, dann höchstens 30 Sekunden für laufende
+Arbeiten wie ein Festschreiben oder ein Backup und das Backup eines eben
+festgeschriebenen Belegs, zusammen höchstens 40 Sekunden, dann das
+Schließen der Datenbank. Ein Backup, das in dieser Zeit nicht fertig
+wird, bricht ab, ohne eine halbe Datei zu hinterlassen; das nächste
+Backup holt es nach. Die Angaben unter `logging:` sorgen dafür, dass das
+Container-Log höchstens fünf Dateien mit je 10 MB belegt.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*

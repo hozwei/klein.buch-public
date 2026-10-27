@@ -1,3 +1,0 @@
-written via Write-Tool, expecting bash to NOT see this immediately
-line 2
-line 3

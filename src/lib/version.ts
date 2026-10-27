@@ -1,6 +1,6 @@
 // G4.1-Fix — Display-Helper für die App-Version.
 //
-// Cargo/Tauri verlangen semver (MAJOR.MINOR.PATCH). Klein.Buch nutzt
+// Cargo verlangt semver (MAJOR.MINOR.PATCH). Klein.Buch nutzt
 // CalVer im Schema `YYYY.M.PATCH` (Beispiele: 2026.5.0 = Mai-Release,
 // 2026.5.1 = Bugfix im selben Monat, 2026.6.0 = Juni-Release).
 //

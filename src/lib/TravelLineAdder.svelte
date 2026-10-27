@@ -1,11 +1,15 @@
 <script lang="ts">
   // Block P1: wiederverwendbarer „Anfahrt"-Block für die Positions-Editoren
   // (Rechnung, Angebot, Umwandlung). km × Satz → eine normale Position.
-  import { onMount } from "svelte";
-  import { travelSettingsGet, travelCompute } from "$lib/api";
-  import type { TravelLine } from "$lib/types";
-  import { euro } from "$lib/format";
-  import { flash } from "$lib/toast.svelte";
+  import { onMount, tick } from "svelte";
+  import { travelSettingsGet, travelCompute } from "#lib/api.ts";
+  import type { TravelLine } from "#lib/types.ts";
+  import { euro } from "#lib/format.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { randomId } from "#lib/browser.ts";
+  import QuantityInput from "#lib/QuantityInput.svelte";
+
+  const kmId = `travel-km-${randomId()}`;
 
   let { onAdd }: { onAdd: (line: TravelLine) => void } = $props();
 
@@ -14,6 +18,7 @@
   let km = $state<number | null>(null);
   let loaded = $state(false);
   let adding = $state(false);
+  let kmError = $state<string | undefined>(undefined);
 
   onMount(async () => {
     try {
@@ -28,10 +33,15 @@
   });
 
   async function add() {
+    if (adding) return;
     if (km == null || !(km > 0)) {
-      flash("Bitte eine Kilometerzahl größer als 0 eingeben.", "error");
+      kmError = "Bitte eine Kilometerzahl größer als 0 eingeben.";
+      // Fokus ans Feld mit der Meldung (ADR 0041 Nr. 22).
+      await tick();
+      document.getElementById(kmId)?.focus();
       return;
     }
+    kmError = undefined;
     adding = true;
     try {
       const line = await travelCompute(km, roundTrip);
@@ -54,20 +64,16 @@
         <a href="/settings/travel">jetzt festlegen</a>, dann lässt sich die Anfahrt automatisch berechnen.
       </span>
     {:else}
-      <span class="lbl">Anfahrt</span>
-      <input
-        type="number"
-        step="any"
-        min="0"
-        placeholder="km"
-        class="km"
-        bind:value={km}
-      />
+      <label class="lbl" for={kmId}>Anfahrt (km)</label>
+      <span class="km">
+        <QuantityInput id={kmId} bind:value={km} maxFractionDigits={1} unit="km" noun="Kilometerzahl" error={kmError} />
+      </span>
       <label class="rt">
         <input type="checkbox" bind:checked={roundTrip} /> Hin &amp; Rück
       </label>
       <span class="rate">Satz: {euro(rateCents)}/km</span>
-      <button type="button" class="btn-secondary" onclick={add} disabled={adding}>
+      <!-- Während des Rechnens gesperrt, aber fokussierbar (ADR 0041 Nr. 33). -->
+      <button type="button" class="btn-secondary" onclick={add} aria-disabled={adding ? "true" : undefined}>
         + Anfahrt
       </button>
     {/if}
@@ -76,11 +82,14 @@
 
 <style>
   .travel { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; }
-  .lbl { font-weight: 600; font-size: 0.9rem; }
-  .km { width: 6rem; padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; }
-  .rt { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; color: #4b5563; }
-  .rate { color: #6b7280; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
-  .hint { color: #6b7280; font-size: 0.9rem; }
+  .lbl { font-weight: 600; font-size: var(--fs-sm); }
+  .km { width: var(--w-short); }
+  .rt { display: inline-flex; align-items: center; gap: 0.5rem; min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); cursor: pointer; }
+  .rate { color: var(--text-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+  .hint { color: var(--text-muted); font-size: var(--fs-sm); }
+  /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31). Vorher inline-flex mit
+     44 px Mindesthöhe — das riss auf dem Handy jede Zeile des Satzes auseinander (U1-Sichtprüfung). */
+  .hint a { text-decoration: underline; }
   /* Lokale btn-Defs entfernt — globale aus tokens.css greifen
      (Manuel-Hardline 2026-05-26: alle Buttons app-weit gleich groß). */
 </style>

@@ -1,4 +1,4 @@
-//! Tauri-Commands für Zahlungs-Konten (Block 9).
+//! Commands für Zahlungs-Konten (Block 9).
 //!
 //! Stammdaten (Bank/Bargeld/PayPal/…). Kein Hard-Delete — Konten werden
 //! deaktiviert (`active=0`), weil sie von Kosten/Rechnungen/Privatbewegungen
@@ -30,34 +30,6 @@ pub async fn payment_accounts_list(
     payment_accounts::list(&pool, include_inactive.unwrap_or(false)).await
 }
 
-/// Argumente von [`payment_accounts_ensure_defaults`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentAccountsEnsureDefaultsArgs {}
-
-/// Idempotenter Seed der Standard-Konten ("Hauptkonto", "Bargeld") und Rückgabe
-/// der aktuellen Liste. Wird vom Settings-UI beim ersten Öffnen aufgerufen.
-pub async fn payment_accounts_ensure_defaults(
-    ctx: &Arc<AppCtx>,
-    _args: PaymentAccountsEnsureDefaultsArgs,
-) -> Result<Vec<PaymentAccountRow>> {
-    let pool = ctx.pool()?;
-
-    let pool = &pool;
-    let seeded = payment_accounts::ensure_defaults(pool).await?;
-    if seeded {
-        audit_log::append(
-            pool,
-            "payment_account.seed_defaults",
-            "payment_account",
-            "-",
-            Some(r#"{"created":["Hauptkonto","Bargeld"]}"#),
-        )
-        .await?;
-    }
-    payment_accounts::list(pool, false).await
-}
-
 /// Argumente von [`payment_accounts_create`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,12 +51,7 @@ pub async fn payment_accounts_create(
         "payment_account.create",
         "payment_account",
         &row.id,
-        Some(&format!(
-            r#"{{"label":"{}","type":"{}","default":{}}}"#,
-            escape(&row.label),
-            escape(&row.account_type),
-            row.is_default == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "type": &row.account_type, "default": row.is_default == 1 })),
     )
     .await?;
     Ok(row)
@@ -112,12 +79,7 @@ pub async fn payment_accounts_update(
         "payment_account.update",
         "payment_account",
         &id,
-        Some(&format!(
-            r#"{{"label":"{}","type":"{}","default":{}}}"#,
-            escape(&row.label),
-            escape(&row.account_type),
-            row.is_default == 1
-        )),
+        Some(serde_json::json!({ "label": &row.label, "type": &row.account_type, "default": row.is_default == 1 })),
     )
     .await?;
     Ok(row)
@@ -153,10 +115,6 @@ pub async fn payment_accounts_set_active(
     )
     .await?;
     Ok(())
-}
-
-fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

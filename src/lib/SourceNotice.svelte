@@ -4,9 +4,9 @@
   // „Entwicklungs-Build, Quellstand unbekannt", dazu die Lizenzseiten unter
   // `/legal/`. Lädt `/api/public/info` selbst (ohne Sitzung).
   import { onMount } from "svelte";
-  import { publicInfo, type PublicInfo } from "$lib/transport";
-  import { formatVersionDisplay } from "$lib/version";
-  import { DEV_SOURCE_TEXT, safeSourceLink, sourceLabel } from "$lib/sourceInfo";
+  import { publicInfo, type PublicInfo } from "#lib/transport.ts";
+  import { formatVersionDisplay } from "#lib/version.ts";
+  import { DEV_SOURCE_TEXT, safeSourceLink, sourceLabel } from "#lib/sourceInfo.ts";
 
   let info = $state<PublicInfo | null>(null);
   let failed = $state(false);
@@ -44,14 +44,17 @@
   .source-notice {
     margin: 1.25rem 0 0;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--c-border);
-    color: var(--c-text-muted);
-    font-size: 0.78rem;
+    border-top: var(--rule);
+    color: var(--text-muted);
+    font-size: var(--type-caption);
     line-height: 1.5;
     text-align: center;
   }
   .source-notice a {
-    color: var(--c-primary-700);
+    color: var(--accent);
     text-decoration: underline;
+  }
+  @media (pointer: coarse) {
+    .source-notice a { display: inline-flex; align-items: center; min-height: var(--target); }
   }
 </style>

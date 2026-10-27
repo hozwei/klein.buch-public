@@ -57,3 +57,14 @@ DEFAULT_COVER_TEMPLATE}`, `typst_render::{render_euer, render_pdf}`,
 `docs/reference/{elster-euer-formular-schema, datev-format}.md`, Frontend
 `routes/euer/export`; ADR 0022 (EÜR-Aggregation). Commits `8d029732` / `85731b1e`
 / `31f78815` / `3d161c86`, Tag `v0.1.0-phase2c`.
+
+## Amendment 2026-10-25 — Lauf F5b
+
+Die Zuordnung der Ausfüllhilfe folgt jetzt dem amtlichen Vordruck des jeweiligen Jahres
+und führt die Kennzahl (2024/2025: Zeilen wie oben; 2026: „Waren“ Zeile 29, alle weiteren
+Betriebsausgaben-Zeilen eins tiefer). Regelbesteuerung wird netto/Umsatzsteuer
+aufgeteilt (Zeilen 15/16/17, Vorsteuer Kz 185), ein Storno-Überhang ist Betriebsausgabe
+(Kz 183). Der DATEV-Stapel löst das Geldkonto je Zahlungskonto auf (die Vereinfachung
+„Geldkonto fest Standard-Bank“ entfällt), bucht Anlagenverkäufe ohne Umsatzsteuer mit
+Restbuchwert, aktivierte Kosten als Zugang auf dem Anlagekonto und trägt den
+Sachkontenrahmen im Kopf. Einzelheiten und Quellen: ADR 0039 Nr. 135.

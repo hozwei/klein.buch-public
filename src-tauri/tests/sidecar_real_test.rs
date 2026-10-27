@@ -110,6 +110,118 @@ async fn sidecar_real_kosit_accepts_generated_xrechnung() {
     );
 }
 
+/// Lauf E: Storno-XML mit BT-25 (Nummer) und BT-26 (Rechnungsdatum) des
+/// Originals besteht den echten Validator.
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_kosit_accepts_storno_with_preceding_invoice() {
+    let mut storno = invoice();
+    storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+    for it in &mut storno.items {
+        it.unit_price_cents = -it.unit_price_cents;
+    }
+    storno.due_date = None;
+    let preceding = klein_buch_lib::domain::storno::PrecedingInvoice {
+        number: "RE-2025-0042".into(),
+        issue_date: NaiveDate::from_ymd_opt(2025, 12, 10).unwrap(),
+    };
+    let xml = generator::to_xrechnung_with_preceding(
+        "ST-2026-0001",
+        &storno,
+        &seller(),
+        &buyer(),
+        "N/A",
+        &[],
+        Some(&preceding),
+    )
+    .expect("Generator");
+    assert!(xml.contains("<qdt:DateTimeString format=\"102\">20251210</qdt:DateTimeString>"));
+    let report = validator::validate(&xml, &sidecar_dir())
+        .await
+        .expect("KoSIT läuft");
+    assert!(
+        matches!(
+            report.status,
+            ValidationStatus::Passed | ValidationStatus::Warning
+        ),
+        "{report:?}"
+    );
+}
+
+/// Lauf F5a (R1-S2-TESTS): Regelbesteuerung mit vielen Kleinpositionen und
+/// zwei Sätzen. Die USt je Gruppe entsteht aus der Nettosumme (BR-CO-17), die
+/// Summe gerundeter Positionssteuern wiche um Cents ab. Dazu der Storno mit
+/// exakt negierten Beträgen.
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_kosit_accepts_regelbesteuerung_with_small_items() {
+    let regel = SellerView {
+        is_kleinunternehmer: false,
+        waived_since: Some(NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+        vat_id: Some("DE123456788"),
+        ..seller()
+    };
+    let mut inv = invoice();
+    inv.items = (1..=40)
+        .map(|p| InvoiceItemInput {
+            position: p,
+            description: format!("Kleinteil {p}"),
+            quantity: if p % 3 == 0 { 0.333 } else { 1.0 },
+            unit_code: "C62".into(),
+            unit_price_cents: 333 + i64::from(p),
+            tax_rate_percent: if p % 2 == 0 { 19.0 } else { 7.0 },
+            tax_category_code: "S".into(),
+            description_title: None,
+            description_markup: None,
+            source_package_id: None,
+            source_package_revision: None,
+        })
+        .collect();
+    let totals = klein_buch_lib::domain::invoice::compute_totals(&inv.items);
+    let per_line: i64 = totals.items.iter().map(|t| t.tax_amount_cents).sum();
+    assert_ne!(
+        per_line, totals.tax_amount_cents,
+        "Testdaten sollen den Unterschied der Rundungswege zeigen"
+    );
+    for (number, input) in [
+        ("RE-2026-0002", inv.clone()),
+        ("ST-2026-0002", {
+            let mut s = inv.clone();
+            s.is_storno_for = Some("019a0000-0000-7000-8000-000000000002".into());
+            s.due_date = None;
+            for it in &mut s.items {
+                it.unit_price_cents = -it.unit_price_cents;
+            }
+            s
+        }),
+    ] {
+        let preceding = klein_buch_lib::domain::storno::PrecedingInvoice {
+            number: "RE-2026-0002".into(),
+            issue_date: NaiveDate::from_ymd_opt(2026, 10, 24).unwrap(),
+        };
+        let xml = generator::to_xrechnung_with_preceding(
+            number,
+            &input,
+            &regel,
+            &buyer(),
+            "N/A",
+            &[],
+            input.is_storno_for.as_ref().map(|_| &preceding),
+        )
+        .expect("Generator");
+        let report = validator::validate(&xml, &sidecar_dir())
+            .await
+            .expect("KoSIT läuft");
+        assert!(
+            matches!(
+                report.status,
+                ValidationStatus::Passed | ValidationStatus::Warning
+            ),
+            "{number}: {report:?}"
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore = "braucht Java-Laufzeit (sidecar_real)"]
 async fn sidecar_real_kosit_rejects_broken_xrechnung() {
@@ -158,11 +270,65 @@ async fn sidecar_real_mustang_combine_and_extract_pdfa3() {
         text.contains("pdfaid:part>3<") || text.contains("pdfaid:part=\"3\""),
         "PDF/A-3 in den XMP-Metadaten"
     );
+    // R3-017 (Lauf F5c): Container passt zur XRechnung-Guideline des XML.
+    assert!(
+        text.contains("ConformanceLevel>XRECHNUNG<")
+            || text.contains("ConformanceLevel=\"XRECHNUNG\""),
+        "ZUGFeRD-Profil XRECHNUNG in den XMP-Metadaten"
+    );
+    assert!(text.contains("xrechnung.xml"), "Anhang xrechnung.xml");
     let extracted = mustang_bridge::extract_xml(&zugferd, &sidecar_dir())
         .await
         .expect("Mustang extract");
     assert!(extracted.contains("RE-2026-0001"), "{extracted}");
     assert!(extracted.contains("Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."));
+}
+
+/// Lauf F6b (LE-TYPST): Jede eingebaute Rechnungsvorlage liefert — mit Logo und
+/// Zahlungskonten — ein PDF/A-3b, das Mustang annimmt (Typst-Update-Prüfung).
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_mustang_accepts_every_builtin_template() {
+    use klein_buch_lib::pdf::templates;
+    let logo = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/assets/app-icon/logo-1024.png"),
+    )
+    .expect("Logo");
+    let accounts = serde_json::json!([
+        {"type":"bank","label":"Geschäftskonto","holder":"Erika Beispiel","iban":"DE02120300000000202051","bic":"BYLADEM1001","details":null}
+    ]);
+    let xml = xml();
+    for (name, tpl) in [
+        ("modern", templates::TEMPLATE_MODERN),
+        ("klassisch", templates::TEMPLATE_KLASSISCH),
+        ("minimal", templates::TEMPLATE_MINIMAL),
+    ] {
+        let pdf = typst_render::render_invoice(
+            tpl,
+            "RE-2026-0001",
+            &invoice(),
+            &seller(),
+            &buyer(),
+            None,
+            Some(("/branding/logo.png", logo.as_slice())),
+            Some("Erika Beispiel"),
+            &accounts,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let zugferd = mustang_bridge::create_zugferd(&pdf, &xml, &sidecar_dir())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: Mustang combine {e}"));
+        let text = String::from_utf8_lossy(&zugferd);
+        assert!(
+            text.contains("pdfaid:part>3<") || text.contains("pdfaid:part=\"3\""),
+            "{name}: PDF/A-3 in den XMP-Metadaten"
+        );
+        let extracted = mustang_bridge::extract_xml(&zugferd, &sidecar_dir())
+            .await
+            .unwrap_or_else(|e| panic!("{name}: Mustang extract {e}"));
+        assert!(extracted.contains("RE-2026-0001"), "{name}");
+    }
 }
 
 // ---------------------------------------------------------------------------

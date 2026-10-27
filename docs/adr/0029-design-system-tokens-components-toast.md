@@ -58,3 +58,18 @@ Wildbach-Marke. Constraint: **local-first** → kein Web-Font-Download.
 PageBar,ToastHost,ConfirmDialog,Banner}.svelte`, `src/lib/toast.svelte.ts`;
 ADR 0021 (UI-Feedback-/Interaktions-Konventionen). Commits `block-ds-1` /
 `block-ds-2`.
+
+## Amendment 2026-10-27 — UI/UX-Lauf 2026.11 (ADR 0041)
+
+**Status:** Akzeptiert · 2026-10-27 · Lauf 2026.11 (ADR 0041). Die Richtlinie steht jetzt in
+`docs/architecture/design.md`. Geändert gegenüber dieser Entscheidung:
+
+- **Zwei Token-Ebenen** (ADR 0041 Nr. 5, 6): Die Palette `--c-*` bleibt; Bausteine nutzen nur
+  Rollen-Tokens (`--text*`, `--surface-*`, `--line*`, `--status-*`, `--focus-*`, `--sp-*`,
+  `--target*`). Mehrere Palettenwerte wurden für die Kontraste angehoben.
+- **Die globalen `!important`-Overrides (Nr. 5 dieser Entscheidung) sind zurückgebaut** (ADR 0041
+  Nr. 7, 75): von 94 auf 33 Deklarationen außerhalb von Druck und reduzierter Bewegung, die übrigen
+  sind in `design.md` begründet.
+- **Weitere Bausteine** (ADR 0041): u. a. `ActionMenu`, `MoneyInput`/`QuantityInput`, `DocNo`,
+  `ContactSelect`, `LoadingState`, `RequiredLegend`; die PageBar kennt Aktionsgewichte (Nr. 66).
+- **Feedback:** siehe Amendment 2026-10-27 in ADR 0021.

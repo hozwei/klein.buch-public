@@ -42,16 +42,9 @@ pub async fn archive_event(
     pool: &SqlitePool,
     action: ArchiveAction,
     archive_id: &str,
-    details_json: Option<&str>,
+    details: Option<serde_json::Value>,
 ) -> Result<()> {
-    audit_log::append(
-        pool,
-        action.as_str(),
-        "archive_entry",
-        archive_id,
-        details_json,
-    )
-    .await
+    audit_log::append(pool, action.as_str(), "archive_entry", archive_id, details).await
 }
 
 #[cfg(test)]

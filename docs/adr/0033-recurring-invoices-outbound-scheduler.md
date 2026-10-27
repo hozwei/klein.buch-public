@@ -70,3 +70,35 @@ PDF, KoSIT und Archiv erfüllen.
 `db::repo::recurring_invoice`, Migrationen `0024`/`0025`, Frontend
 `routes/recurring-invoices/**`; ADR 0023 (Eingangsseite + Scheduler), ADR 0027
 (Cron-Jobs in `run_tick`), ADR 0005 (§19). Review-Bereich Q, Befunde KB-0053..KB-0058.
+
+## Amendment 2026-10-24 — Dauerbetrieb (ADR 0040, Lauf F)
+
+**Status:** Akzeptiert. Ändert Pt. 2 (Catch-up), Pt. 5, Pt. 6 und Pt. 7:
+
+- **Nachholen (Pt. 2).** Bis drei fällige Termine holt der Lauf selbst nach;
+  nur der jüngste folgt der Automatik-Stufe, ältere entstehen als Entwurf
+  (nachgeholte Rechnungen gehen nie automatisch hinaus), dazu ein
+  Sammelhinweis. Mehr Termine nur nach Bestätigung („Rückstand …“: nachholen,
+  höchstens 24, oder ab heute fortsetzen); das Fortsetzen einer pausierten
+  Vorlage mit verpassten Terminen verlangt dieselbe Wahl. Eine neue Vorlage darf
+  nicht in der Vergangenheit beginnen. Belegdatum bleibt der Erstellungstag.
+- **§19 auch im Scheduler (Pt. 5, R1-017).** Vor jeder Materialisierung prüft
+  der Lauf die Positionen gegen den aktuellen §19-Status; bei Verstoß entsteht
+  kein Entwurf, sondern ein Hinweis. Ebenso bei archiviertem oder
+  anonymisiertem Kunden; die Anonymisierung pausiert die Vorlagen des Kontakts.
+- **Absturzfest (Pt. 6).** Nummer, Entwurf, Audit und Vorrücken der Vorlage
+  committen zusammen; Festschreiben und Versand setzt ein Lauf nach einem
+  Abbruch über einen Fortsetzungs-Marker fort — nie eine zweite Rechnung für
+  denselben Termin.
+- **Kein Lauf beim Öffnen der Seite (Pt. 7, W14-030).** Der Fälligkeits-Check
+  beim Öffnen der Abo-Seite entfällt; im Server läuft der Tick ab dem
+  Entsperren, „fällige jetzt erstellen“ bleibt als Knopf.
+- **Sperre auch beim Bearbeiten und Pausieren** (W14-031); der Lauf liest die
+  Vorlage je Termin frisch. Pause bei unplausibler Uhr bzw. nach einem Restore
+  (ADR 0040 Nr. 5/6).
+- **Tests (Konsequenzen).** Die Begründung „Lib-Unit-Tests, weil der Scheduler
+  die OS-Notification-Bridge linkt“ ist mit W5 bzw. dem Wegfall von
+  `notify::os_native` und `Notifier` (Lauf F, D-16) entfallen. Die
+  Scheduler-Tests laufen mit fester Uhr als Lib-Tests
+  (`scheduler::recurring_invoice::pipeline_tests`) und als Integrationstests
+  (`tests/recurring_scheduler_test.rs`).

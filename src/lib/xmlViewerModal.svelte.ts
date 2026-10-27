@@ -9,7 +9,7 @@
 // bereits geladenen Payload. Laden/Fehler-Handling bleibt beim Aufrufer
 // (Toast bei Tamper / kein E-Rechnungs-Original).
 
-import type { XmlViewerPayload } from "$lib/types";
+import type { XmlViewerPayload } from "#lib/types.ts";
 
 export const xmlViewerStore = $state<{
   visible: boolean;

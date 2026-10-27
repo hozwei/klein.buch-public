@@ -3,7 +3,7 @@ slug: installation-docker
 title: Installation mit Docker Compose
 category: betrieb
 order: 10
-keywords: [installation, docker, compose, container, image, setup-token, einrichtung, betrieb, server, volume]
+keywords: [installation, docker, compose, container, image, setup-token, einrichtung, betrieb, server, volume, startbildschirm, web-app-manifest, handy]
 ---
 
 # Installation mit Docker Compose
@@ -70,7 +70,7 @@ services:
       core: 0
     pids_limit: 256
     mem_limit: 2g
-    stop_grace_period: 60s
+    stop_grace_period: 90s
     logging:
       driver: json-file
       options:
@@ -81,7 +81,7 @@ services:
 ## Was die Zeilen bedeuten
 
 `image` nennt das Image samt Version. Ersetze `VERSION` durch die
-Nummer einer Veröffentlichung, zum Beispiel `2026.10.0`. Die
+Nummer einer Veröffentlichung, zum Beispiel `2026.11.0`. Die
 Versionen findest Du unter "Releases" im öffentlichen Projekt. Ein
 Image mit dem Namen `latest` gibt es absichtlich nicht: Ein
 wandernder Name würde bei jedem Herunterladen unbemerkt eine neue
@@ -132,10 +132,16 @@ Betriebssystems. `ulimits: core: 0` verhindert Speicherabbilder bei
 einem Absturz, die Dein Daten-Passwort enthalten könnten. `pids_limit`
 und `mem_limit` begrenzen Prozesse und Arbeitsspeicher.
 
-`stop_grace_period: 60s` gibt Klein.Buch beim Stoppen bis zu 60
-Sekunden Zeit. In dieser Zeit laufen angefangene Aufgaben wie ein
-Festschreiben oder ein Backup zu Ende. Docker wartet sonst nur 10
-Sekunden und beendet den Prozess dann hart. Verkürze diesen Wert nicht.
+`stop_grace_period: 90s` gibt Klein.Buch beim Stoppen bis zu 90
+Sekunden Zeit. Klein.Buch hält zuerst seine geplanten Aufgaben an (ein
+Abo-Lauf beendet den gerade bearbeiteten Termin), wartet höchstens 30
+Sekunden auf offene Verbindungen und weitere 30 Sekunden auf angefangene
+Aufgaben wie ein Festschreiben oder ein Backup, schreibt ein noch
+ausstehendes Backup eines eben festgeschriebenen Belegs (alles zusammen
+höchstens 40 Sekunden) und schließt dann die Datenbank. Docker wartet sonst nur 10 Sekunden und beendet den Prozess
+dann hart. Verkürze diesen Wert nicht. Ein abgebrochenes Backup ist
+unkritisch: Es wird erst unter einem Zwischennamen geschrieben und erst
+am Ende umbenannt; Reste räumt Klein.Buch beim nächsten Start auf.
 
 `logging` begrenzt das Container-Log auf fünf Dateien zu je 10 MB. Im
 Log stehen der Setup-Token und fehlgeschlagene Anmeldungen mit
@@ -176,7 +182,7 @@ Die Pfade im Container (`KLEIN_BUCH_DATA_DIR`, `KLEIN_BUCH_INPUTS_DIR`,
 
 Einen ungültigen Wert bei öffentlicher Adresse, Proxys, `KLEIN_BUCH_LISTEN`,
 der Wurzel der Backup-Ziele, den beiden Platzgrenzen oder den Test-Ports
-meldet Klein.Buch beim Start im Log und startet nicht. Zwei Schalter gibt es nur für Tests, nie für den Betrieb:
+meldet Klein.Buch beim Containerstart im Log und startet nicht. Zwei Schalter gibt es nur für Tests, nie für den Betrieb:
 `KLEIN_BUCH_INSECURE_HTTP=1` erlaubt die Anmeldung ohne HTTPS, und
 `KLEIN_BUCH_ALLOW_UNMOUNTED=1` schaltet die Prüfung der Volumes ab.
 
@@ -218,15 +224,17 @@ In der Oberfläche von Klein.Buch erscheint er nie.
 
 1. Trag den Setup-Token ein.
 2. Leg Dein Daten-Passwort fest (mindestens 16 Zeichen, am besten drei
-   oder vier zufällige Wörter) und wiederhole es. Das Daten-Passwort ist
+   oder vier zufällige Wörter, kein bekannter Spruch, nicht der
+   Firmenname) und wiederhole es. Das Daten-Passwort ist
    die Passphrase aus dem Glossar: Es verschlüsselt Datenbank und
    Backups. Es wird nirgends gespeichert und lässt sich nicht
    zurücksetzen. Mehr dazu im Kapitel "Passphrase einrichten".
 3. Klick auf **"Weiter zum QR-Code"**, scanne den QR-Code mit Deiner
    Authenticator-App und gib den angezeigten Code ein.
 4. Klick auf **"Einrichten & erstes Backup erstellen"**.
-5. Notiere die zehn Einmal-Codes, hake "Ich habe die Codes sicher
-   notiert." an und klick auf "Weiter".
+5. Notiere die zehn Einmal-Codes (oder sichere sie mit "Als
+   Textdatei speichern" an einem Ort außerhalb dieses Servers), hake
+   "Ich habe die Codes sicher notiert." an und klick auf "Weiter".
 
 Danach richtest Du Deine Firmendaten und ein Off-Site-Backup ein
 (Kapitel "Off-Site-Backup einrichten"). Solange es kein externes Ziel
@@ -237,6 +245,28 @@ Containers ist Klein.Buch gesperrt, bis Du Dich im Browser anmeldest.
 Erst dann laufen Tages-Backup und andere geplante Aufgaben weiter.
 Warum das so ist, steht im Kapitel "Fehlersuche im Container".
 
+## Auf dem Startbildschirm von Handy und Tablet
+
+Klein.Buch bringt ein Web-App-Manifest mit, eine kleine Datei mit
+Name, Symbol und Farben der Anwendung. Damit lässt sich Klein.Buch
+über das Menü des Browsers auf den Startbildschirm legen (je nach
+Browser etwa "Zum Home-Bildschirm" oder "App installieren") und
+öffnet sich dann in einem eigenen Fenster ohne Adressleiste. Am
+Reverse-Proxy musst Du dafür nichts einstellen; Klein.Buch liefert die
+Datei selbst aus.
+
+Eine Offline-Funktion gibt es nicht. Klein.Buch hat keinen Service
+Worker (das Hilfsprogramm, mit dem Web-Apps Seiten für unterwegs
+zwischenspeichern) und lädt jede Seite vom Server. Ohne Verbindung zu
+Deiner Instanz geht also auch die Startbildschirm-App nicht; nach
+einem Update zeigt sie dafür gleich die neue Version. Auf iPhone und
+iPad hat die Startbildschirm-App eigene Cookies, getrennt vom
+Browser: Du meldest Dich dort einmal gesondert mit Daten-Passwort und
+App-Code an, und sie erscheint als eigene Sitzung unter "Einstellungen
+→ Sicherheit & Anmeldung". Eine Zurück-Taste des Browsers hat sie
+nicht; zurück geht es über die Zurück-Links der Seiten und die
+Navigation.
+
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

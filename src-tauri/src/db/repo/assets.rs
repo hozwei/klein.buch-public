@@ -14,6 +14,7 @@
 use crate::db::models::{AssetDetail, AssetListItem, AssetRow};
 use crate::domain::asset::AssetInput;
 use crate::error::{Error, Result};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
@@ -36,6 +37,31 @@ pub struct ListFilter {
 #[allow(clippy::too_many_arguments)]
 pub async fn create(
     pool: &SqlitePool,
+    input: &AssetInput,
+    asset_number: &str,
+    fiscal_year: i64,
+    method_db: &str,
+    useful_life_years: Option<f64>,
+    book_value_cents: i64,
+) -> Result<AssetRow> {
+    let mut conn = pool.acquire().await?;
+    create_in(
+        &mut conn,
+        input,
+        asset_number,
+        fiscal_year,
+        method_db,
+        useful_life_years,
+        book_value_cents,
+    )
+    .await
+}
+
+/// [`create`] innerhalb einer laufenden Transaktion (Lauf F8): Nummer, Anlage,
+/// Verweis der Quell-Kosten und Audit entstehen zusammen oder gar nicht.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_in(
+    conn: &mut sqlx::SqliteConnection,
     input: &AssetInput,
     asset_number: &str,
     fiscal_year: i64,
@@ -67,10 +93,12 @@ pub async fn create(
     .bind(input.business_share_percent)
     .bind(book_value_cents)
     .bind(input.notes.as_deref())
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
-    get(pool, &id)
+    sqlx::query_as::<_, AssetRow>("SELECT * FROM assets WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| Error::Domain("create: post-INSERT SELECT leer".into()))
 }
@@ -188,16 +216,23 @@ pub async fn update(
         ));
     }
 
-    sqlx::query(
+    // Guard auch im UPDATE (Lauf F2c): ein paralleles Veräußern oder
+    // Festschreiben zwischen Prüfung und Schreiben greift nicht durch.
+    // Lauf F8: Das Anschaffungsjahr folgt dem korrigierten Anschaffungsdatum
+    // (AfA-Beginn, Jahresfilter, Prüfung abgeschlossener Jahre); die
+    // Anlagennummer behält das Jahr ihrer Vergabe (ADR 0039 Nr. 148 (6)).
+    let res = sqlx::query(
         "UPDATE assets SET
-            label = ?, acquisition_date = ?, acquisition_cost_cents = ?,
+            label = ?, acquisition_date = ?, acquisition_fiscal_year = ?,
+            acquisition_cost_cents = ?,
             expense_id = ?, vendor_contact_id = ?, depreciation_method = ?,
             useful_life_years = ?, afa_category = ?, business_share_percent = ?,
             book_value_cents = ?, notes = ?, updated_at = datetime('now','utc')
-          WHERE id = ?",
+          WHERE id = ? AND disposed = 0 AND locked_at IS NULL",
     )
     .bind(input.label.trim())
     .bind(input.acquisition_date.to_string())
+    .bind(i64::from(input.acquisition_date.year()))
     .bind(input.acquisition_cost_cents)
     .bind(input.expense_id.as_deref())
     .bind(input.vendor_contact_id.as_deref())
@@ -210,6 +245,13 @@ pub async fn update(
     .bind(id)
     .execute(pool)
     .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Anlage wurde inzwischen veräußert oder festgeschrieben — keine \
+             Stammdaten-Änderung möglich."
+                .into(),
+        ));
+    }
 
     get(pool, id)
         .await?
@@ -240,6 +282,17 @@ pub async fn set_book_value(
     book_value_cents: i64,
     last_depreciation_year: Option<i64>,
 ) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    set_book_value_in(&mut conn, id, book_value_cents, last_depreciation_year).await
+}
+
+/// [`set_book_value`] innerhalb einer laufenden Transaktion (Lauf F, D-03).
+pub async fn set_book_value_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    book_value_cents: i64,
+    last_depreciation_year: Option<i64>,
+) -> Result<()> {
     let res = sqlx::query(
         "UPDATE assets SET book_value_cents = ?, last_depreciation_year = ?,
                 updated_at = datetime('now','utc')
@@ -248,7 +301,7 @@ pub async fn set_book_value(
     .bind(book_value_cents)
     .bind(last_depreciation_year)
     .bind(id)
-    .execute(pool)
+    .execute(conn)
     .await?;
     if res.rows_affected() == 0 {
         return Err(Error::Domain(format!(
@@ -263,7 +316,10 @@ pub async fn set_book_value(
 /// Veräußert/verschrottet eine Anlage. `residual_book_value_cents` ist der
 /// Restbuchwert-Snapshot zum Disposal. Disposal-Felder stehen NICHT in der
 /// Immutability-Whitelist — auch eine festgeschriebene Anlage darf veräußert
-/// werden. Doppel-Disposal wird verhindert.
+/// werden. Doppel-Disposal wird verhindert: Vorab-Prüfung, `AND disposed = 0`
+/// im UPDATE (zwei gleichzeitige Aufrufe) und DB-seitig
+/// `trg_assets_disposal_final` (Migration 0032) — nach der Veräußerung sind die
+/// Abgangsfelder unveränderlich.
 pub async fn dispose(
     pool: &SqlitePool,
     id: &str,
@@ -272,31 +328,61 @@ pub async fn dispose(
     proceeds_cents: i64,
     residual_book_value_cents: i64,
 ) -> Result<AssetRow> {
-    let existing = get(pool, id)
+    let mut conn = pool.acquire().await?;
+    dispose_in(
+        &mut conn,
+        id,
+        disposal_date,
+        disposal_type_db,
+        proceeds_cents,
+        residual_book_value_cents,
+    )
+    .await?;
+    drop(conn);
+    get(pool, id)
         .await?
-        .ok_or_else(|| Error::Domain(format!("Anlage nicht gefunden: {id}")))?;
-    if existing.disposed == 1 {
-        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+        .ok_or_else(|| Error::Domain("dispose: post-UPDATE SELECT leer".into()))
+}
+
+/// [`dispose`] auf einer Verbindung in einer laufenden Schreib-Transaktion
+/// (Lauf F3b: `assets_dispose` bucht die AfA bis zum Abgang und den Abgang
+/// zusammen oder gar nicht).
+pub async fn dispose_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    disposal_date: &str,
+    disposal_type_db: &str,
+    proceeds_cents: i64,
+    residual_book_value_cents: i64,
+) -> Result<()> {
+    let disposed: Option<i64> = sqlx::query_scalar("SELECT disposed FROM assets WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    match disposed {
+        None => return Err(Error::Domain(format!("Anlage nicht gefunden: {id}"))),
+        Some(1) => return Err(Error::Domain("Anlage ist bereits veräußert.".into())),
+        Some(_) => {}
     }
 
-    sqlx::query(
+    let res = sqlx::query(
         "UPDATE assets SET
             disposed = 1, disposal_date = ?, disposal_type = ?,
             disposal_proceeds_cents = ?, disposal_residual_book_value_cents = ?,
             updated_at = datetime('now','utc')
-          WHERE id = ?",
+          WHERE id = ? AND disposed = 0",
     )
     .bind(disposal_date)
     .bind(disposal_type_db)
     .bind(proceeds_cents)
     .bind(residual_book_value_cents)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
-
-    get(pool, id)
-        .await?
-        .ok_or_else(|| Error::Domain("dispose: post-UPDATE SELECT leer".into()))
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain("Anlage ist bereits veräußert.".into()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

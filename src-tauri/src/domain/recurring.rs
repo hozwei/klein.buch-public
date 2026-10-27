@@ -90,7 +90,7 @@ pub struct RecurringInput {
     /// Am Stichtag automatisch eine Kosten-Position anlegen (Catch-up), sonst
     /// nur als „fällig" in der Liste melden (Reminder).
     pub auto_create_expense: bool,
-    /// §13b-Vorgabe für die erzeugten Kosten (reines Hinweis-Flag).
+    /// §13b-Vorgabe für die erzeugten Kosten (mit Flag muss die USt 0 sein, ADR 0039 Nr. 143).
     pub reverse_charge_13b_default: bool,
 }
 
@@ -100,10 +100,20 @@ pub struct RecurringInput {
 pub enum RecurringValidationError {
     LabelMissing,
     DescriptionMissing,
-    FrequencyInvalid { value: String },
-    DayOfPeriodOutOfRange { day: i64 },
-    CategoryInvalid { category: String },
-    AmountNotPositive { amount: i64 },
+    FrequencyInvalid {
+        value: String,
+    },
+    DayOfPeriodOutOfRange {
+        day: i64,
+    },
+    CategoryInvalid {
+        category: String,
+    },
+    AmountNotPositive {
+        amount: i64,
+    },
+    /// Erwarteter Betrag über der Domänengrenze (F5-fix).
+    AmountOutOfRange,
 }
 
 /// Validiert eine [`RecurringInput`]. Aggregiert alle Fehler (kein Fail-Fast).
@@ -136,6 +146,9 @@ pub fn validate_recurring(input: &RecurringInput) -> Result<(), Vec<RecurringVal
         errs.push(E::AmountNotPositive {
             amount: input.expected_amount_cents,
         });
+    }
+    if !crate::domain::money::amount_in_range(input.expected_amount_cents) {
+        errs.push(E::AmountOutOfRange);
     }
 
     if errs.is_empty() {
@@ -189,14 +202,51 @@ pub fn is_due(next_due_date: NaiveDate, today: NaiveDate) -> bool {
     next_due_date <= today
 }
 
+/// Anzahl fälliger Termine ab `first` (einschließlich) bis `today`, höchstens
+/// bis `end` (Laufzeit-Ende) — gezählt bis `cap` (Obergrenze gegen
+/// Endlosschleifen bei unplausiblen Daten). Lauf F, W14-026.
+pub fn count_due_occurrences(
+    frequency: Frequency,
+    day_of_period: u32,
+    first: NaiveDate,
+    today: NaiveDate,
+    end: Option<NaiveDate>,
+    cap: usize,
+) -> usize {
+    let mut n = 0usize;
+    let mut at = first;
+    while n < cap && at <= today && end.is_none_or(|e| at <= e) {
+        n += 1;
+        at = compute_next_due_date(frequency, day_of_period, at);
+    }
+    n
+}
+
+/// Erster Termin der Reihe ab `first`, der auf oder nach `date` liegt
+/// („ab heute fortsetzen“). Liefert zusätzlich die Zahl übersprungener Termine.
+pub fn first_occurrence_on_or_after(
+    frequency: Frequency,
+    day_of_period: u32,
+    first: NaiveDate,
+    date: NaiveDate,
+) -> (NaiveDate, usize) {
+    let mut at = first;
+    let mut skipped = 0usize;
+    // Jede Periode rückt mindestens 28 Tage vor; 10 000 Schritte reichen für
+    // jedes plausible Datum (> 800 Jahre monatlich).
+    while at < date && skipped < 10_000 {
+        at = compute_next_due_date(frequency, day_of_period, at);
+        skipped += 1;
+    }
+    (at, skipped)
+}
+
 // ---- Fehler-Texte ----------------------------------------------------------
 
 /// Menschenlesbare deutsche Fehlermeldung (für Toasts/UI).
 pub fn message(e: &RecurringValidationError) -> String {
+    use crate::domain::money::eur;
     use RecurringValidationError as E;
-    fn eur(c: i64) -> String {
-        format!("{:.2} €", c as f64 / 100.0).replace('.', ",")
-    }
     match e {
         E::LabelMissing => "Bezeichnung ist erforderlich.".into(),
         E::DescriptionMissing => "Beschreibungs-Vorlage ist erforderlich.".into(),
@@ -211,6 +261,7 @@ pub fn message(e: &RecurringValidationError) -> String {
                 eur(*amount)
             )
         }
+        E::AmountOutOfRange => crate::domain::money::amount_out_of_range_message(),
     }
 }
 
@@ -224,12 +275,20 @@ pub fn variant_name(e: &RecurringValidationError) -> &'static str {
         E::DayOfPeriodOutOfRange { .. } => "DayOfPeriodOutOfRange",
         E::CategoryInvalid { .. } => "CategoryInvalid",
         E::AmountNotPositive { .. } => "AmountNotPositive",
+        E::AmountOutOfRange => "AmountOutOfRange",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
+    #[test]
+    fn message_formats_amounts_without_float() {
+        let m = message(&RecurringValidationError::AmountNotPositive { amount: -250 });
+        assert!(m.contains("(-2,50 €)"), "{m}");
+    }
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -371,10 +430,69 @@ mod tests {
     }
 
     #[test]
+    fn counts_due_occurrences_with_end_and_cap() {
+        let f = Frequency::Monthly;
+        // 01.03., 01.04., 01.05. bis 20.05.
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2026, 3, 1), d(2026, 5, 20), None, 100),
+            3
+        );
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2026, 6, 1), d(2026, 5, 20), None, 100),
+            0
+        );
+        // Laufzeit-Ende 15.04. → nur 01.03. und 01.04.
+        assert_eq!(
+            count_due_occurrences(
+                f,
+                1,
+                d(2026, 3, 1),
+                d(2026, 5, 20),
+                Some(d(2026, 4, 15)),
+                100
+            ),
+            2
+        );
+        // Obergrenze
+        assert_eq!(
+            count_due_occurrences(f, 1, d(2016, 1, 1), d(2026, 5, 20), None, 24),
+            24
+        );
+    }
+
+    #[test]
+    fn first_occurrence_on_or_after_skips_backlog() {
+        let f = Frequency::Monthly;
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 1, 1), d(2026, 5, 20)),
+            (d(2026, 6, 1), 5)
+        );
+        // Termin genau heute bleibt
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 1, 1), d(2026, 5, 1)),
+            (d(2026, 5, 1), 4)
+        );
+        // nichts verpasst
+        assert_eq!(
+            first_occurrence_on_or_after(f, 1, d(2026, 7, 1), d(2026, 5, 20)),
+            (d(2026, 7, 1), 0)
+        );
+    }
+
+    #[test]
     fn is_due_inclusive_of_today() {
         let today = d(2026, 5, 20);
         assert!(is_due(d(2026, 5, 20), today), "== today ist fällig");
         assert!(is_due(d(2026, 5, 19), today), "Vergangenheit ist fällig");
         assert!(!is_due(d(2026, 5, 21), today), "Zukunft ist nicht fällig");
+    }
+
+    /// F5-fix: Erwarteter Betrag über 1 Mrd. € wird abgelehnt.
+    #[test]
+    fn expected_amount_above_limit_is_rejected() {
+        let mut r = good();
+        r.expected_amount_cents = crate::domain::money::MAX_AMOUNT_CENTS + 1;
+        let err = validate_recurring(&r).unwrap_err();
+        assert!(err.contains(&RecurringValidationError::AmountOutOfRange));
     }
 }

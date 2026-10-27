@@ -1,6 +1,6 @@
 // Backend-Aufrufe. Jede Funktion ruft einen Command-Kern über
 // `invoke<T>(name, args)` auf — seit Plan W5 per HTTP (`src/lib/transport.ts`,
-// `POST /api/cmd/{name}`), vorher über die Tauri-Bridge.
+// `POST /api/cmd/{name}`), vorher über die Bridge der Desktop-Fassung.
 // Block 2: contacts_* + seller_profile_* + paragraph_19_info.
 // Block 3b: invoices_* — Draft, Lock-and-Issue, Cancel, Payment.
 
@@ -18,12 +18,22 @@ export {
   authLogout,
   authLock,
   authSecurity,
+  authSessions,
+  authRevokeOtherSessions,
   authTotpRenewOffer,
   authTotpRenewFinish,
   authRecoveryRenew,
   authChangePassphrase,
+  PassphraseChangeUnclear,
 } from "./transport";
-export type { AuthState, AuthStatus, TotpOffer, SecondFactor, LoginResult } from "./transport";
+export type {
+  AuthState,
+  AuthStatus,
+  AuthSession,
+  TotpOffer,
+  SecondFactor,
+  LoginResult,
+} from "./transport";
 import type {
   AnonymizeCheck,
   DownloadTicket,
@@ -89,6 +99,8 @@ import type {
   PrivateMovementCreateArgs,
   AddAttachmentArgs,
   RecurringSubscription,
+  ResumeMode,
+  SchedulerHoldStatus,
   RecurringInputDto,
   RecurringProcessReport,
   RecurringInvoiceRow,
@@ -103,8 +115,9 @@ import type {
   AssetListFilter,
   AssetInputDto,
   AssetDisposeArgs,
+  AssetDisposalPreview,
   AfaTabellen,
-  MethodSuggestion,
+  AssetSuggestion,
   DepreciationEntry,
   AccrueReport,
   EuerReport,
@@ -113,6 +126,7 @@ import type {
   EuerDetailExport,
   EuerPdfExport,
   DatevExport,
+  DatevHeaderNumbers,
   StbExport,
   AfaPending,
   AppNotification,
@@ -322,6 +336,11 @@ export function invoicesCreateDraft(args: CreateDraftArgs): Promise<InvoiceDetai
   return invoke<InvoiceDetail>("invoices_create_draft", { args });
 }
 
+/** Bearbeitet einen offenen Rechnungs-Entwurf (Lauf F5); die Nummer bleibt. */
+export function invoicesUpdateDraft(id: string, args: CreateDraftArgs): Promise<InvoiceDetail> {
+  return invoke<InvoiceDetail>("invoices_update_draft", { id, args });
+}
+
 export function invoicesValidateDraft(id: string): Promise<ValidationIssueDto[]> {
   return invoke<ValidationIssueDto[]>("invoices_validate_draft", { id });
 }
@@ -339,6 +358,15 @@ export function invoicesRecordPayment(args: RecordPaymentArgs): Promise<Invoice>
 
 export function invoicesCancel(args: CancelArgs): Promise<CancelResponse> {
   return invoke<CancelResponse>("invoices_cancel", { args });
+}
+
+/**
+ * Verwirft einen nummerierten Rechnungs- oder Storno-Entwurf (Re-Auth, Lauf F
+ * W14-032). Kein Löschen: Zeitpunkt und Grund (mindestens 10 Zeichen) stehen am
+ * Beleg, die Nummer bleibt verbraucht. Die Schaltfläche gestaltet der UI/UX-Lauf.
+ */
+export function invoicesVoidDraft(args: { id: string; reason: string }): Promise<Invoice> {
+  return invoke<Invoice>("invoices_void_draft", args);
 }
 
 
@@ -410,10 +438,6 @@ export function quotesList(filter?: QuoteListFilter): Promise<QuoteListItem[]> {
 
 export function quotesGet(id: string): Promise<QuoteDetail | null> {
   return invoke<QuoteDetail | null>("quotes_get", { id });
-}
-
-export function quotesAttachmentsList(quoteId: string): Promise<AttachmentView[]> {
-  return invoke<AttachmentView[]>("quotes_attachments_list", { quoteId });
 }
 
 export function quotesCreateDraft(args: QuoteCreateDraftArgs): Promise<QuoteDetail> {
@@ -624,10 +648,6 @@ export function paymentAccountsList(includeInactive = false): Promise<PaymentAcc
   return invoke<PaymentAccount[]>("payment_accounts_list", { includeInactive });
 }
 
-export function paymentAccountsEnsureDefaults(): Promise<PaymentAccount[]> {
-  return invoke<PaymentAccount[]>("payment_accounts_ensure_defaults");
-}
-
 export function paymentAccountsCreate(input: PaymentAccountInput): Promise<PaymentAccount> {
   return invoke<PaymentAccount>("payment_accounts_create", { input });
 }
@@ -728,8 +748,28 @@ export function recurringUpdate(
   return invoke<RecurringSubscription>("recurring_update", { id, input });
 }
 
-export function recurringSetActive(id: string, active: boolean): Promise<RecurringSubscription> {
-  return invoke<RecurringSubscription>("recurring_set_active", { id, active });
+/**
+ * Pausieren/Fortsetzen. Beim Fortsetzen eines Auto-Abos mit verpassten Terminen
+ * verlangt der Server `resumeMode` (nachholen oder ab heute fortsetzen).
+ */
+export function recurringSetActive(
+  id: string,
+  active: boolean,
+  resumeMode?: ResumeMode,
+): Promise<RecurringSubscription> {
+  return invoke<RecurringSubscription>("recurring_set_active", {
+    id,
+    active,
+    resumeMode: resumeMode ?? null,
+  });
+}
+
+/** Entscheidung zu verpassten Terminen eines aktiven Abos („Rückstand …“). */
+export function recurringResolveBacklog(
+  id: string,
+  mode: ResumeMode,
+): Promise<RecurringSubscription> {
+  return invoke<RecurringSubscription>("recurring_resolve_backlog", { id, mode });
 }
 
 /** „Jetzt erfassen" — legt die Kosten-Position für den aktuellen Stichtag an. */
@@ -765,11 +805,28 @@ export function recurringInvoicesUpdate(
   return invoke<RecurringInvoiceDetail>("recurring_invoices_update", { id, input });
 }
 
+/**
+ * Pausieren/Fortsetzen. Beim Fortsetzen einer Vorlage mit verpassten Terminen
+ * verlangt der Server `resumeMode` (nachholen oder ab heute fortsetzen).
+ */
 export function recurringInvoicesSetActive(
   id: string,
   active: boolean,
+  resumeMode?: ResumeMode,
 ): Promise<RecurringInvoiceRow> {
-  return invoke<RecurringInvoiceRow>("recurring_invoices_set_active", { id, active });
+  return invoke<RecurringInvoiceRow>("recurring_invoices_set_active", {
+    id,
+    active,
+    resumeMode: resumeMode ?? null,
+  });
+}
+
+/** Entscheidung zu verpassten Terminen einer aktiven Vorlage („Rückstand …“). */
+export function recurringInvoicesResolveBacklog(
+  id: string,
+  mode: ResumeMode,
+): Promise<RecurringInvoiceRow> {
+  return invoke<RecurringInvoiceRow>("recurring_invoices_resolve_backlog", { id, mode });
 }
 
 /** „Jetzt erstellen" — erzeugt die Rechnung für den aktuellen Stichtag. Liefert die Rechnungs-ID. */
@@ -801,10 +858,12 @@ export function assetsAfaTable(): Promise<AfaTabellen> {
 export function assetsSuggestMethod(
   expenseCategory: string | null,
   acquisitionCostCents: number,
-): Promise<MethodSuggestion> {
-  return invoke<MethodSuggestion>("assets_suggest_method", {
+  expenseId: string | null = null,
+): Promise<AssetSuggestion> {
+  return invoke<AssetSuggestion>("assets_suggest_method", {
     expenseCategory,
     acquisitionCostCents,
+    expenseId,
   });
 }
 
@@ -818,6 +877,15 @@ export function assetsUpdate(id: string, input: AssetInputDto): Promise<AssetDet
 
 export function assetsDispose(args: AssetDisposeArgs): Promise<AssetDetail> {
   return invoke<AssetDetail>("assets_dispose", { args });
+}
+
+/** Vorschau des Abgangs zum Datum (liest nur, Lauf 2026.11 U4): Restbuchwert,
+ *  AfA bis zum Abgang und ggf. der Grund, aus dem `assetsDispose` ablehnen würde. */
+export function assetsDisposalPreview(
+  id: string,
+  disposalDate: string,
+): Promise<AssetDisposalPreview> {
+  return invoke<AssetDisposalPreview>("assets_disposal_preview", { id, disposalDate });
 }
 
 /** „AfA für Jahr X jetzt buchen" — bucht bis einschließlich fiscalYear (Catch-up). */
@@ -873,14 +941,35 @@ export function euerExportPdf(fiscalYear: number): Promise<EuerPdfExport> {
   return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear });
 }
 
-/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe. */
-export function euerExportDatev(fiscalYear: number, skr: string): Promise<DatevExport> {
-  return invoke<DatevExport>("euer_export_datev", { fiscalYear, skr });
+/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe.
+ *  Berater- und Mandantennummer sind optional (Feld 11/12 des DATEV-Kopfs;
+ *  1001–9999999 bzw. 1–99999, sonst lehnt der Server ab — F5, U4). */
+export function euerExportDatev(
+  fiscalYear: number,
+  skr: string,
+  numbers: DatevHeaderNumbers = {},
+): Promise<DatevExport> {
+  return invoke<DatevExport>("euer_export_datev", {
+    fiscalYear,
+    skr,
+    consultantNumber: numbers.consultantNumber ?? null,
+    clientNumber: numbers.clientNumber ?? null,
+  });
 }
 
-/** Erzeugt das komplette Steuerberater-Paket (ZIP). */
-export function euerExportStbZip(fiscalYear: number, skr: string): Promise<StbExport> {
-  return invoke<StbExport>("euer_export_stb_zip", { fiscalYear, skr });
+/** Erzeugt das komplette Steuerberater-Paket (ZIP); Nummern wie bei
+ *  `euerExportDatev` (gehen in den DATEV-Stapel im Paket). */
+export function euerExportStbZip(
+  fiscalYear: number,
+  skr: string,
+  numbers: DatevHeaderNumbers = {},
+): Promise<StbExport> {
+  return invoke<StbExport>("euer_export_stb_zip", {
+    fiscalYear,
+    skr,
+    consultantNumber: numbers.consultantNumber ?? null,
+    clientNumber: numbers.clientNumber ?? null,
+  });
 }
 
 // ---- Backup + Restore (Block 4) --------------------------------------------
@@ -898,6 +987,9 @@ export interface TargetView {
   remoteDir: string | null;
   hostFingerprint: string | null;
   lastResult: { ok: boolean; at: string; error: string | null } | null;
+  /** Jüngste erfolgreiche Kopie auf diesem Ziel (RFC 3339, Europe/Berlin), auch
+   *  wenn der letzte Lauf scheiterte; null = noch keine Kopie (Lauf 2026.11 U4). */
+  lastCopyAt: string | null;
 }
 
 export interface SftpProbe {
@@ -916,8 +1008,17 @@ export interface BackupSettings {
   /** Eingebundene Unterordner der Wurzel. */
   availableDirs: string[];
   targets: TargetView[];
-  /** `missing` | `failing` | `ok`. */
-  offsiteStatus: "missing" | "failing" | "ok";
+  /** `missing` | `failing` | `stale` (Kopie fehlt oder ist älter als die
+   *  Frist der Regel „Backup überfällig“, Lauf F3a) | `ok`. */
+  offsiteStatus: "missing" | "failing" | "stale" | "ok";
+  /** Stand der Off-Site-Sicherung: älteste der je Ziel jüngsten Kopien
+   *  (`targets[].lastCopyAt`, RFC 3339); null ohne Ziel oder solange ein Ziel
+   *  keine Kopie hat (Lauf 2026.11 U4). */
+  offsiteLastCopyAt: string | null;
+  /** Alter davon in Berliner Kalendertagen (0 = heute), wie der Status „stale“. */
+  offsiteAgeDays: number | null;
+  /** Uhrzeit des Tages-Backups (`HH:MM`, Europe/Berlin; Lauf F). */
+  dailyTime: string;
 }
 
 export interface BackupOutcome {
@@ -929,7 +1030,20 @@ export interface BackupOutcome {
   triggerReason: string;
   createdAt: string;
   /** Ergebnis je Off-Site-Ziel (Plan W7). */
-  offsite: { targetId: string; label: string; location: string | null; error: string | null }[];
+  offsite: OffsiteResult[];
+}
+
+/** Ergebnis der Spiegelung auf ein Off-Site-Ziel (`backup::OffsiteResult`). */
+export interface OffsiteResult {
+  targetId: string;
+  label: string;
+  /** Pfad/URI bei Erfolg. */
+  location: string | null;
+  /** Fehlertext; bei `suspended` der Grund der Aussetzung. */
+  error: string | null;
+  /** Spiegelung ausgesetzt (Pause nach einer Wiederherstellung bis zur Freigabe) —
+   *  kein Fehlschlag des Ziels; vor `error` prüfen (Lauf 2026.11 U4). */
+  suspended: boolean;
 }
 
 export interface BackupHistoryItem {
@@ -1000,6 +1114,11 @@ export function backupGetSettings(): Promise<BackupSettings> {
   return invoke<BackupSettings>("backup_get_settings");
 }
 
+/** Uhrzeit des Tages-Backups setzen (`HH:MM`, Europe/Berlin). */
+export function backupSetDailyTime(time: string): Promise<string> {
+  return invoke<string>("backup_set_daily_time", { time });
+}
+
 export function backupCreateNow(): Promise<BackupOutcome> {
   return invoke<BackupOutcome>("backup_create_now");
 }
@@ -1062,6 +1181,12 @@ export function backupLogSearch(filter: BackupLogFilter): Promise<BackupLogEntry
  *  aus der Historie. */
 export type RestoreSource = { uploadId: string } | { backupId: string };
 
+/** Lädt ein Backup (verschlüsselte `.kbk`) aus dem lokalen Backup-Ordner oder
+ *  einem Verzeichnis-Ziel herunter (Re-Auth, einmaliges Ticket; Lauf F3a). */
+export function backupDownload(backupId: string): Promise<DownloadTicket> {
+  return invoke<DownloadTicket>("backup_download", { backupId });
+}
+
 /** Restore Phase A (Job, Re-Auth); danach startet der Server neu. */
 export function backupRestoreApply(
   source: RestoreSource,
@@ -1122,10 +1247,6 @@ export function fiscalYearClosedList(): Promise<FiscalYearLock[]> {
   return invoke<FiscalYearLock[]>("fiscal_year_closed_list");
 }
 
-export function fiscalYearAutoCloseGet(): Promise<boolean> {
-  return invoke<boolean>("fiscal_year_auto_close_get");
-}
-
 export function fiscalYearAutoCloseSet(enabled: boolean): Promise<void> {
   return invoke<void>("fiscal_year_auto_close_set", { enabled });
 }
@@ -1147,6 +1268,70 @@ export function archiveIntegrityHistory(limit?: number): Promise<IntegrityCheckR
 // ---- „Über"-Dialog (Block G2-DOC.3.5) --------------------------------------
 
 /** Statische App-Metadaten (Version, Schema-Version, Build-Commit, Lizenz). */
+/** Pause der automatischen Belegerzeugung (Uhrsprung, Restore). */
+export function schedulerHoldStatus(): Promise<SchedulerHoldStatus> {
+  return invoke<SchedulerHoldStatus>("scheduler_hold_status");
+}
+
+/** Pause aufheben (Re-Auth). */
+export function schedulerReleaseHold(): Promise<SchedulerHoldStatus> {
+  return invoke<SchedulerHoldStatus>("scheduler_release_hold");
+}
+
+/** Nummernkreis (zuletzt vergebene Nummer je Art und Jahr; Lauf F, D-24). */
+export interface NumberingCounter {
+  docType: string;
+  label: string;
+  fiscalYear: number;
+  lastValue: number;
+  lastNumber: string | null;
+}
+
+export function numberingCountersList(): Promise<NumberingCounter[]> {
+  return invoke<NumberingCounter[]>("numbering_counters_list");
+}
+
+/** Nummernkreis anheben (nur aufwärts, Re-Auth, Begründung im Audit-Log). */
+export function numberingRaise(args: {
+  docType: string;
+  fiscalYear: number;
+  lastValue: number;
+  reason: string;
+}): Promise<NumberingCounter[]> {
+  return invoke<NumberingCounter[]>("numbering_raise", args);
+}
+
+/** Wiederhergestellter Entwurf, dessen Nummer vor dem Restore schon festgeschrieben war (F1d). */
+export interface RestoredDraftConflict {
+  /** `invoice` (auch Storno) oder `quote`. */
+  kind: "invoice" | "quote";
+  id: string;
+  number: string;
+}
+
+export function numberingRestoredDraftsList(): Promise<RestoredDraftConflict[]> {
+  return invoke<RestoredDraftConflict[]>("numbering_restored_drafts_list");
+}
+
+/** Abgleich mit dem versandten Original bestätigen (Re-Auth, Begründung im Audit-Log). */
+export function numberingRestoredDraftConfirm(args: {
+  kind: "invoice" | "quote";
+  id: string;
+  reason: string;
+}): Promise<RestoredDraftConflict[]> {
+  return invoke<RestoredDraftConflict[]>("numbering_restored_draft_confirm", args);
+}
+
+/** Reihen, die nach einer Wiederherstellung auf „Rückstand …“ warten (F1d). */
+export interface RestoreReviewList {
+  templates: string[];
+  subscriptions: string[];
+}
+
+export function recurringRestoreReviewList(): Promise<RestoreReviewList> {
+  return invoke<RestoreReviewList>("recurring_restore_review_list");
+}
+
 export function appInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("app_info");
 }

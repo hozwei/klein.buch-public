@@ -12,13 +12,16 @@ Beim Wiederherstellen spielst Du ein Backup in Deine Klein.Buch-Instanz
 zurück. Klein.Buch prüft das Backup gründlich, bevor es irgendetwas
 ersetzt. Die meisten Fehler zeigen sich deshalb, bevor sich an Deinen
 Daten etwas ändert. Und sobald die eigentliche Wiederherstellung
-beginnt, gibt es ein Sicherheits-Backup des vorherigen Stands. Hier die
-typischen Fehler.
+beginnt, gibt es ein Sicherheits-Backup des vorherigen Stands. Ein
+falsches Backup-Passwort meldet Klein.Buch direkt am Feld, alle anderen
+Fehler als Meldung "Wiederherstellen fehlgeschlagen: …" mit dem Grund.
+Hier die typischen Fehler.
 
 ## Passphrase wird nicht akzeptiert
 
-Die Meldung lautet "Authentifizierung fehlgeschlagen (falsche Passphrase
-oder beschädigtes Backup)".
+Die Meldung steht direkt am Feld "Backup-Passwort" und lautet
+"Authentifizierung fehlgeschlagen (falsche Passphrase oder beschädigtes
+Backup)". Das Feld ist danach leer, damit Du die Passphrase neu eingibst.
 
 Mögliche Ursachen:
 
@@ -81,6 +84,19 @@ und bei Backups einer Instanz, die mit einem anderen Daten-Ordner
 betrieben wurde. Einen Umzug von der Desktop-Fassung in den Server gibt
 es nicht. Wer die Desktop-Fassung produktiv genutzt hat, bewahrt den
 Bestand mit dieser Fassung auf.
+
+## "verwaiste Verweise" oder "mehr als einen festgeschriebenen Storno-Beleg"
+
+Klein.Buch prüft die Datenbank im Backup so, wie es sie später beim
+Entsperren prüft. "Die Datenbank im Backup enthält verwaiste Verweise"
+heißt: Ein Eintrag verweist auf einen Datensatz, den es im Backup nicht
+gibt, etwa nach einer Bearbeitung der Datenbank von Hand. "… mehr als
+einen festgeschriebenen Storno-Beleg" heißt: Zu einer Rechnung gibt es
+zwei festgeschriebene Stornos; diese Version könnte die Datenbank nicht
+mehr entsperren. In beiden Fällen lehnt Klein.Buch das Backup ab, bevor
+es etwas austauscht; Deine Instanz bleibt, wie sie ist. Nimm ein anderes
+Backup; die Einzelheiten stehen im Server-Log unter "Restore-Prüfung eines
+Backups" (nicht unter "Entsperren").
 
 ## Backup zu groß oder zu wenig Platz
 
@@ -161,4 +177,4 @@ der Passphrase verschlüsselt, die vor der Wiederherstellung galt.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -29,12 +29,14 @@ jobs:
     # Fest auf 24.04: ubuntu-latest wechselt seit 19.10.2026 auf 26.04 (apt-Schritt hing dort).
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    # MailHog für den Block-5-E2E-Test (SMTP 1025, HTTP-API 8025). Der Test
-    # erkennt einen fehlenden MailHog selbst und überspringt sich dann (no-op);
-    # hier ist er also voll aktiv.
+    # Mailpit für den SMTP-E2E-Test `tests/e2e_test.rs` (SMTP 1025, HTTP-API 8025;
+    # bis Lauf F7a MailHog, W14-021). Der Test erkennt einen fehlenden Mailpit selbst
+    # und überspringt sich dann (no-op); hier ist er also voll aktiv. Image per Digest
+    # (Index aus der Registry, 25.10.2026); legal/check_base_images.py prüft, dass
+    # jedes Service-Image einen Digest trägt.
     services:
-      mailhog:
-        image: mailhog/mailhog
+      mailpit:
+        image: axllent/mailpit:v1.32.0@sha256:0790692be935ea4420d085694f7985b1f692ca6a8771ab0e0bd8ba75ac180498
         ports:
           - 1025:1025
           - 8025:8025
@@ -42,7 +44,7 @@ jobs:
       run:
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space (Runner läuft sonst bei Typst + SQLCipher voll)
         run: |
@@ -84,18 +86,18 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Version aus "packageManager" in package.json.
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
           cache: "pnpm"
           cache-dependency-path: pnpm-lock.yaml
 
@@ -107,6 +109,27 @@ jobs:
 
       - name: vitest
         run: pnpm test
+
+      # Der ZAP-API-Scan (security.yml) beschreibt die Commands mit diesem Skript;
+      # ein Bruch fiele sonst erst im Sicherheits-Gate auf (Lauf F6-fix).
+      - name: OpenAPI aus der Registry (ZAP-Scan)
+        run: |
+          python3 -I "$GITHUB_WORKSPACE/.github/scripts/openapi_from_registry.py" http://localhost:8080 > "$RUNNER_TEMP/openapi.json"
+          python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); assert len(d["paths"]) >= 100, len(d["paths"])' "$RUNNER_TEMP/openapi.json"
+
+      # Wie die Stufe „web“ im Dockerfile: SPA nach build/ und die Lizenzliste
+      # der JS-Pakete im Bundle (Vite-Plugin) für /legal/ (Lauf F6c).
+      - name: SPA-Build + Lizenzliste
+        run: |
+          pnpm build
+          test -s build/index.html
+          test -s build/legal/js-licenses.json
+          # Vorkomprimierte Varianten (Vite-Plugin, ADR 0041 Nr. 212), nicht unter legal/.
+          test -s build/index.html.br && test -s build/index.html.gz
+          test -z "$(find build/legal -name '*.br' -o -name '*.gz')"
+          # Die Prüfliste der Lizenzseite im Image-Smoke (image_smoke.sh, „for js in …“)
+          # nennt genau die Pakete des Bundles (Lauf F7a).
+          python3 -I -c 'import json, re, sys; names = {p["name"] for p in json.load(open("build/legal/js-licenses.json"))}; m = re.search(r"^for js in (.+); do$", open(sys.argv[1], encoding="utf-8").read(), re.M); listed = set(m.group(1).split()); assert names == listed, (sorted(names), sorted(listed))' "$GITHUB_WORKSPACE/.github/scripts/image_smoke.sh"
 
       # LICENSE muss der unveränderte AGPL-3.0-Volltext sein (gnu.org, Stand 23.10.2026).
       - name: LICENSE = AGPL-3.0-Volltext, COPYRIGHT vorhanden
@@ -133,7 +156,7 @@ jobs:
       CARGO_AUDIT_VERSION: "0.22.2"
       CARGO_AUDIT_SHA256: 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Werkzeuge laden (feste Versionen, SHA-256)
         working-directory: ${{ runner.temp }}
@@ -172,8 +195,12 @@ jobs:
             --ignore RUSTSEC-2026-0194 \
             --ignore RUSTSEC-2026-0195
 
+  # Laufzeit- und Entwicklungsabhängigkeiten blockierend ab „high“ (Lauf F7a): Die
+  # Entwicklungswerkzeuge laufen in CI und beim Bau des Images (Lieferkette des
+  # SPA-Bundles). Begründete Ausnahmen nur über `auditConfig.ignoreGhsas` in
+  # pnpm-workspace.yaml (Kommentar mit Grund und Ablaufdatum).
   js-audit:
-    name: pnpm audit (prod)
+    name: pnpm audit (prod + dev)
     if: github.repository == 'hozwei/klein.buch-public'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -181,20 +208,23 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           package_json_file: package.json
 
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: 24
 
       - name: pnpm audit --prod --audit-level high
         run: pnpm audit --prod --audit-level high
+
+      - name: pnpm audit --audit-level high (mit Entwicklungsabhängigkeiten)
+        run: pnpm audit --audit-level high
 
   secrets:
     name: gitleaks
@@ -205,7 +235,7 @@ jobs:
       GITLEAKS_VERSION: "8.30.1"
       GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: gitleaks laden (feste Version, SHA-256)
         working-directory: ${{ runner.temp }}
@@ -228,7 +258,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Java-Inventar (pom.properties ↔ THIRD-PARTY-JAVA.md)
         run: python3 -I legal/check_java_inventory.py

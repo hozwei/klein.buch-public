@@ -2,7 +2,7 @@
 
 > Build-zeitliche Ablage des **User-Handbuchs** (G2-DOC.2). Der Ordnername
 > `src-tauri/resources/` ist historisch (Desktop-Fassung); seit Phase W
-> (ADR 0039) gibt es keine Tauri-Resource mehr. Eingebunden wird das
+> (ADR 0039) gibt es keine Ressourcen der Desktop-Shell mehr. Eingebunden wird das
 > Handbuch beim Build der SPA: `src/lib/handbook/index.ts` lädt alle
 > `*.md`-Dateien dieses Ordners per Vite-Glob (`import.meta.glob`, `?raw`,
 > eager) in das Frontend-Bundle, `src/lib/handbook/render.ts` löst Bilder

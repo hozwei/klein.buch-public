@@ -12,7 +12,7 @@
 //!
 //! ## TLS-Strategie
 //!
-//! - `use_tls = false` → `builder_dangerous` (Klartext, z. B. lokaler MailHog
+//! - `use_tls = false` → `builder_dangerous` (Klartext, z. B. lokaler Mailpit
 //!   im E2E-Test oder ein interner Relay).
 //! - `use_tls = true` + Port 465 → implizites TLS (`relay`).
 //! - `use_tls = true` + sonst (typ. 587) → STARTTLS (`starttls_relay`).
@@ -38,7 +38,7 @@ pub struct SmtpConfig {
     pub port: u16,
     pub use_tls: bool,
     pub username: Option<String>,
-    pub password: Option<String>,
+    pub password: Option<zeroize::Zeroizing<String>>,
 }
 
 impl std::fmt::Debug for SmtpConfig {
@@ -137,11 +137,21 @@ fn tls_parameters(host: &str) -> Result<Option<lettre::transport::smtp::client::
         return Ok(None);
     };
     let pem = std::fs::read(&path).map_err(|e| {
-        Error::Mail(format!(
+        // W5-ERR-PATHS: der Pfad nur ins Log.
+        tracing::warn!(
             "{ENV_CA_FILE} ({}) nicht lesbar: {e}",
             std::path::Path::new(&path).display()
-        ))
+        );
+        Error::Mail(format!("{ENV_CA_FILE} nicht lesbar: {e}"))
     })?;
+    // W8-SMTP-CA (Lauf F5c): lettre nimmt eine Datei ohne Zertifikat stillschweigend
+    // als leere Liste an; dann scheiterte erst der Handshake mit „UnknownIssuer“.
+    const PEM_CERT: &[u8] = b"-----BEGIN CERTIFICATE-----";
+    if !pem.windows(PEM_CERT.len()).any(|w| w == PEM_CERT) {
+        return Err(Error::Mail(format!(
+            "{ENV_CA_FILE}: kein PEM-Zertifikat gefunden (erwartet „-----BEGIN CERTIFICATE-----“)."
+        )));
+    }
     let cert = Certificate::from_pem(&pem)
         .map_err(|e| Error::Mail(format!("{ENV_CA_FILE}: kein gültiges PEM-Zertifikat: {e}")))?;
     let params = TlsParameters::builder(host.to_string())
@@ -155,9 +165,13 @@ fn tls_parameters(host: &str) -> Result<Option<lettre::transport::smtp::client::
 /// Klartext (`use_tls = false`) nur ohne Zugangsdaten (Plan W8).
 fn build_transport(config: &SmtpConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
     use lettre::transport::smtp::client::Tls;
+    // W14-017: auch Konten aus älteren Ständen und der Ad-hoc-Test.
+    crate::nettest::check_host(&config.host)?;
     let credentials = match (config.username.as_ref(), config.password.as_ref()) {
         (Some(user), Some(pass)) if !user.trim().is_empty() && !pass.is_empty() => {
-            Some(Credentials::new(user.clone(), pass.clone()))
+            // lettre hält die Zugangsdaten als eigenen `String` (nicht
+            // überschreibbar, security.md §4).
+            Some(Credentials::new(user.clone(), pass.to_string()))
         }
         _ => None,
     };
@@ -210,7 +224,7 @@ pub async fn send(config: &SmtpConfig, mail: &OutgoingMail) -> Result<SmtpRespon
     let transport = build_transport(config)?;
     // Empfänger und Benutzername nur auf DEBUG (Plan W5.9, personenbezogen).
     tracing::info!(
-        host = %config.host,
+        host = ?config.host,
         port = config.port,
         use_tls = config.use_tls,
         attachments = mail.attachments.len(),
@@ -223,7 +237,7 @@ pub async fn send(config: &SmtpConfig, mail: &OutgoingMail) -> Result<SmtpRespon
     );
     let response = transport.send(message).await.map_err(|e| {
         // Die Server-Antwort nennt oft den Empfänger → nur auf DEBUG.
-        tracing::warn!(host = %config.host, "SMTP: Versand fehlgeschlagen");
+        tracing::warn!(host = ?config.host, "SMTP: Versand fehlgeschlagen");
         tracing::debug!(error = %e, "SMTP: Fehlerantwort");
         Error::Mail(format!("SMTP-Versand fehlgeschlagen: {e}"))
     })?;
@@ -243,13 +257,13 @@ pub async fn send(config: &SmtpConfig, mail: &OutgoingMail) -> Result<SmtpRespon
 pub async fn test_connection(config: &SmtpConfig) -> Result<()> {
     let transport = build_transport(config)?;
     tracing::info!(
-        host = %config.host,
+        host = ?config.host,
         port = config.port,
         use_tls = config.use_tls,
         "SMTP: teste Verbindung"
     );
     let reachable = transport.test_connection().await.map_err(|e| {
-        tracing::warn!(host = %config.host, error = %e, "SMTP: Verbindungstest fehlgeschlagen");
+        tracing::warn!(host = ?config.host, error = %e, "SMTP: Verbindungstest fehlgeschlagen");
         Error::Mail(format!("Verbindungstest fehlgeschlagen: {e}"))
     })?;
     if !reachable {
@@ -257,7 +271,7 @@ pub async fn test_connection(config: &SmtpConfig) -> Result<()> {
             "SMTP-Server antwortet nicht auf Hello (nicht erreichbar).".into(),
         ));
     }
-    tracing::info!(host = %config.host, "SMTP: Verbindung ok");
+    tracing::info!(host = ?config.host, "SMTP: Verbindung ok");
     Ok(())
 }
 
@@ -267,8 +281,8 @@ mod tests {
 
     fn sample_mail() -> OutgoingMail {
         OutgoingMail {
-            from_name: "Wildbach Computerhilfe".into(),
-            from_email: "schmidm@wildbach-computerhilfe.de".into(),
+            from_name: "Beispiel IT-Service".into(),
+            from_email: "inhaber@example.org".into(),
             to: "kunde@example.com".into(),
             subject: "Rechnung RE-2026-0001".into(),
             body_text: "Anbei die Rechnung. Mit freundlichen Gruessen".into(),
@@ -328,7 +342,7 @@ mod tests {
             port: 25,
             use_tls: false,
             username: Some("kb".into()),
-            password: Some("geheim".into()),
+            password: Some(zeroize::Zeroizing::new("geheim".into())),
         };
         assert!(build_transport(&cfg).is_err());
         let open = SmtpConfig {

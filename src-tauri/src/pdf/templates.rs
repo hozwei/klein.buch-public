@@ -22,6 +22,15 @@ pub struct TemplateMeta {
     /// `inputs/pdf-templates/`. Ein `inputs/`-Override eines Built-in-Namens
     /// erscheint als `builtin = false` (die Datei gewinnt).
     pub builtin: bool,
+    /// Stellt die Vorlage Stornos dar (nutzt `storno_of`, LE-CUSTOM-TEMPLATE-STORNO;
+    /// erkannt wie der §19-Marker, nur gelesen — Lauf 2026.11 U4).
+    #[serde(default)]
+    pub supports_storno: bool,
+    /// Ohne Storno-Darstellung: Name der eingebauten Vorlage, mit der die
+    /// Rechnungs-Pipeline Stornos stattdessen erzeugt
+    /// ([`storno_fallback_name`]); sonst `None`.
+    #[serde(default)]
+    pub storno_fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -125,7 +134,7 @@ pub const DEFAULT_QUOTE_TEMPLATE: &str = r#"// Klein.Buch — Eingebettetes Defa
   if p.len() == 3 { p.at(2) + "." + p.at(1) + "." + p.at(0) } else { str(d) }
 }
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 
 #set page(
   paper: "a4",
@@ -295,16 +304,20 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 // Erwartet `data` (Beträge bereits als formatierte Strings):
 //   data.{year, generatedAt, isKleinunternehmer, kleinunternehmerHinweis}
 //   data.seller.{name, street, postalCode, city, taxNumber|null, vatId|null, email}
-//   data.form.lines[].{zeile, bezeichnung, betrag, isEntry}
-//   data.form.{incomeTotal, expenseTotal, surplus}
+//   data.form.lines[].{zeile, kennzahl, bezeichnung, betrag, isEntry}
+//   data.form.{incomeTotal, expenseTotal, surplus, formYear, notes[]}
+//   Datumsangaben kommen als TT.MM.JJJJ (KB-0018).
 //   data.assets[].{assetNumber, label, acquisitionDate, acquisitionCost, method, afaYear, bookValueEnd, disposalNote}
 //   data.income[].{paidDate, invoiceNumber, customer, description, amount}
 //   data.storno[].{stornoDate, stornoNumber, originalNumber, amount}
 //   data.expenses[].{paidDate, expenseNumber, vendor, category, description, amount}
 //   data.disposals[].{disposalDate, assetNumber, label, proceeds, residual, gainLoss}
 //   data.{incomeSum, expenseSum}
+//   data.snapshotMismatch: null | {closedAt, version, fields, rows[].{label, snapshot, live}}
+//     (abgeschlossenes Jahr, dessen heutige Eckwerte vom Festschreibungs-Snapshot
+//     abweichen — Lauf F2c, KB-0031)
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(120)
 
 #set page(
@@ -341,18 +354,41 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
 #v(3mm)
 #line(length: 100%, stroke: 0.5pt + luma(180))
 
+#if data.at("snapshotMismatch", default: none) != none [
+  #let m = data.snapshotMismatch
+  #v(2mm)
+  #block(width: 100%, inset: 8pt, radius: 3pt, stroke: 1pt + rgb("#b91c1c"), fill: rgb("#fef2f2"))[
+    #text(weight: "bold", fill: rgb("#b91c1c"))[Abweichung vom Jahresabschluss] \
+    #text(size: 8.5pt)[Das Geschäftsjahr #str(data.year) wurde am #m.closedAt (Klein.Buch #m.version) abgeschlossen. Die heute aus den Einzelbuchungen gerechneten Eckwerte weichen vom damals festgeschriebenen Stand ab (#m.fields). Maßgeblich für die abgegebene Erklärung ist der festgeschriebene Stand; die Ursache steht im Audit-Protokoll.]
+    #v(1mm)
+    #table(
+      columns: (1fr, auto, auto),
+      align: (left, right, right),
+      [*Eckwert*], [*festgeschrieben*], [*heute*],
+      ..m.rows.map(r => (r.label, r.snapshot, r.live)).flatten()
+    )
+  ]
+]
+
 == 1. Anlage EÜR — Übertrag ins ELSTER-Formular
-#text(size: 8pt, fill: muted)[Positionen mit Zeilennummer in „Mein ELSTER" eintragen; die Summen berechnet ELSTER selbst.]
+#text(size: 8pt, fill: muted)[Positionen mit Zeile und Kennzahl (Kz) in „Mein ELSTER" eintragen#if data.form.at("formYear", default: none) != none [ (Zeilen nach Vordruck #str(data.form.formYear))]; grau gesetzte Summen berechnet ELSTER selbst.]
 #v(1mm)
 #table(
-  columns: (auto, 1fr, auto),
-  align: (center + horizon, left, right),
-  [*Zeile*], [*Position*], [*Betrag*],
+  columns: (auto, auto, 1fr, auto),
+  align: (center + horizon, center + horizon, left, right),
+  [*Zeile*], [*Kz*], [*Position*], [*Betrag*],
   ..data.form.lines.map(l => {
     let c = if l.isEntry { black } else { muted }
-    ([#text(fill: c)[#l.zeile]], [#text(fill: c)[#l.bezeichnung]], [#text(fill: c)[#l.betrag]])
+    ([#text(fill: c)[#l.zeile]], [#text(fill: c)[#l.at("kennzahl", default: "")]], [#text(fill: c)[#l.bezeichnung]], [#text(fill: c)[#l.betrag]])
   }).flatten()
 )
+#if data.form.at("notes", default: ()).len() > 0 [
+  #v(1mm)
+  #block(width: 100%, inset: 6pt, radius: 3pt, stroke: 0.6pt + rgb("#b45309"), fill: rgb("#fffbeb"))[
+    #text(weight: "bold", size: 8.5pt)[Hinweise zur Ausfüllhilfe]
+    #list(..data.form.notes.map(n => text(size: 8pt)[#n]))
+  ]
+]
 
 == 2. Anlageverzeichnis (AVEÜR)
 #if data.assets.len() == 0 [
@@ -384,7 +420,7 @@ pub const DEFAULT_EUER_TEMPLATE: &str = r##"// Klein.Buch — Eingebettetes EÜR
       ([#text(fill: r)[#s.stornoDate]], [#text(fill: r)[#s.stornoNumber]], [#text(fill: r)[Storno zu #s.originalNumber]], [#text(fill: r)[—]], [#text(fill: r)[−#s.amount]])
     }).flatten()
   )
-  #align(right)[#text(weight: "bold")[Summe Zahlungseingänge: #data.incomeSum]]
+  #align(right)[#text(weight: "bold")[Summe Zahlungseingänge abzüglich Storno-Erstattungen: #data.incomeSum]]
 ]
 
 == 4. Einzelaufstellung — Betriebsausgaben
@@ -435,7 +471,7 @@ pub fn load_cover_source(inputs_dir: &Path) -> String {
 /// taxNumber|null, vatId|null, email}`, `data.contents[]` (Datei-Liste).
 pub const DEFAULT_COVER_TEMPLATE: &str = r##"// Klein.Buch — Deckblatt Steuerberater-Paket (Block 14c)
 
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 
 #set page(
@@ -501,7 +537,7 @@ pub fn load_dsgvo_source(inputs_dir: &Path) -> String {
 /// Datenschema = serialisierter [`crate::domain::dsgvo::DataSubjectReport`]
 /// (camelCase). Geld kommt als Integer-Cent; die Vorlage formatiert selbst.
 pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft nach Art. 15 (Block 18) — KEIN §14-Beleg
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 #let accent = rgb("#176b87")
 
@@ -521,6 +557,19 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
 }
 #let dash(v) = if v == none [—] else [#v]
 #let yesno(b) = if b [Ja] else [Nein]
+#let invoice_status(s) = (
+  draft: "Entwurf", issued: "ausgestellt", sent: "versandt",
+  partially_paid: "teilweise bezahlt", paid: "bezahlt", canceled: "storniert",
+  voided: "verworfen (nie ausgestellt)",
+).at(s, default: s)
+#let quote_status(s) = (
+  draft: "Entwurf", sent: "fertiggestellt", accepted: "angenommen", rejected: "abgelehnt",
+  canceled: "verworfen oder storniert", converted: "in Rechnung umgewandelt",
+).at(s, default: s)
+#let frequency_label(f) = (
+  monthly: "monatlich", quarterly: "vierteljährlich", semiannually: "halbjährlich",
+  annually: "jährlich",
+).at(f, default: f)
 
 #set page(
   paper: "a4",
@@ -596,11 +645,14 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
     #table(
       columns: (auto, 1fr, auto, 1fr),
       stroke: none, inset: 2.5pt,
-      [*Datum*], [#format_date(inv.invoiceDate)], [*Status*], [#inv.status#if inv.isStorno [ (Storno)]],
+      [*Datum*], [#format_date(inv.invoiceDate)], [*Status*], [#invoice_status(inv.status)#if inv.isStorno [ (Storno)]],
       [*Leistungsdatum*], [#format_date(inv.deliveryDate)], [*Fällig*], [#format_date(inv.dueDate)],
       [*Netto*], [#format_euro(inv.netAmountCents)], [*Brutto*], [#format_euro(inv.grossAmountCents)],
       [*Bezahlt*], [#format_euro(inv.paidAmountCents) (#format_date(inv.paidAt))], [*Versandt*], [#format_date(inv.sentAt)],
     )
+    #if inv.at("voidedAt", default: none) != none [
+      #text(size: 8.5pt, fill: muted)[Verworfen am #format_date(inv.voidedAt), nie ausgestellt. Grund: #dash(inv.voidReason)]
+    ]
     #if inv.at("buyerSnapshot", default: none) != none [
       #text(size: 8.5pt, fill: muted)[Empfänger-Stand zur Rechnungszeit: #dash(inv.buyerSnapshot.name), #dash(inv.buyerSnapshot.street), #dash(inv.buyerSnapshot.postalCode) #dash(inv.buyerSnapshot.city)]
     ]
@@ -630,7 +682,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
     #table(
       columns: (auto, 1fr, auto, 1fr),
       stroke: none, inset: 2.5pt,
-      [*Datum*], [#format_date(q.quoteDate)], [*Status*], [#q.status],
+      [*Datum*], [#format_date(q.quoteDate)], [*Status*], [#quote_status(q.status)],
       [*Gültig bis*], [#format_date(q.validUntil)], [*Brutto*], [#format_euro(q.grossAmountCents)],
     )
     #if q.items.len() > 0 [
@@ -662,6 +714,63 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
   )
 ]
 
+= Wiederkehrende Rechnungen (Abo-Vorlagen)
+#if data.at("recurringInvoices", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Abo-Vorlagen gespeichert.]
+] else [
+  #for t in data.recurringInvoices [
+    == #t.label
+    #table(
+      columns: (auto, 1fr, auto, 1fr),
+      stroke: none, inset: 2.5pt,
+      [*Rhythmus*], [#frequency_label(t.frequency)], [*Aktiv*], [#yesno(t.active)],
+      [*Nächster Termin*], [#format_date(t.nextDueDate)], [*Zahlungsziel*], [#t.paymentTermsDays Tage],
+      [*Beginn*], [#format_date(t.startDate)], [*Ende*], [#format_date(t.endDate)],
+    )
+    #if t.items.len() > 0 [
+      #table(
+        columns: (auto, 1fr, auto, auto, auto),
+        align: (right, left, right, right, right),
+        inset: 3pt,
+        table.header([Pos.], [Beschreibung], [Menge], [Einzel], [Netto]),
+        ..t.items.map(it => (
+          [#it.position], [#it.description], [#it.quantity #it.unitCode], [#format_euro(it.unitPriceCents)], [#format_euro(it.netAmountCents)],
+        )).flatten()
+      )
+    ]
+  ]
+]
+
+= Kosten-Abos (Sie als Lieferant)
+#if data.at("subscriptions", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Kosten-Abos gespeichert.]
+] else [
+  #table(
+    columns: (1fr, auto, auto, auto, auto),
+    align: (left, left, left, right, center),
+    inset: 3pt,
+    table.header([Bezeichnung], [Rhythmus], [Nächster Termin], [Betrag], [Aktiv]),
+    ..data.subscriptions.map(s => (
+      [#s.label], [#frequency_label(s.frequency)], [#format_date(s.nextDueDate)], [#format_euro(s.expectedAmountCents)], [#yesno(s.active)],
+    )).flatten()
+  )
+]
+
+= Anlagen (Sie als Lieferant)
+#if data.at("assets", default: ()).len() == 0 [
+  #text(fill: muted)[Keine Anlagen gespeichert.]
+] else [
+  #table(
+    columns: (auto, 1fr, auto, auto, auto),
+    align: (left, left, left, right, left),
+    inset: 3pt,
+    table.header([Nr.], [Bezeichnung], [Anschaffung], [Kosten], [Abgang]),
+    ..data.assets.map(a => (
+      [#a.assetNumber], [#a.label], [#format_date(a.acquisitionDate)], [#format_euro(a.acquisitionCostCents)], [#if a.disposed [#format_date(a.disposalDate)] else [—]],
+    )).flatten()
+  )
+]
+
 = Archivierte Dokumente
 #if data.documents.len() == 0 [
   #text(fill: muted)[Keine archivierten Dokumente.]
@@ -679,7 +788,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
   #text(size: 8pt, fill: muted)[Die Original-Dateien liegen — soweit „im ZIP = Ja" — im Unterordner „dokumente/" dieser Auskunft bei. SHA-256-Prüfsummen stehen in der beigefügten auskunft.json.]
 ]
 
-= Versandprotokoll (E-Mail)
+= E-Mail-Protokoll
 #if data.emails.len() == 0 [
   #text(fill: muted)[Keine Versandvorgänge protokolliert.]
 ] else [
@@ -720,7 +829,7 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
 /// (AST-only, escaped) und wird via `eval(mode: "markup")` eingebettet. Genau diese
 /// Mechanik nutzt später auch die Beleg-Position (P3).
 pub const PACKAGE_PREVIEW_TEMPLATE: &str = r##"// Klein.Buch — Paket-Vorschau (Block P2b)
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 
 #set page(paper: "a4", margin: 2.2cm,
@@ -760,7 +869,7 @@ pub const PACKAGE_PREVIEW_TEMPLATE: &str = r##"// Klein.Buch — Paket-Vorschau 
 
 /// Eingebaute Broschüren-Vorlage „paketübersicht". Marketing-Dokument, kein Beleg.
 pub const PACKAGE_CATALOG_TEMPLATE: &str = r##"// Klein.Buch — Paket-Katalog-Broschüre (Block P4) — KEIN §14-Beleg
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let muted = luma(110)
 #let accent = rgb("#176b87")
 #let format_euro(cents) = {
@@ -874,10 +983,12 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -956,6 +1067,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
       #num_label: *#doc.number* \
       #if is_invoice [
         Rechnungsdatum: #format_date(doc.date) \
+        #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
         #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
         #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
       ] else [
@@ -1012,7 +1124,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
       #v(2mm)
     ]
     #grid(columns: (1fr, auto), align: (left, right),
-      [#text(weight: "bold")[#if doc.is_kleinunternehmer [#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]] else [#if is_invoice [Brutto-Betrag:] else [Gesamtbetrag:]]]],
+      [#text(weight: "bold")[#if doc.is_kleinunternehmer [#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]] else [#if is_invoice [Brutto-Betrag:] else [Gesamtbetrag:]]]],
       [#text(weight: "bold", fill: accent, size: 12pt)[#format_euro(doc.gross_amount)]],
     )
   ]
@@ -1036,7 +1148,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1060,7 +1172,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
 
 #v(5mm)
 #text(size: 9pt, fill: luma(110))[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
@@ -1078,10 +1190,12 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -1149,6 +1263,9 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
   [#num_label: *#doc.number*],
   [#if is_invoice [Rechnungsdatum] else [Angebotsdatum]: #format_date(doc.date)],
 )
+#if storno_of != none [
+  #align(right)[Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date)]
+]
 #if is_invoice [
   #align(right)[
     #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
@@ -1189,7 +1306,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 // §19: kein USt-Ausweis → nur Gesamt. Regelbesteuerung → Netto/USt/Brutto.
 #align(right)[#if doc.is_kleinunternehmer [
   #table(columns: (auto, auto), align: (left, right), stroke: none, inset: 4pt,
-    [#text(weight: "bold")[#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
+    [#text(weight: "bold")[#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
   )
 ] else [
   #table(columns: (auto, auto), align: (left, right), stroke: none, inset: 4pt,
@@ -1214,7 +1331,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1237,7 +1354,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 ]
 #v(4mm)
 #text(size: 9pt, style: "italic")[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
@@ -1255,10 +1372,12 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
   let s = if calc.fract(q) == 0 { str(calc.round(q)) } else { str(q) }
   s.replace(".", ",")
 }
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 #let is_invoice = data.at("invoice", default: none) != none
 #let doc = if is_invoice { data.invoice } else { data.quote }
-#let doc_title = if is_invoice { "Rechnung" } else { "Angebot" }
+// Storno-Beleg: Bezug auf die stornierte Rechnung (Nummer, Datum; Lauf E).
+#let storno_of = if is_invoice { doc.at("storno_of", default: none) } else { none }
+#let doc_title = if storno_of != none { "Stornorechnung" } else if is_invoice { "Rechnung" } else { "Angebot" }
 #let num_label = if is_invoice { "Rechnungsnummer" } else { "Angebotsnummer" }
 #let format_date(d) = {
   let p = str(d).split("-")
@@ -1331,6 +1450,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
     #num_label: #doc.number \
     #if is_invoice [
       Rechnungsdatum: #format_date(doc.date) \
+      #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
       #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
       #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
     ] else [
@@ -1374,7 +1494,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 // §19: kein USt-Ausweis → nur Gesamt. Regelbesteuerung → Netto/USt/Brutto.
 #align(right)[#if doc.is_kleinunternehmer [
   #grid(columns: (auto, auto), column-gutter: 14pt, row-gutter: 3pt, align: (left, right),
-    [#text(weight: "bold")[#if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
+    [#text(weight: "bold")[#if storno_of != none [Stornobetrag:] else if is_invoice [Rechnungsbetrag:] else [Gesamtbetrag:]]], [#text(weight: "bold")[#format_euro(doc.gross_amount)]],
   )
 ] else [
   #grid(columns: (auto, auto), column-gutter: 14pt, row-gutter: 3pt, align: (left, right),
@@ -1400,7 +1520,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 
 // Kurzer Zahlungshinweis — die Bankdaten stehen im Fuß-Impressum. Wird AUCH bei
 // gesetztem Bezahlt-Hinweis gezeigt (z. B. Teilzahlung: Restbetrag bleibt offen).
-#if is_invoice and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
+#if is_invoice and storno_of == none and data.at("payment_accounts", default: ()).any(acc => acc.at("type", default: "other") == "bank" and acc.at("iban", default: none) != none) [
   #v(5mm)
   #text(size: 9pt)[Bitte überweisen Sie den Rechnungsbetrag#if doc.at("due_date", default: none) != none [ bis zum #format_date(doc.due_date)] auf das unten genannte Konto. Verwendungszweck: *#doc.number*.]
 ]
@@ -1423,7 +1543,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
 ]
 #v(4mm)
 #text(size: 8pt, fill: muted)[
-  #if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
+  #if storno_of != none [Dieser Beleg storniert die genannte Rechnung vollständig.] else if is_invoice [Vielen Dank für Ihren Auftrag.] else [Dieses Angebot ist freibleibend und bis zum genannten Datum gültig.]
 ]
 "##;
 
@@ -1440,6 +1560,38 @@ pub fn builtin_unified(name: &str) -> Option<&'static str> {
         "klassisch" => Some(TEMPLATE_KLASSISCH),
         "minimal" => Some(TEMPLATE_MINIMAL),
         _ => None,
+    }
+}
+
+/// Vorlage für einen Storno, wenn die gewählte Rechnungsvorlage keine Stornos
+/// darstellt (LE-CUSTOM-TEMPLATE-STORNO): die eingebaute Vorlage gleichen
+/// Namens (falls eine eigene Datei eine eingebaute überschreibt), sonst
+/// „klassisch“. Alle eingebauten Vorlagen tragen den §19-Marker und
+/// `storno_of`.
+pub fn storno_fallback_template(name: &str) -> &'static str {
+    builtin_unified(name).unwrap_or(TEMPLATE_KLASSISCH)
+}
+
+/// Name der Vorlage aus [`storno_fallback_template`] (für die Vorlagenliste,
+/// Lauf 2026.11 U4).
+pub fn storno_fallback_name(name: &str) -> &'static str {
+    BUILTIN_UNIFIED_NAMES
+        .iter()
+        .copied()
+        .find(|b| *b == name)
+        .unwrap_or("klassisch")
+}
+
+/// Metadaten einer Vorlage aus ihrem Quelltext (§19-Marker, Storno-Darstellung).
+fn template_meta(name: &str, path: PathBuf, source: &str, builtin: bool) -> TemplateMeta {
+    let supports_storno = crate::pdf::klausel_check::supports_storno(source);
+    TemplateMeta {
+        name: name.to_string(),
+        path,
+        klausel_status: inspect(source).into(),
+        builtin,
+        supports_storno,
+        storno_fallback: (!supports_storno).then(|| storno_fallback_name(name).to_string()),
     }
 }
 
@@ -1491,12 +1643,7 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
         let source = builtin_unified(name).unwrap_or("");
         map.insert(
             (*name).to_string(),
-            TemplateMeta {
-                name: (*name).to_string(),
-                path: PathBuf::new(),
-                klausel_status: inspect(source).into(),
-                builtin: true,
-            },
+            template_meta(name, PathBuf::new(), source, true),
         );
     }
 
@@ -1528,12 +1675,7 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
             };
             map.insert(
                 stem.to_string(),
-                TemplateMeta {
-                    name: stem.to_string(),
-                    path: path.clone(),
-                    klausel_status: inspect(&source).into(),
-                    builtin: false,
-                },
+                template_meta(stem, path.clone(), &source, false),
             );
         }
     }
@@ -1544,6 +1686,19 @@ pub fn list_templates(inputs_dir: &Path) -> Result<Vec<TemplateMeta>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // LE-CUSTOM-TEMPLATE-STORNO: Der Rückfall für Stornos stellt Stornos dar und
+    // besteht den §19-Klausel-Check.
+    #[test]
+    fn storno_fallback_supports_storno_and_klausel() {
+        for name in ["eigene", "modern", "klassisch", "minimal"] {
+            let src = storno_fallback_template(name);
+            assert!(crate::pdf::klausel_check::supports_storno(src), "{name}");
+            assert!(crate::pdf::klausel_check::verify_for_kleinunternehmer(src).is_ok());
+        }
+        assert_eq!(storno_fallback_template("modern"), TEMPLATE_MODERN);
+        assert_eq!(storno_fallback_template("eigene"), TEMPLATE_KLASSISCH);
+    }
 
     #[test]
     fn list_templates_merges_builtins_and_inputs_and_classifies() {
@@ -1613,6 +1768,45 @@ mod tests {
         );
         // Trotzdem genau ein „modern"-Eintrag (kein Duplikat).
         assert_eq!(list.iter().filter(|m| m.name == "modern").count(), 1);
+        // U4: die eigene Datei ohne `storno_of` stellt keine Stornos dar —
+        // Stornos entstehen mit der eingebauten Vorlage gleichen Namens.
+        assert!(!modern.supports_storno);
+        assert_eq!(modern.storno_fallback.as_deref(), Some("modern"));
+    }
+
+    // Lauf 2026.11 U4 (Warteliste 11): Die Vorlagenliste sagt, ob eine Vorlage
+    // Stornos darstellt, und nennt sonst die Ersatzvorlage (wie die Pipeline).
+    #[test]
+    fn list_templates_reports_storno_support_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates = dir.path().join("pdf-templates");
+        std::fs::create_dir(&templates).unwrap();
+        std::fs::write(
+            templates.join("mit-storno.typ"),
+            "#let storno_of = data.invoice.at(\"storno_of\", default: none)",
+        )
+        .unwrap();
+        std::fs::write(templates.join("ohne-storno.typ"), "#text[Rechnung]").unwrap();
+
+        let list = list_templates(dir.path()).unwrap();
+        for name in BUILTIN_UNIFIED_NAMES {
+            let m = list.iter().find(|m| &m.name == name).unwrap();
+            assert!(m.supports_storno, "{name}");
+            assert_eq!(m.storno_fallback, None, "{name}");
+        }
+        let with = list.iter().find(|m| m.name == "mit-storno").unwrap();
+        assert!(with.supports_storno);
+        assert_eq!(with.storno_fallback, None);
+        let without = list.iter().find(|m| m.name == "ohne-storno").unwrap();
+        assert!(!without.supports_storno);
+        assert_eq!(without.storno_fallback.as_deref(), Some("klassisch"));
+        assert_eq!(
+            storno_fallback_template("ohne-storno"),
+            builtin_unified("klassisch").unwrap()
+        );
+        let json = serde_json::to_value(without).unwrap();
+        assert_eq!(json["supportsStorno"], false);
+        assert_eq!(json["stornoFallback"], "klassisch");
     }
 
     #[test]

@@ -233,8 +233,10 @@ def fonts_part(meta: Metadata, fonts_notice: str) -> str:
             "<p>Typst bettet über das Crate "
             f"<code>{esc(FONTS_CRATE)}</code> ({esc(versions)}) Schriften in das Server-Binary ein, "
             "die beim Erzeugen von PDF-Belegen verwendet werden können: Libertinus Serif "
-            "(SIL Open Font License 1.1), New Computer Modern (GUST Font License) und "
-            "DejaVu (Bitstream-Vera-Lizenz). Dazu kommen ICC-Farbprofile (CC0-1.0). "
+            "(SIL Open Font License 1.1), New Computer Modern (GUST Font License), "
+            "DejaVu (Bitstream-Vera-Lizenz) und die PDF-Standardschriften von Foxit (PDFium, "
+            "BSD-3-Clause; seit Typst 0.15, für eingebettete PDF-Grafiken). Dazu kommen "
+            "ICC-Farbprofile (CC0-1.0). "
             "Der folgende Text ist die NOTICE-Datei des Crates im Wortlaut.</p>",
             pre(fonts_notice),
             "<p class=\"hint\">Die Schriften des Betriebssystems im Image (z. B. "

@@ -42,23 +42,62 @@ pub fn anonymization_blocker(open_invoice_drafts: i64, open_quote_drafts: i64) -
     if open_invoice_drafts <= 0 && open_quote_drafts <= 0 {
         return None;
     }
+    // U6-006: Wörter der Oberfläche (Ausstellen, Fertigstellen, „Entwurf verwerfen“).
     let mut parts = Vec::new();
     if open_invoice_drafts > 0 {
-        parts.push(format!("{open_invoice_drafts} offene(r) Rechnungs-Entwurf"));
+        let noun = if open_invoice_drafts == 1 {
+            "Rechnungs-Entwurf"
+        } else {
+            "Rechnungs-Entwürfe"
+        };
+        parts.push(format!("{open_invoice_drafts} {noun}"));
     }
     if open_quote_drafts > 0 {
-        parts.push(format!("{open_quote_drafts} offene(s) Angebot im Entwurf"));
+        let noun = if open_quote_drafts == 1 {
+            "Angebots-Entwurf"
+        } else {
+            "Angebots-Entwürfe"
+        };
+        parts.push(format!("{open_quote_drafts} {noun}"));
     }
     Some(format!(
-        "Anonymisierung nicht möglich: {}. Bitte diese Belege zuerst festschreiben \
-         (ausstellen/versenden) oder löschen. Festgeschriebene Belege bleiben über ihren \
-         Empfänger-Snapshot erhalten.",
+        "Anonymisierung nicht möglich: Es gibt noch offene Entwürfe ({}). Stell Rechnungen \
+         zuerst aus und Angebote fertig oder verwirf die Entwürfe („Entwurf verwerfen“ im \
+         Menü „Mehr“). Ausgestellte und fertiggestellte Belege behalten die Empfängerdaten; \
+         verworfene Entwürfe verlieren sie bei der Anonymisierung.",
         parts.join(" und ")
     ))
 }
 
+/// Nennt `text` den Namen eines Kontakts (Lauf F3b)? Ganzer Name oder ein
+/// Namensteil ab vier Zeichen, ohne Groß-/Kleinschreibung (Unicode, also auch
+/// „MÜLLER“ = „Müller“); die Rechtsform „GmbH“ zählt nicht als Namensteil.
+/// Großzügig gemeint: Ein Treffer ersetzt bei der Anonymisierung nur die
+/// Buchungsvorlage eines pausierten Kosten-Abos durch einen Platzhalter.
+pub fn mentions_name(text: &str, name: &str) -> bool {
+    let text = text.to_lowercase();
+    let name = name.trim().to_lowercase();
+    if name.chars().count() >= 2 && text.contains(&name) {
+        return true;
+    }
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|part| part.chars().count() >= 4 && *part != "gmbh")
+        .any(|part| text.contains(part))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mentions_name_finds_full_name_and_parts() {
+        use super::mentions_name;
+        assert!(mentions_name("Miete Büro – Hans Müller", "Hans Müller"));
+        assert!(mentions_name("Miete Büro MÜLLER", "Hans Müller"));
+        assert!(mentions_name("Miete bei Li", "Li"));
+        assert!(!mentions_name("Miete Büro", "Hans Müller"));
+        assert!(!mentions_name("Lizenz Software GmbH", "Beispiel GmbH"));
+        assert!(!mentions_name("Hosting", ""));
+    }
+
     use super::*;
 
     #[test]
@@ -92,14 +131,13 @@ mod tests {
     #[test]
     fn blocker_mentions_counts() {
         let msg = anonymization_blocker(2, 0).expect("should block");
-        assert!(msg.contains('2'));
-        assert!(msg.contains("Rechnungs-Entwurf"));
+        assert!(msg.contains("2 Rechnungs-Entwürfe"));
 
         let msg2 = anonymization_blocker(0, 3).expect("should block");
-        assert!(msg2.contains('3'));
-        assert!(msg2.contains("Angebot"));
+        assert!(msg2.contains("3 Angebots-Entwürfe"));
 
         let both = anonymization_blocker(1, 1).expect("should block");
-        assert!(both.contains(" und "));
+        assert!(both.contains("1 Rechnungs-Entwurf und 1 Angebots-Entwurf"));
+        assert!(both.contains("„Entwurf verwerfen“"));
     }
 }

@@ -45,9 +45,11 @@ besondere Lage ab.
    zwei Klein.Buch-Versionen ändert, musst Du die Differenz selbst
    beachten oder auf das nächste Klein.Buch-Update warten.
 3. Internationale Geschäfte (innergemeinschaftliche Lieferungen,
-   Reverse Charge, Drittland-Lieferungen) sind in Version 1.0
-   nicht abgebildet. Wenn Du solche Geschäfte hast, brauchst Du
-   ergänzende Beratung.
+   Reverse Charge, Drittland-Lieferungen) sind derzeit
+   nicht abgebildet. Eingangsrechnungen nach §13b UStG kann
+   Klein.Buch markieren, die Steuer berechnet und meldet es aber
+   nicht. Wenn Du solche Geschäfte hast, brauchst Du ergänzende
+   Beratung.
 4. Personalwesen (Lohnabrechnungen, Sozialabgaben) ist nicht Teil
    von Klein.Buch.
 
@@ -57,7 +59,8 @@ besondere Lage ab.
    Konto-Auszug ab. Wenn Klein.Buch eine deutlich andere Zahl
    zeigt als Dein Bauchgefühl, ist es Zeit, in die Details zu
    schauen.
-2. Erzeuge den Steuerberater-ZIP oder die ELSTER-Ausfüllhilfe.
+2. Erzeuge das Steuerberater-Paket oder die ELSTER-Ausfüllhilfe
+   (unter "Steuer (EÜR)" mit "Für die Steuererklärung exportieren").
 3. Wenn Du einen Steuerberater hast, lass ihn die EÜR
    gegen-prüfen, bevor Du irgendwas an das Finanzamt schickst.
 4. Wenn Du selbst abgibst, lies Dir mindestens die Erklärungs-
@@ -85,4 +88,4 @@ die professionelle Einschätzung in nicht-trivialen Fällen.
 
 ---
 
-*Letzte Aktualisierung: 27.05.2026 · Klein.Buch 1.0*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

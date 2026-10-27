@@ -52,3 +52,30 @@ Ein Restore darf nie unbemerkt Daten zerstören.
 - **Pflicht-Backup vor jeder Migration** (ADR 0039, E15): Beim Entsperren mit älterem Schema
   und nach dem Restore eines älteren Backups entsteht vorher ein verifiziertes Backup
   (Auslöser `manual`, wird nie rotiert); scheitert es, wird nicht migriert.
+
+## Amendment 2026-10-24 — Rotation nach Kalender-Eimern (Lauf F, ADR 0040)
+
+Die Aufbewahrung 30/12/7 zählt seit Lauf F Kalender-Eimer (jüngstes Backup je
+Berliner Tag, Monat, Jahr) statt Backups je Klasse; der Floor behält bei
+erfolgreichem Off-Site-Ziel 7/3/1. Das Tages-Backup entsteht einmal je
+Kalendertag zu einer festen Uhrzeit. Auf SFTP-Zielen löscht Klein.Buch nichts.
+Einzelheiten: ADR 0034 (Amendment 2026-10-24), ADR 0040 Nr. 15 und 16.
+
+## Amendment 2026-10-25 — Backup-Format 3 (Lauf F3a, ADR 0039 Nr. 127)
+
+Argon2id + AES-256-GCM bleiben. Neu ist **Format 3**: Der Klartext-Kopf (Magic und
+Manifest) ist als *Associated Data* an AES-GCM gebunden — ein veränderter Kopf, auch das
+Herabsetzen auf Format 2, lässt die Entschlüsselung scheitern. Inhalt wie Format 2; der
+Restore nimmt Format 1, 2 und 3 an. Ver- und Entschlüsselung laufen im selben Puffer
+(Speicherbedarf beim Restore etwa einmal die Backup-Größe statt dreimal). Lock-Backups
+entstehen seit Lauf F3a im Hintergrund unmittelbar nach dem Festschreiben (vermerkt, im
+Scheduler; ADR 0040 Nr. 50).
+
+## Amendment 2026-10-25 — Pflicht-Backup vor einer Migration im Format der Vorversion (Lauf F3c, ADR 0039 Nr. 129)
+
+Das Backup, das Klein.Buch vor einer Datenbank-Migration schreibt, hat das höchste Format,
+das die Version mit dem alten Schema-Stand einspielt — für Schema ≤ 31 (v2026.10) Format 2
+ohne AAD, sonst das aktuelle Format. So gelingt der dokumentierte Rückfall auf die
+Vorversion mit genau diesem Backup. Alle übrigen Backups bleiben Format 3 mit gebundenem
+Kopf. Der Restore gibt den entschlüsselten Inhalt frei, bevor er das Pre-Restore-Backup
+anlegt; die Spitze ist das Größere von beidem, nicht die Summe.

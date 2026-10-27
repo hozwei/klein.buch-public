@@ -1,10 +1,31 @@
 <script lang="ts">
-  import { APP_TIME_ZONE, dayOfYearBerlin, daysInYear, todayBerlin, yearBerlin } from "$lib/date";
-  // Start-Seite (G2-UX.2). Hero + KPI-Karten + Quick-Actions + Aufgaben/Letzte
+  import {
+    APP_TIME_ZONE,
+    dayOfYearBerlin,
+    daysBetweenIso,
+    daysInYear,
+    todayBerlin,
+    yearBerlin,
+  } from "#lib/date.ts";
+  import { dayClock } from "#lib/dayClock.svelte.ts";
+  // Start-Seite (G2-UX.2). Sachstand + Kennzahlen + Schnellzugriff + Aufgaben/Letzte
   // Belege. Liest ausschließlich existierende API-Bindings (keine neuen Backend-
-  // Commands). Lädt parallel via Promise.allSettled, zeigt Skeleton-Pulse bis
+  // Commands). Lädt parallel via Promise.allSettled, zeigt Platzhalter bis
   // Daten da sind, fängt Einzel-Fehler je Karte ab.
-  import PageBar from "$lib/PageBar.svelte";
+  // U4: Kennzahlen als `.kb-metric` ohne Anheben, Schnellzugriff als Liste statt
+  // gleicher Kacheln (design.md §8.1), Sachstand statt Begrüßung (U1-064), Backup-
+  // Stand aus den Server-Feldern (Warteliste 13), „Letzte Belege“ im gemeinsamen
+  // Raster (U3-039). Korrekturrunde V3: Datum in --type-heading (keine Hero-Fläche),
+  // Kennzahlen ohne Umbruch und auf dem Handy zweispaltig, Schnellzugriff als
+  // .kb-linklist, Status und Belegart nur über <Badge> mit den Wörtern der
+  // Status-Helfer (invoiceStatus.ts, expenseStatus.ts), Platzhalter ohne Animation.
+  import PageBar from "#lib/PageBar.svelte";
+  import DocNo from "#lib/DocNo.svelte";
+  import Banner from "#lib/Banner.svelte";
+  import Badge from "#lib/Badge.svelte";
+  import { invoiceStatusView } from "./invoices/invoiceStatus.ts";
+  import type { StatusView } from "./invoices/invoiceStatus.ts";
+  import { expenseStatusView } from "./expenses/expenseStatus.ts";
   import {
     sellerProfileGet,
     paragraph19Info,
@@ -12,13 +33,13 @@
     euerComputeReport,
     invoicesList,
     expensesList,
-    backupLogList,
     backupGetSettings,
     notificationsList,
     recurringInvoicesList,
-  } from "$lib/api";
-  import type { BackupLogEntry } from "$lib/api";
-  import { euro, date as fmtDate } from "$lib/format";
+  } from "#lib/api.ts";
+  import type { BackupSettings } from "#lib/api.ts";
+  import { euro, date as fmtDate } from "#lib/format.ts";
+  import { withinTerm } from "#lib/recurringChoice.ts";
   import type {
     SellerProfile,
     Paragraph19Info,
@@ -28,11 +49,14 @@
     ExpenseListItem,
     AppNotification,
     RecurringInvoiceRow,
-  } from "$lib/types";
+  } from "#lib/types.ts";
 
   // ---- Loader-State ----------------------------------------------------------
 
   let seller = $state<SellerProfile | null>(null);
+  // U4 (V1-10): Firmendaten-Hinweis nur nach einer erfolgreichen Antwort (null = kein
+  // Profil); ein Ladefehler zeigt ihn nicht.
+  let sellerState = $state<"loading" | "ok" | "error">("loading");
   let para19 = $state<Paragraph19Info | null>(null);
   let fyOverview = $state<FiscalYearOverview | null>(null);
   let fyErr = $state<string | null>(null); // wird im Hero als kompakter Hinweis gezeigt
@@ -42,9 +66,10 @@
   let invoicesErr = $state<string | null>(null);
   let expenses = $state<ExpenseListItem[] | null>(null);
   let expensesErr = $state<string | null>(null);
-  let backupLog = $state<BackupLogEntry[] | null>(null);
-  // Plan W7: Off-Site-Status (missing | failing | ok); null = nicht geladen.
-  let offsiteStatus = $state<"missing" | "failing" | "ok" | null>(null);
+  // Plan W7 / U4 (Warteliste 13, Übergabe F3): Stand der Off-Site-Sicherung vom Server —
+  // Status (missing | failing | stale | ok) und Alter der ältesten der je Ziel jüngsten
+  // Kopien in Berliner Tagen (ADR 0041 Nr. 86); null = nicht geladen.
+  let backupSettings = $state<BackupSettings | null>(null);
   let backupErr = $state<string | null>(null);
   let notifications = $state<AppNotification[] | null>(null);
   let notifErr = $state<string | null>(null);
@@ -62,15 +87,17 @@
   }
 
   async function loadAll() {
+    // Kein Lesen von Zustand vor dem ersten await: loadAll läuft im $effect unten, jede
+    // gelesene Variable würde ihn erneut auslösen (Schutz vor Doppelklick im Menüeintrag).
     // Setze alle States auf null → Skeleton.
     seller = null;
+    sellerState = "loading";
     para19 = null;
     fyOverview = null; fyErr = null;
     euer = null; euerErr = null;
     invoices = null; invoicesErr = null;
     expenses = null; expensesErr = null;
-    backupLog = null; backupErr = null;
-    offsiteStatus = null;
+    backupSettings = null; backupErr = null;
     notifications = null; notifErr = null;
     recurring = null; recurringErr = null;
 
@@ -93,7 +120,6 @@
       currentYear !== null
         ? expensesList({ fiscalYear: currentYear, includeCanceled: false })
         : expensesList({ includeCanceled: false }),
-      backupLogList(20),
       notificationsList(false),
       recurringInvoicesList(false),
       backupGetSettings(),
@@ -105,14 +131,18 @@
       rEuer,
       rInvoices,
       rExpenses,
-      rBackup,
       rNotif,
       rRecurring,
       rBackupSettings,
     ] = results;
 
-    if (rSeller.status === "fulfilled") seller = rSeller.value;
-    // Seller-Fehler still ignorieren → Hero fällt auf „Willkommen bei Klein.Buch" zurück.
+    if (rSeller.status === "fulfilled") {
+      seller = rSeller.value;
+      sellerState = "ok";
+    } else {
+      // Seller-Fehler still ignorieren → Kopfzeile ohne Firmenname, kein Firmendaten-Hinweis.
+      sellerState = "error";
+    }
 
     if (rPara19.status === "fulfilled") para19 = rPara19.value;
     // §19-Hinweis ist optional → Fehler still ignorieren (Stripe bleibt dann ohne Sub-Text).
@@ -126,13 +156,12 @@
     if (rExpenses.status === "fulfilled") expenses = rExpenses.value;
     else expensesErr = errMsg(rExpenses.reason);
 
-    if (rBackup.status === "fulfilled") backupLog = rBackup.value;
-    else backupErr = errMsg(rBackup.reason);
 
     if (rNotif.status === "fulfilled") notifications = rNotif.value;
     else notifErr = errMsg(rNotif.reason);
 
-    if (rBackupSettings.status === "fulfilled") offsiteStatus = rBackupSettings.value.offsiteStatus;
+    if (rBackupSettings.status === "fulfilled") backupSettings = rBackupSettings.value;
+    else backupErr = errMsg(rBackupSettings.reason);
 
     if (rRecurring.status === "fulfilled") recurring = rRecurring.value;
     else recurringErr = errMsg(rRecurring.reason);
@@ -146,10 +175,11 @@
 
   // ---- Derived-Werte ---------------------------------------------------------
 
-  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1).
-  const today = new Date();
-  const todayIso = todayBerlin(today);
-  const currentYear = yearBerlin(today);
+  // Datum und Jahr in Europe/Berlin, nicht in der Zeitzone des Geräts (W1.1);
+  // reaktiv über Mitternacht (D-27, lib/dayClock.svelte.ts).
+  const today = $derived(dayClock.now);
+  const todayIso = $derived(todayBerlin(today));
+  const currentYear = $derived(yearBerlin(today));
 
   const fmtHeroDate = new Intl.DateTimeFormat("de-DE", {
     weekday: "long",
@@ -158,10 +188,10 @@
     year: "numeric",
     timeZone: APP_TIME_ZONE,
   });
-  const heroDate = fmtHeroDate.format(today);
+  const heroDate = $derived(fmtHeroDate.format(today));
 
-  const fyDay = dayOfYearBerlin(today);
-  const fyDaysInYear = daysInYear(currentYear);
+  const fyDay = $derived(dayOfYearBerlin(today));
+  const fyDaysInYear = $derived(daysInYear(currentYear));
   // Tag-Anzeige nur sinnvoll, wenn das offene GJ das laufende Kalenderjahr ist.
   // Bei offenem Vorjahr (currentYear < today.year) wäre „Tag X von 365" für
   // das Vorjahr irreführend → wir lassen die Tag-Zeile dann weg.
@@ -197,58 +227,84 @@
       .filter((i) => i.dueDate !== null && i.dueDate.slice(0, 10) < todayIso)
       .map((i) => ({
         ...i,
-        overdueDays: Math.max(
-          1,
-          Math.floor(
-            (today.getTime() - new Date(((i.dueDate as string).slice(0, 10)) + "T00:00:00").getTime()) / 86_400_000,
-          ),
-        ),
+        // Kalendertage in Europe/Berlin, nicht in der Zeitzone des Geräts (D-15).
+        overdueDays: Math.max(1, daysBetweenIso((i.dueDate as string).slice(0, 10), todayIso) || 1),
       }))
       .sort((a, b) => b.overdueDays - a.overdueDays),
   );
 
-  // Fällige Abo-Rechnungen.
+  // Fällige Abo-Rechnungen (nur innerhalb der Laufzeit, F1d).
   const recurringDue = $derived(
-    recurring?.filter((r) => r.active === 1 && r.nextDueDate.slice(0, 10) <= todayIso) ?? [],
+    recurring?.filter(
+      (r) => r.active === 1 && withinTerm(r) && r.nextDueDate.slice(0, 10) <= todayIso,
+    ) ?? [],
   );
 
-  // Letzter erfolgreicher Off-Site-Backup. `backupLog === null` ⇒ noch nicht
-  // geladen → backupAmpel bleibt null (kein „never"-False-Positive vor Load).
-  type BackupAmpel = "green" | "yellow" | "red" | "never";
-  const lastOffSiteBackup = $derived(
-    backupLog === null
-      ? null
-      : (backupLog.find(
-          (e) => e.status === "ok" && (e.targetKind === "directory" || e.targetKind === "sftp"),
-        ) ?? null),
+  // Off-Site-Sicherung (U4, Warteliste 13): Status und Alter rechnet der Server
+  // (Berliner Kalendertage, wie die Regel „Backup überfällig“); die Seite zeigt nur an.
+  const offsiteStatus = $derived(backupSettings?.offsiteStatus ?? null);
+  const offsiteAgeDays = $derived(backupSettings?.offsiteAgeDays ?? null);
+  const backupTone = $derived<"success" | "warning" | "danger" | "neutral">(
+    offsiteStatus === "ok"
+      ? "success"
+      : offsiteStatus === "stale"
+        ? "warning"
+        : offsiteStatus === "failing" || offsiteStatus === "missing"
+          ? "danger"
+          : "neutral",
   );
-  const backupDaysAgo = $derived(
-    lastOffSiteBackup
-      ? Math.floor(
-          (today.getTime() - new Date(lastOffSiteBackup.createdAt).getTime()) / 86_400_000,
-        )
-      : null,
+  function ageText(n: number): string {
+    return n === 0 ? "heute" : n === 1 ? "gestern" : `vor ${n} Tagen`;
+  }
+  // Kennzahl „Backup“: Wert und Zusatzzeile.
+  const backupValue = $derived(
+    offsiteStatus === "missing"
+      ? "Kein Ziel"
+      : offsiteAgeDays === null
+        ? "Noch keine Kopie"
+        : ageText(offsiteAgeDays).replace(/^./, (c) => c.toUpperCase()),
   );
-  const backupAmpel: BackupAmpel | null = $derived(
-    backupLog === null
-      ? null
-      : lastOffSiteBackup === null
-        ? "never"
-        : backupDaysAgo !== null && backupDaysAgo <= 7
-          ? "green"
-          : backupDaysAgo !== null && backupDaysAgo <= 14
-            ? "yellow"
-            : "red",
+  const backupSub = $derived(
+    offsiteStatus === "missing"
+      ? "kein externes Backup-Ziel"
+      : offsiteStatus === "failing"
+        ? "letzter Lauf fehlgeschlagen"
+        : offsiteAgeDays === null
+          ? "ein externes Ziel ohne Kopie"
+          : (backupSettings?.targets.length ?? 0) > 1
+            ? "Stand der externen Kopien"
+            : "letzte externe Kopie",
   );
-  const backupLabel = $derived(
-    backupDaysAgo === null
-      ? "Noch nie"
-      : backupDaysAgo === 0
-        ? "Heute"
-        : backupDaysAgo === 1
-          ? "Gestern"
-          : `vor ${backupDaysAgo} Tagen`,
-  );
+  // Aufgabe „Backup“ mit klarem Text je Zustand (Übergabe F3: Wortlaut bei `stale`).
+  const backupTask = $derived.by<{ tone: "danger" | "warning"; text: string; cta: string } | null>(() => {
+    if (offsiteStatus === "missing") {
+      return {
+        tone: "danger",
+        text: "Kein externes Backup-Ziel eingerichtet. Richte eines ein, damit eine Kopie außerhalb des Servers liegt.",
+        cta: "Ziel einrichten",
+      };
+    }
+    if (offsiteStatus === "failing") {
+      return {
+        tone: "danger",
+        text:
+          "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen." +
+          (offsiteAgeDays !== null ? ` Letzte erfolgreiche externe Kopie: ${ageText(offsiteAgeDays)}.` : ""),
+        cta: "Ziele prüfen",
+      };
+    }
+    if (offsiteStatus === "stale") {
+      return {
+        tone: "warning",
+        text:
+          offsiteAgeDays === null
+            ? "Ein externes Backup-Ziel hat noch keine Kopie. Erstelle ein Backup, damit es eine bekommt."
+            : `Die externe Kopie ist ${offsiteAgeDays} ${offsiteAgeDays === 1 ? "Tag" : "Tage"} alt. Erstelle ein Backup; kommen die täglichen Backups nicht an, prüfe die Ziele. Nach einer Wiederherstellung kopiert Klein.Buch erst nach der Freigabe wieder extern.`,
+        cta: "Zu den Backups",
+      };
+    }
+    return null;
+  });
 
   // GJ-Abschluss-Erinnerung: Vorjahr noch nicht festgeschrieben?
   // currentYear ist das älteste offene GJ. Wenn currentYear < heutiges Jahr,
@@ -270,7 +326,8 @@
     docNumber: string;
     counterparty: string;
     amountCents: number;
-    statusKey: "open" | "paid" | "partial" | "canceled";
+    /** Badge-Wort und -Ton aus dem Status-Helfer des Bereichs (V3-07). */
+    status: StatusView;
   };
 
   const recentEntries: RecentEntry[] = $derived.by(() => {
@@ -279,14 +336,8 @@
       // Drafts ausblenden (kein „Beleg" im GoBD-Sinn).
       if (i.status === "draft") continue;
       const isStorno = i.isStornoFor !== null;
-      const statusKey: RecentEntry["statusKey"] =
-        i.status === "canceled"
-          ? "canceled"
-          : i.status === "paid"
-            ? "paid"
-            : i.status === "partially_paid"
-              ? "partial"
-              : "open";
+      // V3-07: dieselben Wörter wie in der Rechnungsliste (invoiceStatusView); die
+      // Belegart „Storno-Beleg“ steht als Merkmal davor (Spalte „Art“).
       entries.push({
         kind: isStorno ? "ST" : "RE",
         href: `/invoices/${i.id}`,
@@ -295,23 +346,10 @@
         docNumber: i.invoiceNumber,
         counterparty: i.contactName,
         amountCents: i.grossAmountCents,
-        statusKey,
+        status: invoiceStatusView(i, todayIso),
       });
     }
     for (const e of expenses ?? []) {
-      if (e.status === "canceled") {
-        entries.push({
-          kind: "K",
-          href: `/expenses/${e.id}`,
-          sortDate: e.expenseDate,
-          dateIso: e.expenseDate,
-          docNumber: e.expenseNumber,
-          counterparty: e.vendorNameSnapshot,
-          amountCents: e.grossAmountCents,
-          statusKey: "canceled",
-        });
-        continue;
-      }
       entries.push({
         kind: "K",
         href: `/expenses/${e.id}`,
@@ -320,28 +358,47 @@
         docNumber: e.expenseNumber,
         counterparty: e.vendorNameSnapshot,
         amountCents: e.grossAmountCents,
-        statusKey: e.paidDate ? "paid" : "open",
+        status: expenseStatusView(e),
       });
     }
     return entries.sort((a, b) => b.sortDate.localeCompare(a.sortDate)).slice(0, 5);
   });
 
-  function statusLabel(s: RecentEntry["statusKey"]): string {
-    return s === "paid"
-      ? "bezahlt"
-      : s === "partial"
-        ? "teilgezahlt"
-        : s === "canceled"
-          ? "storniert"
-          : "offen";
-  }
+  const KIND_LABEL: Record<RecentEntry["kind"], string> = {
+    RE: "Rechnung",
+    ST: "Storno-Beleg",
+    K: "Kosten",
+  };
+
+  // U4 (V1-10): Firmendaten, die zum Ausstellen der ersten Rechnung fehlen — dieselben
+  // Pflichtangaben, die der Server beim Ausstellen prüft (§14 UStG, XRechnung BR-DE-6:
+  // Name, Anschrift, Telefon, Steuernummer oder USt-IdNr.). Nur Anzeige.
+  const sellerTask = $derived.by<{ text: string; cta: string } | null>(() => {
+    if (sellerState !== "ok") return null;
+    if (!seller) {
+      return {
+        text: "Deine Firmendaten fehlen noch — ohne sie kannst du keine Rechnung ausstellen.",
+        cta: "Firmendaten ausfüllen",
+      };
+    }
+    const missing: string[] = [];
+    if (!seller.name.trim()) missing.push("Firmenname");
+    if (!seller.street.trim() || !seller.postalCode.trim() || !seller.city.trim()) missing.push("Anschrift");
+    if (!seller.phone?.trim()) missing.push("Telefon");
+    if (!seller.taxNumber?.trim() && !seller.vatId?.trim()) missing.push("Steuernummer oder USt-IdNr.");
+    if (missing.length === 0) return null;
+    return {
+      text: `In deinen Firmendaten fehlt für das Ausstellen von Rechnungen: ${missing.join(", ")}.`,
+      cta: "Firmendaten ergänzen",
+    };
+  });
 
   // Aufgaben-Liste: Anzahl Items (für Empty-State-Check).
   const taskTotal = $derived(
-    overdueInvoices.length +
+    (sellerTask ? 1 : 0) +
+      overdueInvoices.length +
       recurringDue.length +
-      (backupAmpel === "red" || backupAmpel === "never" ? 1 : 0) +
-      (backupAmpel === "yellow" ? 1 : 0) +
+      (backupTask ? 1 : 0) +
       (overdueFy !== null ? 1 : 0) +
       (notifCount > 0 ? 1 : 0),
   );
@@ -349,193 +406,204 @@
   // Saldo-Farbe.
   const saldoIsNegative = $derived(euer !== null && euer.surplusCents < 0);
 
-  // Begrüßung mit Vorname (alles vor erstem Leerzeichen) — sonst voller Name.
-  const greetingName: string = $derived(
-    seller?.name ? seller.name.split(" ")[0] : "",
+  // Kopfzeile der Seite (U1-064, design.md §8.1): Sachstand statt Begrüßung.
+  const fyText = $derived(
+    fyOverview
+      ? `Geschäftsjahr ${fyOverview.currentYear}` +
+          (showFyDay ? `, Tag ${fyDay} von ${fyDaysInYear}` : ", noch nicht abgeschlossen")
+      : null,
   );
 </script>
 
-<PageBar title="Start">
+<!-- U4 (design.md §4.2): „Aktualisieren“ als Nebenaktion, bis 600 px im Menü „Mehr“. -->
+<!-- V2-06: nicht `disabled` während des Ladens (der Knopf behielte sonst den Fokus nicht);
+     ein zweiter Klick bleibt wirkungslos. -->
+<PageBar
+  title="Start"
+  secondary={[
+    {
+      label: isRefreshing ? "Wird geladen …" : "Aktualisieren",
+      onSelect: () => {
+        if (!isRefreshing) void loadAll();
+      },
+    },
+  ]}
+>
   {#snippet actions()}
-    <button
-      type="button"
-      class="btn-secondary btn-sm"
-      onclick={() => void loadAll()}
-      disabled={isRefreshing}
-      aria-label="Daten aktualisieren"
-    >
-      {isRefreshing ? "Wird geladen …" : "Aktualisieren"}
-    </button>
+    <!-- Hauptaktion der Startseite, auf Mobil ganz oben erreichbar (U1, §8.5). -->
+    <a class="btn-primary" href="/invoices/new">Rechnung schreiben</a>
   {/snippet}
 </PageBar>
 
-<!-- Hero -->
-<section class="hero">
-  <h2 class="hero-greet">
-    {#if seller === null && isRefreshing}
-      <span class="sk sk-text" style="width: 18rem;">&nbsp;</span>
-    {:else if greetingName}
-      Willkommen, {greetingName}
-    {:else}
-      Willkommen bei Klein.Buch
-    {/if}
-  </h2>
+<!-- Sachstand (U1-064): Datum und Geschäftsjahr statt Begrüßung. Trennpunkt steht am Ende
+     eines Teils, nie am Zeilenanfang (U1-065). -->
+<!-- U4 (V4-10): Das Datum ist keine Abschnittsüberschrift (sonst wären die Karten darunter
+     Unterabschnitte des Datums) — Text in --type-heading (V3-03: nicht größer als der
+     Seitentitel, keine Hero-Fläche); Abschnitte sind h2 (design.md §2).
+     V2-02: eine dauerhafte Statuszeile sagt das Laden an; die Platzhalter tragen aria-busy. -->
+<p class="kb-visually-hidden" role="status">{isRefreshing ? "Wird geladen …" : ""}</p>
+<section class="hero" aria-label="Sachstand">
+  <p class="hero-date">{heroDate}</p>
   <p class="hero-meta">
-    {heroDate}
-    {#if fyOverview}
-      <span class="hero-sep">·</span>
-      GJ {fyOverview.currentYear}{#if showFyDay} — Tag {fyDay} von {fyDaysInYear}{:else} offen{/if}
+    {#if fyText}
+      <span class="hero-part">{fyText}{#if seller?.name}<span aria-hidden="true">{" "}·</span>{/if}</span>
     {:else if fyErr}
-      <span class="hero-sep">·</span>
-      <span class="hero-err">GJ konnte nicht geladen werden</span>
+      <span class="hero-part hero-err">Geschäftsjahr konnte nicht geladen werden{#if seller?.name}<span aria-hidden="true">{" "}·</span>{/if}</span>
     {/if}
+    {#if seller?.name}{" "}<span class="hero-part">{seller.name}</span>{/if}
   </p>
   {#if isKlein === true}
     <p class="hero-stripe">
-      §19-Modus aktiv — es wird keine Umsatzsteuer ausgewiesen.
-      {#if para19}<br /><span class="hero-stripe-sub">{para19.hinweisText}</span>{/if}
+      <strong>Kleinunternehmer (§19 UStG):</strong>{" "}
+      {para19 ? `Auf deinen Rechnungen steht „${para19.hinweisText}“` : "Es wird keine Umsatzsteuer ausgewiesen."}
     </p>
   {/if}
 </section>
 
-<!-- KPI-Karten -->
+<!-- U4 (V1-10, design.md §4.10): Solange Pflichtangaben fehlen, führt die Übersicht zu den
+     Firmendaten — oben als Banner und als erste Aufgabe. -->
+{#if sellerTask}
+  <Banner kind="warning" href="/settings/seller?next=/" linkLabel={sellerTask.cta}>
+    {sellerTask.text}
+  </Banner>
+{/if}
+
+<!-- Kennzahlen (design.md §4.4): .kb-metric — Haarlinie, flacher Schatten, kein Anheben. -->
 <section class="kpis" aria-label="Kennzahlen">
-  <!-- Einnahmen GJ -->
-  <article class="kpi" data-tone="neutral">
-    <p class="kpi-label">Einnahmen GJ</p>
+  <article class="kpi kb-metric">
+    <p class="lbl">Einnahmen GJ</p>
     {#if euer === null && euerErr === null}
-      <p class="kpi-val sk sk-num">&nbsp;</p>
+      <p class="val sk sk-num">&nbsp;</p>
     {:else if euerErr}
       <p class="kpi-err">{euerErr}</p>
     {:else if euer}
-      <p class="kpi-val">{euro(euer.totalIncomeCents)}</p>
+      <p class="val">{euro(euer.totalIncomeCents)}</p>
     {/if}
     <p class="kpi-sub">seit 01.01.</p>
   </article>
 
-  <!-- Ausgaben GJ -->
-  <article class="kpi" data-tone="neutral">
-    <p class="kpi-label">Ausgaben GJ</p>
+  <article class="kpi kb-metric">
+    <p class="lbl">Ausgaben GJ</p>
     {#if euer === null && euerErr === null}
-      <p class="kpi-val sk sk-num">&nbsp;</p>
+      <p class="val sk sk-num">&nbsp;</p>
     {:else if euerErr}
       <p class="kpi-err">{euerErr}</p>
     {:else if euer}
-      <p class="kpi-val">{euro(euer.totalExpensesCents)}</p>
+      <p class="val">{euro(euer.totalExpensesCents)}</p>
     {/if}
     <p class="kpi-sub">seit 01.01.</p>
   </article>
 
-  <!-- Saldo -->
-  <article class="kpi" data-tone={saldoIsNegative ? "danger" : "success"}>
-    <p class="kpi-label">Saldo</p>
+  <article class="kpi kb-metric" data-tone={saldoIsNegative ? "danger" : "success"}>
+    <p class="lbl">Saldo</p>
     {#if euer === null && euerErr === null}
-      <p class="kpi-val sk sk-num">&nbsp;</p>
+      <p class="val sk sk-num">&nbsp;</p>
     {:else if euerErr}
       <p class="kpi-err">{euerErr}</p>
     {:else if euer}
-      <p class="kpi-val">{euro(euer.surplusCents)}</p>
+      <p class="val">{euro(euer.surplusCents)}</p>
     {/if}
     <p class="kpi-sub">vorläufige EÜR</p>
   </article>
 
-  <!-- Offene Rechnungen -->
-  <a class="kpi kpi-link" data-tone="neutral" href="/invoices">
-    <p class="kpi-label">Offene Rechnungen</p>
+  <a class="kpi kb-metric kpi-link" href="/invoices">
+    <p class="lbl">Offene Rechnungen</p>
     {#if invoices === null && invoicesErr === null}
-      <p class="kpi-val sk sk-num">&nbsp;</p>
+      <p class="val sk sk-num">&nbsp;</p>
     {:else if invoicesErr}
       <p class="kpi-err">{invoicesErr}</p>
     {:else}
-      <p class="kpi-val">{openInvoicesCount}</p>
+      <p class="val">{openInvoicesCount}</p>
       <p class="kpi-sub">{euro(openInvoicesTotalCents)} ausstehend</p>
     {/if}
   </a>
 
-  <!-- Backup-Status -->
-  <a
-    class="kpi kpi-link"
-    data-tone={
-      backupAmpel === "green"
-        ? "success"
-        : backupAmpel === "yellow"
-          ? "warning"
-          : backupAmpel === "red" || backupAmpel === "never"
-            ? "danger"
-            : "neutral"
-    }
-    href="/settings/backup"
-  >
-    <p class="kpi-label">
-      {#if backupAmpel !== null}
-        <span class="dot dot-{backupAmpel}" aria-hidden="true"></span>
-      {/if}
+  <a class="kpi kb-metric kpi-link kpi-backup" data-tone={backupTone} href="/settings/backup">
+    <p class="lbl">
+      {#if backupSettings !== null}<span class="dot dot-{backupTone}" aria-hidden="true"></span>{/if}
       Backup
     </p>
-    {#if backupLog === null && backupErr === null}
-      <p class="kpi-val sk sk-num">&nbsp;</p>
+    {#if backupSettings === null && backupErr === null}
+      <p class="val sk sk-num">&nbsp;</p>
     {:else if backupErr}
       <p class="kpi-err">{backupErr}</p>
     {:else}
-      <p class="kpi-val kpi-val-small">{backupLabel}</p>
-      <p class="kpi-sub">
-        {#if lastOffSiteBackup}
-          letztes Off-Site-Backup
-        {:else}
-          noch kein Off-Site-Backup
-        {/if}
-      </p>
+      <p class="val val-small">{backupValue}</p>
+      <p class="kpi-sub">{backupSub}</p>
     {/if}
   </a>
 </section>
 
-<!-- Quick-Actions -->
-<section class="quick" aria-label="Schnellzugriff">
-  <a class="tile" href="/invoices/new">
-    <span class="t-title">Rechnung schreiben</span>
-    <span class="t-sub">Neue Rechnung an einen Kunden</span>
-  </a>
-  <a class="tile" href="/expenses/new">
-    <span class="t-title">Kosten erfassen</span>
-    <span class="t-sub">Etwas, das du fürs Geschäft bezahlt hast</span>
-  </a>
-  <a class="tile" href="/quotes/new">
-    <span class="t-title">Angebot erstellen</span>
-    <span class="t-sub">Kostenvoranschlag für einen Kunden</span>
-  </a>
-  <a class="tile" href="/contacts/new">
-    <span class="t-title">Kontakt anlegen</span>
-    <span class="t-sub">Neuer Kunde oder Lieferant</span>
-  </a>
-</section>
+<!-- Schnellzugriff: eine Liste mit Lineatur statt vier gleicher Kacheln (design.md §8.1),
+     globaler Baustein .kb-linklist wie der Einstellungen-Hub (V3-04). -->
+<nav class="quick" aria-label="Schnellzugriff">
+  <ul class="kb-linklist">
+    <li>
+      <a href="/invoices/new">
+        <span class="kb-ll-title">Rechnung schreiben</span>
+        <span class="kb-ll-sub">Neue Rechnung an einen Kunden</span>
+      </a>
+    </li>
+    <li>
+      <a href="/expenses/new">
+        <span class="kb-ll-title">Kosten erfassen</span>
+        <span class="kb-ll-sub">Etwas, das du fürs Geschäft bezahlt hast</span>
+      </a>
+    </li>
+    <li>
+      <a href="/quotes/new">
+        <span class="kb-ll-title">Angebot erstellen</span>
+        <span class="kb-ll-sub">Kostenvoranschlag für einen Kunden</span>
+      </a>
+    </li>
+    <li>
+      <a href="/contacts/new">
+        <span class="kb-ll-title">Kontakt anlegen</span>
+        <span class="kb-ll-sub">Neuer Kunde oder Lieferant</span>
+      </a>
+    </li>
+  </ul>
+</nav>
 
-<!-- Zwei-Spalten: Aufgaben + Letzte Belege -->
+<!-- Zwei Spalten: Aufgaben + Letzte Belege -->
 <section class="cols">
   <!-- Aufgaben -->
-  <article class="col card">
+  <article class="col card" aria-labelledby="tasks-h">
     <header class="col-head">
-      <h3>Anstehende Aufgaben</h3>
+      <h2 id="tasks-h">Anstehende Aufgaben</h2>
     </header>
 
-    {#if invoices === null && recurring === null && backupLog === null}
-      <ul class="tasks">
+    {#if invoices === null && recurring === null && backupSettings === null}
+      <ul class="tasks" aria-busy="true">
         <li class="task sk sk-row">&nbsp;</li>
         <li class="task sk sk-row">&nbsp;</li>
         <li class="task sk sk-row">&nbsp;</li>
       </ul>
     {:else if taskTotal === 0}
-      <p class="empty">Alles im grünen Bereich — nichts zu tun.</p>
+      <p class="empty">Nichts zu tun: keine überfälligen Rechnungen, fälligen Abos oder offenen Hinweise.</p>
     {:else}
+      <!-- U7 (R3-07, design.md §4.9): Die Art der Aufgabe ist ein Merkmal (Tag ohne
+           Punkt); Status-Badge nur „Überfällig“. Die Dringlichkeit trägt der Text. -->
       <ul class="tasks">
+        {#if sellerTask}
+          <li class="task">
+            <div class="task-row">
+              <Badge kind="tag">Firmendaten</Badge>
+              <span class="task-text">{sellerTask.text}</span>
+              <a class="btn-secondary" href="/settings/seller?next=/">{sellerTask.cta}</a>
+            </div>
+          </li>
+        {/if}
+
         {#each overdueInvoices.slice(0, 6) as inv (inv.id)}
           <li class="task">
             <a class="task-row" href="/invoices/{inv.id}">
-              <span class="task-badge tb-danger">Überfällig</span>
+              <Badge tone="danger">Überfällig</Badge>
               <span class="task-text">
-                <strong>{inv.invoiceNumber}</strong> · {inv.contactName}
+                <DocNo value={inv.invoiceNumber} /> · {inv.contactName}
               </span>
               <span class="task-meta">
-                {inv.overdueDays} {inv.overdueDays === 1 ? "Tag" : "Tage"} fällig
+                {inv.overdueDays} {inv.overdueDays === 1 ? "Tag" : "Tage"} überfällig
               </span>
             </a>
           </li>
@@ -544,47 +612,19 @@
         {#each recurringDue.slice(0, 3) as r (r.id)}
           <li class="task">
             <a class="task-row" href="/recurring-invoices/new?id={r.id}">
-              <span class="task-badge tb-warning">Abo fällig</span>
+              <Badge kind="tag">Abo fällig</Badge>
               <span class="task-text">{r.label}</span>
               <span class="task-meta">{fmtDate(r.nextDueDate)}</span>
             </a>
           </li>
         {/each}
 
-        {#if offsiteStatus === "missing" || offsiteStatus === "failing"}
+        {#if backupTask}
           <li class="task">
             <div class="task-row">
-              <span class="task-badge tb-danger">Backup</span>
-              <span class="task-text">
-                {offsiteStatus === "missing"
-                  ? "Kein externes Backup-Ziel eingerichtet."
-                  : "Ein externes Backup-Ziel ist beim letzten Backup fehlgeschlagen."}
-              </span>
-              <a class="btn-secondary btn-sm" href="/settings/backup">Ziele prüfen</a>
-            </div>
-          </li>
-        {/if}
-
-        {#if backupAmpel === "red" || backupAmpel === "never"}
-          <li class="task">
-            <div class="task-row">
-              <span class="task-badge tb-danger">Backup</span>
-              <span class="task-text">
-                {#if backupAmpel === "never"}
-                  Noch kein Off-Site-Backup vorhanden.
-                {:else}
-                  Letztes Off-Site-Backup {backupLabel}.
-                {/if}
-              </span>
-              <a class="btn-secondary btn-sm" href="/settings/backup">Jetzt sichern</a>
-            </div>
-          </li>
-        {:else if backupAmpel === "yellow"}
-          <li class="task">
-            <div class="task-row">
-              <span class="task-badge tb-warning">Backup</span>
-              <span class="task-text">Letztes Off-Site-Backup {backupLabel}.</span>
-              <a class="btn-secondary btn-sm" href="/settings/backup">Jetzt sichern</a>
+              <Badge kind="tag">Backup</Badge>
+              <span class="task-text">{backupTask.text}</span>
+              <a class="btn-secondary" href="/settings/backup">{backupTask.cta}</a>
             </div>
           </li>
         {/if}
@@ -592,9 +632,9 @@
         {#if overdueFy !== null}
           <li class="task">
             <div class="task-row">
-              <span class="task-badge tb-warning">GJ-Abschluss</span>
+              <Badge kind="tag">GJ-Abschluss</Badge>
               <span class="task-text">Geschäftsjahr {overdueFy} noch nicht festgeschrieben.</span>
-              <a class="btn-secondary btn-sm" href="/fiscal-year">Abschließen</a>
+              <a class="btn-secondary" href="/fiscal-year">Abschließen</a>
             </div>
           </li>
         {/if}
@@ -602,11 +642,11 @@
         {#if notifCount > 0}
           <li class="task">
             <a class="task-row" href="/notifications">
-              <span class="task-badge tb-info">Hinweise</span>
+              <Badge kind="tag">Hinweise</Badge>
               <span class="task-text">
-                {notifCount} {notifCount === 1 ? "offener Hinweis" : "offene Hinweise"} in der Inbox.
+                {notifCount} {notifCount === 1 ? "offener Hinweis" : "offene Hinweise"}.
               </span>
-              <span class="task-meta">Ansehen →</span>
+              <span class="task-meta">Ansehen <span aria-hidden="true">→</span></span>
             </a>
           </li>
         {/if}
@@ -621,23 +661,24 @@
     {/if}
   </article>
 
-  <!-- Letzte Belege -->
-  <article class="col card">
+  <!-- Letzte Belege: alle Zeilen in einem gemeinsamen Raster (U3-039, CSS subgrid). -->
+  <article class="col card" aria-labelledby="recent-h">
     <header class="col-head">
-      <h3>Letzte Belege</h3>
+      <h2 id="recent-h">Letzte Belege</h2>
     </header>
 
     {#if invoices === null && expenses === null}
-      <ul class="recents">
-        <li class="recent sk sk-row">&nbsp;</li>
-        <li class="recent sk sk-row">&nbsp;</li>
-        <li class="recent sk sk-row">&nbsp;</li>
-        <li class="recent sk sk-row">&nbsp;</li>
+      <ul class="recents-sk" aria-busy="true">
+        <li class="sk sk-row">&nbsp;</li>
+        <li class="sk sk-row">&nbsp;</li>
+        <li class="sk sk-row">&nbsp;</li>
+        <li class="sk sk-row">&nbsp;</li>
       </ul>
     {:else if recentEntries.length === 0}
+      <!-- V2-09: dieselbe Beschriftung wie die Hauptaktion der PageBar, als secondary. -->
       <div class="empty">
         <p>Noch keine Belege — leg deine erste Rechnung an.</p>
-        <a class="btn-primary btn-sm" href="/invoices/new">Rechnung schreiben</a>
+        <a class="btn-secondary" href="/invoices/new">Rechnung schreiben</a>
       </div>
     {:else}
       <ul class="recents">
@@ -645,14 +686,12 @@
           <li class="recent">
             <a class="recent-row" href={r.href}>
               <span class="recent-date">{fmtDate(r.dateIso)}</span>
-              <span class="recent-badge rb-{r.kind.toLowerCase()}">{r.kind}</span>
-              <span class="recent-num">{r.docNumber}</span>
+              <!-- V2-05/V3-07: Belegart als Merkmal (Badge ohne Punkt); vorgelesen als Wort. -->
+              <span class="recent-badge"><Badge kind="tag"><span aria-hidden="true">{r.kind}</span><span class="kb-visually-hidden">{KIND_LABEL[r.kind]}</span></Badge></span>
+              <span class="recent-num"><DocNo value={r.docNumber} muted={r.status.strike} /></span>
               <span class="recent-party">{r.counterparty}</span>
               <span class="recent-amount">{euro(r.amountCents)}</span>
-              <span class="recent-status">
-                <span class="dot dot-{r.statusKey}" aria-hidden="true"></span>
-                {statusLabel(r.statusKey)}
-              </span>
+              <span class="recent-status"><Badge tone={r.status.tone} strike={r.status.strike}>{r.status.label}</Badge></span>
             </a>
           </li>
         {/each}
@@ -669,281 +708,232 @@
 </section>
 
 <style>
-  /* ----- Hero (G2-UX.3.3, Apple-Polish) -------------------------------------- */
+  /* ----- Sachstand (U1-064, U4) ---------------------------------------------
+     Flach, kompakt: Datum in --type-heading (V3-03: kleiner als der Seitentitel, keine
+     Hero-Fläche), Petrol-Kante links als einziges Akzentdetail (kein Verlauf, kein Schatten). */
   .hero {
-    margin: 0 0 1.5rem;
-    padding: 1.6rem 1.75rem;
-    background: linear-gradient(135deg, var(--c-primary-50) 0%, var(--c-surface) 70%);
-    border: 1px solid var(--c-primary-100);
-    border-radius: var(--r-xl);
-    box-shadow: var(--sh-md);
+    margin: 0 0 var(--sp-5);
+    padding: var(--sp-4) var(--sp-5);
+    background: var(--surface-card);
+    border: var(--rule);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-card);
   }
-  .hero-greet {
-    margin: 0 0 0.4rem;
-    /* Display-Font + große Schriftgröße + straffes Tracking — Apple-typische
-       Hero-Headline. var(--font-display) greift global aus tokens.css, hier
-       explizit gesetzt, weil die Headline ein h2 ist (Display nur an h1/h2/h3). */
+  @media (max-width: 600px) {
+    .hero { padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
+  }
+  .hero-date {
+    margin: 0 0 var(--sp-1);
     font-family: var(--font-display);
-    font-size: var(--fs-3xl);
-    letter-spacing: -0.024em;
-    font-weight: 700;
-    color: var(--c-text);
-    line-height: 1.15;
+    font-size: var(--type-heading);
+    line-height: var(--lh-snug);
+    font-weight: 600;
+    color: var(--text);
   }
   .hero-meta {
     margin: 0;
-    color: var(--c-text-muted);
-    font-size: 0.95rem;
+    color: var(--text-muted);
+    font-size: var(--type-body);
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 0.35em;
   }
-  .hero-sep { margin: 0 0.45rem; color: var(--c-text-subtle); }
-  .hero-err { color: var(--c-danger-700); }
+  .hero-part { overflow-wrap: break-word; min-width: 0; }
+  .hero-err { color: var(--status-danger-fg); }
   .hero-stripe {
-    margin: 0.7rem 0 0;
-    padding: 0.45rem 0.7rem;
-    background: var(--c-primary-100);
-    color: var(--c-primary-800);
-    border-radius: var(--r-sm);
-    font-size: 0.88rem;
+    margin: var(--sp-3) 0 0;
+    padding: var(--sp-1) var(--sp-3);
+    background: var(--status-primary-bg);
+    color: var(--status-primary-fg);
+    border-radius: var(--radius-control);
+    font-size: var(--type-small);
+    line-height: var(--lh-snug);
     display: inline-block;
-  }
-  .hero-stripe-sub {
-    color: var(--c-primary-700);
-    font-size: 0.82rem;
-    font-style: italic;
+    max-width: 100%;
   }
 
-  /* ----- KPIs ---------------------------------------------------------------- */
+  /* ----- Kennzahlen ---------------------------------------------------------- */
+  /* V3-01/V3-02: feste Spalten (die Kachel misst ihre Breite, tokens.css .kb-metric);
+     Handy zweispaltig statt fünf gestapelter Karten, Backup über die volle Breite. */
   .kpis {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-    gap: 1rem;
-    margin: 0 0 1.5rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-3);
+    margin: 0 0 var(--sp-5);
   }
-  .kpi {
-    background: var(--c-surface);
-    /* Hairline-Border statt solid grey — Schatten trägt die Card, nicht der Strich. */
-    border: 1px solid rgba(16, 36, 44, 0.06);
-    border-radius: var(--r-xl);
-    padding: 1.1rem 1.25rem;
-    box-shadow: var(--sh-md);
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
+  .kpi { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .kpi .lbl { display: flex; align-items: center; gap: var(--sp-2); }
+  .kpi .val { margin: 2px 0; }
+  /* Text statt Zahl („Noch keine Kopie“): darf umbrechen. */
+  .kpi .val-small { font-size: var(--type-heading); white-space: normal; overflow-wrap: break-word; }
+  .kpi[data-tone="success"] .val { color: var(--status-success-fg); }
+  .kpi[data-tone="danger"] .val { color: var(--status-danger-fg); }
+  .kpi[data-tone="warning"] .val { color: var(--status-warning-fg); }
+  .kpi-link { text-decoration: none; color: inherit; transition: background var(--t-base) var(--ease-apple), border-color var(--t-base) var(--ease-apple); }
+  /* Zeigen ändert nur die Fläche (kein Anheben, design.md §8.1); Fokus bleibt der Ring. */
+  @media (hover: hover) {
+    .kpi-link:hover { background: var(--surface-hover); border-color: var(--line-hover); }
   }
-  .kpi-link {
-    text-decoration: none;
-    color: inherit;
-    /* Apple-Hover: die Karte hebt sich (Schatten + minimaler Lift). Kein
-       Border-Color-Switch — wirkt nervöser als gewollt. */
-    transition:
-      box-shadow var(--t-base) var(--ease-apple),
-      transform var(--t-base) var(--ease-apple);
-    will-change: transform;
+  .kpi-sub { margin: 0; font-size: var(--type-small); color: var(--text-muted); }
+  .kpi-err { margin: 2px 0; font-size: var(--type-small); color: var(--status-danger-fg); }
+
+  /* ----- Schnellzugriff (.kb-linklist, tokens.css) --------------------------- */
+  .quick { margin: 0 0 var(--sp-5); }
+  .quick .kb-linklist { grid-template-columns: 1fr; }
+
+  /* U2-Sichtprüfung: keine einzelne Kachel allein in der letzten Zeile. Feste
+     Spaltenzahlen nach der Breite des Inhaltsbereichs (<main>, Container „kb-main“). */
+  @container kb-main (width < 36rem) {
+    .kpi.kb-metric { padding: var(--sp-3); }
+    .kpi-backup { grid-column: 1 / -1; }
   }
-  .kpi-link:hover {
-    box-shadow: var(--sh-lg);
-    transform: translateY(-1px);
+  @container kb-main (width >= 30rem) {
+    .quick .kb-linklist { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
-  .kpi-link:active { transform: translateY(0); box-shadow: var(--sh-md); }
-  .kpi[data-tone="success"] .kpi-val { color: var(--c-success-700); }
-  .kpi[data-tone="danger"] .kpi-val { color: var(--c-danger-700); }
-  .kpi[data-tone="warning"] .kpi-val { color: var(--c-warning-700); }
-  .kpi-label {
-    margin: 0;
-    font-size: 0.82rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--c-text-muted);
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
+  @container kb-main (width >= 36rem) {
+    .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
   }
-  .kpi-val {
-    margin: 0.2rem 0 0.1rem;
-    font-size: 1.7rem;
-    font-weight: 700;
-    color: var(--c-text);
-    font-variant-numeric: tabular-nums;
+  @container kb-main (width >= 44rem) {
+    .quick .kb-linklist { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   }
-  .kpi-val-small { font-size: 1.2rem; }
-  .kpi-sub {
-    margin: 0;
-    font-size: 0.82rem;
-    color: var(--c-text-muted);
-  }
-  .kpi-err {
-    margin: 0.2rem 0;
-    font-size: 0.82rem;
-    color: var(--c-danger-700);
+  @container kb-main (width >= 66rem) {
+    .kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
 
-  /* ----- Quick-Actions ------------------------------------------------------- */
-  .quick {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
-    gap: 1rem;
-    margin: 0 0 1.5rem;
-  }
-  .tile {
-    display: flex; flex-direction: column; gap: 0.3rem;
-    background: var(--c-surface);
-    border: 1px solid rgba(16, 36, 44, 0.06);
-    border-radius: var(--r-xl);
-    padding: 1.15rem 1.25rem;
-    text-decoration: none;
-    box-shadow: var(--sh-md);
-    transition:
-      box-shadow var(--t-base) var(--ease-apple),
-      transform var(--t-base) var(--ease-apple);
-    will-change: transform;
-  }
-  .tile:hover { box-shadow: var(--sh-lg); transform: translateY(-1px); }
-  .tile:active { transform: translateY(0); box-shadow: var(--sh-md); }
-  .t-title { font-weight: 600; color: var(--c-text); font-size: 1rem; }
-  .t-sub { color: var(--c-text-muted); font-size: 0.85rem; }
-
-  /* ----- Zwei-Spalten -------------------------------------------------------- */
+  /* ----- Zwei Spalten -------------------------------------------------------- */
   .cols {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1rem;
+    gap: var(--sp-4);
   }
   @media (max-width: 1023px) {
     .cols { grid-template-columns: 1fr; }
   }
-  /* R5-011: lokale `.card`-Re-Definition entfernt — globale aus tokens.css
-     greift (Memory `feedback_sweep_local_overrides`: svelte-check meldet
-     solche Doppelungen NICHT, daher manueller Sweep nötig). */
+  /* Zeilen richten sich nach der Breite der Karte, nicht des Fensters (U1). */
+  .col { container-type: inline-size; min-width: 0; }
   .col-head {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    /* Hairline rgba — innerer Trenner statt harter grauer Strich. */
-    border-bottom: 1px solid rgba(16, 36, 44, 0.08);
-    padding-bottom: 0.65rem;
-    margin-bottom: 0.7rem;
+    border-bottom: var(--rule);
+    padding-bottom: var(--sp-2);
+    margin-bottom: var(--sp-2);
   }
-  .col-head h3 { margin: 0; font-size: 1rem; font-weight: 700; color: var(--c-text); }
+  .col-head h2 { margin: 0; font-size: var(--type-heading); line-height: var(--lh-snug); color: var(--text); }
   .empty {
-    text-align: center;
-    color: var(--c-text-muted);
-    padding: 1.5rem 0.5rem;
+    color: var(--text-muted);
+    padding: var(--sp-4) var(--sp-2);
     display: flex;
     flex-direction: column;
-    gap: 0.7rem;
-    align-items: center;
+    gap: var(--sp-3);
+    align-items: flex-start;
+    margin: 0;
   }
   .empty p { margin: 0; }
   .card-err {
-    margin: 0.7rem 0 0;
-    font-size: 0.82rem;
-    color: var(--c-danger-700);
+    margin: var(--sp-3) 0 0;
+    font-size: var(--type-small);
+    color: var(--status-danger-fg);
   }
 
-  /* ----- Tasks --------------------------------------------------------------- */
+  /* ----- Aufgaben ------------------------------------------------------------ */
   .tasks { list-style: none; padding: 0; margin: 0; }
-  /* Hairlines zwischen Items — macOS-Settings-Look. */
-  .task + .task { border-top: 1px solid rgba(16, 36, 44, 0.08); }
+  .task + .task { border-top: var(--rule); }
   .task-row {
     display: grid;
     grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: 0.7rem;
-    padding: 0.6rem 0.2rem;
+    gap: var(--sp-3);
+    padding: var(--sp-2) 2px;
+    /* Trefferfläche ganze Zeile ≥ --target (44 px im Drawer-Band, U1). */
+    min-height: var(--target);
     text-decoration: none;
-    color: var(--c-text);
+    color: var(--text);
   }
-  a.task-row:hover { background: var(--c-surface-2); }
-  .task-badge {
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 2px 8px;
-    border-radius: var(--r-pill);
-    white-space: nowrap;
+  @media (hover: hover) {
+    a.task-row:hover { background: var(--surface-row-hover); }
   }
-  .tb-danger { background: var(--c-danger-50); color: var(--c-danger-700); }
-  .tb-warning { background: var(--c-warning-50); color: var(--c-warning-700); }
-  .tb-info { background: var(--c-primary-50); color: var(--c-primary-700); }
-  .task-text { font-size: 0.92rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .task-meta { font-size: 0.82rem; color: var(--c-text-muted); white-space: nowrap; }
+  /* Schmale Spalte: Badge und Zusatz über bzw. unter den Text, damit der Text
+     umbrechen kann statt abgeschnitten zu werden (1.4.12). */
+  @container (max-width: 30rem) {
+    .task-row { grid-template-columns: auto 1fr; }
+    .task-text { grid-column: 1 / -1; }
+    .task-meta, .task-row > .btn-secondary { grid-column: 1 / -1; justify-self: start; }
+  }
+  /* Umbrechen statt abschneiden (1.4.12 Textabstände, U1). */
+  .task-text { min-width: 0; overflow-wrap: break-word; }
+  .task-meta { font-size: var(--type-small); color: var(--text-muted); white-space: nowrap; }
 
-  /* ----- Recent-Belege ------------------------------------------------------- */
-  .recents { list-style: none; padding: 0; margin: 0; }
-  .recent + .recent { border-top: 1px solid rgba(16, 36, 44, 0.08); }
+  /* ----- Letzte Belege (U3-039) ---------------------------------------------
+     Ein Raster für alle Zeilen: Liste = Grid mit sechs Spalten, jede Zeile und ihr
+     Link übernehmen die Spalten per subgrid — Datum, Art, Nummer, Partner, Betrag
+     und Status stehen in Fluchten. Schmale Karte: zweispaltig gestapelt. */
+  .recents {
+    list-style: none; padding: 0; margin: 0;
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr) auto auto;
+    column-gap: var(--sp-3);
+  }
+  .recent { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
+  .recent + .recent { border-top: var(--rule); }
   .recent-row {
     display: grid;
-    grid-template-columns: auto auto 1fr 1fr auto auto;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: 0.6rem;
-    padding: 0.55rem 0.2rem;
+    padding: var(--sp-2) 2px;
+    min-height: var(--target);
     text-decoration: none;
-    color: var(--c-text);
-    font-size: 0.92rem;
+    color: var(--text);
   }
-  .recent-row:hover { background: var(--c-surface-2); }
-  .recent-date { font-size: 0.82rem; color: var(--c-text-muted); white-space: nowrap; min-width: 5.5rem; }
-  .recent-badge {
-    font-size: 0.7rem;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: var(--r-sm);
-    background: var(--c-primary-50);
-    color: var(--c-primary-700);
-    min-width: 1.6rem;
-    text-align: center;
+  @media (hover: hover) {
+    .recent-row:hover { background: var(--surface-row-hover); }
   }
-  .rb-st { background: var(--c-danger-50); color: var(--c-danger-700); }
-  .rb-k { background: var(--c-warning-50); color: var(--c-warning-700); }
-  .recent-num { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .recent-party { color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .recent-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-  .recent-status { font-size: 0.8rem; color: var(--c-text-muted); display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+  .recent-date { font-size: var(--type-small); color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* U4 (V2-05/V3-07): Belegart ist kein Status — Badge kind="tag" für RE, ST und K. */
+  .recent-badge { justify-self: start; }
+  .recent-num { white-space: nowrap; color: var(--text); }
+  /* Umbrechen statt abschneiden (1.4.12), Namen nur an Leerzeichen (U3). */
+  .recent-party { color: var(--text-muted); overflow-wrap: break-word; min-width: 0; }
+  .recent-amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; text-align: right; }
+  .recent-status { justify-self: start; white-space: nowrap; }
 
-  @media (max-width: 720px) {
-    .recent-row { grid-template-columns: 1fr auto; row-gap: 0.2rem; }
+  @container (max-width: 36rem) {
+    .recents { display: block; }
+    .recent { display: block; }
+    .recent-row { grid-template-columns: 1fr auto; column-gap: var(--sp-3); row-gap: 2px; }
     .recent-date { grid-column: 1; }
     .recent-badge { grid-column: 2; justify-self: end; }
     .recent-num { grid-column: 1 / span 2; }
     .recent-party { grid-column: 1 / span 2; }
-    .recent-amount { grid-column: 1; }
+    .recent-amount { grid-column: 1; text-align: left; }
     .recent-status { grid-column: 2; justify-self: end; }
   }
 
-  /* ----- Dots ---------------------------------------------------------------- */
+  /* ----- Punkte (Status mit Farbe UND Text daneben) -------------------------- */
   .dot {
     display: inline-block;
     width: 9px;
     height: 9px;
     border-radius: 50%;
-    background: var(--c-text-subtle);
+    background: var(--text-subtle);
+    flex: none;
   }
-  .dot-green, .dot-paid { background: var(--c-success-500); }
-  .dot-yellow, .dot-partial { background: var(--c-warning-500); }
-  .dot-red, .dot-canceled { background: var(--c-danger-500); }
-  .dot-never { background: var(--c-danger-500); }
-  .dot-open { background: var(--c-text-subtle); }
+  .dot-success { background: var(--status-success-fg); }
+  .dot-warning { background: var(--status-warning-fg); }
+  .dot-danger { background: var(--status-danger-fg); }
+  .dot-neutral { background: var(--text-subtle); }
 
-  /* ----- Skeleton ------------------------------------------------------------ */
+  /* ----- Platzhalter beim Laden ---------------------------------------------
+     Statische Flächen, nur damit das Layout nicht springt (design.md §5 „Laden“);
+     keine Endlos-Animation (V3-06), die Ansage trägt die Statuszeile (role="status"). */
+  .recents-sk { list-style: none; padding: 0; margin: 0; }
   .sk {
-    background: linear-gradient(90deg, var(--c-bg) 0%, var(--c-border) 50%, var(--c-bg) 100%);
-    background-size: 200% 100%;
-    animation: sk-pulse 1.2s ease-in-out infinite;
+    background: var(--surface-page);
     border-radius: var(--r-sm);
     display: inline-block;
     color: transparent;
   }
-  .sk-text { height: 1.5rem; }
   .sk-num { height: 1.7rem; width: 6rem; }
-  .sk-row { display: block; height: 2rem; margin: 0.4rem 0; border-radius: var(--r-sm); }
-  @keyframes sk-pulse {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-
-  /* R5-011: lokales `.btn-sm` entfernt — Manuel-Hardline 2026-05-26: alle
-     Buttons app-weit gleich groß. tokens.css hält `.btn-sm` absichtlich
-     no-op; Task-Row-CTAs erben jetzt die Standard-Button-Größe. */
+  .sk-row { display: block; height: 2rem; margin: var(--sp-2) 0; }
 </style>

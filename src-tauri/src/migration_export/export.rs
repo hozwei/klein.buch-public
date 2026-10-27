@@ -19,11 +19,11 @@
 use crate::config::Paths;
 use crate::db::repo::audit_log;
 use crate::error::{Error, Result};
+use crate::hash::sha256_hex;
 use crate::migration_export::json_dump;
 use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -234,9 +234,7 @@ pub async fn export_all(
             "migration.export.tamper_detected",
             "archive",
             rel,
-            Some(&format!(
-                r#"{{"expected":"{expected}","actual":"{actual}"}}"#
-            )),
+            Some(serde_json::json!({ "expected": expected, "actual": actual })),
         )
         .await?;
     }
@@ -299,12 +297,6 @@ fn slugify(s: &str) -> String {
         .collect()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    format!("{:x}", h.finalize())
-}
-
 fn collect_files(base: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut out = Vec::new();
     if !base.is_dir() {
@@ -334,6 +326,19 @@ fn collect_files(base: &Path) -> Result<Vec<(String, PathBuf)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lauf F6b (LE-HASH-CRATES): Hashes im Migrations-Export bleiben bit-genau.
+    #[test]
+    fn sha256_hex_known_answers() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
     use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::SqlitePool;
     use std::io::Read;

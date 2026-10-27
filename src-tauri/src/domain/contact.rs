@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Eingabe-Datenmodell für create/update. Wird von Tauri-Commands deserialisiert.
+/// Eingabe-Datenmodell für create/update. Wird von den Commands deserialisiert.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactInput {
@@ -203,7 +203,9 @@ pub fn validate_vat_id(raw: &str) -> Result<(), ValidationError> {
 }
 
 /// Pragmatischer E-Mail-Check: `local@domain.tld`, keine Whitespace, mindestens
-/// ein Punkt in der Domain. Voller RFC-5322-Check ist out-of-scope.
+/// ein Punkt in der Domain, Top-Level-Domain mit mindestens zwei Buchstaben
+/// (RFC 1123 §2.1, IANA-Root-Zone; R1-S3-EMAIL) oder als IDN-A-Label
+/// (`xn--…`). Voller RFC-5322-Check ist out-of-scope.
 fn is_valid_email(s: &str) -> bool {
     if s.chars().any(|c| c.is_whitespace()) {
         return false;
@@ -220,7 +222,11 @@ fn is_valid_email(s: &str) -> bool {
         return false;
     }
     let tld = domain.rsplit('.').next().unwrap_or("");
-    !tld.is_empty() && tld.chars().all(|c| c.is_ascii_alphabetic())
+    let alphabetic = tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic());
+    let idn = tld.len() > 4
+        && tld.to_ascii_lowercase().starts_with("xn--")
+        && tld.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    alphabetic || idn
 }
 
 #[cfg(test)]
@@ -238,7 +244,7 @@ mod tests {
             postal_code: "84028".into(),
             city: "Landshut".into(),
             country_code: "DE".into(),
-            email: Some("info@beispiel.de".into()),
+            email: Some("info@beispiel.example.org".into()),
             phone: None,
             iban: Some("DE89370400440532013000".into()),
             bic: None,
@@ -340,8 +346,20 @@ mod tests {
         assert!(validate(&i)
             .unwrap_err()
             .contains(&ValidationError::InvalidEmail));
-        i.email = Some("a@b.de".into());
+        i.email = Some("a@b.example.org".into());
         assert!(validate(&i).is_ok());
+    }
+
+    // R1-S3-EMAIL: TLD mit mindestens zwei Buchstaben (oder IDN-A-Label).
+    #[test]
+    fn email_tld_needs_two_letters() {
+        assert!(!is_valid_email("info@example.c"));
+        assert!(!is_valid_email("info@example.1"));
+        assert!(!is_valid_email("info@example."));
+        assert!(is_valid_email("info@example.org"));
+        assert!(is_valid_email("info@kunde.example"));
+        assert!(is_valid_email("info@example.xn--zckzah"));
+        assert!(!is_valid_email("info@example.xn--"));
     }
 
     #[test]

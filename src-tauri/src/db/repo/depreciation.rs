@@ -31,6 +31,22 @@ pub async fn book_entry(
     fiscal_year: i64,
     calc: &DepreciationCalc,
 ) -> Result<DepreciationEntryRow> {
+    let mut conn = pool.acquire().await?;
+    let id = book_entry_in(&mut conn, asset_id, fiscal_year, calc).await?;
+    drop(conn);
+    get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("book_entry: post-INSERT SELECT leer".into()))
+}
+
+/// AfA-Eintrag innerhalb einer laufenden Transaktion (Lauf F, D-03); liefert
+/// die neue ID.
+pub async fn book_entry_in(
+    conn: &mut sqlx::SqliteConnection,
+    asset_id: &str,
+    fiscal_year: i64,
+    calc: &DepreciationCalc,
+) -> Result<String> {
     let id = Uuid::now_v7().to_string();
     sqlx::query(
         "INSERT INTO depreciation_entries (
@@ -46,12 +62,9 @@ pub async fn book_entry(
     .bind(calc.book_value_before_cents)
     .bind(calc.book_value_after_cents)
     .bind(if calc.is_full_writeoff { 1i64 } else { 0i64 })
-    .execute(pool)
+    .execute(conn)
     .await?;
-
-    get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain("book_entry: post-INSERT SELECT leer".into()))
+    Ok(id)
 }
 
 /// Zahl der AfA-Buchungen einer Anlage (egal ob gelockt). Gate fürs Bearbeiten

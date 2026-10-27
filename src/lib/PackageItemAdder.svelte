@@ -3,9 +3,13 @@
   // (Rechnung, Angebot, Umwandlung). Gruppiertes Dropdown (Kategorie → Paket) →
   // materialisiert die aktive Revision als Beleg-Position.
   import { onMount } from "svelte";
-  import { packagesList, packageCategoriesList, packageMaterializeItem } from "$lib/api";
-  import type { Package, PackageCategory, MaterializedPackageItem } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
+  import { packagesList, packageCategoriesList, packageMaterializeItem } from "#lib/api.ts";
+  import type { Package, PackageCategory, MaterializedPackageItem } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import { randomId } from "#lib/browser.ts";
+
+  const selId = `pkg-sel-${randomId()}`;
+  const errId = `${selId}-err`;
 
   let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
 
@@ -14,8 +18,10 @@
   let selected = $state("");
   let loaded = $state(false);
   let adding = $state(false);
+  // Feldfehler statt Toast (ADR 0041 Nr. 22), erst nach einem Versuch ohne Wahl.
+  let pkgError = $state("");
 
-  // Nur aktive Pakete mit veröffentlichter Revision sind einfügbar.
+  // Nur aktive (nicht archivierte) Pakete mit einer Version sind einfügbar.
   let active = $derived(
     packages.filter((p) => p.status === "active" && p.currentRevision != null),
   );
@@ -51,15 +57,18 @@
   });
 
   async function add() {
+    if (adding) return;
     if (!selected) {
-      flash("Bitte ein Paket wählen.", "error");
+      pkgError = "Bitte zuerst ein Paket wählen.";
+      document.getElementById(selId)?.focus();
       return;
     }
+    pkgError = "";
     adding = true;
     try {
       const item = await packageMaterializeItem(selected);
       onAdd(item);
-      flash(`Paket „${item.packageName}" eingefügt.`);
+      flash(`Paket „${item.packageName}“ eingefügt.`);
       selected = "";
     } catch (e) {
       flash(String(e), "error");
@@ -71,8 +80,15 @@
 
 {#if loaded && active.length > 0}
   <div class="pkg">
-    <span class="lbl">Paket</span>
-    <select bind:value={selected} class="sel">
+    <label class="lbl" for={selId}>Paket</label>
+    <select
+      id={selId}
+      bind:value={selected}
+      class="sel"
+      onchange={() => (pkgError = "")}
+      aria-invalid={pkgError ? "true" : undefined}
+      aria-describedby={pkgError ? errId : undefined}
+    >
       <option value="">— Paket wählen —</option>
       {#each groups as g (g.label)}
         <optgroup label={g.label}>
@@ -82,14 +98,16 @@
         </optgroup>
       {/each}
     </select>
-    <button type="button" class="btn-secondary" onclick={add} disabled={adding || !selected}>
+    <!-- Nicht gesperrt: ohne Wahl erscheint der Grund am Feld (design.md §4.1). -->
+    <button type="button" class="btn-secondary" onclick={add} aria-disabled={adding ? "true" : undefined}>
       + Paket
     </button>
+    {#if pkgError}<span id={errId} class="err">{pkgError}</span>{/if}
   </div>
 {:else if loaded}
   <div class="pkg">
     <span class="hint">
-      Keine veröffentlichten Pakete —
+      Keine aktiven Pakete —
       <a href="/packages">Paket-Katalog öffnen</a>, um eins anzulegen.
     </span>
   </div>
@@ -97,9 +115,14 @@
 
 <style>
   .pkg { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0 0.2rem; }
-  .lbl { font-weight: 600; font-size: 0.9rem; }
-  .sel { padding: 0.4rem 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; font: inherit; min-width: 16rem; }
-  .hint { color: #6b7280; font-size: 0.9rem; }
+  .lbl { font-weight: 600; font-size: var(--fs-sm); }
+  /* Kante, Höhe und Pfeil kommen aus tokens.css (U4); hier nur die Breite. */
+  .sel { min-width: min(16rem, 100%); max-width: 100%; }
+  .hint { color: var(--text-muted); font-size: var(--fs-sm); }
+  .err { flex-basis: 100%; font-size: var(--fs-xs); color: var(--status-danger-fg); }
+  /* Link im Hinweistext: Trefferfläche ≥ --target ohne Zeilensprung. */
+  /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31), keine 44-px-Zeile (U1-Sichtprüfung). */
+  .hint a { text-decoration: underline; }
   /* Lokale btn-Defs entfernt — globale aus tokens.css greifen
      (Manuel-Hardline 2026-05-26: alle Buttons app-weit gleich groß). */
 </style>

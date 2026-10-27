@@ -5,8 +5,10 @@
 //! Diese Tabelle hält nur die Verbindungs-Metadaten + die
 //! `keychain_service_id`, unter der die Passphrase abgelegt ist.
 //!
-//! OAuth (Block 16) erweitert das Schema (Migration 0009) und dieses Repo;
-//! Stand v4 ist nur `auth_type = 'smtp_password'` produktiv.
+//! Die OAuth-Spalten aus Migration 0014 (Microsoft Graph, Desktop-Fassung)
+//! bleiben im Schema (forward-only), werden im Server aber nicht mehr befüllt;
+//! `update` leert sie, wenn ein übernommenes Microsoft-Konto auf SMTP umgestellt
+//! wird (ADR 0039 Nr. 138).
 
 use crate::db::models::MailAccountRow;
 use crate::error::{Error, Result};
@@ -14,14 +16,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-/// Eingabe zum Anlegen eines Mail-Accounts. Geheimnisse (SMTP-Passwort,
-/// OAuth-Token) sind NICHT Teil dieses Structs — sie gehen direkt vom Command
-/// in den Keychain.
+/// Eingabe zum Anlegen eines Mail-Accounts. Das SMTP-Passwort ist NICHT Teil
+/// dieses Structs — es geht direkt vom Command in die Tabelle `secrets`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountInput {
     pub label: String,
-    /// `"smtp_password"` oder `"oauth_microsoft"` (Block 16).
+    /// Im Server nur `"smtp_password"` (E9; Prüfung im Command).
     pub auth_type: String,
     pub smtp_host: Option<String>,
     pub smtp_port: Option<i64>,
@@ -30,12 +31,6 @@ pub struct MailAccountInput {
     pub from_email: String,
     pub from_name: String,
     pub is_default: bool,
-    /// OAuth (Block 16): die nutzer-eigene Azure-App. Kein Secret (Public-Client
-    /// + PKCE). Nur für `auth_type = "oauth_microsoft"` relevant.
-    #[serde(default)]
-    pub oauth_tenant_id: Option<String>,
-    #[serde(default)]
-    pub oauth_client_id: Option<String>,
 }
 
 /// Legt einen Account an. Vergibt UUIDv7 als ID und — bei
@@ -46,8 +41,6 @@ pub struct MailAccountInput {
 /// zurückgegebenen `keychain_service_id` im Keychain abzulegen.
 pub async fn create(pool: &SqlitePool, input: &MailAccountInput) -> Result<MailAccountRow> {
     let id = Uuid::now_v7().to_string();
-    // Keychain-Eintrag für BEIDE Auth-Typen: smtp_password legt dort die
-    // Passphrase ab (user "smtp"), oauth_microsoft die Token-Bundle (user "oauth").
     // Markiert ein Konto mit Passwort-Anmeldung; das Passwort selbst liegt seit
     // W8 unter `secrets::smtp_key(id)` in der Datenbank.
     let keychain_service_id = Some(format!("kleinbuch::mail::{id}"));
@@ -61,9 +54,8 @@ pub async fn create(pool: &SqlitePool, input: &MailAccountInput) -> Result<MailA
     sqlx::query(
         "INSERT INTO mail_accounts (
             id, label, auth_type, smtp_host, smtp_port, smtp_user, smtp_use_tls,
-            keychain_service_id, from_email, from_name, is_default,
-            oauth_tenant_id, oauth_client_id
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            keychain_service_id, from_email, from_name, is_default
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&input.label)
@@ -76,8 +68,6 @@ pub async fn create(pool: &SqlitePool, input: &MailAccountInput) -> Result<MailA
     .bind(&input.from_email)
     .bind(&input.from_name)
     .bind(if input.is_default { 1i64 } else { 0i64 })
-    .bind(&input.oauth_tenant_id)
-    .bind(&input.oauth_client_id)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -143,7 +133,8 @@ pub async fn update(
         "UPDATE mail_accounts SET
             label = ?, auth_type = ?, smtp_host = ?, smtp_port = ?, smtp_user = ?,
             smtp_use_tls = ?, from_email = ?, from_name = ?, is_default = ?,
-            oauth_tenant_id = ?, oauth_client_id = ?
+            oauth_tenant_id = NULL, oauth_client_id = NULL, oauth_account_email = NULL,
+            oauth_scopes = NULL, oauth_token_expires_at = NULL
          WHERE id = ?",
     )
     .bind(&input.label)
@@ -155,8 +146,6 @@ pub async fn update(
     .bind(&input.from_email)
     .bind(&input.from_name)
     .bind(if input.is_default { 1i64 } else { 0i64 })
-    .bind(&input.oauth_tenant_id)
-    .bind(&input.oauth_client_id)
     .bind(id)
     .execute(&mut *tx)
     .await?;
@@ -185,58 +174,6 @@ pub async fn delete(pool: &SqlitePool, id: &str) -> Result<()> {
             "mail_accounts::delete: id {id} nicht gefunden"
         )));
     }
-    Ok(())
-}
-
-/// Schreibt die OAuth-Session-Metadaten nach einem erfolgreichen Connect/Refresh
-/// (Block 16). Token bleiben im Keychain — hier nur nicht-geheime Anzeigedaten:
-/// verbundenes Postfach, gewährte Scopes, Access-Token-Ablauf (UTC ISO-8601).
-pub async fn set_oauth_session(
-    pool: &SqlitePool,
-    id: &str,
-    account_email: Option<&str>,
-    scopes: Option<&str>,
-    token_expires_at: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "UPDATE mail_accounts SET
-            oauth_account_email = ?, oauth_scopes = ?, oauth_token_expires_at = ?
-         WHERE id = ?",
-    )
-    .bind(account_email)
-    .bind(scopes)
-    .bind(token_expires_at)
-    .bind(id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Aktualisiert nur den Access-Token-Ablauf (nach einem stillen Refresh).
-pub async fn set_oauth_token_expiry(
-    pool: &SqlitePool,
-    id: &str,
-    token_expires_at: &str,
-) -> Result<()> {
-    sqlx::query("UPDATE mail_accounts SET oauth_token_expires_at = ? WHERE id = ?")
-        .bind(token_expires_at)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-/// Trennt die OAuth-Verbindung: löscht die Session-Metadaten (Postfach, Scopes,
-/// Ablauf). Der Keychain-Eintrag wird vom Command separat entfernt.
-pub async fn clear_oauth_session(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query(
-        "UPDATE mail_accounts SET
-            oauth_account_email = NULL, oauth_scopes = NULL, oauth_token_expires_at = NULL
-         WHERE id = ?",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
     Ok(())
 }
 

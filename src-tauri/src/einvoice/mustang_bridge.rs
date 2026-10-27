@@ -33,8 +33,8 @@ use crate::error::{Error, Result};
 ///
 /// Kritische Flags (siehe Mustang `Main.java`):
 /// - `--format zf` ZUGFeRD (CII-Container), `--version 2`
-/// - `--profile e` = EN16931 (Mustang lowercased + matcht Single-Char-Codes;
-///   `EN16931` als Literal würde `Unknown profile` werfen)
+/// - `--profile x` = XRECHNUNG ([`ZUGFERD_PROFILE`]; Mustang lowercased + matcht
+///   Single-Char-Codes, `XRECHNUNG` als Literal würde `Unknown profile` werfen)
 /// - `-i` ignoriert PDF/A-Konformitätsfehler des **Inputs** (Typst-PDF ist
 ///   kein PDF/A) — der Output wird trotzdem als PDF/A-3 geschrieben
 /// - `--no-additional-attachments` unterdrückt den interaktiven
@@ -79,12 +79,25 @@ pub fn build_extract_args(source_zugferd: &Path, out_xml: &Path) -> Vec<String> 
     ]
 }
 
+/// ZUGFeRD-Profil des Rechnungs-PDFs (R3-017, Lauf F5c): `x` = **XRECHNUNG**.
+///
+/// Das eingebettete XML ist eine XRechnung 3.0 (CII, Guideline-ID
+/// `urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0`, BT-24).
+/// ZUGFeRD 2.x ordnet genau dieser Guideline das Profil XRECHNUNG zu: XMP
+/// `fx:ConformanceLevel` = `XRECHNUNG`, Anhang `xrechnung.xml`. Das bisherige
+/// Profil `e` (EN 16931) schrieb `EN 16931` und `zugferd-invoice.xml` in den
+/// Container, passend zur Guideline `urn:cen.eu:en16931:2017` — XML und Container
+/// widersprachen sich. Beide Profile sind EN-16931-konform und damit E-Rechnung
+/// nach § 14 Abs. 1 UStG (BMF vom 15.10.2024); der Mustang-Validator prüft beide
+/// als gültig. ADR 0008 Amendment 2026-10-25.
+pub const ZUGFERD_PROFILE: &str = "x";
+
 /// Wandelt Plain-PDF + XRechnung-XML in ein ZUGFeRD-PDF/A-3 um.
 ///
 /// Ein einziger `combine`-Aufruf konvertiert nach PDF/A-3 und bettet das
 /// XML ein. Mock-Modus liefert `pdf_bytes` unverändert.
 pub async fn create_zugferd(pdf_bytes: &[u8], xml: &str, sidecar_dir: &Path) -> Result<Vec<u8>> {
-    create_zugferd_with_profile(pdf_bytes, xml, sidecar_dir, "e").await
+    create_zugferd_with_profile(pdf_bytes, xml, sidecar_dir, ZUGFERD_PROFILE).await
 }
 
 /// Wie [`create_zugferd`], aber mit explizitem ZUGFeRD-Profil
@@ -116,8 +129,7 @@ pub async fn create_zugferd_with_profile(
     tokio::fs::write(&xml_path, xml).await?;
 
     // cwd auf tmpdir setzen — vermeidet, dass Java-Sidecar relative Outputs
-    // (Logs, temp-XML, etc.) ins Sidecar-Bundle schreibt. Tauri-Dev-Mode-
-    // Watcher würde sonst die App mitten in der Pipeline rebuilten.
+    // (Logs, temp-XML, etc.) ins (read-only) Sidecar-Verzeichnis schreibt.
     let cwd = tmpdir.path();
 
     // Ein-Schritt-Combine: Plain-PDF → PDF/A-3 + eingebettetes XML.
@@ -297,6 +309,10 @@ mod tests {
         // Profil als Single-Char-Code (Mustang lowercased + matcht so)
         let p = args.iter().position(|a| a == "--profile").unwrap();
         assert_eq!(args[p + 1], "e");
+        assert_eq!(
+            ZUGFERD_PROFILE, "x",
+            "R3-017: XRechnung-Guideline → Profil XRECHNUNG"
+        );
         // Nicht-interaktiv + PDF/A-Input-Errors ignorieren
         assert!(args.iter().any(|a| a == "-i"));
         assert!(args.iter().any(|a| a == "--no-additional-attachments"));

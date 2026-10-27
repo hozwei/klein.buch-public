@@ -18,7 +18,7 @@
 use crate::db::models::RecurringSubscriptionRow;
 use crate::domain::recurring::RecurringInput;
 use crate::error::{Error, Result};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 // ---- CREATE ----------------------------------------------------------------
@@ -166,30 +166,78 @@ pub async fn list_due_auto(
     Ok(rows)
 }
 
+/// Aktive Abos im Modus „Erinnerung“ (`auto_create_expense=0`), deren Stichtag
+/// erreicht ist — Grundlage des Hinweises „Abo fällig“ (Lauf F, D-01).
+pub async fn list_due_reminders(
+    pool: &SqlitePool,
+    today: &str,
+) -> Result<Vec<RecurringSubscriptionRow>> {
+    let rows: Vec<RecurringSubscriptionRow> = sqlx::query_as(
+        "SELECT * FROM recurring_subscriptions
+          WHERE active = 1 AND auto_create_expense = 0 AND next_due_date <= ?
+          ORDER BY next_due_date ASC",
+    )
+    .bind(today)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 // ---- ADVANCE (nach Auto-/Manuell-Anlage) -----------------------------------
 
 /// Schreibt nach einer erzeugten Kosten-Position den Fortschritt fort:
 /// `last_executed_at`, `last_expense_id` und den nächsten `next_due_date`.
+///
+/// Compare-and-Swap (Lauf F, W14-022): vorgerückt wird nur, wenn
+/// `next_due_date` noch auf `expected_due_date` steht. Hat ein paralleler Lauf
+/// die Periode schon gebucht, schlägt der Aufruf fehl statt still zu
+/// überschreiben.
 pub async fn advance(
     pool: &SqlitePool,
     id: &str,
+    expected_due_date: &str,
     last_expense_id: &str,
+    next_due_date: &str,
+) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    advance_in(
+        &mut conn,
+        id,
+        expected_due_date,
+        Some(last_expense_id),
+        next_due_date,
+    )
+    .await
+}
+
+/// [`advance`] innerhalb einer laufenden Transaktion. `last_expense_id = None`
+/// rückt ohne Beleg vor (übersprungener Termin, z. B. im abgeschlossenen
+/// Geschäftsjahr) und lässt den letzten Beleg stehen.
+pub async fn advance_in(
+    conn: &mut SqliteConnection,
+    id: &str,
+    expected_due_date: &str,
+    last_expense_id: Option<&str>,
     next_due_date: &str,
 ) -> Result<()> {
     let res = sqlx::query(
         "UPDATE recurring_subscriptions SET
-            last_executed_at = datetime('now','utc'),
-            last_expense_id = ?,
-            next_due_date = ?
-         WHERE id = ?",
+            last_executed_at = CASE WHEN ?1 IS NULL THEN last_executed_at
+                                    ELSE datetime('now','utc') END,
+            last_expense_id = COALESCE(?1, last_expense_id),
+            next_due_date = ?2
+         WHERE id = ?3 AND next_due_date = ?4",
     )
     .bind(last_expense_id)
     .bind(next_due_date)
     .bind(id)
-    .execute(pool)
+    .bind(expected_due_date)
+    .execute(conn)
     .await?;
     if res.rows_affected() == 0 {
-        return Err(Error::Domain(format!("advance: Abo {id} nicht gefunden")));
+        return Err(Error::Domain(format!(
+            "advance: Abo {id} nicht gefunden oder bereits über {expected_due_date} hinaus vorgerückt"
+        )));
     }
     Ok(())
 }

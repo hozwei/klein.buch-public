@@ -8,7 +8,7 @@ use crate::app_ctx::AppCtx;
 use crate::db::repo::{app_settings, euer as euer_repo};
 use crate::error::Result;
 use crate::euer::aggregate::aggregate;
-use crate::fiscal_year::{lock, transition};
+use crate::fiscal_year::{lock, snapshot, transition};
 use chrono::Datelike;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -28,6 +28,12 @@ pub struct FiscalYearStatus {
     pub closable: bool,
     /// Anzahl aktiver Anlagen ohne gebuchte AfA für dieses Jahr (Warnhinweis).
     pub afa_pending: i64,
+    /// Offene Entwürfe des Jahres (Lauf F): Warnhinweis vor dem Abschluss —
+    /// sie blockieren ihn nicht, lassen sich danach aber nur noch verwerfen.
+    pub open_drafts: lock::OpenDrafts,
+    /// Nur abgeschlossene Jahre: stimmen die heute gerechneten Eckwerte mit
+    /// dem Festschreibungs-Snapshot überein (KB-0031)? `None` = offenes Jahr.
+    pub snapshot_matches: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,7 +57,7 @@ pub async fn fiscal_year_overview(
     let pool = ctx.pool()?;
 
     let pool = &pool;
-    let current = crate::clock::today_berlin().year() as i64;
+    let current = ctx.clock().today_berlin().year() as i64;
     let auto = app_settings::get_bool(pool, "depreciation_auto_year_close", true).await?;
 
     let inputs = euer_repo::load_inputs(pool).await?;
@@ -72,6 +78,8 @@ pub async fn fiscal_year_overview(
     let mut out = Vec::new();
     for year in years.into_iter().rev() {
         let lock_row = closed.iter().find(|l| l.fiscal_year == year);
+        let snapshot_matches =
+            lock_row.map(|l| snapshot::compare(l, &aggregate(year as i32, &inputs)).matches);
         let (income, expense, afa, surplus, is_closed, closed_at) = match lock_row {
             Some(l) => (
                 l.income_total_cents,
@@ -94,6 +102,7 @@ pub async fn fiscal_year_overview(
             }
         };
         let afa_pending = euer_repo::afa_pending_count(pool, year as i32).await?;
+        let open_drafts = lock::open_drafts(pool, year).await?;
         out.push(FiscalYearStatus {
             fiscal_year: year,
             closed: is_closed,
@@ -104,6 +113,8 @@ pub async fn fiscal_year_overview(
             surplus_cents: surplus,
             closable: !is_closed && year < current,
             afa_pending,
+            open_drafts,
+            snapshot_matches,
         });
     }
 
@@ -132,8 +143,8 @@ pub async fn fiscal_year_close(
     let session = &ctx.session;
 
     let paths = ctx.paths.clone();
-    let today = crate::clock::today_berlin();
-    lock::close_year(&pool, &paths, session, year, today).await
+    let now = ctx.clock().now_utc();
+    lock::close_year(&pool, &paths, session, year, now).await
 }
 
 /// Argumente von [`fiscal_year_closed_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -148,20 +159,6 @@ pub async fn fiscal_year_closed_list(
     let pool = ctx.pool()?;
 
     lock::list_closed(&pool).await
-}
-
-/// Argumente von [`fiscal_year_auto_close_get`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FiscalYearAutoCloseGetArgs {}
-
-pub async fn fiscal_year_auto_close_get(
-    ctx: &Arc<AppCtx>,
-    _args: FiscalYearAutoCloseGetArgs,
-) -> Result<bool> {
-    let pool = ctx.pool()?;
-
-    app_settings::get_bool(&pool, "depreciation_auto_year_close", true).await
 }
 
 /// Argumente von [`fiscal_year_auto_close_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

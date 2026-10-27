@@ -4,10 +4,12 @@
 //! (Vorlage, Paket, Broschüre, Angebots-Bundle) entstehen in
 //! `<data>/tmp/downloads/<uuid>/<Dateiname>`; der Kern gibt ein
 //! [`DownloadTicket`] zurück, der Browser holt die Datei über
-//! `GET /files/download/{id}`. Exporte sind einmalig abrufbar und verfallen
-//! nach [`EXPORT_TTL`], Vorschauen sind mehrfach abrufbar (PDF-Ansicht lädt
+//! `GET /files/download/{id}`. Exporte sind einmalig abrufbar (die Datei wird
+//! mit dem ersten Abruf gelöscht) und verfallen nach [`EXPORT_TTL`] (10 min),
+//! Vorschauen sind mehrfach abrufbar (PDF-Ansicht lädt
 //! nach) und verfallen nach [`PREVIEW_TTL`]. Abgelaufene werden bei jedem
-//! Registrieren und Abrufen gelöscht, Reste beim Start (`<data>/tmp`).
+//! Registrieren und Abrufen gelöscht, Reste beim Serverstart
+//! und durch den stündlichen Sweeper (`<data>/tmp`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,8 +21,16 @@ use uuid::Uuid;
 
 use crate::error::{Error, Result};
 
-pub const EXPORT_TTL: Duration = Duration::from_secs(3600);
+/// Lauf F4b (W14-014): Klartext-Exporte liegen höchstens 10 min auf dem
+/// persistenten Volume (`<data>/tmp`, mit in Snapshots von `/data`); der erste
+/// Abruf entnimmt sie und löscht die Datei, sobald der Stream endet — auch bei
+/// Abbruch (dann den Export neu erzeugen).
+pub const EXPORT_TTL: Duration = Duration::from_secs(600);
 pub const PREVIEW_TTL: Duration = Duration::from_secs(600);
+/// Nicht registrierte Download-Ordner (Kern schreibt noch bzw. Vorgang
+/// abgebrochen) erst nach dieser Zeit löschen: ein großer Export (Migration,
+/// DSGVO) kann länger als [`EXPORT_TTL`] brauchen, bis er registriert ist.
+pub const ORPHAN_TTL: Duration = Duration::from_secs(3600);
 const DIR: &str = "downloads";
 
 /// Was der Kern dem Browser zurückgibt.
@@ -48,6 +58,10 @@ pub struct DownloadEntry {
     pub file_name: String,
     pub mime: &'static str,
     pub kind: DownloadKind,
+    /// `false`: Die Datei liegt außerhalb des Download-Ordners und gehört ihm
+    /// nicht (Backup in einem Verzeichnis-Ziel, [`DownloadStore::register_borrowed`],
+    /// Lauf F3c) — Abruf, Ablauf und Sperren entfernen nur den Eintrag.
+    pub owned: bool,
     expires: Instant,
 }
 
@@ -113,6 +127,25 @@ impl DownloadStore {
 
     /// Registriert die geschriebene Datei.
     pub fn register(&self, id: Uuid, path: &Path, kind: DownloadKind) -> Result<DownloadTicket> {
+        self.insert(id, path, kind, true)
+    }
+
+    /// Registriert eine vorhandene Datei außerhalb des Download-Ordners, ohne
+    /// sie zu kopieren (Backup in einem Verzeichnis-Ziel auf einem anderen
+    /// Dateisystem, Lauf F3c): kein zusätzlicher Platz unter `<data>/tmp`.
+    /// Abruf, Ablauf und Sperren entfernen nur den Eintrag, nie die Datei.
+    pub fn register_borrowed(&self, path: &Path, kind: DownloadKind) -> Result<DownloadTicket> {
+        self.sweep();
+        self.insert(Uuid::new_v4(), path, kind, false)
+    }
+
+    fn insert(
+        &self,
+        id: Uuid,
+        path: &Path,
+        kind: DownloadKind,
+        owned: bool,
+    ) -> Result<DownloadTicket> {
         let meta = std::fs::metadata(path)?;
         let file_name = path
             .file_name()
@@ -127,6 +160,7 @@ impl DownloadStore {
             mime: mime_for(&file_name),
             file_name: file_name.clone(),
             kind,
+            owned,
             expires: Instant::now() + ttl,
         };
         self.lock().insert(id, entry);
@@ -170,7 +204,7 @@ impl DownloadStore {
     }
 
     /// Entfernt abgelaufene Einträge samt Dateien, dazu nicht registrierte
-    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`EXPORT_TTL`] sind.
+    /// Verzeichnisse (abgebrochene Vorgänge), die älter als [`ORPHAN_TTL`] sind.
     pub fn sweep(&self) {
         let now = Instant::now();
         let (expired, known): (Vec<PathBuf>, Vec<String>) = {
@@ -180,9 +214,10 @@ impl DownloadStore {
                 .filter(|(_, e)| e.expires <= now)
                 .map(|(id, _)| *id)
                 .collect();
+            // Nur eigene Dateien löschen (nie ein geliehenes Backup, Lauf F3c).
             let expired = gone
                 .iter()
-                .filter_map(|id| map.remove(id).map(|e| e.path))
+                .filter_map(|id| map.remove(id).filter(|e| e.owned).map(|e| e.path))
                 .collect();
             (
                 expired,
@@ -202,14 +237,15 @@ impl DownloadStore {
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age > EXPORT_TTL);
+                .is_some_and(|age| age > ORPHAN_TTL);
             if old && !known.contains(&name) {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
     }
 
-    /// Alle Einträge und Dateien löschen (beim Sperren der Datenbank).
+    /// Alle Einträge und die Dateien im Download-Ordner löschen (beim Sperren
+    /// der Datenbank); geliehene Dateien bleiben.
     pub fn clear(&self) {
         self.lock().clear();
         if let Ok(entries) = std::fs::read_dir(&self.root) {
@@ -258,6 +294,82 @@ mod tests {
         assert!(store.take("kein-uuid").is_none());
     }
 
+    /// Lauf F3c: Ein geliehenes Backup (Verzeichnis-Ziel auf einem anderen
+    /// Dateisystem) wird ohne Kopie registriert; Abruf, Ablauf und Sperren
+    /// entfernen nur den Eintrag, nie die Datei oder ihren Ordner.
+    #[test]
+    fn borrowed_file_is_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DownloadStore::new(dir.path());
+        let target = dir.path().join("ziel");
+        std::fs::create_dir_all(&target).unwrap();
+        let file = target.join("klein-buch-20261025-120000000-abcd1234.kbk");
+        std::fs::write(&file, b"KBK").unwrap();
+
+        let ticket = store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        assert_eq!(ticket.size_bytes, 3);
+        assert_eq!(
+            ticket.file_name,
+            "klein-buch-20261025-120000000-abcd1234.kbk"
+        );
+        let entry = store.take(&ticket.download_id).unwrap();
+        assert!(!entry.owned);
+        assert_eq!(entry.path, file);
+        assert!(store.take(&ticket.download_id).is_none(), "einmalig");
+        let root = dir.path().join("tmp").join("downloads");
+        assert!(
+            !root.exists() || std::fs::read_dir(&root).unwrap().next().is_none(),
+            "keine Kopie im Download-Ordner"
+        );
+
+        // Ablauf: Eintrag weg, Datei bleibt.
+        let again = store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        {
+            let id = Uuid::parse_str(&again.download_id).unwrap();
+            let mut map = store.lock();
+            map.get_mut(&id).unwrap().expires =
+                Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        }
+        store.sweep();
+        assert!(store.is_empty());
+        assert!(file.is_file(), "Ablauf löscht das Backup nicht");
+
+        // Sperren der Datenbank: ebenso.
+        store
+            .register_borrowed(&file, DownloadKind::Export)
+            .unwrap();
+        store.clear();
+        assert!(store.is_empty());
+        assert!(file.is_file(), "Sperren löscht das Backup nicht");
+    }
+
+    /// W14-014 (Lauf F4b): Exporte verfallen nach 10 min; ein Ordner, in den
+    /// ein Kern noch schreibt (nicht registriert), bleibt bis [`ORPHAN_TTL`].
+    #[test]
+    fn exports_expire_after_ten_minutes_unregistered_dirs_survive() {
+        assert_eq!(EXPORT_TTL, Duration::from_secs(600));
+        assert!(ORPHAN_TTL > EXPORT_TTL);
+        let dir = tempfile::tempdir().unwrap();
+        let store = DownloadStore::new(dir.path());
+        let (_, writing) = store.prepare("migration.zip").unwrap();
+        std::fs::write(&writing, b"PK").unwrap();
+        let ticket = store
+            .put_bytes("EÜR.csv", b"a;b", DownloadKind::Export)
+            .unwrap();
+        {
+            let id = Uuid::parse_str(&ticket.download_id).unwrap();
+            let mut map = store.lock();
+            map.get_mut(&id).unwrap().expires =
+                Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        }
+        store.sweep();
+        assert!(store.take(&ticket.download_id).is_none(), "abgelaufen");
+        assert!(writing.is_file(), "Ordner im Schreiben bleibt");
+    }
     #[test]
     fn file_names_are_cleaned() {
         assert_eq!(safe_file_name("a\"b\r\n.pdf", "x"), "ab.pdf");

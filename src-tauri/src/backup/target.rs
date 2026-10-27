@@ -160,7 +160,7 @@ pub async fn save_targets(pool: &SqlitePool, targets: &[TargetEntry]) -> Result<
         "backup.targets.set",
         "backup",
         "targets",
-        Some(&serde_json::json!({ "targets": summary }).to_string()),
+        Some(serde_json::json!({ "targets": summary })),
     )
     .await?;
     Ok(())
@@ -190,9 +190,25 @@ pub async fn store_results(
     set_setting(pool, RESULTS_KEY, &serde_json::to_string(&all)?).await
 }
 
-/// Status der Off-Site-Sicherung (Plan W7): `missing` (kein Ziel), `failing`
-/// (ein Ziel scheiterte beim letzten Lauf) oder `ok`.
-pub async fn offsite_status(pool: &SqlitePool, root: &Path) -> Result<&'static str> {
+/// Höchstalter einer Off-Site-Kopie in Tagen, bevor der Status `stale` lautet
+/// (Standard; die Regel `backup_overdue` kann es über `max_age_days` ändern).
+pub const OFFSITE_MAX_AGE_DAYS: i64 = 7;
+
+/// Status der Off-Site-Sicherung (Plan W7, Lauf F3a W7-OFFSITE-STALE):
+///
+/// - `missing`: kein Ziel eingerichtet;
+/// - `failing`: ein Ziel scheiterte beim letzten Lauf;
+/// - `stale`: kein Ziel scheiterte, aber mindestens eines hat noch keine
+///   erfolgreiche Kopie oder seine letzte ist älter als `max_age_days` der
+///   Regel `backup_overdue` (Standard [`OFFSITE_MAX_AGE_DAYS`], Berliner
+///   Kalendertage wie die Regel) — etwa während einer Pause nach einem
+///   Restore (Spiegelung ausgesetzt) oder wenn keine Backups mehr laufen;
+/// - `ok`.
+pub async fn offsite_status(
+    pool: &SqlitePool,
+    root: &Path,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<&'static str> {
     let targets = list_targets(pool, root).await?;
     if targets.is_empty() {
         return Ok("missing");
@@ -201,7 +217,85 @@ pub async fn offsite_status(pool: &SqlitePool, root: &Path) -> Result<&'static s
     let failing = targets
         .iter()
         .any(|t| results.get(&t.id).is_some_and(|r| !r.ok));
-    Ok(if failing { "failing" } else { "ok" })
+    if failing {
+        return Ok("failing");
+    }
+    let max_age = crate::notify::rules::get(pool, "rule_backup_overdue")
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.config_i64("max_age_days", OFFSITE_MAX_AGE_DAYS))
+        .unwrap_or(OFFSITE_MAX_AGE_DAYS);
+    let today = crate::clock::berlin_date(now);
+    let stale = targets.iter().any(|t| match results.get(&t.id) {
+        None => true,
+        Some(r) => match chrono::DateTime::parse_from_rfc3339(&r.at) {
+            Ok(at) => {
+                let day = at.with_timezone(&chrono_tz::Europe::Berlin).date_naive();
+                (today - day).num_days() > max_age
+            }
+            // Unlesbarer Zeitpunkt: keine Aussage über das Alter.
+            Err(_) => false,
+        },
+    });
+    Ok(if stale { "stale" } else { "ok" })
+}
+
+/// Zeitpunkt der jüngsten erfolgreichen Kopie auf einem Ziel (RFC 3339,
+/// Europe/Berlin; Lauf 2026.11 U4): das letzte Ergebnis, wenn es erfolgreich
+/// war, sonst der jüngste erfolgreiche Eintrag im Backup-Protokoll mit Art,
+/// Bezeichnung **und Ort** des Ziels. `None` = noch keine Kopie bekannt.
+///
+/// U7 (R2-03): Bezeichnungen sind frei wählbar und nicht eindeutig (Standard:
+/// Ordner bzw. Host). Ohne den Ort übernähme ein Ziel die Kopien eines entfernten
+/// oder eines zweiten Ziels mit derselben Bezeichnung (etwa SFTP auf demselben
+/// Host mit anderem Remote-Ordner).
+pub async fn last_copy_at(
+    pool: &SqlitePool,
+    entry: &TargetEntry,
+    last: Option<&TargetResult>,
+) -> Result<Option<String>> {
+    if let Some(r) = last.filter(|r| r.ok) {
+        return Ok(Some(r.at.clone()));
+    }
+    let (kind, label) = log_meta(entry);
+    let location = log_location(&entry.target);
+    let newest: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(created_at) FROM backup_log
+          WHERE status = 'ok' AND target_kind = ?1 AND target_label = ?2
+            AND substr(full_path, -length(?3 || file_name)) = ?3 || file_name",
+    )
+    .bind(kind)
+    .bind(label)
+    .bind(location)
+    .fetch_one(pool)
+    .await?;
+    Ok(newest
+        .as_deref()
+        .and_then(crate::clock::db_utc_to_berlin)
+        .map(|t| t.to_rfc3339()))
+}
+
+/// Stand der Off-Site-Sicherung (Lauf 2026.11 U4): der älteste der je Ziel
+/// jüngsten Kopie-Zeitpunkte ([`last_copy_at`]) und sein Alter in Berliner
+/// Kalendertagen (0 = heute; gerechnet wie der Status `stale`). `None`, wenn
+/// kein Ziel eingerichtet ist oder ein Ziel noch keine (lesbare) Kopie hat.
+pub fn oldest_copy(
+    copies: &[Option<String>],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(String, i64)> {
+    let mut oldest: Option<(chrono::DateTime<chrono::FixedOffset>, &String)> = None;
+    for copy in copies {
+        let text = copy.as_ref()?;
+        let at = chrono::DateTime::parse_from_rfc3339(text).ok()?;
+        if oldest.is_none_or(|(o, _)| at < o) {
+            oldest = Some((at, text));
+        }
+    }
+    let (at, text) = oldest?;
+    let day = at.with_timezone(&chrono_tz::Europe::Berlin).date_naive();
+    let age = (crate::clock::berlin_date(now) - day).num_days().max(0);
+    Some((text.clone(), age))
 }
 
 pub fn kind_of(target: &BackupTarget) -> &'static str {
@@ -349,12 +443,29 @@ pub async fn write_backup(
     file_name: &str,
     bytes: &[u8],
 ) -> Result<String> {
+    write_backup_shared(
+        target,
+        password,
+        file_name,
+        std::sync::Arc::new(bytes.to_vec()),
+    )
+    .await
+}
+
+/// Wie [`write_backup`], mit geteiltem Puffer (Lauf F3a): Floor und jedes
+/// Ziel schreiben dieselbe Datei, ohne sie je Ziel zu kopieren.
+pub async fn write_backup_shared(
+    target: &BackupTarget,
+    password: Option<&str>,
+    file_name: &str,
+    bytes: std::sync::Arc<Vec<u8>>,
+) -> Result<String> {
     match target {
         BackupTarget::Directory { path } => {
             // blockierende Datei-I/O außerhalb der Runtime (hängende Mounts)
             let dir = PathBuf::from(path);
             let full = dir.join(file_name);
-            let data = bytes.to_vec();
+            let data = bytes;
             let target = full.clone();
             tokio::task::spawn_blocking(move || -> Result<()> {
                 std::fs::create_dir_all(&dir)?;
@@ -379,7 +490,7 @@ pub async fn write_backup(
                 remote_dir,
                 host_fingerprint.as_deref(),
                 file_name,
-                bytes,
+                &bytes,
             )
             .await
         }
@@ -394,6 +505,23 @@ pub async fn write_backup(
 /// Off-Site-Ziels (der Floor wird als `("local", None)` protokolliert).
 pub fn log_meta(entry: &TargetEntry) -> (&'static str, Option<String>) {
     (kind_of(&entry.target), Some(entry.label.clone()))
+}
+
+/// Ort eines Ziels, wie ihn `full_path` einer erfolgreichen Kopie im
+/// Backup-Protokoll unmittelbar vor dem Dateinamen trägt (U7, R2-03): bei
+/// Verzeichnissen das Ende `/<Ordner>/` (davor steht die aufgelöste Wurzel), bei
+/// SFTP die URI bis zum Dateinamen wie in [`super::sftp::upload`].
+fn log_location(target: &BackupTarget) -> String {
+    match target {
+        BackupTarget::Directory { path } => format!("/{}/", path.trim().trim_matches('/')),
+        BackupTarget::Sftp {
+            host,
+            port,
+            user,
+            remote_dir,
+            ..
+        } => super::sftp::sftp_uri(user, host, *port, &super::sftp::remote_join(remote_dir, "")),
+    }
 }
 
 /// Beste-Wissen-`full_path`-Beschreibung für die **Fehler**-Zeile, wenn
@@ -467,8 +595,14 @@ mod tests {
     async fn targets_roundtrip_and_status() {
         let pool = settings_pool().await;
         let root = Path::new("/backup-targets");
+        let now = chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 10, 20, 10, 0, 0).unwrap();
+        let status = |pool: SqlitePool| async move {
+            offsite_status(&pool, Path::new("/backup-targets"), now)
+                .await
+                .unwrap()
+        };
         assert!(list_targets(&pool, root).await.unwrap().is_empty());
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "missing");
+        assert_eq!(status(pool.clone()).await, "missing");
         let targets = vec![
             TargetEntry {
                 id: "a".into(),
@@ -488,24 +622,44 @@ mod tests {
         let json = get_setting(&pool, TARGETS_KEY).await.unwrap().unwrap();
         assert!(json.contains(r#""kind":"directory""#) && json.contains(r#""id":"a""#));
         assert!(!json.contains("password"));
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "ok");
-        let r = |ok| TargetResult {
+        // W7-OFFSITE-STALE: Ziele ohne erfolgreiche Kopie sind „veraltet“.
+        assert_eq!(status(pool.clone()).await, "stale");
+        let r = |ok, at: &str| TargetResult {
             ok,
-            at: "t".into(),
+            at: at.into(),
             error: (!ok).then(|| "weg".into()),
         };
+        let recent = "2026-10-19T02:30:00+02:00";
         store_results(
             &pool,
             &targets,
-            &[("a".into(), r(true)), ("b".into(), r(false))],
+            &[
+                ("a".into(), r(true, recent)),
+                ("b".into(), r(false, recent)),
+            ],
         )
         .await
         .unwrap();
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "failing");
+        assert_eq!(status(pool.clone()).await, "failing");
         // Ziel b entfernt → sein Ergebnis fällt heraus
         save_targets(&pool, &targets[..1]).await.unwrap();
         store_results(&pool, &targets[..1], &[]).await.unwrap();
-        assert_eq!(offsite_status(&pool, root).await.unwrap(), "ok");
+        assert_eq!(status(pool.clone()).await, "ok");
+        // Letzte Kopie vor 7 Kalendertagen: noch ok; vor 8: veraltet.
+        let at_days = |s: &str| [("a".to_string(), r(true, s))];
+        store_results(&pool, &targets[..1], &at_days("2026-10-13T23:59:00+02:00"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "ok");
+        store_results(&pool, &targets[..1], &at_days("2026-10-12T23:59:00+02:00"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "stale");
+        // Unlesbarer Zeitpunkt: keine Aussage über das Alter.
+        store_results(&pool, &targets[..1], &at_days("t"))
+            .await
+            .unwrap();
+        assert_eq!(status(pool.clone()).await, "ok");
         assert!(
             save_targets(&pool, &vec![targets[0].clone(); MAX_TARGETS + 1])
                 .await
@@ -612,6 +766,31 @@ mod tests {
         assert_eq!(log_meta(&e), ("sftp", Some("Server".into())));
     }
 
+    /// U7 (R2-03): Der Ort passt genau auf den `full_path` erfolgreicher Kopien.
+    #[test]
+    fn log_location_is_the_path_before_the_file_name() {
+        let dir = BackupTarget::Directory {
+            path: "nas/kb/".into(),
+        };
+        assert_eq!(log_location(&dir), "/nas/kb/");
+        for remote_dir in ["klein-buch", "/srv/kb/", "", "."] {
+            let target = BackupTarget::Sftp {
+                host: "backup.example.org".into(),
+                port: 2222,
+                user: "kb".into(),
+                remote_dir: remote_dir.into(),
+                host_fingerprint: None,
+            };
+            let uploaded = crate::backup::sftp::sftp_uri(
+                "kb",
+                "backup.example.org",
+                2222,
+                &crate::backup::sftp::remote_join(remote_dir, "a.kbk"),
+            );
+            assert_eq!(format!("{}a.kbk", log_location(&target)), uploaded);
+        }
+    }
+
     #[test]
     fn log_failed_path_builds_directory_path_and_sftp_uri() {
         let dir = BackupTarget::Directory {
@@ -638,5 +817,28 @@ mod tests {
             host_fingerprint: None,
         };
         assert_eq!(log_failed_path(&sftp_root, "f.kbk"), "sftp://u@h:22/f.kbk");
+    }
+
+    // Lauf 2026.11 U4 (Warteliste 13): Stand der Off-Site-Sicherung = älteste der
+    // je Ziel jüngsten Kopien, Alter in Berliner Kalendertagen.
+    #[test]
+    fn oldest_copy_takes_weakest_target_in_berlin_days() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap();
+        let now = crate::clock::berlin_to_utc(day, 0, 30);
+        let fresh = Some("2026-06-10T00:10:00+02:00".to_string());
+        // Am Vortag kurz nach Mitternacht (Berliner Zeit) → 1 Tag.
+        let older = Some("2026-06-09T00:30:00+02:00".to_string());
+        assert_eq!(
+            oldest_copy(&[fresh.clone(), older], now),
+            Some(("2026-06-09T00:30:00+02:00".to_string(), 1))
+        );
+        assert_eq!(
+            oldest_copy(std::slice::from_ref(&fresh), now),
+            Some(("2026-06-10T00:10:00+02:00".to_string(), 0))
+        );
+        // Ein Ziel ohne Kopie, kein Ziel oder unlesbare Zeit → keine Aussage.
+        assert_eq!(oldest_copy(&[fresh.clone(), None], now), None);
+        assert_eq!(oldest_copy(&[], now), None);
+        assert_eq!(oldest_copy(&[Some("gestern".into())], now), None);
     }
 }

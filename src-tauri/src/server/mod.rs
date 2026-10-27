@@ -33,6 +33,8 @@ pub mod jobs;
 pub mod legal;
 pub mod limits;
 pub mod logging;
+pub mod passphrase_policy;
+pub mod pending;
 pub mod policy;
 pub mod ratelimit;
 pub mod session;
@@ -48,22 +50,28 @@ use std::sync::Arc;
 use axum::routing::{any, get, post};
 use axum::{middleware, Json, Router};
 
-use crate::app_ctx::{AppCtx, NoDesktop};
+use crate::app_ctx::AppCtx;
 use crate::config::Paths;
 use crate::error::{Error, Result};
 use state::ServerState;
 
-/// Kennung der Anwendung (früher Tauri-Identifier), für die Info-Anzeige.
+/// Kennung der Anwendung (aus der Desktop-Fassung übernommen), für die Info-Anzeige.
 pub const APP_IDENTIFIER: &str = "de.wildbach.kleinbuch";
 
 /// Router mit allen Routen und Middleware (Plan W5/W6).
 ///
 /// Öffentlich (ohne Sitzung) sind genau `GET /api/auth/status`,
-/// `POST /api/auth/setup`, `POST /api/auth/login`, `GET /api/public/info`,
+/// `POST /api/auth/setup`, `POST /api/auth/login`, `POST /api/auth/login/poll`
+/// (nur mit Ticket-Cookie, W14-037), `GET /api/public/info`,
 /// `GET /healthz`, `GET /legal/…` (W12) und die SPA-Assets (Plan §3).
 /// `/api/public/info` und `/legal/` zählen zusätzlich Anfragen je Client
 /// ([`ratelimit::public_limit`]).
 pub fn router(state: Arc<ServerState>) -> Router {
+    layered(routes(&state), state)
+}
+
+/// Alle Routen ohne den gemeinsamen Middleware-Stapel ([`layered`]).
+fn routes(state: &Arc<ServerState>) -> Router<Arc<ServerState>> {
     // Öffentliche Lese-Routen zählen Anfragen je Client (W12).
     let public_limit = middleware::from_fn_with_state(state.clone(), ratelimit::public_limit);
     let info = get(public_info).route_layer(public_limit.clone());
@@ -74,10 +82,16 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/auth/status", get(auth::status))
         .route("/auth/setup", post(auth::setup))
         .route("/auth/login", post(auth::login))
+        .route("/auth/login/poll", post(auth::login_poll))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/lock", post(auth::lock))
         .route("/auth/reauth", post(auth::reauth))
         .route("/auth/security", get(auth::security))
+        .route("/auth/sessions", get(auth::sessions))
+        .route(
+            "/auth/sessions/others/revoke",
+            post(auth::revoke_other_sessions),
+        )
         .route("/auth/totp/renew", post(auth::totp_renew))
         .route("/auth/recovery/renew", post(auth::recovery_renew))
         .route("/auth/passphrase", post(auth::change_passphrase))
@@ -114,9 +128,22 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/legal/", legal_index)
         .route("/legal/{*file}", legal_file)
         .fallback_service(headers::spa_service(&state.ctx.paths.web_dir))
+}
+
+/// Middleware-Stapel um `routes` (von innen nach außen): globale Grenze,
+/// Panik-Abfang (ASVS 7.4.3, Lauf F4b), Host-/Origin-Policy, Sicherheits-
+/// Header, Zugriffsprotokoll. Der Panik-Abfang sitzt innerhalb von Policy,
+/// Headern und Protokoll, damit auch die 500 nach einer Panik HSTS, CSP,
+/// nosniff und eine Protokollzeile bekommt. Öffentlich für Tests (Route, die
+/// panict).
+pub fn layered(routes: Router<Arc<ServerState>>, state: Arc<ServerState>) -> Router {
+    routes
         .layer(middleware::from_fn_with_state(
             state.clone(),
             limits::global_limit,
+        ))
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            panic_response,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -128,6 +155,15 @@ pub fn router(state: Arc<ServerState>) -> Router {
         ))
         .layer(middleware::from_fn(logging::access_log))
         .with_state(state)
+}
+
+/// Antwort nach einer Panik in Handler oder Middleware (ASVS 7.4.3, Lauf
+/// F4b): 500 im `ApiError`-Format mit `ref`, ERROR-Log nur mit der Referenz —
+/// ohne Panik-Text und ohne Anfrage-Inhalt. Die Verbindung bleibt nutzbar.
+pub fn panic_response(_panic: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    axum::response::IntoResponse::into_response(errors::ApiError::internal(
+        &"Panik bei der Bearbeitung einer Anfrage",
+    ))
 }
 
 async fn head_not_allowed() -> axum::http::StatusCode {
@@ -220,42 +256,80 @@ fn run_server() -> ExitCode {
 async fn serve_main() -> Result<()> {
     let cfg = config::ServerConfig::from_env()?;
     let paths = Paths::from_env()?;
-    let ctx = Arc::new(AppCtx::new(
-        paths,
-        Arc::new(crate::notify::InboxOnly),
-        Arc::new(NoDesktop),
-        APP_IDENTIFIER,
-    ));
+    let ctx = Arc::new(AppCtx::new(paths, APP_IDENTIFIER));
     let state = prepare(ctx, &cfg)?;
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
         .map_err(|e| Error::Config(format!("Port {} nicht verfügbar: {e}", cfg.listen)))?;
     tracing::info!("Klein.Buch lauscht auf {}", cfg.listen);
 
-    // Abgelaufene Downloads und Uploads unabhängig von Anfragen löschen
-    // (Plan W7: „nach 1 h gelöscht“, Gegenprüfung).
+    // R3-014 (Lauf F4b): Sidecar im Hintergrund prüfen — Log und Inbox-Hinweis
+    // beim nächsten Entsperren, kein Abbruch.
+    let health_ctx = state.ctx.clone();
+    tokio::spawn(async move {
+        crate::einvoice::sidecar_health::startup_check(&health_ctx).await;
+    });
+
+    // Minütlich: abgelaufene Downloads und Uploads löschen (Plan W7: „nach 1 h
+    // gelöscht“). Stündlich: alte Reste in data/tmp und abgebrochene
+    // Backup-Teildateien (D-13). Alle 6 h im gesperrten Zustand ein Hinweis im
+    // Log (D-19). Gesperrt nach dem Start: sofort.
+    log_if_locked(&state);
     let sweeper = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut minutes: u64 = 0;
         loop {
             tokio::select! {
                 _ = tick.tick() => {
                     sweeper.ctx.downloads.sweep();
                     sweeper.ctx.uploads.sweep();
+                    if minutes > 0 && minutes.is_multiple_of(60) {
+                        let paths = sweeper.ctx.paths.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            startup::sweep_tmp(&paths.data_dir, startup::TMP_MAX_AGE);
+                            startup::sweep_partial_backups(&paths.backups_dir, startup::TMP_MAX_AGE);
+                        })
+                        .await;
+                    }
+                    if minutes > 0 && minutes.is_multiple_of(LOCKED_LOG_EVERY_MINUTES) {
+                        log_if_locked(&sweeper);
+                    }
+                    minutes += 1;
                 }
                 _ = sweeper.shutdown.cancelled() => break,
             }
         }
     });
 
+    // Signal → geordnet herunterfahren. Der Scheduler erhält die
+    // Abbruch-Anforderung sofort (auch beim Neustart nach einem Restore),
+    // nicht erst nach dem Abwarten der Verbindungen (W14-025b).
     let token = state.shutdown.clone();
     tokio::spawn(async move {
         wait_for_signal().await;
         tracing::info!("Signal empfangen — fahre geordnet herunter");
         token.cancel();
     });
+    let stopper = state.clone();
+    tokio::spawn(async move {
+        stopper.shutdown.cancelled().await;
+        crate::scheduler::tick::request_stop(&stopper.ctx);
+    });
 
-    http::serve(listener, router(state.clone()), state.shutdown.clone()).await?;
+    // Lauf F4d: Grenze je Gegenstelle; vertraute Proxys bündeln alle Clients
+    // und zählen nur gegen die globale Grenze.
+    let limits = http::ConnectionLimits {
+        unlimited_peers: state.policy.trusted_proxies.clone(),
+        ..Default::default()
+    };
+    http::serve_with(
+        listener,
+        router(state.clone()),
+        state.shutdown.clone(),
+        limits,
+    )
+    .await?;
     state.finish_shutdown().await;
     Ok(())
 }
@@ -293,6 +367,19 @@ pub fn prepare(ctx: Arc<AppCtx>, cfg: &config::ServerConfig) -> Result<Arc<Serve
         state.ensure_setup_token();
     }
     Ok(state)
+}
+
+/// Abstand des Log-Hinweises „Instanz gesperrt“ (D-19).
+const LOCKED_LOG_EVERY_MINUTES: u64 = 6 * 60;
+
+/// Gesperrter Zustand sichtbar im Container-Log (D-19, E3: nach einem Neustart
+/// läuft nichts, bis im Browser entsperrt wird).
+fn log_if_locked(state: &ServerState) {
+    if state.instance_state() == state::InstanceState::Locked {
+        tracing::info!(
+            "Instanz gesperrt — Backups, Abo-Läufe und Prüfungen ruhen bis zur Anmeldung im Browser"
+        );
+    }
 }
 
 async fn wait_for_signal() {

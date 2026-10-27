@@ -150,6 +150,11 @@ export interface PdfTemplateMeta {
   path: string;
   klauselStatus: PdfTemplateKlauselStatus;
   builtin: boolean;
+  /** Stellt die Vorlage Stornos dar (nutzt `storno_of`; Lauf 2026.11 U4). */
+  supportsStorno: boolean;
+  /** Ohne Storno-Darstellung: eingebaute Vorlage, mit der Stornos entstehen
+   *  (z. B. "klassisch"); sonst null. */
+  stornoFallback: string | null;
 }
 
 export interface Paragraph19Info {
@@ -211,10 +216,15 @@ export interface Invoice {
   buyerCountryCode: string | null;
   buyerVatId: string | null;
   buyerEmail: string | null;
+  /** Bezahlt-/Zahlungshinweis (reiner PDF-Text, Migration 0018). */
+  paymentNote: string | null;
   // Ursprungsangebot bei Konvertierung (Block 7, Migration 0005).
   derivedFromQuoteId: Uuid | null;
   // Zahlungs-Eingangs-Konto (Migration 0007, Block 9). Additiv.
   paidToAccountId: Uuid | null;
+  /** Verworfener Entwurf (Migration 0032): Zeitpunkt (UTC) und Grund; die Nummer bleibt verbraucht. */
+  voidedAt: Iso8601 | null;
+  voidReason: string | null;
 }
 
 export interface InvoiceItem {
@@ -254,6 +264,8 @@ export interface InvoiceListItem {
   currencyCode: string;
   status: InvoiceStatus;
   isStornoFor: Uuid | null;
+  /** Verworfener Entwurf (Migration 0032). */
+  voidedAt: Iso8601 | null;
 }
 
 export interface InvoiceListFilter {
@@ -332,6 +344,8 @@ export interface RecordPaymentArgs {
   amountCents: Cents;
   paidDate: string;
   note: string | null;
+  /** Zahlungskonto des Eingangs (DATEV-Geldkonto, R2-011). */
+  accountId?: Uuid | null;
 }
 
 // ---- Mail (Block 5) --------------------------------------------------------
@@ -340,7 +354,7 @@ export interface RecordPaymentArgs {
 export interface MailAccount {
   id: Uuid;
   label: string;
-  authType: string;          // "smtp_password" | "oauth_microsoft" (Block 16)
+  authType: string;          // "smtp_password"; "oauth_microsoft" nur bei übernommenen Desktop-Konten
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -351,7 +365,7 @@ export interface MailAccount {
   isDefault: number;         // 0|1
   lastUsedAt: Iso8601 | null;
   createdAt: Iso8601;
-  // OAuth (Block 16) — nicht-geheime Metadaten.
+  // OAuth (Migration 0014) — Bestandsdaten der Desktop-Fassung, nur gelesen.
   oauthTenantId: string | null;
   oauthClientId: string | null;
   oauthAccountEmail: string | null;
@@ -361,7 +375,7 @@ export interface MailAccount {
 
 export interface MailAccountInput {
   label: string;
-  authType: string;          // "smtp_password" | "oauth_microsoft"
+  authType: string;          // im Server nur "smtp_password" (E9)
   smtpHost: string | null;
   smtpPort: number | null;
   smtpUser: string | null;
@@ -369,18 +383,6 @@ export interface MailAccountInput {
   fromEmail: string;
   fromName: string;
   isDefault: boolean;
-  // OAuth (Block 16): nutzer-eigene Azure-App. Kein Secret.
-  oauthTenantId: string | null;
-  oauthClientId: string | null;
-}
-
-/** OAuth-Verbindungsstatus eines Microsoft-Kontos (Block 16). */
-export interface OauthStatus {
-  accountId: Uuid;
-  connected: boolean;
-  accountEmail: string | null;
-  scopes: string | null;
-  tokenExpiresAt: Iso8601 | null;
 }
 
 /** Ein Eintrag im E-Mail-Versandprotokoll (Block 16b). Korrespondiert zu `EmailLogRow`. */
@@ -437,6 +439,8 @@ export interface SendResult {
   to: string;
   subject: string;
   attachmentCount: number;
+  /** Versandprotokoll unvollständig (R4-S2-EMAILLOG). */
+  warning?: string | null;
 }
 
 export interface RenderedMail {
@@ -547,6 +551,10 @@ export interface QuoteListItem {
   grossAmountCents: Cents;
   currencyCode: string;
   status: QuoteStatus;
+  /** Festgeschrieben am (DB-Zeitstempel UTC); null = nie festgeschrieben.
+   *  `status === "canceled"` ohne `lockedAt` = verworfener Entwurf, mit
+   *  `lockedAt` = zurückgezogenes Angebot (Lauf 2026.11 U4). */
+  lockedAt: Iso8601 | null;
 }
 
 export interface QuoteListFilter {
@@ -698,6 +706,7 @@ export interface SendPackageCatalogResult {
   subject: string;
   packageCount: number;
   attachmentCount: number;
+  warning?: string | null;
 }
 
 // ---- Rechtsdokumente / Legal Documents (Block 8) ---------------------------
@@ -746,6 +755,7 @@ export interface SendQuoteResult {
   to: string;
   subject: string;
   attachmentCount: number;
+  warning?: string | null;
 }
 
 // ---- Payment Accounts (Block 9) --------------------------------------------
@@ -949,6 +959,14 @@ export interface ParsedEInvoice {
   grossAmountCents: Cents | null;
   lineDescriptions: string[];
   reverseCharge: boolean;
+  /** Steuerkategorien laut Rechnung (UNTDID 5305, z. B. "S", "E", "AE", "K"),
+   *  je einmal in der Reihenfolge des Auftretens (Lauf 2026.11 U4). */
+  taxCategories: string[];
+  /** Mindestens eine Kategorie K (innergemeinschaftlich, §1a UStG) — nur ein
+   *  Kennzeichen für den Hinweis, Beträge bleiben unberührt (U4). */
+  intraCommunity: boolean;
+  /** CII-Profil-URN (BT-24); null bei UBL. */
+  guidelineId: string | null;
 }
 
 /** Ergebnis von expenses_parse_einvoice (Schritt 1, nichts persistiert). */
@@ -1071,8 +1089,24 @@ export interface RecurringSubscription {
 /** Korrespondiert zu `ProcessReport` (scheduler::recurring) in Rust. */
 export interface RecurringProcessReport {
   skippedLocked: boolean;
+  /** Grund einer Pause der automatischen Belegerzeugung (Lauf F), sonst null. */
+  skippedHold?: string | null;
   processedSubscriptions: number;
   createdExpenses: number;
+  failedSubscriptions?: number;
+  /** Abos mit Rückstand über der Grenze — warten auf „Rückstand …“. */
+  awaitingDecision?: number;
+}
+
+/** Wahl bei verpassten Terminen (Fortsetzen nach Pause, Rückstand). */
+export type ResumeMode = "catchUp" | "skip";
+
+/** Pause der automatischen Belegerzeugung (Uhrsprung, Restore; ADR 0040). */
+export interface SchedulerHoldStatus {
+  held: boolean;
+  reason: string | null;
+  since: string | null;
+  message: string | null;
 }
 
 // ---- Wiederkehrende Ausgangsrechnungen / Abo-Rechnungen (Block RI) ----------
@@ -1146,8 +1180,12 @@ export interface RecurringInvoiceInputDto {
 /** Korrespondiert zu `ProcessReport` (scheduler::recurring_invoice) in Rust. */
 export interface RecurringInvoiceProcessReport {
   skippedLocked: boolean;
+  skippedHold?: string | null;
   processedTemplates: number;
   createdInvoices: number;
+  failedTemplates?: number;
+  awaitingDecision?: number;
+  resumed?: number;
 }
 
 // ---- Anlagen / Assets + AfA (Block 12) -------------------------------------
@@ -1250,6 +1288,33 @@ export interface AssetDisposeArgs {
   proceedsCents: Cents;
 }
 
+/** Vorschau eines Abgangs (`commands::assets::AssetDisposalPreview`, Lauf 2026.11 U4):
+ *  was `assets_dispose` zum Datum buchen würde. Gewinn bzw. Verlust =
+ *  Erlös − `residualBookValueCents`. */
+export interface AssetDisposalPreview {
+  assetId: Uuid;
+  disposalDate: string; // YYYY-MM-DD
+  /** Aktueller Restbuchwert (Stand vor dem Abgang). */
+  currentBookValueCents: Cents;
+  /** Offene AfA ab dem Abgangsjahr, die der Abgang ersetzt. */
+  replacedDepreciationCents: Cents;
+  replacedYears: number[];
+  /** AfA der Vorjahre ohne Buchung, die der Abgang nachholt. */
+  catchUpDepreciationCents: Cents;
+  catchUpYears: number[];
+  /** Restbuchwert zu Beginn des Abgangsjahres. */
+  bookValueBeforeCents: Cents;
+  /** Anteilige AfA im Abgangsjahr bis einschließlich Abgangsmonat. */
+  disposalYearDepreciationCents: Cents;
+  disposalYearMonths: number;
+  /** Restbuchwert zum Abgang (Ausgabe in der EÜR). */
+  residualBookValueCents: Cents;
+  /** AfA insgesamt von der Anschaffung bis zum Abgang. */
+  depreciationToDateCents: Cents;
+  /** Grund, aus dem der Abgang zu diesem Datum abgelehnt würde; null = möglich. */
+  blockedReason: string | null;
+}
+
 /** Korrespondiert zu `afa_tabellen::AfaCategory` in Rust. */
 export interface AfaCategory {
   code: string;
@@ -1273,6 +1338,24 @@ export interface MethodSuggestion {
   usefulLifeYears: number | null;
   afaCategory: string | null;
   reason: string;
+}
+
+/** Korrespondiert zu `commands::assets::AssetSourceDefaults` (Lauf F8). */
+export interface AssetSourceDefaults {
+  /** Belegdatum der Quell-Kosten (YYYY-MM-DD). */
+  acquisitionDate: string;
+  /** Brutto bei §19, netto bei Regelbesteuerung (§ 9b Abs. 1 EStG; Status bei Leistungsbezug = Belegdatum, Lauf F8d). */
+  acquisitionCostCents: number;
+  /** Betrag ohne Umsatzsteuer — Grundlage der GWG-Grenze. */
+  gwgBasisCents: number;
+  isKleinunternehmer: boolean;
+  /** Kosten mit §13b-Schalter (Lauf F8c): bei §19 die selbst geschuldete Steuer als eigene Kosten + Anlage. */
+  reverseCharge13b: boolean;
+}
+
+/** Korrespondiert zu `commands::assets::AssetSuggestion` (Lauf F8). */
+export interface AssetSuggestion extends MethodSuggestion {
+  source: AssetSourceDefaults | null;
 }
 
 /** Korrespondiert zu `accrue_yearly::AccrueReport` in Rust. */
@@ -1310,14 +1393,21 @@ export interface EuerReport {
   disposalGainLossCents: Cents;
   // Ergebnis
   surplusCents: Cents;
+  /** §19 im Jahr aktiv (period-aware wie die Exporte); false = Regelbesteuerung
+   *  (Verzicht ab diesem Jahr). Lauf 2026.11 U4. */
+  isKleinunternehmer: boolean;
+  /** Abgleich mit dem Festschreibungs-Snapshot; null = Jahr offen (U4). */
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- ELSTER-Ausfüllhilfe / Anlage EÜR (Block 14a) --------------------------
 
 /** Eine Zeile der ELSTER-Ausfüllhilfe (`euer::elster_csv::ElsterLine`). */
 export interface ElsterLine {
-  /** Offizielle Zeilennummer der Anlage EÜR; 0 = reine Kontrollsumme. */
+  /** Zeilennummer im amtlichen Vordruck des Jahres (siehe `formYear`). */
   zeile: number;
+  /** Amtliche Kennzahl (Kz), über die Jahre gleich. */
+  kennzahl: number | null;
   bezeichnung: string;
   amountCents: Cents;
   /** true = im ELSTER-Formular einzutragen; false = ELSTER berechnet selbst. */
@@ -1328,10 +1418,16 @@ export interface ElsterLine {
 export interface ElsterForm {
   fiscalYear: number;
   isKleinunternehmer: boolean;
+  /** Jahr des Vordrucks, dem die Zeilennummern folgen. */
+  formYear: number;
+  /** true = Zeilennummern am Vordruck genau dieses Jahres geprüft. */
+  layoutVerified: boolean;
   lines: ElsterLine[];
   incomeTotalCents: Cents;
   expenseTotalCents: Cents;
   surplusCents: Cents;
+  /** Hinweise der Ausfüllhilfe (Vordruck, Regelbesteuerung, Storno-Überhang). */
+  notes: string[];
 }
 
 /** Download-Ticket (Plan W7, `downloads::DownloadTicket`): die Datei liegt kurz
@@ -1347,6 +1443,7 @@ export interface ElsterExportResult {
   download: DownloadTicket;
   lineCount: number;
   entryCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- Einzelaufstellung + Anlageverzeichnis (Block 14a) ---------------------
@@ -1376,6 +1473,8 @@ export interface EuerExpenseItem {
   category: string; // ExpenseCategory-Code → Label via expenseCategoryLabel()
   description: string;
   grossCents: Cents;
+  /** §19-Status bei Leistungsbezug (Jahr des Belegdatums, Lauf F8d). */
+  isKleinunternehmer: boolean;
 }
 
 /** Eine Anlagen-Veräußerung (`euer::detail::DisposalItem`). */
@@ -1405,6 +1504,29 @@ export interface AveeurItem {
   disposalProceedsCents: Cents | null;
 }
 
+/** EÜR-Eckwerte in Cent (`fiscal_year::snapshot::Figures`). */
+export interface SnapshotFigures {
+  incomeCents: Cents;
+  expenseCents: Cents;
+  afaCents: Cents;
+  surplusCents: Cents;
+}
+
+/**
+ * Abgleich eines abgeschlossenen Jahres mit dem Festschreibungs-Snapshot
+ * (`fiscal_year::snapshot::SnapshotCheck`, Lauf F, KB-0031).
+ */
+export interface SnapshotCheck {
+  fiscalYear: number;
+  closedAt: Iso8601;
+  closedWithVersion: string;
+  snapshot: SnapshotFigures;
+  live: SnapshotFigures;
+  matches: boolean;
+  /** `income` | `expenses` | `afa` | `surplus` */
+  differences: string[];
+}
+
 /** Komplettes EÜR-Paket eines GJ (`commands::euer::EuerPackage`). */
 export interface EuerPackage {
   form: ElsterForm;
@@ -1413,6 +1535,8 @@ export interface EuerPackage {
   expenses: EuerExpenseItem[];
   disposals: EuerDisposalItem[];
   assets: AveeurItem[];
+  /** Nur abgeschlossene Jahre (Lauf F). */
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Ergebnis des Einzelaufstellung-ZIP-Exports (`commands::euer::EuerDetailExport`). */
@@ -1421,6 +1545,7 @@ export interface EuerDetailExport {
   incomeCount: number;
   expenseCount: number;
   assetCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Offene AfA-Buchungen eines GJ (`commands::euer::AfaPending`). */
@@ -1433,18 +1558,28 @@ export interface AfaPending {
 export interface EuerPdfExport {
   download: DownloadTicket;
   sizeBytes: number;
+  snapshotCheck: SnapshotCheck | null;
+}
+
+/** Optionale Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer
+ *  1001–9999999, Mandantennummer 1–99999 (Lauf F5, Durchreichen U4). */
+export interface DatevHeaderNumbers {
+  consultantNumber?: number | null;
+  clientNumber?: number | null;
 }
 
 /** Ergebnis des DATEV-Buchungsstapel-Exports (`commands::euer::DatevExport`). */
 export interface DatevExport {
   download: DownloadTicket;
   bookingCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 /** Ergebnis des Steuerberater-Paket-Exports (`commands::euer::StbExport`). */
 export interface StbExport {
   download: DownloadTicket;
   fileCount: number;
+  snapshotCheck: SnapshotCheck | null;
 }
 
 // ---- Block 15: Notifications / Hinweise ------------------------------------
@@ -1474,7 +1609,7 @@ export interface NotificationRule {
   enabled: number; // 0|1
   configJson: string;
   deliverInApp: number; // 0|1
-  deliverOsNative: number; // 0|1
+  deliverOsNative: number; // 0|1 — Spalte der Desktop-Fassung, ohne Wirkung (Lauf F)
   createdAt: Iso8601;
 }
 
@@ -1491,6 +1626,16 @@ export interface FiscalYearStatus {
   surplusCents: Cents;
   closable: boolean;
   afaPending: number;
+  /** Offene Entwürfe des Jahres (Lauf F): Warnhinweis vor dem Abschluss. */
+  openDrafts: OpenDrafts;
+  /** Nur abgeschlossene Jahre: Snapshot und Live-Rechnung stimmen überein. */
+  snapshotMatches: boolean | null;
+}
+
+/** Offene Entwürfe eines Jahres (`fiscal_year::lock::OpenDrafts`). */
+export interface OpenDrafts {
+  invoices: number;
+  quotes: number;
 }
 
 /** Offene Forderung (Carry-over, `fiscal_year::transition::OpenReceivable`). */
@@ -1524,6 +1669,8 @@ export interface FiscalYearLock {
   appVersion: string;
   schemaVersion: number;
   notes: string | null;
+  /** Nur in der Antwort des Abschlusses (Lauf F). */
+  openDrafts?: OpenDrafts;
 }
 
 // ---- Block 15: System / Audit-Trail / Integrity ----------------------------
@@ -1560,6 +1707,12 @@ export interface IntegrityCheckRow {
   filesPassed: number;
   filesFailed: number;
   failedArchiveIdsJson: string | null;
+  /** Teilmenge von filesFailed: fehlende Dateien; null = Lauf vor Migration 0032. */
+  filesMissing: number | null;
+  /** Vorhanden, aber nicht lesbar (kein Manipulationsbefund); null = vor 0032. */
+  filesUnreadable: number | null;
+  missingArchiveIdsJson: string | null;
+  unreadableArchiveIdsJson: string | null;
 }
 
 /** Statische App-Metadaten für den „Über"-Dialog (`commands::system::AppInfo`). */

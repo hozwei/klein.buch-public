@@ -9,7 +9,7 @@
 //! - **R4-006** Migration-Export läuft als TX-Snapshot durch (Smoke: erfolgreicher
 //!   End-to-End-Lauf mit allen Tabellen + Archive + Manifest).
 //! - **R4-007** Scheduler-Recurring-Invoice-Notice landet in der Inbox via
-//!   `notify::store::create` (keine OS-Push via `os_native::push`).
+//!   `notify::store::create` (Inbox, kein Kanal außerhalb).
 
 use klein_buch_lib::backup::restore::{apply_pending, recover_pending_rollback, RESTORE_MARKER};
 use klein_buch_lib::config::Paths;
@@ -213,7 +213,7 @@ async fn r4_004_005_export_clean_when_hash_matches() {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(body);
-    let real_hash = format!("{:x}", h.finalize());
+    let real_hash: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
     sqlx::query(
         "INSERT INTO archive_entries
             (id, file_path, file_name, file_hash_sha256, file_size_bytes, mime_type, source)

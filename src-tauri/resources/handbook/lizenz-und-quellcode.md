@@ -101,8 +101,15 @@ Im Image liegen dieselben Dateien zusätzlich unter
 Veröffentlichung als eigenes Archiv
 `klein-buch-<Version>-quellen-dritter.tar.zst` auf der Release-Seite
 des öffentlichen Projekts unter
-`https://github.com/hozwei/klein.buch-public/releases`.
+`https://github.com/hozwei/klein.buch-public/releases`. Jedes Image
+nennt die Adresse seines Archivs im Label `de.klein-buch.source-archive`;
+das Archiv ist veröffentlicht, bevor das Image erscheint, und bleibt
+verfügbar, solange es das Image gibt.
+
+Gibst Du das Image selbst weiter, etwa auf einem Datenträger oder fertig
+eingerichtet auf einem Gerät, reicht der Verweis auf die Release-Seite
+nicht: Dann gehört das Quellarchiv mit dazu.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*

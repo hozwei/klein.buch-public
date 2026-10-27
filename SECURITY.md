@@ -40,7 +40,7 @@ Version, nie durch Ändern eines bestehenden Tags: Images tragen nur volle
 Versionen, es gibt kein `:latest`, und Tags werden nie verschoben oder gelöscht
 (ADR 0039, E15). Aktualisiert wird in der eigenen Container-Verwaltung;
 `docs/operations-guide.md` §8 beschreibt Update und Rückfall. Die App kann neue
-Versionen in der Inbox melden (opt-in unter Einstellungen → Sicherheit &
+Versionen als Hinweis melden (opt-in unter Einstellungen → Sicherheit &
 Anmeldung).
 
 ## Image prüfen
@@ -52,7 +52,7 @@ cosign ohne Schlüssel (keyless, OIDC-Identität des Workflows) signiert.
 ### Signatur
 
 ```sh
-cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 `<v>` ist die Version ohne führendes `v`, z. B. das Tag aus dem Release. Die
@@ -97,7 +97,21 @@ und Werkzeuge per SHA-256 festgelegt. Einzelheiten:
 
 Eine Instanz dient genau einem Nutzer und darf aus dem Internet erreichbar sein.
 Anmeldung mit Passphrase und TOTP, die Datenbank ist mit SQLCipher verschlüsselt,
-Backups zusätzlich mit Argon2id und AES-256-GCM. Bedrohungsmodell und
+Backups zusätzlich mit Argon2id und AES-256-GCM. Neue Passphrasen werden gegen
+eine eingebettete Sperrliste und einfache Muster geprüft; nach 100
+Fehlversuchen in Folge ist die Anmeldung mit TOTP von unbekannten Geräten
+gesperrt, bis eine Anmeldung mit Einmal-Code oder von einem bekannten Gerät
+gelingt. Sensible Aktionen (u. a. Exporte, Zahlungsdaten, Restore) verlangen
+eine frische Bestätigung; angemeldete Sitzungen lassen sich einsehen und
+abmelden. Exporte liegen im Klartext höchstens zehn Minuten auf dem Server und
+verschwinden mit dem ersten Abruf. Der Server begrenzt offene Verbindungen und
+trennt Gegenstellen, die nicht mehr lesen; die API nimmt Inhalte nur als JSON an.
+Das Log schreibt jedes Ereignis als genau eine Zeile (keine gefälschten Zeilen
+über Eingaben), nennt Kunden-Mailadressen nur auf DEBUG und protokolliert je
+Aufruf Client-IP, Aufruf-Kennung (gleich der `ref` interner Fehler) und eine
+gekürzte Sitzungskennung. Den Stand gegenüber OWASP ASVS 4.0.3 Level 2 und die bewusst
+getroffenen Abweichungen nennt `docs/architecture/security.md` §11.
+Bedrohungsmodell und
 Gegenmaßnahmen: `docs/architecture/security.md` und
 `docs/adr/0039-web-docker-betrieb.md`. Was der Betreiber beitragen muss
 (Reverse-Proxy mit TLS, `KLEIN_BUCH_TRUSTED_PROXIES`, Volumes, Off-Site-Backup,

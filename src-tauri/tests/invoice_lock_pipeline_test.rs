@@ -31,7 +31,7 @@ const TEMPLATE_TEST: &str = r#"// §19-KLAUSEL-BLOCK: REQUIRED
 // Minimal-Template für Integration-Tests. Echte Production-Template
 // liegt unter inputs/pdf-templates/default.typ.
 #set page(paper: "a4")
-#let data = json.decode(sys.inputs.at("data-json"))
+#let data = json(bytes(sys.inputs.at("data-json")))
 = Rechnung #data.invoice.number
 Empfänger: #data.buyer.name \
 #data.invoice.gross_amount
@@ -77,7 +77,7 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
     seller_profile::upsert(
         &pool,
         &seller_profile::SellerProfileInput {
-            name: "Wildbach Computerhilfe".into(),
+            name: "Beispiel IT-Service".into(),
             legal_form: None,
             street: "Beispielweg 1".into(),
             postal_code: "84028".into(),
@@ -85,7 +85,7 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
             country_code: "DE".into(),
             tax_number: Some("123/456/78901".into()),
             vat_id: None,
-            email: "schmidm@wildbach-computerhilfe.de".into(),
+            email: "inhaber@example.org".into(),
             phone: Some("+49 000 000000".into()),
             iban: None,
             bic: None,
@@ -131,7 +131,7 @@ async fn create_test_contact(pool: &SqlitePool) -> String {
             postal_code: "80331".into(),
             city: "München".into(),
             country_code: "DE".into(),
-            email: Some("info@kunde.de".into()),
+            email: Some("info@kunde.example.org".into()),
             phone: None,
             iban: None,
             bic: None,
@@ -410,7 +410,7 @@ async fn paragraph_19_violation_blocks_lock() {
         .unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("Paragraph19VatViolation") || msg.contains("Validation failed"),
+        msg.contains("Die Rechnung kann nicht ausgestellt werden: ") && msg.contains("§19 UStG"),
         "erwarte §19-Block, got: {msg}"
     );
 
@@ -454,7 +454,9 @@ async fn storno_creates_new_invoice_and_marks_original() {
     // Storno-Datum: heute (Europe/Berlin) — sonst löst validate_for_issue
     // einen `InvoiceDateInFuture`-Fehler aus, wenn der Test vor dem
     // hardgecodeten 2026-05-25 ausgeführt wird.
-    let today = chrono::Local::now().date_naive();
+    let today = klein_buch_lib::clock::today_berlin();
+    // Lauf E: Geschäftsjahr und Nummernkreis folgen dem Storno-Datum.
+    let storno_fy = klein_buch_lib::domain::storno::storno_fiscal_year(&today);
     let storno_input = build_storno_input(
         &original_view,
         detail.invoice.id.clone(),
@@ -467,11 +469,11 @@ async fn storno_creates_new_invoice_and_marks_original() {
     let storno_number = klein_buch_lib::db::numbering::next_number(
         &env.pool,
         klein_buch_lib::domain::numbering::DocType::StornoInvoice,
-        2026,
+        storno_fy,
     )
     .await
     .unwrap();
-    assert!(storno_number.starts_with("ST-2026-"));
+    assert!(storno_number.starts_with(&format!("ST-{storno_fy}-")));
 
     let snapshot = invoices::SellerSnapshot {
         name: &seller.name,
@@ -496,7 +498,7 @@ async fn storno_creates_new_invoice_and_marks_original() {
     };
     let payload = invoices::DraftCreatePayload {
         contact_id: contact_id.clone(),
-        fiscal_year: 2026,
+        fiscal_year: i64::from(storno_fy),
         is_kleinunternehmer: true,
         input: storno_input,
         derived_from_quote_id: None,
@@ -511,12 +513,21 @@ async fn storno_creates_new_invoice_and_marks_original() {
     )
     .await
     .unwrap();
-    inv_cmd::run_lock_pipeline(&env.pool, &env.paths, &storno_draft.id, "N/A")
-        .await
-        .unwrap();
-    invoices::mark_canceled(&env.pool, &id, &storno_draft.id, Some("Test-Storno"))
-        .await
-        .unwrap();
+    // Storno-Paar: Lock des Storno-Belegs und Cancel des Originals in einer
+    // Transaktion (R1-003; das frühere `mark_canceled` ist entfernt,
+    // R1-S2-MARKCANCELED).
+    inv_cmd::run_lock_pipeline_with_pair(
+        &env.pool,
+        &env.paths,
+        &storno_draft.id,
+        "N/A",
+        inv_cmd::LockCancelPair {
+            original_id: &id,
+            reason: Some("Test-Storno"),
+        },
+    )
+    .await
+    .unwrap();
 
     // Verifikation
     let original = invoices::get(&env.pool, &id).await.unwrap().unwrap();

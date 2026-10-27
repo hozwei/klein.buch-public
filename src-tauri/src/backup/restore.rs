@@ -1,15 +1,20 @@
 //! Restore-Wizard (Block 4) — verify-then-apply, zweiphasig.
 //!
-//! Warum zweiphasig? Während die App läuft, hält der sqlx-Pool die SQLite-Datei
-//! (inkl. WAL) offen. Unter Windows lässt sich eine geöffnete DB-Datei nicht
-//! zuverlässig ersetzen. Daher:
+//! Warum zweiphasig? Während der Server läuft, hält der sqlx-Pool die
+//! SQLite-Datei (inkl. WAL) offen; ein Tausch der Datei unter einer offenen
+//! Verbindung ist nicht sicher. Daher:
 //!
-//! 1. **Phase A — [`apply`]** (App läuft): Pre-Restore-Backup erstellen,
+//! 1. **Phase A — [`apply`]** (Server läuft, Änderungen gesperrt):
 //!    Backup-Datei entschlüsseln + Hash verifizieren, Inhalt in ein
-//!    Staging-Verzeichnis entpacken, eine **Marker-Datei** schreiben und einen
-//!    Neustart anfordern.
-//! 2. **Phase B — [`apply_pending`]** (App-Start, **vor** dem Öffnen des Pools):
-//!    Staging-DB über die echte DB legen, Archive ersetzen, Marker löschen.
+//!    Staging-Verzeichnis entpacken, danach (Inhalt freigegeben, Lauf F3c) das
+//!    Pre-Restore-Backup erstellen, die Nummernkreise der laufenden DB
+//!    festhalten (D-24), eine **Marker-Datei** schreiben und einen Neustart
+//!    anfordern.
+//! 2. **Phase B — [`apply_pending`]** (Serverstart, **vor** dem Öffnen des
+//!    Pools): Staging-DB über die echte DB legen, Archive ersetzen, Marker
+//!    löschen. Das erste Entsperren danach (`db::run_migrations`) schreibt den
+//!    Audit, setzt die Pause der automatischen Abläufe (W14-023), hebt die
+//!    Nummernkreise an und gleicht die Backup-Historie ab (D-22).
 //!
 //! Die Marker-Datei liegt im Dateisystem (nicht in der DB!), weil die DB selbst
 //! ausgetauscht wird.
@@ -27,7 +32,6 @@ use crate::backup::{create_now, encrypt, manifest, snapshot, BackupSession};
 use crate::config::Paths;
 use crate::db::schema_version::{EXPECTED_SCHEMA_VERSION, MIN_RESTORE_SCHEMA_VERSION};
 use crate::error::{Error, Result};
-use chrono::Utc;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::fs;
@@ -96,23 +100,45 @@ pub fn preview(file_path: &Path) -> Result<RestorePreview> {
 
 /// Entschlüsselt + verifiziert ein Backup-File mit der gegebenen Passphrase.
 /// Liefert (Manifest, Content-ZIP-Bytes). Schlägt fehl bei falscher Passphrase
-/// (GCM-Auth) oder bei Content-Hash-Mismatch (Manipulation).
+/// (GCM-Auth), ab Format 3 bei verändertem Klartext-Kopf (AAD) oder bei
+/// Content-Hash-Mismatch (Manipulation). Kopiert die Datei einmal — für große
+/// Dateien [`decrypt_backup_owned`].
 pub fn decrypt_backup(
     file_bytes: &[u8],
     passphrase: &str,
 ) -> Result<(manifest::Manifest, Vec<u8>)> {
-    let (m, ct) = manifest::unframe(file_bytes)?;
+    decrypt_backup_owned(file_bytes.to_vec(), passphrase)
+}
+
+/// Wie [`decrypt_backup`], aber **in place** (W7-RESTORE-RAM, Lauf F3a): Der
+/// Puffer der gelesenen Datei wird zum Content-ZIP, ohne Kopie des Ciphertexts
+/// und ohne zweiten Puffer für den Klartext — Speicherbedarf etwa einmal die
+/// Backup-Größe statt dreimal. Format 1/2 ohne AAD, ab Format 3 ist die AAD
+/// der Klartext-Kopf (`bytes[..offset]`, W14-020).
+pub fn decrypt_backup_owned(
+    mut file_bytes: Vec<u8>,
+    passphrase: &str,
+) -> Result<(manifest::Manifest, Vec<u8>)> {
+    let (m, offset) = manifest::parse_header(&file_bytes)?;
+    manifest::ensure_supported_format(m.format_version)?;
     let salt = manifest::from_hex(&m.salt_hex)?;
     let nonce = encrypt::nonce_array(&manifest::from_hex(&m.nonce_hex)?)?;
-    let key = encrypt::derive_key(passphrase.as_bytes(), &salt)?;
-    let content = encrypt::decrypt(&key, &nonce, &ct)?;
-    let actual = snapshot::sha256_hex(&content);
+    let key = zeroize::Zeroizing::new(encrypt::derive_key(passphrase.as_bytes(), &salt)?);
+    let aad = if manifest::binds_header(m.format_version) {
+        file_bytes[..offset].to_vec()
+    } else {
+        Vec::new()
+    };
+    // Kopf abschneiden: verschiebt den Inhalt im selben Puffer (keine Kopie).
+    file_bytes.drain(..offset);
+    encrypt::decrypt_in_place(&key, &nonce, &aad, &mut file_bytes)?;
+    let actual = snapshot::sha256_hex(&file_bytes);
     if actual != m.content_sha256 {
         return Err(Error::Backup(
             "Content-Hash stimmt nicht — Backup beschädigt".into(),
         ));
     }
-    Ok((m, content))
+    Ok((m, file_bytes))
 }
 
 /// Grenzen für Phase A (Plan W7): Gesamtgröße beim Entpacken und freier Platz.
@@ -141,12 +167,14 @@ pub fn is_wrong_passphrase(err: &Error) -> bool {
 }
 
 /// Phase A (Plan W7): Manifest und Format prüfen → Schema `30 ≤ s ≤ EXPECTED`
-/// → entschlüsseln (Passphrase-Prüfung vor jedem Schreiben) →
-/// Pre-Restore-Backup mit der aktuellen Passphrase → Platz prüfen → gehärtet
-/// ins Staging entpacken → gestagte DB mit der Backup-Passphrase öffnen und
-/// ihre Schema-Version gegen das Manifest prüfen → Audit → Marker. Scheitert
-/// ein Schritt nach dem Anlegen des Stagings, wird es gelöscht. `label`
-/// beschreibt die Quelle ohne Serverpfad (Audit, Marker, Bericht).
+/// → entschlüsseln (Passphrase-Prüfung vor jedem Schreiben) → Audit
+/// `backup.restore.requested` → Platz prüfen → gehärtet ins Staging entpacken
+/// und die gestagte DB mit der Backup-Passphrase prüfen (der entschlüsselte
+/// Inhalt ist danach freigegeben, Lauf F3c) → Pre-Restore-Backup mit der
+/// aktuellen Passphrase → Platz erneut prüfen → Nummernkreise festhalten →
+/// Marker. Scheitert ein Schritt nach dem Anlegen des Stagings, wird es
+/// gelöscht. `label` beschreibt die Quelle ohne Serverpfad (Audit, Marker,
+/// Bericht).
 pub async fn apply(
     pool: &SqlitePool,
     paths: &Paths,
@@ -157,7 +185,7 @@ pub async fn apply(
     limits: RestoreLimits,
 ) -> Result<RestoreReport> {
     let current = session.get().ok_or_else(|| {
-        Error::Backup("Vor dem Restore bitte die App entsperren (aktuelle Passphrase).".into())
+        Error::Backup("Vor dem Restore bitte die Instanz entsperren (aktuelle Passphrase).".into())
     })?;
     // Ein schon vorgemerkter Restore würde sonst sein Staging verlieren
     // (Gegenprüfung W7).
@@ -176,10 +204,11 @@ pub async fn apply(
     // Entschlüsseln + Content-Hash prüfen — vor dem Pre-Restore-Backup, damit
     // eine falsche Passphrase nichts schreibt. Argon2id/AES außerhalb der
     // Runtime, KDF begrenzt (Plan W2.6).
+    // In place (W7-RESTORE-RAM): der Dateipuffer wird zum Content-ZIP.
     let content_zip = {
         let pass = zeroize::Zeroizing::new(passphrase.to_string());
         crate::limits::run_blocking(&crate::limits::KDF, move || {
-            decrypt_backup(&file_bytes, &pass).map(|(_m, content)| content)
+            decrypt_backup_owned(file_bytes, &pass).map(|(_m, content)| content)
         })
         .await?
     };
@@ -192,35 +221,31 @@ pub async fn apply(
         "backup.restore.requested",
         "backup",
         "restore",
-        Some(
-            &serde_json::json!({
-                "source": label,
-                "schema": header.schema_version,
-                "format": header.format_version,
-            })
-            .to_string(),
-        ),
+        Some(serde_json::json!({
+            "source": label,
+            "schema": header.schema_version,
+            "format": header.format_version,
+        })),
     )
     .await?;
 
-    // Pre-Restore-Backup (Pflicht) mit der aktuellen Session-Passphrase.
-    let pre = create_now(pool, paths, &current, "pre_restore").await?;
-
     // Platz: entpackte Größe laut Verzeichnis ≤ Limit und ≤ (frei − Reserve)/2
     // — der Tausch beim Neustart kopiert das Staging noch einmal
-    // (Gegenprüfung W7).
+    // (Gegenprüfung W7). Nach dem Pre-Restore-Backup folgt eine zweite Prüfung.
     let declared = declared_size(&content_zip)?;
     let free = crate::uploads::free_bytes(&paths.data_dir)?;
     let budget = limits
         .max_bytes
         .min(free.saturating_sub(limits.min_free_bytes) / 2);
     if declared > budget {
-        return Err(Error::Backup(format!(
-            "Backup zu groß für den Restore: {declared} Bytes entpackt, erlaubt {budget} \
-             (KLEIN_BUCH_MAX_RESTORE_BYTES / freier Platz)."
-        )));
+        return Err(too_large(declared, budget));
     }
 
+    // Lauf F3c: erst entpacken (berührt keine Live-Daten; das Staging wird bei
+    // einem Fehler entfernt), dann das Pre-Restore-Backup. Der entschlüsselte
+    // Inhalt ist damit freigegeben, bevor das Pre-Restore-Backup die laufende
+    // Instanz packt und verschlüsselt: Spitze max(Backup, Pre-Restore-Backup)
+    // statt beider zusammen (Speicherbedarf, operations-guide §10).
     let staging = paths.data_dir.join(RESTORE_STAGING);
     reset_dir(&staging)?;
     let staged = stage(
@@ -238,11 +263,87 @@ pub async fn apply(
         return Err(e);
     }
 
+    // Pre-Restore-Backup (Pflicht) mit der aktuellen Session-Passphrase.
+    let pre = match create_now(pool, paths, &current, "pre_restore").await {
+        Ok(pre) => pre,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    // Zweite Platzprüfung: Das Pre-Restore-Backup liegt jetzt im
+    // Datenverzeichnis, der Tausch braucht die entpackte Größe noch einmal.
+    let free_now = match crate::uploads::free_bytes(&paths.data_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    let room = free_now.saturating_sub(limits.min_free_bytes);
+    if declared > room {
+        remove_staging(&staging).await;
+        return Err(too_large(declared, room));
+    }
+
+    // Nummernkreise der laufenden DB (Lauf F, D-24): nach dem Tausch hebt das
+    // erste Entsperren die Zähler der eingespielten DB auf diese Stände an,
+    // falls sie höher sind — bereits vergebene Nummern werden nie erneut
+    // vergeben. Seit der Annahme des Restores sind Änderungen gesperrt; die
+    // Stände bleiben bis zum Tausch gültig.
+    let counters = match crate::db::numbering::snapshot(pool).await {
+        Ok(c) => c,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    // F1d: nächste Termine der Abo-Reihen (bereits abgerechnete Perioden
+    // werden nach dem Restore nicht erneut abgerechnet) und Nummern
+    // festgeschriebener Belege (wiederhergestellte Entwürfe mit diesen Nummern
+    // werden vorgemerkt), siehe `backup::after_restore`.
+    let series = match crate::backup::after_restore::snapshot_series(pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    let locked_numbers = match crate::backup::after_restore::snapshot_locked_numbers(pool).await {
+        Ok(n) => n,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+    // F3b: IDs dieser Belege — gleiche Nummer, anderer Datensatz heißt
+    // „ersetzte DB von einer anderen Instanz“ (Nummernkreis-Hinweis).
+    let locked_ids = match crate::backup::after_restore::snapshot_locked_ids(pool).await {
+        Ok(n) => n,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+
+    // Lauf F8: abgeschlossene Geschäftsjahre der laufenden DB — ein älteres
+    // Backup darf ein inzwischen abgeschlossenes Jahr nicht wieder öffnen
+    // (`fiscal_year::lock::restore_locks_in` beim ersten Entsperren).
+    let fiscal_year_locks = match crate::fiscal_year::lock::list_closed(pool).await {
+        Ok(l) => l,
+        Err(e) => {
+            remove_staging(&staging).await;
+            return Err(e);
+        }
+    };
+
     // Marker vorbereiten (Dateisystem, nicht DB). Er wird erst nach dem
     // Pflicht-Audit an seinen Platz gebracht (Review W2 S1-6): scheitert der
     // Audit, meldet der Restore einen Fehler und wird beim Neustart auch NICHT
     // angewendet.
-    let staged_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let staged_at = crate::clock::now_utc()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
     let marker = paths.data_dir.join(RESTORE_MARKER);
     let marker_tmp = paths.data_dir.join(format!("{RESTORE_MARKER}.tmp"));
     let info = serde_json::json!({
@@ -252,6 +353,12 @@ pub async fn apply(
         "pre_restore_backup": pre.file_name,
         "format_version": header.format_version,
         "schema_version": header.schema_version,
+        "backup_created_at": header.created_at,
+        "counters": counters,
+        "series": series,
+        "locked_numbers": locked_numbers,
+        "locked_ids": locked_ids,
+        "fiscal_year_locks": fiscal_year_locks,
     });
     let written = (|| -> Result<()> {
         use std::io::Write;
@@ -285,6 +392,14 @@ pub async fn apply(
         branding_restored,
         notice: (!branding_restored).then(|| NOTICE_V1_NO_BRANDING.to_string()),
     })
+}
+
+/// Fehler „zu groß für den Restore“ (Limit bzw. freier Platz).
+fn too_large(declared: u64, allowed: u64) -> Error {
+    Error::Backup(format!(
+        "Backup zu groß für den Restore: {declared} Bytes entpackt, erlaubt {allowed} \
+         (KLEIN_BUCH_MAX_RESTORE_BYTES / freier Platz)."
+    ))
 }
 
 /// Schema-Version eines Backups im zulässigen Bereich (E15)?
@@ -354,7 +469,7 @@ async fn remove_staging(staging: &Path) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     tracing::warn!(
-        "Restore-Staging ließ sich nicht vollständig entfernen (wird beim Start aufgeräumt)"
+        "Restore-Staging ließ sich nicht vollständig entfernen (wird beim nächsten Serverstart aufgeräumt)"
     );
 }
 
@@ -417,14 +532,45 @@ async fn stage(
         // wäre die Instanz nach dem Tausch dauerhaft gesperrt.
         crate::server::startup::check_archive_paths(&pool, paths)
             .await
-            .map_err(|_| {
-                Error::Backup(format!(
-                    "Die Archivpfade im Backup passen nicht zu {} (Backup einer Instanz mit \
-                 anderem Datenverzeichnis oder der Desktop-Fassung) — Restore abgebrochen.",
-                    paths.archive_dir.display()
-                ))
+            .map_err(|e| {
+                // W5-ERR-PATHS: Pfade nur ins Log.
+                tracing::warn!("Restore: {e}");
+                Error::Backup(
+                    "Die Archivpfade im Backup passen nicht zum Archivverzeichnis dieser \
+                     Instanz (Backup einer Instanz mit anderem Datenverzeichnis oder der \
+                     Desktop-Fassung) — Restore abgebrochen; Einzelheiten im Server-Log."
+                        .into(),
+                )
             })?;
-        check_migration_checksums(&pool).await
+        check_migration_checksums(&pool).await?;
+        // Lauf F2a: Auch die Prüfungen des Entsperrens (Fremdschlüssel, R1-012)
+        // und die Vorab-Prüfung der Migration 0032 schon hier — sonst bliebe
+        // die Instanz nach dem Tausch gesperrt. F2c: Befunde mit dem Kontext
+        // dieser Prüfung loggen, nicht als „beim Entsperren“.
+        let violations = crate::db::foreign_key_violations(&pool).await?;
+        if !violations.is_empty() {
+            crate::db::log_foreign_key_violations("Restore-Prüfung eines Backups", &violations);
+            tracing::error!(
+                "Restore abgebrochen: {} verletzte(r) Fremdschlüssel in der Datenbank des \
+                 Backups, z. B. {} — die laufende Instanz bleibt unverändert.",
+                violations.len(),
+                violations[0]
+            );
+            return Err(Error::Backup(
+                "Die Datenbank im Backup enthält verwaiste Verweise (Fremdschlüssel; \
+                 Einzelheiten im Server-Log) — Restore abgebrochen."
+                    .into(),
+            ));
+        }
+        if crate::db::duplicate_locked_stornos(&pool).await? > 0 {
+            return Err(Error::Backup(
+                "Die Datenbank im Backup enthält zu mindestens einer Rechnung mehr als einen \
+                 festgeschriebenen Storno-Beleg; diese Version könnte sie nicht entsperren — \
+                 Restore abgebrochen."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
     .await;
     pool.close().await;
@@ -451,8 +597,9 @@ pub async fn warn_missing_templates(
         };
     let referenced: Vec<String> = match sqlx::query_scalar(
         "SELECT default_pdf_template FROM seller_profile
-         UNION SELECT pdf_template FROM invoices WHERE locked_at IS NULL
-         UNION SELECT pdf_template FROM quotes WHERE locked_at IS NULL
+         UNION SELECT pdf_template FROM invoices
+                WHERE locked_at IS NULL AND voided_at IS NULL
+         UNION SELECT pdf_template FROM quotes WHERE locked_at IS NULL AND status = 'draft'
          UNION SELECT pdf_template FROM recurring_invoices WHERE active = 1",
     )
     .fetch_all(pool)
@@ -507,6 +654,27 @@ pub struct AppliedInfo {
     pub pre_restore_backup: String,
     #[serde(default)]
     pub schema_version: Option<i32>,
+    /// Erstellungszeit des eingespielten Backups (Manifest, UTC ISO-8601).
+    #[serde(default)]
+    pub backup_created_at: Option<String>,
+    /// Nummernkreise der ersetzten DB (Lauf F, D-24); leer bei Markern aus
+    /// älteren Versionen und bei einer frisch eingerichteten Instanz.
+    #[serde(default)]
+    pub counters: Vec<crate::db::numbering::CounterState>,
+    /// Nächste Termine der Abo-Reihen der ersetzten DB (F1d); leer bei einer
+    /// frisch eingerichteten Instanz.
+    #[serde(default)]
+    pub series: Vec<crate::backup::after_restore::SeriesState>,
+    /// Nummern der festgeschriebenen Rechnungen, Stornos und Angebote der
+    /// ersetzten DB (F1d).
+    #[serde(default)]
+    pub locked_numbers: Vec<String>,
+    /// IDs derselben Belege (F3b); leer bei Markern vor F3b.
+    #[serde(default)]
+    pub locked_ids: Vec<String>,
+    /// Abschlüsse der ersetzten DB (Lauf F8); leer bei Markern vor F8.
+    #[serde(default)]
+    pub fiscal_year_locks: Vec<crate::fiscal_year::lock::FiscalYearLock>,
 }
 
 /// Datei im `data_dir`: angewendeter Restore, dessen Audit noch aussteht
@@ -548,7 +716,7 @@ const BRANDING_ROLLBACK_DIR: &str = "branding.rollback";
 /// Zustandsdatei des Phase-B-Tauschs (Review W2 S0-2). Sie sagt
 /// [`recover_pending_rollback`] nach einem Abbruch eindeutig, ob die Originale
 /// zurückgeholt oder nur noch aufgeräumt werden müssen — statt das aus der
-/// Existenz von Ordnern abzuleiten (ein beim Start neu angelegtes leeres
+/// Existenz von Ordnern abzuleiten (ein beim Serverstart neu angelegtes leeres
 /// `archive/` sah sonst wie „Tausch fertig“ aus und das echte Archiv in
 /// `archive.rollback` wurde gelöscht).
 pub const RESTORE_SWAP_STATE: &str = "RESTORE_SWAP_STATE.json";
@@ -621,10 +789,14 @@ fn sync_dir(dir: &Path) {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InjectAt {
-    /// Stufe 1 beim n-ten Paar (0 = DB, 1 = Archiv, 2 = Branding).
+    /// Stufe 1 beim n-ten Paar (0 = DB, 1 = Archiv, 2 = Branding, zuletzt WAL).
     Stage1(usize),
     /// Stufe 2 nach dem Kopieren der DB.
     Stage2,
+    /// Stufe 1: Das n-te Original verschwindet zwischen Prüfung und
+    /// `rename` (wie das `-wal`, das SQLite beim Schließen der letzten
+    /// Verbindung nachlaufend löscht) — kein Fehler, sondern „nicht da“.
+    Vanish(usize),
 }
 
 #[cfg(test)]
@@ -649,6 +821,14 @@ fn injected_stage1(index: usize) -> Result<()> {
     injected(InjectAt::Stage1(index))
 }
 #[cfg(not(test))]
+fn injected_vanish(_index: usize, _path: &Path) {}
+#[cfg(test)]
+fn injected_vanish(index: usize, path: &Path) {
+    if INJECT.with(|i| i.get()) == Some(InjectAt::Vanish(index)) {
+        let _ = fs::remove_file(path);
+    }
+}
+#[cfg(not(test))]
 fn injected_stage2() -> Result<()> {
     Ok(())
 }
@@ -657,7 +837,19 @@ fn injected_stage2() -> Result<()> {
     injected(InjectAt::Stage2)
 }
 
-/// Paare (Original, beiseitegelegte Fassung, ist Verzeichnis) des Tauschs.
+/// Suffix des mitgesicherten WAL der beiseitegelegten DB (W7-WAL-SHM): SQLite
+/// findet es so auch neben `klein-buch.sqlite.rollback` (`<db>-wal`).
+const WAL_ROLLBACK_SUFFIX: &str = ".rollback-wal";
+
+/// Paare (Original, beiseitegelegte Fassung, ist Verzeichnis) des Tauschs:
+/// DB, Archiv, ab Format 2 `data/branding` und zuletzt das WAL der DB.
+///
+/// W7-WAL-SHM (Lauf F3a): Das WAL wird mit der DB beiseitegelegt statt
+/// gelöscht. Nach einem harten Abbruch (Container-Kill, Stromausfall) kann es
+/// festgeschriebene, noch nicht in die DB-Datei übernommene Transaktionen
+/// enthalten; ohne es wäre die DB bei einem Rückfall auf die Originale älter
+/// als der letzte Commit. Das `-shm` ist nur ein Index und wird gelöscht
+/// (SQLite baut es aus dem WAL neu auf).
 fn swap_pairs(paths: &Paths, with_branding: bool) -> Vec<(PathBuf, PathBuf, bool)> {
     let mut v = vec![
         (
@@ -678,14 +870,20 @@ fn swap_pairs(paths: &Paths, with_branding: bool) -> Vec<(PathBuf, PathBuf, bool
             true,
         ));
     }
+    v.push((
+        with_suffix(&paths.db_file, "-wal"),
+        with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX),
+        false,
+    ));
     v
 }
 
 fn remove_path(path: &Path, is_dir: bool) -> Result<()> {
     if is_dir {
         clear_dir_force(path)?;
-        if path.exists() {
-            fs::remove_dir(path)?;
+        match fs::remove_dir(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            other => other?,
         }
     } else {
         remove_if_exists(path)?;
@@ -729,7 +927,9 @@ pub fn restore_incomplete(paths: &Paths) -> bool {
 ///   Der Marker bleibt; `apply_pending` startet den Tausch neu.
 /// - keine Zustandsdatei (älterer Stand): nichts löschen. Fehlt das Original,
 ///   kommt die `.rollback`-Fassung zurück; sind beide da, wird die
-///   `.rollback`-Fassung beiseitegelegt (`.verworfen-<uuid>`).
+///   `.rollback`-Fassung beiseitegelegt (`.verworfen-<uuid>`). Das
+///   `.rollback-wal` kommt nur zusammen mit der `.rollback`-DB zurück, sonst
+///   wird es beiseitegelegt (Lauf F3a: nie ein fremdes WAL neben der DB).
 ///
 /// `pub`, weil `tests/r4_review_test.rs` die Funktion direkt aufruft.
 pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
@@ -749,21 +949,36 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
                     if orig.exists() {
                         remove_path(orig, *is_dir)?;
                     }
-                    fs::rename(rb, orig)?;
+                    rename_if_exists(rb, orig)?;
                 }
             }
             clear_swap_state(paths);
         }
         None => {
+            // Das WAL gehört zu genau einer DB: Es kommt nur zurück, wenn
+            // auch die `.rollback`-DB zurückkam — sonst läge ein fremdes WAL
+            // neben der eingespielten DB (SQLite würde seine Seiten
+            // übernehmen). In jedem anderen Fall wird es beiseitegelegt.
+            let wal_rb = with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX);
+            let mut db_restored = false;
             for (orig, rb, _) in &pairs {
-                if rb.exists() {
-                    if orig.exists() {
-                        quarantine(rb)?;
+                if !rb.exists() {
+                    continue;
+                }
+                if *rb == wal_rb {
+                    if db_restored && !orig.exists() {
+                        rename_if_exists(rb, orig)?;
                     } else {
-                        if let Some(parent) = orig.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        fs::rename(rb, orig)?;
+                        quarantine(rb)?;
+                    }
+                } else if orig.exists() {
+                    quarantine(rb)?;
+                } else {
+                    if let Some(parent) = orig.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    if rename_if_exists(rb, orig)? && *orig == paths.db_file {
+                        db_restored = true;
                     }
                 }
             }
@@ -772,7 +987,7 @@ pub fn recover_pending_rollback(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-/// Phase B: wird beim App-Start **vor** dem Öffnen des Pools aufgerufen. Wenn ein
+/// Phase B: wird beim Serverstart **vor** dem Öffnen des Pools aufgerufen. Wenn ein
 /// Marker existiert, wird die Staging-DB über die echte DB gelegt und das Archive
 /// (ab Backup-Format 2 auch `data/branding`) ersetzt. `inputs/` bleibt
 /// unangetastet (Hardline).
@@ -827,6 +1042,35 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         .get("schema_version")
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
+    let backup_created_at = info
+        .get("backup_created_at")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let counters: Vec<crate::db::numbering::CounterState> = info
+        .get("counters")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let series: Vec<crate::backup::after_restore::SeriesState> = info
+        .get("series")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let locked_numbers: Vec<String> = info
+        .get("locked_numbers")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let locked_ids: Vec<String> = info
+        .get("locked_ids")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let fiscal_year_locks: Vec<crate::fiscal_year::lock::FiscalYearLock> = info
+        .get("fiscal_year_locks")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
 
     let staged_db = staging.join("klein-buch.sqlite");
     if !staged_db.is_file() {
@@ -837,37 +1081,47 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
 
     let pairs = swap_pairs(paths, restore_branding);
 
-    // Stufe 1 — Originale beiseite. WAL/SHM gehören zur alten DB; ohne sie ist
-    // die `.rollback`-DB bei einem Rückfall ein sauberer (ggf. älterer) Stand.
+    // Stufe 1 — Originale beiseite, das WAL der alten DB mit ihr (W7-WAL-SHM,
+    // siehe `swap_pairs`): neben der neuen DB liegt danach kein fremdes WAL,
+    // und ein Rückfall bringt die alte DB mit allen festgeschriebenen
+    // Transaktionen zurück. Das `-shm` ist abgeleitet und wird gelöscht.
     write_swap_state(paths, SwapPhase::Moving)?;
-    remove_if_exists(&with_suffix(&paths.db_file, "-wal"))?;
     remove_if_exists(&with_suffix(&paths.db_file, "-shm"))?;
+    // Lauf F4d (CI 23ede89): `orig.exists()` ist nur ein Vorfilter.
+    // Verschwindet ein Original zwischen Prüfung und `rename` (das `-wal`
+    // löscht SQLite beim Schließen der letzten Verbindung nachlaufend), gilt
+    // es als „nicht vorhanden“ statt als Fehler: `rename_if_exists` meldet
+    // `false`, das Paar zählt nicht als verschoben, Zustandsdatei und
+    // Rückfall bleiben konsistent.
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (index, (orig, rb, is_dir)) in pairs.iter().enumerate() {
         if !orig.exists() {
             continue;
         }
-        let step = (|| -> Result<()> {
+        let step = (|| -> Result<bool> {
             injected_stage1(index)?;
             if rb.exists() {
                 remove_path(rb, *is_dir)?;
             }
-            fs::rename(orig, rb)?;
-            Ok(())
+            injected_vanish(index, orig);
+            rename_if_exists(orig, rb)
         })();
-        if let Err(e) = step {
-            let mut undone = true;
-            for (o, r) in moved.iter().rev() {
-                if fs::rename(r, o).is_err() {
-                    undone = false;
+        match step {
+            Ok(true) => moved.push((orig.clone(), rb.clone())),
+            Ok(false) => {}
+            Err(e) => {
+                let mut undone = true;
+                for (o, r) in moved.iter().rev() {
+                    if rename_if_exists(r, o).is_err() {
+                        undone = false;
+                    }
                 }
+                if undone {
+                    clear_swap_state(paths);
+                }
+                return Err(e);
             }
-            if undone {
-                clear_swap_state(paths);
-            }
-            return Err(e);
         }
-        moved.push((orig.clone(), rb.clone()));
     }
     write_swap_state(paths, SwapPhase::Moved)?;
 
@@ -909,7 +1163,7 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
             if orig.exists() && remove_path(orig, *is_dir).is_err() {
                 restored = false;
             }
-            if rb.exists() && fs::rename(rb, orig).is_err() {
+            if rb.exists() && rename_if_exists(rb, orig).is_err() {
                 restored = false;
             }
         }
@@ -928,6 +1182,12 @@ pub fn apply_pending(paths: &Paths) -> Result<Option<AppliedInfo>> {
         branding_restored: restore_branding,
         pre_restore_backup,
         schema_version,
+        backup_created_at,
+        counters,
+        series,
+        locked_numbers,
+        locked_ids,
+        fiscal_year_locks,
     };
     {
         use std::io::Write;
@@ -962,12 +1222,34 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Entfernt eine Datei, falls vorhanden — ohne `exists()` vorab (Lauf F,
+/// LE-CI-FLAKE: `-wal`/`-shm` verschwinden beim Schließen der letzten
+/// Verbindung, das Schließen kann nachlaufen).
 fn remove_if_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        make_writable(path)?;
-        fs::remove_file(path)?;
+    make_writable(path)?;
+    match fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => Ok(other?),
     }
-    Ok(())
+}
+
+/// Verschiebt `from` nach `to`. Fehlt die Quelle — auch wenn sie erst
+/// zwischen einer Prüfung und dem `rename` verschwindet —, ist das kein
+/// Fehler, sondern `Ok(false)` (Lauf F4d, TOCTOU wie LE-CI-FLAKE/N1).
+/// `NotFound` bei noch vorhandener Quelle (z. B. fehlender Zielordner)
+/// bleibt ein Fehler.
+fn rename_if_exists(from: &Path, to: &Path) -> Result<bool> {
+    match fs::rename(from, to) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if fs::symlink_metadata(from).is_err() {
+                Ok(false)
+            } else {
+                Err(e.into())
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn make_writable(path: &Path) -> Result<()> {
@@ -1252,6 +1534,26 @@ mod tests {
                 verified_at TEXT) STRICT",
             "CREATE TABLE marker (id INTEGER PRIMARY KEY, v TEXT) STRICT",
             "INSERT INTO marker (v) VALUES ('original-data')",
+            // Nummernkreise (Phase A hält sie für das Anheben fest, D-24)
+            "CREATE TABLE doc_number_counters (doc_type TEXT NOT NULL, fiscal_year INTEGER NOT NULL,
+                last_value INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (doc_type, fiscal_year)) STRICT",
+            // Abo-Termine und festgeschriebene Nummern (Phase A, F1d)
+            "CREATE TABLE recurring_invoices (id TEXT PRIMARY KEY NOT NULL,
+                next_due_date TEXT NOT NULL) STRICT",
+            "CREATE TABLE recurring_subscriptions (id TEXT PRIMARY KEY NOT NULL,
+                next_due_date TEXT NOT NULL) STRICT",
+            "CREATE TABLE invoices (id TEXT PRIMARY KEY NOT NULL, invoice_number TEXT NOT NULL,
+                locked_at TEXT, is_storno_for TEXT) STRICT",
+            "CREATE TABLE quotes (id TEXT PRIMARY KEY NOT NULL, quote_number TEXT NOT NULL,
+                locked_at TEXT) STRICT",
+            // Abschlüsse (Phase A hält sie fest, Lauf F8)
+            "CREATE TABLE fiscal_year_locks (fiscal_year INTEGER PRIMARY KEY NOT NULL,
+                closed_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                income_total_cents INTEGER NOT NULL, expense_total_cents INTEGER NOT NULL,
+                afa_total_cents INTEGER NOT NULL, surplus_cents INTEGER NOT NULL,
+                assets_locked INTEGER NOT NULL DEFAULT 0,
+                depreciation_entries_locked INTEGER NOT NULL DEFAULT 0,
+                app_version TEXT NOT NULL, schema_version INTEGER NOT NULL, notes TEXT) STRICT",
             // für die Prüfungen in Phase A (Archivpfade, Migrationen)
             "CREATE TABLE archive_entries (id TEXT PRIMARY KEY NOT NULL, file_path TEXT NOT NULL)",
             "CREATE TABLE _sqlx_migrations (version INTEGER PRIMARY KEY, checksum BLOB NOT NULL,
@@ -1493,6 +1795,179 @@ mod tests {
         out
     }
 
+    /// Schreibt ein (Format-3-)Backup als Format 2 um: gleicher Inhalt, Hülle
+    /// ohne AAD — so, wie Klein.Buch bis Lauf F3a geschrieben hat.
+    fn rewrite_as_format_v2(file: &Path, passphrase: &str) -> PathBuf {
+        let bytes = fs::read(file).unwrap();
+        let (mut m, content) = decrypt_backup(&bytes, passphrase).unwrap();
+        let salt = encrypt::random_bytes(encrypt::SALT_LEN);
+        let nonce = encrypt::random_bytes(encrypt::NONCE_LEN);
+        let key = encrypt::derive_key(passphrase.as_bytes(), &salt).unwrap();
+        let ct = encrypt::encrypt(&key, &encrypt::nonce_array(&nonce).unwrap(), &content).unwrap();
+        m.format_version = 2;
+        m.salt_hex = manifest::to_hex(&salt);
+        m.nonce_hex = manifest::to_hex(&nonce);
+        let out = file.with_file_name("format-v2.kbk");
+        fs::write(&out, manifest::frame(&m, &ct).unwrap()).unwrap();
+        out
+    }
+
+    /// Ersetzt `from` einmal durch `to` (gleiche Länge) im Klartext-Kopf.
+    fn patch_header(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let (_, offset) = manifest::parse_header(bytes).unwrap();
+        let head = std::str::from_utf8(&bytes[..offset]).unwrap();
+        let at = head
+            .find(from)
+            .unwrap_or_else(|| panic!("{from} fehlt in {head}"));
+        let mut out = bytes.to_vec();
+        out[at..at + to.len()].copy_from_slice(to.as_bytes());
+        out
+    }
+
+    /// W14-020 (Lauf F3a): Neue Backups haben Format 3 und binden den Kopf als
+    /// AAD — eine geänderte Schema-Version, ein geänderter Zeitpunkt oder das
+    /// Herabsetzen auf Format 2 lassen die Entschlüsselung scheitern (wie eine
+    /// falsche Passphrase: nichts wird geschrieben). Die Vorschau liest den
+    /// Kopf weiter ohne Passphrase.
+    #[tokio::test]
+    async fn format3_header_is_bound_to_ciphertext() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+        let pass = "passphrase-1234567890";
+        let outcome = backup::create_now(&pool, &paths, pass, "manual")
+            .await
+            .unwrap();
+        let bytes = fs::read(&outcome.file_path).unwrap();
+        let m = manifest::read_manifest_only(&bytes).unwrap();
+        assert_eq!(m.format_version, 3);
+        assert_eq!(
+            preview(Path::new(&outcome.file_path))
+                .unwrap()
+                .format_version,
+            3
+        );
+        assert!(decrypt_backup(&bytes, pass).is_ok());
+
+        let schema = format!("\"schemaVersion\":{}", m.schema_version);
+        let other_schema = format!("\"schemaVersion\":{}", m.schema_version - 1);
+        let year = &m.created_at[..4];
+        let other_year = (year.parse::<i32>().unwrap() - 1).to_string();
+        for patched in [
+            patch_header(&bytes, &schema, &other_schema),
+            patch_header(
+                &bytes,
+                &format!("\"createdAt\":\"{year}"),
+                &format!("\"createdAt\":\"{other_year}"),
+            ),
+            patch_header(&bytes, "\"formatVersion\":3", "\"formatVersion\":2"),
+        ] {
+            let err = decrypt_backup(&patched, pass).unwrap_err();
+            assert!(is_wrong_passphrase(&err), "{err}");
+        }
+
+        // Restore mit verändertem Kopf: abgelehnt, kein Pre-Restore-Backup.
+        let tampered = dir.path().join("manipuliert.kbk");
+        fs::write(
+            &tampered,
+            patch_header(&bytes, "\"formatVersion\":3", "\"formatVersion\":2"),
+        )
+        .unwrap();
+        let session = backup::BackupSession::default();
+        session.set(pass.to_string());
+        let before = fs::read_dir(&paths.backups_dir).unwrap().count();
+        let err = apply(
+            &pool,
+            &paths,
+            &session,
+            &tampered,
+            "manipuliert.kbk",
+            pass,
+            TEST_LIMITS,
+        )
+        .await
+        .unwrap_err();
+        assert!(is_wrong_passphrase(&err), "{err}");
+        assert_eq!(fs::read_dir(&paths.backups_dir).unwrap().count(), before);
+        assert!(!paths.data_dir.join(RESTORE_MARKER).exists());
+    }
+
+    /// Bis Lauf F3a geschriebene Backups (Format 2, ohne AAD) bleiben
+    /// einspielbar — samt Logo und Unterschrift.
+    #[tokio::test]
+    async fn restore_of_format_v2_backup_without_aad() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        let branding = crate::branding::branding_dir(&paths.data_dir);
+        fs::create_dir_all(&branding).unwrap();
+        fs::write(branding.join("logo.png"), b"LOGO-IM-BACKUP").unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+        let pass = "passphrase-1234567890";
+        let original = backup::create_now(&pool, &paths, pass, "manual")
+            .await
+            .unwrap();
+        let v2 = rewrite_as_format_v2(Path::new(&original.file_path), pass);
+        assert_eq!(
+            manifest::read_manifest_only(&fs::read(&v2).unwrap())
+                .unwrap()
+                .format_version,
+            2
+        );
+        fs::write(branding.join("logo.png"), b"LOGO-NEU").unwrap();
+
+        let session = backup::BackupSession::default();
+        session.set(pass.to_string());
+        let report = apply(&pool, &paths, &session, &v2, "v2.kbk", pass, TEST_LIMITS)
+            .await
+            .unwrap();
+        assert_eq!(report.format_version, 2);
+        assert!(report.branding_restored);
+        pool.close().await;
+        apply_pending(&paths).unwrap().unwrap();
+        assert_eq!(
+            fs::read(branding.join("logo.png")).unwrap(),
+            b"LOGO-IM-BACKUP"
+        );
+    }
+
+    /// Lauf F3c (S1): Auf Wunsch entsteht Format 2 (Pflicht-Backup vor einer
+    /// Migration, Rückfall auf v2026.10): ohne AAD mit der Leselogik bis
+    /// v2026.10 lesbar (`encrypt::decrypt` über alles nach dem Kopf) und von
+    /// dieser Version ebenso. Format 1 entsteht nie.
+    #[tokio::test]
+    async fn format2_for_rollback_decrypts_without_aad() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.backups_dir).unwrap();
+        let pool = pool_for_backup(&paths.db_file).await;
+        let pass = "passphrase-1234567890";
+        let opts = |format_version| backup::CreateOptions {
+            mirror: backup::Mirror::Auto,
+            now: crate::clock::now_utc(),
+            format_version,
+        };
+        let outcome = backup::create_with(&pool, &paths, pass, "manual", opts(2))
+            .await
+            .unwrap();
+        let bytes = fs::read(&outcome.file_path).unwrap();
+        let (m, ct) = manifest::unframe(&bytes).unwrap();
+        assert_eq!(m.format_version, 2);
+        let key = encrypt::derive_key(pass.as_bytes(), &manifest::from_hex(&m.salt_hex).unwrap())
+            .unwrap();
+        let nonce = encrypt::nonce_array(&manifest::from_hex(&m.nonce_hex).unwrap()).unwrap();
+        let content = encrypt::decrypt(&key, &nonce, &ct).unwrap();
+        assert_eq!(snapshot::sha256_hex(&content), m.content_sha256);
+        let (_, current) = decrypt_backup(&bytes, pass).unwrap();
+        assert_eq!(current, content);
+
+        assert!(backup::create_with(&pool, &paths, pass, "manual", opts(1))
+            .await
+            .is_err());
+    }
+
     /// Plan W1.5: Logo und Unterschrift (`data/branding`) überstehen
     /// Backup → Restore; ein nach dem Backup gelöschtes Bild kommt zurück,
     /// ein später hinzugekommenes verschwindet (exakter Backup-Stand).
@@ -1714,6 +2189,41 @@ mod tests {
         assert!(!restore_incomplete(&paths));
     }
 
+    /// Lauf F4d (CI 23ede89): Das WAL verschwindet zwischen Prüfung und
+    /// `rename` (SQLite löscht es beim Schließen nachlaufend) → der Tausch
+    /// gelingt ohne WAL, ohne `.rollback-wal` und ohne Zustandsdatei.
+    #[test]
+    fn wal_vanishing_between_check_and_rename_does_not_abort_swap() {
+        let dir = TempDir::new().unwrap();
+        let paths = swap_fixture(dir.path());
+        let wal = with_suffix(&paths.db_file, "-wal");
+        let rb_wal = with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX);
+        fs::write(&wal, b"ORIGINAL-WAL").unwrap();
+        let wal_index = swap_pairs(&paths, true).len() - 1;
+        INJECT.with(|i| i.set(Some(InjectAt::Vanish(wal_index))));
+        let applied = apply_pending(&paths);
+        INJECT.with(|i| i.set(None));
+        assert!(applied.unwrap().is_some());
+        assert_eq!(fs::read(&paths.db_file).unwrap(), b"NEUE-DB");
+        assert!(!wal.exists());
+        assert!(!rb_wal.exists());
+        assert!(!swap_state_path(&paths).exists());
+        assert!(!restore_incomplete(&paths));
+    }
+
+    /// Lauf F4d: `rename_if_exists` meldet eine fehlende Quelle als `false`,
+    /// einen fehlenden Zielordner bei vorhandener Quelle aber als Fehler.
+    #[test]
+    fn rename_if_exists_distinguishes_missing_source_from_missing_target_dir() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("a");
+        assert!(!rename_if_exists(&src, &dir.path().join("b")).unwrap());
+        fs::write(&src, b"x").unwrap();
+        assert!(rename_if_exists(&src, &dir.path().join("fehlt/b")).is_err());
+        assert!(rename_if_exists(&src, &dir.path().join("b")).unwrap());
+        assert_eq!(fs::read(dir.path().join("b")).unwrap(), b"x");
+    }
+
     /// Review W2 S0-2: scheitert Stufe 2 (Kopie), kommen die Originale zurück.
     #[test]
     fn stage2_failure_rolls_back_to_originals() {
@@ -1740,7 +2250,9 @@ mod tests {
         // Absturz simulieren: Originale beiseite, Zustand `moved`, Teilkopie.
         write_swap_state(&paths, SwapPhase::Moved).unwrap();
         for (orig, rb, _) in swap_pairs(&paths, true) {
-            fs::rename(&orig, &rb).unwrap();
+            if orig.exists() {
+                fs::rename(&orig, &rb).unwrap();
+            }
         }
         fs::write(&paths.db_file, b"HALBE-DB").unwrap();
         fs::create_dir_all(&paths.archive_dir).unwrap(); // leer, wie ein Neustart
@@ -1748,6 +2260,107 @@ mod tests {
         recover_pending_rollback(&paths).unwrap();
         assert_original_state(&paths);
         assert!(!swap_state_path(&paths).exists());
+    }
+
+    /// W7-WAL-SHM (Lauf F3a): Das WAL der laufenden DB wandert beim Tausch mit
+    /// ihr beiseite. Scheitert die Kopie, kommt es zurück; gelingt der Tausch,
+    /// liegt neben der neuen DB kein fremdes WAL und kein `.rollback-wal`.
+    #[test]
+    fn swap_moves_wal_with_db_and_drops_shm() {
+        let dir = TempDir::new().unwrap();
+        let paths = swap_fixture(dir.path());
+        let wal = with_suffix(&paths.db_file, "-wal");
+        let shm = with_suffix(&paths.db_file, "-shm");
+        let rb_wal = with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX);
+        fs::write(&wal, b"ORIGINAL-WAL").unwrap();
+        fs::write(&shm, b"index").unwrap();
+
+        INJECT.with(|i| i.set(Some(InjectAt::Stage2)));
+        assert!(apply_pending(&paths).is_err());
+        INJECT.with(|i| i.set(None));
+        assert_original_state(&paths);
+        assert_eq!(fs::read(&wal).unwrap(), b"ORIGINAL-WAL", "WAL zurück");
+        assert!(!rb_wal.exists());
+        assert!(!shm.exists(), "-shm ist abgeleitet und wird gelöscht");
+
+        // Abbruch nach dem Beiseitelegen (Zustand `moved`): Recovery holt
+        // DB und WAL gemeinsam zurück.
+        write_swap_state(&paths, SwapPhase::Moved).unwrap();
+        for (orig, rb, _) in swap_pairs(&paths, true) {
+            fs::rename(&orig, &rb).unwrap();
+        }
+        assert!(restore_incomplete(&paths));
+        recover_pending_rollback(&paths).unwrap();
+        assert_original_state(&paths);
+        assert_eq!(fs::read(&wal).unwrap(), b"ORIGINAL-WAL");
+
+        let applied = apply_pending(&paths).unwrap();
+        assert!(applied.is_some());
+        assert_eq!(fs::read(&paths.db_file).unwrap(), b"NEUE-DB");
+        assert!(!wal.exists(), "kein fremdes WAL neben der neuen DB");
+        assert!(!rb_wal.exists(), "aufgeräumt");
+        assert!(!restore_incomplete(&paths));
+    }
+
+    /// W7-WAL-SHM mit echter SQLite: Transaktionen, die nach einem harten
+    /// Abbruch nur im WAL stehen, sind nach einem Rückfall des Tauschs da.
+    #[tokio::test]
+    async fn committed_wal_transactions_survive_swap_rollback() {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        let dir = TempDir::new().unwrap();
+        let paths = swap_fixture(dir.path());
+        let live = dir.path().join("live.sqlite");
+        let opts = SqliteConnectOptions::new()
+            .filename(&live)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .pragma("wal_autocheckpoint", "0");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE t (v TEXT) STRICT")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for i in 0..5 {
+            sqlx::query("INSERT INTO t (v) VALUES (?)")
+                .bind(format!("fest-{i}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // Abbild eines harten Abbruchs: DB-Datei + WAL bei offener Verbindung.
+        fs::copy(&live, &paths.db_file).unwrap();
+        fs::copy(
+            with_suffix(&live, "-wal"),
+            with_suffix(&paths.db_file, "-wal"),
+        )
+        .unwrap();
+        pool.close().await;
+        // Gegenprobe: ohne WAL fehlen die Zeilen.
+        let bare = dir.path().join("ohne-wal.sqlite");
+        fs::copy(&paths.db_file, &bare).unwrap();
+        let count = |file: PathBuf| async move {
+            let p = crate::db::open_pool(&file, None).await.unwrap();
+            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+                .fetch_one(&p)
+                .await
+                .unwrap();
+            p.close().await;
+            n
+        };
+        assert_eq!(count(bare).await, 0, "die Zeilen stehen nur im WAL");
+
+        INJECT.with(|i| i.set(Some(InjectAt::Stage2)));
+        assert!(apply_pending(&paths).is_err());
+        INJECT.with(|i| i.set(None));
+        assert_eq!(count(paths.db_file.clone()).await, 5, "WAL kam mit zurück");
     }
 
     /// Ohne Zustandsdatei (älterer Stand) wird nichts gelöscht: liegt beides vor,
@@ -1769,6 +2382,41 @@ mod tests {
             .collect();
         assert_eq!(kept.len(), 1, "{kept:?}");
         assert!(paths.data_dir.join(&kept[0]).join("wichtig.pdf").exists());
+    }
+
+    /// W7-WAL-SHM: Ohne Zustandsdatei kommt ein liegengebliebenes
+    /// `.rollback-wal` nie neben eine vorhandene (eingespielte) DB — es wird
+    /// beiseitegelegt. Fehlt die DB und kommt die `.rollback`-DB zurück, kommt
+    /// ihr WAL mit.
+    #[test]
+    fn leftover_rollback_wal_follows_only_its_db() {
+        let dir = TempDir::new().unwrap();
+        let paths = paths_for(dir.path());
+        fs::create_dir_all(&paths.data_dir).unwrap();
+        let wal = with_suffix(&paths.db_file, "-wal");
+        let rb_db = with_suffix(&paths.db_file, DB_ROLLBACK_SUFFIX);
+        let rb_wal = with_suffix(&paths.db_file, WAL_ROLLBACK_SUFFIX);
+
+        // Eingespielte DB vorhanden, altes WAL liegt noch herum.
+        fs::write(&paths.db_file, b"NEUE-DB").unwrap();
+        fs::write(&rb_wal, b"ALT-WAL").unwrap();
+        recover_pending_rollback(&paths).unwrap();
+        assert!(!wal.exists(), "kein fremdes WAL neben der DB");
+        assert!(!rb_wal.exists());
+        let kept = fs::read_dir(&paths.data_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".rollback-wal.verworfen-"))
+            .count();
+        assert_eq!(kept, 1, "beiseitegelegt, nicht gelöscht");
+
+        // DB fehlt: `.rollback`-DB und ihr WAL kommen gemeinsam zurück.
+        fs::remove_file(&paths.db_file).unwrap();
+        fs::write(&rb_db, b"ALT-DB").unwrap();
+        fs::write(&rb_wal, b"ALT-WAL").unwrap();
+        recover_pending_rollback(&paths).unwrap();
+        assert_eq!(fs::read(&paths.db_file).unwrap(), b"ALT-DB");
+        assert_eq!(fs::read(&wal).unwrap(), b"ALT-WAL");
     }
 
     /// Review W2 S1-5: ein Anhang mit `..` im Namen blockiert den Restore nicht;
@@ -1921,8 +2569,9 @@ mod tests {
     fn unsupported_format_version_is_rejected() {
         assert!(manifest::ensure_supported_format(1).is_ok());
         assert!(manifest::ensure_supported_format(2).is_ok());
+        assert!(manifest::ensure_supported_format(3).is_ok(), "Lauf F3a");
         assert!(manifest::ensure_supported_format(0).is_err());
-        assert!(manifest::ensure_supported_format(3).is_err());
+        assert!(manifest::ensure_supported_format(4).is_err());
     }
 
     /// G1-HARDEN.1: ohne entsperrte Session bricht der Restore ab — das

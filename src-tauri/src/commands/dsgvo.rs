@@ -1,4 +1,4 @@
-//! Tauri-Command für die **DSGVO-Auskunft nach Art. 15** (Block 18).
+//! Command für die **DSGVO-Auskunft nach Art. 15** (Block 18).
 //!
 //! Reiner **Lese-/Export-Pfad**: sammelt alle Daten zu einem Kontakt
 //! ([`crate::db::repo::dsgvo`]), baut den Report ([`crate::domain::dsgvo`]) und
@@ -13,9 +13,9 @@
 //! protokolliert (`action = 'dsgvo.export'`) — ohne personenbezogene Inhalte,
 //! nur Kontakt-ID + Zählwerte. Keine DB-Mutation an Belegen, keine Migration.
 //!
-//! Testbarer Kern: [`export_core`] (nimmt `&Paths` statt `AppHandle`, wie
-//! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne
-//! Tauri-/Opener-Hülle.
+//! Testbarer Kern: [`export_core`] (nimmt `&Paths` statt `AppCtx`, wie
+//! `send_catalog_core`). Der Command [`dsgvo_export`] ist nur die dünne Hülle
+//! darum.
 
 use crate::app_ctx::AppCtx;
 use serde::Serialize;
@@ -25,7 +25,9 @@ use std::sync::Arc;
 
 use crate::config::Paths;
 use crate::db::repo::{audit_log, dsgvo as dsgvo_repo, seller_profile};
-use crate::domain::dsgvo::{self, ControllerInfo, RawData, RawInvoice, RawQuote};
+use crate::domain::dsgvo::{
+    self, ControllerInfo, RawData, RawInvoice, RawQuote, RawRecurringInvoice,
+};
 use crate::error::{Error, Result};
 use crate::pdf::{templates, typst_render};
 
@@ -70,8 +72,7 @@ async fn build_controller(pool: &SqlitePool) -> Result<ControllerInfo> {
     })
 }
 
-/// Testbarer Kern: sammeln → Report → ZIP schreiben → Audit. Kein Opener, kein
-/// AppHandle. `generated_at` (Anzeige) und `file_date` (Dateiname) kommen vom
+/// Testbarer Kern: sammeln → Report → ZIP schreiben → Audit. Ohne `AppCtx`. `generated_at` (Anzeige) und `file_date` (Dateiname) kommen vom
 /// Aufrufer, damit der Test deterministisch ist.
 pub async fn export_core(
     pool: &SqlitePool,
@@ -80,7 +81,7 @@ pub async fn export_core(
     generated_at: &str,
     file_date: &str,
 ) -> Result<DsgvoExportResult> {
-    // Eigenes Verzeichnis unter <data>/tmp (beim Start geleert); bei einem
+    // Eigenes Verzeichnis unter <data>/tmp (Reste räumt der Sweeper, D-13); bei einem
     // Fehler wird es sofort gelöscht — keine halbe Auskunft mit Personendaten
     // bleibt liegen (Gegenprüfung W7).
     let out_dir = paths
@@ -123,12 +124,20 @@ async fn export_core_in(
         .iter()
         .map(|(q, items)| RawQuote { quote: q, items })
         .collect();
+    let recurring_invoices: Vec<RawRecurringInvoice> = gathered
+        .recurring_invoices
+        .iter()
+        .map(|(t, items)| RawRecurringInvoice { template: t, items })
+        .collect();
 
     let raw = RawData {
         contact: &gathered.contact,
         invoices: &invoices,
         quotes: &quotes,
         expenses: &gathered.expenses,
+        recurring_invoices: &recurring_invoices,
+        subscriptions: &gathered.subscriptions,
+        assets: &gathered.assets,
         documents: &gathered.documents,
         emails: &gathered.emails,
         audit: &gathered.audit,
@@ -208,16 +217,7 @@ async fn export_core_in(
         "dsgvo.export",
         "contact",
         contact_id,
-        Some(&format!(
-            r#"{{"invoices":{},"quotes":{},"expenses":{},"documents":{},"bundled":{},"emails":{},"generatedAt":"{}"}}"#,
-            report.invoices.len(),
-            report.quotes.len(),
-            report.expenses.len(),
-            report.documents.len(),
-            bundled_count,
-            report.emails.len(),
-            generated_at,
-        )),
+        Some(serde_json::json!({ "invoices": report.invoices.len(), "quotes": report.quotes.len(), "expenses": report.expenses.len(), "recurringInvoices": report.recurring_invoices.len(), "subscriptions": report.subscriptions.len(), "assets": report.assets.len(), "documents": report.documents.len(), "bundled": bundled_count, "emails": report.emails.len(), "generatedAt": generated_at })),
     )
     .await?;
 

@@ -1,4 +1,4 @@
-//! Tauri-Commands für Settings.
+//! Commands für Settings.
 //!
 //! Block 2 implementiert nur `seller_profile_{get,upsert}` inkl. §19-Toggle
 //! mit 5-Jahres-Bindungs-Schutz. Weitere Settings (mail, payment-accounts, pdf,
@@ -34,6 +34,12 @@ pub struct SellerProfileUpsertArgs {
     pub input: SellerProfileInput,
 }
 
+/// Speichert das Verkäuferprofil. Bedingte Re-Auth (W14-038, Lauf F4a):
+/// Ändern sich IBAN, BIC oder der §19-Status gegenüber dem gespeicherten
+/// Profil, verlangt der Kern eine frische Bestätigung
+/// ([`crate::commands::reauth::require_fresh`]; als frisch gilt auch eine
+/// Anmeldung der letzten 5 min). Prüfung und Speichern laufen unter
+/// [`crate::locks::SELLER_PROFILE`] am Stück.
 pub async fn seller_profile_upsert(
     ctx: &Arc<AppCtx>,
     args: SellerProfileUpsertArgs,
@@ -41,7 +47,21 @@ pub async fn seller_profile_upsert(
     let SellerProfileUpsertArgs { input } = args;
     let pool = ctx.pool()?;
 
-    seller_profile::upsert(&pool, &input).await
+    let _profile = crate::locks::SELLER_PROFILE.lock("1").await;
+    let prev = seller_profile::get(&pool).await?;
+    if seller_profile::reauth_relevant_change(prev.as_ref(), &input) {
+        crate::commands::reauth::require_fresh()?;
+    }
+    let row = seller_profile::upsert(&pool, &input).await?;
+    // Lauf F8d (ADR 0039 Nr. 148): Ein Verzicht auf §19 (wirkt ab Jahresbeginn)
+    // oder eine Rückkehr kann den Status bereits aktivierter Kosten ändern.
+    // Nicht blockieren (§ 19 Abs. 1 und 3 UStG), aber die betroffenen Anlagen mit
+    // Handlungsweg in der Inbox nennen.
+    let prev_klein = prev.as_ref().is_none_or(|p| p.is_kleinunternehmer == 1);
+    if prev_klein != (row.is_kleinunternehmer == 1) {
+        crate::commands::assets::notify_capitalized_status_change(&pool).await;
+    }
+    Ok(row)
 }
 
 /// Argumente von [`seller_logo_set`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -478,9 +498,7 @@ pub async fn travel_settings_set(ctx: &Arc<AppCtx>, args: TravelSettingsSetArgs)
         "settings.travel.update",
         "settings",
         "travel",
-        Some(&format!(
-            r#"{{"cost_per_km_cents":{cost_per_km_cents},"round_trip_default":{round_trip_default}}}"#
-        )),
+        Some(serde_json::json!({ "cost_per_km_cents": cost_per_km_cents, "round_trip_default": round_trip_default })),
     )
     .await
     {

@@ -63,7 +63,9 @@ für diesen Hostname, lokale Datenträger für Datenbank und Archiv (kein NFS/SM
    - `image:` auf eine **feste Version** setzen,
      `ghcr.io/hozwei/klein-buch:<Version>` (Versionen auf der
      [Releases-Seite](https://github.com/hozwei/klein.buch-public/releases);
-     es gibt kein `:latest`);
+     es gibt kein `:latest`); zu jeder Version liegt dort auch der
+     Quelltext aller Komponenten Dritter (GPL, LGPL, MPL, EPL, EUPL u. a.) als
+     `klein-buch-<Version>-quellen-dritter.tar.zst`;
    - `KLEIN_BUCH_PUBLIC_URL` auf die öffentliche Adresse;
    - `KLEIN_BUCH_TRUSTED_PROXIES` auf die Adresse, unter der der Reverse-Proxy
      beim Container ankommt (`docs/operations-guide.md` §6);
@@ -73,7 +75,7 @@ für diesen Hostname, lokale Datenträger für Datenbank und Archiv (kein NFS/SM
 3. **Signatur prüfen** (empfohlen, `SECURITY.md`):
 
    ```sh
-   cosign verify ghcr.io/hozwei/klein-buch:<Version> --certificate-identity-regexp 'https://github.com/hozwei/klein.buch-public/.github/workflows/.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com
+   cosign verify ghcr.io/hozwei/klein-buch:<Version> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
    ```
 
 4. **Starten und den Setup-Token aus dem Log holen:**
@@ -110,13 +112,22 @@ Hilfe) und das Betriebshandbuch `docs/operations-guide.md`.
 
 **Im Browser, auch mobil** — eine Instanz, ein Datenbestand, erreichbar von
 jedem Gerät mit Browser; Kernabläufe (Anmelden, Rechnung bis PDF, Zahlung,
-Ausgabe mit Fotobeleg) auf dem Telefon bedienbar.
+Kosten mit Fotobeleg) auf dem Telefon bedienbar.
 
-**Stammdaten** — Firmendaten mit §19-Schalter (inklusive
+**Bedienung** — für Smartphone, Tablet und Desktop ausgelegt: auf Touch-Geräten
+Navigation als Menü, je Seite der nächste Schritt als Hauptaktion und Seltenes im
+Menü „Mehr“, Beträge in deutscher Schreibweise („1.234,56“), Fehler direkt am
+Feld, Umkehrbares mit „Rückgängig“ statt Rückfrage, F1 öffnet das passende
+Handbuch-Kapitel. Web-App-Manifest für „Zum Startbildschirm“ (ohne
+Offline-Funktion). Die Oberfläche orientiert sich an WCAG 2.2 AA und wird mit
+axe-core und manuell geprüft.
+
+**Firmendaten und Kontakte** — Firmendaten mit §19-Schalter (inklusive
 5-Jahres-Bindungs-Warnung beim Verzicht), Kunden- und Lieferanten-Verwaltung,
 optionales Firmenlogo, anpassbare Kilometer-Sätze für die Anfahrt-Abrechnung.
 
-**Angebote** — anlegen, festschreiben, annehmen, in Rechnungen wandeln.
+**Angebote** — anlegen, fertigstellen (festschreiben), versenden, annehmen, in
+Rechnungen wandeln.
 Versand als PDF inklusive verknüpfter AGB- und Datenschutz-Version (zentral und
 unveränderlich versioniert).
 
@@ -131,8 +142,11 @@ Beleg-Kopien (keine nachträgliche Verfälschung), Kilometer-basierte
 Anfahrt-Positionen, optionaler Paket-Katalog als Broschüre.
 
 **Abo-Rechnungen** — wiederkehrende Ausgangsrechnungen mit drei
-Automatik-Stufen (nur Entwurf / festschreiben / festschreiben und versenden);
-der Scheduler prüft alle fünf Minuten und holt verpasste Perioden nach.
+Automatik-Stufen („Nur Entwurf“, „Automatisch ausstellen“, „Ausstellen +
+senden“);
+der Scheduler prüft alle fünf Minuten und holt bis zu drei verpasste Perioden
+selbst nach (nur die jüngste mit Automatik, ältere als Entwurf); größere
+Rückstände erst nach Rückfrage.
 
 **Eingangs-Rechnungen** — XRechnung (CII + UBL) und ZUGFeRD per Upload im
 Browser lesen, KoSIT-prüfen (beratend), Original GoBD-konform archivieren, als
@@ -142,11 +156,11 @@ E-Rechnung zulässigen ZUGFeRD-Profile (`EN16931`, `EXTENDED`, `XRECHNUNG`);
 
 **Kosten** — geschäftliche Ausgaben mit Beleg als PDF oder Bild (auch direkt mit
 der Kamera), DATEV-Kontenrahmen-Mapping (SKR03 als Standard), Privatbewegungen
-(EÜR-neutral), Storno-Korrektur, wiederkehrende Vorlagen.
+(EÜR-neutral), Storno mit „Korrigiert neu erfassen“, wiederkehrende Vorlagen.
 
-**Anlagen & AfA** — Anlagenverzeichnis, lineare Abschreibung, amtliche
+**Anschaffungen & AfA** — Anlagenverzeichnis, lineare Abschreibung, amtliche
 AfA-Tabelle als pflegbares JSON, Ausbuchung beim Verkauf oder Verschrotten mit
-Buchwert-Auflösung.
+Restbuchwert-Vorschau vor dem Buchen.
 
 **EÜR & Export** — Cash-Basis-Aggregation nach §4 Abs. 3 / §11 EStG,
 ELSTER-Ausfüllhilfe mit zeilengenauen Werten und eigener „Anlage EÜR“-PDF,
@@ -158,12 +172,12 @@ automatischer AfA-Lauf zum Jahreswechsel (abschaltbar), Festschreibungs-
 Protokoll, Auto-Backup.
 
 **Versand** — SMTP mit TLS/STARTTLS (auch Microsoft 365 über SMTP);
-Zugangsdaten verschlüsselt in der Datenbank. Append-only-Versandprotokoll mit
+Zugangsdaten verschlüsselt in der Datenbank. Append-only-E-Mail-Protokoll mit
 Provider-Antwort.
 
-**Hinweise** — Inbox in der App für fällige Backups, fehlende oder gescheiterte
-Off-Site-Sicherungen, Mail-Fehler, anstehende AfA-Läufe und (opt-in) neue
-Versionen. Pro Regel ein- und ausschaltbar.
+**Hinweise** — Seite „Hinweise“ in der App für fällige Backups, fehlende oder
+gescheiterte Off-Site-Sicherungen, Mail-Fehler, anstehende AfA-Läufe und
+(opt-in) neue Versionen. Pro Regel ein- und ausschaltbar.
 
 **Sicherheit & Nachvollziehbarkeit** — Anmeldung mit Passphrase und TOTP plus
 Einmal-Codes, Re-Auth vor kritischen Aktionen, SQLCipher-verschlüsselte
@@ -181,8 +195,9 @@ je Ziel, Backup-Protokoll als append-only Liste.
 Minimal), alle §19-konform mit Pflicht-Klausel und Pflichtangaben, mit Vorschau;
 eigene Vorlagen im Volume `/inputs`.
 
-**Eingebautes Handbuch** — Benutzer- und Betriebshandbuch in der App (F1 oder
-Menü → Hilfe) mit Volltext-Suche und Glossar.
+**Eingebautes Handbuch** — Benutzer- und Betriebshandbuch in der App (Hilfe in
+der Seitenleiste; F1 öffnet das Kapitel zur aktuellen Seite) mit Volltext-Suche
+und Glossar.
 
 ---
 
@@ -199,7 +214,7 @@ Menü → Hilfe) mit Volltext-Suche und Glossar.
   neu starten); vor jeder Datenbank-Umstellung legt Klein.Buch selbst ein
   geprüftes Backup an.
 
-Die Windows-Desktop-Releases v2026.5.0 und v2026.5.1 sind die letzten
+Die Desktop-Releases v2026.5.0 und v2026.5.1 sind die letzten
 Desktop-Versionen. Einen Datenumzug von der Desktop-App in die Docker-Fassung gibt
 es nicht (ADR 0039, E17).
 
@@ -231,7 +246,7 @@ Architektur: **Functional Core / Imperative Shell**. Pure Funktionen in
 
 **Voraussetzungen:**
 - Rust in der Version aus `src-tauri/rust-toolchain.toml`
-- Node ≥ 22, pnpm (Version aus `packageManager` in `package.json`)
+- Node 24 LTS (≥ 24.11), pnpm (Version aus `packageManager` in `package.json`)
 - für das Image: Docker mit BuildKit
 
 ```bash
@@ -284,21 +299,21 @@ jlink-Laufzeit zusammen. Build, CI und Release: `docs/architecture/build-and-rel
 │                           Design-Tokens, Komponenten
 ├── src-tauri/              Rust-Crate (Name aus der Desktop-Zeit beibehalten)
 │   ├── src/                Backend (Functional Core / Imperative Shell), server/
-│   ├── migrations/         Forward-only SQL-Migrationen (0001–0031)
+│   ├── migrations/         Forward-only SQL-Migrationen (0001–0032)
 │   ├── tests/              Integrationstests
 │   ├── resources/handbook/ Benutzer- und Betriebshandbuch (Markdown)
 │   └── sidecar/            Java-Sidecar: JARs, XRechnung-Konfiguration,
 │                           Launcher, versions.json, Lizenzinventar
 ├── legal/                  Erzeugung und Prüfung der Lizenzseite /legal/
-├── docs/                   ARCHITECTURE, ADRs (0001–0039), Betriebshandbuch
+├── docs/                   ARCHITECTURE, ADRs (0001–0040), Betriebshandbuch
 ├── inputs/                 Menschen-gepflegt: PDF-Vorlagen, AfA-Tabelle,
 │                           Beispiel-Daten (Seed für das Volume /inputs)
 └── .github/                CI, Image- und Release-Workflows
 ```
 
 `inputs/` ist tabu für automatische Schreib-Operationen: Der Container kopiert
-die mitgelieferten Dateien beim Start ins Volume `/inputs` und überschreibt dort
-nie, was der Nutzer geändert hat (neue Fassungen landen als `<name>.neu`).
+die mitgelieferten Dateien beim Containerstart ins Volume `/inputs` und überschreibt dort
+nie, was der Nutzer geändert hat (neue Fassungen landen je Fassung einmal als `<name>.neu`).
 
 ---
 
@@ -368,8 +383,8 @@ Issue, Forks unter der AGPL willkommen. Einzelheiten: `CONTRIBUTING.md`.
 - **Architektur** — `docs/ARCHITECTURE.md` für den Überblick,
   `docs/architecture/` für Vertiefungen (Sicherheit, GoBD, §19, Datenmodell,
   Build und Release).
-- **Architecture Decision Records** — `docs/adr/` (0001–0039); der Umbau zur
-  Docker-Fassung steht in ADR 0039.
+- **Architecture Decision Records** — `docs/adr/` (0001–0040); der Umbau zur
+  Docker-Fassung steht in ADR 0039, Dauerbetrieb und Zeitlogik in ADR 0040.
 - **Änderungen** — `CHANGELOG.md`.
 
 ---

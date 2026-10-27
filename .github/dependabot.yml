@@ -1,6 +1,6 @@
 # Dependabot (Plan W12): wöchentliche Versions-Updates, gruppiert je Ökosystem.
-# Pfade gelten im öffentlichen Repo (Wurzel = ). Dependabot liest diese Datei
-# nur vom Standardzweig (main).
+# Pfade gelten relativ zur Wurzel des öffentlichen Repos (= Inhalt des Produktordners).
+# Dependabot liest diese Datei nur vom Standardzweig (main).
 #
 # Die PRs sind Hinweise: Übernommen wird eine Änderung im Entwicklungsordner und mit dem
 # nächsten Veröffentlichen, nicht per Merge auf GitHub (ein fremder Commit ließe
@@ -14,6 +14,12 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # tera 2 ändert die Vorlagensyntax: Mail-Vorlagen der Betreiber (inputs/mail-templates)
+      # würden brechen. Bewusst bei tera 1, solange es Sicherheitsupdates bekommt
+      # (ADR 0039 Nr. 139, Lauf F6b); Minor/Patch und Sicherheits-Updates kommen weiter.
+      - dependency-name: "tera"
+        update-types: ["version-update:semver-major"]
     groups:
       rust:
         patterns: ["*"]
@@ -26,6 +32,14 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # Typen müssen zur Laufzeit passen (Node 24 LTS im Image und in CI, Lauf F6c).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 (nativer Compiler) trägt die Werkzeugkette noch nicht:
+      # SvelteKit 3 verlangt typescript ^6, svelte-check ^5 || ^6 (ADR 0039 Nr. 140).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       js:
         patterns: ["*"]
@@ -49,6 +63,11 @@ updates:
       day: monday
       timezone: Europe/Berlin
     open-pull-requests-limit: 5
+    ignore:
+      # Basis-Images bleiben auf LTS-Linien (Node 24, Java 21); ein Wechsel der Linie
+      # (z. B. Node 26, Java 25) ist eine bewusste Entscheidung, kein Routine-Update.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       basis-images:
         patterns: ["*"]

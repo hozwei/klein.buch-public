@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { notificationRulesList, notificationRulesSetEnabled } from "$lib/api";
-  import type { NotificationRule } from "$lib/types";
-  import { flash } from "$lib/toast.svelte";
-  import Banner from "$lib/Banner.svelte";
-  import Toggle from "$lib/Toggle.svelte";
+  import { notificationRulesList, notificationRulesSetEnabled } from "#lib/api.ts";
+  import type { NotificationRule } from "#lib/types.ts";
+  import { flash } from "#lib/toast.svelte.ts";
+  import Banner from "#lib/Banner.svelte";
+  import Toggle from "#lib/Toggle.svelte";
+  import PageBar from "#lib/PageBar.svelte";
 
   let rules = $state<NotificationRule[]>([]);
   let loading = $state(true);
@@ -38,7 +39,8 @@
 
   function describe(rule: NotificationRule): string {
     if (rule.id === "rule_backup_result")
-      return "Hinweis in der Hinweis-Liste nach jeder Sicherung: bei fehlgeschlagener externer Spiegelung (immer) und bei erfolgreichem manuellem Backup.";
+      // U6-012: Fehler externer Ziele meldet der Server unabhängig von dieser Regel.
+      return "Hinweis nach einer Sicherung: wenn die lokale Sicherung fehlschlägt oder unvollständig ist, und nach einem erfolgreichen manuellen Backup. Fehler bei externen Zielen meldet Klein.Buch immer, auch wenn diese Erinnerung aus ist.";
     switch (rule.ruleType) {
       case "monthly_doc_check":
         return "Monatliche Erinnerung, alle Belege und Kosten des Vormonats zu erfassen.";
@@ -50,6 +52,8 @@
         return "Hinweis auf festgeschriebene Rechnungen, deren Fälligkeitsdatum überschritten ist.";
       case "archive_integrity_failed":
         return "Dringender Hinweis, wenn der monatliche Archiv-Check einen Schaden findet.";
+      case "recurring_due":
+        return "Hinweis am Stichtag eines Kosten-Abos im Modus „Erinnerung“ – die Kosten-Position legst du dann mit „Buchen“ an.";
       default:
         return rule.label;
     }
@@ -57,10 +61,7 @@
 
 </script>
 
-<header class="hdr">
-  <h1>Erinnerungen einstellen</h1>
-  <a class="back" href="/notifications">← Zu den Hinweisen</a>
-</header>
+<PageBar back="/notifications" backLabel="Hinweise" title="Erinnerungen einstellen" />
 
 <p class="lead">
   Lege fest, woran Klein.Buch dich automatisch erinnert. Erinnerungen erscheinen
@@ -70,7 +71,7 @@
 {#if error}
   <Banner>{error}</Banner>
 {:else if loading}
-  <p class="muted">Lade …</p>
+  <p class="muted" role="status">Wird geladen …</p>
 {:else}
   <ul class="list">
     {#each rules as rule (rule.id)}
@@ -85,7 +86,7 @@
             ariaLabel={rule.label}
             onchange={(next) => toggle(rule, next)}
           />
-          <span class="state">{rule.enabled === 1 ? "An" : "Aus"}</span>
+          <span class="state" aria-hidden="true">{rule.enabled === 1 ? "An" : "Aus"}</span>
         </span>
       </li>
     {/each}
@@ -93,63 +94,56 @@
 {/if}
 
 <style>
-  .hdr {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  h1 {
-    margin: 0;
-  }
-  .back {
-    color: #2563eb;
-    text-decoration: none;
-    font-size: 0.9rem;
-  }
-  /* .intro entfernt — globale .lead aus tokens.css. */
+  /* .lead global aus tokens.css. U1: PageBar statt eigenem Kopf.
+     U4 (design.md §2.4 „Lineatur statt Kästen“): eine Karte, Regeln durch Linien getrennt. */
   .muted {
-    color: var(--c-text-muted);
+    color: var(--text-muted);
   }
   .list {
     list-style: none;
-    padding: 0;
-    margin: 1rem 0 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    padding: 0 var(--sp-4);
+    margin: 0;
+    background: var(--surface-card);
+    border: var(--rule);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+    max-width: 56rem;
   }
   .item {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 1rem;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 0.85rem 1rem;
+    gap: var(--sp-4);
+    padding: var(--sp-3) 0;
+    border-bottom: var(--rule);
   }
+  .item:last-child { border-bottom: 0; }
   .text {
-    margin: 0.3rem 0;
-    font-size: 0.9rem;
-    color: #374151;
-    line-height: 1.45;
+    margin: var(--sp-1) 0 0;
+    font-size: var(--type-body);
+    color: var(--text-muted);
+    line-height: var(--lh-body);
     max-width: 40rem;
   }
   .switch {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-shrink: 0;
   }
   .switch .state {
-    font-size: 0.85rem;
-    color: #4b5563;
+    font-size: var(--type-small);
+    color: var(--text-muted);
     min-width: 2.4rem;
   }
   .body {
     min-width: 0;
+    flex: 1 1 auto;
     overflow-wrap: anywhere;
+  }
+  /* U1-Sichtprüfung: Auf dem Handy steht der Schalter unter dem Text, sonst bleibt
+     für die Beschreibung bei 320 px nur eine Spalte von ~120 px. */
+  @media (max-width: 600px) {
+    .item { flex-direction: column; align-items: flex-start; gap: var(--sp-1); }
   }
 </style>

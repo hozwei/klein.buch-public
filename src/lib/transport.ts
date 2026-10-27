@@ -1,4 +1,4 @@
-// HTTP-Transport zum Server (Plan W5.11, ADR 0039) — ersetzt die Tauri-Bridge.
+// HTTP-Transport zum Server (Plan W5.11, ADR 0039) — ersetzt die Bridge der Desktop-Fassung.
 //
 // `invoke(name, args)` schickt `POST /api/cmd/{name}` mit JSON-Argumenten,
 // Pflicht-Header `X-KleinBuch-Request` und einem Idempotenz-Schlüssel je
@@ -10,7 +10,9 @@
 // dadurch höchstens einmal aus und liefert bei `timeout` das Ergebnis der
 // noch laufenden ersten Ausführung. 403 `reauth_required` (Plan W6) öffnet den
 // Re-Auth-Dialog (`setReauthHandler`) und wiederholt danach mit demselben
-// Schlüssel.
+// Schlüssel. Der Dialog erfährt die Adresse (`/api/cmd/<name>` bzw. den
+// Auth-Pfad), um die Aktion zu nennen; ein Abbruch wirft `REAUTH_CANCELED`
+// (U4, V1-09: kein Fehler-Toast mit der Server-Meldung).
 
 import { randomId } from "./browser";
 
@@ -33,8 +35,12 @@ function notifyAuth(reason: AuthReason) {
   for (const l of listeners) l(reason);
 }
 
-/** Zeigt den Re-Auth-Dialog; `true`, wenn die Re-Auth gelungen ist. */
-type ReauthHandler = () => Promise<boolean>;
+/** Zeigt den Re-Auth-Dialog für die Anfrage an `url`; `true`, wenn die Re-Auth gelungen ist. */
+type ReauthHandler = (url: string) => Promise<boolean>;
+
+/** Re-Auth-Dialog abgebrochen: nichts wurde ausgeführt. `flash()` zeigt das als
+ *  neutralen Hinweis statt als Fehler (toast.svelte.ts). */
+export const REAUTH_CANCELED = "Abgebrochen – nichts geändert.";
 let reauthHandler: ReauthHandler | null = null;
 
 /** Registriert den Re-Auth-Dialog (einmal, im Layout). */
@@ -65,6 +71,26 @@ const NETWORK_RETRIES = 3;
 export const JOB_POLL_MS = 500;
 /** So lange wird ein 503 `timeout`/`busy` mit demselben Schlüssel wiederholt. */
 export const RETRY_503_MS = 10 * 60_000;
+
+/**
+ * Meldung, wenn ein Command auch nach allen Wiederholungen (`RETRY_503_MS`) noch
+ * mit 503 `timeout` antwortet (U7, R1-07). Ein neuer Klick erzeugt einen neuen
+ * Idempotenz-Schlüssel; bei nicht idempotenten Anlagen (Kosten, Privatbewegung)
+ * entstünde so eine zweite festgeschriebene Buchung. Deshalb ersetzt die Oberfläche
+ * die Server-Meldung („… bitte noch einmal versuchen“) durch den Rat, erst zu prüfen.
+ */
+export const TIMEOUT_UNCLEAR =
+  "Die Aktion dauert ungewöhnlich lange und läuft im Hintergrund möglicherweise noch zu Ende. " +
+  "Prüf in der Liste, ob sie schon ausgeführt wurde, bevor du sie wiederholst.";
+
+async function isTimeout(res: Response): Promise<boolean> {
+  if (res.status !== 503) return false;
+  try {
+    return (await res.clone().json())?.code === "timeout";
+  } catch {
+    return false;
+  }
+}
 
 async function errorMessage(res: Response): Promise<string> {
   try {
@@ -152,10 +178,11 @@ async function sendWithRetries(
     }
     if (!reauthTried && reauthHandler && (await needsReauth(res))) {
       reauthTried = true;
-      if (await reauthHandler()) {
+      if (await reauthHandler(url)) {
         res = await send(url, init);
         continue;
       }
+      throw REAUTH_CANCELED;
     }
     return res;
   }
@@ -191,6 +218,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
   }
   if (!res.ok) {
     handleAuthStatus(res);
+    if (await isTimeout(res)) throw TIMEOUT_UNCLEAR;
     throw await errorMessage(res);
   }
   const text = await res.text();
@@ -356,6 +384,29 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Höchstdauer, die das Frontend auf eine lange Anmeldung (Umstellung der
+ *  Datenbank nach einem Update samt Pflicht-Backup) wartet. */
+const PENDING_AUTH_MAX_MS = 30 * 60_000;
+
+/**
+ * W14-037 (Lauf F4a): Antwortet die Anmeldung bzw. Einrichtung mit 202
+ * (`state: "pending"`), läuft sie auf dem Server weiter; das Ergebnis holt
+ * `POST /api/auth/login/poll` ab (Ticket im HttpOnly-Cookie). Liefert die
+ * endgültige Antwort (200 mit Sitzung, sonst den Fehler).
+ */
+async function followPendingAuth(res: Response, intervalMs = 1000): Promise<Response> {
+  const started = Date.now();
+  let current = res;
+  while (current.status === 202) {
+    if (Date.now() - started > PENDING_AUTH_MAX_MS) {
+      throw "Die Anmeldung dauert ungewöhnlich lange — bitte das Server-Log prüfen und die Seite neu laden.";
+    }
+    await sleep(intervalMs);
+    current = await sendOnce("/api/auth/login/poll", authInit({}));
+  }
+  return current;
+}
+
 /** Neues TOTP-Geheimnis mit QR-Code (Einrichtung bzw. Erneuerung). */
 export interface TotpOffer {
   secret: string;
@@ -363,9 +414,14 @@ export interface TotpOffer {
   qrSvg: string;
 }
 
-/** Einrichtung Schritt 1: Setup-Token prüfen, TOTP-Geheimnis anfordern. */
-export async function authSetupOffer(setupToken: string): Promise<TotpOffer> {
-  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, step: "totp" }));
+/** Einrichtung Schritt 1: Setup-Token prüfen, TOTP-Geheimnis anfordern. Mit
+ *  `passphrase` (nur Ersteinrichtung) prüft der Server das neue Passwort schon
+ *  hier (422 `passphrase_common`/`_too_short`/`_too_long`, Lauf F4a). */
+export async function authSetupOffer(setupToken: string, passphrase?: string): Promise<TotpOffer> {
+  const body = passphrase === undefined
+    ? { setupToken, step: "totp" }
+    : { setupToken, step: "totp", passphrase };
+  return jsonOrThrow(await postAuth("/api/auth/setup", body));
 }
 
 /** Einrichtung Schritt 2: atomar mit Passphrase und TOTP-Bestätigung. */
@@ -374,7 +430,8 @@ export async function authSetupFinish(
   passphrase: string,
   totpCode: string,
 ): Promise<{ recoveryCodes: string[] }> {
-  return jsonOrThrow(await postAuth("/api/auth/setup", { setupToken, passphrase, totpCode }));
+  const res = await postAuth("/api/auth/setup", { setupToken, passphrase, totpCode });
+  return jsonOrThrow(await followPendingAuth(res));
 }
 
 /** Zweiter Faktor: TOTP-Code oder Einmal-Code. */
@@ -390,9 +447,12 @@ export interface LoginResult {
   usedRecoveryCode?: boolean;
 }
 
-/** Anmelden; `ok:false` bei falschen Angaben (immer dieselbe Meldung). */
+/** Anmelden; `ok:false` bei falschen Angaben (immer dieselbe Meldung). Eine
+ *  lange Anmeldung (202, z. B. Umstellung der Datenbank) wird abgewartet. */
 export async function authLogin(passphrase: string, factor: SecondFactor): Promise<LoginResult> {
-  const res = await postAuth("/api/auth/login", { passphrase, ...factor });
+  const res = await followPendingAuth(
+    await postAuth("/api/auth/login", { passphrase, ...factor }),
+  );
   if (res.status === 401) return { ok: false };
   const body = await jsonOrThrow<Omit<LoginResult, "ok">>(res);
   return { ok: true, ...body };
@@ -418,9 +478,21 @@ export async function authLogout(): Promise<void> {
   await jsonOrThrow(await postAuth("/api/auth/logout", {}));
 }
 
-/** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. */
+/** „Datenbank sperren“: Pool zu, alle Sitzungen beendet. Ein ausstehendes
+ *  Lock-Backup oder eine laufende Aktion kann das Sperren über die 30-s-Grenze
+ *  ziehen (Lauf F3c); der Server sperrt dann garantiert im Hintergrund zu Ende
+ *  (Lauf F8: nach dem Beenden der Sitzungen bricht er nicht mehr ab), die
+ *  Sitzungen sind bereits beendet. */
 export async function authLock(): Promise<void> {
-  await jsonOrThrow(await postAuth("/api/auth/lock", {}));
+  const res = await postAuth("/api/auth/lock", {});
+  if (res.status === 503) {
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    if (body?.code === "timeout") return;
+  }
+  await jsonOrThrow(res);
 }
 
 export async function authSecurity(): Promise<{ recoveryLeft: number; insecureHttp: boolean }> {
@@ -429,6 +501,34 @@ export async function authSecurity(): Promise<{ recoveryLeft: number; insecureHt
     credentials: "same-origin",
   });
   return jsonOrThrow(res);
+}
+
+/** Eine angemeldete Sitzung (W14-005). Zeiten UTC wie DB-Zeitstempel. */
+export interface AuthSession {
+  /** Gekürzte Kennung (8 Hex-Zeichen), kein Rückschluss auf das Cookie. */
+  id: string;
+  loginAt: string;
+  lastSeenAt: string;
+  current: boolean;
+  reauthActive: boolean;
+}
+
+/** Übersicht der angemeldeten Sitzungen (W14-005). */
+export async function authSessions(): Promise<AuthSession[]> {
+  const res = await fetchWithRetry("/api/auth/sessions", {
+    method: "GET",
+    credentials: "same-origin",
+  });
+  const body = await jsonOrThrow<{ sessions: AuthSession[] }>(res);
+  return body.sessions;
+}
+
+/** Alle anderen Sitzungen abmelden (Re-Auth); liefert die Anzahl. */
+export async function authRevokeOtherSessions(): Promise<number> {
+  const body = await jsonOrThrow<{ revoked: number }>(
+    await postAuthReauth("/api/auth/sessions/others/revoke", {}),
+  );
+  return body.revoked;
 }
 
 export async function authTotpRenewOffer(): Promise<TotpOffer> {
@@ -449,10 +549,30 @@ export async function authRecoveryRenew(): Promise<string[]> {
   return body.recoveryCodes;
 }
 
+/** Lauf F8: Antwort `timeout` beim Passphrase-Wechsel — das Ergebnis ist
+ *  unklar. Der Server begrenzt seine Wartezeiten so, dass das nicht vorkommen
+ *  sollte; tritt es doch ein (etwa sehr große Datenbank), darf die Oberfläche
+ *  weder „Fehler“ melden noch die neue Passphrase verwerfen. */
+export class PassphraseChangeUnclear extends Error {}
+
 export async function authChangePassphrase(
   newPassphrase: string,
 ): Promise<{ backupStarted: boolean }> {
-  return jsonOrThrow(await postAuthReauth("/api/auth/passphrase", { newPassphrase }));
+  const res = await postAuthReauth("/api/auth/passphrase", { newPassphrase });
+  if (res.status === 503) {
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null);
+    if (body?.code === "timeout") {
+      throw new PassphraseChangeUnclear(
+        "Ergebnis unklar: Der Server hat nicht rechtzeitig geantwortet, der Wechsel kann im " +
+          "Hintergrund noch wirksam geworden sein. Bewahre die neue Passphrase auf und versuche " +
+          "beim nächsten Anmelden zuerst die neue, dann die bisherige.",
+      );
+    }
+  }
+  return jsonOrThrow(res);
 }
 
 // ---- Neustart nach Restore ---------------------------------------------------

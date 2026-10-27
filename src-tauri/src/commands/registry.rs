@@ -1,11 +1,13 @@
 //! Registry aller Command-Kerne (Plan W4, Handler generiert per `w4_codegen.py`)
 //! mit den Zugriffsregeln für den HTTP-Dispatcher (Plan W5.2, ADR 0039).
 //!
-//! Jeder Eintrag: Name (= Command-Name im Frontend), Weg ([`Route`]), `auth`,
-//! `cost`, Art ([`Kind`]), `body_limit` und ein Handler, der das JSON-Argument-
-//! Objekt in das Args-Struct des Kerns übersetzt. Über `POST /api/cmd/{name}`
-//! erreichbar ist nur, was [`Route::Cmd`] hat (verbindliche Allowlist); alles
-//! andere beantwortet der Dispatcher mit 404.
+//! Jeder Eintrag: Name (= Command-Name im Frontend), `auth`, `cost`, Art
+//! ([`Kind`]), `body_limit` und ein Handler, der das JSON-Argument-Objekt in das
+//! Args-Struct des Kerns übersetzt. Die Registry ist die verbindliche Allowlist
+//! für `POST /api/cmd/{name}`; jeden anderen Namen beantwortet der Dispatcher mit
+//! 404. Die Desktop-Commands, die der Server nur noch gesperrt mitführte
+//! (Explorer, Lizenzpfad, MS-Graph, Vorgänger der Auth-Routen), sind seit Lauf F6
+//! samt Kern entfernt (ADR 0039 Nr. 138).
 
 use crate::app_ctx::AppCtx;
 use crate::error::{Error, Result};
@@ -18,6 +20,12 @@ use std::sync::{Arc, LazyLock};
 pub type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send>>;
 /// Handler: Kontext + JSON-Argumente → JSON-Ergebnis.
 pub type Handler = fn(Arc<AppCtx>, Value) -> HandlerFuture;
+/// Ergebnis einer Vorprüfung.
+pub type PrecheckFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+/// Vorprüfung im Dispatcher vor der Annahme (W14-039, Lauf F3a): läuft vor
+/// Sperren wie `begin_restore` und vor dem Start des Jobs; ein Fehler
+/// antwortet sofort (meist 400) und hinterlässt keinen Zustand.
+pub type Precheck = fn(Arc<AppCtx>, Value) -> PrecheckFuture;
 
 /// Wer darf aufrufen (Plan §3, W5/W6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +36,10 @@ pub enum Auth {
     Session,
     /// gültige Sitzung + frische Re-Auth (Prüfung der Frische ab W6)
     Reauth,
+    /// gültige Sitzung; frische Re-Auth nur für Änderungen, die der Kern als
+    /// sicherheitsrelevant erkennt ([`crate::commands::reauth`]). Als frisch
+    /// gilt auch eine Anmeldung der letzten 5 min (W14-038, Lauf F4a).
+    Conditional,
 }
 
 /// Kostenklasse für Lastgrenzen (Plan W5.8).
@@ -55,60 +67,34 @@ pub enum Kind {
     Job,
 }
 
-/// Über welchen Weg der Kern erreichbar ist (Plan W5.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Route {
-    /// `POST /api/cmd/{name}` (Allowlist)
-    Cmd,
-    /// ersetzt durch eine eigene Route (Auth, Upload, Download)
-    Replaced(&'static str),
-    /// entfällt im Server (Desktop-Funktion)
-    Dropped,
-    /// im Server-Betrieb gesperrt (E7 Factory Reset, E9 MS-Graph, E11 Drop-Folder)
-    Blocked,
-}
-
 /// Ein Registry-Eintrag.
 pub struct CommandSpec {
     pub name: &'static str,
-    pub route: Route,
     pub auth: Auth,
     pub cost: Cost,
     pub kind: Kind,
     pub body_limit: usize,
     pub handler: Handler,
+    /// Vorprüfung der Argumente vor der Annahme (W14-039).
+    pub precheck: Option<Precheck>,
 }
 
 /// Standard-Body-Limit für `POST /api/cmd/*` (Plan W5.8).
 pub const DEFAULT_BODY_LIMIT: usize = 256 * 1024;
 
-/// Weg im Server (Plan W5.2).
-fn route_of(name: &str) -> Route {
-    match name {
-        "backup_needs_onboarding" | "backup_is_unlocked" => Route::Replaced("GET /api/auth/status"),
-        "backup_setup_passphrase" => Route::Replaced("POST /api/auth/setup"),
-        "backup_unlock" => Route::Replaced("POST /api/auth/login"),
-        "invoices_open_pdf" | "attachments_open" => Route::Replaced("GET /files/archive/{id} (W7)"),
-        "backup_set_target" | "backup_set_sftp_target" => {
-            Route::Replaced("backup_target_add_directory / backup_target_add_sftp (W7)")
-        }
-        "backup_restore_preview"
-        | "backup_open_folder"
-        | "backup_reveal_path"
-        | "euer_reveal_path"
-        | "invoices_reveal_pdf"
-        | "attachments_reveal"
-        | "third_party_licenses_path" => Route::Dropped,
-        "mail_oauth_status" | "mail_oauth_connect" | "mail_oauth_disconnect" => Route::Blocked,
-        _ => Route::Cmd,
-    }
-}
-
-/// Re-Auth-Pflicht (Plan W6; die Prüfung der Frische folgt in W6).
+/// Re-Auth-Pflicht (Plan W6). Die Liste wird nur erweitert oder gezielt
+/// bedingt gemacht (Lauf F4a); jede Änderung steht im Registry-Test der
+/// Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`).
 fn auth_of(name: &str) -> Auth {
     match name {
-        "backup_set_target"
-        | "backup_set_sftp_target"
+        // W14-038 (Lauf F4a): Re-Auth nur, wenn sich IBAN, BIC oder der
+        // §19-Status (samt Verzicht) gegenüber dem gespeicherten Profil ändern
+        // — Prüfung im Kern (`commands::settings::seller_profile_upsert`).
+        "seller_profile_upsert" => Auth::Conditional,
+        // W14-009 (Lauf F5c): Versand an einen Empfänger, der von der hinterlegten
+        // Adresse des Belegs abweicht — Prüfung in der Vorprüfung und im Kern
+        // (`commands::mail::require_step_up_for_recipient`).
+        "mail_send_invoice" | "mail_send_quote" => Auth::Conditional,
         | "backup_target_add_directory"
         | "backup_target_add_sftp"
         | "backup_target_remove"
@@ -125,13 +111,34 @@ fn auth_of(name: &str) -> Auth {
         | "dsgvo_export"
         | "euer_export_stb_zip"
         | "euer_export_detail_zip"
-        // W14: Zahlungsdaten und §19-Status (IBAN auf jeder künftigen Rechnung,
-        // auch den automatisch versendeten), unumkehrbare Schritte.
-        | "seller_profile_upsert"
+        // W14: Zahlungsdaten (IBAN auf jeder künftigen Rechnung, auch den
+        // automatisch versendeten), unumkehrbare Schritte.
         | "payment_accounts_create"
         | "payment_accounts_update"
+        // Lauf F4a (W14-028/W14-003): Konto aktivieren bzw. deaktivieren
+        // ändert, welche Bankverbindung auf künftigen Rechnungen steht.
+        | "payment_accounts_set_active"
+        // Lauf F4a (W14-028, ASVS V11.1.4): Exporte mit Buchungstexten,
+        // Kundennamen und Beträgen verlassen den Server im Klartext.
+        | "euer_export_datev"
+        | "euer_export_elster"
+        | "euer_export_pdf"
         | "contacts_anonymize"
-        | "fiscal_year_close" => Auth::Reauth,
+        | "fiscal_year_close"
+        // Lauf F: Freigabe nach einer Pause der automatischen Belegerzeugung
+        // (Uhrsprung, Restore) — danach können Rechnungen hinausgehen.
+        | "scheduler_release_hold"
+        // Lauf F (D-24): Anheben eines Nummernkreises (dokumentierte Lücke).
+        | "numbering_raise"
+        // Lauf F (F1d): Freigabe eines wiederhergestellten Entwurfs, dessen
+        // Nummer vor dem Restore schon festgeschrieben war.
+        | "numbering_restored_draft_confirm"
+        // Lauf F (F2a, W14-032): Verwerfen eines nummerierten Rechnungs-
+        // Entwurfs — unumkehrbar, die Nummer bleibt verbraucht.
+        | "invoices_void_draft"
+        // Lauf F (F3a, W13-BACKUP-DOWNLOAD): die verschlüsselte `.kbk` verlässt
+        // den Server (Offline-Angriff auf die Passphrase möglich).
+        | "backup_download" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -168,10 +175,13 @@ fn cost_of(name: &str) -> Cost {
     }
 }
 
-/// Art des Aufrufs (Plan W5.6). Was nicht ausdrücklich nur liest, gilt als
-/// ändernd (abgekoppelt + Idempotenz — für reine Leser unschädlich).
-fn kind_of(name: &str) -> Kind {
-    match name {
+/// Art des Aufrufs (Plan W5.6). Jeder Command ist ausdrücklich eingestuft
+/// (W14-012, Lauf F4b): [`Kind::Job`], [`Kind::Read`] oder [`Kind::Write`]; ein
+/// neuer Command ohne Einstufung ergibt `None` und lässt den Registry-Test
+/// `every_command_has_an_explicit_kind` scheitern. Im Betrieb gilt ein
+/// nicht eingestufter Command vorsichtshalber als ändernd ([`kind_of`]).
+pub fn classified_kind(name: &str) -> Option<Kind> {
+    let kind = match name {
         // Festschreiben/Ausstellen, Storno, Versand, Backup, Restore, Exporte
         "invoices_lock_and_issue"
         | "quotes_issue"
@@ -186,37 +196,183 @@ fn kind_of(name: &str) -> Kind {
         | "euer_export_stb_zip"
         | "dsgvo_export"
         | "migration_export_run" => Kind::Job,
-        // legt fällige Abo-Kosten an
-        "recurring_run_due_check" => Kind::Write,
-        n if n.ends_with("_list")
-            || n.ends_with("_get")
-            || n.ends_with("_search")
-            || n.ends_with("_data")
-            || n.ends_with("_info")
-            || n.ends_with("_overview")
-            || n.ends_with("_history")
-            || n.ends_with("_preview")
-            || n.ends_with("_count")
-            || n.ends_with("_status")
-            || n.ends_with("_check") =>
-        {
-            Kind::Read
-        }
-        "euer_compute_report"
-        | "euer_available_years"
-        | "euer_package"
-        | "euer_afa_pending"
+        // liest nur (keine Datenänderung; Vorschauen und das EÜR-Paket legen
+        // höchstens einen flüchtigen Download an)
+        "app_info"
+        | "archive_integrity_history"
         | "assets_afa_table"
+        | "assets_disposal_preview"
+        | "assets_get"
+        | "assets_list"
         | "assets_suggest_method"
+        | "attachments_list"
+        | "audit_trail_list"
+        | "backup_list"
+        | "backup_log_list"
+        | "backup_log_search"
+        | "contacts_anonymize_check"
+        | "contacts_get"
+        | "contacts_list"
+        | "contacts_search"
         | "depreciation_list_for_year"
+        | "document_terms_get"
         | "email_log_for"
+        | "email_log_list"
+        | "email_log_search"
+        | "euer_afa_pending"
+        | "euer_available_years"
+        | "euer_compute_report"
+        | "euer_package"
+        | "expenses_get"
+        | "expenses_list"
+        | "expenses_receipt_xml_text"
+        | "fiscal_year_closed_list"
+        | "fiscal_year_overview"
+        | "invoices_get"
+        | "invoices_list"
         | "invoices_validate_draft"
-        | "quotes_validate_draft"
+        | "legal_documents_list"
+        | "mail_accounts_list"
+        | "mail_invoice_preview"
+        | "mail_quote_preview"
+        | "notification_rules_list"
+        | "notifications_list"
+        | "notifications_unread_count"
+        | "numbering_counters_list"
+        | "numbering_restored_drafts_list"
+        | "package_categories_list"
+        | "package_preview"
+        | "package_revisions_get"
+        | "package_revisions_list"
+        | "packages_get"
+        | "packages_list"
+        | "paragraph_19_info"
+        | "payment_accounts_list"
+        | "pdf_template_preview"
+        | "pdf_templates_list"
+        | "private_movements_get"
+        | "private_movements_list"
+        | "quote_signature_get"
+        | "quotes_get"
         | "quotes_legal_bindings"
+        | "quotes_list"
+        | "quotes_validate_draft"
+        | "recurring_get"
+        | "recurring_invoices_get"
+        | "recurring_invoices_list"
+        | "recurring_list"
+        | "recurring_restore_review_list"
+        | "scheduler_hold_status"
+        | "seller_logo_data"
+        | "seller_owner_get"
+        | "seller_profile_get"
+        | "seller_signature_data"
         | "travel_compute"
-        | "expenses_receipt_xml_text" => Kind::Read,
-        _ => Kind::Write,
-    }
+        | "travel_settings_get"
+        | "update_check_get" => Kind::Read,
+        // ändert Daten oder legt Dateien/Hinweise an (abgekoppelt + Idempotenz)
+        "archive_integrity_run"
+        | "assets_create"
+        | "assets_dispose"
+        | "assets_update"
+        | "attachments_add"
+        | "backup_download"
+        | "backup_get_settings"
+        | "backup_set_daily_time"
+        | "backup_target_add_directory"
+        | "backup_target_add_sftp"
+        | "backup_target_remove"
+        | "backup_test_sftp"
+        | "backup_test_sftp_saved"
+        | "contacts_anonymize"
+        | "contacts_archive"
+        | "contacts_create"
+        | "contacts_unarchive"
+        | "contacts_update"
+        | "depreciation_accrue_year"
+        | "depreciation_reset_asset"
+        | "document_terms_set"
+        | "euer_export_datev"
+        | "euer_export_detail_zip"
+        | "euer_export_elster"
+        | "euer_export_pdf"
+        | "expenses_cancel"
+        | "expenses_create"
+        | "expenses_create_from_einvoice"
+        | "expenses_parse_einvoice"
+        | "expenses_set_payment"
+        | "fiscal_year_auto_close_set"
+        | "fiscal_year_close"
+        | "invoices_create_draft"
+        | "invoices_record_payment"
+        | "invoices_update_draft"
+        | "invoices_void_draft"
+        | "legal_documents_activate"
+        | "legal_documents_deactivate"
+        | "legal_documents_upload"
+        | "mail_account_create"
+        | "mail_account_delete"
+        | "mail_account_test_connection"
+        | "mail_account_test_saved"
+        | "mail_account_update"
+        | "mail_send_test"
+        | "notification_rules_set_enabled"
+        | "notifications_dismiss"
+        | "notifications_dismiss_all"
+        | "notifications_run_checks"
+        | "numbering_raise"
+        | "numbering_restored_draft_confirm"
+        | "package_catalog_render"
+        | "package_categories_reorder"
+        | "package_category_create"
+        | "package_category_update"
+        | "package_materialize_item"
+        | "package_revisions_rollback"
+        | "packages_archive"
+        | "packages_create"
+        | "packages_reactivate"
+        | "packages_update_as_new_revision"
+        | "payment_accounts_create"
+        | "payment_accounts_set_active"
+        | "payment_accounts_update"
+        | "private_movements_create"
+        | "quote_signature_set"
+        | "quotes_accept"
+        | "quotes_cancel"
+        | "quotes_convert_to_invoice"
+        | "quotes_create_draft"
+        | "quotes_generate_pdf"
+        | "quotes_open_bundle"
+        | "quotes_reject"
+        | "recurring_create"
+        | "recurring_invoices_create"
+        | "recurring_invoices_resolve_backlog"
+        | "recurring_invoices_set_active"
+        | "recurring_invoices_update"
+        | "recurring_resolve_backlog"
+        | "recurring_run_due_check"
+        | "recurring_run_now"
+        | "recurring_set_active"
+        | "recurring_update"
+        | "scheduler_release_hold"
+        | "seller_default_template_set"
+        | "seller_logo_clear"
+        | "seller_logo_set"
+        | "seller_owner_set"
+        | "seller_profile_upsert"
+        | "seller_signature_clear"
+        | "seller_signature_set"
+        | "travel_settings_set"
+        | "update_check_set" => Kind::Write,
+        _ => return None,
+    };
+    Some(kind)
+}
+
+/// Art des Aufrufs für die Registry; nicht Eingestuftes gilt als ändernd
+/// (abgekoppelt + Idempotenz — für reine Leser unschädlich).
+fn kind_of(name: &str) -> Kind {
+    classified_kind(name).unwrap_or(Kind::Write)
 }
 
 fn body_limit_of(_name: &str) -> usize {
@@ -224,22 +380,27 @@ fn body_limit_of(_name: &str) -> usize {
     DEFAULT_BODY_LIMIT
 }
 
+/// Vorprüfung vor der Annahme (W14-039).
+fn precheck_of(name: &str) -> Option<Precheck> {
+    match name {
+        "backup_restore_apply" => Some(pre::backup_restore_apply),
+        "mail_send_invoice" => Some(pre::mail_send_invoice),
+        "mail_send_quote" => Some(pre::mail_send_quote),
+        _ => None,
+    }
+}
+
 impl CommandSpec {
     fn new(name: &'static str, handler: Handler) -> Self {
         Self {
             name,
-            route: route_of(name),
             auth: auth_of(name),
             cost: cost_of(name),
             kind: kind_of(name),
             body_limit: body_limit_of(name),
             handler,
+            precheck: precheck_of(name),
         }
-    }
-
-    /// Über `POST /api/cmd/{name}` erreichbar?
-    pub fn exposed(&self) -> bool {
-        self.route == Route::Cmd
     }
 }
 
@@ -251,14 +412,9 @@ pub static REGISTRY: LazyLock<Vec<CommandSpec>> = LazyLock::new(|| {
         .collect()
 });
 
-/// Sucht einen Eintrag nach Name (auch nicht erreichbare).
+/// Sucht einen Eintrag nach Name (Allowlist für `POST /api/cmd/{name}`).
 pub fn find(name: &str) -> Option<&'static CommandSpec> {
     REGISTRY.iter().find(|c| c.name == name)
-}
-
-/// Sucht einen über `POST /api/cmd/{name}` erreichbaren Eintrag (Allowlist).
-pub fn find_exposed(name: &str) -> Option<&'static CommandSpec> {
-    find(name).filter(|c| c.exposed())
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
@@ -279,19 +435,13 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("assets_create", h::assets_create),
     ("assets_update", h::assets_update),
     ("assets_dispose", h::assets_dispose),
-    ("attachments_open", h::attachments_open),
-    ("attachments_reveal", h::attachments_reveal),
+    ("assets_disposal_preview", h::assets_disposal_preview),
     ("attachments_list", h::attachments_list),
     ("attachments_add", h::attachments_add),
-    ("backup_needs_onboarding", h::backup_needs_onboarding),
-    ("backup_is_unlocked", h::backup_is_unlocked),
     ("backup_get_settings", h::backup_get_settings),
-    ("backup_setup_passphrase", h::backup_setup_passphrase),
-    ("backup_unlock", h::backup_unlock),
+    ("backup_set_daily_time", h::backup_set_daily_time),
     ("backup_create_now", h::backup_create_now),
-    ("backup_set_target", h::backup_set_target),
     ("backup_test_sftp", h::backup_test_sftp),
-    ("backup_set_sftp_target", h::backup_set_sftp_target),
     (
         "backup_target_add_directory",
         h::backup_target_add_directory,
@@ -299,13 +449,11 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("backup_target_add_sftp", h::backup_target_add_sftp),
     ("backup_target_remove", h::backup_target_remove),
     ("backup_test_sftp_saved", h::backup_test_sftp_saved),
-    ("backup_open_folder", h::backup_open_folder),
-    ("backup_reveal_path", h::backup_reveal_path),
     ("backup_list", h::backup_list),
     ("backup_log_list", h::backup_log_list),
     ("backup_log_search", h::backup_log_search),
-    ("backup_restore_preview", h::backup_restore_preview),
     ("backup_restore_apply", h::backup_restore_apply),
+    ("backup_download", h::backup_download),
     ("contacts_list", h::contacts_list),
     ("contacts_get", h::contacts_get),
     ("contacts_create", h::contacts_create),
@@ -328,7 +476,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("euer_export_datev", h::euer_export_datev),
     ("euer_export_stb_zip", h::euer_export_stb_zip),
     ("euer_afa_pending", h::euer_afa_pending),
-    ("euer_reveal_path", h::euer_reveal_path),
     ("expenses_list", h::expenses_list),
     ("expenses_get", h::expenses_get),
     ("expenses_create", h::expenses_create),
@@ -343,17 +490,16 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("fiscal_year_overview", h::fiscal_year_overview),
     ("fiscal_year_close", h::fiscal_year_close),
     ("fiscal_year_closed_list", h::fiscal_year_closed_list),
-    ("fiscal_year_auto_close_get", h::fiscal_year_auto_close_get),
     ("fiscal_year_auto_close_set", h::fiscal_year_auto_close_set),
     ("invoices_list", h::invoices_list),
     ("invoices_get", h::invoices_get),
-    ("invoices_open_pdf", h::invoices_open_pdf),
-    ("invoices_reveal_pdf", h::invoices_reveal_pdf),
     ("invoices_create_draft", h::invoices_create_draft),
     ("invoices_validate_draft", h::invoices_validate_draft),
     ("invoices_lock_and_issue", h::invoices_lock_and_issue),
     ("invoices_record_payment", h::invoices_record_payment),
     ("invoices_cancel", h::invoices_cancel),
+    ("invoices_void_draft", h::invoices_void_draft),
+    ("invoices_update_draft", h::invoices_update_draft),
     ("legal_documents_list", h::legal_documents_list),
     ("legal_documents_upload", h::legal_documents_upload),
     ("legal_documents_activate", h::legal_documents_activate),
@@ -367,9 +513,6 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::mail_account_test_connection,
     ),
     ("mail_account_test_saved", h::mail_account_test_saved),
-    ("mail_oauth_status", h::mail_oauth_status),
-    ("mail_oauth_connect", h::mail_oauth_connect),
-    ("mail_oauth_disconnect", h::mail_oauth_disconnect),
     ("email_log_list", h::email_log_list),
     ("email_log_for", h::email_log_for),
     ("email_log_search", h::email_log_search),
@@ -410,10 +553,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("package_catalog_render", h::package_catalog_render),
     ("package_catalog_send", h::package_catalog_send),
     ("payment_accounts_list", h::payment_accounts_list),
-    (
-        "payment_accounts_ensure_defaults",
-        h::payment_accounts_ensure_defaults,
-    ),
     ("payment_accounts_create", h::payment_accounts_create),
     ("payment_accounts_update", h::payment_accounts_update),
     (
@@ -425,7 +564,6 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("private_movements_create", h::private_movements_create),
     ("quotes_list", h::quotes_list),
     ("quotes_get", h::quotes_get),
-    ("quotes_attachments_list", h::quotes_attachments_list),
     ("quotes_create_draft", h::quotes_create_draft),
     ("quotes_validate_draft", h::quotes_validate_draft),
     ("quotes_issue", h::quotes_issue),
@@ -443,6 +581,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("recurring_set_active", h::recurring_set_active),
     ("recurring_run_now", h::recurring_run_now),
     ("recurring_run_due_check", h::recurring_run_due_check),
+    ("recurring_resolve_backlog", h::recurring_resolve_backlog),
     ("recurring_invoices_list", h::recurring_invoices_list),
     ("recurring_invoices_get", h::recurring_invoices_get),
     ("recurring_invoices_create", h::recurring_invoices_create),
@@ -452,6 +591,10 @@ static ENTRIES: &[(&str, Handler)] = &[
         h::recurring_invoices_set_active,
     ),
     ("recurring_invoices_run_now", h::recurring_invoices_run_now),
+    (
+        "recurring_invoices_resolve_backlog",
+        h::recurring_invoices_resolve_backlog,
+    ),
     (
         "recurring_invoices_run_due_check",
         h::recurring_invoices_run_due_check,
@@ -486,7 +629,22 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("archive_integrity_run", h::archive_integrity_run),
     ("archive_integrity_history", h::archive_integrity_history),
     ("app_info", h::app_info),
-    ("third_party_licenses_path", h::third_party_licenses_path),
+    ("scheduler_hold_status", h::scheduler_hold_status),
+    ("scheduler_release_hold", h::scheduler_release_hold),
+    ("numbering_counters_list", h::numbering_counters_list),
+    ("numbering_raise", h::numbering_raise),
+    (
+        "numbering_restored_drafts_list",
+        h::numbering_restored_drafts_list,
+    ),
+    (
+        "numbering_restored_draft_confirm",
+        h::numbering_restored_draft_confirm,
+    ),
+    (
+        "recurring_restore_review_list",
+        h::recurring_restore_review_list,
+    ),
 ];
 
 mod h {
@@ -555,20 +713,11 @@ mod h {
         })
     }
 
-    pub fn attachments_open(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+    pub fn assets_disposal_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
-            let args: crate::commands::attachments::AttachmentsOpenArgs = parse(v)?;
+            let args: crate::commands::assets::AssetsDisposalPreviewArgs = parse(v)?;
             Ok(serde_json::to_value(
-                crate::commands::attachments::attachments_open(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn attachments_reveal(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::attachments::AttachmentsRevealArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::attachments::attachments_reveal(&ctx, args).await?,
+                crate::commands::assets::assets_disposal_preview(&ctx, args).await?,
             )?)
         })
     }
@@ -591,24 +740,6 @@ mod h {
         })
     }
 
-    pub fn backup_needs_onboarding(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupNeedsOnboardingArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_needs_onboarding(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_is_unlocked(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupIsUnlockedArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_is_unlocked(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_get_settings(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupGetSettingsArgs = parse(v)?;
@@ -618,38 +749,11 @@ mod h {
         })
     }
 
-    pub fn backup_setup_passphrase(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetupPassphraseArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_setup_passphrase(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_unlock(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupUnlockArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_unlock(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_create_now(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupCreateNowArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_create_now(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_set_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetTargetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_set_target(&ctx, args).await?,
             )?)
         })
     }
@@ -708,33 +812,6 @@ mod h {
         })
     }
 
-    pub fn backup_set_sftp_target(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupSetSftpTargetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_set_sftp_target(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_open_folder(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupOpenFolderArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_open_folder(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn backup_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupRevealPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_reveal_path(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupListArgs = parse(v)?;
@@ -762,20 +839,20 @@ mod h {
         })
     }
 
-    pub fn backup_restore_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::backup::BackupRestorePreviewArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::backup::backup_restore_preview(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn backup_restore_apply(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::backup::backup_restore_apply(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_download(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupDownloadArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_download(&ctx, args).await?,
             )?)
         })
     }
@@ -978,15 +1055,6 @@ mod h {
         })
     }
 
-    pub fn euer_reveal_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::euer::EuerRevealPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::euer::euer_reveal_path(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn expenses_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::expenses::ExpensesListArgs = parse(v)?;
@@ -1086,15 +1154,6 @@ mod h {
         })
     }
 
-    pub fn fiscal_year_auto_close_get(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::fiscal_year::FiscalYearAutoCloseGetArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::fiscal_year::fiscal_year_auto_close_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
     pub fn fiscal_year_auto_close_set(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::fiscal_year::FiscalYearAutoCloseSetArgs = parse(v)?;
@@ -1118,24 +1177,6 @@ mod h {
             let args: crate::commands::invoices::InvoicesGetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn invoices_open_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::invoices::InvoicesOpenPdfArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::invoices::invoices_open_pdf(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn invoices_reveal_pdf(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::invoices::InvoicesRevealPdfArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::invoices::invoices_reveal_pdf(&ctx, args).await?,
             )?)
         })
     }
@@ -1181,6 +1222,24 @@ mod h {
             let args: crate::commands::invoices::InvoicesCancelArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_cancel(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_update_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesUpdateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_update_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_void_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesVoidDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_void_draft(&ctx, args).await?,
             )?)
         })
     }
@@ -1262,33 +1321,6 @@ mod h {
             let args: crate::commands::mail::MailAccountTestConnectionArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::mail::mail_account_test_connection(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_status(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthStatusArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_status(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_connect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthConnectArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_connect(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn mail_oauth_disconnect(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::mail::MailOauthDisconnectArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::mail::mail_oauth_disconnect(&ctx, args).await?,
             )?)
         })
     }
@@ -1599,17 +1631,6 @@ mod h {
         })
     }
 
-    pub fn payment_accounts_ensure_defaults(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::payment_accounts::PaymentAccountsEnsureDefaultsArgs =
-                parse(v)?;
-            let out =
-                crate::commands::payment_accounts::payment_accounts_ensure_defaults(&ctx, args)
-                    .await?;
-            Ok(serde_json::to_value(out)?)
-        })
-    }
-
     pub fn payment_accounts_create(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
         Box::pin(async move {
             let args: crate::commands::payment_accounts::PaymentAccountsCreateArgs = parse(v)?;
@@ -1678,15 +1699,6 @@ mod h {
             let args: crate::commands::quotes::QuotesGetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::quotes::quotes_get(&ctx, args).await?,
-            )?)
-        })
-    }
-
-    pub fn quotes_attachments_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
-        Box::pin(async move {
-            let args: crate::commands::quotes::QuotesAttachmentsListArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::quotes::quotes_attachments_list(&ctx, args).await?,
             )?)
         })
     }
@@ -1831,6 +1843,98 @@ mod h {
             let args: crate::commands::recurring::RecurringRunNowArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::recurring::recurring_run_now(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_resolve_backlog(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringResolveBacklogArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_resolve_backlog(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_invoices_resolve_backlog(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring_invoice::RecurringInvoicesResolveBacklogArgs =
+                parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring_invoice::recurring_invoices_resolve_backlog(&ctx, args)
+                    .await?,
+            )?)
+        })
+    }
+
+    pub fn scheduler_hold_status(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::SchedulerHoldStatusArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::scheduler_hold_status(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn scheduler_release_hold(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::SchedulerReleaseHoldArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::scheduler_release_hold(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_counters_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingCountersListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_counters_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_raise(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRaiseArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_raise(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_restored_drafts_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRestoredDraftsListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_restored_drafts_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn numbering_restored_draft_confirm(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::system::NumberingRestoredDraftConfirmArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::system::numbering_restored_draft_confirm(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_restore_review_list(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringRestoreReviewListArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_restore_review_list(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn backup_set_daily_time(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::backup::BackupSetDailyTimeArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::backup::backup_set_daily_time(&ctx, args).await?,
             )?)
         })
     }
@@ -2153,13 +2257,32 @@ mod h {
             )?)
         })
     }
+}
 
-    pub fn third_party_licenses_path(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+/// Vorprüfungen ([`Precheck`], W14-039).
+mod pre {
+    use super::*;
+
+    pub fn backup_restore_apply(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
         Box::pin(async move {
-            let args: crate::commands::system::ThirdPartyLicensesPathArgs = parse(v)?;
-            Ok(serde_json::to_value(
-                crate::commands::system::third_party_licenses_path(&ctx, args).await?,
-            )?)
+            let args: crate::commands::backup::BackupRestoreApplyArgs = parse(v)?;
+            crate::commands::backup::backup_restore_apply_precheck(&ctx, &args).await
+        })
+    }
+
+    /// W14-009: abweichender Empfänger → 403 `reauth_required` vor der Annahme.
+    pub fn mail_send_invoice(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendInvoiceArgs = parse(v)?;
+            crate::commands::mail::mail_send_invoice_precheck(&ctx, &args).await
+        })
+    }
+
+    /// W14-009: wie [`mail_send_invoice`].
+    pub fn mail_send_quote(ctx: Arc<AppCtx>, v: Value) -> PrecheckFuture {
+        Box::pin(async move {
+            let args: crate::commands::mail::MailSendQuoteArgs = parse(v)?;
+            crate::commands::mail::mail_send_quote_precheck(&ctx, &args).await
         })
     }
 }

@@ -21,11 +21,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
@@ -51,6 +50,10 @@ pub struct TotpFile {
 pub enum Check {
     Valid,
     Invalid,
+    /// Der Code passt zu einem bereits verbrauchten Zeitschritt (Wiederholung,
+    /// RFC 6238 §5.2); abgelehnt wie `Invalid`, nur im Log unterschieden
+    /// (`reason=totp_replay`, ASVS V2.8.5, Lauf F4a).
+    Replay,
     /// `totp.json` fehlt (nach `totp-reset` oder vor der Einrichtung).
     Missing,
 }
@@ -159,8 +162,7 @@ fn normalize_recovery(input: &str) -> String {
 }
 
 fn recovery_hash(normalized: &str) -> String {
-    let digest = Sha256::digest(normalized.as_bytes());
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    crate::hash::sha256_hex(normalized.as_bytes())
 }
 
 /// Ablage `/data/auth/totp.json`.
@@ -280,12 +282,14 @@ impl TotpStore {
         let secret = decode_secret(&file.secret_b32)?;
         let now = step_at(now_unix);
         let mut matched: Option<u64> = None;
+        let mut replayed = false;
         for step in [now.saturating_sub(1), now, now + 1] {
             let expected = code_for_step(&secret, step);
             let eq: bool = expected.as_bytes().ct_eq(code.as_bytes()).into();
             if eq && well_formed && step > file.last_used_step && matched.is_none() {
                 matched = Some(step);
             }
+            replayed |= eq && well_formed && step <= file.last_used_step;
         }
         match matched {
             Some(step) => {
@@ -293,6 +297,7 @@ impl TotpStore {
                 self.write(&file)?;
                 Ok(Check::Valid)
             }
+            None if replayed => Ok(Check::Replay),
             None => Ok(Check::Invalid),
         }
     }
@@ -368,6 +373,16 @@ pub fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
+    /// Lauf F6b (LE-HASH-CRATES): gespeicherte Hashes der Wiederherstellungs-
+    /// codes bleiben über Crate-Updates gleich (sonst wären alle ungültig).
+    #[test]
+    fn recovery_hash_known_answer() {
+        assert_eq!(
+            recovery_hash(&normalize_recovery("abcd-2345-efgh-6789")),
+            "314d0391c297e5142ab14c76bf799f3c04a1e1a01deb862d0a3ba2b7def8f538"
+        );
+    }
+
     /// RFC 6238 Anhang B (SHA1, Geheimnis "12345678901234567890"), 6 Stellen.
     #[test]
     fn rfc6238_vectors() {
@@ -397,7 +412,7 @@ mod tests {
         let confirmed = code_for_step(&secret, step_at(t0) + 1);
         assert_eq!(
             store.verify_code(&confirmed, t0).unwrap(),
-            Check::Invalid,
+            Check::Replay,
             "Bestätigungscode verbraucht"
         );
         let t = t0 + 2 * PERIOD_SECS;
@@ -405,12 +420,12 @@ mod tests {
         assert_eq!(store.verify_code(&code, t).unwrap(), Check::Valid);
         assert_eq!(
             store.verify_code(&code, t).unwrap(),
-            Check::Invalid,
+            Check::Replay,
             "Replay"
         );
         // Neuer Store (Neustart): Replay bleibt verboten.
         let again = TotpStore::new(dir.path());
-        assert_eq!(again.verify_code(&code, t).unwrap(), Check::Invalid);
+        assert_eq!(again.verify_code(&code, t).unwrap(), Check::Replay);
         // t+1 ok, t+2 (zwei Schritte voraus) nicht
         let later = t + PERIOD_SECS;
         let plus1 = code_for_step(&secret, step_at(later) + 1);

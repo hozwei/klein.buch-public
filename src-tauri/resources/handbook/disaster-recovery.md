@@ -20,7 +20,8 @@ Disaster Recovery (Wiederherstellung nach einem Totalausfall).
 1. Eine aktuelle Backup-Datei (Endung `.kbk`) von einem Deiner externen
    Ziele, also vom NAS, aus dem Cloud-Speicher oder vom SFTP-Server. Ist
    nur der Server kaputt, der Daten-Ordner aber noch lesbar, findest Du
-   die Backups auch dort im Unterordner `backups`.
+   die Backups auch dort im Unterordner `backups`. Eine früher mit
+   "Herunterladen" geholte Datei taugt ebenso.
 2. Die Passphrase, die galt, als dieses Backup erstellt wurde. Sie ist
    der einzige Schlüssel zu Deinem Backup. Ohne sie ist die Datei
    wertlos, und niemand kann sie öffnen, auch nicht der Hersteller von
@@ -43,14 +44,15 @@ Uhrzeit der Sicherung, zum Beispiel
 
 Vergleiche diesen Zeitpunkt mit Deiner zuletzt verschickten Rechnung.
 Alles, was nach dem Backup festgeschrieben wurde, fehlt nach der
-Wiederherstellung. Klein.Buch kennt diese Belege dann nicht und vergibt
-ihre Nummern erneut. Dasselbe gilt für Abo-Rechnungen: Waren sie laut
-Backup noch fällig, schreibt Klein.Buch sie gleich nach der ersten
-Anmeldung fest und verschickt sie, wenn sie so eingestellt sind, auch per
-E-Mail. Prüfe deshalb direkt nach der Anmeldung die Rechnungen (siehe
-Schritt 4). Klein.Buch ist ein Werkzeug, kein Steuerberater. Bei Lücken
-oder doppelten Rechnungen sprich mit Deiner Steuerberatung, bevor Du
-etwas stornierst.
+Wiederherstellung. Die neue Instanz kennt diese Belege nicht und damit
+auch nicht ihre Nummern. Damit keine Nummer doppelt vergeben wird
+(§14 Abs. 4 Nr. 4 UStG), hebst Du die betroffenen Nummernkreise vor der
+ersten neuen Rechnung an (Schritt 4). Eine Lücke ist zulässig und
+dokumentiert, eine doppelte Nummer nicht. Abo-Rechnungen, Abo-Kosten und
+der Versand bleiben nach der Wiederherstellung angehalten, bis Du sie
+freigibst; es geht also nichts automatisch hinaus. Klein.Buch ist ein
+Werkzeug, kein Steuerberater. Bei Lücken oder doppelten Rechnungen sprich
+mit Deiner Steuerberatung, bevor Du etwas stornierst.
 
 ## Schritt 1: Neue Instanz anlegen
 
@@ -68,7 +70,7 @@ Der Betreiber installiert Klein.Buch neu, wie im Kapitel "[Installation mit Dock
    Ziele kommt mit dem Backup zurück, und Klein.Buch erkennt die Ordner
    an diesen Namen.
 4. Seine Kopie von `/inputs` legt der Betreiber vor dem ersten Start in
-   den neuen Vorlagen-Ordner. Klein.Buch ergänzt beim Start fehlende
+   den neuen Vorlagen-Ordner. Klein.Buch ergänzt beim Containerstart fehlende
    Dateien aus dem Image und überschreibt nie eine Datei, die Du geändert
    hast. Bringt das Image eine neuere Fassung einer solchen Datei mit,
    legt Klein.Buch sie mit der Endung `.neu` daneben und meldet das unter
@@ -97,20 +99,21 @@ funktioniert nicht mehr. Die neuen Einmal-Codes gelten weiter.
 
 1. Kopiere die Backup-Datei vom externen Ziel vollständig auf Dein Gerät.
 2. Öffne in der neuen Instanz "Einstellungen" und "Backups" und wähle in
-   der Karte "Wiederherstellen" im Feld "Backup-Datei" die `.kbk`-Datei.
+   der Karte "Wiederherstellen" im Feld "Backup-Datei (.kbk)" die `.kbk`-Datei.
 3. Gib im Feld "Backup-Passwort" die Passphrase ein, die galt, als das
    Backup erstellt wurde.
-4. Klick auf "Wiederherstellen" und bestätige die Rückfrage. Fragt
-   Klein.Buch im Fenster "Aktion bestätigen" nach Daten-Passwort und
-   App-Code, sind das die Passphrase und der Code der neuen Instanz aus
-   Schritt 2.
+4. Klick auf "Wiederherstellen" und bestätige die Rückfrage "Backup
+   wiederherstellen?" mit "Wiederherstellen". Fragt Klein.Buch danach im
+   Fenster "Aktion bestätigen: Backup wiederherstellen" nach
+   Daten-Passwort und App-Code, sind das die Passphrase und der Code der
+   neuen Instanz aus Schritt 2.
 
 Klein.Buch lädt die Datei hoch und prüft sie: Passphrase, Vollständigkeit,
 Version und ob die Datenbank im Backup zu diesem Server passt. Erst dann
 legt es ein Sicherheits-Backup des aktuellen Stands an. Das ist vor
 jeder Wiederherstellung Pflicht, auch wenn die neue Instanz noch leer
 ist. Danach meldet es "Wiederherstellung vorbereitet", der Server startet
-neu und spielt das Backup beim Start ein. Das Sicherheits-Backup der
+neu und spielt das Backup beim Neustart ein. Das Sicherheits-Backup der
 leeren Instanz steht später im Backup-Verlauf ("Vor einer
 Wiederherstellung"). Du kannst es ignorieren.
 
@@ -123,17 +126,43 @@ Datenbank auf das aktuelle Format um.
 
 Danach prüfst Du:
 
-1. Unter "Rechnungen": Ist Deine letzte Rechnung da? Sind gerade
-   Abo-Rechnungen entstanden, die es schon gab?
+1. Unter "Rechnungen", "Kosten" und den anderen Belegen: Welche Nummer
+   wurde nach dem Stand des Backups zuletzt vergeben (Mail-Ausgang,
+   Korrespondenz, Kontoauszug)? Fehlen Belege, hebst Du unter
+   "Einstellungen" → "Backups" → "Nummernkreise" den betroffenen Kreis
+   an: Klick in seiner Zeile auf "Anheben …", trag im Feld "Zuletzt
+   vergebene Nummer (laufende Nummer)" die zuletzt vergebene laufende
+   Nummer und im Feld "Begründung (Audit-Log)" mindestens 10 Zeichen ein
+   und klick auf "Nummernkreis anheben". Die Rückfrage nennt die nächste
+   Nummer; Du bestätigst mit "Anheben" und, falls Klein.Buch danach
+   fragt, mit Daten-Passwort und App-Code. Klein.Buch lässt nur ein
+   Anheben zu, nie ein Absenken. Der Hinweis "Nummernkreise nach der
+   Wiederherstellung" unter "Hinweise" erinnert daran.
 2. Unter "Einstellungen" und "Backups": Sind die externen Ziele wieder
-   da? Klick auf "Jetzt sichern" und schau, ob die Kopie auf jedes Ziel
-   klappt.
+   da? Bis zur Freigabe (Punkt 5) gehen Backups nur in den lokalen
+   Ordner; nach "Jetzt sichern" stehen die Ziele deshalb als
+   "Ausgesetzt". Unter "Rechnungen" → "Abo-Rechnungen" und "Kosten" →
+   "Kosten-Abos": Reihen mit einem offenen Termin bis heute
+   zeigen "Rückstand …"
+   (pausierte Reihen fragen beim Fortsetzen). Prüfe im Mail-Ausgang bzw.
+   auf dem Kontoauszug, ob der Termin auf dem alten Server schon
+   abgerechnet wurde. "Ab heute fortsetzen" lässt die offenen Termine aus,
+   auch einen heute fälligen; "Nachholen" legt Rechnungen nur als Entwurf
+   an.
 3. Unter "Hinweise": Meldet Klein.Buch "PDF-Vorlagen nach dem Restore
    fehlen", fehlt in `/inputs` eine Vorlage, die Deine Daten benutzen.
    Dann muss der Betreiber seine Kopie von `/inputs` zurücklegen.
 4. Unter "Einstellungen" und "Protokoll & Datensicherheit": Starte in der
    Karte "Archiv-Integrität" mit "Jetzt prüfen" eine Prüfung des
    Archivs.
+5. Erst wenn alles stimmt: Oben im Hinweis "Automatische Abo-Läufe
+   angehalten." auf "Prüfen und freigeben" klicken, die Rückfrage "Ist
+   dies die produktive Instanz?" mit "Ja, produktiv — freigeben"
+   beantworten und, falls Klein.Buch danach fragt, mit Daten-Passwort
+   und App-Code bestätigen. Danach laufen Abo-Rechnungen, Abo-Kosten und
+   Versand wieder (größere Rückstände nur nach Rückfrage),
+   und Backups gehen wieder auf die externen Ziele. Klick danach auf
+   "Jetzt sichern" und schau, ob die Kopie auf jedes Ziel klappt.
 
 Mail-Konten und SFTP-Ziele samt Passwörtern kommen mit dem Backup zurück,
 auf dem Stand des Backups.
@@ -145,13 +174,17 @@ Rechnungsnummern doppelt.
 ## Was eine Wiederherstellung braucht
 
 Arbeitsspeicher: Klein.Buch hält die Backup-Datei beim Entschlüsseln
-vollständig im Arbeitsspeicher, dazu eine verschlüsselte Kopie und den
-entschlüsselten Inhalt. Rechne mit etwa dem Dreifachen der
-Backup-Größe, zusätzlich zum Grundbedarf. Für ein Backup von 1 GiB sind
-das rund 3 GiB. Ist die Speichergrenze des Containers (`mem_limit` in der
-Compose-Datei) kleiner, bricht die Wiederherstellung ab. Der Betreiber
-kann die Grenze für die Wiederherstellung anheben und danach wieder
-senken.
+vollständig im Arbeitsspeicher und entschlüsselt sie an derselben Stelle.
+Rechne mit etwa der Backup-Größe, zusätzlich zum Grundbedarf. Für ein
+Backup von 1 GiB ist das rund 1 GiB. Erst nach dem Auspacken, wenn
+dieser Speicher wieder frei ist, legt Klein.Buch das Sicherheits-Backup
+des bisherigen Stands an; das braucht bis zum Doppelten von dessen
+Größe. In einer frisch eingerichteten Instanz ist es winzig, über einen
+gewachsenen Bestand gilt die Faustregel aus dem Kapitel
+"Speicherbedarf". Ist die Speichergrenze des
+Containers (`mem_limit` in der Compose-Datei) kleiner, bricht die
+Wiederherstellung ab. Der Betreiber kann die Grenze für die
+Wiederherstellung anheben und danach wieder senken.
 
 Platz im Daten-Ordner: Die hochgeladene Datei selbst, das
 Sicherheits-Backup und das Doppelte des entpackten Inhalts, weil
@@ -190,4 +223,4 @@ neu ein. `/inputs` sichert der Betreiber selbst.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

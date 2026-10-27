@@ -29,25 +29,32 @@ einem Probe-Wiederherstellen.
 Klick im Hauptmenü auf "Einstellungen", dann auf "Backups" und oben
 rechts auf "Backup-Protokoll". Das Protokoll ist der lückenlose und
 unveränderliche Nachweis jeder Sicherung, auch der fehlgeschlagenen.
-Jede Zeile nennt den Zeitpunkt, den Status ("gesichert" oder
-"fehlgeschlagen"), den Auslöser ("Manuell", "Täglich (automatisch)",
+Jede Zeile nennt den Zeitpunkt, den Status ("Gesichert", "Gesichert,
+unvollständig" oder "Fehlgeschlagen"), den Auslöser ("Manuell", "Täglich (automatisch)",
 "Beleg festgeschrieben" oder "Vor Wiederherstellung"), das Ziel ("Lokal
 (Pflichtkopie)", "Ordner (extern)" oder "SFTP-Server", jeweils mit
 Deiner Bezeichnung), die Datei und die Größe. Jeder Backup-Lauf erzeugt
 eine Zeile für die lokale Kopie und eine Zeile je externem Ziel.
 
 Über die Felder "Suche", "Von", "Bis", "Status", "Auslöser" und "Ziel"
-grenzt Du die Liste ein, mit "Suchen" wendest Du die Filter an,
-"Zurücksetzen" hebt sie wieder auf.
+grenzt Du die Liste ein. Die Auswahlfelder wirken sofort, Suchtext und
+Datum wendest Du mit "Filtern" an; "Filter zurücksetzen" hebt alle
+Filter wieder auf. Über der Tabelle steht, wie viele Einträge gefunden
+wurden, mit dem Zusatz "(gefiltert)", solange ein Filter aktiv ist.
+Angezeigt werden höchstens 1000 Einträge; bei mehr grenzt Du die Suche
+ein, um ältere zu sehen.
 
-Schau nach der neuesten Zeile je Ziel. Steht dort "gesichert", ist alles
+Schau nach der neuesten Zeile je Ziel. Steht dort "Gesichert", ist alles
 in Ordnung. Ist das letzte erfolgreiche Backup auf einem externen Ziel
 älter als sieben Tage, läuft etwas nicht rund. Klein.Buch meldet das
 ohnehin unter "Hinweise" mit dem Eintrag "Off-Site-Backup überfällig".
 Einen schnellen Überblick gibt auch die Seite "Backups": Unter jedem
-externen Ziel steht, wann es zuletzt geklappt hat oder warum nicht.
+externen Ziel steht, wann es zuletzt geklappt hat oder warum nicht, und
+die Karte "Status" zeigt unter "Stand extern" das Alter der externen
+Kopien. Dasselbe Alter steht auf der Startseite in der Kennzahl
+"Backup".
 
-## Wenn ein Eintrag "fehlgeschlagen" zeigt
+## Wenn ein Eintrag "Fehlgeschlagen" zeigt
 
 Die Fehlermeldung steht in derselben Zeile direkt unter dem Dateinamen.
 Die häufigsten Ursachen sind:
@@ -64,9 +71,19 @@ Behebe die Ursache und klick auf der Seite "Backups" auf "Jetzt sichern".
 Klein.Buch protokolliert das Ergebnis erneut. Wenn der Fehler bleibt,
 schau ins Kapitel "[Backup-Fehler](/help/troubleshooting-backup)".
 
+Steht bei einem Eintrag "Gesichert, unvollständig" und darunter
+"Unvollständig: … nicht gesichert",
+fehlt im Backup etwas aus dem Beleg-Archiv. Klein.Buch sichert nur echte
+Dateien. Hat jemand auf dem Server einen Ordner im Archiv durch eine
+Verknüpfung (einen symbolischen Link) ersetzt, etwa um alte Jahrgänge
+auszulagern, steht er hier und fehlt im Backup. Der Betreiber holt den
+Ordner dann zurück oder bindet ihn als Volume ein. Fehlt eine
+Archivdatei, klärt die Integritätsprüfung, welche es ist. Klein.Buch
+meldet das zusätzlich unter "Hinweise" ("Backup unvollständig").
+
 Eine Sache kann das Protokoll nicht sehen: Lädt ein Sync-Programm auf
 dem Server die Dateien aus einem Ordner-Ziel in einen Cloud-Speicher
-hoch, meldet Klein.Buch "gesichert", sobald die Datei im Ordner liegt.
+hoch, meldet Klein.Buch "Gesichert", sobald die Datei im Ordner liegt.
 Ob das Hochladen danach klappt, prüfst Du beim Cloud-Speicher selbst.
 
 ## Probe-Wiederherstellen (alle drei Monate)
@@ -98,14 +115,16 @@ So gehst Du vor:
 
 Danach startet die Test-Instanz neu und enthält alle Deine Daten und
 Einstellungen. Dazu gehören auch die Mail-Konten mit Passwort, die
-SFTP-Ziele und Deine Abo-Rechnungen. Sobald Du Dich dort anmeldest,
-beginnt Klein.Buch sofort mit seinen geplanten Aufgaben. Fällige
-Abo-Rechnungen würden festgeschrieben und, je nach Einstellung, per
-E-Mail an Deine Kunden verschickt, und Backups gingen an Deine SFTP-Ziele.
-Melde Dich in der Test-Instanz deshalb nur an, wenn sie keine Verbindung
-nach außen hat (also weder Mail-Server noch SFTP-Server erreicht). Sonst
-hörst Du nach Schritt 4 auf: Der Betreiber hält die Test-Instanz an und
-löscht ihre Ordner.
+SFTP-Ziele und Deine Abo-Rechnungen. Nach der Anmeldung bleiben die
+automatischen Abläufe angehalten: Klein.Buch schreibt keine
+Abo-Rechnungen fest, verschickt nichts und kopiert Backups nicht auf die
+externen Ziele (Hinweis "Automatische Abo-Läufe angehalten" oben). In
+der Test-Instanz klickst Du **nie** auf "Prüfen und freigeben" — das ist
+nur für die produktive Instanz. So kannst Du Dich dort gefahrlos anmelden,
+stichprobenartig Rechnungen öffnen und die Archiv-Prüfung starten.
+Danach hält der Betreiber die Test-Instanz an und löscht ihre Ordner.
+Ganz ohne Verbindung nach außen (weder Mail-Server noch SFTP-Server
+erreichbar) ist die Test-Instanz trotzdem am sichersten.
 
 Klappt die Wiederherstellung nicht, lies das Kapitel "[Fehler beim
 Wiederherstellen](/help/troubleshooting-restore)".
@@ -152,4 +171,4 @@ Du nicht abschalten.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.10*
+*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*

@@ -2,7 +2,7 @@
 //!
 //! Konvention:
 //! - `FromRow` für sqlx-Mappings (alle Spalten in DB-Reihenfolge).
-//! - `Serialize` für Tauri-Bridge ans Frontend (camelCase).
+//! - `Serialize` für die JSON-Antworten ans Frontend (camelCase).
 //! - Booleans sind in SQLite INTEGER (0/1); wir mappen über `i64` und reichen
 //!   das so ans Frontend. Optional kann das Frontend einen Boolean draus machen.
 //! - Timestamps als `String` (ISO-8601), weil chrono+sqlx-Default für TEXT-Spalten
@@ -69,12 +69,12 @@ pub struct SellerProfileRow {
 
 // ---- Mail Accounts ---------------------------------------------------------
 
-/// Ein konfigurierter Versand-Account. Die SMTP-Passphrase bzw. die OAuth-Token
-/// stehen **nicht** hier, sondern im OS-Keychain unter `keychain_service_id`.
-/// Die OAuth-Spalten (Block 16, Migration 0014) halten nur nicht-geheime
-/// Metadaten: die nutzer-eigene Azure-App (`oauth_tenant_id`/`oauth_client_id`),
-/// das verbundene Postfach (`oauth_account_email`), die gewährten Scopes und den
-/// Access-Token-Ablauf für die Refresh-Entscheidung.
+/// Ein konfigurierter Versand-Account. Das SMTP-Passwort steht **nicht** hier,
+/// sondern in der Tabelle `secrets` (W8); `keychain_service_id` markiert nur ein
+/// Konto mit Passwort-Anmeldung. Die OAuth-Spalten (Migration 0014, Microsoft
+/// Graph der Desktop-Fassung) sind Bestandsdaten: Der Server befüllt sie nicht
+/// mehr und leert sie beim Umstellen eines solchen Kontos auf SMTP (E9,
+/// ADR 0039 Nr. 138).
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAccountRow {
@@ -91,7 +91,7 @@ pub struct MailAccountRow {
     pub is_default: i64,
     pub last_used_at: Option<String>,
     pub created_at: String,
-    // ---- OAuth (Block 16) — nicht-geheime Metadaten ----
+    // ---- OAuth (Migration 0014) — Bestandsdaten, nur gelesen ----
     pub oauth_tenant_id: Option<String>,
     pub oauth_client_id: Option<String>,
     pub oauth_account_email: Option<String>,
@@ -207,6 +207,10 @@ pub struct InvoiceRow {
     // Zahlungs-Eingangs-Konto (Migration 0007, Block 9). Spalte additiv;
     // in den Zahlungs-Workflow wird sie erst bei Bedarf verdrahtet.
     pub paid_to_account_id: Option<String>,
+    // Verworfener Entwurf (Migration 0032, W14-032): Zeitpunkt (UTC) und
+    // Grund. Die Nummer bleibt verbraucht; status bleibt 'draft'.
+    pub voided_at: Option<String>,
+    pub void_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -257,6 +261,8 @@ pub struct InvoiceListItem {
     pub currency_code: String,
     pub status: String,
     pub is_storno_for: Option<String>,
+    /// Verworfener Entwurf (Migration 0032).
+    pub voided_at: Option<String>,
 }
 
 // ---- Quotes (Block 6, Migration 0005) --------------------------------------
@@ -393,6 +399,11 @@ pub struct QuoteListItem {
     pub gross_amount_cents: i64,
     pub currency_code: String,
     pub status: String,
+    /// Festgeschrieben (ausgestellt) am; `None` = nie festgeschrieben. Ein
+    /// zurückgezogenes Angebot (`status = canceled`) ohne `locked_at` ist ein
+    /// verworfener Entwurf, mit `locked_at` ein zurückgezogenes Angebot
+    /// (Lauf 2026.11 U4, Warteliste 9).
+    pub locked_at: Option<String>,
 }
 
 // ---- Legal Documents (Block 8, Migration 0006) -----------------------------

@@ -47,6 +47,12 @@ pub enum Error {
     #[error("Datenbank gesperrt — bitte zuerst entsperren.")]
     Locked,
 
+    /// Die Änderung verlangt eine frische Bestätigung mit Passphrase und
+    /// zweitem Faktor (bedingte Re-Auth im Kern, W14-038; HTTP 403
+    /// `reauth_required`).
+    #[error("Diese Aktion ist geschützt: Bestätige sie mit Daten-Passwort und App-Code.")]
+    ReauthRequired,
+
     /// Argumente eines Commands passen nicht zum Args-Struct (HTTP 400).
     #[error("Ungültige Anfrage: {0}")]
     BadRequest(String),
@@ -62,3 +68,28 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// Fehlerart ohne Inhalt (für WARN-Zeilen, die keine personenbezogenen
+    /// Daten aus dem Fehlertext tragen dürfen, W14-016; Volltext auf DEBUG).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Error::Db(_) => "db",
+            Error::Migrate(_) => "migrate",
+            Error::SchemaMismatch { .. } => "schema_mismatch",
+            Error::Io(_) => "io",
+            Error::Json(_) => "json",
+            Error::Config(_) => "config",
+            Error::Domain(_) => "domain",
+            Error::Sidecar(_) => "sidecar",
+            Error::Mail(_) => "mail",
+            Error::Backup(_) => "backup",
+            Error::Locked => "locked",
+            Error::ReauthRequired => "reauth_required",
+            Error::BadRequest(_) => "bad_request",
+            Error::Crypto(_) => "crypto",
+            Error::Zip(_) => "zip",
+            Error::Other(_) => "other",
+        }
+    }
+}

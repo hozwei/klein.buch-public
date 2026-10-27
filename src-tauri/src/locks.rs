@@ -1,6 +1,6 @@
 //! Prozessweite Sperren je Schlüssel (Archivpfad, Beleg, Abo-Vorlage).
 //!
-//! Klein.Buch läuft als **ein** Prozess (Desktop bzw. ein Server-Container,
+//! Klein.Buch läuft als **ein** Prozess (ein Server-Container,
 //! ADR 0015 Single-Tenant); diese Sperren serialisieren zusammengehörige
 //! Abläufe innerhalb des Prozesses. Die Datenbank sichert zusätzlich über
 //! Constraints, Trigger und Compare-and-Swap ab (zweite Linie).
@@ -45,8 +45,19 @@ impl Default for KeyedLocks {
 pub static ARCHIVE_PATHS: KeyedLocks = KeyedLocks::new();
 /// Belege: Festschreiben/Ausstellen einer Rechnung läuft je Rechnung am Stück.
 pub static INVOICES: KeyedLocks = KeyedLocks::new();
-/// Abo-Vorlagen: Tick und „Jetzt erstellen“ nie gleichzeitig (Plan W1.4).
+/// Angebote: Festschreiben, Annahme, Ablehnung (Lauf F3b), Zurückziehen,
+/// Umwandeln in eine Rechnung und das Zurücknehmen der Umwandlung (Verwerfen
+/// des Entwurfs) je Angebot nacheinander (Lauf F2c).
+pub static QUOTES: KeyedLocks = KeyedLocks::new();
+/// Abo-Vorlagen: Tick und „Jetzt erstellen“ nie gleichzeitig (Plan W1.4);
+/// Bearbeiten und Pausieren nehmen dieselbe Sperre (Lauf F, W14-031).
 pub static RECURRING_TEMPLATES: KeyedLocks = KeyedLocks::new();
+/// Kosten-Abos: Tick, „Jetzt erfassen“, Bearbeiten und Pausieren je Abo
+/// nacheinander (Lauf F, W14-022).
+pub static RECURRING_SUBSCRIPTIONS: KeyedLocks = KeyedLocks::new();
+/// Verkäuferprofil: Prüfung der bedingten Re-Auth gegen den gespeicherten
+/// Stand und das Speichern am Stück (Lauf F4a, W14-038).
+pub static SELLER_PROFILE: KeyedLocks = KeyedLocks::new();
 
 #[cfg(test)]
 mod tests {
