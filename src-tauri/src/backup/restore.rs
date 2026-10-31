@@ -1411,8 +1411,28 @@ fn entry_action(rel: &Path, is_dir: bool, format_version: u32) -> Option<bool> {
     }
 }
 
-/// Entpackt einen Content-ZIP gehärtet nach `dest` (Plan W7): Pfade nur über
-/// `enclosed_name()` (kein `..`, kein absoluter Pfad), nur erlaubte Namen
+/// Relativer Pfad eines ZIP-Eintrags nur aus normalen Bestandteilen, getrennt
+/// durch `/` (ein Schrägstrich am Ende markiert ein Verzeichnis): kein
+/// absoluter Pfad, keine leeren, `.`- oder `..`-Bestandteile, kein `\`, `:`
+/// oder NUL (ADR 0042 V3b; `archive::store` lässt `/ \ :` in Dateinamen nicht zu).
+fn safe_entry_path(name: &str) -> Option<PathBuf> {
+    let trimmed = name.strip_suffix('/').unwrap_or(name);
+    if trimmed.is_empty() || trimmed.contains(['\\', ':', '\0']) {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in trimmed.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return None;
+        }
+        out.push(part);
+    }
+    Some(out)
+}
+
+/// Entpackt einen Content-ZIP gehärtet nach `dest` (Plan W7): Pfade nur aus
+/// normalen Bestandteilen ([`safe_entry_path`], zusätzlich `enclosed_name()`;
+/// kein `..`, kein absoluter Pfad), nur erlaubte Namen
 /// ([`entry_action`]), keine Symlinks, keine doppelten Dateien, höchstens
 /// `max_entries` Einträge, gelesene Bytes per `take` begrenzt (gesamt und je
 /// Eintrag nach Kompressionsverhältnis). Liefert die geschriebenen Bytes.
@@ -1433,7 +1453,12 @@ pub fn extract_zip(
     let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
+        // zip 9: `name()` ist fallibel (UTF-8, sonst CP437); ein nicht
+        // dekodierbarer Name bricht den Restore ab (ADR 0042 V3b).
+        let name = file
+            .name()
+            .map_err(|e| Error::Backup(format!("unlesbarer Name im Backup-ZIP: {e}")))?
+            .into_owned();
         if file.is_symlink() {
             return Err(Error::Backup(format!(
                 "Symlink im Backup-ZIP: {name} — Restore abgebrochen"
@@ -1441,15 +1466,11 @@ pub fn extract_zip(
         }
         // Review W2 S1-5 / Plan W7: Komponenten prüfen statt Zeichenfolgen —
         // „Angebot v2..pdf“ ist legitim, `../x`, `/x` oder `C:\x` nicht.
-        // `enclosed_name()` lässt `a/../b` zu (bleibt im Ziel, unterläuft aber
-        // die Allowlist) — daher nur normale Bestandteile.
-        let rel = file
-            .enclosed_name()
-            .filter(|p| {
-                p.components()
-                    .all(|c| matches!(c, std::path::Component::Normal(_)))
-            })
-            .filter(|_| !name.starts_with('\\') && !name.contains(':'))
+        // ADR 0042 V3b: zip 9 normalisiert in `enclosed_name()` (`/x` → `x`,
+        // `a/../b` → `b`), daher eigene Prüfung des Rohnamens; `enclosed_name()`
+        // bleibt als zweite Schranke.
+        let rel = safe_entry_path(&name)
+            .filter(|_| file.enclosed_name().is_some())
             .ok_or_else(|| Error::Backup(format!("unsicherer Pfad im Backup-ZIP: {name}")))?;
         let is_dir = file.is_dir();
         match entry_action(&rel, is_dir, format_version) {
@@ -1788,7 +1809,7 @@ mod tests {
         let opts = zip::write::SimpleFileOptions::default();
         for i in 0..src.len() {
             let mut e = src.by_index(i).unwrap();
-            let name = e.name().to_string();
+            let name = e.name().unwrap().into_owned();
             let new_name = match name.strip_prefix("branding/") {
                 Some(rest) => format!("inputs/branding/{rest}"),
                 None => name,
@@ -2462,21 +2483,59 @@ mod tests {
             .join("archive/2026/attachments/Angebot v2..pdf")
             .is_file());
 
-        for evil in ["../evil.txt", "archive/../../evil.txt", "/etc/evil"] {
+        // ADR 0042 V3b: zip 9 normalisiert `/x` und `a/../b` in
+        // `enclosed_name()` — auch erlaubte Ziele nach Normalisierung bleiben
+        // als unsicherer Pfad abgelehnt.
+        for evil in [
+            "../evil.txt",
+            "archive/../../evil.txt",
+            "/etc/evil",
+            "/klein-buch.sqlite",
+            "/archive/2026/a.pdf",
+            "archive/x/../2026/a.pdf",
+            "x/../klein-buch.sqlite",
+            "./klein-buch.sqlite",
+            "archive//a.pdf",
+            "archive\\..\\klein-buch.sqlite",
+            "archive/2026/a\\b.pdf",
+            "archive/2026/C:a.pdf",
+        ] {
             let mut zw = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
             zw.start_file(evil, opts).unwrap();
             zw.write_all(b"x").unwrap();
             let bytes = zw.finish().unwrap().into_inner();
-            assert!(
-                extract_zip(
-                    &bytes,
-                    dir.path(),
-                    manifest::FORMAT_VERSION,
-                    &ExtractLimits::default()
-                )
-                .is_err(),
-                "{evil}"
-            );
+            let dir = TempDir::new().unwrap();
+            let err = extract_zip(
+                &bytes,
+                dir.path(),
+                manifest::FORMAT_VERSION,
+                &ExtractLimits::default(),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("unsicherer Pfad"), "{evil}: {err}");
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0, "{evil}");
+        }
+    }
+
+    /// ADR 0042 V3b: Rohnamen-Prüfung unabhängig von `enclosed_name()`.
+    #[test]
+    fn safe_entry_path_accepts_only_normal_parts() {
+        assert_eq!(
+            safe_entry_path("archive/2026/Angebot v2..pdf"),
+            Some(PathBuf::from("archive/2026/Angebot v2..pdf"))
+        );
+        assert_eq!(
+            safe_entry_path("archive/2026/"),
+            Some(PathBuf::from("archive/2026"))
+        );
+        assert_eq!(
+            safe_entry_path("branding/Größe.png"),
+            Some(PathBuf::from("branding/Größe.png"))
+        );
+        for evil in [
+            "", "/", "/x", "a/../b", "./a", "a//b", "a\\b", "C:x", "a\0b", "..",
+        ] {
+            assert_eq!(safe_entry_path(evil), None, "{evil:?}");
         }
     }
 
@@ -2489,6 +2548,82 @@ mod tests {
             zw.write_all(bytes).unwrap();
         }
         zw.finish().unwrap().into_inner()
+    }
+
+    /// Inhalte der Fixtures `tests/fixtures/backup-content-zip2-format{1,3}.zip`,
+    /// erzeugt mit zip 2.4.2 (Schreiber bis v2026.11.0) und Deflate; dieselben
+    /// Funktionen standen im Wegwerf-Generator.
+    fn zip2_fixture_lcg(seed: u32, len: usize) -> Vec<u8> {
+        let mut x = seed;
+        (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    fn zip2_fixture_files() -> Vec<(&'static str, Vec<u8>)> {
+        let mut db = b"SQLite format 3\0".to_vec();
+        while db.len() < 8192 {
+            db.extend_from_slice(b"Klein.Buch Fixture zip 2.4.2 ");
+        }
+        db.truncate(8192);
+        let mut pdf = b"%PDF-1.7\n".to_vec();
+        pdf.extend(zip2_fixture_lcg(0x2026_0520, 6000));
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(zip2_fixture_lcg(0x0000_0042, 300));
+        vec![
+            ("klein-buch.sqlite", db),
+            ("archive/2026/Rechnung Größe März.pdf", pdf),
+            (
+                "archive/2026/attachments/Angebot v2..pdf",
+                b"%PDF-1.7\nAnhang".to_vec(),
+            ),
+            ("branding/logo.png", png),
+        ]
+    }
+
+    /// ADR 0042 V3b: Backups bis v2026.11.0 (Desktop-Format 1, Server-Format
+    /// 2/3) schrieb zip 2.4.2. zip 9 muss sie unverändert entpacken: Deflate,
+    /// Verzeichniseinträge, Umlaute, `..` im Dateinamen, Format-1-`inputs/`.
+    #[test]
+    fn extract_zip_reads_archives_written_by_zip2() {
+        let format3: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/backup-content-zip2-format3.zip"
+        ));
+        let format1: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/backup-content-zip2-format1.zip"
+        ));
+        for (bytes, format_version) in [(format3, manifest::FORMAT_VERSION), (format1, 1)] {
+            let dir = TempDir::new().unwrap();
+            let written =
+                extract_zip(bytes, dir.path(), format_version, &ExtractLimits::default()).unwrap();
+            let files = zip2_fixture_files();
+            let expected: u64 = files.iter().map(|(_, b)| b.len() as u64).sum();
+            assert_eq!(written, expected, "Format {format_version}");
+            for (name, content) in &files {
+                assert_eq!(
+                    fs::read(dir.path().join(name)).unwrap(),
+                    *content,
+                    "Format {format_version}: {name}"
+                );
+            }
+            assert!(dir.path().join("archive/2026").is_dir());
+            // Format 1: `inputs/` und `inputs/branding/**` übersprungen.
+            assert!(!dir.path().join("inputs").exists());
+        }
+        // Format 3 kennt kein `inputs/` mehr: das Format-1-Archiv wird abgelehnt.
+        let dir = TempDir::new().unwrap();
+        assert!(extract_zip(
+            format1,
+            dir.path(),
+            manifest::FORMAT_VERSION,
+            &ExtractLimits::default()
+        )
+        .is_err());
     }
 
     /// Plan W7: Allowlist, Eintragszahl, Gesamtgröße, Symlinks, Doppelte,

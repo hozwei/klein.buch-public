@@ -175,8 +175,9 @@ russh-sftp = "2.1"
 # --- Archive ---
 # Nur Deflate (Backups, Exporte) und Zeitstempel: ohne die Standard-Features
 # entfallen zstd/bzip2/xz samt statisch gelinktem C-Code (W12); fremde ZIPs mit
-# anderen Verfahren werden abgelehnt.
-zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+# anderen Verfahren werden abgelehnt. zip 9 statt 2 (ADR 0042 V3b: CVE-2026-115905,
+# CVE-2026-115909, RUSTSEC-2026-0367..0369); `deflate` = flate2 (zlib-rs) + zopfli.
+zip = { version = "9.1", default-features = false, features = ["deflate", "time"] }
 
 # --- Temp files (Sidecar-Bridges schreiben PDFs/XML in Temp-Dirs) ---
 tempfile = "3"

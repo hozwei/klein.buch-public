@@ -433,7 +433,7 @@ mod tests {
 
         let mut archive = zip::ZipArchive::new(File::open(&zip_path).unwrap()).unwrap();
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert!(names.contains(&"tables/contacts.json".to_string()));
         assert!(names.contains(&"archive/2026/invoices/pdf/RE-2026-0001.pdf".to_string()));

@@ -40,6 +40,10 @@ offenen Punkte aus Lauf 2026.11.
   der Leistung). Abo-Rechnungen setzen den tatsächlichen Abrechnungszeitraum, auch bei
   quartalsweiser, halbjährlicher und jährlicher Abrechnung; ein Storno übernimmt den Zeitraum.
   Die Leitweg-ID wird schon am Entwurf (und an der Abo-Vorlage) gespeichert.
+- **Sicherheit:** Die ZIP-Bibliothek ist von 2.4 auf 9.1 gehoben (CVE-2026-115905, kritisch, und
+  CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
+  Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`
+  oder leere Bestandteile).
 
 ### Hinweise für Betreiber (Update von 2026.11.0)
 

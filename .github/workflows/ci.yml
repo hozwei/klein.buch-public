@@ -189,9 +189,6 @@ jobs:
         run: |
           cargo-audit audit --file Cargo.lock \
             --ignore RUSTSEC-2023-0071 \
-            --ignore RUSTSEC-2026-0367 \
-            --ignore RUSTSEC-2026-0368 \
-            --ignore RUSTSEC-2026-0369 \
             --ignore RUSTSEC-2026-0194 \
             --ignore RUSTSEC-2026-0195
 

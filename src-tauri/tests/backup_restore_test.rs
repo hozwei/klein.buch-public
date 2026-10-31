@@ -149,7 +149,7 @@ async fn migration_export_contains_all_data() {
 
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
     assert!(names.contains(&"tables/contacts.json".to_string()));
     assert!(names.contains(&"archive/2026/beleg.xml".to_string()));
@@ -171,8 +171,9 @@ fn extract_zip_to(zip_bytes: &[u8], dest: &Path) {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).unwrap();
-        let out = dest.join(file.name());
-        if file.name().ends_with('/') {
+        let name = file.name().unwrap().into_owned();
+        let out = dest.join(&name);
+        if name.ends_with('/') {
             std::fs::create_dir_all(&out).unwrap();
             continue;
         }

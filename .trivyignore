@@ -5,14 +5,6 @@
 # src-tauri/deny.toml ([advisories] ignore) und der --ignore-Liste von cargo audit;
 # Java-Ausnahmen betreffen Bibliotheken, die im Mustang-Uber-JAR mitgebündelt sind.
 
-# zip 2.4.2 (Rust, im Server-Binary): Die Lücken betreffen nur ZipArchive::extract bzw.
-# ZipStreamReader::extract (SUID/SGID-Bits, Symlinks außerhalb des Zielordners).
-# Klein.Buch liest Backups und Exporte über by_name/by_index_raw in den Speicher und ruft
-# extract nicht auf. Fix erst in zip 9 (inkompatible API). RUSTSEC-2026-0367/-0368/-0369.
-GHSA-vv5m-jxxh-4627 exp:2027-04-30
-GHSA-4v9h-p7m9-rh26 exp:2027-04-30
-GHSA-4684-h2q9-2vcp exp:2027-04-30
-
 # quick-xml 0.38.4 (Rust, über typst 0.15 → hayagriva 0.10 → citationberg 0.7, neueste
 # Fassung mit quick-xml ^0.38; behoben erst ab 0.41): parst nur die eingebetteten CSL-Daten
 # und CSL-Dateien, die eine Vorlage des Betreibers ausdrücklich lädt (keine eingebaute Vorlage

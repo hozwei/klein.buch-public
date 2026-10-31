@@ -178,7 +178,7 @@ async fn stb_zip_contains_receipts_readme_and_matching_manifest() {
         let mut f = zip.by_index(i).unwrap();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).unwrap();
-        files.insert(f.name().to_string(), buf);
+        files.insert(f.name().unwrap().into_owned(), buf);
     }
     let root = format!("EUER-{year}/");
     assert!(
