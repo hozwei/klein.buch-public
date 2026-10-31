@@ -21,8 +21,10 @@ Realisationsprinzip. Ausnahmen:
 
 Eine erfasste Zahlung, die nie geflossen ist, ist kein Zufluss: Klein.Buch
 storniert sie per Gegenbuchung zum ursprünglichen Zahldatum, nur im offenen
-Geschäftsjahr; für abgeschlossene Jahre gilt die Berichtigung nach § 153 AO
-(ADR 0042 Nr. 8).
+Geschäftsjahr. Für abgeschlossene Jahre gilt: War die Steuer zu niedrig, besteht
+die Berichtigungspflicht nach § 153 Abs. 1 Satz 1 Nr. 1 AO; zu hoch erfasste
+Einnahmen (der typische Fall: die Zahlung ist nie geflossen) ändert das
+Finanzamt auf Antrag (§ 173 Abs. 1 Nr. 2, § 164 Abs. 2 AO) (ADR 0042 Nr. 8).
 
 Klein.Buch zielt auf:
 - §19-Kleinunternehmer.

@@ -290,7 +290,10 @@ pub async fn refresh_mirror_in(conn: &mut SqliteConnection, today: NaiveDate) ->
 /// 0042 Nr. 5): Zahlungseingänge auf festgeschriebene Ausgangsrechnungen
 /// (Netto-Anteil je Steuergruppe), Storno-Erstattungen negativ. Erlöse aus dem
 /// Abgang von Anlagen erfasst Klein.Buch nicht als Rechnung; sie bleiben
-/// außen vor (§ 19 Abs. 2 UStG).
+/// außen vor (§ 19 Abs. 2 UStG). Nicht im Inland steuerbare und die nach
+/// § 19 Abs. 2 abzuziehenden steuerfreien Umsätze kann Klein.Buch unter §19
+/// nicht unterscheiden (alle Positionen „E“); die Texte nennen den Wert darum
+/// „Zahlungseingänge laut Klein.Buch“ (L-GOBD-03).
 pub async fn turnover_items(pool: &SqlitePool, years: &[i32]) -> Result<Vec<UmsatzPosten>> {
     let dates: std::collections::HashMap<String, (Option<String>, String)> =
         sqlx::query_as::<_, (String, Option<String>, String)>(

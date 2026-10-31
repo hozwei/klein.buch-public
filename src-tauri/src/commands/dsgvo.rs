@@ -310,7 +310,10 @@ fn readme_text(name: &str, generated_at: &str) -> String {
          - dokumente/     Beigefügte Originaldateien (Rechnungen, Belege, Anhänge), soweit vorhanden.\n\n\
          Hinweise:\n\
          - Diese Auskunft ist keine Rechtsberatung.\n\
-         - Teile der Daten unterliegen gesetzlichen Aufbewahrungspflichten (u. a. § 147 AO, § 14b UStG, 10 Jahre).\n\
+         - Teile der Daten unterliegen gesetzlichen Aufbewahrungspflichten nach § 147 Abs. 3 AO: Bücher und \
+         Aufzeichnungen 10 Jahre, Buchungsbelege einschließlich Rechnungen 8 Jahre (auch § 14b Abs. 1 UStG), \
+         Handels- und Geschäftsbriefe 6 Jahre, jeweils ab Ende des Kalenderjahres. Innerhalb dieser Fristen \
+         ist eine Löschung ausgeschlossen; die Buchhaltung hält die Unterlagen einheitlich 10 Jahre vor.\n\
          - Angaben Dritter in beigefügten Dokumenten sind vor einer Herausgabe zu prüfen (Art. 15 Abs. 4 DSGVO).\n\
          - Erstellt mit Klein.Buch — einem Werkzeug, keinem Steuerberater.\n"
     )
@@ -325,5 +328,17 @@ mod tests {
         assert_eq!(slugify("Müller & Söhne GmbH"), "m-ller-s-hne-gmbh");
         assert_eq!(slugify("   "), "kontakt");
         assert_eq!(slugify("ACME"), "acme");
+    }
+
+    /// DOC-01: Das LIESMICH nennt die Fristen nach § 147 Abs. 3 AO getrennt
+    /// (Rechnungen 8 Jahre) statt „§ 14b UStG, 10 Jahre“.
+    #[test]
+    fn readme_names_differentiated_retention_periods() {
+        let t = readme_text("Beispiel GmbH", "2026-10-31 12:00");
+        assert!(t.contains("Rechnungen 8 Jahre"), "{t}");
+        assert!(t.contains("Bücher und Aufzeichnungen 10 Jahre"), "{t}");
+        assert!(t.contains("Geschäftsbriefe 6 Jahre"), "{t}");
+        assert!(t.contains("einheitlich 10 Jahre vor"), "{t}");
+        assert!(!t.contains("§ 14b UStG, 10 Jahre"), "{t}");
     }
 }

@@ -108,9 +108,9 @@ DATEV-Stapel.
    Grund ist Pflicht (mindestens 10 Zeichen) und steht an der
    Gegenbuchung und im Protokoll. Ist er zu kurz, steht die Meldung am
    Feld.
-3. Klick auf **"Zahlung stornieren"**. Klein.Buch fragt zur Bestätigung
-   Daten-Passwort und App-Code ab, wie bei anderen unumkehrbaren
-   Schritten.
+3. Klick auf **"Zahlung stornieren"**. Liegt Deine letzte Bestätigung
+   länger als fünf Minuten zurück, fragt Klein.Buch Daten-Passwort und
+   App-Code ab, wie bei anderen unumkehrbaren Schritten.
 4. Klein.Buch bestätigt mit "Zahlung vom … über … storniert." und bietet
    **"Zahlung neu erfassen"** an. Der Knopf öffnet die Seite "+ Zahlung"
    mit Datum, Konto und Notiz der stornierten Zahlung als Vorschlag;

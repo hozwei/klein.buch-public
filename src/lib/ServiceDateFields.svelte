@@ -68,10 +68,11 @@
     </label>
   </div>
 
+  <!-- UI-01: Das Label trägt nur den Feldnamen; die Meldung steht daneben (design.md §4.7). -->
   {#if mode === "date"}
     <div class="svc-fields">
-      <label for="{idPrefix}-date">
-        <span>Leistungsdatum <span class="req" aria-hidden="true">*</span></span>
+      <div class="svc-field">
+        <label for="{idPrefix}-date">Leistungsdatum <span class="req" aria-hidden="true">*</span></label>
         <input
           id="{idPrefix}-date"
           type="date"
@@ -84,12 +85,12 @@
           aria-describedby={describedBy(!!errDelivery && `${idPrefix}-date-err`, `${idPrefix}-hint`)}
         />
         {#if errDelivery}<span id="{idPrefix}-date-err" class="field-err">{errDelivery}</span>{/if}
-      </label>
+      </div>
     </div>
   {:else}
     <div class="svc-fields">
-      <label for="{idPrefix}-start">
-        <span>Beginn <span class="req" aria-hidden="true">*</span></span>
+      <div class="svc-field">
+        <label for="{idPrefix}-start">Beginn <span class="req" aria-hidden="true">*</span></label>
         <input
           id="{idPrefix}-start"
           type="date"
@@ -101,9 +102,9 @@
           aria-describedby={describedBy(!!errStart && `${idPrefix}-start-err`, `${idPrefix}-hint`)}
         />
         {#if errStart}<span id="{idPrefix}-start-err" class="field-err">{errStart}</span>{/if}
-      </label>
-      <label for="{idPrefix}-end">
-        <span>Ende <span class="req" aria-hidden="true">*</span></span>
+      </div>
+      <div class="svc-field">
+        <label for="{idPrefix}-end">Ende <span class="req" aria-hidden="true">*</span></label>
         <input
           id="{idPrefix}-end"
           type="date"
@@ -116,7 +117,7 @@
           aria-describedby={describedBy(!!errEnd && `${idPrefix}-end-err`, `${idPrefix}-hint`)}
         />
         {#if errEnd}<span id="{idPrefix}-end-err" class="field-err">{errEnd}</span>{/if}
-      </label>
+      </div>
     </div>
   {/if}
   <!-- Hinweis bleibt bei einem Fehler stehen (design.md §4.7); bei einer Vorausrechnung der Hinweis darauf. -->
@@ -144,7 +145,7 @@
   .svc-mode:focus-within { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
   .svc-mode input { width: auto; margin: 0; padding: 0; flex: none; }
   .svc-fields { display: flex; flex-wrap: wrap; gap: 0.75rem; }
-  .svc-fields label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
+  .svc-field { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   .svc-fields input {
     padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
     font: inherit; font-weight: 400; color: var(--text); background: var(--surface-card);

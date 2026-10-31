@@ -125,6 +125,7 @@
       flash(check.blocker ?? "Anonymisierung derzeit nicht möglich.", "error");
       return;
     }
+    // DOC-11 (wie DOC-01): Fristen nach § 147 Abs. 3 AO getrennt nennen, nicht pauschal 10 Jahre.
     if (
       !(await confirmDialog({
         title: "Kontakt anonymisieren (DSGVO Art. 17)?",
@@ -132,7 +133,9 @@
           "Diese Aktion ist unwiderruflich. Die personenbezogenen Kontaktdaten werden überschrieben " +
           "(Name durch Platzhalter ersetzt, alle übrigen Felder gelöscht) und der Kontakt archiviert. " +
           `Gesetzlich aufbewahrungspflichtige Belege bleiben erhalten: ${check.lockedInvoices === 1 ? "1 Rechnung" : `${check.lockedInvoices} Rechnungen`} ` +
-          `und ${check.lockedQuotes === 1 ? "1 Angebot" : `${check.lockedQuotes} Angebote`} behalten ihren damaligen Empfänger-Stand (§147 AO, 10 Jahre). ` +
+          `und ${check.lockedQuotes === 1 ? "1 Angebot" : `${check.lockedQuotes} Angebote`} behalten ihren damaligen Empfänger-Stand ` +
+          "(gesetzliche Aufbewahrung nach § 147 AO: Rechnungen 8, Geschäftsbriefe wie Angebote 6 Jahre; " +
+          "Klein.Buch hält einheitlich 10 Jahre vor). " +
           "Ebenfalls ersetzt werden: der Empfänger in verworfenen Rechnungs- und " +
           "Angebots-Entwürfen (Nummer, Datum, Betrag und Positionen bleiben), " +
           "Bezeichnung und Notiz der Abo-Vorlagen an diesen Kontakt sowie die Bezeichnung seiner " +
@@ -227,7 +230,8 @@
     <Banner kind="info">
       Dieser Kontakt wurde anonymisiert (DSGVO Art. 17). Die personenbezogenen
       Kontaktdaten wurden gelöscht; festgeschriebene Rechnungen und Angebote behalten
-      ihren damaligen Empfänger-Stand und bleiben gesetzlich erhalten (§147 AO).
+      ihren damaligen Empfänger-Stand und bleiben erhalten (Aufbewahrung nach § 147 AO; Klein.Buch
+      hält einheitlich 10 Jahre vor).
     </Banner>
   {:else}
     {#if contact.archived === 1}

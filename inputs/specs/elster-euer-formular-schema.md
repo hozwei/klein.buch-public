@@ -5,7 +5,8 @@ vorgeschriebenem Datensatz durch Datenfernübertragung übermittelt
 (Anlage EÜR; § 60 Abs. 4 EStDV, § 25 Abs. 4 EStG). Die Vordrucke und die
 Anleitung veröffentlicht das BMF je Jahr per BMF-Schreiben; die
 Kennzahlen (Kz) bleiben über die Jahre gleich, die Zeilennummern nicht
-(2026: ab Kz 100 eine Zeile tiefer als 2024/2025).
+(2026: neue Zeile 27 für die Anlage LuF, Kz 100 in Zeile 29 statt 27, alle folgenden
+Betriebsausgaben-Zeilen eine Zeile tiefer als 2024/2025).
 
 Quellen: § 60 Abs. 4 EStDV —
 https://www.gesetze-im-internet.de/estdv_1955/__60.html ; BMF-Schreiben zur

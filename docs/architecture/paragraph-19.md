@@ -40,6 +40,8 @@ zwischengespeichert); `applyTaxRules` (`src/lib/tax.ts`) läuft nur mit dem
 Status genau dieses Datums, damit ein veralteter Wert die Sätze eines geladenen
 Entwurfs nicht umschreibt. Weicht der Status vom heutigen ab, zeigt
 `TaxStatusNotice` einen Hinweis („Am Leistungsdatum gilt die Regelbesteuerung.“).
+Scheitert die Abfrage, sagt `TaxStatusNotice` das in allen vier Editoren gleich,
+bezogen auf das maßgebliche Datum; der Server prüft beim Speichern erneut (UI-04).
 
 - **Rechnungs- und Angebots-Items.** Tax-Rate-Feld ist ausgeblendet,
   Tax-Category ist auf `E` (Exempt) fest verdrahtet, kein Switch zwischen
@@ -54,12 +56,13 @@ Entwurfs nicht umschreibt. Weicht der Status vom heutigen ab, zeigt
   §19 heute oder ab einem eingetragenen künftigen Wechsel gilt
   (`kleinTodayOrLater`, wie der Server).
 - **Recurring-Invoice-Templates.** Beim Speichern prüft der Server die
-  Positionen gegen den Status am ersten Termin, im Lauf je Termin (KB-0053,
-  ADR 0042 Nr. 3).
+  Positionen gegen den Status am Ende des ersten Abrechnungszeitraums, im Lauf
+  je Termin am Ende seines Abrechnungszeitraums (KB-0053, ADR 0042 Nr. 3).
 
 Der Status selbst ändert sich nur im Abschnitt „Steuerstatus“ von „Meine
 Firmendaten“ (`routes/settings/seller/TaxStatusSection.svelte`): Verlauf,
-Status heute, Gesamtumsatz mit Grenzhinweisen, Gefahr-Dialog „Statuswechsel
+Status heute, Zahlungseingänge laut Klein.Buch mit Grenzhinweisen (Grenze
+des laufenden Jahres nach `turnover.presumedFoundingYear`), Gefahr-Dialog „Statuswechsel
 eintragen?“ (`alertdialog`, Grund mit Erklärung, Wirkungsdatum mit Vorschlag
 und 1.-Januar-Prüfung, Bindungshinweis beim Verzicht, Vorschau der Folgen über
 `tax_status_change_preview`, § 15a UStG, Re-Auth) und „Eintrag widerrufen?“ für
@@ -169,14 +172,27 @@ Trigger `trg_tax_status_changes_revoke_only`).
 | Grund | Status | Wirkungsdatum | Bindung |
 |---|---|---|---|
 | Verzicht (§ 19 Abs. 3 UStG) | Regel | 1. Januar | fünf Kalenderjahre einschließlich des Wirkungsjahres: Verzicht ab 2026 → Rückkehr frühestens 01.01.2031 |
-| Wegfall wegen des Vorjahres (> 25.000 €) | Regel | 1. Januar | keine |
-| Wegfall im laufenden Jahr (> 100.000 €) bzw. im Gründungsjahr (> 25.000 €) | Regel | Tag des Umsatzes, der die Grenze überschreitet | keine |
+| Wegfall wegen des Vorjahres (> 25.000 €) | Regel | 1. Januar; im laufenden Jahr schon zum 1. Januar des Folgejahres eintragbar (L-GOBD-02) | keine |
+| Wegfall im laufenden Jahr (> 100.000 €) bzw. im Gründungsjahr (> 25.000 €) | Regel | Tag des Umsatzes, der die Grenze überschreitet (Vorschlag siehe unten) | keine; Rückkehr frühestens 1. Januar des übernächsten Jahres (DOC-02) |
 | Rückkehr | §19 | 1. Januar | nach einem Verzicht erst ab Bindungsende |
+
+Wirkungsjahre liegen zwischen 1900 und 9999 (beim Verzicht einschließlich der
+Bindung), passend zum CHECK `date(x) IS x`; die Commands der EÜR prüfen das
+Geschäftsjahr ebenso (`domain::fiscal_year::checked_year`, SEC-2026.11.1-01).
+`earliest_return` liefert nach einem Verzicht das Bindungsende, nach einem
+Wegfall im laufenden Jahr bzw. Gründungsjahr Y den 01.01.(Y+2) (der Eintrag
+besagt einen Gesamtumsatz Y über 25.000 €), sonst den nächsten 1. Januar.
 
 **Prüfung** (`domain::tax_status::validate_change`, rein): Grund passt zum
 Status und zum Wirkungsdatum; ein neuer Eintrag wirkt nach dem jüngsten
-gültigen (keine Überschneidung) und ändert den Status; ein Wegfall liegt nicht
-in der Zukunft; die Rückkehr verletzt keine Bindung; kein abgeschlossenes
+gültigen (keine Überschneidung) und ändert den Status; ein Wegfall im
+laufenden Jahr bzw. Gründungsjahr liegt nicht in der Zukunft, ein Wegfall wegen
+des Vorjahres höchstens zum 1. Januar des Folgejahres; die Rückkehr verletzt
+keine Bindung und liegt nach einem eigenen, gültigen Wegfall im laufenden Jahr
+bzw. Gründungsjahr Y nicht vor dem 01.01.(Y+2) (`ReturnAfterWegfall`, § 19
+Abs. 1 Satz 1 UStG; der Eintrag selbst besagt einen Gesamtumsatz Y über
+25.000 €, darum Ablehnung statt Warnung, V8a-R-04; war er falsch, wird er
+widerrufen); kein abgeschlossenes
 Geschäftsjahr ändert seinen Status (der Jahres-Snapshot hängt über die
 Vorsteuer aktivierter Kosten davon ab). Die Commands prüfen über
 `validate_change_with` bzw. `validate_revoke_with` zusätzlich aktivierte
@@ -185,7 +201,10 @@ danach liegt (`CapitalizedInputTax`): Ändert sich ihr Status, verschöbe sich
 Vorsteuer ins abgeschlossene Jahr (`ClosedYearInputTax`). Warnungen, die
 nicht sperren (`change_warnings`, Feld `warnings` der Vorschau): Verzicht nach
 Ablauf der Erklärungsfrist (Ende Februar des übernächsten Jahres, § 19 Abs. 3
-Satz 1), Rückkehr bei einem Vorjahresumsatz über 25.000 €.
+Satz 1), Rückkehr bei erfassten Zahlungseingängen des Vorjahres über 25.000 €,
+Rückkehr im Voraus, solange
+das Vorjahr läuft, und Wegfall wegen des Vorjahres bei erfassten
+Zahlungseingängen bis 25.000 € (ADR 0042 Nr. 18).
 
 **Commands** (`commands::tax_status`): `tax_status_overview`, `tax_status_at`,
 `tax_status_change_preview`, `tax_status_change_add`,
@@ -209,12 +228,31 @@ das Festschreiben ab, statt den alten Status einzufrieren. Detailseiten von
 Entwürfen zeigen den Status ihres Datums wie die Editoren, festgeschriebene den
 eingefrorenen Wert.
 
-**Gesamtumsatz und Grenzen** (ADR 0042 Nr. 5): Gesamtumsatz nach
-vereinnahmten Entgelten, netto, ohne Anlagenverkäufe
-(`domain::tax_status::gesamtumsatz`); Grenzprüfung für Vorjahr (25.000 €),
-laufendes Jahr (100.000 €) und vermutetes Gründungsjahr (25.000 €, wenn
-Klein.Buch keinen früheren Umsatz kennt) mit dem auslösenden Beleg als
-Vorschlag. Hinweis über die Regel `rule_tax_threshold` (täglich und nach
+**Gesamtumsatz und Grenzen** (ADR 0042 Nr. 5): Zahlungseingänge laut
+Klein.Buch nach vereinnahmten Entgelten, netto, ohne Anlagenverkäufe
+(`domain::tax_status::gesamtumsatz`), als Annäherung an den Gesamtumsatz nach
+§ 19 Abs. 2 UStG: nicht steuerbare und die dort abzuziehenden steuerfreien
+Umsätze kann Klein.Buch unter §19 (alle Positionen „E“) nicht unterscheiden,
+die Texte nennen den Wert darum „Zahlungseingänge laut Klein.Buch“
+(L-GOBD-03). Grenzprüfung für Vorjahr (25.000 €), laufendes Jahr (100.000 €),
+vermutetes Gründungsjahr (25.000 €, wenn Klein.Buch keinen früheren Umsatz
+kennt) und Folgejahr (`Grenzart::Folgejahr`: laufendes Jahr schon über
+25.000 € → Wegfall wegen des Vorjahres zum 1. Januar des Folgejahres, damit
+Abo-Rechnungen und Vorausrechnungen mit Leistung im Folgejahr den richtigen
+Status bekommen; entfällt neben einem überschrittenen Hinweis „laufendes
+Jahr“ oder „Vorjahr“, deren Wegfall über den Jahreswechsel fortwirkt und den
+ein Eintrag zum 1. Januar des Folgejahres sperrte, V8a-R-03). Den
+auslösenden Beleg bestimmt der Zufluss (Reihenfolge der Zahldaten). Vorschlag
+für das Wirkungsdatum (L-GOBD-01, `wegfall_suggestion`): das Leistungsdatum
+des auslösenden Belegs, wenn es im geprüften Jahr und nicht nach der Zahlung
+liegt, sonst der Tag der Zahlung (Leistung im Vorjahr; Anzahlung oder
+Vorausrechnung), begrenzt auf das Jahr und heute; der Status wird am selben
+Tag geprüft. `trigger_service_year` nennt das Leistungsjahr des auslösenden
+Belegs: Liegt es vor dem geprüften Jahr, bleibt dieser Beleg unter dem Status
+seines Jahres (ADR 0042 Nr. 3), und die Hinweistexte sagen, dass erst die
+Umsätze ab der Zahlung steuerpflichtig sind (V8a-R-02). Das vermutete
+Gründungsjahr (`gruendungsjahr_vermutet`) liefert die Übersicht auch als
+`turnover.presumedFoundingYear` für die Grenzangabe (UI-08). Hinweis über die Regel `rule_tax_threshold` (täglich und nach
 jedem Eintrag); den Wechsel trägt der Nutzer selbst ein.
 
 **Übernahme des Bestands** (Nr. 6): Die Migration bildet den alten Schalter so
@@ -273,9 +311,10 @@ sich am Klausel-Erfordernis nichts.
 ### 8.2 Abo-Rechnungen mit §19 (Phase 4)
 
 Jeder Termin trägt den Status am Ende seines Abrechnungszeitraums (ADR 0042
-Nr. 3/10; Zeitraum = Stichtag bis Tag vor dem nächsten Stichtag). Ein
-nachgeholter Termin vor einem Wechsel bleibt §19; passt die Steuerart der
-Vorlage nicht zum Status am Termin, entsteht dort keine Rechnung (Hinweis,
+Nr. 3/10; Zeitraum = Stichtag bis Tag vor dem nächsten Stichtag). Termine,
+deren Abrechnungszeitraum vor dem Wechsel endet, bleiben §19, auch wenn sie
+nachgeholt werden; passt die Steuerart der Vorlage nicht zum Status am Ende
+des Abrechnungszeitraums, entsteht dort keine Rechnung (Hinweis,
 keine Nummer), bis die Vorlage umgestellt ist.
 
 ### 8.3 E-Rechnung-Empfang von Lieferanten mit USt
@@ -291,8 +330,8 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
 ## 9. Was im UI explizit kommuniziert wird
 
 - In „Meine Firmendaten“, Abschnitt „Steuerstatus“: Status heute, Bindung und
-  frühestmögliche Rückkehr, eingetragener künftiger Wechsel, Gesamtumsatz
-  Vorjahr/laufendes Jahr mit Grenzhinweisen (auslösender Beleg, Vorschlag für
+  frühestmögliche Rückkehr, eingetragener künftiger Wechsel, Zahlungseingänge
+  laut Klein.Buch für Vorjahr/laufendes Jahr mit Grenzhinweisen (auslösender Beleg, Vorschlag für
   das Wirkungsdatum, „Klein.Buch wechselt nie selbst“) und der Verlauf mit
   Wirkungsdatum, Status, Grund, Bindung und Widerruf; Link ins
   Handbuch-Kapitel „Kleinunternehmer-Regelung“.
@@ -320,8 +359,14 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
   reicht nicht; nur Marker reicht nicht; korrekt zugelassenes Template
   passiert.
 - `domain::tax_status::tests`: Status am Stichtag (inklusiv), 1.-Januar-Regeln
-  je Grund, Bindung bis Wirkungsjahr + 5, Rückkehr nach Wegfall ohne Sperre,
-  mehrfacher Wechsel, Widerruf, abgeschlossene Jahre, Grenzprüfung.
+  je Grund, Bindung bis Wirkungsjahr + 5, Rückkehr nach Wegfall wegen des
+  Vorjahres ohne Sperre,
+  mehrfacher Wechsel, Widerruf, abgeschlossene Jahre, Grenzprüfung;
+  Vorschlag des Wirkungsdatums bei Leistung im Vorjahr bzw. nach der Zahlung,
+  Wegfall wegen des Vorjahres im Voraus mit Warnung, Grenzhinweis Folgejahr
+  (entfällt neben überschrittenem Vorjahr), Rückkehr nach Wegfall im
+  laufenden Jahr bzw. Gründungsjahr (Y+2, Ablehnung davor),
+  Jahre außerhalb 1900–9999 ohne Panik.
 - `tests/migration_0033_test.rs`: Append-only, CHECKs, Übernahme des Bestands
   (2000–2040 wie bisher), Spiegel.
 - `tests/tax_status_flow_test.rs`: Wegfall am 15.08. (Rechnung 14.08. §19,
@@ -329,7 +374,13 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
   Folgejahr, Rückwirkung im abgeschlossenen Jahr, Widerruf, Mischjahr in
   EÜR/ELSTER/DATEV, Grenzhinweis, Paket und Angebot → Rechnung nach Datum;
   Hinweis nach dem Widerruf, Vorsteuer aktivierter Kosten im abgeschlossenen
-  Jahr, erneute Statusprüfung im Lock, Warnungen der Vorschau.
+  Jahr, erneute Statusprüfung im Lock, Warnungen der Vorschau; Grenzhinweis
+  mit Leistung im Vorjahr (Text nennt den Status des Leistungsjahres),
+  Rückkehr nach Wegfall im laufenden Jahr abgelehnt, EÜR mit Jahr außerhalb
+  des Bereichs.
+- `tests/recurring_scheduler_test.rs`
+  (`wegfall_vorjahr_in_advance_covers_subscription_over_year_end`): Abo über
+  den Jahreswechsel nach einem Wegfall wegen des Vorjahres im Voraus.
 - `db::repo::tax_status::tests::mirror_columns_are_written_only_here`: keine
   Lesestelle der Spiegelspalten.
 - `commands::recurring_invoice::tests` (KB-0053): Speichern einer Abo-
@@ -338,6 +389,9 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
   wählbare Gründe nach dem jüngsten Eintrag, Vorschläge für das Wirkungsdatum,
   1.-Januar- und Zukunftsprüfung, Bindungsende, Texte (Grenzhinweis, Folgen,
   Editor-Hinweis, Umwandlung), `kleinTodayOrLater`, Zwischenspeicher je Datum.
+- `src/routes/settings/seller/tax-status-dialog-leads.test.ts` (vitest): die
+  Einleitungen der Dialoge (`aria-describedby`) enthalten keinen Code als
+  Klartext (V8a-R-01).
 
 ---
 
@@ -352,3 +406,7 @@ Stand: 2026-05-26, ADR 0005; 2026-10-27 (Lauf 2026.11.1, V1): §1, §5, §6, §7
 `domain::invoice::validate_for_issue`, `einvoice::generator::build_cii`,
 `pdf::klausel_check`, `commands::settings::seller_profile_upsert`. Nachtrag 2026-10-31 (Lauf 2026.11.1, V7): Kopf und §10
 (`domain::kleinunternehmer::tests`) gegen `src/domain/kleinunternehmer.rs` geprüft.
+Nachtrag 2026-10-31 (Lauf 2026.11.1, V8a): §6 und §10 gegen
+`src/domain/tax_status.rs` und `src/commands/tax_status.rs` geprüft; Prüfbefunde
+V8a-R-02 bis R-06: §2, §6, §8.2, §9 und §10 gegen dieselben Dateien,
+`commands/recurring_invoice.rs` und `tests/recurring_scheduler_test.rs` geprüft.

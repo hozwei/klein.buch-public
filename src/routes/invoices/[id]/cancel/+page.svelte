@@ -176,7 +176,8 @@
         {#if originalPeriod}
           Er übernimmt auch den Leistungszeitraum der Rechnung ({originalPeriod}).
         {:else}
-          Als Leistungsdatum trägt er das Storno-Datum.
+          <!-- DOC-12: Leistungsdatum des Originals, ohne es dessen Rechnungsdatum. -->
+          Er übernimmt auch das Leistungsdatum der Rechnung ({date(inv.deliveryDate ?? inv.invoiceDate)}).
         {/if}
       </Banner>
       {#if hasPayments}

@@ -55,8 +55,9 @@ Ohne weiteren Eintrag bist du **Kleinunternehmer nach §19 UStG**. Dann weist
 Klein.Buch keine Umsatzsteuer aus und setzt automatisch den Pflichthinweis
 „Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen.“ auf jede Rechnung und in die
 E-Rechnung. Der Abschnitt **Steuerstatus** unter den Firmendaten zeigt den Verlauf,
-den aktuellen Status und den Gesamtumsatz von Vorjahr und laufendem Jahr (mit
-Hinweis, wenn eine Grenze erreicht ist). Einen Wechsel trägst du mit
+den aktuellen Status und die Zahlungseingänge laut Klein.Buch von Vorjahr und
+laufendem Jahr als Annäherung an den Gesamtumsatz (mit Hinweis, wenn eine Grenze
+erreicht ist). Einen Wechsel trägst du mit
 **Statuswechsel eintragen …** ein, mit Wirkungsdatum und Grund: Ein freiwilliger
 Verzicht auf §19 wirkt ab 1. Januar und bindet dich fünf Kalenderjahre
 einschließlich des Wirkungsjahres; ein Wegfall wegen der Umsatzgrenzen (Vorjahr
@@ -253,7 +254,7 @@ belegt. Gegenbuchungen stornierter Zahlungen erscheinen in EÜR und Exporten.
 ## 7. Geschäftsjahr und Hinweise
 
 Unter **Geschäftsjahr** schließt du ein **abgelaufenes** Jahr ab: AfA buchen,
-Jahr prüfungssicher festschreiben (§146 AO), Backup. Der Abschluss ist
+Jahr festschreiben (Sperre nach § 146 Abs. 4 AO), Backup. Der Abschluss ist
 unumkehrbar; Korrekturen danach nur per Storno-Beleg. Er wartet auf gerade
 laufende Buchungen; offene Entwürfe des Jahres blockieren ihn nicht, lassen sich
 danach aber nur noch verwerfen (der Abschluss-Dialog warnt davor). Abgeschlossene

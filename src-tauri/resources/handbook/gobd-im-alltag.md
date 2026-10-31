@@ -83,7 +83,7 @@ XRechnung-XMLs, DATEV-Stapel und Inhalts-Übersicht.
    Zugriff.
 4. Führt ein Audit-Log, das nicht editierbar ist.
 5. Schreibt zeitnahe Sicherungs-Kopien (Backups).
-6. Erzeugt prüfungssichere Exporte für den Steuerberater.
+6. Erzeugt Exporte mit Prüfsummen für den Steuerberater.
 
 Damit erfüllst Du im Alltag die GoBD-Pflichten, ohne dass Du an
 einzelne Punkte denken musst.

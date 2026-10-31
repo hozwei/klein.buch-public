@@ -612,7 +612,8 @@
       <p class="muted">
         Der Entwurf wird nicht gelöscht: Zeitpunkt und Grund stehen daran und im Protokoll, die
         Nummer <DocNo value={inv.invoiceNumber} inline /> bleibt vergeben. Danach lässt er sich weder
-        ändern noch ausstellen. Klein.Buch fragt zur Bestätigung Daten-Passwort und App-Code ab.
+        ändern noch ausstellen. Liegt deine letzte Bestätigung länger als 5 Minuten zurück, fragt
+        Klein.Buch Daten-Passwort und App-Code ab.
       </p>
       <label class="void-reason" for="void-reason">
         <span>Grund <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></span>
@@ -999,7 +1000,8 @@
             Mindestens 10 Zeichen, z. B. „Betrag falsch erfasst, laut Kontoauszug 450,00 €“. Ohne Namen von Personen.
           </small>
         </div>
-        <p class="rp-auth">Klein.Buch fragt zur Bestätigung Daten-Passwort und App-Code ab.</p>
+        <!-- UI-11: Re-Auth mit 5-Minuten-Fenster (REAUTH_WINDOW); eine frische Anmeldung zählt. -->
+        <p class="rp-auth">Liegt deine letzte Bestätigung länger als 5 Minuten zurück, fragt Klein.Buch Daten-Passwort und App-Code ab.</p>
       </div>
       <footer class="kb-dialog-foot">
         <Button variant="secondary" initialFocus onclick={closeReverse}>Abbrechen</Button>

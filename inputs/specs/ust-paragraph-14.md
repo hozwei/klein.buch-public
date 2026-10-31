@@ -13,8 +13,10 @@ Klein.Buch prüft die Angaben vor dem Ausstellen (`domain::invoice::validate_for
 4. Fortlaufende Rechnungsnummer (Klein.Buch: `RE-{JJJJ}-{NNNN}`).
 5. Menge und handelsübliche Bezeichnung der Leistung.
 6. Zeitpunkt der Leistung — als Datum oder Zeitraum; der Kalendermonat genügt
-   (§ 31 Abs. 4 UStDV). Bei einer Rechnung vor der Leistung (Vorausrechnung, Anzahlung) der
-   Zeitpunkt der Vereinnahmung, sofern er feststeht und vom Ausstellungsdatum abweicht.
+   (§ 31 Abs. 4 UStDV). Bei einer Rechnung vor der Leistung (Vorausrechnung) der
+   voraussichtliche Leistungszeitpunkt. Wurde das Entgelt vor der Leistung schon vereinnahmt
+   (Anzahlung, § 14 Abs. 5 Satz 1 UStG), zusätzlich der Zeitpunkt der Vereinnahmung, sofern er
+   feststeht und vom Ausstellungsdatum abweicht (§ 14 Abs. 4 Satz 1 Nr. 6 UStG).
 7. Entgelt und jede im Voraus vereinbarte Minderung.
 8. Steuersatz und Steuerbetrag bzw. Hinweis auf eine Steuerbefreiung.
 

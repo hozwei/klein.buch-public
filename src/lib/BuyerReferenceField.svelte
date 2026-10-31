@@ -26,8 +26,10 @@
   const formatHint = $derived(buyerReferenceFormatHint(value));
 </script>
 
-<label class="bref {cls}" for={id}>
-  <span>Leitweg-ID (optional)</span>
+<!-- UI-01: Das Label trägt nur den Feldnamen; Eingabe, Fehler und Formathilfe stehen daneben
+     (design.md §4.7, wie FormField), sonst stecken Hinweis und Fehler im zugänglichen Namen. -->
+<div class="bref {cls}">
+  <label for={id}>Leitweg-ID (optional)</label>
   <input
     {id}
     type="text"
@@ -42,10 +44,10 @@
   <span id="{id}-hint" class="field-hint">
     Nur bei öffentlichen Auftraggebern (Behörden): Die Leitweg-ID steht als Käuferreferenz in der
     E-Rechnung. Aufbau: Grobadressierung, optional Feinadressierung, zweistellige Prüfziffer, durch
-    Bindestriche getrennt (z.&nbsp;B. 04011000-12345-67). Leer lassen, wenn der Auftraggeber keine
+    Bindestriche getrennt (z.&nbsp;B. 04011000-1234512345-06). Leer lassen, wenn der Auftraggeber keine
     Behörde ist.{#if formatHint}{" "}{formatHint}{/if}{#if note}{" "}{note}{/if}
   </span>
-</label>
+</div>
 
 <style>
   .bref { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }

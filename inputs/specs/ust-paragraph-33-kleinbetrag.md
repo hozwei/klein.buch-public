@@ -18,6 +18,6 @@ Pflichtangaben enthalten:
 - Anschrift des Empfängers.
 
 Klein.Buch erkennt das über `domain::kleinbetragsrechnung::is_applicable(brutto)` und prüft dann
-milder (Empfängeranschrift und Steuernummer entfallen; die Rechnungsnummer vergibt Klein.Buch
-trotzdem fortlaufend, GoBD). Auch hier gilt:
+milder (die Empfängeranschrift entfällt; Steuernummer oder USt-IdNr. bleibt wegen der
+XRechnung Pflicht, BR-CO-26; die Rechnungsnummer vergibt Klein.Buch trotzdem fortlaufend, GoBD). Auch hier gilt:
 bei `is_kleinunternehmer = true` → §19-Klausel obligatorisch.

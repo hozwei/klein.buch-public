@@ -619,8 +619,13 @@ sonst erneut frei. Deshalb:
 
 ## 6. Aufbewahrung und kein Löschen-UI
 
-§147 AO + UStG ⇒ 10 Jahre (Rechnungen, Buchungen, alles was zur Aufstellung
-beigetragen hat). Klein.Buch hat:
+Gesetzliche Fristen nach §147 Abs. 3 und 4 AO (seit dem Vierten
+Bürokratieentlastungsgesetz), jeweils ab Ende des Kalenderjahres: Bücher und
+Aufzeichnungen 10 Jahre, Buchungsbelege einschließlich Rechnungen 8 Jahre (auch
+§14b Abs. 1 UStG), Handels- und Geschäftsbriefe 6 Jahre; länger, solange die
+Festsetzungsfrist läuft (§147 Abs. 3 Satz 5 AO). Klein.Buch hält technisch alles
+einheitlich 10 Jahre vor und löscht auch danach nichts (DOC-01/DOC-11; die
+DSGVO-Auskunft nennt die Fristen so, `domain::dsgvo::RETENTION_TEXT`). Klein.Buch hat:
 
 - **Kein** UI-Button, um eine Rechnung, Kosten-Buchung, AfA-Zeile oder
   Privatbewegung zu **löschen**; die DB verbietet `DELETE` auf diesen Tabellen

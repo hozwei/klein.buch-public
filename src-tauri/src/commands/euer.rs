@@ -41,6 +41,9 @@ pub(crate) async fn year_tax_status(
     pool: &SqlitePool,
     fiscal_year: i32,
 ) -> Result<(bool, Option<String>)> {
+    // SEC-2026.11.1-01: Jahresbereich an der Grenze prüfen.
+    let fiscal_year = crate::domain::fiscal_year::checked_year(i64::from(fiscal_year))
+        .map_err(crate::error::Error::Domain)?;
     let hist = crate::db::repo::tax_status::history(pool).await?;
     let ys = hist.year_status(fiscal_year);
     let change = (ys == crate::domain::tax_status::YearStatus::Wechsel)
@@ -109,12 +112,16 @@ pub async fn euer_compute_report(
     args: EuerComputeReportArgs,
 ) -> Result<EuerReportView> {
     let EuerComputeReportArgs { fiscal_year } = args;
+    // SEC-2026.11.1-01: ein Jahr außerhalb 1900–9999 ist eine Meldung, keine
+    // Panik in der Statushistorie.
+    let year = crate::domain::fiscal_year::checked_year(fiscal_year)
+        .map_err(crate::error::Error::Domain)?;
     let pool = ctx.pool()?;
 
     let inputs = euer_repo::load_inputs(&pool).await?;
-    let report = aggregate::aggregate(fiscal_year as i32, &inputs);
+    let report = aggregate::aggregate(year, &inputs);
     let hist = crate::db::repo::tax_status::history(&pool).await?;
-    let year_status = hist.year_status(fiscal_year as i32);
+    let year_status = hist.year_status(year);
     // Gleiche Rechnung wie `snapshot::check`, ohne die Eingaben ein zweites Mal
     // zu laden.
     let snapshot_check = crate::fiscal_year::lock::get(&pool, fiscal_year)
@@ -124,7 +131,7 @@ pub async fn euer_compute_report(
         is_kleinunternehmer: year_status.is_klein(),
         year_status,
         status_change: (year_status == crate::domain::tax_status::YearStatus::Wechsel)
-            .then(|| crate::commands::tax_status::year_status_text(&hist, fiscal_year as i32)),
+            .then(|| crate::commands::tax_status::year_status_text(&hist, year)),
         snapshot_check,
         report,
     })

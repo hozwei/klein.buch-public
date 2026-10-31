@@ -446,6 +446,13 @@ async fn storno_creates_new_invoice_and_marks_original() {
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
         service_period: None,
+        delivery_date: detail
+            .invoice
+            .delivery_date
+            .as_deref()
+            .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()),
+        invoice_date: chrono::NaiveDate::parse_from_str(&detail.invoice.invoice_date, "%Y-%m-%d")
+            .unwrap(),
         items: detail
             .items
             .iter()

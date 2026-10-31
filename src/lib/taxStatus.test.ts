@@ -13,7 +13,9 @@ import {
   consequenceLines,
   effectiveFromError,
   effectiveFromLabel,
+  effectiveFromPhrase,
   lastEntry,
+  REASONS,
   nextChangeAfter,
   nextJanFirst,
   invoiceTaxDate,
@@ -151,6 +153,7 @@ describe("suggestChange", () => {
       limitCents: 10_000_000,
       exceeded: true,
       triggerDocument: "RE-2026-0042",
+      triggerServiceYear: 2026,
       suggestedEffectiveFrom: "2026-07-15",
       suggestedReason: "wegfall_laufend",
       presumed: false,
@@ -185,6 +188,8 @@ describe("effectiveFromError", () => {
     expect(effectiveFromError("verzicht", "", today)).toMatch(/Wirkungsdatum/);
     expect(effectiveFromError("verzicht", "2026-02-30", today)).toMatch(/gültiges Datum/);
     expect(effectiveFromError("verzicht", "1899-01-01", today)).toMatch(/gültiges Datum/);
+    // SEC-2026.11.1-01: höchstens vierstellige Jahre wie der Server.
+    expect(effectiveFromError("verzicht", "10000-01-01", today)).toMatch(/gültiges Datum/);
     expect(effectiveFromError("initial", "", today)).toBe("");
   });
 
@@ -201,8 +206,9 @@ describe("effectiveFromError", () => {
     expect(effectiveFromError("wegfall_gruendungsjahr", "2026-10-28", today)).toMatch(/Zukunft/);
   });
 
-  it("Wegfall Vorjahr nicht für ein künftiges Jahr", () => {
-    expect(effectiveFromError("wegfall_vorjahr", "2027-01-01", today)).toMatch(/nicht im Voraus/);
+  it("Wegfall Vorjahr höchstens zum 1. Januar des Folgejahres im Voraus (L-GOBD-02)", () => {
+    expect(effectiveFromError("wegfall_vorjahr", "2027-01-01", today)).toBe("");
+    expect(effectiveFromError("wegfall_vorjahr", "2028-01-01", today)).toMatch(/im Voraus/);
     expect(effectiveFromError("wegfall_vorjahr", "2026-01-01", today)).toBe("");
   });
 });
@@ -226,6 +232,18 @@ describe("Texte", () => {
     expect(effectiveFromLabel("2026-07-15")).toBe("15.07.2026");
   });
 
+  it("Wirkungsdatum im Satz: nie „ab seit Beginn“ (UI-05)", () => {
+    expect(effectiveFromPhrase(ANFANG)).toBe("seit Beginn");
+    expect(effectiveFromPhrase(ANFANG, true)).toBe("Seit Beginn");
+    expect(effectiveFromPhrase("2026-07-15")).toBe("ab 15.07.2026");
+    expect(effectiveFromPhrase("2026-07-15", true)).toBe("Ab 15.07.2026");
+  });
+
+  it("Rückkehr ohne Umsatzprognose (UI-07, § 19 Abs. 1 UStG n. F.)", () => {
+    expect(REASONS.rueckkehr.explain).not.toContain("voraussichtlich");
+    expect(REASONS.rueckkehr.explain).toContain("endet die Regelung mit diesem Umsatz");
+  });
+
   it("Knopf je Grund", () => {
     expect(changeConfirmLabel("verzicht")).toBe("Verzicht eintragen");
     expect(changeConfirmLabel("wegfall_laufend")).toBe("Wegfall eintragen");
@@ -241,6 +259,7 @@ describe("Texte", () => {
       limitCents: 2_500_000,
       exceeded: true,
       triggerDocument: "RE-2026-0007",
+      triggerServiceYear: 2026,
       suggestedEffectiveFrom: "2026-09-01",
       suggestedReason: "wegfall_gruendungsjahr",
       presumed: true,
@@ -249,6 +268,43 @@ describe("Texte", () => {
     expect(t).toContain("01.09.2026");
     expect(t).toContain("Gründungsjahr");
     expect(t).toMatch(/26\.000,00\s€/);
+    expect(t).not.toContain("bleibt unter dem Status ihres Jahres");
+  });
+
+  it("Grenzhinweis mit Leistung im Vorjahr: auslösender Beleg bleibt im Status seines Jahres (V8a-R-02)", () => {
+    const t = thresholdHintText({
+      kind: "laufend",
+      year: 2026,
+      turnoverCents: 10_100_000,
+      limitCents: 10_000_000,
+      exceeded: true,
+      triggerDocument: "RE-2025-0099",
+      triggerServiceYear: 2025,
+      suggestedEffectiveFrom: "2026-10-05",
+      suggestedReason: "wegfall_laufend",
+      presumed: false,
+    });
+    expect(t).toContain("Die Leistung aus 2025 bleibt unter dem Status ihres Jahres");
+    expect(t).toContain("05.10.2026");
+  });
+
+  it("Grenzhinweis Folgejahr: Wegfall zum 1. Januar des nächsten Jahres (L-GOBD-02)", () => {
+    const t = thresholdHintText({
+      kind: "folgejahr",
+      year: 2026,
+      turnoverCents: 3_000_000,
+      limitCents: 2_500_000,
+      exceeded: true,
+      triggerDocument: "RE-2026-0031",
+      triggerServiceYear: 2026,
+      suggestedEffectiveFrom: "2027-01-01",
+      suggestedReason: "wegfall_vorjahr",
+      presumed: false,
+    });
+    expect(t).toContain("01.01.2027");
+    expect(t).toContain("RE-2026-0031");
+    expect(t).toContain("Zahlungseingänge 2026 laut Klein.Buch");
+    expect(t).toMatch(/Abo-Rechnungen/);
   });
 
   it("Grenze genau erreicht: kein Wegfall", () => {
@@ -259,12 +315,32 @@ describe("Texte", () => {
       limitCents: 2_500_000,
       exceeded: false,
       triggerDocument: null,
+      triggerServiceYear: null,
       suggestedEffectiveFrom: null,
       suggestedReason: "wegfall_vorjahr",
       presumed: false,
     });
-    expect(t).toContain("erreicht damit genau");
-    expect(t).toContain("gilt weiter");
+    expect(t).toContain("erreichen damit genau");
+    expect(t).toContain("Zahlungseingänge 2025 laut Klein.Buch");
+    expect(t).toContain("im laufenden Jahr weiter");
+    // UI-06: Das Vorjahr ist abgeschlossen; kein „jeder weitere Umsatz überschreitet“.
+    expect(t).not.toContain("jeder weitere Umsatz");
+  });
+
+  it("Grenze im laufenden Jahr genau erreicht: jeder weitere Umsatz überschreitet", () => {
+    const t = thresholdHintText({
+      kind: "laufend",
+      year: 2026,
+      turnoverCents: 10_000_000,
+      limitCents: 10_000_000,
+      exceeded: false,
+      triggerDocument: null,
+      triggerServiceYear: null,
+      suggestedEffectiveFrom: null,
+      suggestedReason: "wegfall_laufend",
+      presumed: false,
+    });
+    expect(t).toContain("jeder weitere Umsatz überschreitet die Grenze");
   });
 
   it("Folgen als Zeilen; ohne Folgen leer", () => {

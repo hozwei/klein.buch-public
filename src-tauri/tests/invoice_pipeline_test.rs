@@ -182,6 +182,8 @@ fn storno_pattern_yields_valid_negative_invoice() {
         currency_code: "EUR",
         pdf_template: "default",
         service_period: None,
+        delivery_date: None,
+        invoice_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
         items: vec![OriginalItemView {
             position: 1,
             description: "Beratung",

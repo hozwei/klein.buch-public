@@ -1497,6 +1497,14 @@ pub async fn invoices_cancel(
         currency_code: &original.invoice.currency_code,
         pdf_template: &original.invoice.pdf_template,
         service_period: original_period,
+        // DOC-12: Leistungszeitpunkt des Originals für den Storno.
+        delivery_date: original
+            .invoice
+            .delivery_date
+            .as_deref()
+            .map(parse_date)
+            .transpose()?,
+        invoice_date: parse_date(&original.invoice.invoice_date)?,
         items: original
             .items
             .iter()

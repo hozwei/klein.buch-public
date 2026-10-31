@@ -154,7 +154,7 @@ Regel eine Leitweg-ID, die Kennung, unter der die Behörde
 E-Rechnungen entgegennimmt. Du trägst sie im Entwurf in das Feld
 "Leitweg-ID (optional)" ein (Aufbau: Grobadressierung, optional
 Feinadressierung, zweistellige Prüfziffer, durch Bindestriche
-getrennt, zum Beispiel 04011000-12345-67). Die Prüfziffer prüft die
+getrennt, zum Beispiel 04011000-1234512345-06). Die Prüfziffer prüft die
 Eingangsplattform der Behörde, nicht Klein.Buch; weicht der Aufbau
 ab, weist Klein.Buch nur darauf hin. Der Entwurf speichert sie, und
 beim Ausstellen schreibt Klein.Buch sie als Käuferreferenz (BT-10) in

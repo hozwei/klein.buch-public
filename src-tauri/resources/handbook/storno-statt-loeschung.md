@@ -45,8 +45,10 @@ rückgängig machen, die Rechnung selbst bleibt erhalten. Erst
    Überschrift „Stornorechnung“ — auch in der E-Rechnung (XML)
 5. Der Leitweg-ID der Original-Rechnung in der E-Rechnung, falls die
    Rechnung eine hatte (Rechnung an eine Behörde)
-6. Dem Leistungszeitraum der Original-Rechnung, falls sie einen hatte
-   (sonst dem Storno-Datum als Leistungsdatum)
+6. Dem Leistungszeitpunkt der Original-Rechnung: ihrem Leistungszeitraum
+   bzw. Leistungsdatum, ohne beides ihrem Rechnungsdatum. Der Storno
+   korrigiert die ursprüngliche Leistung (§ 31 Abs. 5 UStDV); das
+   Storno-Datum ist das Datum des Belegs, nicht das einer Leistung
 
 Die Karte "Original-Rechnung" auf der Storno-Seite zeigt Leistungsdatum
 bzw. Leistungszeitraum und, falls vorhanden, die Leitweg-ID der

@@ -457,7 +457,7 @@ migrate_with_backup`), nicht beim Prozessstart — vorher ist die DB zu:
   (ADR 0039 E15, W7). Scheitert es, wird nicht migriert und die Instanz bleibt
   gesperrt (409 `pre_migration_backup_failed`). Danach läuft
   `db::run_migrations` (`sqlx::migrate!`) die fehlenden Migrationen.
-- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 34): `db::run_migrations`
+- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 35): `db::run_migrations`
   lehnt vor dem Migrations-Runner mit `Error::SchemaMismatch` und dem Hinweis
   auf das Image der passenden Version ab, kein Entsperren (ein älteres Programm
   liest keine neuere DB — unklar, welche neuen Constraints existieren; Lauf F).

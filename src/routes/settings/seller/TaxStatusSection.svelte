@@ -2,7 +2,7 @@
   // Abschnitt „Steuerstatus“ in „Meine Firmendaten“ (ADR 0042 Nr. 1–6). Ersetzt den
   // Schalter „Kleinunternehmer nach §19 UStG“ und den §19-Wechseldialog (ADR 0041
   // Nr. 21/220/251): Historie (append-only, Widerruf statt Löschen), Status heute,
-  // Gesamtumsatz nach § 19 Abs. 2 UStG mit Grenzhinweisen und der Gefahr-Dialog
+  // Zahlungseingänge laut Klein.Buch (L-GOBD-03) mit Grenzhinweisen und der Gefahr-Dialog
   // „Statuswechsel eintragen“ mit Grund, Wirkungsdatum und Vorschau der Folgen.
   //
   // Eintrag und Widerruf verlangen eine frische Re-Auth (Registry, Transport). Der
@@ -51,6 +51,7 @@
     consequenceLines,
     effectiveFromError,
     effectiveFromLabel,
+    effectiveFromPhrase,
     nextChangeAfter,
     statusAt,
     suggestChange,
@@ -175,7 +176,8 @@
     note = "";
     if (reason) applySuggestion(reason);
     if (prefill?.suggestedEffectiveFrom) effectiveFrom = prefill.suggestedEffectiveFrom;
-    if (prefill?.triggerDocument) triggerDocument = prefill.triggerDocument;
+    // Beleg nur bei Gründen mit Feld „auslösender Beleg“ (nicht beim Hinweis „Folgejahr“, L-GOBD-02).
+    if (prefill?.triggerDocument && REASONS[prefill.suggestedReason].trigger) triggerDocument = prefill.triggerDocument;
     tried = false;
     serverError = null;
     preview = null;
@@ -354,7 +356,8 @@
     <p class="kb-muted">
       Klein.Buch rechnet jeden Beleg mit dem Steuerstatus seines Datums: Rechnungen nach dem
       Leistungsdatum bzw. dem Ende des Leistungszeitraums (sonst Rechnungsdatum), Angebote nach dem Angebotsdatum, Kosten nach dem
-      Belegdatum. Beim Festschreiben bleibt der Status einer Rechnung unverändert.
+      Belegdatum. Beim Festschreiben wird der Status am maßgeblichen Datum eingefroren; spätere
+      Einträge ändern festgeschriebene Rechnungen nicht.
     </p>
 
     <!-- Grenzhinweise (ADR 0042 Nr. 5): Klein.Buch wechselt nie selbst. -->
@@ -370,22 +373,31 @@
       </Banner>
     {/each}
 
-    <!-- Gesamtumsatz nach vereinnahmten Entgelten (§ 19 Abs. 2 UStG) -->
-    <h3 class="sub">Gesamtumsatz</h3>
+    <!-- Zahlungseingänge laut Klein.Buch als Annäherung an den Gesamtumsatz
+         (§ 19 Abs. 2 UStG; L-GOBD-03) -->
+    <h3 class="sub">Zahlungseingänge laut Klein.Buch</h3>
     <dl class="kb-ledger turnover">
       <div>
         <dt>{overview.turnover.previousYear} (Grenze 25.000 €)</dt>
         <dd>{euro(overview.turnover.previousYearCents)}</dd>
       </div>
       <div>
-        <dt>{overview.turnover.currentYear} bis heute (Grenze 100.000 €)</dt>
+        <!-- UI-08, V8a-R-06: Im Gründungsjahr gilt schon im laufenden Jahr 25.000 € (ADR 0042
+             Nr. 2); vermutet der Server ein Gründungsjahr, steht diese Grenze vorn. -->
+        <dt>
+          {overview.turnover.currentYear} bis heute
+          ({overview.turnover.presumedFoundingYear
+            ? "Grenze 25.000 € im Gründungsjahr; ist es nicht dein Gründungsjahr, 100.000 €"
+            : "Grenze 100.000 €"})
+        </dt>
         <dd>{euro(overview.turnover.currentYearCents)}</dd>
       </div>
     </dl>
     <p class="kb-muted small">
       Nach vereinnahmten Entgelten, netto, Erstattungen aus Stornos abgezogen; ohne Verkäufe von
-      Anlagen (§ 19 Abs. 2 UStG). Klein.Buch kennt nur die hier erfassten Zahlungen; Umsätze
-      außerhalb von Klein.Buch rechnest du selbst hinzu.
+      Anlagen. Maßgeblich für die Grenzen ist der Gesamtumsatz nach § 19 Abs. 2 UStG: Umsätze
+      außerhalb von Klein.Buch rechnest du hinzu; nicht im Inland steuerbare Umsätze (Leistungsort
+      im Ausland) und die dort genannten steuerfreien Umsätze ziehst du selbst ab.
     </p>
 
     <!-- Historie -->
@@ -430,7 +442,7 @@
               <td data-label="Aktion">
                 {#if e.id === overview.revocableId && !e.revokedAt}
                   <Button variant="secondary" onclick={() => openRevoke(e)}
-                    ariaLabel={`Widerrufen: Eintrag ab ${effectiveFromLabel(e.effectiveFrom)}`}>Widerrufen …</Button>
+                    ariaLabel={`Widerrufen: Eintrag ${effectiveFromPhrase(e.effectiveFrom)}`}>Widerrufen …</Button>
                 {/if}
               </td>
             </tr>
@@ -484,15 +496,17 @@
         <fieldset class="reasons" aria-describedby={reasonError ? "ts-reason-err" : undefined}>
           <legend>Grund<span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></legend>
           {#if reasonError}<p id="ts-reason-err" class="err">{reasonError}</p>{/if}
+          <!-- UI-02: Das Label trägt nur die Bezeichnung; die Erklärung steht daneben und
+               kommt einmal über aria-describedby (nicht doppelt als Name und Beschreibung). -->
           {#each reasons as r (r)}
-            <label class="reason">
-              <input type="radio" name="ts-reason" value={r} checked={reason === r}
-                onchange={() => chooseReason(r)} aria-describedby="ts-reason-{r}" />
-              <span>
+            <div class="reason">
+              <label class="reason-l">
+                <input type="radio" name="ts-reason" value={r} checked={reason === r}
+                  onchange={() => chooseReason(r)} aria-describedby="ts-reason-{r}" />
                 <strong>{REASONS[r].label}</strong>
-                <small id="ts-reason-{r}">{REASONS[r].explain}</small>
-              </span>
-            </label>
+              </label>
+              <small id="ts-reason-{r}">{REASONS[r].explain}</small>
+            </div>
           {/each}
         </fieldset>
 
@@ -508,9 +522,16 @@
             <small id="ts-date-hint" class="hint">
               {#if info.janFirst}
                 Nur zum 1. Januar eines Jahres (§ 19 Abs. 1 und 3 UStG).
+                <!-- L-GOBD-02 (ADR 0042 Nr. 2): im Voraus höchstens zum 1. Januar des Folgejahres. -->
+                {#if reason === "wegfall_vorjahr"}Im Voraus höchstens zum 1. Januar des nächsten Jahres.{/if}
               {:else}
-                Tag des Umsatzes, mit dem die Grenze überschritten wird (Leistungsdatum der Rechnung);
-                dieser Umsatz ist schon steuerpflichtig.
+                <!-- L-GOBD-01 (ADR 0042 Nr. 2): Vorschlag wie wegfall_suggestion im Server. -->
+                Tag des Umsatzes, mit dem die Grenze überschritten wird: das Leistungsdatum der Rechnung,
+                bei einer Leistung im Vorjahr, einer Anzahlung oder Vorausrechnung der Tag der Zahlung.
+                <!-- V8a-R-02: Eine Leistung aus dem Vorjahr bleibt unter dem Status ihres Jahres
+                     (ADR 0042 Nr. 3). -->
+                Dieser Umsatz ist schon steuerpflichtig; eine Leistung aus dem Vorjahr bleibt unter
+                dem Status ihres Jahres, steuerpflichtig sind dann die Umsätze ab dem Tag der Zahlung.
               {/if}
               Rückwirkend nur in einem offenen Geschäftsjahr.
             </small>
@@ -542,8 +563,10 @@
           </Banner>
         {/if}
 
-        <!-- Vorschau der Folgen (Server, schreibt nichts). -->
-        <div id="ts-preview" class="preview" tabindex="-1" aria-live="polite">
+        <!-- Vorschau der Folgen (Server, schreibt nichts). UI-03: keine eigene Live-Region
+             um die Banner (design.md §4.10); angesagt wird über die Banner bzw. die eine
+             Statuszeile, tabindex bleibt für die Fokusführung. -->
+        <div id="ts-preview" class="preview" tabindex="-1">
           {#if reason && !dateError}
             {#if previewError}
               <Banner kind="error" title="Die Vorschau ist fehlgeschlagen.">{previewError}</Banner>
@@ -571,7 +594,7 @@
                   <ul>{#each previewLines as l (l)}<li>{l}</li>{/each}</ul>
                 </Banner>
               {:else}
-                <p class="kb-muted">Keine festgeschriebenen Belege, Entwürfe oder Abo-Vorlagen betroffen.</p>
+                <p class="kb-muted" role="status">Keine festgeschriebenen Belege, Entwürfe oder Abo-Vorlagen betroffen.</p>
               {/if}
             {:else if previewBusy}
               <p class="kb-muted" role="status">Folgen werden geprüft …</p>
@@ -631,11 +654,12 @@
       </header>
       <div class="kb-dialog-body">
         <p id="ts-revoke-lead">
-          Der Eintrag „{REASONS[revokeEntry.reason]?.label ?? revokeEntry.reason}“ ab
-          {effectiveFromLabel(revokeEntry.effectiveFrom)} gilt danach nicht mehr; er bleibt mit dem
+          <!-- UI-05: „ab TT.MM.JJJJ“ bzw. „seit Beginn“ (Anfangsstand), nie „ab seit Beginn“. -->
+          Der Eintrag „{REASONS[revokeEntry.reason]?.label ?? revokeEntry.reason}“
+          {effectiveFromPhrase(revokeEntry.effectiveFrom)} gilt danach nicht mehr; er bleibt mit dem
           Grund im Verlauf sichtbar.
           {#if statusAfterRevoke}
-            Ab {effectiveFromLabel(revokeEntry.effectiveFrom)} gilt dann wieder:
+            {effectiveFromPhrase(revokeEntry.effectiveFrom, true)} gilt dann wieder:
             <strong>{TAX_STATUS_LABEL[statusAfterRevoke]}</strong>.
           {/if}
           Festgeschriebene Rechnungen ändern sich nicht; betroffene nennt Klein.Buch unter Hinweise.
@@ -677,14 +701,12 @@
   .ts-dialog li { margin-bottom: 0.3rem; }
   .reasons { border: 0; padding: 0; margin: 1rem 0; min-width: 0; }
   .reasons legend { font-weight: 600; padding: 0; margin-bottom: 0.4rem; }
-  .reason {
-    display: flex; gap: 0.6rem; align-items: flex-start;
-    padding: 0.5rem 0; min-height: var(--target); cursor: pointer;
-    border-bottom: 1px solid var(--line);
-  }
-  .reason input { margin-top: 0.25rem; min-width: 1.1rem; min-height: 1.1rem; }
-  .reason span { display: flex; flex-direction: column; gap: 0.15rem; }
-  .reason small { color: var(--text-muted); font-size: var(--fs-sm); }
+  .reason { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+  /* Trefferfläche: das Label, mindestens --target hoch (U1, 2.5.8). */
+  .reason-l { display: flex; gap: 0.6rem; align-items: flex-start; min-height: var(--target); cursor: pointer; }
+  .reason input { margin-top: 0.25rem; min-width: 1.1rem; min-height: 1.1rem; flex: none; }
+  /* Erklärung unter der Bezeichnung, eingerückt um Radio und Abstand. */
+  .reason small { display: block; margin: 0.15rem 0 0 1.7rem; color: var(--text-muted); font-size: var(--fs-sm); }
   .f { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; min-width: 0; }
   .f > label { font-size: var(--fs-sm); font-weight: 600; }
   .f input, .f textarea { min-height: var(--target); font: inherit; padding: 0.45rem; box-sizing: border-box; }

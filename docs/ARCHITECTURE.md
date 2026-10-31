@@ -150,7 +150,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |
 | `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit und einziger Kanal), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht |
-| `fiscal_year::{lock,transition,guard}` | Shell | prüfungssicherer GJ-Abschluss + `ensure_year_open`-Guard (ADR 0027) |
+| `fiscal_year::{lock,transition,guard}` | Shell | GJ-Abschluss mit Sperre (§ 146 Abs. 4 AO) + `ensure_year_open`-Guard (ADR 0027) |
 | `scheduler::{tick,recurring,reminders,integrity_check_cron,depreciation_year_close,recurring_invoice,update_check}` | Shell | 5-Min-Tick, nur entsperrt, Catch-up (ADR 0023/0027, §5) |
 | `assets::afa_tabellen` | Shell | AfA-Tabellen-Laden aus `inputs/afa-tabellen.json` |
 | `db::repo::{expenses,private_movements,payment_accounts,recurring,assets,depreciation,euer,email_log,app_settings,legal_documents,attachments,quotes}` | Shell | Repos der Phase-2-Domänen, AGB/Datenschutz-Versionierung (ADR 0018) |
@@ -718,7 +718,7 @@ den verlinkten ADRs.
   (no-update/no-delete-Trigger), Abschluss nur für abgelaufene Jahre,
   unumkehrbar; Storno als Korrektur bleibt möglich.
 - **Schema-Disziplin** (ADR 0003). STRICT-Tabellen, forward-only Migrationen
-  (0001–0032, Version v32, LF-Zeilenenden), Schema-Version-Check beim
+  (0001–0035, Version v35, LF-Zeilenenden), Schema-Version-Check beim
   Entsperren (neuere DB ⇒ kein Entsperren), Geld als Integer-Cents, UUIDv7-PKs.
   Restore nimmt Backups mit `30 ≤ schema ≤ EXPECTED` und migriert vorwärts.
 - **`inputs/` tabu.** Vom Menschen gepflegt; der Container ergänzt das Volume

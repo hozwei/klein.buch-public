@@ -120,7 +120,7 @@ ist; sonst lässt Du das Feld leer. Du trägst sie schon im Entwurf ein
 (Karte "Allgemein"), der Entwurf speichert sie. Aufgebaut ist sie aus
 Grobadressierung, optional Feinadressierung und einer zweistelligen
 Prüfziffer, durch Bindestriche getrennt (zum Beispiel
-04011000-12345-67). In der Karte "Ausstellen" steht sie noch einmal
+04011000-1234512345-06). In der Karte "Ausstellen" steht sie noch einmal
 vorbelegt: Ein geänderter Wert gilt für diese E-Rechnung, ein leeres
 Feld lässt die gespeicherte gelten. Entfernen lässt sie sich über
 "Entwurf bearbeiten". Beim Ausstellen übernimmt Klein.Buch sie als

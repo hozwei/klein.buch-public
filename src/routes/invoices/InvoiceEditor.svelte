@@ -546,13 +546,8 @@
   </Banner>
 {:else}
   <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
-    dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
-  {#if taxAt.error}
-    <Banner kind="warning">
-      Der Steuerstatus am Leistungsdatum ließ sich nicht laden ({taxAt.error}). Klein.Buch prüft
-      ihn beim Speichern und Ausstellen.
-    </Banner>
-  {/if}
+    dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung"
+    error={taxAt.error} checkedWhen="beim Speichern und Ausstellen" />
   {#if editId && editNumber}
     <RestoreConflictBanner conflict={restoreConflict} number={editNumber} doc="invoice" where="editor" />
   {/if}

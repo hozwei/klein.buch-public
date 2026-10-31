@@ -1862,13 +1862,16 @@ export interface TaxStatusChange {
 
 /** Hinweis zu einer Umsatzgrenze (§ 19 Abs. 1/2 UStG). */
 export interface TaxThresholdHint {
-  kind: "vorjahr" | "laufend" | "gruendungsjahr";
+  /** `folgejahr`: Umsatz des laufenden Jahres über 25.000 € → Wegfall zum 1. Januar des Folgejahres. */
+  kind: "vorjahr" | "laufend" | "gruendungsjahr" | "folgejahr";
   year: number;
   turnoverCents: Cents;
   limitCents: Cents;
   /** true = überschritten, false = genau erreicht. */
   exceeded: boolean;
   triggerDocument: string | null;
+  /** Jahr der Leistung des auslösenden Belegs; vor `year` bleibt er unter dem Status seines Jahres (V8a-R-02). */
+  triggerServiceYear: number | null;
   suggestedEffectiveFrom: string | null;
   suggestedReason: TaxStatusReason;
   /** true = Gründungsjahr nur vermutet. */
@@ -1888,6 +1891,8 @@ export interface TaxStatusOverview {
     previousYearCents: Cents;
     currentYear: number;
     currentYearCents: Cents;
+    /** Gründungsjahr vermutet (kein früherer Umsatz in Klein.Buch): Grenze 25.000 € (UI-08). */
+    presumedFoundingYear: boolean;
   };
   thresholdHints: TaxThresholdHint[];
   hinweisText: string;

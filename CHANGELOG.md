@@ -82,11 +82,14 @@ offenen Punkte aus Lauf 2026.11.
   ab 0033) und legt vorher das übliche Pflicht-Backup an. Ein Image 2026.11.0 kann die
   migrierte Datenbank und danach angelegte Backups nicht öffnen; zurück geht es nur über das
   Pflicht-Backup.
-- **Steuerstatus:** Der bisherige Stand erscheint als „Wechsel aus dem bisherigen Schalter
-  übernommen“ (Bindung nach § 19 Abs. 3 UStG). War der Wechsel in Wahrheit ein gesetzlicher
-  Wegfall, den Eintrag widerrufen und mit dem richtigen Grund neu eintragen.
-- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`; Jobs und Backup
-  brauchen höchstens 40 s; das Herunterfahren dauert bis zu 75 s, insgesamt höchstens 75 s.
+- **Steuerstatus:** Klein.Buch übernimmt den bisherigen Schalter in den Verlauf: als „Stand zu
+  Beginn“ (Kleinunternehmer bzw. von Anfang an Regelbesteuerung, ohne Bindung) und, wenn es einen
+  Wechsel mit Datum gab, als „Wechsel aus dem bisherigen Schalter übernommen“ mit Bindung nach
+  § 19 Abs. 3 UStG. War dieser Wechsel in Wahrheit ein gesetzlicher Wegfall, den Eintrag
+  widerrufen und mit dem richtigen Grund neu eintragen.
+- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`. Das Herunterfahren dauert
+  bis zu 75 s: offene Verbindungen höchstens 30 s, Tick, Jobs und ein ausstehendes Lock-Backup
+  höchstens 40 s, Datenbank 5 s, zusammen höchstens 75 s; der Rest bis 90 s ist Puffer.
 
 ## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, veröffentlicht 2026-10-27
 

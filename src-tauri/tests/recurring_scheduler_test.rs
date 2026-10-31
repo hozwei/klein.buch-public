@@ -1877,3 +1877,135 @@ async fn catch_up_occurrences_follow_status_at_their_date() {
         .unwrap();
     assert_eq!(t.next_due_date, "2026-05-01", "Termin bleibt offen");
 }
+
+/// L-GOBD-02 (Abschlussprüfung V8a): Zahlungseingänge 2025 über 25.000 € →
+/// der Wegfall wegen des Vorjahres zum 01.01.2026 lässt sich schon im Dezember
+/// 2025 eintragen. Ein monatliches Abo mit Stichtag 15. (Zeitraum 15.12.2025 –
+/// 14.01.2026, Status am Ende) erzeugt dann keine Rechnung ohne Umsatzsteuer
+/// mehr: Mit Steuerart E bleibt der Termin offen (Hinweis), nach der Umstellung
+/// auf S/19 % entsteht die Rechnung mit Umsatzsteuer.
+#[tokio::test]
+async fn wegfall_vorjahr_in_advance_covers_subscription_over_year_end() {
+    use klein_buch_lib::commands::{reauth, recurring_invoice as cmd, tax_status as tax_cmd};
+    let env = setup().await;
+    mk_seller(&env.pool).await;
+    let contact = mk_contact(&env.pool).await;
+
+    // 30.000 € netto im Oktober 2025 vereinnahmt (dazu 2024, kein Gründungsjahr).
+    for (day, net) in [(d(2024, 6, 3), 1_000_i64), (d(2025, 10, 1), 3_000_000)] {
+        let input = InvoiceInput {
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
+            direction: InvoiceDirection::Issued,
+            invoice_date: day,
+            delivery_date: Some(day),
+            due_date: Some(day + chrono::Duration::days(14)),
+            currency_code: "EUR".into(),
+            items: vec![InvoiceItemInput {
+                unit_price_cents: net,
+                ..item()
+            }],
+            notes: None,
+            payment_note: None,
+            pdf_template: "default".into(),
+            is_storno_for: None,
+            cancel_reason: None,
+        };
+        let draft = inv_cmd::create_invoice_draft_on(&env.pool, &contact, &input, None, day)
+            .await
+            .unwrap();
+        inv_cmd::run_lock_pipeline(&env.pool, &env.paths, &draft.invoice.id, "N/A")
+            .await
+            .unwrap();
+        klein_buch_lib::db::repo::invoices::record_payment(
+            &env.pool,
+            &draft.invoice.id,
+            net,
+            &day.to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let mut abo = tmpl_input(&contact, d(2025, 12, 15), "issue");
+    abo.day_of_period = 15;
+    let tmpl = recurring_invoice::create(&env.pool, &abo).await.unwrap();
+
+    // Eintrag im Voraus am 10.12.2025: ohne Warnung, weil die Zahlungen die
+    // Grenze schon überschreiten.
+    let ctx = ctx_for(&env, noon(d(2025, 12, 10))).await;
+    let input = serde_json::json!({
+        "input": {
+            "effectiveFrom": "2026-01-01",
+            "status": "regelbesteuerung",
+            "reason": "wegfall_vorjahr",
+        }
+    });
+    let p =
+        tax_cmd::tax_status_change_preview(&ctx, serde_json::from_value(input.clone()).unwrap())
+            .await
+            .unwrap();
+    assert!(
+        p.ok && p.warnings.is_empty(),
+        "{:?} {:?}",
+        p.errors,
+        p.warnings
+    );
+    assert_eq!(
+        p.consequences.recurring_templates,
+        vec!["Wartung".to_string()]
+    );
+    reauth::with_reauth(
+        true,
+        tax_cmd::tax_status_change_add(&ctx, serde_json::from_value(input).unwrap()),
+    )
+    .await
+    .expect("Wegfall im Voraus");
+
+    // Termin 15.12.2025: Zeitraum bis 14.01.2026 → Regelbesteuerung; mit E keine
+    // Rechnung, keine Nummer, Termin bleibt offen.
+    let clock = noon(d(2025, 12, 15));
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 0, "{r:?}");
+    assert_eq!(notices(&env.pool, "recurring_invoice_blocked:").await, 1);
+    let t = recurring_invoice::get_row(&env.pool, &tmpl.template.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(t.next_due_date, "2025-12-15");
+
+    // Umgestellt auf S/19 %: Rechnung mit Umsatzsteuer, Zeitraum über den
+    // Jahreswechsel.
+    let ctx = ctx_for(&env, noon(d(2025, 12, 15))).await;
+    let mut fixed = abo.clone();
+    fixed.items[0].tax_category_code = "S".into();
+    fixed.items[0].tax_rate_percent = 19.0;
+    cmd::recurring_invoices_update(
+        &ctx,
+        cmd::RecurringInvoicesUpdateArgs {
+            id: tmpl.template.id.clone(),
+            input: fixed,
+        },
+    )
+    .await
+    .unwrap();
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 1, "{r:?}");
+    let row: (Option<String>, Option<String>, i64, i64) = sqlx::query_as(
+        "SELECT service_period_start, service_period_end, is_kleinunternehmer, tax_amount_cents
+           FROM invoices WHERE service_period_start IS NOT NULL",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0.as_deref(), Some("2025-12-15"));
+    assert_eq!(row.1.as_deref(), Some("2026-01-14"));
+    assert_eq!(row.2, 0, "Regelbesteuerung am Ende des Zeitraums");
+    assert_eq!(row.3, 1_881, "19 % auf 99,00 €");
+}

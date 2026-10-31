@@ -341,7 +341,10 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
    **2026.11.0 → 2026.11.1:** Migrationen 0033–0035 (Schema 35: Steuerstatus-Historie,
    Zahlungsbuch, Leistungszeitraum und Leitweg-ID am Entwurf); das Backup vor der
    Migration hat Format 3, das 2026.11.0 einspielt. Der bisherige §19-Stand erscheint
-   als Eintrag „Wechsel aus dem bisherigen Schalter übernommen“ (ADR 0042 Nr. 6, 20);
+   im Verlauf je nach Fall als „Stand zu Beginn“ (Kleinunternehmer bzw. von Anfang an
+   regelbesteuert ohne Wechseldatum, ohne Bindung) oder zusätzlich als Eintrag
+   „Wechsel aus dem bisherigen Schalter übernommen“ zum 1. Januar des Wechseljahres mit
+   Bindung (Schalter aus mit gespeichertem Wechseldatum; ADR 0042 Nr. 6, 20);
    vorhandene Zahlungen übernimmt die Migration ins Zahlungsbuch und bricht bei einer
    Abweichung mit benannter Meldung ab, bevor etwas umgestellt ist (Instanz bleibt
    gesperrt, siehe `fehlersuche-im-container`).

@@ -5,6 +5,7 @@
   // gebucht und geändert wird nichts. Ziel des Inbox-Hinweises nach einem
   // Statuswechsel (`commands::vat_adjustment::OVERVIEW_URL`). Gerechnet wird im
   // Server (`domain::vat_adjustment`), Texte in `../vatAdjustment.ts`.
+  import { untrack } from "svelte";
   import { page } from "$app/state";
   import { yearBerlin } from "#lib/date.ts";
   import { assetsList, vatAdjustmentOverview } from "#lib/api.ts";
@@ -45,6 +46,9 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let reloadTick = $state(0);
+  // UI-12: Nach einem Jahreswechsel bzw. erneuten Laden die neue Übersicht ansagen
+  // (die erste Ladung zeigt LoadingState, dort braucht es keine Ansage).
+  let reloaded = $state(false);
 
   // Jahresauswahl aus den Anschaffungsjahren; scheitert die Liste, bleibt das Jahr wählbar.
   $effect(() => {
@@ -64,9 +68,14 @@
     let stale = false;
     loading = true;
     error = null;
+    // untrack: der Effect hängt nur am Jahr und am Neu-Laden, nicht an der Übersicht.
+    const hadOverview = untrack(() => overview !== null);
+    reloaded = false;
     vatAdjustmentOverview(y)
       .then((o) => {
-        if (!stale) overview = o;
+        if (stale) return;
+        overview = o;
+        reloaded = hadOverview;
       })
       .catch((e) => {
         if (stale) return;
@@ -102,6 +111,13 @@
   zeigt je Anlage den Zeitraum, den Anteil des Jahres und die Grenzen nach § 44 UStDV.
 </p>
 
+<!-- UI-12 (design.md §4.5, wie die EÜR-Seite): Beim Jahreswechsel bleibt die alte Übersicht
+     stehen, bis die neue da ist; die Statuszeile sagt das, der Bereich trägt aria-busy. -->
+<p class="status muted" role="status">
+  {#if loading && overview}Übersicht {selectedYear} wird geladen …{:else if reloaded && overview}<span
+      class="kb-visually-hidden">Übersicht {overview.year} geladen.</span>{/if}
+</p>
+
 {#if loading && !overview}
   <LoadingState />
 {:else if error}
@@ -110,6 +126,7 @@
     {#snippet actions()}<Button variant="secondary" onclick={() => reloadTick++}>Erneut laden</Button>{/snippet}
   </Banner>
 {:else if overview}
+  <div class="va-body" aria-busy={loading || undefined}>
   <Banner kind="info" title="Übersicht für die Steuererklärung, keine Buchung.">{overview.notice}</Banner>
 
   {#if projectedYear}
@@ -141,7 +158,7 @@
   {/if}
 
   {#if parts.changed.length > 0}
-    <Table caption="Vorsteuerberichtigung {overview.year} je Anlage" cards>
+    <Table caption="Vorsteuerberichtigung {overview.year} je Anlage" cards busy={loading}>
       <thead>
         <tr>
           <th>Anschaffung</th>
@@ -246,12 +263,14 @@
       </ul>
     </section>
   {/if}
+  </div>
 {/if}
 
 <style>
   /* .card / .lead / .kb-input / .kb-ledger: globale Definitionen aus tokens.css. */
   .year { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); align-self: center; }
   .year-select { width: auto; }
+  .status { margin: 0 0 var(--sp-2); }
   .summary { max-width: 36rem; margin: var(--sp-4) 0; }
   .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
   .empty p { margin: 0; }

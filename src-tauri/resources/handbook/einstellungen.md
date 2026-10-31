@@ -34,7 +34,8 @@ Mehr dazu im Kapitel "Verkäuferprofil anlegen". Die Angaben speicherst
 Du mit "Speichern" ohne Rückfrage.
 
 Unter dem Formular steht der Abschnitt "Steuerstatus": Status heute,
-Gesamtumsatz mit Grenzhinweisen und der Verlauf Deiner Wechsel
+Zahlungseingänge laut Klein.Buch mit Grenzhinweisen und der Verlauf
+Deiner Wechsel
 zwischen Kleinunternehmer-Regelung und Regelbesteuerung. Ohne Eintrag
 gilt die Kleinunternehmer-Regelung. Einen Wechsel trägst Du dort mit
 "Statuswechsel eintragen …" ein, mit Grund und Wirkungsdatum; er gilt

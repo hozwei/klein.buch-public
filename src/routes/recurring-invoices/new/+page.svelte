@@ -379,7 +379,8 @@
   </Banner>
 {:else}
   <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
-    dateLabel={editId ? "Ende des nächsten Abrechnungszeitraums" : "Ende des ersten Abrechnungszeitraums"} noun="auf den erzeugten Rechnungen" />
+    dateLabel={editId ? "Ende des nächsten Abrechnungszeitraums" : "Ende des ersten Abrechnungszeitraums"} noun="auf den erzeugten Rechnungen"
+    error={taxAt.error} checkedWhen="beim Speichern und an jedem Termin" />
 
   <form id="ri-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
     <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>

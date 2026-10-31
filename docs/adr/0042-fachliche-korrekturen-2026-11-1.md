@@ -193,6 +193,27 @@ nennt ihre Fundstelle. Festgeschriebene Belege bleiben unverändert (GoBD-Hardli
 33. **Banner** kennt eine Live-Region (`live`, `label`) für Ergebnisse, die sich ohne Seitenwechsel
     ändern; alte Hinweisflächen, Zahl- und Linkklassen sind auf die Bausteine umgestellt.
 
+### Abschlussprüfung (Ergänzungen zu Nr. 2, 5, 18)
+
+34. **Wirkungsdatum beim Wegfall im laufenden Jahr bzw. Gründungsjahr:** Der Gesamtumsatz zählt
+    nach vereinnahmten Entgelten (§ 19 Abs. 2 UStG), maßgeblich ist der Zufluss, der die Summe über
+    die Grenze hebt. Vorgeschlagen wird das Leistungsdatum dieses Umsatzes, wenn es im Jahr liegt
+    und nicht nach der Zahlung, sonst der Zahltag; der Nutzer kann abweichen.
+35. **Wegfall wegen des Vorjahres vorab:** Sobald die Zahlungseingänge des laufenden Jahres
+    25.000 € überschreiten, lässt sich der Wegfall zum 1. Januar des Folgejahres schon eintragen
+    (sonst entstünden Abo-Rechnungen und Vorausrechnungen des Folgejahres ohne Umsatzsteuer);
+    Klein.Buch weist darauf hin.
+36. **Rückkehr nach einem Wegfall** im laufenden Jahr bzw. Gründungsjahr Y ist frühestens zum
+    01.01.(Y+2) möglich, weil der Gesamtumsatz des Jahres Y dann Vorjahresumsatz ist (§ 19 Abs. 1
+    Satz 1 UStG); eine frühere Rückkehr lehnt Klein.Buch ab. Unsichere Fälle (Umsatz außerhalb von
+    Klein.Buch, Vorjahr läuft noch) bleiben Warnungen nach Nr. 18.
+37. **Aufbewahrungsfristen in der DSGVO-Auskunft:** § 147 Abs. 3 AO und § 14b UStG in der Fassung des
+    Vierten Bürokratieentlastungsgesetzes (Bücher und Aufzeichnungen 10 Jahre, Buchungsbelege
+    einschließlich Rechnungen 8 Jahre, Geschäftsbriefe 6 Jahre). Klein.Buch hält einheitlich
+    10 Jahre vor; die Auskunft nennt beides getrennt.
+38. **Storno übernimmt den Leistungszeitpunkt** des Originals (Zeitraum, sonst Leistungsdatum,
+    sonst dessen Rechnungsdatum); die Erstattung bucht die EÜR weiter am Tag der Rückzahlung.
+
 ## Konsequenzen
 
 - Schema 35. Ein Image 2026.11.0 kann eine Datenbank oder ein Backup mit Schema 35 nicht öffnen;

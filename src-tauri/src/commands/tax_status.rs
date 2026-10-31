@@ -43,7 +43,10 @@ fn eur(cents: i64) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct TaxStatusOverviewArgs {}
 
-/// Gesamtumsatz nach vereinnahmten Entgelten (§ 19 Abs. 2 UStG).
+/// Zahlungseingänge laut Klein.Buch (netto, nach vereinnahmten Entgelten) als
+/// Annäherung an den Gesamtumsatz nach § 19 Abs. 2 UStG (L-GOBD-03): Umsätze
+/// außerhalb von Klein.Buch fehlen, nicht steuerbare und die dort genannten
+/// steuerfreien Umsätze zieht Klein.Buch nicht ab.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Turnover {
@@ -51,6 +54,10 @@ pub struct Turnover {
     pub previous_year_cents: i64,
     pub current_year: i32,
     pub current_year_cents: i64,
+    /// Klein.Buch vermutet für das laufende Jahr ein Gründungsjahr (keine
+    /// Zahlung aus früheren Jahren): Grenze dort 25.000 € statt 100.000 €
+    /// (UI-08, V8a-R-06; wie der Hinweis „Gründungsjahr“).
+    pub presumed_founding_year: bool,
 }
 
 /// Antwort von [`tax_status_overview`].
@@ -86,6 +93,7 @@ async fn threshold_hints(
         previous_year_cents: tax_status::gesamtumsatz(&posten, year - 1),
         current_year: year,
         current_year_cents: tax_status::gesamtumsatz(&posten, year),
+        presumed_founding_year: tax_status::gruendungsjahr_vermutet(&posten, year, earlier),
     };
     let hints = tax_status::grenzpruefung(hist, &posten, today, earlier);
     Ok((turnover, hints))
@@ -220,8 +228,8 @@ pub struct ChangeConsequences {
     /// Offene Rechnungs- und Angebotsentwürfe, deren Datum betroffen ist (sie
     /// übernehmen beim Festschreiben den neuen Status).
     pub affected_drafts: Vec<String>,
-    /// Aktive Abo-Vorlagen, deren Positionen nicht zum Status am nächsten
-    /// Termin passen.
+    /// Aktive Abo-Vorlagen, deren Positionen nicht zum Status am Ende des
+    /// Abrechnungszeitraums des nächsten Termins passen (ADR 0042 Nr. 22).
     pub recurring_templates: Vec<String>,
     /// Aus Kosten übernommene Anlagen mit unpassenden Anschaffungskosten.
     pub capitalized_assets: Vec<String>,
@@ -320,7 +328,8 @@ pub async fn consequences(
         }
     }
 
-    // Aktive Abo-Vorlagen: Positionen passen nicht zum Status am nächsten Termin.
+    // Aktive Abo-Vorlagen: Positionen passen nicht zum Status am Ende des
+    // Abrechnungszeitraums des nächsten Termins (ADR 0042 Nr. 22, DOC-04).
     let templates: Vec<(String, String, String, i64, String, i64)> = sqlx::query_as(
         "SELECT r.label, r.next_due_date, i.tax_category_code, i.position, r.frequency,
                 r.day_of_period
@@ -370,23 +379,31 @@ pub struct TaxStatusChangePreviewArgs {
     pub input: TaxStatusChangeInput,
 }
 
-/// Warnungen zu einem geplanten Eintrag (ADR 0042 Nr. 4 und 5); sperren nicht.
+/// Warnungen zu einem geplanten Eintrag (ADR 0042 Nr. 4, 5 und 18); sperren
+/// nicht. Rückkehr und Wegfall wegen des Vorjahres brauchen die erfassten
+/// Zahlungseingänge des Jahres vor dem Wirkungsjahr (DOC-02, L-GOBD-02).
 async fn change_warnings(
     pool: &SqlitePool,
+    hist: &TaxStatusHistory,
     change: &NewChange,
     today: NaiveDate,
 ) -> Result<Vec<String>> {
-    let turnover_before = if change.reason == ChangeReason::Rueckkehr {
+    let turnover_before = if matches!(
+        change.reason,
+        ChangeReason::Rueckkehr | ChangeReason::WegfallVorjahr
+    ) {
         let year = change.effective_from.year() - 1;
         let posten = repo::turnover_items(pool, &[year]).await?;
         Some(tax_status::gesamtumsatz(&posten, year))
     } else {
         None
     };
-    Ok(tax_status::change_warnings(change, today, turnover_before)
-        .iter()
-        .map(tax_status::warning_message)
-        .collect())
+    Ok(
+        tax_status::change_warnings(hist, change, today, turnover_before)
+            .iter()
+            .map(tax_status::warning_message)
+            .collect(),
+    )
 }
 
 /// Prüft einen geplanten Eintrag und listet seine Folgen, ohne zu schreiben.
@@ -408,7 +425,7 @@ pub async fn tax_status_change_preview(
             Ok(ChangePreview {
                 ok: true,
                 errors: Vec::new(),
-                warnings: change_warnings(&pool, &change, today).await?,
+                warnings: change_warnings(&pool, &hist, &change, today).await?,
                 binding_until: binding.map(|d| d.to_string()),
                 consequences: consequences(&pool, &hist, &next, today).await?,
             })
@@ -642,8 +659,8 @@ async fn notify_after_change(
     }
     if !c.recurring_templates.is_empty() {
         parts.push(format!(
-            "Abo-Vorlagen, deren Steuerart nicht zum Status am nächsten Termin passt (Vorlage \
-             anpassen, sonst entsteht dort keine Rechnung): {}.",
+            "Abo-Vorlagen, deren Steuerart nicht zum Status am Ende des Abrechnungszeitraums des \
+             nächsten Termins passt (Vorlage anpassen, sonst entsteht dort keine Rechnung): {}.",
             c.recurring_templates.join(", ")
         ));
     }
@@ -703,13 +720,16 @@ pub async fn notify_thresholds(pool: &SqlitePool, today: NaiveDate) -> Result<us
     let (_, hints) = threshold_hints(pool, &hist, today).await?;
     let mut created = 0usize;
     for h in &hints {
+        // L-GOBD-03: Klein.Buch kennt nur die hier erfassten Zahlungseingänge,
+        // nicht den Gesamtumsatz nach § 19 Abs. 2 UStG; die Texte nennen sie so.
         let (title, what) = match (h.kind, h.exceeded) {
             (tax_status::Grenzart::Vorjahr, true) => (
                 "Vorjahresumsatz über 25.000 €",
                 format!(
-                    "Der Gesamtumsatz {} lag nach den in Klein.Buch erfassten Zahlungen bei {} und \
-                     damit über {}. Dann gilt §19 ab dem 1. Januar {} nicht mehr (§ 19 Abs. 1 \
-                     UStG), ohne Bindung; Vorschlag: Wegfall wegen des Vorjahres zum 01.01.{}.",
+                    "Die in Klein.Buch erfassten Zahlungseingänge {} betragen netto {} und liegen \
+                     damit über {}. Ist das dein Gesamtumsatz, gilt §19 ab dem 1. Januar {} nicht \
+                     mehr (§ 19 Abs. 1 Satz 1 UStG), ohne Bindung; Vorschlag: Wegfall wegen des \
+                     Vorjahres zum 01.01.{}.",
                     h.year,
                     eur(h.turnover_cents),
                     eur(h.limit_cents),
@@ -720,35 +740,60 @@ pub async fn notify_thresholds(pool: &SqlitePool, today: NaiveDate) -> Result<us
             (tax_status::Grenzart::Vorjahr, false) => (
                 "Vorjahresumsatz hat 25.000 € erreicht",
                 format!(
-                    "Der Gesamtumsatz {} lag bei {} und hat die Grenze von {} erreicht, aber nicht \
-                     überschritten; §19 gilt weiter.",
+                    "Die in Klein.Buch erfassten Zahlungseingänge {} betragen netto {} und erreichen \
+                     die Grenze von {}, ohne sie zu überschreiten; §19 gilt weiter.",
                     h.year,
                     eur(h.turnover_cents),
                     eur(h.limit_cents)
                 ),
             ),
+            // L-GOBD-02: schon im laufenden Jahr auf den Wegfall zum 01.01. des
+            // Folgejahres hinweisen (Abo-Rechnungen, Vorausrechnungen).
+            (tax_status::Grenzart::Folgejahr, _) => {
+                let mut text = format!(
+                    "Die in Klein.Buch erfassten Zahlungseingänge {} betragen bisher netto {} und \
+                     liegen damit über {}. Ist das dein Gesamtumsatz, gilt §19 ab dem 1. Januar {} \
+                     nicht mehr (§ 19 Abs. 1 Satz 1 UStG). Trage den Wegfall wegen des Vorjahres \
+                     zum 01.01.{} schon jetzt ein: Abo-Rechnungen und Vorausrechnungen, deren \
+                     Leistung oder Abrechnungszeitraum im Jahr {} liegt, weisen dann \
+                     Umsatzsteuer aus.",
+                    h.year,
+                    eur(h.turnover_cents),
+                    eur(h.limit_cents),
+                    h.year + 1,
+                    h.year + 1,
+                    h.year + 1
+                );
+                if let Some(doc) = h.trigger_document.as_deref() {
+                    text.push_str(&format!(" Überschritten mit {doc}."));
+                }
+                ("Wegfall der Kleinunternehmer-Regelung im nächsten Jahr", text)
+            }
             (kind, exceeded) => {
+                // DOC-03: Die Grenze im Gründungsjahr steht nicht in § 19 Abs. 2
+                // UStG (dort nur der Gesamtumsatz), sondern folgt aus Abs. 1 und
+                // dem BMF-Schreiben vom 18.03.2025 (Abschn. 19.1 UStAE).
+                let gruendung = "im Gründungsjahr (§ 19 Abs. 1 UStG i. V. m. BMF-Schreiben vom \
+                                 18.03.2025, Abschn. 19.1 UStAE)";
                 let (title, limit_text) = match (kind, exceeded) {
-                    (tax_status::Grenzart::Gruendungsjahr, true) => (
-                        "Umsatz im Gründungsjahr über 25.000 €",
-                        "im Gründungsjahr (§ 19 Abs. 2 UStG)",
-                    ),
-                    (tax_status::Grenzart::Gruendungsjahr, false) => (
-                        "Umsatz im Gründungsjahr hat 25.000 € erreicht",
-                        "im Gründungsjahr (§ 19 Abs. 2 UStG)",
-                    ),
+                    (tax_status::Grenzart::Gruendungsjahr, true) => {
+                        ("Umsatz im Gründungsjahr über 25.000 €", gruendung)
+                    }
+                    (tax_status::Grenzart::Gruendungsjahr, false) => {
+                        ("Umsatz im Gründungsjahr hat 25.000 € erreicht", gruendung)
+                    }
                     (_, true) => (
                         "Umsatz im laufenden Jahr über 100.000 €",
-                        "im laufenden Jahr (§ 19 Abs. 1 UStG)",
+                        "im laufenden Jahr (§ 19 Abs. 1 Satz 1 UStG)",
                     ),
                     (_, false) => (
                         "Umsatz im laufenden Jahr hat 100.000 € erreicht",
-                        "im laufenden Jahr (§ 19 Abs. 1 UStG)",
+                        "im laufenden Jahr (§ 19 Abs. 1 Satz 1 UStG)",
                     ),
                 };
                 let mut text = format!(
-                    "Der Gesamtumsatz {} liegt nach den erfassten Zahlungen bei {}; die Grenze \
-                     {limit_text} beträgt {}.",
+                    "Die in Klein.Buch erfassten Zahlungseingänge {} betragen bisher netto {}; die \
+                     Grenze {limit_text} beträgt {}.",
                     h.year,
                     eur(h.turnover_cents),
                     eur(h.limit_cents)
@@ -756,11 +801,28 @@ pub async fn notify_thresholds(pool: &SqlitePool, today: NaiveDate) -> Result<us
                 if let (Some(doc), Some(from)) =
                     (h.trigger_document.as_deref(), h.suggested_effective_from)
                 {
+                    // L-GOBD-01: Vorschlag ist der Tag des Umsatzes, mit dem die
+                    // Grenze überschritten wird (Leistungsdatum im Jahr, sonst
+                    // der Zufluss). V8a-R-02: Eine Leistung aus einem früheren
+                    // Jahr bleibt unter dem Status ihres Jahres (ADR 0042 Nr. 3,
+                    // § 19 Abs. 1 Satz 1 UStG); steuerpflichtig wird erst, was
+                    // ab der Zahlung ausgeführt wird.
+                    let effect = match h.trigger_service_year.filter(|y| *y < h.year) {
+                        Some(sy) => format!(
+                            "die Leistung aus {sy} bleibt unter dem Status ihres Jahres; \
+                             steuerpflichtig sind die Umsätze ab dem Tag dieser Zahlung, die \
+                             vorherigen bleiben steuerfrei"
+                        ),
+                        None => "dieser Umsatz ist schon steuerpflichtig, die vorherigen bleiben \
+                                 steuerfrei"
+                            .to_string(),
+                    };
                     text.push_str(&format!(
-                        " Überschritten mit {doc}; dieser Umsatz ist schon steuerpflichtig, die \
-                         vorherigen bleiben steuerfrei. Vorschlag: Wegfall zum {} mit {doc} als \
-                         auslösendem Beleg.",
-                        de(from)
+                        " Überschritten mit {doc}; {effect}. Vorschlag: Wegfall zum {} mit {doc} \
+                         als auslösendem Beleg (Leistungsdatum, wenn es im Jahr {} und nicht nach \
+                         der Zahlung liegt, sonst der Tag der Zahlung).",
+                        de(from),
+                        h.year
                     ));
                 }
                 if h.presumed {
@@ -775,8 +837,11 @@ pub async fn notify_thresholds(pool: &SqlitePool, today: NaiveDate) -> Result<us
         let body = format!(
             "{what} Klein.Buch ändert den Steuerstatus nicht selbst: Liegen die Voraussetzungen \
              vor, trage den Wechsel unter Einstellungen → Meine Firmendaten → Steuerstatus ein. \
-             Den Gesamtumsatz kennt Klein.Buch nur aus den hier erfassten Rechnungen und \
-             Zahlungen; Umsätze mit Anlagevermögen zählen nicht mit."
+             Klein.Buch zählt die Zahlungseingänge auf hier festgeschriebene Rechnungen. \
+             Maßgeblich ist der Gesamtumsatz nach § 19 Abs. 2 UStG: Umsätze außerhalb von \
+             Klein.Buch kommen hinzu; nicht im Inland steuerbare Umsätze (Leistungsort im \
+             Ausland), die dort genannten steuerfreien Umsätze und Umsätze mit Anlagevermögen \
+             ziehst du selbst ab."
         );
         let key = format!(
             "tax_threshold:{}:{}:{}",

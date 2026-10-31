@@ -16,6 +16,10 @@
 //!   Grenze.
 //! * Leistungszeitraum über den Stichtag: es zählt das Ende (Entwurf, Prüfung,
 //!   Festschreiben, Angebotsumwandlung mit Leitweg-ID; ADR 0042 Nr. 10).
+//! * Abschlussprüfung V8a: Vorschlag des Wirkungsdatums bei Leistung im Vorjahr
+//!   (L-GOBD-01), Wegfall wegen des Vorjahres im Voraus mit Grenzhinweis
+//!   „Folgejahr“ (L-GOBD-02), Rückkehr nach Wegfall im laufenden Jahr (DOC-02),
+//!   Jahre außerhalb 1900–9999 als Meldung (SEC-2026.11.1-01).
 //!
 //! Tempfile-DB mit den echten Migrationen, Mock-Sidecar; Testdaten nur mit
 //! Dokumentations-Adressen (example.org). Feste Daten im Jahr 2026 (offenes
@@ -1343,5 +1347,314 @@ async fn quote_conversion_takes_service_period_and_buyer_reference() {
     assert!(
         codes.contains(&"ItemExemptWithoutKleinunternehmer".to_string()),
         "{codes:?}"
+    );
+}
+
+// ============================================================================
+// Abschlussprüfung V8a (L-GOBD-01, L-GOBD-02, DOC-02, SEC-2026.11.1-01)
+// ============================================================================
+
+fn fix_clock(env: &Env, day: NaiveDate) {
+    env.ctx
+        .set_clock(Arc::new(klein_buch_lib::clock::FixedClock::at_berlin(
+            day, 12, 0,
+        )));
+}
+
+/// Festgeschriebene §19-Rechnung, bezahlt am `paid`; liefert die Nummer.
+async fn paid_invoice(
+    env: &Env,
+    date: NaiveDate,
+    delivery: NaiveDate,
+    net: i64,
+    paid: NaiveDate,
+) -> String {
+    let id = create_draft(env, input(date, delivery, item(1, net, "E", 0.0)))
+        .await
+        .unwrap();
+    let resp = lock(env, &id).await.unwrap();
+    klein_buch_lib::db::repo::invoices::record_payment(
+        &env.pool,
+        &id,
+        net,
+        &paid.to_string(),
+        None,
+    )
+    .await
+    .unwrap();
+    resp.invoice.invoice_number
+}
+
+/// L-GOBD-01 (a): Die Zahlung, mit der die Summe über 100.000 € steigt, gehört
+/// zu einer Leistung des Vorjahres. Vorschlag ist der Tag dieser Zahlung, nicht
+/// der 01.01.; die Umsätze davor bleiben steuerfrei, eine Rechnung mit Leistung
+/// im März ist vom Eintrag nicht betroffen.
+#[tokio::test]
+async fn threshold_suggestion_with_service_in_previous_year_is_the_payment_day() {
+    let env = setup().await;
+    fix_clock(&env, d(2026, 10, 20));
+    paid_invoice(&env, d(2025, 6, 1), d(2025, 6, 1), 1_000, d(2025, 6, 1)).await;
+    let late = paid_invoice(
+        &env,
+        d(2025, 12, 10),
+        d(2025, 12, 10),
+        200_000,
+        d(2026, 10, 5),
+    )
+    .await;
+    paid_invoice(&env, d(2026, 3, 1), d(2026, 3, 1), 9_900_000, d(2026, 3, 1)).await;
+
+    let o = tax_cmd::tax_status_overview(&env.ctx, tax_cmd::TaxStatusOverviewArgs {})
+        .await
+        .unwrap();
+    let hint = o
+        .threshold_hints
+        .iter()
+        .find(|h| h.kind == klein_buch_lib::domain::tax_status::Grenzart::Laufend)
+        .expect("Grenzhinweis");
+    assert_eq!(hint.trigger_document.as_deref(), Some(late.as_str()));
+    assert_eq!(hint.suggested_effective_from, Some(d(2026, 10, 5)));
+    // Der Vorschlag lässt sich eintragen und betrifft die März-Rechnung nicht.
+    let p = preview(
+        &env,
+        Some("2026-10-05"),
+        "regelbesteuerung",
+        "wegfall_laufend",
+    )
+    .await;
+    assert!(p.ok, "{:?}", p.errors);
+    assert!(
+        p.consequences.affected_invoices.is_empty(),
+        "{:?}",
+        p.consequences.affected_invoices
+    );
+    // Hinweistext: Zahlungseingänge laut Klein.Buch, Vorschlag mit Datum.
+    tax_cmd::notify_thresholds(&env.pool, d(2026, 10, 20))
+        .await
+        .unwrap();
+    let body: String = sqlx::query_scalar(
+        "SELECT body FROM notifications WHERE dedup_key = 'tax_threshold:laufend:2026:ueber'",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert!(
+        body.contains("05.10.2026")
+            && body.contains("Zahlungseingänge")
+            && body.contains("Leistungsort im Ausland"),
+        "{body}"
+    );
+    // V8a-R-02: Der auslösende Beleg selbst bleibt §19 (Leistung 2025); der
+    // Text behauptet nicht, er sei schon steuerpflichtig.
+    assert_eq!(hint.trigger_service_year, Some(2025));
+    assert!(
+        body.contains("die Leistung aus 2025 bleibt unter dem Status ihres Jahres")
+            && !body.contains("dieser Umsatz ist schon steuerpflichtig"),
+        "{body}"
+    );
+}
+
+/// L-GOBD-02: Zahlungseingänge 2025 über 25.000 € → Grenzhinweis „Folgejahr“
+/// schon im Dezember 2025; der Wegfall wegen des Vorjahres zum 01.01.2026 lässt
+/// sich dann im Voraus eintragen, ohne Warnung. Ohne bekannten Umsatz warnt die
+/// Vorschau, sperrt aber nicht; weiter als ein Jahr im Voraus geht es nicht.
+#[tokio::test]
+async fn wegfall_vorjahr_can_be_entered_in_advance_for_next_year() {
+    let env = setup().await;
+    fix_clock(&env, d(2025, 12, 10));
+    // Ohne Umsatz: Warnung, kein Fehler.
+    let p = preview(
+        &env,
+        Some("2026-01-01"),
+        "regelbesteuerung",
+        "wegfall_vorjahr",
+    )
+    .await;
+    assert!(p.ok, "{:?}", p.errors);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("liegt bisher") && w.contains("0,00 €")),
+        "{:?}",
+        p.warnings
+    );
+    let p = preview(
+        &env,
+        Some("2027-01-01"),
+        "regelbesteuerung",
+        "wegfall_vorjahr",
+    )
+    .await;
+    assert!(!p.ok);
+    assert!(
+        p.errors.iter().any(|e| e.contains("im Voraus")),
+        "{:?}",
+        p.errors
+    );
+
+    // Umsatz 2024: kein vermutetes Gründungsjahr.
+    paid_invoice(&env, d(2024, 6, 1), d(2024, 6, 1), 1_000, d(2024, 6, 1)).await;
+    paid_invoice(
+        &env,
+        d(2025, 3, 1),
+        d(2025, 3, 1),
+        1_000_000,
+        d(2025, 3, 10),
+    )
+    .await;
+    let trigger = paid_invoice(
+        &env,
+        d(2025, 10, 1),
+        d(2025, 10, 1),
+        2_000_000,
+        d(2025, 10, 10),
+    )
+    .await;
+    let o = tax_cmd::tax_status_overview(&env.ctx, tax_cmd::TaxStatusOverviewArgs {})
+        .await
+        .unwrap();
+    let hint = o
+        .threshold_hints
+        .iter()
+        .find(|h| h.kind == klein_buch_lib::domain::tax_status::Grenzart::Folgejahr)
+        .expect("Hinweis Folgejahr");
+    assert_eq!(hint.suggested_effective_from, Some(d(2026, 1, 1)));
+    assert_eq!(hint.trigger_document.as_deref(), Some(trigger.as_str()));
+    assert_eq!(
+        tax_cmd::notify_thresholds(&env.pool, d(2025, 12, 10))
+            .await
+            .unwrap(),
+        1
+    );
+
+    let p = preview(
+        &env,
+        Some("2026-01-01"),
+        "regelbesteuerung",
+        "wegfall_vorjahr",
+    )
+    .await;
+    assert!(
+        p.ok && p.warnings.is_empty(),
+        "{:?} {:?}",
+        p.errors,
+        p.warnings
+    );
+    add(
+        &env,
+        Some("2026-01-01"),
+        "regelbesteuerung",
+        "wegfall_vorjahr",
+    )
+    .await
+    .expect("Wegfall im Voraus");
+    let o = tax_cmd::tax_status_overview(&env.ctx, tax_cmd::TaxStatusOverviewArgs {})
+        .await
+        .unwrap();
+    assert!(o.threshold_hints.is_empty(), "{:?}", o.threshold_hints);
+    // Heute gilt noch §19, ab 01.01.2026 die Regelbesteuerung.
+    assert_eq!(
+        o.current_status,
+        klein_buch_lib::domain::tax_status::TaxStatus::Kleinunternehmer
+    );
+    assert!(!tax_status::history(&env.pool)
+        .await
+        .unwrap()
+        .is_klein_at(d(2026, 1, 1)));
+}
+
+/// DOC-02, V8a-R-04: Nach einem Wegfall im laufenden Jahr 2026 schlägt die
+/// Übersicht die Rückkehr frühestens zum 01.01.2028 vor; eine Rückkehr zum
+/// 01.01.2027 lehnt Klein.Buch ab (§ 19 Abs. 1 Satz 1 UStG: Gesamtumsatz 2026
+/// über 25.000 €). War der Wegfall falsch, wird er widerrufen.
+#[tokio::test]
+async fn return_after_wegfall_laufend_is_suggested_two_years_later() {
+    let env = setup().await;
+    fix_clock(&env, d(2026, 10, 20));
+    let w = add(
+        &env,
+        Some("2026-09-10"),
+        "regelbesteuerung",
+        "wegfall_laufend",
+    )
+    .await
+    .expect("Wegfall laufend");
+    let o = tax_cmd::tax_status_overview(&env.ctx, tax_cmd::TaxStatusOverviewArgs {})
+        .await
+        .unwrap();
+    assert_eq!(o.earliest_return.as_deref(), Some("2028-01-01"));
+    let p = preview(&env, Some("2027-01-01"), "kleinunternehmer", "rueckkehr").await;
+    assert!(!p.ok);
+    assert!(
+        p.errors
+            .iter()
+            .any(|e| e.contains("01.01.2028") && e.contains("Widerrufe")),
+        "{:?}",
+        p.errors
+    );
+    let err = add(&env, Some("2027-01-01"), "kleinunternehmer", "rueckkehr")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("01.01.2028"), "{err}");
+    assert!(
+        preview(&env, Some("2028-01-01"), "kleinunternehmer", "rueckkehr")
+            .await
+            .ok
+    );
+    // Sauberer Weg bei einem Irrtum: Wegfall widerrufen.
+    let rv = revoke(&env, &w.entry.id, "Grenze nicht überschritten")
+        .await
+        .expect("Widerruf des Wegfalls");
+    assert!(rv.entry.revoked_at.is_some());
+}
+
+/// SEC-2026.11.1-01: Geschäftsjahr bzw. Wirkungsdatum außerhalb 1900–9999 ist
+/// eine Meldung, keine Panik (vorher 500 „Interner Fehler“).
+#[tokio::test]
+async fn out_of_range_years_are_domain_errors() {
+    let env = setup().await;
+    for year in [300_000_i64, 10_000, 1899, -5] {
+        let err = euer_cmd::euer_compute_report(
+            &env.ctx,
+            euer_cmd::EuerComputeReportArgs { fiscal_year: year },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, klein_buch_lib::error::Error::Domain(ref m) if m.contains("außerhalb")),
+            "{year}: {err}"
+        );
+    }
+    assert!(euer_cmd::euer_compute_report(
+        &env.ctx,
+        euer_cmd::EuerComputeReportArgs { fiscal_year: 2026 },
+    )
+    .await
+    .is_ok());
+    for from in ["+262140-01-01", "9999-01-01", "10000-01-01"] {
+        let args: Result<tax_cmd::TaxStatusChangePreviewArgs, _> =
+            serde_json::from_value(change_json(Some(from), "regelbesteuerung", "verzicht"));
+        let Ok(args) = args else { continue };
+        let p = tax_cmd::tax_status_change_preview(&env.ctx, args)
+            .await
+            .expect("keine Panik, kein 500");
+        assert!(!p.ok, "{from}");
+        assert!(
+            p.errors.iter().any(|e| e.contains("9999")),
+            "{from}: {:?}",
+            p.errors
+        );
+        let err = add(&env, Some(from), "regelbesteuerung", "verzicht")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, klein_buch_lib::error::Error::Domain(_)),
+            "{from}: {err}"
+        );
+    }
+    assert_eq!(
+        count(&env.pool, "SELECT COUNT(*) FROM tax_status_changes").await,
+        0
     );
 }

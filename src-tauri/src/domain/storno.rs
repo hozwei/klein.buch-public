@@ -23,6 +23,12 @@ pub struct OriginalInvoiceView<'a> {
     /// Leistungszeitraum des Originals (Beginn, Ende), falls gesetzt — der
     /// Storno übernimmt ihn (ADR 0042 Nr. 10).
     pub service_period: Option<(NaiveDate, NaiveDate)>,
+    /// Leistungsdatum des Originals, falls gesetzt — der Storno übernimmt es
+    /// (DOC-12).
+    pub delivery_date: Option<NaiveDate>,
+    /// Rechnungsdatum des Originals: Leistungszeitpunkt des Originals, wenn es
+    /// weder Leistungsdatum noch Zeitraum trägt (Rückfall wie beim Original).
+    pub invoice_date: NaiveDate,
     pub items: Vec<OriginalItemView<'a>>,
 }
 
@@ -91,12 +97,18 @@ pub fn build_storno_input<'a>(
     InvoiceInput {
         direction: InvoiceDirection::Issued,
         invoice_date: storno_date,
-        // Leistungsdatum entspricht dem Storno-Datum — wir machen die
-        // Stornierung "heute", die Rück-Leistung ist nicht das Original-
-        // Leistungsdatum (Cash-Basis). Trägt das Original einen
-        // Leistungszeitraum, übernimmt der Storno ihn statt eines Datums
-        // (ADR 0042 Nr. 10: BG-14 wie im Original, kein BT-72).
-        delivery_date: original.service_period.is_none().then_some(storno_date),
+        // DOC-12: Der Storno korrigiert die ursprüngliche Leistung (§ 31
+        // Abs. 5 UStDV, § 17 UStG); er nennt darum einheitlich deren
+        // Leistungszeitpunkt: den Leistungszeitraum (ADR 0042 Nr. 10: BG-14
+        // wie im Original, kein BT-72), sonst das Leistungsdatum, sonst das
+        // Rechnungsdatum des Originals (dessen Rückfall). Das Storno-Datum ist
+        // das Datum des Belegs, kein Tag einer Leistung. Die EÜR setzt die
+        // Erstattung weiter am Storno-Datum an (Cash-Basis), der Status folgt
+        // dem Original (`invoice_tax_status`).
+        delivery_date: original
+            .service_period
+            .is_none()
+            .then(|| original.delivery_date.unwrap_or(original.invoice_date)),
         service_period_start: original.service_period.map(|(s, _)| s),
         service_period_end: original.service_period.map(|(_, e)| e),
         // BT-10 liest der Storno aus der archivierten E-Rechnung des
@@ -125,6 +137,8 @@ mod tests {
             currency_code: "EUR",
             pdf_template: "default",
             service_period: None,
+            delivery_date: None,
+            invoice_date: NaiveDate::from_ymd_opt(2026, 3, 12).unwrap(),
             items: vec![
                 OriginalItemView {
                     position: 1,
@@ -255,6 +269,8 @@ mod tests {
             currency_code: "EUR",
             pdf_template: "default",
             service_period: None,
+            delivery_date: None,
+            invoice_date: NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
             items,
         };
         let original_items: Vec<InvoiceItemInput> = original
@@ -313,9 +329,24 @@ mod tests {
         assert_eq!(storno.service_period_start, Some(d(4, 1)));
         assert_eq!(storno.service_period_end, Some(d(6, 30)));
         assert_eq!(storno.delivery_date, None);
-        // ohne Zeitraum wie bisher: Leistungsdatum = Storno-Datum
-        let plain = build_storno_input(&original(), "uuid".into(), d(7, 2), None);
-        assert_eq!(plain.delivery_date, Some(d(7, 2)));
+        assert_eq!(storno.invoice_date, d(7, 2));
+    }
+
+    /// DOC-12: Der Storno nennt einheitlich den Leistungszeitpunkt des
+    /// Originals (§ 31 Abs. 5 UStDV): sein Leistungsdatum, ohne Leistungsdatum
+    /// und Zeitraum dessen Rechnungsdatum — nie das Storno-Datum.
+    #[test]
+    fn storno_takes_the_delivery_date_of_the_original() {
+        let d = |m, t| NaiveDate::from_ymd_opt(2026, m, t).unwrap();
+        let mut orig = original();
+        orig.delivery_date = Some(d(3, 10));
+        let storno = build_storno_input(&orig, "uuid".into(), d(6, 15), None);
+        assert_eq!(storno.delivery_date, Some(d(3, 10)));
+        assert_eq!(storno.invoice_date, d(6, 15));
+        assert_eq!(storno.service_period_start, None);
+        // Ohne Leistungsdatum: Rechnungsdatum des Originals.
+        let plain = build_storno_input(&original(), "uuid".into(), d(6, 15), None);
+        assert_eq!(plain.delivery_date, Some(d(3, 12)));
         assert_eq!(plain.service_period_start, None);
     }
 

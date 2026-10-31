@@ -207,11 +207,11 @@ impl ProcessingInfo {
                 "Finanzbehörden im Rahmen gesetzlicher Pflichten".into(),
                 "Kreditinstitute/Zahlungsdienstleister im Rahmen der Zahlungsabwicklung".into(),
             ],
-            retention: "Steuerlich relevante Belege werden gemäß § 147 AO und § 14b UStG 10 Jahre \
-                 aufbewahrt; eine frühere Löschung ist insoweit gesetzlich ausgeschlossen. \
-                 Nicht aufbewahrungspflichtige Stammdaten werden nach Wegfall des Zwecks gesperrt \
-                 bzw. anonymisiert."
-                .into(),
+            // DOC-01: Fristen nach § 147 Abs. 3 AO und § 14b UStG in der Fassung
+            // des Vierten Bürokratieentlastungsgesetzes (Rechnungen 8, nicht
+            // 10 Jahre); „gesetzlich ausgeschlossen“ nur innerhalb dieser
+            // Fristen. Klein.Buch hält technisch einheitlich 10 Jahre vor.
+            retention: RETENTION_TEXT.into(),
             rights: vec![
                 "Auskunft (Art. 15 DSGVO)".into(),
                 "Berichtigung (Art. 16 DSGVO)".into(),
@@ -453,11 +453,29 @@ pub struct AuditEventEntry {
     pub entity_id: Option<String>,
 }
 
+/// Speicherdauer in der Auskunft (Art. 15 Abs. 1 lit. d DSGVO), DOC-01: Fristen
+/// nach § 147 Abs. 3 und 4 AO und § 14b Abs. 1 UStG seit dem Vierten
+/// Bürokratieentlastungsgesetz; Löschausschluss (Art. 17 Abs. 3 lit. b DSGVO)
+/// nur innerhalb der jeweiligen Frist; tatsächliche Vorhaltedauer 10 Jahre.
+pub const RETENTION_TEXT: &str =
+    "Steuerlich relevante Unterlagen werden nach § 147 Abs. 3 und 4 AO ab dem Ende des \
+     Kalenderjahres, in dem sie entstanden sind, aufbewahrt: Bücher und Aufzeichnungen 10 Jahre, \
+     Buchungsbelege einschließlich Rechnungen 8 Jahre (auch § 14b Abs. 1 UStG), Handels- und \
+     Geschäftsbriefe wie Angebote 6 Jahre; solange die Festsetzungsfrist noch läuft, länger \
+     (§ 147 Abs. 3 Satz 5 AO). Innerhalb dieser Fristen ist eine Löschung gesetzlich \
+     ausgeschlossen (Art. 17 Abs. 3 lit. b DSGVO). Die Buchhaltung hält alle steuerlich \
+     relevanten Unterlagen einheitlich 10 Jahre vor; ist die gesetzliche Frist einer Unterlage \
+     abgelaufen, können Sie deren Löschung oder Einschränkung verlangen (Art. 17, 18 DSGVO). \
+     Nicht aufbewahrungspflichtige Stammdaten werden nach Wegfall des Zwecks gesperrt bzw. \
+     anonymisiert.";
+
 const DISCLAIMER: &str =
     "Diese Auskunft wurde automatisiert mit Klein.Buch nach Art. 15 DSGVO erstellt und ist \
      keine Rechtsberatung. Ein Teil der enthaltenen Daten unterliegt gesetzlichen \
-     Aufbewahrungspflichten (u. a. § 147 AO, § 14b UStG, 10 Jahre) und kann vor Fristablauf nicht \
-     gelöscht werden. Rein interne, subjektive Vermerke sind nicht Gegenstand dieser Auskunft. \
+     Aufbewahrungspflichten nach § 147 Abs. 3 AO (Bücher und Aufzeichnungen 10 Jahre, \
+     Buchungsbelege einschließlich Rechnungen 8 Jahre, auch § 14b Abs. 1 UStG, Handels- und \
+     Geschäftsbriefe 6 Jahre, jeweils ab Ende des Kalenderjahres) und kann vor Ablauf der \
+     jeweiligen Frist nicht gelöscht werden. Rein interne, subjektive Vermerke sind nicht Gegenstand dieser Auskunft. \
      Angaben Dritter in beigefügten Dokumenten sind vor einer Herausgabe zu prüfen (Art. 15 \
      Abs. 4 DSGVO). Verbindlichkeit und Vollständigkeit sind im Einzelfall rechtlich zu prüfen.";
 
@@ -1003,6 +1021,28 @@ mod tests {
         // Art.-15(1)-Pflichtangaben vorhanden.
         assert!(!report.processing_info.purposes.is_empty());
         assert!(report.processing_info.retention.contains("147"));
+    }
+
+    /// DOC-01: Speicherdauer nach § 147 Abs. 3 AO und § 14b UStG seit dem
+    /// Vierten Bürokratieentlastungsgesetz — Rechnungen 8, Geschäftsbriefe 6,
+    /// Bücher 10 Jahre; kein „§ 14b UStG … 10 Jahre“ mehr; die einheitliche
+    /// Vorhaltedauer von 10 Jahren ist als solche benannt.
+    #[test]
+    fn retention_texts_follow_fourth_bureaucracy_relief_act() {
+        for text in [RETENTION_TEXT, DISCLAIMER] {
+            assert!(
+                text.contains("Rechnungen 8 Jahre")
+                    && text.contains("Bücher und Aufzeichnungen 10 Jahre")
+                    && text.contains("Geschäftsbriefe")
+                    && text.contains("6 Jahre"),
+                "{text}"
+            );
+            assert!(!text.contains("§ 14b UStG 10"), "{text}");
+            assert!(!text.contains("§ 14b UStG, 10 Jahre"), "{text}");
+        }
+        assert!(RETENTION_TEXT.contains("einheitlich 10 Jahre vor"));
+        assert!(RETENTION_TEXT.contains("Innerhalb dieser Fristen"));
+        assert_eq!(ProcessingInfo::standard().retention, RETENTION_TEXT);
     }
 
     /// Referenz-PDF der DSGVO-Auskunft für Typst-Updates (siehe `pdf::snapshot`).

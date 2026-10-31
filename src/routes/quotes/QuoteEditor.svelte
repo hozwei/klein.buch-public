@@ -457,7 +457,8 @@
     Deine Firmendaten fehlen. <a class="kb-link" href={`/settings/seller?next=${sellerNext}`}>Jetzt ausfüllen</a>.
   </Banner>
 {:else}
-  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein} dateLabel="Angebotsdatum" noun="auf dem Angebot" />
+  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein} dateLabel="Angebotsdatum" noun="auf dem Angebot"
+    error={taxAt.error} />
   {#if editId && editNumber}
     <RestoreConflictBanner conflict={restoreConflict} number={editNumber} doc="quote" where="editor" />
   {/if}

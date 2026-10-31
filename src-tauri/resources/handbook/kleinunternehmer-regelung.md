@@ -51,29 +51,69 @@ Sobald Dein laufender Jahresumsatz die 100.000 €-Grenze
 weg — der Umsatz, mit dem die Schwelle gerissen wird, gehört
 bereits zur Regelbesteuerung. Alle vorherigen Umsätze des Jahres
 bleiben §19. Im Folgejahr bist Du ebenfalls regelbesteuert, weil Dein
-Vorjahresumsatz dann über 25.000 € liegt. Liegt Dein Umsatz im
+Vorjahresumsatz dann über 25.000 € liegt; zurück kannst Du frühestens
+zum 1. Januar des übernächsten Jahres. Liegt Dein Umsatz im
 laufenden Jahr nur über 25.000 €, aber unter 100.000 €, bleibst Du
 in diesem Jahr Kleinunternehmer; die Regelbesteuerung beginnt dann
 erst im Folgejahr. Im Jahr der Gründung gilt im laufenden Jahr schon
-die 25.000 €-Grenze; für ihr Überschreiten gilt dasselbe wie für
-die 100.000 €-Grenze.
+die 25.000 €-Grenze (§ 19 Abs. 1 UStG mit dem BMF-Schreiben vom
+18.03.2025, Abschnitt 19.1 UStAE); für ihr Überschreiten gilt dasselbe
+wie für die 100.000 €-Grenze.
+
+Zum Gesamtumsatz zählen nur die im Inland steuerbaren Umsätze
+(§ 19 Abs. 2 UStG). Umsätze, deren Leistungsort im Ausland liegt (etwa
+Leistungen an Unternehmer in einem anderen EU-Land), und bestimmte
+steuerfreie Umsätze (§ 4 Nr. 8 Buchst. i, Nr. 9 Buchst. b und Nr. 11
+bis 28 UStG sowie steuerfreie Hilfsumsätze) zählen nicht mit.
 
 ### Was Klein.Buch dabei zeigt
 
 Unter Einstellungen → "Meine Firmendaten", Abschnitt "Steuerstatus",
-steht Dein **Gesamtumsatz** des Vorjahres und des laufenden Jahres bis
-heute: die Zahlungseingänge auf Deine Rechnungen, netto, abzüglich
-der Erstattungen aus Stornos. Klein.Buch kennt nur die hier erfassten
-Zahlungen; Umsätze außerhalb von Klein.Buch rechnest Du selbst hinzu.
+stehen Deine **Zahlungseingänge laut Klein.Buch** für das Vorjahr und
+das laufende Jahr bis heute: die Zahlungen auf Deine festgeschriebenen
+Rechnungen, netto, abzüglich der Erstattungen aus Stornos. Das ist
+eine Annäherung an den Gesamtumsatz, nicht der Gesamtumsatz selbst:
+Umsätze außerhalb von Klein.Buch rechnest Du selbst hinzu; nicht im
+Inland steuerbare Umsätze (Leistungsort im Ausland), die nach § 19
+Abs. 2 UStG abzuziehenden steuerfreien Umsätze und Umsätze mit
+Anlagevermögen ziehst Du selbst ab. Unter §19 tragen alle Positionen
+die Steuerart "steuerbefreit", Klein.Buch kann diese Umsätze darum
+nicht unterscheiden.
 
-Erreicht oder überschreitet der Gesamtumsatz eine Grenze, erscheint
-dort und im Bereich "Hinweise" ein Grenzhinweis. Er nennt die Rechnung,
-mit der die Grenze überschritten wurde, und schlägt ein Wirkungsdatum
-vor: das Leistungsdatum dieser Rechnung, frühestens den 1. Januar des
-Jahres. Kennt Klein.Buch keinen Umsatz aus früheren Jahren, nimmt es
-an, dass das laufende Jahr Dein Gründungsjahr ist, und prüft auch die
-25.000 €-Grenze; trifft das nicht zu, gilt für Dich im laufenden Jahr
-nur die 100.000 €-Grenze. Klein.Buch prüft die Grenzen auch täglich im
+Erreichen oder überschreiten die Zahlungseingänge eine Grenze,
+erscheint dort und im Bereich "Hinweise" ein Grenzhinweis. Beim Wegfall
+im laufenden Jahr oder im Gründungsjahr nennt er die Rechnung, mit
+deren Zahlung die Grenze überschritten wurde, und schlägt ein
+Wirkungsdatum vor, den frühesten vertretbaren Tag des Wechsels:
+
+- das Leistungsdatum dieser Rechnung (bei einem Leistungszeitraum dessen
+  Ende), wenn es im laufenden Jahr und nicht nach der Zahlung liegt;
+  dieser Umsatz ist dann schon steuerpflichtig;
+- bei einer Anzahlung oder Vorausrechnung, deren Leistung erst nach der
+  Zahlung kommt, den Tag der Zahlung; die spätere Leistung ist dann
+  schon steuerpflichtig;
+- bei einer Leistung aus dem Vorjahr ebenfalls den Tag der Zahlung.
+  Diese Rechnung selbst bleibt aber unter dem Status ihres
+  Leistungsjahres, also meist §19; steuerpflichtig sind die Umsätze ab
+  dem Tag dieser Zahlung. Die Umsätze des Jahres davor bleiben
+  steuerfrei, darum nicht der 1. Januar. Der Grenzhinweis sagt das in
+  diesem Fall ausdrücklich.
+
+Liegen die Zahlungseingänge des laufenden Jahres schon über 25.000 €,
+weist ein Grenzhinweis darauf hin, dass die Regelung ab dem 1. Januar
+des Folgejahres nicht mehr gilt, und schlägt den Wegfall wegen des
+Vorjahres zu diesem Tag vor (siehe "Wenn Dein Umsatz schon im
+laufenden Jahr über 25.000 € liegt"). Kennt Klein.Buch keinen Umsatz
+aus früheren Jahren, nimmt es an, dass das laufende Jahr Dein
+Gründungsjahr ist, und prüft auch die 25.000 €-Grenze im laufenden
+Jahr; trifft das nicht zu, gilt für Dich im laufenden Jahr nur die
+100.000 €-Grenze. Die Zeile des laufenden Jahres nennt dann beide
+Grenzen, die 25.000 € zuerst. Liegen schon die Zahlungseingänge des
+Vorjahres über 25.000 € und ist noch kein Wegfall eingetragen, bietet
+nur der Hinweis zum Vorjahr den Wegfall an: Er wirkt ab dem 1. Januar
+des laufenden Jahres und gilt über den Jahreswechsel fort, ein
+eigener Hinweis zum Folgejahr entfällt dann. Klein.Buch prüft die
+Grenzen auch täglich im
 Hintergrund.
 
 **Klein.Buch wechselt nie von selbst.** Ein automatischer Wechsel würde
@@ -97,7 +137,7 @@ Abschnitt **"Steuerstatus"**. Dort stehen:
 - der Status von heute, nach einem Verzicht das Ende der Bindung und
   das Datum, ab dem Du frühestens zurückkannst,
 - ein schon eingetragener künftiger Wechsel ("Eingetragen: ab …"),
-- Dein Gesamtumsatz und die Grenzhinweise,
+- Deine Zahlungseingänge laut Klein.Buch und die Grenzhinweise,
 - der Verlauf als Tabelle mit den Spalten "Wirkung ab", "Status",
   "Grund" und "Bindung bis" und der Aktion "Widerrufen …" am jüngsten
   Eintrag,
@@ -125,7 +165,8 @@ nicht mit dem von heute:
   Position die Steuerart, die am Datum dieses Belegs gilt.
 
 Die Formulare zeigen das an: Gilt am Leistungsdatum (bzw.
-Angebotsdatum oder Termin) die Kleinunternehmer-Regelung, blenden sie
+Angebotsdatum oder Ende des Abrechnungszeitraums) die
+Kleinunternehmer-Regelung, blenden sie
 die USt-Felder aus. Weicht der Status am Datum des Belegs von dem von
 heute ab, steht oben ein Hinweis, etwa "Am Leistungsdatum gilt die
 Regelbesteuerung." Änderst Du das Datum über einen Wechsel hinweg,
@@ -155,12 +196,19 @@ etwas gespeichert ist: festgeschriebene Rechnungen, deren Status nicht
 mehr passt, betroffene Entwürfe und Abo-Vorlagen, aus Kosten
 übernommene Anlagen und die Jahre, deren EÜR-, ELSTER- und DATEV-Exporte
 Du neu erstellen solltest. Passt der Eintrag nicht (etwa ein Datum vor
-dem jüngsten Eintrag, eine Rückkehr während der Bindung oder ein
+dem jüngsten Eintrag, eine Rückkehr während der Bindung, eine
+Rückkehr vor dem 1. Januar des übernächsten Jahres nach einem eigenen
+Wegfall im laufenden Jahr oder im Gründungsjahr oder ein
 abgeschlossenes Geschäftsjahr), stehen die Gründe im Dialog. Unter
-"Bitte prüfen." stehen Warnungen, die das Eintragen nicht sperren: ein
-Verzicht nach Ablauf der Erklärungsfrist oder eine Rückkehr, obwohl Dein
-Gesamtumsatz im Vorjahr nach den in Klein.Buch erfassten Zahlungen über
-25.000 € lag.
+"Bitte prüfen." stehen Warnungen, die das Eintragen nicht sperren, weil
+Klein.Buch die Tatsachen nicht sicher kennt:
+
+- ein Verzicht nach Ablauf der Erklärungsfrist,
+- ein Wegfall wegen des Vorjahres, obwohl Deine Zahlungseingänge laut
+  Klein.Buch in diesem Vorjahr nicht über 25.000 € liegen (bei einem
+  Eintrag im Voraus: bisher nicht),
+- eine Rückkehr, obwohl Deine Zahlungseingänge laut Klein.Buch im
+  Vorjahr über 25.000 € lagen oder obwohl das Vorjahr noch läuft.
 
 Mit dem Knopf unten rechts ("Verzicht eintragen", "Wegfall eintragen",
 "Rückkehr eintragen" bzw. "Regelbesteuerung eintragen") trägst Du den
@@ -190,22 +238,36 @@ Bereich "Hinweise".
   Frist abgelaufen, warnt der Dialog: Trag den Verzicht dann nur ein,
   wenn Du ihn rechtzeitig gegenüber dem Finanzamt erklärt hast.
 - **Wegfall: Vorjahresumsatz über 25.000 €.** Die Regelung gilt ab dem
-  1. Januar nicht mehr, ohne Bindung. Trag den Wegfall ein, bevor Du
-  die erste Rechnung des Jahres ausstellst.
+  1. Januar nicht mehr, ohne Bindung. Eintragen kannst Du den Wegfall
+  im betroffenen Jahr oder schon im Vorjahr zum 1. Januar des
+  Folgejahres, sobald Dein Gesamtumsatz die 25.000 € überschritten hat;
+  weiter im Voraus nicht.
 - **Wegfall: Umsatz im laufenden Jahr über 100.000 €.** Die Regelung
-  endet mit dem Umsatz, der die Grenze überschreitet; als
-  Wirkungsdatum gilt das Leistungsdatum dieser Rechnung. Ohne Bindung.
-  Das Datum darf nicht in der Zukunft liegen: Den Wegfall trägst Du
-  ein, sobald der Umsatz vorliegt.
+  endet mit dem Umsatz, der die Grenze überschreitet. Als Wirkungsdatum
+  schlägt Klein.Buch das Leistungsdatum der auslösenden Rechnung vor,
+  wenn es im Jahr und nicht nach der Zahlung liegt, sonst den Tag der
+  Zahlung (siehe "Was Klein.Buch dabei zeigt"). Ohne Bindung. Das Datum
+  darf nicht in der Zukunft liegen: Den Wegfall trägst Du ein, sobald
+  der Umsatz vorliegt.
 - **Wegfall: Umsatz im Gründungsjahr über 25.000 €.** Wie beim
   laufenden Jahr, nur mit der Grenze von 25.000 €.
 - **Rückkehr zu §19.** Zum 1. Januar eines Jahres, wenn Dein
-  Gesamtumsatz im Vorjahr höchstens 25.000 € betrug und im laufenden
-  Jahr voraussichtlich höchstens 100.000 € beträgt. Nach einem Wegfall
+  Gesamtumsatz im Vorjahr höchstens 25.000 € betrug. Eine Prognose für
+  das laufende Jahr verlangt das Gesetz seit 2025 nicht mehr;
+  überschreitet Dein Umsatz im laufenden Jahr 100.000 €, endet die
+  Regelung mit diesem Umsatz. Nach einem Wegfall
   geht das ohne Sperre, nach einem Verzicht erst nach Ablauf der fünf
-  Jahre. Klein.Buch prüft die Bindung; lag Dein Gesamtumsatz im
-  Vorjahr nach den erfassten Zahlungen über 25.000 €, warnt der Dialog.
-  Die Umsatzvoraussetzungen prüfst Du selbst.
+  Jahre. Nach einem Wegfall im laufenden Jahr oder im Gründungsjahr
+  lag Dein Gesamtumsatz in diesem Jahr über 25.000 €; zurück kannst
+  Du dann frühestens zum 1. Januar des übernächsten Jahres (§ 19 Abs. 1
+  Satz 1 UStG). So schlägt es Klein.Buch vor, eine frühere Rückkehr
+  lehnt es ab. War der Wegfall-Eintrag falsch, widerrufst Du ihn
+  zuerst. Nach einem Wegfall wegen des
+  Vorjahres geht es zum nächsten 1. Januar, wenn Dein Gesamtumsatz im
+  Jahr des Wegfalls höchstens 25.000 € beträgt. Klein.Buch prüft die
+  Bindung und die Rückkehr nach eigenem Wegfall und warnt in den oben
+  genannten Fällen; die
+  Umsatzvoraussetzungen prüfst Du selbst.
 
 Der Wechsel kann eine Vorsteuerberichtigung nach §15a UStG auslösen,
 wenn Du Anlagen weiter nutzt, die Du unter dem anderen Status
@@ -252,6 +314,20 @@ diesem Jahr schon Rechnungen mit dem §19-Hinweis festgeschrieben,
 nennt Klein.Buch sie unter "Hinweise"; es gilt dasselbe wie beim
 Überschreiten der 100.000 €-Grenze.
 
+### Wenn Dein Umsatz schon im laufenden Jahr über 25.000 € liegt
+
+Liegt Dein Gesamtumsatz im laufenden Jahr über 25.000 € (aber unter
+100.000 €), bleibst Du in diesem Jahr Kleinunternehmer; ab dem
+1. Januar des Folgejahres gilt die Regelbesteuerung (§ 19 Abs. 1
+Satz 1 UStG). Trag den Wegfall wegen des Vorjahres zum 1. Januar des
+Folgejahres **schon jetzt** ein, sobald der Grenzhinweis erscheint.
+Sonst bekämen Rechnungen, die Du noch in diesem Jahr ausstellst, deren
+Leistung aber im Folgejahr liegt, den falschen Status: Abo-Rechnungen,
+deren Abrechnungszeitraum über den Jahreswechsel reicht, und
+Vorausrechnungen für eine Leistung im Folgejahr. Bleibt Dein
+Gesamtumsatz am Jahresende wider Erwarten bei höchstens 25.000 €
+(etwa nach einem Storno mit Erstattung), widerrufe den Eintrag.
+
 ### Angebot und Rechnung über einen Wechsel
 
 Ein Angebot behält den Status seines Datums. Wandelst Du es nach
@@ -268,12 +344,14 @@ Angebot.":
 
 ### Abo-Rechnungen über einen Wechsel
 
-Jeder Termin einer Abo-Vorlage zählt mit dem Status an seinem Datum.
-Passen die Positionen der Vorlage an einem Termin nicht zum Status
+Jeder Termin einer Abo-Vorlage zählt mit dem Status am Ende seines
+Abrechnungszeitraums (Tag vor dem nächsten Termin). Passen die
+Positionen der Vorlage an einem Termin nicht zum Status
 (zum Beispiel Steuerart "steuerbefreit" nach einem Wechsel zur
 Regelbesteuerung), erzeugt Klein.Buch für diesen Termin keine Rechnung,
 sondern einen Hinweis. Pass dann die Positionen der Vorlage an.
-Nachgeholte Termine vor dem Wechsel bleiben §19.
+Termine, deren Abrechnungszeitraum vor dem Wechsel endet, bleiben §19,
+auch wenn Klein.Buch sie erst später nachholt.
 
 ## Einen Eintrag widerrufen
 
@@ -391,11 +469,17 @@ Steuerberater; die Ausfüllhilfe weist darauf hin.
 Bis Klein.Buch 2026.11.0 gab es statt des Verlaufs einen Schalter
 "Kleinunternehmer nach §19 UStG". Beim Update übernimmt Klein.Buch
 den Stand so, dass für jedes Jahr derselbe Status gilt wie bisher:
-Warst Du regelbesteuert, steht im Verlauf ein Eintrag "Wechsel aus dem
-bisherigen Schalter übernommen" zum 1. Januar des Jahres, in dem Du
-umgeschaltet hattest. Er bindet Dich wie ein Verzicht fünf
-Kalenderjahre einschließlich dieses Jahres, weil der Schalter den
-Grund nicht kannte. War es in Wahrheit ein Wegfall durch eine
+
+- Warst Du Kleinunternehmer, steht im Verlauf "Stand zu Beginn" mit
+  der Kleinunternehmer-Regelung.
+- Warst Du von Anfang an regelbesteuert, ohne Datum eines Wechsels in
+  den Firmendaten, steht dort "Stand zu Beginn" mit der
+  Regelbesteuerung, ohne Bindung.
+- Hattest Du umgeschaltet und war das Datum des Wechsels gespeichert,
+  steht dort zusätzlich ein Eintrag "Wechsel aus dem bisherigen
+  Schalter übernommen" zum 1. Januar dieses Jahres. Er bindet Dich wie
+  ein Verzicht fünf Kalenderjahre einschließlich dieses Jahres, weil
+  der Schalter den Grund nicht kannte. War es in Wahrheit ein Wegfall durch eine
 Umsatzgrenze, widerrufe den übernommenen Eintrag (sofern dadurch kein
 abgeschlossenes Jahr betroffen ist) und trag den Wechsel mit dem
 richtigen Grund neu ein.

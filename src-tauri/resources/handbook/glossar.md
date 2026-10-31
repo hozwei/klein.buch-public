@@ -289,8 +289,10 @@ Abschlussprotokoll.
 
 Die Regeln, nach denen das Finanzamt Buchhaltungs-Software
 akzeptiert. Die wichtigsten Punkte: Belege sind nach der
-Festschreibung unveränderlich, Storno ersetzt Löschung, alles wird
-10 Jahre aufbewahrt, jede Änderung ist nachvollziehbar.
+Festschreibung unveränderlich, Storno ersetzt Löschung, Unterlagen
+werden aufbewahrt (Bücher 10, Buchungsbelege wie Rechnungen 8,
+Geschäftsbriefe 6 Jahre; Klein.Buch hält alles einheitlich 10 Jahre
+vor), jede Änderung ist nachvollziehbar.
 Klein.Buch erzwingt diese Regeln direkt im Code; Du kannst sie
 nicht aus Versehen brechen.
 
@@ -379,7 +381,7 @@ Die Kennung, mit der eine Behörde E-Rechnungen an die richtige
 Stelle leitet. Nur Rechnungen an öffentliche Auftraggeber brauchen
 sie. Sie besteht aus Grobadressierung, optional Feinadressierung und
 einer zweistelligen Prüfziffer, durch Bindestriche getrennt (zum
-Beispiel 04011000-12345-67). Du trägst sie im Entwurf ein (Feld
+Beispiel 04011000-1234512345-06). Du trägst sie im Entwurf ein (Feld
 "Leitweg-ID (optional)"), der Entwurf speichert sie, beim Ausstellen
 kommt sie als Käuferreferenz in die E-Rechnung; danach ist sie
 unveränderlich. Bei allen anderen Kunden bleibt das Feld leer.

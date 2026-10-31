@@ -481,7 +481,8 @@
   .actions-col { text-align: right; }
   /* U2: nicht mitten im Wort trennen („Betriebshaftpfli/cht“), Silbentrennung (lang="de"). */
   .abo-name { font-weight: 600; color: var(--text); overflow-wrap: break-word; hyphens: auto; }
-  .abo-meta { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+  /* UI-13: eigenes Gewicht, sonst erbt die Nebenzeile in der Kartenansicht 700 von td.kb-card-head (tokens.css). */
+  .abo-meta { font-size: var(--fs-sm); font-weight: 400; color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .muted-cell { color: var(--text-muted); }
   /* Pausiert: gedämpft über die Textfarbe statt Deckkraft (Kontrast 1.4.3). */

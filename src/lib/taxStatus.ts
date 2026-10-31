@@ -104,7 +104,8 @@ export const REASONS: Record<TaxStatusReason, ReasonInfo> = {
     trigger: false,
     explain:
       "Dein Gesamtumsatz im Vorjahr lag über 25.000 €. Die Regelung gilt ab dem 1. Januar nicht " +
-      "mehr, ohne Bindung (§ 19 Abs. 1 UStG).",
+      "mehr, ohne Bindung (§ 19 Abs. 1 UStG). Liegt dein Umsatz schon im laufenden Jahr über 25.000 €, " +
+      "trägst du den Wegfall jetzt schon zum 1. Januar des nächsten Jahres ein.",
   },
   wegfall_laufend: {
     label: "Wegfall: Umsatz im laufenden Jahr über 100.000 €",
@@ -130,10 +131,14 @@ export const REASONS: Record<TaxStatusReason, ReasonInfo> = {
     status: "kleinunternehmer",
     janFirst: true,
     trigger: false,
+    // UI-07: § 19 Abs. 1 Satz 1 UStG n. F. (ab 2025) kennt keine Prognose mehr; die
+    // 100.000-€-Grenze gilt laufend (ADR 0042 Nr. 2).
     explain:
       "Du giltst wieder als Kleinunternehmer, zum 1. Januar eines Jahres. Voraussetzung: Gesamtumsatz " +
-      "im Vorjahr höchstens 25.000 € und im laufenden Jahr voraussichtlich höchstens 100.000 €. Nach " +
-      "einem Wegfall ohne Sperre, nach einem Verzicht erst nach Ablauf der fünf Jahre.",
+      "im Vorjahr höchstens 25.000 €. Überschreitet dein Umsatz im laufenden Jahr 100.000 €, endet die " +
+      "Regelung mit diesem Umsatz. Nach " +
+      "einem Wegfall ohne Sperre (nach einem Wegfall im laufenden Jahr oder im Gründungsjahr frühestens " +
+      "zum 1. Januar des übernächsten Jahres), nach einem Verzicht erst nach Ablauf der fünf Jahre.",
   },
   legacy: {
     label: "Wechsel aus dem bisherigen Schalter übernommen",
@@ -207,9 +212,11 @@ export interface SuggestContext {
 /**
  * Vorschlag für Wirkungsdatum und Beleg je Grund (ADR 0042 Nr. 2 und 5):
  * - Verzicht: nächster 1. Januar (ohne Rückwirkung; ändern lässt er sich).
- * - Wegfall Vorjahr: 1. Januar des laufenden Jahres.
+ * - Wegfall Vorjahr: aus dem Grenzhinweis (1. Januar des laufenden Jahres bzw.
+ *   im Voraus des Folgejahres, L-GOBD-02), sonst 1. Januar des laufenden Jahres.
  * - Wegfall laufend/Gründungsjahr: aus dem Grenzhinweis (Leistungsdatum des
- *   auslösenden Belegs, frühestens 1. Januar), sonst leer.
+ *   auslösenden Belegs, wenn im Jahr und nicht nach der Zahlung, sonst Tag der
+ *   Zahlung; ADR 0042 Nr. 2, L-GOBD-01), sonst leer.
  * - Rückkehr: frühestmögliche Rückkehr laut Server, sonst nächster 1. Januar.
  * Jeder Vorschlag liegt nach dem jüngsten Eintrag, soweit der Grund das zulässt.
  */
@@ -243,15 +250,16 @@ export function suggestChange(
 }
 
 /**
- * Feldprüfung des Wirkungsdatums wie `validate_change` (Pflicht, 1. Januar,
- * Wegfall nicht in der Zukunft). Überschneidung, Bindung und abgeschlossene Jahre
+ * Feldprüfung des Wirkungsdatums wie `validate_change` (Pflicht, 1900–9999,
+ * 1. Januar, Wegfall nicht in der Zukunft; Wegfall wegen des Vorjahres höchstens
+ * zum 1. Januar des Folgejahres, L-GOBD-02). Überschneidung, Bindung und abgeschlossene Jahre
  * meldet die Server-Vorschau. Liefert die Meldung oder `""`.
  */
 export function effectiveFromError(reason: TaxStatusReason, value: string, today: string): string {
   if (reason === "initial") return "";
   const v = (value ?? "").trim();
   if (!v) return "Bitte ein Wirkungsdatum angeben.";
-  if (!isIsoDate(v) || yearOf(v) < 1900) return "Bitte ein gültiges Datum angeben (TT.MM.JJJJ).";
+  if (!isIsoDate(v) || yearOf(v) < 1900 || yearOf(v) > 9999) return "Bitte ein gültiges Datum angeben (TT.MM.JJJJ).";
   const info = REASONS[reason];
   if (info.janFirst && v.slice(5) !== "01-01") {
     return `„${info.label}“ wirkt nur zum 1. Januar, z. B. ${fmtDate(janFirst(yearOf(v)))} oder ${fmtDate(janFirst(yearOf(v) + 1))}.`;
@@ -259,8 +267,8 @@ export function effectiveFromError(reason: TaxStatusReason, value: string, today
   if ((reason === "wegfall_laufend" || reason === "wegfall_gruendungsjahr") && v > today) {
     return "Ein Wegfall lässt sich erst eintragen, wenn der Umsatz vorliegt: Das Datum darf nicht in der Zukunft liegen.";
   }
-  if (reason === "wegfall_vorjahr" && yearOf(v) > yearOf(today)) {
-    return "Den Wegfall wegen des Vorjahres trägst du im betroffenen Jahr ein, nicht im Voraus.";
+  if (reason === "wegfall_vorjahr" && yearOf(v) > yearOf(today) + 1) {
+    return "Den Wegfall wegen des Vorjahres trägst du höchstens zum 1. Januar des nächsten Jahres im Voraus ein.";
   }
   return "";
 }
@@ -276,18 +284,49 @@ export function effectiveFromLabel(effectiveFrom: string): string {
   return effectiveFrom === ANFANG ? "seit Beginn" : fmtDate(effectiveFrom);
 }
 
-/** Text eines Grenzhinweises (ADR 0042 Nr. 5). */
+/**
+ * Wirkungsdatum im Satz (UI-05): „ab TT.MM.JJJJ“ bzw. „seit Beginn“ beim
+ * Anfangsstand. Das „ab“ setzt die Funktion selbst, sonst entstünde „ab seit Beginn“.
+ * `capital` für den Satzanfang („Ab …“ bzw. „Seit Beginn“).
+ */
+export function effectiveFromPhrase(effectiveFrom: string, capital = false): string {
+  const s = effectiveFrom === ANFANG ? "seit Beginn" : `ab ${fmtDate(effectiveFrom)}`;
+  return capital ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Text eines Grenzhinweises (ADR 0042 Nr. 5). Der Wert sind die Zahlungseingänge
+ * laut Klein.Buch, nicht der Gesamtumsatz nach § 19 Abs. 2 UStG (L-GOBD-03).
+ */
 export function thresholdHintText(h: TaxThresholdHint): string {
   const what =
     h.kind === "vorjahr"
-      ? `Dein Gesamtumsatz ${h.year} beträgt ${euro(h.turnoverCents)}`
-      : `Dein Gesamtumsatz ${h.year} beträgt bisher ${euro(h.turnoverCents)}`;
+      ? `Deine Zahlungseingänge ${h.year} laut Klein.Buch betragen ${euro(h.turnoverCents)}`
+      : `Deine Zahlungseingänge ${h.year} laut Klein.Buch betragen bisher ${euro(h.turnoverCents)}`;
+  if (h.kind === "folgejahr") {
+    // L-GOBD-02: Wegfall wegen des Vorjahres zum 1. Januar des Folgejahres.
+    let s = `${what} und liegen über ${euro(h.limitCents)}. Ab ${fmtDate(h.suggestedEffectiveFrom ?? `${h.year + 1}-01-01`)} gilt die Regelung dann nicht mehr.`;
+    if (h.triggerDocument) s += ` Die Grenze überschreitet die Zahlung auf ${h.triggerDocument}.`;
+    s += " Trag den Wegfall schon jetzt ein, damit Abo-Rechnungen und Vorausrechnungen mit Leistung im Folgejahr Umsatzsteuer ausweisen.";
+    return s;
+  }
   const limit = h.kind === "vorjahr" ? "die Vorjahresgrenze" : h.kind === "gruendungsjahr" ? "die Grenze im Gründungsjahr" : "die Grenze im laufenden Jahr";
   if (!h.exceeded) {
-    return `${what} und erreicht damit genau ${limit} von ${euro(h.limitCents)}. Die Regelung gilt weiter; jeder weitere Umsatz überschreitet die Grenze.`;
+    // UI-06: Das Vorjahr ist abgeschlossen; weitere Zahlungen zählen zum laufenden Jahr
+    // (§ 19 Abs. 2 UStG, § 11 EStG) und berühren die Vorjahresgrenze nicht mehr.
+    const rest =
+      h.kind === "vorjahr"
+        ? "Die Grenze ist nicht überschritten; die Regelung gilt im laufenden Jahr weiter (Grenze dort 100.000 €)."
+        : "Die Regelung gilt weiter; jeder weitere Umsatz überschreitet die Grenze.";
+    return `${what} und erreichen damit genau ${limit} von ${euro(h.limitCents)}. ${rest}`;
   }
-  let s = `${what} und liegt über ${limit} von ${euro(h.limitCents)}.`;
-  if (h.triggerDocument) s += ` Die Grenze überschreitet der Umsatz aus ${h.triggerDocument}.`;
+  let s = `${what} und liegen über ${limit} von ${euro(h.limitCents)}.`;
+  if (h.triggerDocument) s += ` Die Grenze überschreitet die Zahlung auf ${h.triggerDocument}.`;
+  // V8a-R-02: Eine Leistung aus einem früheren Jahr bleibt unter dem Status ihres Jahres
+  // (ADR 0042 Nr. 3); steuerpflichtig sind erst die Umsätze ab der Zahlung.
+  if (h.triggerDocument && h.triggerServiceYear !== null && h.triggerServiceYear < h.year) {
+    s += ` Die Leistung aus ${h.triggerServiceYear} bleibt unter dem Status ihres Jahres; steuerpflichtig sind die Umsätze ab dem Tag dieser Zahlung.`;
+  }
   if (h.suggestedEffectiveFrom) s += ` Vorschlag: Wegfall ab ${fmtDate(h.suggestedEffectiveFrom)}.`;
   if (h.presumed) {
     s += " Klein.Buch kennt keinen früheren Umsatz und nimmt darum an, dass dies dein Gründungsjahr ist; trifft das nicht zu, gilt die Grenze von 100.000 €.";
@@ -311,7 +350,7 @@ export function consequenceLines(c: TaxStatusConsequences): string[] {
   }
   if (c.recurringTemplates.length > 0) {
     out.push(
-      `Abo-Vorlagen, deren Positionen nicht zum Status am nächsten Termin passen: ${c.recurringTemplates.join(", ")}. ` +
+      `Abo-Vorlagen, deren Positionen nicht zum Status am Ende des nächsten Abrechnungszeitraums passen: ${c.recurringTemplates.join(", ")}. ` +
         "Bis du sie anpasst, erzeugen ihre Termine keine Rechnung.",
     );
   }

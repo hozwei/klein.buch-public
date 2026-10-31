@@ -224,6 +224,13 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
         service_period: None,
+        delivery_date: detail
+            .invoice
+            .delivery_date
+            .as_deref()
+            .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()),
+        invoice_date: chrono::NaiveDate::parse_from_str(&detail.invoice.invoice_date, "%Y-%m-%d")
+            .unwrap(),
         items: detail
             .items
             .iter()

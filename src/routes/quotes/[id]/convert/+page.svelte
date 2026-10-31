@@ -439,7 +439,8 @@
     </Banner>
   {:else}
     <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
-      dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
+      dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung"
+      error={taxAt.error} />
     {#if conversionHint}
       <Banner kind="warning" title="Anderer Steuerstatus als im Angebot.">{conversionHint}</Banner>
     {/if}

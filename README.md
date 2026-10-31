@@ -6,9 +6,10 @@ Im Browser, auf der eigenen Instanz, auch vom Telefon. AGPL-3.0.
 Klein.Buch deckt den vollständigen Beleg-Lebenszyklus eines deutschen
 Kleinunternehmers ab — Angebot, Rechnung (XRechnung + ZUGFeRD-PDF/A-3),
 Eingangsrechnung per Upload, Kosten, Anlagen mit linearer AfA,
-Einnahmen-Überschuss-Rechnung und Steuerberater-/ELSTER-Export — und legt dabei
-besonderen Wert auf **GoBD-Konformität** und den **§19-Schutz** (kein
-versehentlicher Umsatzsteuer-Ausweis).
+Einnahmen-Überschuss-Rechnung und Steuerberater-/ELSTER-Export. Es ist nach den
+Anforderungen der **GoBD** gebaut (Unveränderbarkeit festgeschriebener Belege, Storno
+statt Löschung, Audit-Log; ohne Testat) und legt besonderen Wert auf den **§19-Schutz**
+(kein versehentlicher Umsatzsteuer-Ausweis).
 
 Klein.Buch läuft als Docker-Image auf einem eigenen Server; bedient wird es im
 Browser. Eine Instanz gehört genau einem Nutzer. Die Daten liegen auf der Instanz
@@ -125,7 +126,8 @@ axe-core und manuell geprüft.
 **Firmendaten und Kontakte** — Firmendaten mit Steuerstatus nach §19 UStG als
 unveränderlicher Verlauf (Verzicht, Wegfall, Rückkehr mit Wirkungsdatum und
 Grund; Bindung nach einem Verzicht fünf Kalenderjahre einschließlich des
-Wirkungsjahres), Gesamtumsatz mit Hinweis auf erreichte Grenzen, Kunden- und
+Wirkungsjahres), Zahlungseingänge laut Klein.Buch mit Hinweis auf erreichte
+Grenzen, Kunden- und
 Lieferanten-Verwaltung,
 optionales Firmenlogo, anpassbare Kilometer-Sätze für die Anfahrt-Abrechnung.
 
@@ -156,7 +158,7 @@ Rückstände erst nach Rückfrage mit Anzahl und Daten der offenen Termine. Jede
 Abo-Rechnung trägt ihren Abrechnungszeitraum.
 
 **Eingangs-Rechnungen** — XRechnung (CII + UBL) und ZUGFeRD per Upload im
-Browser lesen, KoSIT-prüfen (beratend), Original GoBD-konform archivieren, als
+Browser lesen, KoSIT-prüfen (beratend), Original unveränderbar mit Prüfsumme archivieren, als
 Kosten-Position übernehmen; Anzeige der Roh-XML. Nur die seit 2025 als
 E-Rechnung zulässigen ZUGFeRD-Profile (`EN16931`, `EXTENDED`, `XRECHNUNG`);
 `MINIMUM` und `BASIC-WL` werden mit klarer Meldung abgelehnt.
@@ -176,7 +178,7 @@ DATEV-Buchungsstapel (`EXTF_`, SKR03/SKR04, Berater- und Mandantennummer
 Pflicht; Import in DATEV noch ohne Prüfprotokoll), Steuerberater-Paket als ZIP mit
 Hash-Verifikation — alles als Browser-Download.
 
-**Geschäftsjahres-Abschluss** — prüfungssicherer Jahres-Lock nach §146 AO,
+**Geschäftsjahres-Abschluss** — Jahresabschluss mit Sperre nach § 146 Abs. 4 AO,
 automatischer AfA-Lauf zum Jahreswechsel (abschaltbar), Festschreibungs-
 Protokoll, Auto-Backup.
 
@@ -201,7 +203,7 @@ eines Sync-Clients) und SFTP mit Host-Key-Prüfung. Aufbewahrung je Ziel, Status
 je Ziel, Backup-Protokoll als append-only Liste.
 
 **PDF-Layouts** — vier mitgelieferte Vorlagen (Standard, Modern, Klassisch,
-Minimal), alle §19-konform mit Pflicht-Klausel und Pflichtangaben, mit Vorschau;
+Minimal), alle mit §19-Klausel und Pflichtangaben, mit Vorschau;
 eigene Vorlagen im Volume `/inputs`.
 
 **Eingebautes Handbuch** — Benutzer- und Betriebshandbuch in der App (Hilfe in
@@ -308,13 +310,13 @@ jlink-Laufzeit zusammen. Build, CI und Release: `docs/architecture/build-and-rel
 │                           Design-Tokens, Komponenten
 ├── src-tauri/              Rust-Crate (Name aus der Desktop-Zeit beibehalten)
 │   ├── src/                Backend (Functional Core / Imperative Shell), server/
-│   ├── migrations/         Forward-only SQL-Migrationen (0001–0032)
+│   ├── migrations/         Forward-only SQL-Migrationen (0001–0035)
 │   ├── tests/              Integrationstests
 │   ├── resources/handbook/ Benutzer- und Betriebshandbuch (Markdown)
 │   └── sidecar/            Java-Sidecar: JARs, XRechnung-Konfiguration,
 │                           Launcher, versions.json, Lizenzinventar
 ├── legal/                  Erzeugung und Prüfung der Lizenzseite /legal/
-├── docs/                   ARCHITECTURE, ADRs (0001–0040), Betriebshandbuch
+├── docs/                   ARCHITECTURE, ADRs (0001–0042), Betriebshandbuch
 ├── inputs/                 Menschen-gepflegt: PDF-Vorlagen, AfA-Tabelle,
 │                           Beispiel-Daten (Seed für das Volume /inputs)
 └── .github/                CI, Image- und Release-Workflows
@@ -397,8 +399,9 @@ Issue, Forks unter der AGPL willkommen. Einzelheiten: `CONTRIBUTING.md`.
 - **Architektur** — `docs/ARCHITECTURE.md` für den Überblick,
   `docs/architecture/` für Vertiefungen (Sicherheit, GoBD, §19, Datenmodell,
   Build und Release).
-- **Architecture Decision Records** — `docs/adr/` (0001–0040); der Umbau zur
-  Docker-Fassung steht in ADR 0039, Dauerbetrieb und Zeitlogik in ADR 0040.
+- **Architecture Decision Records** — `docs/adr/` (0001–0042); der Umbau zur
+  Docker-Fassung steht in ADR 0039, Dauerbetrieb und Zeitlogik in ADR 0040,
+  UI/UX-Standards in ADR 0041, fachliche Korrekturen in ADR 0042.
 - **Änderungen** — `CHANGELOG.md`.
 
 ---

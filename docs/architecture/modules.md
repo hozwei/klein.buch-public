@@ -180,7 +180,7 @@ ADRs: 0006.
 | `db::mod` | Shell | `open_pool(db_file, key)` (SQLCipher-Pool, `PRAGMA key`), `open_and_init`, `begin_immediate` (Schreib-Transaktion, W2), `prepare_filesystem` (vor jedem Pool-Open: Seed von `/inputs`, vorgemerkter Factory Reset → Start-Abbruch (E7), Restore-Staging aufräumen, vorgemerkten Restore anwenden), `run_migrations` (`sqlx::migrate!` aus `migrations/`, Schema-Check, Restore-Audit), `rekey_db_file` (Passphrase-Wechsel, W6), `db_file_is_plaintext` |
 | `db::models` | Shell | sqlx-Row-Typen (DB-nahe), nicht zu verwechseln mit Domain-Typen — Mapping in den Repos |
 | `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq`; `snapshot` und `raise_in` (nur aufwärts) für Restore und `numbering_raise` (Lauf F, D-24) |
-| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (34), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
+| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (35), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
 | `db::triggers` | Shell-Stub | Dokumentiert die in den Migrations-SQLs definierten Trigger (Code-Stub, die Wahrheit lebt in `migrations/*.sql`) |
 | `db::repo::*` | Shell | Repo pro Domäne (23 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
 

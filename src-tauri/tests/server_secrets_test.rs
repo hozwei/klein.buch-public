@@ -703,6 +703,41 @@ async fn sftp_upload_rejects_foreign_host_key_before_auth() {
     );
 }
 
+/// SEC-2026.11.1-02 (ADR 0042 V3c, „kein SSH-Agent“): Öffnet der Server nach
+/// der Anmeldung einen Agent-Kanal (OpenSSH-Kanaltyp `auth-agent`), lehnt der Client ihn mit
+/// `AdministrativelyProhibited` ab (russh nähme ihn ohne die Überschreibung in
+/// `backup::sftp` an); der Upload gelingt trotzdem.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sftp_client_rejects_agent_channel_from_server() {
+    use klein_buch_lib::backup::sftp;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mock =
+        sftp_mock::start_with_agent_probe(dir.path().join("sftp-server"), "kb", SFTP_SECRET).await;
+    let uri = sftp::upload(
+        Some(SFTP_SECRET),
+        "127.0.0.1",
+        mock.port,
+        "kb",
+        "kb/backups",
+        Some(&mock.fingerprint),
+        "agent-probe.kbk",
+        b"klein-buch",
+    )
+    .await
+    .unwrap();
+    assert!(uri.ends_with("/kb/backups/agent-probe.kbk"), "{uri}");
+    assert_eq!(
+        std::fs::read(mock.root.join("kb/backups/agent-probe.kbk")).unwrap(),
+        b"klein-buch"
+    );
+    assert_eq!(
+        mock.agent_open_result().await.as_deref(),
+        Some("rejected:AdministrativelyProhibited"),
+        "Agent-Kanal muss abgelehnt werden"
+    );
+}
+
 /// Alle Dateien unter `root` (rekursiv, ohne Ordner).
 fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
