@@ -126,6 +126,17 @@ Terminen fortsetzt. Eine Bestätigung zum Nachholen gilt für die Termine
 bis zu dem Tag, an dem Du sie gibst; kommen danach wieder mehr als drei
 Termine zusammen, fragt Klein.Buch erneut.
 
+Der Dialog nennt, wie viele Termine offen sind, und ihre Daten (die
+ersten sechs, danach "und N weitere"), dazu, wie viele Termine "Ab heute
+fortsetzen" auslässt und mit welchem Termin es weitergeht. Endet die
+Laufzeit der Abo-Vorlage vorher, sagt er das. Sind mehr als 24 Termine
+offen, bietet er "Nachholen" nicht an: So viele Rechnungen holt
+Klein.Buch nicht auf einmal nach. Dann bleibt "Ab heute fortsetzen";
+vergangene Zeiträume rechnest Du bei Bedarf einzeln ab. Weil sich das
+Auslassen nicht zurücknehmen lässt, steht der Fokus dann auf
+"Abbrechen", und ein Klick neben den Dialog schließt ihn nicht. Der Dialog zeigt
+den Stand beim Öffnen; Klein.Buch prüft bei Deiner Wahl noch einmal.
+
 Klein.Buch überspringt eine Abo-Vorlage mit Hinweis, statt eine Rechnung
 anzulegen, wenn der Kunde archiviert oder anonymisiert ist oder wenn
 die Positionen nicht zum Steuerstatus am Termin passen: eine Position

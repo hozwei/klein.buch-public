@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, leistungszeitraum, vorausrechnung, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, leistungszeitraum, vorausrechnung, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren, rückstand, nachholen, vorgemerkter entwurf, abgleich]
 ---
 
 # Glossar
@@ -512,6 +512,17 @@ der Detailseite einer empfangenen Rechnung über den Button "Roh-XML
 anzeigen". Praktisch für den Steuerberater oder eine
 Betriebsprüfung, um die maschinenlesbaren Felder zu prüfen.
 
+## Rückstand (Abo)
+
+Termine einer Abo-Rechnung oder eines Kosten-Abos, die ausgefallen
+sind, weil Klein.Buch gesperrt war, der Container nicht lief oder das
+Abo pausiert war. Bei mehr als drei offenen Terminen und beim
+Fortsetzen einer pausierten Reihe fragst Du über "Rückstand …":
+"Nachholen" (höchstens 24 Termine) oder "Ab heute fortsetzen". Der
+Dialog nennt Anzahl und Daten der offenen Termine und, womit es nach
+"Ab heute fortsetzen" weitergeht; bei mehr als 24 Terminen gibt es nur
+"Ab heute fortsetzen".
+
 ## SFTP
 
 Ein Netzwerk-Protokoll für sicheres Kopieren von Dateien auf einen
@@ -629,6 +640,17 @@ dann am Feld den Hinweis "Rechnung vor der Leistung", speichert und
 stellt die Rechnung aber ganz normal aus. Das Rechnungsdatum selbst
 darf nicht in der Zukunft liegen. Für den Steuerstatus zählt der
 angegebene Leistungszeitpunkt.
+
+## Vorgemerkter Entwurf
+
+Ein Rechnungs- oder Angebots-Entwurf aus einem wiederhergestellten
+Backup, dessen Nummer vor der Wiederherstellung schon festgeschrieben
+war. Er ist ein älterer Stand eines Belegs, den Du schon verschickt
+hast. Du passt ihn an das Original an ("Bearbeiten") und bestätigst den
+Abgleich unter "Einstellungen" → "Backups" → "Nummernkreise"; erst
+dann lässt er sich ausstellen bzw. fertigstellen. Änderst Du ihn nach
+der Bestätigung, ist er wieder vorgemerkt; darauf weist der Editor vor
+dem Speichern hin.
 
 ## XRechnung
 

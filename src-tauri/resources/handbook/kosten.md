@@ -157,6 +157,16 @@ verpassten Terminen fortsetzt. Eine Bestätigung zum Nachholen gilt für die
 Termine bis zu dem Tag, an dem Du sie gibst; kommen danach wieder mehr als
 drei Termine zusammen, fragt Klein.Buch erneut.
 
+Der Dialog nennt, wie viele Termine offen sind, und ihre Daten (die
+ersten sechs, danach "und N weitere"), dazu, wie viele Termine "Ab heute
+fortsetzen" auslässt und mit welchem Termin das Abo weitermacht. Sind
+mehr als 24 Termine offen, bietet er "Nachholen" nicht an: Dann bleibt
+"Ab heute fortsetzen", und Du erfasst fehlende Kosten einzeln oder passt
+den nächsten Termin im Abo an. Weil sich das Auslassen nicht
+zurücknehmen lässt, steht der Fokus dann auf "Abbrechen", und ein Klick
+neben den Dialog schließt ihn nicht. Der Dialog zeigt den Stand beim Öffnen;
+Klein.Buch prüft bei Deiner Wahl noch einmal.
+
 ## Beleg-Anhang anschauen
 
 Öffne die Kosten-Position und klick im Abschnitt "Beleg" auf

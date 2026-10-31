@@ -157,6 +157,18 @@ nennt ihre Fundstelle. Festgeschriebene Belege bleiben unverändert (GoBD-Hardli
     bleibt die archivierte E-Rechnung, aus der auch der Storno liest (ADR 0041 Nr. 250). Ein
     Rückschreiben aus dem Archiv in festgeschriebene Rechnungen unterbleibt (GoBD).
 
+### Umsetzung V4 (Ergänzungen zu Nr. 13 und 16)
+
+25. **Vorgemerkte Angebots-Entwürfe** nach einem Restore lassen sich bearbeiten wie Rechnungs-Entwürfe;
+    gesperrt bleibt das Fertigstellen, bis der Abgleich bestätigt ist, und jede spätere Änderung merkt
+    den Entwurf wieder vor (ADR 0040 Nr. 13). Die Editoren zeigen den Zustand vor dem Speichern
+    (Lesefeld `restoreConflict`).
+26. **Angebots-Editor bei Regelbesteuerung** bietet USt-Satz und USt-Art wie der Rechnungs-Editor an;
+    der Server prüft wie bisher, unter § 19 bleiben E/0 erzwungen.
+27. **Rückstand-Vorschau** rechnet aus derselben Funktion wie der Lauf (Anzahl, Daten bis zur Grenze
+    von 24); oberhalb der Grenze ist „Ab heute fortsetzen“ ein Gefahr-Dialog mit Fokus auf
+    „Abbrechen“, weil das Überspringen nicht umkehrbar ist.
+
 ## Konsequenzen
 
 - Schema 35. Ein Image 2026.11.0 kann eine Datenbank oder ein Backup mit Schema 35 nicht öffnen;

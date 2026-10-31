@@ -370,7 +370,12 @@ ein dringender Hinweis offen ist, Weiß auf `--danger-solid` (Screenreader: „�
   Vorschau selbst das Ergebnis — im Fuß nur `secondary`; bis 600 px ist „PDF öffnen“ die einzige
   `primary`, „In neuem Tab öffnen“ entfällt dort (V3-15).
 - Drei Aktionen (`chooseDialog` mit `altLabel`, z. B. „Verpasste Termine“): `--dialog-w: 36rem`,
-  damit „Abbrechen“, „Ab heute fortsetzen“ und „Nachholen“ in eine Zeile passen (U2-019).
+  damit „Abbrechen“, „Ab heute fortsetzen“ und „Nachholen“ in eine Zeile passen (U2-019). Der
+  Rückstand-Dialog (`recurringChoice.ts`, ADR 0042 Nr. 16) nennt Anzahl und Daten der offenen
+  Termine (TT.MM.JJJJ, die ersten sechs, dann „und N weitere“) und das Ziel von „Ab heute
+  fortsetzen“ aus `recurring_backlog_preview`; über der Grenze von 24 entfällt „Nachholen“, der
+  Dialog hat dann nur „Abbrechen“ und „Ab heute fortsetzen“ (statt eines Knopfs, den der Server
+  ablehnt).
 
 - **Re-Auth** (geschützte Aktionen, Plan W6): Der Dialog nennt die Aktion („Aktion bestätigen: Backup
   wiederherstellen“; Namen in `labels.ts`, `reauthActionLabel`, abgeglichen mit der Registry).
@@ -451,7 +456,17 @@ Route), nicht in `src/lib` — er gehört nur diesem Bereich. Die Routen sind d�
 `redirect()` weiter; in der SPA (`ssr = false`) läuft `load` im Browser, SvelteKit ersetzt den
 Verlaufseintrag (beim Start wie bei einer Navigation). Achtung: `no-side-effects-on-open.test.ts`
 prüft nur `+page`/`+layout`-Dateien — das `onMount` eines Editor-Bausteins ruft ebenso nur lesende
-Commands auf.
+Commands auf. Angebote folgen demselben Muster (`routes/quotes/QuoteEditor.svelte`, Routen
+`/quotes/new` und `/quotes/[id]/edit`, ADR 0042 Nr. 13): Server-Ablehnungen am Feld
+(Angebotsdatum, Empfänger) oder als Banner über dem Formular, „Bearbeiten“ als Nebenaktion eines
+offenen Entwurfs (`canEditQuote` in `quoteStatus.ts`).
+
+**Restore-Vormerkung eines Entwurfs** (Warteliste 8, ADR 0042 Nr. 16). Editor und Detailseite von
+Rechnung und Angebot zeigen den Stand aus dem Lesefeld `restoreConflict` über einen Baustein
+(`RestoreConflictBanner`, keine Listenabfrage): `flagged` als Warnung „Nach der Wiederherstellung
+vorgemerkt.“, `confirmed` im Editor als Warnung „Speichern hebt den Abgleich auf.“ — also vor dem
+Speichern —, auf der Detailseite als Info. Die Rückmeldung nach dem Speichern (`restoreSaveFlash`)
+ist bei `confirmed` ein Warn-Toast.
 
 **Sortieren mit Auf/Ab statt Ziehen** (2.5.7, Paket-Kategorien). Je Eintrag „Nach oben“ und „Nach
 unten“ (`secondary`, Pfeil `aria-hidden`, Name mit dem Eintrag: „Nach oben: Fotografie“). Am Rand

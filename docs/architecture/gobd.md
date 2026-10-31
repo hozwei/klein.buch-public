@@ -376,7 +376,7 @@ Mutationen schreiben einen Eintrag (Auswahl, Namen wie im Code):
 
 - Rechnungen: `invoice.draft_create`, `invoice.lock`, `invoice.sent`,
   `invoice.payment_recorded`, `invoice.cancel`, `storno.create`.
-- Angebote: `quote.draft_create`, `quote.issue`, `quote.sent`,
+- Angebote: `quote.draft_create`, `quote.draft_updated`, `quote.issue`, `quote.sent`,
   `quote.accepted`, `quote.rejected`, `quote.converted`, `quote.cancel`,
   `quote.pdf_generated`.
 - Kosten und Privatbewegungen: `expense.create`, `expense.import_einvoice`,
@@ -496,6 +496,28 @@ und Entwürfe eines laufenden Abo-Laufs. Jede Änderung schreibt in derselben
 Transaktion das Audit `invoice.draft_updated` (Nummer, Brutto vorher und
 nachher, Positionen, Empfängerwechsel). Beim Festschreiben friert der Server
 den §19-Status am Beleg ein; ein Storno übernimmt den Status des Originals.
+
+### 5.4b Angebots-Entwurf bearbeiten (ADR 0042 Nr. 13)
+
+Ein Angebot, das noch Entwurf ist, ist weder Handelsbrief noch Buchungsbeleg;
+die Unveränderbarkeit beginnt mit dem Fertigstellen (GoBD Rz. 58 ff.).
+`quotes_update_draft` (Sperre `locks::QUOTES`) überschreibt Kopf, Verkäufer-
+und Empfänger-Snapshot, Summen und Positionen — `repo::quotes::update_draft_in`
+mit `status = 'draft' AND locked_at IS NULL` im `WHERE`, Positionen ersetzt in
+derselben `begin_immediate`-Transaktion wie das Audit `quote.draft_updated`
+(Nummer, Brutto vorher und nachher, Positionen, Empfängerwechsel). Die Trigger
+(`trg_quotes_immutable`, `trg_quotes_canceled_final`, `trg_quote_items_frozen_*`)
+bleiben unverändert. Die Nummer bleibt, deshalb bleibt das Angebotsdatum im
+Geschäftsjahr der Nummer, und das Jahr muss offen sein. Anlegen und Bearbeiten
+prüfen dasselbe: Empfänger nicht anonymisiert, §19-Status am Angebotsdatum
+(ADR 0042 Nr. 3), Blocker wie beim Rechnungs-Entwurf einschließlich §14c-Schutz
+und Betragsgrenzen, Paket-Provenienz. Ein nach einem Restore vorgemerkter
+Entwurf lässt sich an das Original anpassen, aber erst nach der Bestätigung
+fertigstellen; ein bestätigter wird mit jeder Änderung wieder vorgemerkt
+(`reflag_confirmed_in`, Lauf F8), wie bei Rechnungen. `invoices_get` und
+`quotes_get` melden diesen Stand offener Entwürfe im Lesefeld
+`restoreConflict` (`flagged` | `confirmed` | `null`; ADR 0042 Nr. 16), damit
+die Oberfläche vor dem Speichern darauf hinweist.
 
 ### 5.5 Entwurf verwerfen (Lauf F, W14-032)
 

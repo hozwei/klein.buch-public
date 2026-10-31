@@ -251,6 +251,21 @@ pub struct InvoiceDetail {
     /// (Migration 0034, ADR 0042 Nr. 7–8), in der Reihenfolge der Erfassung.
     #[serde(default)]
     pub payments: Vec<InvoicePaymentView>,
+    /// Restore-Vormerkung des Entwurfs (ADR 0042 Nr. 16, Warteliste 8); nur
+    /// `invoices_get` füllt sie, und nur für offene Entwürfe.
+    #[serde(default)]
+    pub restore_conflict: Option<RestoreConflictState>,
+}
+
+/// Stand eines wiederhergestellten Entwurfs, dessen Nummer vor dem Restore
+/// schon festgeschrieben war (Lauf F1d/F8; ADR 0042 Nr. 16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestoreConflictState {
+    /// Vorgemerkt: Festschreiben erst nach Bestätigung.
+    Flagged,
+    /// Bestätigt: das nächste Speichern merkt ihn wieder vor.
+    Confirmed,
 }
 
 /// Eine Zeile des Zahlungsbuchs `invoice_payments` (Migration 0034, ADR 0042
@@ -388,6 +403,10 @@ pub struct QuoteDetail {
     pub items: Vec<QuoteItemRow>,
     pub buyer: Option<ContactRow>,
     pub attachments: Vec<AttachmentView>,
+    /// Restore-Vormerkung des Entwurfs (ADR 0042 Nr. 16, Warteliste 8); nur
+    /// `quotes_get` füllt sie, und nur für offene Entwürfe.
+    #[serde(default)]
+    pub restore_conflict: Option<RestoreConflictState>,
 }
 
 // ---- Packages (Block P2, Migration 0019) -----------------------------------

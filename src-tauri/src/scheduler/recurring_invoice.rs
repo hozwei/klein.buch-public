@@ -56,8 +56,7 @@ use crate::db::repo::{
 };
 use crate::domain::invoice::{InvoiceDirection, InvoiceInput, InvoiceItemInput};
 use crate::domain::recurring::{
-    billing_period, compute_next_due_date, count_due_occurrences, first_occurrence_on_or_after,
-    Frequency,
+    billing_period, compute_next_due_date, count_due_occurrences, skip_target, Frequency,
 };
 use crate::domain::recurring_invoice::AutoMode;
 use crate::error::{Error, Result};
@@ -280,12 +279,8 @@ pub async fn apply_resume_mode(
             .is_some();
     match mode {
         ResumeMode::Skip => {
-            let from = if review {
-                today.succ_opt().unwrap_or(today)
-            } else {
-                today
-            };
-            let (target, skipped) = first_occurrence_on_or_after(freq, day, next, from);
+            // ADR 0042 Nr. 16: dasselbe Ziel wie die Rückstand-Vorschau.
+            let (target, skipped) = skip_target(freq, day, next, today, review);
             catch_up::clear(pool, Series::Template, &tmpl.id).await?;
             catch_up::clear_restore_review(pool, Series::Template, &tmpl.id).await?;
             if skipped == 0 {

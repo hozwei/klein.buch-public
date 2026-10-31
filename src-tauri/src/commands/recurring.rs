@@ -12,6 +12,7 @@
 //! GoBD-Beleg). Die daraus erzeugten Kosten sind sofort gelockt (Block 9).
 
 use crate::app_ctx::AppCtx;
+use chrono::NaiveDate;
 use std::sync::Arc;
 
 use crate::db::models::{ExpenseRow, RecurringSubscriptionRow};
@@ -231,14 +232,13 @@ async fn has_backlog(
     let Ok(next) = chrono::NaiveDate::parse_from_str(&sub.next_due_date, "%Y-%m-%d") else {
         return Ok(false);
     };
-    if next < today {
-        return Ok(true);
-    }
-    Ok(
+    let review =
         catch_up::restore_review_through(pool, Series::Subscription, &sub.id, &sub.next_due_date)
             .await?
-            .is_some_and(|_| next <= today),
-    )
+            .is_some();
+    // ADR 0042 Nr. 16: dieselbe Regel wie die Rückstand-Vorschau (Kosten-Abos
+    // ohne Laufzeit-Ende).
+    Ok(domain::has_backlog(next, today, None, review))
 }
 
 /// Argumente von [`recurring_restore_review_list`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
@@ -268,6 +268,163 @@ pub async fn recurring_restore_review_list(
         templates: catch_up::restore_review_ids(&pool, Series::Template).await?,
         subscriptions: catch_up::restore_review_ids(&pool, Series::Subscription).await?,
     })
+}
+
+// =============================================================================
+// Rückstand-Vorschau (ADR 0042 Nr. 16, V1-11)
+// =============================================================================
+
+/// Art der Reihe für [`recurring_backlog_preview`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BacklogSeries {
+    /// Abo-Rechnungs-Vorlage.
+    Template,
+    /// Kosten-Abo.
+    Subscription,
+}
+
+/// Argumente von [`recurring_backlog_preview`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecurringBacklogPreviewArgs {
+    pub kind: BacklogSeries,
+    pub id: String,
+}
+
+/// Was „nachholen“ bzw. „ab heute fortsetzen“ mit einer Reihe täte — gerechnet
+/// wie `apply_resume_mode` und `has_backlog` (Stand heute; der Server prüft bei
+/// der Wahl erneut).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogPreview {
+    /// Nächster offener Termin der Reihe.
+    pub next_due_date: NaiveDate,
+    /// Verlangt die Reihe die Wahl (wie `has_backlog`)?
+    pub backlog: bool,
+    /// Fällige Termine bis heute (innerhalb der Laufzeit), gezählt bis
+    /// [`catch_up::COUNT_CAP`] — die Zahl, an der „nachholen“ scheitert.
+    pub due: usize,
+    /// Die ersten fälligen Termine, höchstens [`catch_up::CONFIRMED_CAP`].
+    pub dates: Vec<NaiveDate>,
+    /// Höchstzahl beim Nachholen ([`catch_up::CONFIRMED_CAP`]).
+    pub cap: usize,
+    /// Mehr Termine als `cap`: „nachholen“ wird abgelehnt.
+    pub exceeds_cap: bool,
+    /// Prüfung nach einer Wiederherstellung offen (nachgeholte Rechnungen nur
+    /// als Entwurf, „ab heute fortsetzen“ lässt auch den heutigen Termin aus).
+    pub after_restore: bool,
+    /// Nächster Termin nach „ab heute fortsetzen“.
+    pub skip_to: NaiveDate,
+    /// So viele Termine lässt „ab heute fortsetzen“ aus.
+    pub skipped: usize,
+    /// „Ab heute fortsetzen“ führt hinter das Laufzeit-Ende (Vorlage endet).
+    pub skip_ends_series: bool,
+}
+
+/// Rückstand-Vorschau aus den Daten einer Reihe (pure; dieselben Funktionen
+/// und Grenzen wie `apply_resume_mode` und `has_backlog`).
+pub fn backlog_preview(
+    frequency: domain::Frequency,
+    day_of_period: u32,
+    next_due: NaiveDate,
+    end: Option<NaiveDate>,
+    today: NaiveDate,
+    after_restore: bool,
+) -> BacklogPreview {
+    let mut dates = domain::due_occurrences(
+        frequency,
+        day_of_period,
+        next_due,
+        today,
+        end,
+        catch_up::COUNT_CAP,
+    );
+    let due = dates.len();
+    dates.truncate(catch_up::CONFIRMED_CAP);
+    let (skip_to, skipped) =
+        domain::skip_target(frequency, day_of_period, next_due, today, after_restore);
+    BacklogPreview {
+        next_due_date: next_due,
+        backlog: domain::has_backlog(next_due, today, end, after_restore),
+        due,
+        dates,
+        cap: catch_up::CONFIRMED_CAP,
+        exceeds_cap: due > catch_up::CONFIRMED_CAP,
+        after_restore,
+        skip_to,
+        skipped,
+        skip_ends_series: end.is_some_and(|e| skip_to > e),
+    }
+}
+
+/// Testbarer Kern von [`recurring_backlog_preview`] (`today` = Europe/Berlin
+/// aus der Uhr des Aufrufers).
+pub async fn backlog_preview_core(
+    pool: &sqlx::SqlitePool,
+    kind: BacklogSeries,
+    id: &str,
+    today: NaiveDate,
+) -> Result<BacklogPreview> {
+    let (series, frequency, day, next_due, end) = match kind {
+        BacklogSeries::Template => {
+            let t = crate::db::repo::recurring_invoice::get_row(pool, id)
+                .await?
+                .ok_or_else(|| Error::Domain(format!("Vorlage nicht gefunden: {id}")))?;
+            (
+                Series::Template,
+                t.frequency,
+                t.day_of_period,
+                t.next_due_date,
+                t.end_date,
+            )
+        }
+        BacklogSeries::Subscription => {
+            let s = recurring::get(pool, id)
+                .await?
+                .ok_or_else(|| Error::Domain(format!("Abo nicht gefunden: {id}")))?;
+            // Kosten-Abos haben kein Laufzeit-Ende (wie im Lauf).
+            (
+                Series::Subscription,
+                s.frequency,
+                s.day_of_period,
+                s.next_due_date,
+                None,
+            )
+        }
+    };
+    let freq = domain::Frequency::from_db(&frequency)
+        .ok_or_else(|| Error::Domain(format!("Ungültige Frequenz '{frequency}'")))?;
+    let next = parse_iso(&next_due)?;
+    let end = end.as_deref().map(parse_iso).transpose()?;
+    let after_restore = catch_up::restore_review_through(pool, series, id, &next_due)
+        .await?
+        .is_some();
+    Ok(backlog_preview(
+        freq,
+        day.clamp(1, 31) as u32,
+        next,
+        end,
+        today,
+        after_restore,
+    ))
+}
+
+/// Rückstand-Vorschau für den Dialog „nachholen oder ab heute fortsetzen“
+/// (ADR 0042 Nr. 16, V1-11): Anzahl und Daten der offenen Termine, Obergrenze,
+/// Prüfung nach einer Wiederherstellung. Liest nur.
+pub async fn recurring_backlog_preview(
+    ctx: &Arc<AppCtx>,
+    args: RecurringBacklogPreviewArgs,
+) -> Result<BacklogPreview> {
+    let RecurringBacklogPreviewArgs { kind, id } = args;
+    let pool = ctx.pool()?;
+    backlog_preview_core(&pool, kind, &id, ctx.clock().today_berlin()).await
+}
+
+fn parse_iso(s: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
+        .map_err(|e| Error::Domain(format!("Ungültiges Datum '{s}': {e}")))
 }
 
 // =============================================================================

@@ -247,25 +247,22 @@ async fn has_backlog(
     let Ok(next) = chrono::NaiveDate::parse_from_str(&tmpl.next_due_date, "%Y-%m-%d") else {
         return Ok(false);
     };
-    let within = tmpl
+    let end = tmpl
         .end_date
         .as_deref()
-        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
-        .is_none_or(|end| next <= end);
-    if !within {
-        return Ok(false);
-    }
-    if next < today {
-        return Ok(true);
-    }
-    Ok(crate::scheduler::catch_up::restore_review_through(
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok());
+    let review = crate::scheduler::catch_up::restore_review_through(
         pool,
         crate::scheduler::catch_up::Series::Template,
         &tmpl.id,
         &tmpl.next_due_date,
     )
     .await?
-    .is_some_and(|_| next <= today))
+    .is_some();
+    // ADR 0042 Nr. 16: dieselbe Regel wie die Rückstand-Vorschau.
+    Ok(crate::domain::recurring::has_backlog(
+        next, today, end, review,
+    ))
 }
 
 // =============================================================================

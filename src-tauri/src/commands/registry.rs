@@ -270,6 +270,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "recurring_get"
         | "recurring_invoices_get"
         | "recurring_invoices_list"
+        | "recurring_backlog_preview"
         | "recurring_list"
         | "recurring_restore_review_list"
         | "scheduler_hold_status"
@@ -355,6 +356,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "quotes_generate_pdf"
         | "quotes_open_bundle"
         | "quotes_reject"
+        | "quotes_update_draft"
         | "recurring_create"
         | "recurring_invoices_create"
         | "recurring_invoices_resolve_backlog"
@@ -579,6 +581,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("quotes_list", h::quotes_list),
     ("quotes_get", h::quotes_get),
     ("quotes_create_draft", h::quotes_create_draft),
+    ("quotes_update_draft", h::quotes_update_draft),
     ("quotes_validate_draft", h::quotes_validate_draft),
     ("quotes_issue", h::quotes_issue),
     ("quotes_accept", h::quotes_accept),
@@ -664,6 +667,7 @@ static ENTRIES: &[(&str, Handler)] = &[
         "recurring_restore_review_list",
         h::recurring_restore_review_list,
     ),
+    ("recurring_backlog_preview", h::recurring_backlog_preview),
 ];
 
 mod h {
@@ -1727,6 +1731,24 @@ mod h {
             let args: crate::commands::quotes::QuotesGetArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::quotes::quotes_get(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn quotes_update_draft(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::quotes::QuotesUpdateDraftArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::quotes::quotes_update_draft(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn recurring_backlog_preview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::recurring::RecurringBacklogPreviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::recurring::recurring_backlog_preview(&ctx, args).await?,
             )?)
         })
     }

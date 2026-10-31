@@ -3,7 +3,7 @@ slug: angebote
 title: Angebote
 category: bedienen
 order: 110
-keywords: [angebot, kostenvoranschlag, quote, fertigstellen, fertiggestellt, annahme, abgesandt, in rechnung wandeln, verwerfen, agb]
+keywords: [angebot, kostenvoranschlag, quote, entwurf bearbeiten, fertigstellen, fertiggestellt, annahme, abgesandt, in rechnung wandeln, verwerfen, agb]
 ---
 
 # Angebote
@@ -29,16 +29,47 @@ Klick auf "+ Neues Angebot". Wähle den Empfänger, das Angebotsdatum
 und das Gültigkeitsdatum ("Gültig bis") und trage Positionen ein. Die
 Positions-Logik ist identisch zur Rechnung: Beschreibung, Menge,
 Einheit, Einzelpreis. Pakete und Anfahrt kannst Du wie bei
-Rechnungen einfügen. Klick auf "Als Entwurf speichern".
+Rechnungen einfügen. Unter Regelbesteuerung wählst Du je Position
+"USt-Satz" und "USt-Art" wie in der Rechnung; unter der
+Kleinunternehmer-Regelung gibt es diese Felder nicht, jede Position ist
+steuerfrei (Steuerart E, 0 %). Klick auf "Als Entwurf speichern".
 
 Das Gültigkeitsdatum schlägt Klein.Buch aus der Einstellung "Angebot
 gültig" in Deinen Firmendaten vor. Es steht in der Liste und am
 Angebot ("gültig bis …"); abgelaufene Angebote hebt Klein.Buch nicht
 gesondert hervor.
 
-Einen gespeicherten Angebots-Entwurf kannst Du nicht mehr bearbeiten.
-Stimmt etwas nicht, verwirfst Du ihn (siehe unten) und legst ein
-neues Angebot an.
+## Entwurf bearbeiten
+
+Solange das Angebot Entwurf ist, kannst Du es bearbeiten: Mit
+**"Bearbeiten"** am Entwurf änderst Du Empfänger, Angebotsdatum,
+"Gültig bis", Vorlage, Positionen und Notiz; "Änderungen speichern"
+übernimmt sie. Meldet die Prüfung am Entwurf, dass im Entwurf selbst
+etwas fehlt, führt Dich der Link "Entwurf bearbeiten" direkt dorthin.
+Lehnt Klein.Buch das Speichern ab, steht der Grund am Feld
+(Angebotsdatum, Empfänger) oder über dem Formular.
+
+Die Angebotsnummer bleibt, deshalb bleibt auch das Angebotsdatum im
+Geschäftsjahr der Nummer; für ein anderes Jahr
+verwirfst Du den Entwurf und legst ein neues Angebot an. Eine aus
+einem Paket eingefügte Position, die Du änderst, verliert ihren
+Paket-Bezug. Unter der Kleinunternehmer-Regelung lehnt Klein.Buch
+schon beim Speichern jede Position mit Umsatzsteuer ab. Jede Änderung
+steht im Protokoll.
+
+Nicht bearbeiten lassen sich fertiggestellte Angebote (auch
+angenommene, abgelehnte, zurückgezogene und umgewandelte) und
+verworfene Entwürfe. Ein Angebot wird erst mit dem Fertigstellen
+unveränderlich; vorher ist es weder Handelsbrief noch Buchungsbeleg.
+
+Hat Klein.Buch einen Entwurf nach einer Wiederherstellung vorgemerkt
+(die Nummer war vorher schon fertiggestellt, siehe "Backup und
+Wiederherstellen"), passt Du ihn hier an das versandte Original an und
+bestätigst danach den Abgleich; erst dann lässt er sich fertigstellen.
+Speicherst Du einen schon bestätigten Entwurf erneut, ist er wieder
+vorgemerkt, und Du bestätigst den Abgleich noch einmal. Darauf weist
+der Editor schon vor dem Speichern hin ("Speichern hebt den Abgleich
+auf.").
 
 ## AGB und Datenschutzhinweis
 

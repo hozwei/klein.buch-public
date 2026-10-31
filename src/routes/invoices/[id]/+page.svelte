@@ -14,7 +14,6 @@
     saveArchiveFile,
     emailLogFor,
     paymentAccountsList,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
   import type {
     Invoice,
@@ -47,6 +46,7 @@
   import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
   import { REAUTH_CANCELED } from "#lib/transport.ts";
   import { focusLost } from "#lib/focusAfterRemoval.ts";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
   import {
     accountText,
     cleanReverseReason,
@@ -108,8 +108,6 @@
   let relatedStorno = $state<Invoice | null>(null);
   // Warteliste (7): Konto je Zahlung (auch deaktivierte Konten).
   let accounts = $state<PaymentAccount[]>([]);
-  // Warteliste (8): Entwurf nach einer Wiederherstellung vorgemerkt.
-  let restoreFlagged = $state(false);
 
   let id = $derived(page.params.id ?? "");
   // Heute in Europe/Berlin, reaktiv über Mitternacht (V2-03: „Überfällig“ wie auf Start).
@@ -177,18 +175,12 @@
   async function loadRelated(d: InvoiceDetail) {
     relatedOriginal = null;
     relatedStorno = null;
-    restoreFlagged = false;
     try {
       if (d.invoice.isStornoFor) relatedOriginal = (await invoicesGet(d.invoice.isStornoFor))?.invoice ?? null;
       if (d.invoice.canceledByStornoId) relatedStorno = (await invoicesGet(d.invoice.canceledByStornoId))?.invoice ?? null;
       // ADR 0042 Nr. 8: auch nach einer vollen Gegenbuchung (bezahlt 0 €) zeigt die
       // Historie Konten — also laden, sobald es Buchungen gibt.
       if (d.invoice.paidAmountCents > 0 || (d.payments ?? []).length > 0) accounts = await paymentAccountsList(true);
-      if (!d.invoice.lockedAt && !d.invoice.voidedAt) {
-        restoreFlagged = (await numberingRestoredDraftsList()).some(
-          (c) => c.kind === "invoice" && c.id === d.invoice.id,
-        );
-      }
     } catch {
       // Bezug ist Zusatzinformation — Fehler hier nicht hochziehen.
     }
@@ -592,13 +584,15 @@
       gilt und in der EÜR zählt.
     </Banner>
   {/if}
-  {#if restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <DocNo value={inv.invoiceNumber} inline /> war vor der Wiederherstellung schon
-      festgeschrieben. Ausstellen geht erst, wenn du unter
-      <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) bestätigt hast, dass der Entwurf dem versandten Original entspricht.
-    </Banner>
+  {#if !inv.lockedAt && !inv.voidedAt}
+    <!-- Warteliste (8), ADR 0042 Nr. 16: aus dem Lesefeld des Entwurfs (keine Listenabfrage). -->
+    <RestoreConflictBanner
+      conflict={detail.restoreConflict}
+      number={inv.invoiceNumber}
+      doc="invoice"
+      where="detail"
+      editHref={inv.isStornoFor ? undefined : `/invoices/${inv.id}/edit`}
+    />
   {/if}
 
   {#if inv.voidedAt}

@@ -265,7 +265,16 @@ export interface InvoiceDetail {
   buyer: Contact | null;
   /** Zahlungsbuch mit Gegenbuchungen (Migration 0034, ADR 0042 Nr. 7–8). */
   payments: InvoicePayment[];
+  /** Restore-Vormerkung des offenen Entwurfs (ADR 0042 Nr. 16); sonst `null`. */
+  restoreConflict: RestoreConflictState | null;
 }
+
+/**
+ * Stand eines wiederhergestellten Entwurfs mit vor dem Restore festgeschriebener
+ * Nummer: `flagged` = Fertigstellen erst nach Bestätigung, `confirmed` = das
+ * nächste Speichern merkt ihn wieder vor (ADR 0042 Nr. 16, Warteliste 8).
+ */
+export type RestoreConflictState = "flagged" | "confirmed";
 
 /** Eine Buchung des Zahlungsbuchs (`InvoicePaymentView` in Rust). */
 export interface InvoicePayment {
@@ -592,6 +601,8 @@ export interface QuoteDetail {
   items: QuoteItem[];
   buyer: Contact | null;
   attachments: AttachmentView[];
+  /** Restore-Vormerkung des offenen Entwurfs (ADR 0042 Nr. 16); sonst `null`. */
+  restoreConflict: RestoreConflictState | null;
 }
 
 export interface QuoteListItem {

@@ -302,6 +302,13 @@ genau einmal in Deinen Büchern. Dasselbe gilt für Storno-Entwürfe und Angebot
 Entwurf nach der Bestätigung noch einmal, merkt Klein.Buch ihn wieder vor:
 Die Bestätigung galt dem Stand, der der verschickten Rechnung entsprach.
 
+Am Entwurf und beim Bearbeiten steht dazu ein Hinweis. Ist der Entwurf
+vorgemerkt, heißt er "Nach der Wiederherstellung vorgemerkt". Hast Du den
+Abgleich schon bestätigt, sagt Dir der Editor noch vor dem Speichern:
+"Speichern hebt den Abgleich auf." Speicherst Du trotzdem, ist der
+Entwurf wieder vorgemerkt, und Du bestätigst den Abgleich erneut, bevor
+Du die Rechnung ausstellst bzw. das Angebot fertigstellst.
+
 **Abgeschlossene Geschäftsjahre:** Hast Du nach dem Stand des Backups ein
 Geschäftsjahr abgeschlossen, bleibt es abgeschlossen. Klein.Buch übernimmt
 den Abschluss aus der ersetzten Datenbank (mit ihren Eckwerten) und nennt

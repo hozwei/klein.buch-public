@@ -157,7 +157,16 @@ pub async fn quotes_get(ctx: &Arc<AppCtx>, args: QuotesGetArgs) -> Result<Option
     let QuotesGetArgs { id } = args;
     let pool = ctx.pool()?;
 
-    quotes::get_detail(&pool, &id).await
+    let Some(mut detail) = quotes::get_detail(&pool, &id).await? else {
+        return Ok(None);
+    };
+    // ADR 0042 Nr. 16 (Warteliste 8): Restore-Vormerkung für den Hinweis vor
+    // dem Speichern — nur offene Entwürfe lassen sich noch ändern.
+    if detail.quote.status == "draft" && detail.quote.locked_at.is_none() {
+        detail.restore_conflict =
+            crate::backup::after_restore::draft_restore_state(&pool, "quote", &id).await?;
+    }
+    Ok(Some(detail))
 }
 
 // =============================================================================
@@ -193,56 +202,18 @@ pub async fn create_draft_core(
     // auch am Angebot, nicht erst bei der Umwandlung in eine Rechnung.
     crate::commands::packages::enforce_package_provenance(pool, &mut args.input.items).await?;
 
-    let buyer_row = contacts::get(pool, &args.contact_id)
-        .await?
-        .ok_or_else(|| Error::Domain(format!("Empfänger nicht gefunden: {}", args.contact_id)))?;
-    let seller_row = seller_profile::get(pool)
-        .await?
-        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
-
-    // ADR 0042 Nr. 3: Status am Angebotsdatum.
-    let seller_view = make_seller_view(
-        &seller_row,
-        quote_tax_status(pool, args.input.quote_date).await?,
-    );
-    let buyer_view = QuoteBuyerView {
-        name: &buyer_row.name,
-    };
-
-    // Strukturelle Pre-Conditions blocken schon den Draft (analog Rechnung).
-    let today = today_berlin();
-    if let Err(errs) = quote::validate_quote(&args.input, &seller_view, &buyer_view, today) {
-        let blockers: Vec<_> = errs
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    quote::QuoteValidationError::NoItems
-                        | quote::QuoteValidationError::CurrencyEmpty
-                        | quote::QuoteValidationError::TotalNotPositive
-                        | quote::QuoteValidationError::ItemInvalidTaxCategoryCode { .. }
-                        | quote::QuoteValidationError::ItemDuplicatePosition(_)
-                )
-            })
-            .cloned()
-            .collect();
-        if !blockers.is_empty() {
-            return Err(Error::Domain(format!(
-                "Der Entwurf kann nicht gespeichert werden: {}",
-                blockers
-                    .iter()
-                    .map(quote::message)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            )));
-        }
-    }
+    let (buyer_row, seller_row, is_kleinunternehmer) =
+        draft_checks(pool, &args.contact_id, &args.input, today_berlin()).await?;
+    let seller_view = make_seller_view(&seller_row, is_kleinunternehmer);
 
     // GJ = Jahr des Angebotsdatums (Plan W1.2/W9, nie vom Client) — bestimmt
     // den Nummernkreis.
     let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
         &args.input.quote_date,
     ));
+    // ADR 0042 Nr. 13: kein Entwurf mit Nummer in einem abgeschlossenen
+    // Geschäftsjahr (er ließe sich nie fertigstellen).
+    let _year_permit = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
     let quote_number = numbering::next_number(pool, DocType::Quote, fiscal_year as i32).await?;
     let totals = quote::compute_totals(&args.input.items);
     let snapshot = SellerSnapshot {
@@ -293,6 +264,196 @@ pub async fn create_draft_core(
     quotes::get_detail(pool, &row.id)
         .await?
         .ok_or_else(|| Error::Domain("create_draft: detail-load leer".into()))
+}
+
+/// Gemeinsame Prüfungen vor dem Speichern eines Angebots-Entwurfs (Anlegen und
+/// Bearbeiten, ADR 0042 Nr. 13): Empfänger vorhanden und nicht anonymisiert,
+/// Firmendaten vorhanden, §19-Status am Angebotsdatum (ADR 0042 Nr. 3) und die
+/// strukturellen Blocker — dieselben wie beim Rechnungs-Entwurf, also auch der
+/// §14c-Schutz (kein USt-Ausweis unter §19) und die Betragsgrenzen. Was erst
+/// das Fertigstellen verlangt (z. B. Gültig-bis), bleibt dort.
+async fn draft_checks(
+    pool: &SqlitePool,
+    contact_id: &str,
+    input: &QuoteInput,
+    today: NaiveDate,
+) -> Result<(ContactRow, crate::db::models::SellerProfileRow, bool)> {
+    let buyer_row = contacts::get(pool, contact_id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Empfänger nicht gefunden: {contact_id}")))?;
+    if buyer_row.anonymized_at.is_some() {
+        return Err(Error::Domain(
+            "Der Empfänger ist anonymisiert — an ihn entsteht kein neues Angebot.".into(),
+        ));
+    }
+    let seller_row = seller_profile::get(pool)
+        .await?
+        .ok_or_else(|| Error::Domain(crate::domain::invoice::SELLER_PROFILE_MISSING.into()))?;
+    let is_kleinunternehmer = quote_tax_status(pool, input.quote_date).await?;
+    let seller_view = make_seller_view(&seller_row, is_kleinunternehmer);
+    let buyer_view = QuoteBuyerView {
+        name: &buyer_row.name,
+    };
+    if let Err(errs) = quote::validate_quote(input, &seller_view, &buyer_view, today) {
+        use quote::QuoteValidationError as E;
+        let blockers: Vec<_> = errs
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    E::NoItems
+                        | E::CurrencyEmpty
+                        | E::TotalNotPositive
+                        | E::ItemInvalidTaxCategoryCode { .. }
+                        | E::ItemDuplicatePosition(_)
+                        | E::ItemAmountOutOfRange(_)
+                        | E::TotalOutOfRange
+                        | E::Paragraph19VatViolation(_)
+                )
+            })
+            .collect();
+        if !blockers.is_empty() {
+            return Err(Error::Domain(format!(
+                "Der Entwurf kann nicht gespeichert werden: {}",
+                blockers
+                    .iter()
+                    .map(|e| quote::message(e))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )));
+        }
+    }
+    Ok((buyer_row, seller_row, is_kleinunternehmer))
+}
+
+/// Argumente von [`quotes_update_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotesUpdateDraftArgs {
+    pub id: String,
+    pub args: CreateDraftArgs,
+}
+
+/// Bearbeitet einen gespeicherten Angebots-Entwurf (ADR 0042 Nr. 13). Dieselben
+/// Prüfungen wie beim Anlegen; Nummer und Geschäftsjahr bleiben.
+pub async fn quotes_update_draft(
+    ctx: &Arc<AppCtx>,
+    args: QuotesUpdateDraftArgs,
+) -> Result<QuoteDetail> {
+    let QuotesUpdateDraftArgs { id, args } = args;
+    let pool = ctx.pool()?;
+    update_draft_core(&pool, &id, args, ctx.clock().today_berlin()).await
+}
+
+/// Testbarer Kern von [`quotes_update_draft`] (`today` = Europe/Berlin aus der
+/// Uhr des Aufrufers). Ein Angebot, das noch Entwurf ist, ist weder
+/// Handelsbrief noch Buchungsbeleg; die Unveränderbarkeit beginnt mit dem
+/// Fertigstellen (ADR 0042 Nr. 13, GoBD Rz. 58 ff.). Prüft: nur ein offener
+/// Entwurf (Status `draft`, nicht festgeschrieben — ein verworfener Entwurf
+/// steht auf `canceled`); das Angebotsdatum bleibt im Geschäftsjahr der Nummer,
+/// das Geschäftsjahr ist offen; Empfänger, §19-Status und Blocker wie beim
+/// Anlegen; Paket-Provenienz. Schreibt Entwurf, Positionen und Audit
+/// `quote.draft_updated` in **einer** Transaktion, nie parallel zu
+/// Fertigstellen, Zurückziehen oder Umwandeln desselben Angebots. Ein nach
+/// einem Restore vorgemerkter Entwurf bleibt vorgemerkt (Fertigstellen erst
+/// nach Bestätigung, ADR 0040 Nr. 13); ein bestätigter wird mit der Änderung
+/// wieder vorgemerkt (Lauf F8) — wie bei `invoices_update_draft`.
+pub async fn update_draft_core(
+    pool: &SqlitePool,
+    id: &str,
+    mut args: CreateDraftArgs,
+    today: NaiveDate,
+) -> Result<QuoteDetail> {
+    recompute_markup_descriptions(&mut args.input.items);
+
+    let _quote_guard = crate::locks::QUOTES.lock(id).await;
+    let current = quotes::get(pool, id)
+        .await?
+        .ok_or_else(|| Error::Domain(format!("Angebot nicht gefunden: {id}")))?;
+    if current.locked_at.is_some() {
+        return Err(Error::Domain(format!(
+            "Das Angebot {} ist fertiggestellt und lässt sich nicht mehr ändern (GoBD).",
+            current.quote_number
+        )));
+    }
+    if current.status != "draft" {
+        return Err(Error::Domain(format!(
+            "Der Entwurf {} ist verworfen und lässt sich nicht mehr ändern.",
+            current.quote_number
+        )));
+    }
+    let fiscal_year = i64::from(crate::domain::fiscal_year::fiscal_year_for(
+        &args.input.quote_date,
+    ));
+    if fiscal_year != current.fiscal_year {
+        return Err(Error::Domain(format!(
+            "Das Angebotsdatum muss im Geschäftsjahr {} bleiben — die Nummer {} gehört zu \
+             dessen Nummernkreis. Für ein anderes Jahr den Entwurf verwerfen und neu anlegen.",
+            current.fiscal_year, current.quote_number
+        )));
+    }
+    // KB-0046: bearbeitete Paket-Positionen verlieren die Provenienz.
+    crate::commands::packages::enforce_package_provenance(pool, &mut args.input.items).await?;
+    let (buyer_row, seller_row, is_kleinunternehmer) =
+        draft_checks(pool, &args.contact_id, &args.input, today).await?;
+    // Kein Jahresabschluss, bevor der Entwurf geschrieben ist.
+    let _year_permit = crate::fiscal_year::guard::ensure_year_open(pool, fiscal_year).await?;
+
+    let totals = quote::compute_totals(&args.input.items);
+    let seller = SellerSnapshot {
+        name: seller_row.name.as_str(),
+        street: seller_row.street.as_str(),
+        postal_code: seller_row.postal_code.as_str(),
+        city: seller_row.city.as_str(),
+        tax_number: seller_row.tax_number.as_deref(),
+        vat_id: seller_row.vat_id.as_deref(),
+    };
+    let buyer = BuyerSnapshot {
+        name: buyer_row.name.as_str(),
+        street: buyer_row.street.as_deref(),
+        postal_code: buyer_row.postal_code.as_deref(),
+        city: buyer_row.city.as_deref(),
+        country_code: buyer_row.country_code.as_str(),
+        vat_id: buyer_row.vat_id.as_deref(),
+        email: buyer_row.email.as_deref(),
+    };
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    quotes::update_draft_in(
+        &mut tx,
+        id,
+        &quotes::DraftUpdate {
+            contact_id: &args.contact_id,
+            input: &args.input,
+            is_kleinunternehmer,
+            seller: &seller,
+            buyer: &buyer,
+            totals: &totals,
+        },
+    )
+    .await?;
+    audit_log::append_in(
+        &mut tx,
+        "quote.draft_updated",
+        "quote",
+        id,
+        Some(serde_json::json!({
+            "number": current.quote_number,
+            "gross_before": current.gross_amount_cents,
+            "gross": totals.gross_amount_cents,
+            "items": args.input.items.len(),
+            "contact_changed": current.contact_id != args.contact_id,
+            "quote_date": args.input.quote_date,
+        })),
+    )
+    .await?;
+    // Lauf F8: Die Bestätigung nach dem Restore galt dem Stand, der dem
+    // versandten Original entsprach — nach jeder Änderung wieder vorgemerkt.
+    crate::backup::after_restore::reflag_confirmed_in(&mut tx, "quote", id, &current.quote_number)
+        .await?;
+    tx.commit().await?;
+    quotes::get_detail(pool, id)
+        .await?
+        .ok_or_else(|| Error::Domain("update_draft: detail-load leer".into()))
 }
 
 /// Argumente von [`quotes_validate_draft`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).

@@ -24,7 +24,6 @@
     pdfTemplatesList,
     sellerProfileGet,
     documentTermsGet,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
   import type {
     Contact,
@@ -35,6 +34,7 @@
     TaxCategoryCode,
     TravelLine,
     MaterializedPackageItem,
+    RestoreConflictState,
   } from "#lib/types.ts";
   import { date, euro } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
@@ -54,6 +54,8 @@
   import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import ServiceDateFields from "#lib/ServiceDateFields.svelte";
   import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
+  import { restoreSaveFlash } from "#lib/restoreConflict.ts";
   import {
     buyerReferenceError,
     normalizeBuyerReference,
@@ -116,9 +118,10 @@
   let editNumber = $state<string | null>(null);
   let draftFiscalYear = $state<number | null>(null);
   let fromQuote = $state(false);
-  // Warteliste (8): nach einer Wiederherstellung vorgemerkt (Nummer war schon
-  // festgeschrieben); nach dem Speichern erneut geprüft.
-  let restoreFlagged = $state(false);
+  // Warteliste (8), ADR 0042 Nr. 16: Restore-Vormerkung aus dem Lesefeld des
+  // Entwurfs — `flagged` (vor dem Ausstellen abgleichen) oder `confirmed`
+  // (Speichern merkt ihn wieder vor; Hinweis schon vor dem Speichern).
+  let restoreConflict = $state<RestoreConflictState | null>(null);
 
   // Ablehnung des Servers: Gründe als Banner, einzelne Gründe am Feld (nur,
   // solange das Feld den abgelehnten Wert hat).
@@ -298,15 +301,6 @@
     }
   });
 
-  /** Ist der Entwurf nach einer Wiederherstellung vorgemerkt? (nur lesen; Fehler = nein) */
-  async function isRestoreFlagged(id: string): Promise<boolean> {
-    try {
-      return (await numberingRestoredDraftsList()).some((c) => c.kind === "invoice" && c.id === id);
-    } catch {
-      return false;
-    }
-  }
-
   // Übernimmt einen gespeicherten Entwurf ins Formular. Nur offene Entwürfe
   // (keine Stornos, nicht festgeschrieben, nicht verworfen) — sonst zurück zur
   // Detailseite; der Server prüft dasselbe noch einmal.
@@ -354,7 +348,7 @@
       sourcePackageRevision: it.sourcePackageRevision,
     }));
     if (items.length === 0) items = [emptyItem(1)];
-    restoreFlagged = await isRestoreFlagged(id);
+    restoreConflict = d.restoreConflict ?? null;
   }
 
   function addItem() {
@@ -508,15 +502,9 @@
       const detail = editId ? await invoicesUpdateDraft(editId, args) : await invoicesCreateDraft(args);
       // Warteliste (8): Ein nach der Wiederherstellung schon abgeglichener Entwurf
       // ist nach jeder Änderung wieder vorgemerkt (Server, Lauf F8).
-      if (editId && !restoreFlagged && (await isRestoreFlagged(editId))) {
-        flash(
-          "Entwurf geändert. Er war nach der Wiederherstellung schon abgeglichen und ist jetzt wieder " +
-            "vorgemerkt — bestätige den Abgleich vor dem Ausstellen erneut (Einstellungen → Backups).",
-          "warning",
-        );
-      } else {
-        flash(editId ? "Entwurf geändert." : "Entwurf gespeichert.");
-      }
+      // Der Hinweis stand schon vor dem Speichern (RestoreConflictBanner).
+      const done = restoreSaveFlash(restoreConflict, "invoice", !!editId);
+      flash(done.msg, done.kind);
       goto(`/invoices/${detail.invoice.id}`);
     } catch (e) {
       await showServerError(e);
@@ -565,14 +553,8 @@
       ihn beim Speichern und Ausstellen.
     </Banner>
   {/if}
-  {#if editId && restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <span class="kb-docno">{editNumber}</span> war vor der Wiederherstellung schon
-      festgeschrieben. Pass den Entwurf an das versandte Original an und bestätige danach den
-      Abgleich unter <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) — erst dann lässt er sich ausstellen. Jede spätere Änderung verlangt einen
-      neuen Abgleich.
-    </Banner>
+  {#if editId && editNumber}
+    <RestoreConflictBanner conflict={restoreConflict} number={editNumber} doc="invoice" where="editor" />
   {/if}
 
   <form id="invoice-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>

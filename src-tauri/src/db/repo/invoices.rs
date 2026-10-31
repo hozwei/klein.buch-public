@@ -349,6 +349,8 @@ pub async fn get_detail(pool: &SqlitePool, id: &str) -> Result<Option<InvoiceDet
         items,
         buyer,
         payments,
+        // Füllt nur `invoices_get` (ADR 0042 Nr. 16).
+        restore_conflict: None,
     }))
 }
 

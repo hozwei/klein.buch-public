@@ -21,7 +21,6 @@
     saveArchiveFile,
     uploadFile,
     emailLogFor,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
   import type {
     QuoteDetail,
@@ -34,12 +33,12 @@
   import Banner from "#lib/Banner.svelte";
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
-  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
-  import { quoteStatusView } from "../quoteStatus.ts";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
+  import { canEditQuote, quoteStatusView } from "../quoteStatus.ts";
   import {
     isTechnicalError,
     issueReasons,
@@ -95,8 +94,6 @@
       : detail?.quote.isKleinunternehmer !== 0,
   );
   let acceptError = $state("");
-  // Warteliste (8): Entwurf nach einer Wiederherstellung vorgemerkt.
-  let restoreFlagged = $state(false);
 
   function closePanels() {
     showAccept = false;
@@ -119,7 +116,6 @@
         error = "Angebot nicht gefunden.";
       }
       else if (detail.quote.lockedAt) await loadBindings();
-      else await loadRestoreFlag();
       try {
         sendLog = await emailLogFor("quote", id);
       } catch {
@@ -139,18 +135,6 @@
       bindings = await quotesLegalBindings(detail.quote.id);
     } catch {
       // Bindungen sind optional fürs Anzeigen — Fehler hier nicht hochziehen.
-    }
-  }
-
-  // Nur lesen; ein Fehler heißt „nicht vorgemerkt“ (der Server prüft beim Fertigstellen).
-  async function loadRestoreFlag() {
-    restoreFlagged = false;
-    if (!detail || detail.quote.status !== "draft") return;
-    try {
-      const qid = detail.quote.id;
-      restoreFlagged = (await numberingRestoredDraftsList()).some((c) => c.kind === "quote" && c.id === qid);
-    } catch {
-      restoreFlagged = false;
     }
   }
 
@@ -225,6 +209,8 @@
     // U6-005: nach dem Speichern der Firmendaten zurück zu diesem Angebot.
     if (t === "seller") return { href: `/settings/seller?next=/quotes/${id}`, label: "Firmendaten ergänzen" };
     if (t === "buyer") return { href: `/contacts/${contactId}`, label: "Kontakt ergänzen" };
+    // ADR 0042 Nr. 13: Gründe im Entwurf selbst (Positionen, Daten) dort beheben.
+    if (detail && canEditQuote(detail.quote)) return { href: `/quotes/${id}/edit`, label: "Entwurf bearbeiten" };
     return null;
   }
 
@@ -349,6 +335,8 @@
     const secondary: ActionMenuItem[] = [];
     const more: ActionMenuItem[] = [];
     if (!q.lockedAt) {
+      // ADR 0042 Nr. 13: offene Entwürfe lassen sich bearbeiten (wie Rechnungs-Entwürfe).
+      if (canEditQuote(q)) secondary.push({ label: "Bearbeiten", href: `/quotes/${q.id}/edit` });
       // Während der Prüfung nicht gesperrt (Fokus bleibt); check() wartet.
       secondary.push({ label: validating ? "Prüfe …" : "Prüfen", onSelect: runValidation });
     } else {
@@ -461,13 +449,9 @@
     <span class="meta">gültig bis {date(q.validUntil)}</span>
   </p>
 
-  {#if restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <DocNo value={q.quoteNumber} inline /> war vor der Wiederherstellung schon
-      festgeschrieben. Fertigstellen geht erst, wenn du unter
-      <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) bestätigt hast, dass der Entwurf dem versandten Original entspricht.
-    </Banner>
+  {#if canEditQuote(q)}
+    <!-- Warteliste (8), ADR 0042 Nr. 16: aus dem Lesefeld des Entwurfs. -->
+    <RestoreConflictBanner conflict={detail.restoreConflict} number={q.quoteNumber} doc="quote" where="detail" editHref={`/quotes/${q.id}/edit`} />
   {/if}
 
   {#if showAccept}

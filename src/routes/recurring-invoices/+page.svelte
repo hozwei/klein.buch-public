@@ -182,7 +182,7 @@
     if (busyId) return;
     let resumeMode: ResumeMode | undefined;
     if (hasBacklog(s)) {
-      const choice = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+      const choice = await askBacklogChoice("invoice", s, reviewIds.has(s.id));
       if (!choice) return;
       resumeMode = choice;
     }
@@ -257,7 +257,7 @@
   // Rückstand einer aktiven Vorlage (Hinweis „Entscheidung nötig“, W14-026).
   async function resolveBacklog(s: RecurringInvoiceRow) {
     if (busyId) return;
-    const mode = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+    const mode = await askBacklogChoice("invoice", s, reviewIds.has(s.id));
     if (!mode) return;
     busyId = s.id;
     try {

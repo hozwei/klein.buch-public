@@ -491,6 +491,11 @@ export function quotesCreateDraft(args: QuoteCreateDraftArgs): Promise<QuoteDeta
   return invoke<QuoteDetail>("quotes_create_draft", { args });
 }
 
+/** Angebots-Entwurf bearbeiten (ADR 0042 Nr. 13); Nummer und Geschäftsjahr bleiben. */
+export function quotesUpdateDraft(id: string, args: QuoteCreateDraftArgs): Promise<QuoteDetail> {
+  return invoke<QuoteDetail>("quotes_update_draft", { id, args });
+}
+
 export function quotesValidateDraft(id: string): Promise<ValidationIssueDto[]> {
   return invoke<ValidationIssueDto[]>("quotes_validate_draft", { id });
 }
@@ -1384,6 +1389,41 @@ export interface RestoreReviewList {
 
 export function recurringRestoreReviewList(): Promise<RestoreReviewList> {
   return invoke<RestoreReviewList>("recurring_restore_review_list");
+}
+
+/**
+ * Rückstand-Vorschau einer Reihe (ADR 0042 Nr. 16, V1-11): gerechnet wie die
+ * Wahl „nachholen“ bzw. „ab heute fortsetzen“ (Stand heute; der Server prüft
+ * bei der Wahl erneut).
+ */
+export interface BacklogPreview {
+  /** Nächster offener Termin (ISO). */
+  nextDueDate: string;
+  /** Verlangt die Reihe die Wahl? */
+  backlog: boolean;
+  /** Fällige Termine bis heute (innerhalb der Laufzeit). */
+  due: number;
+  /** Die ersten fälligen Termine (ISO), höchstens `cap`. */
+  dates: string[];
+  /** Höchstzahl beim Nachholen. */
+  cap: number;
+  /** Mehr Termine als `cap`: „nachholen“ wird abgelehnt. */
+  exceedsCap: boolean;
+  /** Prüfung nach einer Wiederherstellung offen. */
+  afterRestore: boolean;
+  /** Nächster Termin nach „ab heute fortsetzen“ (ISO). */
+  skipTo: string;
+  /** So viele Termine lässt „ab heute fortsetzen“ aus. */
+  skipped: number;
+  /** „Ab heute fortsetzen“ führt hinter das Laufzeit-Ende. */
+  skipEndsSeries: boolean;
+}
+
+export function recurringBacklogPreview(
+  kind: "template" | "subscription",
+  id: string,
+): Promise<BacklogPreview> {
+  return invoke<BacklogPreview>("recurring_backlog_preview", { kind, id });
 }
 
 export function appInfo(): Promise<AppInfo> {

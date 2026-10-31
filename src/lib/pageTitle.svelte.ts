@@ -67,6 +67,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/quotes": "Angebote",
   "/quotes/new": "Neues Angebot",
   "/quotes/[id]": "Angebot",
+  "/quotes/[id]/edit": "Angebots-Entwurf bearbeiten",
   "/quotes/[id]/send": "Angebot versenden",
   "/quotes/[id]/convert": "Angebot in Rechnung umwandeln",
   "/recurring-invoices": "Abo-Rechnungen",

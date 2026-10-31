@@ -166,7 +166,17 @@ pub async fn invoices_get(
     let InvoicesGetArgs { id } = args;
     let pool = ctx.pool()?;
 
-    invoices::get_detail(&pool, &id).await
+    let Some(mut detail) = invoices::get_detail(&pool, &id).await? else {
+        return Ok(None);
+    };
+    // ADR 0042 Nr. 16 (Warteliste 8): Restore-Vormerkung für den Hinweis vor
+    // dem Speichern — nur offene Entwürfe lassen sich noch ändern.
+    let inv = &detail.invoice;
+    if inv.status == "draft" && inv.locked_at.is_none() && inv.voided_at.is_none() {
+        detail.restore_conflict =
+            crate::backup::after_restore::draft_restore_state(&pool, "invoice", &id).await?;
+    }
+    Ok(Some(detail))
 }
 
 // =============================================================================

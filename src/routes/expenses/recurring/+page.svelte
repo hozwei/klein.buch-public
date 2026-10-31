@@ -126,7 +126,7 @@
     // Server die Wahl „nachholen“ oder „ab heute fortsetzen“ (W14-026).
     let resumeMode: ResumeMode | undefined;
     if (s.active !== 1 && hasBacklog(s)) {
-      const choice = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+      const choice = await askBacklogChoice("expense", s, reviewIds.has(s.id));
       if (!choice) return;
       resumeMode = choice;
     }
@@ -194,7 +194,7 @@
   // Rückstand eines aktiven Auto-Abos (Hinweis „Entscheidung nötig“ bzw.
   // Termin im abgeschlossenen Geschäftsjahr, W14-026/-034).
   async function resolveBacklog(s: RecurringSubscription) {
-    const mode = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+    const mode = await askBacklogChoice("expense", s, reviewIds.has(s.id));
     if (!mode) return;
     busyId = s.id;
     try {

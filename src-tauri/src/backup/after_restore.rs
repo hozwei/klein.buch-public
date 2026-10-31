@@ -581,6 +581,36 @@ pub async fn list_conflicts(pool: &SqlitePool) -> Result<Vec<Conflict>> {
     Ok(out)
 }
 
+/// Stand der Restore-Vormerkung eines Belegs (ADR 0042 Nr. 16, Warteliste 8),
+/// aus derselben Quelle wie [`list_conflicts`] und [`reflag_confirmed_in`]:
+/// `Flagged`, solange der Schlüssel steht; `Confirmed`, wenn die Bestätigung
+/// im Audit steht und nicht wieder vorgemerkt ist — dann merkt das nächste
+/// Speichern den Entwurf neu vor. Sonst `None`.
+pub async fn draft_restore_state(
+    pool: &SqlitePool,
+    kind: &str,
+    id: &str,
+) -> Result<Option<crate::db::models::RestoreConflictState>> {
+    use crate::db::models::RestoreConflictState;
+    if app_settings::get(pool, &conflict_key(kind, id))
+        .await?
+        .is_some()
+    {
+        return Ok(Some(RestoreConflictState::Flagged));
+    }
+    let confirmed: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM audit_log
+          WHERE action = 'numbering.restored_draft_confirmed'
+            AND entity_type = ? AND entity_id = ?
+          LIMIT 1",
+    )
+    .bind(kind)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(confirmed.map(|_| RestoreConflictState::Confirmed))
+}
+
 /// Lauf F8: Merkt einen schon bestätigten Entwurf nach einer Änderung wieder
 /// vor (in der Transaktion der Änderung). Die Bestätigung galt dem Stand, der
 /// dem versandten Original entsprach; danach geänderte Preise oder Empfänger

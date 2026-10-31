@@ -40,6 +40,10 @@ offenen Punkte aus Lauf 2026.11.
   der Leistung). Abo-Rechnungen setzen den tatsächlichen Abrechnungszeitraum, auch bei
   quartalsweiser, halbjährlicher und jährlicher Abrechnung; ein Storno übernimmt den Zeitraum.
   Die Leitweg-ID wird schon am Entwurf (und an der Abo-Vorlage) gespeichert.
+- **Angebots-Entwürfe bearbeiten** (ADR 0042 Nr. 13, 25–27): Ein Angebot, das noch Entwurf ist,
+  lässt sich unter „Bearbeiten“ ändern; Nummer und Geschäftsjahr bleiben. Rechnungs- und
+  Angebots-Editor zeigen einen Restore-Abgleich schon vor dem Speichern. Der Rückstand-Dialog der
+  Abo-Rechnungen und Kosten-Abos nennt Anzahl und Daten der offenen Termine.
 - **Sicherheit:** Die ZIP-Bibliothek ist von 2.4 auf 9.1 gehoben (CVE-2026-115905, kritisch, und
   CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
   Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`

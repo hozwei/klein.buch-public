@@ -82,6 +82,7 @@
     "storno.create": "Storno-Beleg erstellt",
     "payment_account.default_cleared": "Standardkonto bereinigt (Migration)",
     "quote.draft_create": "Angebots-Entwurf angelegt",
+    "quote.draft_updated": "Angebots-Entwurf geändert",
     "quote.issue": "Angebot ausgestellt",
     "quote.sent": "Angebot versendet",
     "quote.accepted": "Angebot angenommen",
