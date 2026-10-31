@@ -1,6 +1,6 @@
 # ADR 0042 — Fachliche Korrekturen 2026.11.1
 
-**Status:** In Arbeit · 2026-10-27 · Lauf 2026.11.1. Migrationen 0033–0035 (Schema 35).
+**Status:** Akzeptiert · 2026-10-31 · Lauf 2026.11.1. Migrationen 0033–0035 (Schema 35).
 Ergänzt ADR 0019, 0021, 0023, 0027, 0033, 0039 und 0041 (Nr. 21, 91, 220, 251); PRD-Revision 11.
 
 ## Kontext

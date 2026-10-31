@@ -174,7 +174,7 @@
           {@const y = a.yearShare}
           <tr>
             <td class="cards-full wrap" data-label="Anschaffung">
-              <DocNo value={a.assetNumber} href={`/assets/${a.assetId}`} inline />{" "}{a.label}
+              <DocNo value={a.assetNumber} href={`/assets/${a.assetId}`} />{" "}{a.label}
               <span class="sub">Gekauft als {originalStatusLabel(a.adjustment.originalKlein)} · Kosten <DocNo value={a.expenseNumber} inline /></span>
               {#if a.hints.length > 0}
                 <ul class="hints">

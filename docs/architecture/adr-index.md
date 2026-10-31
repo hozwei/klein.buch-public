@@ -10,7 +10,7 @@ gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
 **Status-Konvention:** die ADRs 0001–0041 sind **akzeptiert** (Stand 2026-10-31);
-ADR 0042 ist **in Arbeit** bis zum Abschluss von Lauf 2026.11.1;
+ADR 0042 ist **akzeptiert** (Lauf 2026.11.1, 2026-10-31);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -64,7 +64,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 | 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
 | 0041 | UI/UX-Standards (2026.11): Orientierung an WCAG 2.2 AA (keine Konformitätsaussage), Prüf-Harness mit axe-core und Abdeckungsbericht über Mobil, Tablet und Desktop, Design über Rollen-Tokens und Bausteine (PageBar mit Menü „Mehr“, DocNo, ContactSelect, MoneyInput/QuantityInput), Container Queries, deutsche Formate und Betragseingabe, Fehler am Feld, Seitentitel je Route, F1 zum passenden Handbuch-Kapitel, Begriffe der Oberfläche, Lesefelder ohne Migration | UX / Frontend | `design.md`, `../ARCHITECTURE.md` §2g, `modules.md` §14, `data-model.md` §2g |
-| 0042 | Fachliche Korrekturen 2026.11.1 (in Arbeit): Steuerstatus nach § 19 UStG als append-only Historie mit Wirkungsdatum und Grund (Migration 0033; Verzicht bindet fünf Kalenderjahre einschließlich des Wirkungsjahres, Wegfall ohne Bindung, Status je Beleg am Leistungsdatum), Zahlungsbuch mit Gegenbuchung (0034), Leistungszeitraum, Vorausrechnung und Leitweg-ID am Entwurf (0035), Angebots-Entwürfe bearbeiten, Rückstand-Vorschau, DATEV-Stapel nach der Formatbeschreibung (`EXTF_`, Pflichtnummern), Übersicht § 15a UStG; löst ADR 0041 Nr. 21, 91, 220, 251 und ADR 0039 Nr. 135 (6) ab | §19 / GoBD / Export | `paragraph-19.md`, `gobd.md`, `data-model.md` |
+| 0042 | Fachliche Korrekturen 2026.11.1 (akzeptiert): Steuerstatus nach § 19 UStG als append-only Historie mit Wirkungsdatum und Grund (Migration 0033; Verzicht bindet fünf Kalenderjahre einschließlich des Wirkungsjahres, Wegfall ohne Bindung, Status je Beleg am Leistungsdatum), Zahlungsbuch mit Gegenbuchung (0034), Leistungszeitraum, Vorausrechnung und Leitweg-ID am Entwurf (0035), Angebots-Entwürfe bearbeiten, Rückstand-Vorschau, DATEV-Stapel nach der Formatbeschreibung (`EXTF_`, Pflichtnummern), Übersicht § 15a UStG; löst ADR 0041 Nr. 21, 91, 220, 251 und ADR 0039 Nr. 135 (6) ab | §19 / GoBD / Export | `paragraph-19.md`, `gobd.md`, `data-model.md` |
 
 ---
 

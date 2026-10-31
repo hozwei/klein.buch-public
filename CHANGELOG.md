@@ -3,7 +3,7 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
 `JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
-## [2026.11.1] — Fachliche Korrekturen und DATEV-Format, in Arbeit
+## [2026.11.1] — Fachliche Korrekturen, Zahlungsbuch und DATEV-Format, veröffentlicht 2026-10-31
 
 Korrekturen nach 2026.11.0: Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund,
 Leistungszeitraum und Vorausrechnung, Korrektur falsch gebuchter Zahlungen per Gegenbuchung,

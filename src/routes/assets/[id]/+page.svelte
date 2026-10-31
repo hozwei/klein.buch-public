@@ -184,7 +184,7 @@
         <!-- ADR 0042 Nr. 14: Anlagen aus Kosten erscheinen in der Übersicht § 15a. -->
         <div>
           <dt>Vorsteuerberichtigung</dt>
-          <dd><a class="kb-link" href={VAT_ADJUSTMENT_URL}>Übersicht § 15a UStG</a></dd>
+          <dd><a class="kb-link kb-target" href={VAT_ADJUSTMENT_URL}>Übersicht § 15a UStG</a></dd>
         </div>
       {/if}
       {#if a.notes}<div class="span2"><dt>Notiz</dt><dd class="pre">{a.notes}</dd></div>{/if}
