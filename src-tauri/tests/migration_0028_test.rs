@@ -801,6 +801,7 @@ async fn lock_with_pair_cancel_atomically_locks_storno_and_cancels_original() {
         is_kleinunternehmer: None,
         tax_status_date: None,
         totals: None,
+        buyer_reference: None,
     };
     let pair = PairCancel {
         original_id: original,
@@ -881,6 +882,7 @@ async fn lock_with_pair_cancel_rolls_back_storno_lock_when_original_missing() {
         is_kleinunternehmer: None,
         tax_status_date: None,
         totals: None,
+        buyer_reference: None,
     };
     let pair = PairCancel {
         original_id: "00000000-0000-0000-0000-000000000000", // existiert nicht
@@ -944,6 +946,7 @@ async fn lock_without_pair_still_works_for_normal_invoices() {
             is_kleinunternehmer: None,
             tax_status_date: None,
             totals: None,
+            buyer_reference: None,
         },
     )
     .await

@@ -68,8 +68,10 @@ use crate::pdf::{klausel_check, templates, typst_render};
 #[serde(rename_all = "camelCase")]
 pub struct CreateDraftArgs {
     pub contact_id: String,
-    /// Buyer-Reference (BT-10). Default `"N/A"` für B2C; B2G muss
-    /// Leitweg-ID setzen.
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10). Ältere Form; gleichwertig mit
+    /// `input.buyer_reference`, das Vorrang hat (ADR 0042 Nr. 12). Leer oder
+    /// „N/A“ = keine.
+    #[serde(default)]
     pub buyer_reference: Option<String>,
     pub input: InvoiceInput,
 }
@@ -194,6 +196,9 @@ pub async fn invoices_create_draft(
     }
     let mut input = args.input;
     input.cancel_reason = None;
+    if input.buyer_reference.is_none() {
+        input.buyer_reference = args.buyer_reference;
+    }
     create_invoice_draft_from_input(&pool, &args.contact_id, &input, None).await
 }
 
@@ -285,6 +290,8 @@ pub async fn prepare_invoice_draft(
     // P3: Positionen mit Markdown-Body → `description` (XRechnung-BT-154) aus dem
     // Markup als Klartext neu berechnen, damit das XML auch nach Edits stimmt.
     let mut input = input.clone();
+    // ADR 0042 Nr. 12: Leitweg-ID wie gespeichert (leer/„N/A“ = keine).
+    input.buyer_reference = invoice::normalize_buyer_reference(input.buyer_reference.as_deref());
     if input.items.iter().any(item_has_markup) {
         recompute_markup_descriptions(&mut input.items);
     }
@@ -430,6 +437,12 @@ fn check_draft_blockers(
                     | E::ItemAmountOutOfRange(_)
                     | E::TotalOutOfRange
                     | E::Paragraph19VatViolation(_)
+                    // ADR 0042 Nr. 10/12: sonst entstünde ein Entwurf, der sich
+                    // nie ausstellen lässt (und die DB-CHECKs lehnten ab).
+                    | E::ServicePeriodIncomplete
+                    | E::ServicePeriodEndBeforeStart { .. }
+                    | E::ServiceDateAndPeriod
+                    | E::BuyerReferenceInvalid
             )
         })
         .collect();
@@ -475,11 +488,15 @@ pub async fn invoices_update_draft(
 ) -> Result<InvoiceDetail> {
     let InvoicesUpdateDraftArgs { id, args } = args;
     let pool = ctx.pool()?;
+    let mut input = args.input;
+    if input.buyer_reference.is_none() {
+        input.buyer_reference = args.buyer_reference;
+    }
     update_draft_core(
         &pool,
         &id,
         &args.contact_id,
-        args.input,
+        input,
         ctx.clock().today_berlin(),
     )
     .await
@@ -514,6 +531,7 @@ pub async fn update_draft_core(
     }
     let mut input = input;
     input.cancel_reason = None;
+    input.buyer_reference = invoice::normalize_buyer_reference(input.buyer_reference.as_deref());
     if input.items.iter().any(item_has_markup) {
         recompute_markup_descriptions(&mut input.items);
     }
@@ -710,6 +728,9 @@ pub async fn invoices_validate_draft(
 #[serde(rename_all = "camelCase")]
 pub struct InvoicesLockAndIssueArgs {
     pub id: String,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10), optional: überschreibt die am
+    /// Entwurf gespeicherte (ADR 0042 Nr. 12); ohne Wert, leer oder „N/A“ gilt
+    /// die gespeicherte, sonst „N/A“.
     #[serde(default)]
     pub buyer_reference: Option<String>,
 }
@@ -777,6 +798,9 @@ pub struct LockCancelPair<'a> {
 ///
 /// Public, damit Integration-Tests sie ohne Server ausführen
 /// können (Tests bauen Paths direkt aus tempdir + Mock-Sidecar).
+///
+/// `buyer_reference` überschreibt die Leitweg-ID des Entwurfs; leer oder „N/A“
+/// übernimmt die gespeicherte (ADR 0042 Nr. 12).
 pub async fn run_lock_pipeline(
     pool: &SqlitePool,
     paths: &Paths,
@@ -897,7 +921,17 @@ async fn run_lock_pipeline_inner(
         snap
     };
     let buyer_view = effective_buyer.view();
-    let input = detail_to_input(&detail)?;
+    let mut input = detail_to_input(&detail)?;
+    // ADR 0042 Nr. 12: Leitweg-ID bzw. Käuferreferenz (BT-10). Ein übergebener
+    // Wert (Ausstellen-Karte, Storno aus der archivierten E-Rechnung)
+    // überschreibt den des Entwurfs; leer oder „N/A“ heißt „keiner übergeben“.
+    // Der wirksame Wert wird im selben UPDATE wie `locked_at` gespeichert —
+    // nur, wenn er die Regeln der Spalte erfüllt (V3-R02, unten).
+    if let Some(r) = invoice::normalize_buyer_reference(Some(buyer_reference)) {
+        input.buyer_reference = Some(r);
+    }
+    let bt10 = input.buyer_reference.clone();
+    let buyer_reference = bt10.as_deref().unwrap_or("N/A");
     // Storno: Bezug auf die stornierte Rechnung über deren Nummer und Datum
     // (BT-25/BT-26, PDF-Zeile), nicht über die interne ID (Lauf E).
     let original = match detail.invoice.is_storno_for.as_deref() {
@@ -922,8 +956,11 @@ async fn run_lock_pipeline_inner(
     // steuert Prüfung, XML, Klausel-Check und PDF und wird beim Festschreiben am
     // Beleg eingefroren. Das Datum geht mit in den Lock, der den Status in seiner
     // Schreibtransaktion gegen die Historie prüft (V1-R04).
-    let status_day =
-        crate::domain::tax_status::document_date(input.delivery_date, input.invoice_date);
+    let status_day = crate::domain::tax_status::document_date(
+        input.delivery_date,
+        input.service_period_end,
+        input.invoice_date,
+    );
     seller_view.is_kleinunternehmer = match original.as_ref() {
         Some(original) => original.is_kleinunternehmer == 1,
         None => crate::db::repo::tax_status::history(pool)
@@ -938,17 +975,26 @@ async fn run_lock_pipeline_inner(
 
     // 1. Domain-Validation — Hard-Block bei §14/§19-Fehlern. U4 (V1-03): deutscher
     // Vorsatz, Gründe mit „; “ getrennt (die Detailseite zeigt sie als Liste).
-    invoice::validate_for_issue(&input, &seller_view, &buyer_view, today).map_err(|errs| {
-        let what = if original.is_some() {
-            "Der Storno-Beleg"
-        } else {
-            "Die Rechnung"
-        };
-        Error::Domain(format!(
-            "{what} kann nicht ausgestellt werden: {}",
-            issue_reasons(&errs, invoice::message)
-        ))
-    })?;
+    if let Err(mut errs) = invoice::validate_for_issue(&input, &seller_view, &buyer_view, today) {
+        // ADR 0042 Nr. 12 (V3-R02): Der Storno übernimmt BT-10 unverändert aus der
+        // archivierten E-Rechnung des Originals — auch einen Wert von vor V3 ohne
+        // Längen- und Zeichengrenze. Der Storno ist der einzige Korrekturweg
+        // (GoBD), die Grenze gilt deshalb nur für eigene Eingaben.
+        if original.is_some() {
+            errs.retain(|e| !matches!(e, invoice::InvoiceValidationError::BuyerReferenceInvalid));
+        }
+        if !errs.is_empty() {
+            let what = if original.is_some() {
+                "Der Storno-Beleg"
+            } else {
+                "Die Rechnung"
+            };
+            return Err(Error::Domain(format!(
+                "{what} kann nicht ausgestellt werden: {}",
+                issue_reasons(&errs, invoice::message)
+            )));
+        }
+    }
 
     // Konten für Belege: Bankkonten fürs XML (BT-84), alle geflaggten fürs PDF.
     // Inhaber-Name (Einzelunternehmer §14) dient als Kontoinhaber.
@@ -978,12 +1024,13 @@ async fn run_lock_pipeline_inner(
         .filter_map(|a| a.iban.as_deref().map(|iban| (iban, a.bic.as_deref())))
         .collect();
 
-    // Leistungsdatum-Fallback (§14 Abs. 4 Nr. 6 UStG): fehlt das Datum, gilt das
-    // Rechnungsdatum als Leistungszeitpunkt — fürs XML (BT-72) als konkretes Datum,
-    // fürs PDF als Hinweis „entspricht dem Rechnungsdatum". Seit dem Pflichtfeld
-    // (UI) greift das nur noch als Backstop (Alt-Entwürfe/API). Immer aktiv,
-    // keine Einstellung mehr (Manuel 2026-05-23).
-    let service_date_fallback = true;
+    // Leistungsdatum-Fallback (§14 Abs. 4 Nr. 6 UStG): fehlen Datum und Zeitraum,
+    // gilt das Rechnungsdatum als Leistungszeitpunkt — fürs XML (BT-72) als
+    // konkretes Datum, fürs PDF als Hinweis „entspricht dem Rechnungsdatum".
+    // Seit dem Pflichtfeld (UI) greift das nur noch als Backstop (Alt-Entwürfe/
+    // API). Immer aktiv, keine Einstellung mehr (Manuel 2026-05-23). Mit
+    // Leistungszeitraum (BG-14) entfällt BT-72 (ADR 0042 Nr. 10).
+    let service_date_fallback = invoice::service_period(&input).is_none();
     let xml_input = InvoiceInput {
         delivery_date: effective_delivery_date(
             input.delivery_date,
@@ -1042,7 +1089,12 @@ async fn run_lock_pipeline_inner(
     // verbraucht die Dedup der Vorlage nicht.
     let storno_template_fallback =
         preceding.is_some() && !klausel_check::supports_storno(&template_source);
-    if storno_template_fallback {
+    // ADR 0042 Nr. 10: Eine eigene Vorlage ohne Leistungszeitraum zeigte bei
+    // einer Rechnung mit Zeitraum keinen Leistungszeitpunkt — dann ebenso die
+    // eingebaute Vorlage, mit Hinweis nach dem Festschreiben.
+    let period_template_fallback = invoice::service_period(&input).is_some()
+        && !klausel_check::supports_service_period(&template_source);
+    if storno_template_fallback || period_template_fallback {
         let fallback = templates::storno_fallback_template(template_name);
         template_source = fallback.to_string();
     }
@@ -1130,6 +1182,12 @@ async fn run_lock_pipeline_inner(
             tax_amount_cents: issued_totals.tax_amount_cents,
             gross_amount_cents: issued_totals.gross_amount_cents,
         }),
+        // V3-R02: Ein Altwert des Originals außerhalb der Regeln (CHECK 1–200
+        // Zeichen) bleibt nur im XML; die Spalte bleibt leer, Quelle ist das
+        // Archiv (ADR 0041 Nr. 250).
+        buyer_reference: bt10
+            .as_deref()
+            .filter(|r| invoice::buyer_reference_valid(r)),
     };
     let pair_repo = cancel_pair.map(|p| invoices::PairCancel {
         original_id: p.original_id,
@@ -1143,6 +1201,14 @@ async fn run_lock_pipeline_inner(
             detail.invoice.invoice_number
         );
         notify_storno_template_fallback(pool, template_name, &detail.invoice.invoice_number).await;
+    }
+    if period_template_fallback {
+        tracing::warn!(
+            "Vorlage {template_name:?} zeigt keinen Leistungszeitraum — {} mit der eingebauten \
+             Vorlage gerendert",
+            detail.invoice.invoice_number
+        );
+        notify_period_template_fallback(pool, template_name, &detail.invoice.invoice_number).await;
     }
 
     // 9. Audit-Log.
@@ -1407,11 +1473,20 @@ pub async fn invoices_cancel(
     // Originals (Lesen mit Hash-Prüfung, eine Manipulation bricht ab).
     let buyer_reference = original_buyer_reference(pool, &original.invoice).await?;
 
+    // ADR 0042 Nr. 10: Der Storno übernimmt den Leistungszeitraum des Originals.
+    let original_period = match (
+        original.invoice.service_period_start.as_deref(),
+        original.invoice.service_period_end.as_deref(),
+    ) {
+        (Some(s), Some(e)) => Some((parse_date(s)?, parse_date(e)?)),
+        _ => None,
+    };
     // Domain-Storno bauen.
     let original_view = OriginalInvoiceView {
         invoice_number: &original.invoice.invoice_number,
         currency_code: &original.invoice.currency_code,
         pdf_template: &original.invoice.pdf_template,
+        service_period: original_period,
         items: original
             .items
             .iter()
@@ -1831,6 +1906,32 @@ async fn notify_storno_template_fallback(pool: &SqlitePool, template: &str, stor
     }
 }
 
+/// Inbox-Hinweis (ADR 0042 Nr. 10): eine eigene Vorlage ohne Leistungszeitraum;
+/// der Beleg entstand mit der eingebauten Vorlage. Je Vorlage einmal.
+async fn notify_period_template_fallback(pool: &SqlitePool, template: &str, number: &str) {
+    let body = format!(
+        "Die Vorlage „{template}“ zeigt keinen Leistungszeitraum (sie nutzt \
+         `service_period_start` nicht). Der Beleg {number} hat einen Leistungszeitraum und wurde \
+         deshalb mit der eingebauten Vorlage erzeugt, damit der Leistungszeitpunkt auf dem Beleg \
+         steht (§ 14 Abs. 4 UStG). Ergänze die Vorlage um den Leistungszeitraum (siehe Handbuch \
+         „Einstellungen“, Abschnitt „Eigene Vorlagen“), dann nutzen auch diese Belege wieder \
+         Dein Layout."
+    );
+    let dedup = format!("period_template_fallback:{template}");
+    let n = crate::notify::NewNotification {
+        title: "Eigene Vorlage ohne Leistungszeitraum",
+        body: &body,
+        severity: "warning",
+        related_entity_type: Some("invoice"),
+        action_url: Some("/settings/pdf-templates"),
+        dedup_key: Some(&dedup),
+        ..Default::default()
+    };
+    if let Err(e) = crate::notify::emit(pool, n).await {
+        tracing::warn!("Hinweis zur Vorlage ohne Leistungszeitraum nicht angelegt: {e}");
+    }
+}
+
 /// Effektives Leistungsdatum fürs XRechnung-XML (BT-72 / `ActualDeliverySupplyChainEvent`):
 /// liegt kein Datum vor und ist der Fallback aktiv, gilt das Rechnungsdatum als
 /// Leistungszeitpunkt (§14 Abs. 4 Nr. 6 UStG). Reine Funktion — unit-getestet.
@@ -1888,6 +1989,7 @@ pub async fn invoice_tax_status(pool: &SqlitePool, input: &InvoiceInput) -> Resu
         .await?
         .is_klein_at(crate::domain::tax_status::document_date(
             input.delivery_date,
+            input.service_period_end,
             input.invoice_date,
         )))
 }
@@ -2010,6 +2112,16 @@ fn detail_to_input(detail: &InvoiceDetail) -> Result<InvoiceInput> {
         .as_deref()
         .map(parse_date)
         .transpose()?;
+    let service_period_start = invoice
+        .service_period_start
+        .as_deref()
+        .map(parse_date)
+        .transpose()?;
+    let service_period_end = invoice
+        .service_period_end
+        .as_deref()
+        .map(parse_date)
+        .transpose()?;
     let due_date = invoice.due_date.as_deref().map(parse_date).transpose()?;
     let items = detail
         .items
@@ -2032,6 +2144,9 @@ fn detail_to_input(detail: &InvoiceDetail) -> Result<InvoiceInput> {
         direction,
         invoice_date,
         delivery_date,
+        service_period_start,
+        service_period_end,
+        buyer_reference: invoice.buyer_reference.clone(),
         due_date,
         currency_code: invoice.currency_code.clone(),
         items,
@@ -2069,7 +2184,10 @@ fn variant_name(e: &invoice::InvoiceValidationError) -> &'static str {
     match e {
         E::InvoiceDateInFuture { .. } => "InvoiceDateInFuture",
         E::DueDateBeforeInvoiceDate { .. } => "DueDateBeforeInvoiceDate",
-        E::DeliveryDateAfterInvoiceDate { .. } => "DeliveryDateAfterInvoiceDate",
+        E::ServicePeriodIncomplete => "ServicePeriodIncomplete",
+        E::ServicePeriodEndBeforeStart { .. } => "ServicePeriodEndBeforeStart",
+        E::ServiceDateAndPeriod => "ServiceDateAndPeriod",
+        E::BuyerReferenceInvalid => "BuyerReferenceInvalid",
         E::NoItems => "NoItems",
         E::CurrencyEmpty => "CurrencyEmpty",
         E::CurrencyUnsupported(_) => "CurrencyUnsupported",

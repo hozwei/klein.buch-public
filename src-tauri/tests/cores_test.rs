@@ -118,6 +118,9 @@ async fn locked_invoice_with(env: &Env, today: NaiveDate, buyer_reference: &str)
     .unwrap()
     .id;
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),
@@ -468,6 +471,9 @@ async fn storno_drafts_only_complete_through_cancel_and_are_reused() {
         .unwrap()
         .unwrap();
     let storno_like = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),
@@ -593,6 +599,9 @@ async fn no_invoice_draft_or_number_in_a_closed_year() {
         .unwrap();
     let date = NaiveDate::from_ymd_opt(last_year, 12, 20).unwrap();
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: Some(date),

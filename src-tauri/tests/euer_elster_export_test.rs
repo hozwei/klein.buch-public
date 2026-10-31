@@ -155,6 +155,9 @@ async fn mk_locked_invoice(
     is_storno_for: Option<String>,
 ) -> String {
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: None,

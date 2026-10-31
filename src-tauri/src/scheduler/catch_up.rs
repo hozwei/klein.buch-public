@@ -28,8 +28,8 @@
 //!   kann vor dem Ausfall schon abgerechnet worden sein).
 //!
 //! Belegdatum-Regeln bleiben unverändert (GoBD/§14 UStG): Abo-Rechnungen tragen
-//! das Erstellungsdatum, der Leistungszeitraum steht im Leistungsdatum; Abo-Kosten
-//! tragen den Stichtag als Belegdatum.
+//! das Erstellungsdatum, der Abrechnungszeitraum ist ihr Leistungszeitraum (ADR
+//! 0042 Nr. 10); Abo-Kosten tragen den Stichtag als Belegdatum.
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};

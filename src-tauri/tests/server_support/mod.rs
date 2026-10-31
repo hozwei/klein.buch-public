@@ -563,6 +563,9 @@ pub async fn draft_invoice(srv: &TestServer) -> String {
     .id;
     let today = klein_buch_lib::clock::today_berlin();
     let input = klein_buch_lib::domain::invoice::InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: klein_buch_lib::domain::invoice::InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),

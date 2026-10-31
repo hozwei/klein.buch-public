@@ -97,8 +97,8 @@ pub async fn recurring_invoices_create(
             input.next_due_date.format("%d.%m.%Y")
         )));
     }
-    // ADR 0042 Nr. 3: Status am ersten Termin (Leistungsdatum der ersten Rechnung).
-    check_items_no_vat(&pool, &input.items, input.next_due_date).await?;
+    // ADR 0042 Nr. 3/10: Status am Ende des ersten Abrechnungszeitraums.
+    check_items_no_vat(&pool, &input.items, first_status_day(&input)).await?;
     let detail = recurring_invoice::create(&pool, &input).await?;
     audit_log::append(
         &pool,
@@ -128,7 +128,7 @@ pub async fn recurring_invoices_update(
 
     validate(&input)?;
     crate::commands::packages::enforce_package_provenance(&pool, &mut input.items).await?;
-    check_items_no_vat(&pool, &input.items, input.next_due_date).await?;
+    check_items_no_vat(&pool, &input.items, first_status_day(&input)).await?;
     // W14-031: nie gleichzeitig mit einem Lauf auf derselben Vorlage.
     let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
     let detail = recurring_invoice::update(&pool, &id, &input).await?;
@@ -313,6 +313,16 @@ pub async fn recurring_invoices_run_due_check(
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/// §19-Status-Tag der ersten Rechnung einer Vorlage (ADR 0042 Nr. 3/10): Ende
+/// des ersten Abrechnungszeitraums.
+fn first_status_day(input: &RecurringInvoiceInput) -> chrono::NaiveDate {
+    crate::domain::recurring::status_day_for(
+        &input.frequency,
+        input.day_of_period,
+        input.next_due_date,
+    )
+}
 
 fn validate(input: &RecurringInvoiceInput) -> Result<()> {
     if let Err(errs) = domain::validate_recurring_invoice(input) {

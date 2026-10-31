@@ -6,6 +6,7 @@
   import { invoicesGet, invoicesCancel } from "#lib/api.ts";
   import type { InvoiceDetail } from "#lib/types.ts";
   import { euro, date } from "#lib/format.ts";
+  import { formatServicePeriod, serviceSummary } from "#lib/serviceDate.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
@@ -40,6 +41,12 @@
   // Nach dem Storno lässt sich keine Zahlung mehr stornieren (die Erstattung
   // beruht auf den gebuchten Zahlungen): Hinweis, solange es Zahlungen gibt.
   let hasPayments = $derived(effectivePayments(detail?.payments ?? []).length > 0);
+  // ADR 0042 Nr. 10: Der Storno-Beleg übernimmt den Leistungszeitraum des Originals.
+  let originalPeriod = $derived(
+    detail?.invoice.servicePeriodStart && detail.invoice.servicePeriodEnd
+      ? formatServicePeriod(detail.invoice.servicePeriodStart, detail.invoice.servicePeriodEnd)
+      : "",
+  );
 
   async function load() {
     loading = true;
@@ -147,6 +154,11 @@
       <dl>
         <dt>Nummer</dt><dd><DocNo value={inv.invoiceNumber} /></dd>
         <dt>Datum</dt><dd>{date(inv.invoiceDate)}</dd>
+        <!-- ADR 0042 Nr. 10/12: Leistung und Leitweg-ID des Originals. Vor Migration 0035
+             ausgestellte Rechnungen haben keine Spalte; der Storno liest BT-10 aus dem
+             Archiv (ADR 0041 Nr. 250), der Text unten sagt es deshalb neutral (V3-R05). -->
+        <dt>{serviceSummary(inv).label}</dt><dd>{serviceSummary(inv).text}</dd>
+        {#if inv.buyerReference}<dt>Leitweg-ID</dt><dd>{inv.buyerReference}</dd>{/if}
         <dt>Brutto</dt><dd class="kb-num-l">{euro(inv.grossAmountCents)}</dd>
         <dt>Empfänger</dt><dd>{detail.buyer?.name ?? "—"}</dd>
       </dl>
@@ -159,8 +171,13 @@
         negativer Betrag, er gleicht die Original-Rechnung aus. Die Original-Rechnung wird
         <strong>nicht gelöscht</strong> — sie bleibt erhalten und gilt ab jetzt als storniert. So
         verlangt es das Gesetz. Das Stornieren lässt sich nicht rückgängig machen; schick den
-        Storno-Beleg danach an den Kunden. Hat die Rechnung eine Leitweg-ID (Rechnung an eine
-        Behörde), trägt der Storno-Beleg dieselbe.
+        Storno-Beleg danach an den Kunden. Trägt die E-Rechnung des Originals eine Leitweg-ID
+        (Rechnung an eine Behörde), übernimmt der Storno-Beleg sie von dort.
+        {#if originalPeriod}
+          Er übernimmt auch den Leistungszeitraum der Rechnung ({originalPeriod}).
+        {:else}
+          Als Leistungsdatum trägt er das Storno-Datum.
+        {/if}
       </p>
       {#if hasPayments}
         <!-- ADR 0042 Nr. 8: Nach dem Storno lässt sich keine Zahlung mehr stornieren. -->

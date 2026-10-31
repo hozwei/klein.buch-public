@@ -261,6 +261,16 @@ Gesperrte Bedienelemente (`opacity: .5`) sind nach 1.4.3 ausgenommen; ihr Grund 
 - **Kontaktauswahl** `ContactSelect`: natives Auswahlfeld, ab 8 Kontakten mit Suchfeld darüber
   (Name oder Ort, Umlaute egal, Trefferzahl wird angesagt; Enter übernimmt einen einzigen Treffer).
   Deutsche Sortierung. Der gewählte Kontakt bleibt sichtbar, auch wenn die Suche ihn ausblendet.
+- **Leistungszeitpunkt** `ServiceDateFields` (ADR 0042 Nr. 10/11): Radiogruppe (`fieldset`/`legend`
+  „Leistung“) mit den Optionen „Datum“ und „Zeitraum (von–bis)“ — nur das Datumsfeld heißt
+  „Leistungsdatum“ (eindeutiger Name) —, darunter das Datum bzw.
+  „Beginn“/„Ende“; Meldungen am Feld aus `serviceDateErrors()` (`lib/serviceDate.ts`), kein `max`
+  am Datum. Liegt die Leistung nach dem Rechnungsdatum, ersetzt der Hinweis „Rechnung vor der
+  Leistung …“ (Info-Farbe, kein Fehler) den Feldhinweis. Rechnungs-Editor und Angebotsumwandlung.
+- **Leitweg-ID** `BuyerReferenceField` (ADR 0042 Nr. 12): „Leitweg-ID (optional)“ mit Formathilfe
+  (Aufbau, Beispiel); Länge und Steuerzeichen als Fehler am Feld (`buyerReferenceError()`), ein
+  abweichender Aufbau nur als Hinweis (BT-10 darf eine andere Käuferreferenz sein). Am Entwurf, in
+  der Angebotsumwandlung, an der Abo-Vorlage und vorbelegt in der Karte „Ausstellen“.
 - Autofill nach Plan §4.2 (eigene Daten mit Tokens, Daten Dritter und IBAN/BIC/USt-IdNr. `off`).
 
 ### 4.8 Hilfsklassen (global, `tokens.css`)

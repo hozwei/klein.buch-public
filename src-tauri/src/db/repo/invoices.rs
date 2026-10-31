@@ -144,8 +144,9 @@ pub async fn create_draft_in(
             status, notes, payment_note, is_storno_for, cancel_reason,
             buyer_name, buyer_street, buyer_postal_code, buyer_city,
             buyer_country_code, buyer_vat_id, buyer_email,
-            derived_from_quote_id
-         ) VALUES (?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?,  ?, ?, ?,  ?, ?, ?,  'draft', ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?,  ?)",
+            derived_from_quote_id,
+            service_period_start, service_period_end, buyer_reference
+         ) VALUES (?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?,  ?, ?, ?,  ?, ?, ?,  'draft', ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?,  ?,  ?, ?, ?)",
     )
     .bind(&id)
     .bind(invoice_number)
@@ -179,6 +180,9 @@ pub async fn create_draft_in(
     .bind(buyer.vat_id)
     .bind(buyer.email)
     .bind(payload.derived_from_quote_id.as_deref())
+    .bind(payload.input.service_period_start.map(|d| d.to_string()))
+    .bind(payload.input.service_period_end.map(|d| d.to_string()))
+    .bind(payload.input.buyer_reference.as_deref())
     .execute(&mut *conn)
     .await?;
 
@@ -255,6 +259,7 @@ pub async fn update_draft_in(
             notes = ?, payment_note = ?,
             buyer_name = ?, buyer_street = ?, buyer_postal_code = ?, buyer_city = ?,
             buyer_country_code = ?, buyer_vat_id = ?, buyer_email = ?,
+            service_period_start = ?, service_period_end = ?, buyer_reference = ?,
             updated_at = datetime('now','utc')
          WHERE id = ? AND status = 'draft' AND locked_at IS NULL AND voided_at IS NULL
            AND is_storno_for IS NULL",
@@ -284,6 +289,9 @@ pub async fn update_draft_in(
     .bind(update.buyer.country_code)
     .bind(update.buyer.vat_id)
     .bind(update.buyer.email)
+    .bind(input.service_period_start.map(|d| d.to_string()))
+    .bind(input.service_period_end.map(|d| d.to_string()))
+    .bind(input.buyer_reference.as_deref())
     .bind(id)
     .execute(&mut *conn)
     .await?;
@@ -447,6 +455,10 @@ pub struct LockUpdate<'a> {
     /// archivierten Beleg entspricht (F5-fix: Entwürfe mit älterer Summenlogik
     /// oder aus älteren Backups). `None` behält die gespeicherten Summen.
     pub totals: Option<LockTotals>,
+    /// Wirksame Leitweg-ID bzw. Käuferreferenz (BT-10) des ausgestellten Belegs
+    /// (ADR 0042 Nr. 12): im selben UPDATE wie `locked_at` gesetzt, danach
+    /// sperrt sie `trg_invoices_immutable`. `None` behält den gespeicherten Wert.
+    pub buyer_reference: Option<&'a str>,
 }
 
 /// Summen eines Belegs zum Festschreiben (Integer-Cent).
@@ -538,6 +550,7 @@ pub async fn lock_with_pair_cancel(
             net_amount_cents = COALESCE(?, net_amount_cents),
             tax_amount_cents = COALESCE(?, tax_amount_cents),
             gross_amount_cents = COALESCE(?, gross_amount_cents),
+            buyer_reference = COALESCE(?, buyer_reference),
             updated_at = datetime('now','utc')
          WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL",
     )
@@ -549,6 +562,7 @@ pub async fn lock_with_pair_cancel(
     .bind(update.totals.map(|t| t.net_amount_cents))
     .bind(update.totals.map(|t| t.tax_amount_cents))
     .bind(update.totals.map(|t| t.gross_amount_cents))
+    .bind(update.buyer_reference)
     .bind(id)
     .execute(&mut *tx)
     .await?;
@@ -716,7 +730,10 @@ pub async fn refresh_storno_draft(
     let date = storno_date.to_string();
     let res = sqlx::query(
         "UPDATE invoices
-            SET invoice_date = ?, delivery_date = ?, cancel_reason = ?, notes = ?,
+            SET invoice_date = ?,
+                -- ADR 0042 Nr. 10: mit Zeitraum (vom Original) kein Leistungsdatum
+                delivery_date = CASE WHEN service_period_end IS NULL THEN ? END,
+                cancel_reason = ?, notes = ?,
                 updated_at = datetime('now','utc')
           WHERE id = ? AND locked_at IS NULL AND voided_at IS NULL
             AND is_storno_for IS NOT NULL",

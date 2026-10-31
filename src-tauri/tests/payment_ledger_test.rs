@@ -367,8 +367,12 @@ async fn migration_0034_moves_history_and_legacy_into_the_ledger() {
         .expect("übernehmbar");
 
     MIGRATOR.run(&pool).await.unwrap();
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 34);
-    assert_eq!(schema_version(&pool).await, "34");
+    // Seit 0035 (ADR 0042 Nr. 10–12) steht das Schema höher; 0034 ist darin enthalten.
+    const { assert!(EXPECTED_SCHEMA_VERSION >= 34) };
+    assert_eq!(
+        schema_version(&pool).await,
+        EXPECTED_SCHEMA_VERSION.to_string()
+    );
 
     let rows: Vec<(
         String,

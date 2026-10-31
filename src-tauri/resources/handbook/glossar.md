@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, leistungszeitraum, vorausrechnung, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren]
 ---
 
 # Glossar
@@ -349,21 +349,39 @@ direkt; er meldet sich nur, wenn etwas nicht passt.
 
 ## Leistungsdatum
 
-Der Zeitpunkt oder Zeitraum, an dem Du die Leistung tatsächlich
-erbracht hast. Pflichtangabe auf jeder Rechnung. Wenn Du die
-Leistung am gleichen Tag erbringst und abrechnest, sind
-Leistungs- und Belegdatum gleich; Klein.Buch belegt das Feld deshalb
-mit dem Rechnungsdatum vor, bis Du es änderst. Nach dem Leistungsdatum
-richtet sich auch der Steuerstatus der Rechnung (siehe "Steuerstatus"). Bei Monats-Arbeiten
-(zum Beispiel "Beratung im April 2026") ist es ein Zeitraum; den
-nennst Du in der Beschreibung der Position.
+Der Zeitpunkt, an dem Du die Leistung erbringst. Pflichtangabe auf
+der Rechnung (§14 UStG). Wenn Du die Leistung am gleichen Tag
+erbringst und abrechnest, sind Leistungs- und Belegdatum gleich;
+Klein.Buch belegt das Feld deshalb mit dem Rechnungsdatum vor, bis Du
+es änderst. Bei laufenden Arbeiten gibst Du statt dessen einen
+Leistungszeitraum an (siehe dort). Liegt das Datum nach dem
+Rechnungsdatum, ist es eine Vorausrechnung (siehe dort). Nach dem
+Leistungsdatum, bei einem Zeitraum nach dessen Ende, richtet sich
+auch der Steuerstatus der Rechnung (siehe "Steuerstatus").
+
+## Leistungszeitraum
+
+Die Zeitspanne, in der Du eine Leistung erbringst, mit Beginn und
+Ende (zum Beispiel "Beratung vom 01.04.2026 bis 30.04.2026"). Du
+wählst im Rechnungs-Formular unter "Leistung" entweder "Datum" oder
+"Zeitraum (von–bis)", nie beides. Das Ende darf nicht vor dem Beginn
+liegen; für einen ganzen Kalendermonat genügt der Erste bis Letzte
+des Monats (§ 31 Abs. 4 UStDV). Auf dem PDF steht "Leistungszeitraum:
+TT.MM.JJJJ – TT.MM.JJJJ", in der E-Rechnung der Rechnungszeitraum
+(BG-14). Abo-Rechnungen tragen den Abrechnungszeitraum automatisch,
+ein Storno-Beleg den Zeitraum der Original-Rechnung. Nach dem
+Ausstellen ist er unveränderlich.
 
 ## Leitweg-ID
 
 Die Kennung, mit der eine Behörde E-Rechnungen an die richtige
 Stelle leitet. Nur Rechnungen an öffentliche Auftraggeber brauchen
-sie. Du trägst sie beim Ausstellen in der Karte "Ausstellen" ein;
-bei allen anderen Kunden bleibt das Feld leer.
+sie. Sie besteht aus Grobadressierung, optional Feinadressierung und
+einer zweistelligen Prüfziffer, durch Bindestriche getrennt (zum
+Beispiel 04011000-12345-67). Du trägst sie im Entwurf ein (Feld
+"Leitweg-ID (optional)"), der Entwurf speichert sie, beim Ausstellen
+kommt sie als Käuferreferenz in die E-Rechnung; danach ist sie
+unveränderlich. Bei allen anderen Kunden bleibt das Feld leer.
 
 ## Menü "Mehr"
 
@@ -547,7 +565,8 @@ Verzicht auf §19, Wegfall durch eine Umsatzgrenze, Rückkehr). Ohne
 Eintrag gilt die Kleinunternehmer-Regelung. Einträge werden nie
 gelöscht oder geändert; ein irrtümlicher Eintrag wird mit Grund
 widerrufen. Jeder Beleg zählt mit dem Status seines Datums
-(Rechnungen: Leistungsdatum, Kosten: Belegdatum), beim Festschreiben
+(Rechnungen: Leistungsdatum bzw. Ende des Leistungszeitraums, Kosten:
+Belegdatum), beim Festschreiben
 bleibt der Status einer Rechnung unverändert. Mehr im Kapitel
 "Kleinunternehmer-Regelung".
 
@@ -599,6 +618,17 @@ Du trägst ihn im Abschnitt "Steuerstatus" mit "Statuswechsel
 eintragen …" ein; der Dialog nennt das Ende der Bindung, bevor Du
 bestätigst. Ein Wegfall durch eine Umsatzgrenze ist kein Verzicht und
 bindet nicht.
+
+## Vorausrechnung
+
+Eine Rechnung, die Du stellst, bevor Du die Leistung erbringst: Das
+Leistungsdatum oder das Ende des Leistungszeitraums liegt nach dem
+Rechnungsdatum. Das ist erlaubt (§14 Abs. 4 Satz 1 Nr. 6 UStG); Du
+gibst den voraussichtlichen Leistungszeitpunkt an. Klein.Buch zeigt
+dann am Feld den Hinweis "Rechnung vor der Leistung", speichert und
+stellt die Rechnung aber ganz normal aus. Das Rechnungsdatum selbst
+darf nicht in der Zukunft liegen. Für den Steuerstatus zählt der
+angegebene Leistungszeitpunkt.
 
 ## XRechnung
 

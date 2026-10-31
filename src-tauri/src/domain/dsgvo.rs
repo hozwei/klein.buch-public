@@ -275,6 +275,11 @@ pub struct InvoiceEntry {
     pub fiscal_year: i64,
     pub invoice_date: String,
     pub delivery_date: Option<String>,
+    /// Leistungszeitraum und Leitweg-ID bzw. Käuferreferenz (ADR 0042
+    /// Nr. 10/12); eine Käuferreferenz kann Personenbezug tragen.
+    pub service_period_start: Option<String>,
+    pub service_period_end: Option<String>,
+    pub buyer_reference: Option<String>,
     pub due_date: Option<String>,
     /// Status wie in der Datenbank; ein verworfener Entwurf steht als
     /// `voided` (Lauf F2c), nicht als `draft`.
@@ -376,6 +381,8 @@ pub struct RecurringInvoiceEntry {
     pub active: bool,
     pub last_executed_at: Option<String>,
     pub created_at: String,
+    /// Leitweg-ID bzw. Käuferreferenz der Vorlage (ADR 0042 Nr. 12).
+    pub buyer_reference: Option<String>,
     pub items: Vec<ItemEntry>,
 }
 
@@ -541,6 +548,9 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 fiscal_year: inv.fiscal_year,
                 invoice_date: inv.invoice_date.clone(),
                 delivery_date: inv.delivery_date.clone(),
+                service_period_start: inv.service_period_start.clone(),
+                service_period_end: inv.service_period_end.clone(),
+                buyer_reference: inv.buyer_reference.clone(),
                 due_date: inv.due_date.clone(),
                 status: if inv.voided_at.is_some() {
                     VOIDED_STATUS.to_string()
@@ -644,6 +654,7 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 active: flag(t.active),
                 last_executed_at: t.last_executed_at.clone(),
                 created_at: t.created_at.clone(),
+                buyer_reference: t.buyer_reference.clone(),
                 items: rt
                     .items
                     .iter()
@@ -836,6 +847,9 @@ mod tests {
             paid_to_account_id: None,
             voided_at: None,
             void_reason: None,
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
         }
     }
 

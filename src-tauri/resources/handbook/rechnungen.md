@@ -90,11 +90,15 @@ stornierst sie.
 
 ## Ausstellen (Festschreiben)
 
-In der Karte "Ausstellen" steht über dem Knopf das Feld "Leitweg-ID
-(optional)". Die Leitweg-ID ist die Kennung, unter der eine Behörde
-E-Rechnungen entgegennimmt; Klein.Buch schreibt sie als
-Käuferreferenz in die E-Rechnung. Ist Dein Auftraggeber keine
-Behörde, lässt Du das Feld leer.
+Die Leitweg-ID ist die Kennung, unter der eine Behörde E-Rechnungen
+entgegennimmt; Klein.Buch schreibt sie als Käuferreferenz in die
+E-Rechnung. Du trägst sie im Entwurf ein (Feld "Leitweg-ID
+(optional)" in der Karte "Allgemein"), der Entwurf speichert sie. In
+der Karte "Ausstellen" steht sie vorbelegt; ein Wert, den Du dort
+änderst, ersetzt den gespeicherten. Ein leeres Feld dort lässt die
+gespeicherte gelten; entfernen lässt sie sich über "Entwurf
+bearbeiten". Ist Dein Auftraggeber keine Behörde, lässt Du das Feld
+leer.
 
 Wenn die Rechnung fertig ist, klick auf **"Rechnung ausstellen"**
 (oben auf der Seite oder am Ende der Karte "Ausstellen"). Klein.Buch

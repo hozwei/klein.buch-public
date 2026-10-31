@@ -20,6 +20,9 @@ pub struct OriginalInvoiceView<'a> {
     pub invoice_number: &'a str,
     pub currency_code: &'a str,
     pub pdf_template: &'a str,
+    /// Leistungszeitraum des Originals (Beginn, Ende), falls gesetzt — der
+    /// Storno übernimmt ihn (ADR 0042 Nr. 10).
+    pub service_period: Option<(NaiveDate, NaiveDate)>,
     pub items: Vec<OriginalItemView<'a>>,
 }
 
@@ -90,8 +93,15 @@ pub fn build_storno_input<'a>(
         invoice_date: storno_date,
         // Leistungsdatum entspricht dem Storno-Datum — wir machen die
         // Stornierung "heute", die Rück-Leistung ist nicht das Original-
-        // Leistungsdatum (Cash-Basis).
-        delivery_date: Some(storno_date),
+        // Leistungsdatum (Cash-Basis). Trägt das Original einen
+        // Leistungszeitraum, übernimmt der Storno ihn statt eines Datums
+        // (ADR 0042 Nr. 10: BG-14 wie im Original, kein BT-72).
+        delivery_date: original.service_period.is_none().then_some(storno_date),
+        service_period_start: original.service_period.map(|(s, _)| s),
+        service_period_end: original.service_period.map(|(_, e)| e),
+        // BT-10 liest der Storno aus der archivierten E-Rechnung des
+        // Originals (ADR 0041 Nr. 250); das Festschreiben setzt ihn.
+        buyer_reference: None,
         due_date: None, // Storno hat keine Fälligkeit (Gutschrift)
         currency_code: original.currency_code.to_string(),
         items,
@@ -114,6 +124,7 @@ mod tests {
             invoice_number: "RE-2026-0001",
             currency_code: "EUR",
             pdf_template: "default",
+            service_period: None,
             items: vec![
                 OriginalItemView {
                     position: 1,
@@ -243,6 +254,7 @@ mod tests {
             invoice_number: "RE-2026-0002",
             currency_code: "EUR",
             pdf_template: "default",
+            service_period: None,
             items,
         };
         let original_items: Vec<InvoiceItemInput> = original
@@ -289,6 +301,22 @@ mod tests {
         assert!(storno.items[0]
             .description
             .starts_with("Storno zu RE-2026-0001 Pos. 1:"));
+    }
+
+    #[test]
+    fn storno_takes_the_service_period_of_the_original() {
+        // ADR 0042 Nr. 10: Zeitraum vom Original, kein Leistungsdatum (BT-72).
+        let d = |m, t| NaiveDate::from_ymd_opt(2026, m, t).unwrap();
+        let mut orig = original();
+        orig.service_period = Some((d(4, 1), d(6, 30)));
+        let storno = build_storno_input(&orig, "uuid".into(), d(7, 2), None);
+        assert_eq!(storno.service_period_start, Some(d(4, 1)));
+        assert_eq!(storno.service_period_end, Some(d(6, 30)));
+        assert_eq!(storno.delivery_date, None);
+        // ohne Zeitraum wie bisher: Leistungsdatum = Storno-Datum
+        let plain = build_storno_input(&original(), "uuid".into(), d(7, 2), None);
+        assert_eq!(plain.delivery_date, Some(d(7, 2)));
+        assert_eq!(plain.service_period_start, None);
     }
 
     #[test]

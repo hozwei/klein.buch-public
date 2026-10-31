@@ -24,7 +24,7 @@
     RecurringInvoiceMode,
   } from "#lib/types.ts";
   import { FREQUENCIES, unitCodeError, unitLabel, unitOptions } from "#lib/labels.ts";
-  import { euro, percent } from "#lib/format.ts";
+  import { date, euro, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { applyTaxRules, documentTotals, REGEL_TAX_CODES, roundHalfAwayFromZero } from "#lib/tax.ts";
   import Banner from "#lib/Banner.svelte";
@@ -40,6 +40,14 @@
   import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
   import { relevantTaxDate } from "#lib/taxStatus.ts";
   import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import {
+    billingPeriod,
+    buyerReferenceError,
+    formatServicePeriod,
+    normalizeBuyerReference,
+    servicePeriodLabel,
+  } from "#lib/serviceDate.ts";
 
   // Wie in invoices/new: Form-Position = InvoiceItemInput + Markup/Titel als
   // String (für bind:value) + transienter Paket-Name fürs Badge. Menge, Preis
@@ -95,6 +103,8 @@
   let autoMode = $state<RecurringInvoiceMode>("draft");
   let servicePeriodNote = $state(true);
   let pdfTemplate = $state("default");
+  // ADR 0042 Nr. 12: Leitweg-ID für jede erzeugte Rechnung.
+  let buyerReference = $state("");
 
   let items = $state<FormItem[]>([emptyItem(1)]);
 
@@ -113,11 +123,15 @@
     };
   }
 
+  // ADR 0042 Nr. 10: Jede Abo-Rechnung trägt den Abrechnungszeitraum ihres
+  // Termins (Termin bis Tag vor dem folgenden Termin, domain::recurring).
+  let nextPeriod = $derived(billingPeriod(frequency, dayOfPeriod, nextDueDate));
+
   // §19-Hardline: bei Kleinunternehmer USt-Felder sperren + auf E/0 zwingen.
-  // ADR 0042 Nr. 3: Status am nächsten Termin (Leistungsdatum der nächsten
-  // Rechnung), nicht der von heute. Der Server prüft beim Speichern denselben
-  // Termin und im Lauf jeden Termin einzeln.
-  let taxDate = $derived(relevantTaxDate(nextDueDate, null, todayBerlin()));
+  // ADR 0042 Nr. 3/10: Status am Ende des nächsten Abrechnungszeitraums, nicht
+  // der von heute (wie status_day_for). Der Server prüft beim Speichern denselben
+  // Tag und im Lauf jeden Termin einzeln.
+  let taxDate = $derived(relevantTaxDate(nextPeriod?.end, nextDueDate, todayBerlin()));
   const taxAt = taxStatusAtDate(() => taxDate);
   let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
   let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
@@ -136,6 +150,7 @@
   let errEndDate = $derived(
     endDate && endDate < nextDueDate ? "Das Laufzeit-Ende liegt vor der nächsten Fälligkeit." : "",
   );
+  let errBuyerReference = $derived(buyerReferenceError(buyerReference));
   function itemInvalid(it: FormItem): boolean {
     return (
       labelMissing(it) ||
@@ -184,6 +199,7 @@
           paymentTermsDays = t.paymentTermsDays;
           autoMode = (t.autoMode as RecurringInvoiceMode) ?? "draft";
           servicePeriodNote = t.servicePeriodNote === 1;
+          buyerReference = t.buyerReference ?? "";
           pdfTemplate = t.pdfTemplate || "default";
           items = d.items.map((it, idx) => ({
             position: idx + 1,
@@ -286,7 +302,7 @@
     const dayOk = dayRef?.validate() ?? true;
     const termsOk = termsRef?.validate() ?? true;
     if (
-      errLabel || errContact || errEndDate || !dayOk || !termsOk ||
+      errLabel || errContact || errEndDate || errBuyerReference || !dayOk || !termsOk ||
       dayOfPeriod == null || dayOfPeriod < 1 || paymentTermsDays == null ||
       items.some(itemInvalid)
     ) {
@@ -315,6 +331,7 @@
       pdfTemplate: pdfTemplate || "default",
       servicePeriodNote,
       notes: null,
+      buyerReference: normalizeBuyerReference(buyerReference),
       items: items.map(toInput),
     };
 
@@ -362,7 +379,7 @@
   </Banner>
 {:else}
   <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
-    dateLabel={editId ? "nächsten Termin" : "ersten Termin"} noun="auf den erzeugten Rechnungen" />
+    dateLabel={editId ? "Ende des nächsten Abrechnungszeitraums" : "Ende des ersten Abrechnungszeitraums"} noun="auf den erzeugten Rechnungen" />
 
   <form id="ri-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
     <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
@@ -456,6 +473,9 @@
           class="ri-field"
           showErrors={submitted}
         />
+        <!-- ADR 0042 Nr. 12: Leitweg-ID der Vorlage, auf jeder erzeugten Rechnung. -->
+        <BuyerReferenceField bind:value={buyerReference} id="ri-buyer-ref" showErrors={submitted}
+          note="Gilt für jede Rechnung aus dieser Abo-Vorlage." class="span2" />
       </div>
     </section>
 
@@ -683,14 +703,23 @@
     </fieldset>
 
     <section class="card">
+      <!-- ADR 0042 Nr. 10: Den Abrechnungszeitraum (BG-14) trägt jede Abo-Rechnung; der
+           Schalter steuert nur den zusätzlichen Klartext in Position 1. -->
       <Toggle
         bind:checked={servicePeriodNote}
-        label={"Leistungszeitraum automatisch auf die Rechnung schreiben (z.\u00a0B. „Leistungszeitraum: Mai 2026“)"}
+        label={`Leistungszeitraum zusätzlich in Position 1 nennen (z.\u00a0B. „Leistungszeitraum: ${nextPeriod ? servicePeriodLabel(nextPeriod.start, nextPeriod.end) : "Mai 2026"}“)`}
       />
       <p class="hint">
-        Belegdatum jeder erzeugten Rechnung ist der Erstellungstag (rechtlich vorgegeben);
-        der Leistungszeitraum steht separat. Pakete und Anfahrt fügst du oben wie bei einer
-        normalen Rechnung hinzu.
+        {#if nextPeriod}
+          Die Rechnung zum Termin {date(nextPeriod.start)} gilt für den Leistungszeitraum
+          {formatServicePeriod(nextPeriod.start, nextPeriod.end)} — bis zum Tag vor dem folgenden
+          Termin. Er steht auf jeder Rechnung und in der E-Rechnung, auch ohne den Schalter.
+        {:else}
+          Jede Rechnung trägt den Leistungszeitraum ihres Termins — bis zum Tag vor dem folgenden
+          Termin. Er steht auf der Rechnung und in der E-Rechnung, auch ohne den Schalter.
+        {/if}
+        Belegdatum jeder erzeugten Rechnung ist der Erstellungstag (rechtlich vorgegeben).
+        Pakete und Anfahrt fügst du oben wie bei einer normalen Rechnung hinzu.
       </p>
     </section>
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->

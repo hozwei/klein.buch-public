@@ -145,6 +145,18 @@ nennt ihre Fundstelle. Festgeschriebene Belege bleiben unverändert (GoBD-Hardli
 21. **Paket-Revisionen** behalten den Status von heute (Katalogpreis); beim Einfügen in einen Beleg
     gilt der Status am Belegdatum.
 
+### Umsetzung V3 (Ergänzungen zu Nr. 10–12)
+
+22. **Abo-Vorlagen** tragen keinen eigenen Zeitraum: Jede Abo-Rechnung erhält den Abrechnungszeitraum
+    vom Fälligkeitstag bis zum Tag vor der nächsten Fälligkeit (lückenlos auch am Monatsende);
+    der Klartext in Position 1 bleibt („Juni 2026“ bzw. „01.04.2026 – 30.06.2026“). Status-Tag für
+    § 19 ist das Ende des Zeitraums.
+23. **Eigene PDF-Vorlagen** ohne Leistungszeitraum: Für Rechnungen mit Zeitraum nimmt Klein.Buch
+    die eingebaute Vorlage und meldet das in den Hinweisen (Muster wie beim Storno).
+24. **Rechnungen vor Migration 0035** zeigen ihre Leitweg-ID nicht in der Detailansicht; maßgeblich
+    bleibt die archivierte E-Rechnung, aus der auch der Storno liest (ADR 0041 Nr. 250). Ein
+    Rückschreiben aus dem Archiv in festgeschriebene Rechnungen unterbleibt (GoBD).
+
 ## Konsequenzen
 
 - Schema 35. Ein Image 2026.11.0 kann eine Datenbank oder ein Backup mit Schema 35 nicht öffnen;

@@ -55,6 +55,9 @@ fn buyer() -> BuyerView<'static> {
 
 fn invoice() -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
         delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -178,6 +181,7 @@ fn storno_pattern_yields_valid_negative_invoice() {
         invoice_number: "RE-2026-0001",
         currency_code: "EUR",
         pdf_template: "default",
+        service_period: None,
         items: vec![OriginalItemView {
             position: 1,
             description: "Beratung",

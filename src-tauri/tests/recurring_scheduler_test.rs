@@ -236,6 +236,7 @@ fn tmpl_input(contact: &str, next_due: NaiveDate, mode: &str) -> RecurringInvoic
         payment_terms_days: 14,
         pdf_template: "default".into(),
         service_period_note: true,
+        buyer_reference: None,
         notes: None,
         items: vec![item()],
     }
@@ -943,12 +944,18 @@ async fn catch_up_locks_only_latest_period() {
         "nur der jüngste Termin festgeschrieben; Hinweise:\n{}",
         notice_bodies(&env.pool).await
     );
-    let latest: Option<String> =
-        sqlx::query_scalar("SELECT delivery_date FROM invoices WHERE locked_at IS NOT NULL")
-            .fetch_one(&env.pool)
-            .await
-            .unwrap();
-    assert_eq!(latest.as_deref(), Some("2026-05-01"));
+    // ADR 0042 Nr. 10: Abrechnungszeitraum des jüngsten Termins.
+    let latest: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT delivery_date, service_period_start, service_period_end
+           FROM invoices WHERE locked_at IS NOT NULL",
+    )
+    .fetch_one(&env.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        latest,
+        (None, Some("2026-05-01".into()), Some("2026-05-31".into()))
+    );
     assert_eq!(
         count(
             &env.pool,
@@ -968,6 +975,54 @@ async fn catch_up_locks_only_latest_period() {
     );
 }
 
+/// ADR 0042 Nr. 10/12: Ein quartalsweises Abo stellt mit dem ganzen
+/// Abrechnungszeitraum (BG-14) und der Leitweg-ID der Vorlage (BT-10) aus;
+/// der Klartext in Position 1 nennt das Quartal.
+#[tokio::test]
+async fn quarterly_template_issues_with_billing_period_and_buyer_reference() {
+    let env = setup().await;
+    mk_seller(&env.pool).await;
+    let contact = mk_contact(&env.pool).await;
+    let mut input = tmpl_input(&contact, d(2026, 4, 1), "issue");
+    input.frequency = "quarterly".into();
+    input.buyer_reference = Some(" 04011000-12345-67 ".into());
+    let tmpl = recurring_invoice::create(&env.pool, &input).await.unwrap();
+    assert_eq!(
+        tmpl.template.buyer_reference.as_deref(),
+        Some("04011000-12345-67")
+    );
+    let clock = noon(d(2026, 4, 1));
+    let r = scheduler::recurring_invoice::process_due(&job(&env, &clock))
+        .await
+        .unwrap();
+    assert_eq!(r.created_invoices, 1, "{r:?}");
+    let (start, end, bt10, xml_id, desc): (String, String, Option<String>, String, String) =
+        sqlx::query_as(
+            "SELECT i.service_period_start, i.service_period_end, i.buyer_reference,
+                    i.xml_archive_id, it.description
+               FROM invoices i JOIN invoice_items it ON it.invoice_id = i.id
+              WHERE i.locked_at IS NOT NULL AND it.position = 1",
+        )
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!((start.as_str(), end.as_str()), ("2026-04-01", "2026-06-30"));
+    assert_eq!(bt10.as_deref(), Some("04011000-12345-67"));
+    assert!(
+        desc.contains("Leistungszeitraum: 01.04.2026 – 30.06.2026"),
+        "{desc}"
+    );
+    let xml = String::from_utf8(
+        klein_buch_lib::archive::store::read_and_verify_silent(&env.pool, &xml_id)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(xml.contains("<ram:BuyerReference>04011000-12345-67</ram:BuyerReference>"));
+    assert!(xml.contains("<ram:BillingSpecifiedPeriod>"));
+    assert!(xml.contains("20260630"));
+}
+
 /// W14-025: Abbruch nach dem Entwurf (Marker gesetzt, Vorlage vorgerückt) → der
 /// nächste Lauf schreibt den vorhandenen Entwurf fest statt einen zweiten
 /// anzulegen.
@@ -984,6 +1039,9 @@ async fn interrupted_issue_run_resumes_without_second_invoice() {
     let today = d(2026, 5, 20);
     // Zustand nach einem Abbruch zwischen Entwurf und Festschreiben nachbauen.
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(d(2026, 5, 1)),
@@ -1540,7 +1598,7 @@ async fn failure_notice_names_failed_occurrence() {
          WHEN NEW.expense_date = '2026-05-01'
          BEGIN SELECT RAISE(ABORT, 'Test: Mai scheitert'); END",
         "CREATE TRIGGER test_fail_invoice BEFORE INSERT ON invoices
-         WHEN NEW.delivery_date = '2026-05-01'
+         WHEN NEW.service_period_start = '2026-05-01'
          BEGIN SELECT RAISE(ABORT, 'Test: Mai scheitert'); END",
     ] {
         sqlx::query(sql).execute(&env.pool).await.unwrap();
@@ -1598,6 +1656,9 @@ async fn run_now_resumes_interrupted_occurrence_first() {
     // Abbruch nach dem Entwurf für den Mai-Termin (Marker gesetzt, vorgerückt).
     let created_on = d(2026, 5, 2);
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: created_on,
         delivery_date: Some(d(2026, 5, 1)),
@@ -1752,9 +1813,10 @@ async fn exempt_template_after_switch_to_regular_taxation_is_blocked() {
     assert_eq!(r.created_invoices, 1, "{r:?}");
 }
 
-/// ADR 0042 Nr. 3: Nachgeholte Abo-Termine tragen den §19-Status ihres
-/// Leistungsdatums. Wegfall im laufenden Jahr ab 15.04.2026: Die Termine 01.03.
-/// und 01.04. entstehen als §19-Rechnungen; der Termin 01.05. fiele unter die
+/// ADR 0042 Nr. 3/10: Nachgeholte Abo-Termine tragen den §19-Status am Ende
+/// ihres Abrechnungszeitraums. Wegfall im laufenden Jahr ab 15.05.2026: Die
+/// Termine 01.03. und 01.04. (Zeitraum bis 31.03. bzw. 30.04.) entstehen als
+/// §19-Rechnungen; der Termin 01.05. (Zeitraum bis 31.05.) fiele unter die
 /// Regelbesteuerung — mit Steuerart E entsteht dort keine Rechnung (Hinweis,
 /// keine Nummer), der Termin bleibt offen.
 #[tokio::test]
@@ -1773,7 +1835,7 @@ async fn catch_up_occurrences_follow_status_at_their_date() {
     tax_status::insert(
         &env.pool,
         &tax_status::NewEntry {
-            effective_from: d(2026, 4, 15),
+            effective_from: d(2026, 5, 15),
             status: TaxStatus::Regelbesteuerung,
             reason: ChangeReason::WegfallLaufend,
             binding_until: None,
@@ -1790,7 +1852,8 @@ async fn catch_up_occurrences_follow_status_at_their_date() {
         .unwrap();
     assert_eq!(r.created_invoices, 2, "{r:?}");
     let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT delivery_date, is_kleinunternehmer FROM invoices ORDER BY delivery_date",
+        "SELECT service_period_start, is_kleinunternehmer FROM invoices
+          ORDER BY service_period_start",
     )
     .fetch_all(&env.pool)
     .await

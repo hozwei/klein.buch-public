@@ -197,6 +197,29 @@ pub fn compute_next_due_date(
     add_months_clamped(from, frequency.months(), day_of_period)
 }
 
+/// Abrechnungszeitraum eines Termins (ADR 0042 Nr. 10): vom Stichtag bis zum
+/// Tag vor dem folgenden Stichtag (Stichtag + Periode − 1 Tag). Die Zeiträume
+/// aufeinanderfolgender Termine schließen lückenlos aneinander an, auch bei
+/// Stichtag 29.–31. (Monatsende-Klemme wie [`compute_next_due_date`]).
+pub fn billing_period(
+    frequency: Frequency,
+    day_of_period: u32,
+    occurrence: NaiveDate,
+) -> (NaiveDate, NaiveDate) {
+    let next = compute_next_due_date(frequency, day_of_period, occurrence);
+    let end = next.pred_opt().unwrap_or(occurrence).max(occurrence);
+    (occurrence, end)
+}
+
+/// Maßgebliches Datum für den §19-Status einer Abo-Rechnung (ADR 0042 Nr. 3/10):
+/// Ende des Abrechnungszeitraums; bei ungültiger Frequenz der Termin selbst.
+pub fn status_day_for(frequency: &str, day_of_period: i64, occurrence: NaiveDate) -> NaiveDate {
+    match Frequency::from_db(frequency) {
+        Some(f) => billing_period(f, day_of_period.clamp(1, 31) as u32, occurrence).1,
+        None => occurrence,
+    }
+}
+
 /// Ist der Stichtag erreicht oder überschritten? (`<= today`).
 pub fn is_due(next_due_date: NaiveDate, today: NaiveDate) -> bool {
     next_due_date <= today
@@ -282,6 +305,43 @@ pub fn variant_name(e: &RecurringValidationError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn billing_period_spans_until_the_day_before_the_next_due_date() {
+        // ADR 0042 Nr. 10: Stichtag bis Stichtag + Periode − 1 Tag.
+        let d = |y, m, t| NaiveDate::from_ymd_opt(y, m, t).unwrap();
+        assert_eq!(
+            billing_period(Frequency::Monthly, 1, d(2026, 6, 1)),
+            (d(2026, 6, 1), d(2026, 6, 30))
+        );
+        assert_eq!(
+            billing_period(Frequency::Quarterly, 1, d(2026, 4, 1)),
+            (d(2026, 4, 1), d(2026, 6, 30))
+        );
+        assert_eq!(
+            billing_period(Frequency::SemiAnnually, 15, d(2026, 1, 15)),
+            (d(2026, 1, 15), d(2026, 7, 14))
+        );
+        assert_eq!(
+            billing_period(Frequency::Annually, 1, d(2026, 1, 1)),
+            (d(2026, 1, 1), d(2026, 12, 31))
+        );
+        // Monatsende: 31.01. → nächster Stichtag 28.02. → Zeitraum bis 27.02.;
+        // danach 28.02.–30.03. (lückenlos).
+        assert_eq!(
+            billing_period(Frequency::Monthly, 31, d(2026, 1, 31)),
+            (d(2026, 1, 31), d(2026, 2, 27))
+        );
+        assert_eq!(
+            billing_period(Frequency::Monthly, 31, d(2026, 2, 28)),
+            (d(2026, 2, 28), d(2026, 3, 30))
+        );
+        // Quartal über den Jahreswechsel
+        assert_eq!(
+            billing_period(Frequency::Quarterly, 1, d(2026, 11, 1)),
+            (d(2026, 11, 1), d(2027, 1, 31))
+        );
+    }
 
     // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
     #[test]

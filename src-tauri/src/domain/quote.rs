@@ -385,6 +385,12 @@ pub fn variant_name(e: &QuoteValidationError) -> &'static str {
 pub struct ConvertToInvoiceOptions {
     pub invoice_date: NaiveDate,
     pub delivery_date: Option<NaiveDate>,
+    /// Leistungszeitraum (ADR 0042 Nr. 10); Angebote tragen keinen, der Nutzer
+    /// setzt ihn beim Umwandeln.
+    pub service_period_start: Option<NaiveDate>,
+    pub service_period_end: Option<NaiveDate>,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10, ADR 0042 Nr. 12).
+    pub buyer_reference: Option<String>,
     pub due_date: Option<NaiveDate>,
     pub currency_code: String,
     pub notes: Option<String>,
@@ -430,6 +436,9 @@ pub fn convert_to_invoice(
         direction: InvoiceDirection::Issued,
         invoice_date: opts.invoice_date,
         delivery_date: opts.delivery_date,
+        service_period_start: opts.service_period_start,
+        service_period_end: opts.service_period_end,
+        buyer_reference: opts.buyer_reference.clone(),
         due_date: opts.due_date,
         currency_code: opts.currency_code.clone(),
         items: inv_items,
@@ -628,12 +637,34 @@ mod tests {
         ConvertToInvoiceOptions {
             invoice_date: NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
             delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 18).unwrap()),
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
             due_date: Some(NaiveDate::from_ymd_opt(2026, 6, 3).unwrap()),
             currency_code: "EUR".into(),
             notes: Some("aus Angebot AN-2026-0001".into()),
             payment_note: None,
             pdf_template: "default".into(),
         }
+    }
+
+    #[test]
+    fn convert_takes_service_period_and_buyer_reference() {
+        // ADR 0042 Nr. 10/12: Zeitraum und Leitweg-ID aus den Umwandlungs-Optionen.
+        let q = good_quote();
+        let d = |m, t| NaiveDate::from_ymd_opt(2026, m, t).unwrap();
+        let opts = ConvertToInvoiceOptions {
+            delivery_date: None,
+            service_period_start: Some(d(6, 1)),
+            service_period_end: Some(d(6, 30)),
+            buyer_reference: Some("04011000-12345-67".into()),
+            ..convert_opts()
+        };
+        let inv = convert_to_invoice(&q.items, &opts);
+        assert_eq!(inv.delivery_date, None);
+        assert_eq!(inv.service_period_start, Some(d(6, 1)));
+        assert_eq!(inv.service_period_end, Some(d(6, 30)));
+        assert_eq!(inv.buyer_reference.as_deref(), Some("04011000-12345-67"));
     }
 
     #[test]

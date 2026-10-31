@@ -155,8 +155,9 @@ Buchhaltungs-Beleg an und vergibt keine Nummer.
 
 Paket-Preise und der Kilometer-Satz sind Netto-Beträge. Fügst Du ein
 Paket oder eine Anfahrt in einen Beleg ein, bekommt die Position die
-Steuerart, die am Datum dieses Belegs gilt (Leistungsdatum der
-Rechnung, Datum des Angebots, Termin der Abo-Vorlage): Gilt dort die
+Steuerart, die am Datum dieses Belegs gilt (Leistungsdatum bzw. Ende
+des Leistungszeitraums der Rechnung, Datum des Angebots, Ende des
+Abrechnungszeitraums der Abo-Vorlage): Gilt dort die
 Kleinunternehmer-Regelung, setzt Klein.Buch die Steuer-Kategorie
 automatisch als steuerfrei nach §19 UStG und druckt den §19-Hinweis
 auf das fertige PDF. Eine schon eingefügte Position ändert sich nicht,

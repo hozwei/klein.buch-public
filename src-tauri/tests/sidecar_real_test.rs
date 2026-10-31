@@ -63,6 +63,9 @@ fn buyer() -> BuyerView<'static> {
 fn invoice() -> InvoiceInput {
     let d = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: d,
         delivery_date: Some(d),
@@ -145,6 +148,75 @@ async fn sidecar_real_kosit_accepts_storno_with_preceding_invoice() {
         ),
         "{report:?}"
     );
+}
+
+/// ADR 0042 Nr. 10–12: Rechnung mit Leistungszeitraum (BG-14 statt BT-72) und
+/// Leitweg-ID, Storno mit dem Zeitraum des Originals sowie eine
+/// Vorausrechnung (BT-72 nach BT-2) bestehen den echten Validator.
+#[tokio::test]
+#[ignore = "braucht Java-Laufzeit (sidecar_real)"]
+async fn sidecar_real_kosit_accepts_service_period_and_advance_invoice() {
+    let d = |m, t| NaiveDate::from_ymd_opt(2026, m, t).unwrap();
+    let mut period = invoice();
+    period.delivery_date = None;
+    period.service_period_start = Some(d(4, 1));
+    period.service_period_end = Some(d(6, 30));
+    let xml = generator::to_xrechnung(
+        "RE-2026-0001",
+        &period,
+        &seller(),
+        &buyer(),
+        "04011000-12345-67",
+        &[],
+    )
+    .expect("Generator");
+    assert!(xml.contains("<ram:BillingSpecifiedPeriod>"));
+    assert!(!xml.contains("<ram:ActualDeliverySupplyChainEvent>"));
+
+    let mut storno = period.clone();
+    storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+    for it in &mut storno.items {
+        it.unit_price_cents = -it.unit_price_cents;
+    }
+    storno.due_date = None;
+    let preceding = klein_buch_lib::domain::storno::PrecedingInvoice {
+        number: "RE-2026-0001".into(),
+        issue_date: period.invoice_date,
+    };
+    let storno_xml = generator::to_xrechnung_with_preceding(
+        "ST-2026-0001",
+        &storno,
+        &seller(),
+        &buyer(),
+        "04011000-12345-67",
+        &[],
+        Some(&preceding),
+    )
+    .expect("Generator");
+
+    let mut advance = invoice();
+    advance.delivery_date = Some(advance.invoice_date + chrono::Days::new(60));
+    let advance_xml =
+        generator::to_xrechnung("RE-2026-0002", &advance, &seller(), &buyer(), "N/A", &[])
+            .expect("Generator");
+
+    for (name, x) in [
+        ("Zeitraum", &xml),
+        ("Storno mit Zeitraum", &storno_xml),
+        ("Vorausrechnung", &advance_xml),
+    ] {
+        let report = validator::validate(x, &sidecar_dir())
+            .await
+            .expect("KoSIT läuft");
+        assert!(
+            matches!(report.status, ValidationStatus::Passed),
+            "{name}: {report:?}"
+        );
+        eprintln!(
+            "{name}: {:?}, {} Fehler, {} Warnungen",
+            report.status, report.error_count, report.warning_count
+        );
+    }
 }
 
 /// Lauf F5a (R1-S2-TESTS): Regelbesteuerung mit vielen Kleinpositionen und

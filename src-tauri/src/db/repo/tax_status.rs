@@ -294,7 +294,8 @@ pub async fn refresh_mirror_in(conn: &mut SqliteConnection, today: NaiveDate) ->
 pub async fn turnover_items(pool: &SqlitePool, years: &[i32]) -> Result<Vec<UmsatzPosten>> {
     let dates: std::collections::HashMap<String, (Option<String>, String)> =
         sqlx::query_as::<_, (String, Option<String>, String)>(
-            "SELECT invoice_number, delivery_date, invoice_date FROM invoices
+            "SELECT invoice_number, COALESCE(delivery_date, service_period_end), invoice_date
+               FROM invoices
               WHERE direction = 'issued' AND locked_at IS NOT NULL",
         )
         .fetch_all(pool)

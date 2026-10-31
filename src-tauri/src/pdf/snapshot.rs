@@ -136,6 +136,9 @@ fn items(klein: bool) -> Vec<InvoiceItemInput> {
 
 fn invoice(klein: bool) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 10, 24).unwrap(),
         delivery_date: NaiveDate::from_ymd_opt(2026, 10, 20),

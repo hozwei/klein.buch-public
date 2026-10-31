@@ -111,9 +111,12 @@ Escape, F1) steht im Handbuch-Kapitel „Willkommen in Klein.Buch“.
   Kontakten mit Suchfeld.
 - **Rechnung anlegen** unter **Rechnungen → + Neue Rechnung**: Kontakt,
   Positionen (auch Pakete und Anfahrt; Einheiten im Klartext wie Stunde, Stück,
-  Pauschale), Fälligkeit (Pflicht), Währung Euro. Das Leistungsdatum folgt dem
-  Rechnungsdatum, bis du es änderst; der Einzelpreis neuer Positionen startet
-  leer. Im §19-Modus sind die USt-Felder gesperrt. Gespeichert wird ein
+  Pauschale), Fälligkeit (Pflicht), Währung Euro. Unter **Leistung** wählst du
+  ein Datum oder einen Zeitraum (von–bis); das Leistungsdatum folgt dem
+  Rechnungsdatum, bis du es änderst. Beides darf nach dem Rechnungsdatum liegen
+  (Vorausrechnung, Hinweis „Rechnung vor der Leistung“). Bei Rechnungen an
+  Behörden trägst du die Leitweg-ID schon im Entwurf ein. Der Einzelpreis neuer
+  Positionen startet leer. Im §19-Modus sind die USt-Felder gesperrt. Gespeichert wird ein
   **Entwurf** mit bereits vergebener Nummer (`RE-{Jahr}-{Nummer}`); das
   Geschäftsjahr ergibt sich aus dem Rechnungsdatum. Ändern geht über
   **Bearbeiten** (Seite „Entwurf bearbeiten“), ein nicht mehr gebrauchter Entwurf
@@ -122,8 +125,8 @@ Escape, F1) steht im Handbuch-Kapitel „Willkommen in Klein.Buch“.
 - **Rechnung ausstellen**: Unter den Positionen des Entwurfs prüft die Karte
   **Ausstellen** beim Öffnen, ob alles da ist, und nennt fehlende Angaben mit
   Links zur Korrektur („Firmendaten ergänzen“, „Kontakt ergänzen“, „Entwurf
-  bearbeiten“). Dort trägst du bei Rechnungen an Behörden die Leitweg-ID ein
-  (sonst leer lassen). Klein.Buch erzeugt die XRechnung, lässt sie vom
+  bearbeiten“). Die Leitweg-ID steht dort vom Entwurf vorbelegt; ein geänderter
+  Wert gilt für diese E-Rechnung (sonst leer lassen). Klein.Buch erzeugt die XRechnung, lässt sie vom
   KoSIT-Validator prüfen, erzeugt das ZUGFeRD-PDF/A-3 (Profil XRECHNUNG, passend
   zur eingebetteten XRechnung 3.0), archiviert beides unveränderbar und legt ein
   Backup an. Ab jetzt ist die Rechnung **festgeschrieben**; Korrekturen laufen

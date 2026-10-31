@@ -107,6 +107,15 @@ pub struct ConvertArgs {
     /// (das Angebotsdatum ist für die Rechnung irrelevant).
     pub invoice_date: NaiveDate,
     pub delivery_date: Option<NaiveDate>,
+    /// Leistungszeitraum statt Leistungsdatum (ADR 0042 Nr. 10), beide oder
+    /// keiner.
+    #[serde(default)]
+    pub service_period_start: Option<NaiveDate>,
+    #[serde(default)]
+    pub service_period_end: Option<NaiveDate>,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10) der Rechnung (ADR 0042 Nr. 12).
+    #[serde(default)]
+    pub buyer_reference: Option<String>,
     pub due_date: Option<NaiveDate>,
     /// Überschreibt das Angebots-Template; `None` → Template des Angebots.
     pub pdf_template: Option<String>,
@@ -758,6 +767,9 @@ pub async fn quotes_convert_to_invoice(
     let opts = quote::ConvertToInvoiceOptions {
         invoice_date: args.invoice_date,
         delivery_date: args.delivery_date,
+        service_period_start: args.service_period_start,
+        service_period_end: args.service_period_end,
+        buyer_reference: args.buyer_reference,
         due_date: args.due_date,
         currency_code: quote.currency_code.clone(),
         notes: args.notes.or_else(|| quote.notes.clone()),

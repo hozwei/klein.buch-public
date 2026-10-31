@@ -22,6 +22,7 @@
   } from "#lib/types.ts";
   import { EXPENSE_CATEGORIES, einvoiceSourceLabel } from "#lib/labels.ts";
   import { date, euro } from "#lib/format.ts";
+  import { formatServicePeriod } from "#lib/serviceDate.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Banner from "#lib/Banner.svelte";
@@ -353,6 +354,10 @@
     Erkannt: <strong>{einvoiceSourceLabel(sourceFormat)}</strong>
     {#if parsed?.buyerName}
       · Empfänger laut Rechnung: {parsed.buyerName}
+    {/if}
+    {#if parsed?.servicePeriodStart && parsed.servicePeriodEnd}
+      <!-- ADR 0042 Nr. 10: BG-14 der Eingangsrechnung; steht auch in der Notiz. -->
+      · Leistungszeitraum: {formatServicePeriod(parsed.servicePeriodStart, parsed.servicePeriodEnd)}
     {/if}
   </p>
 

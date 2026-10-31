@@ -146,6 +146,9 @@ async fn create_test_contact(pool: &SqlitePool) -> String {
 
 fn good_input() -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
         delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -442,6 +445,7 @@ async fn storno_creates_new_invoice_and_marks_original() {
         invoice_number: &detail.invoice.invoice_number,
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
+        service_period: None,
         items: detail
             .items
             .iter()

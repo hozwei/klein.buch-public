@@ -108,15 +108,16 @@ Abschnitt **"Steuerstatus"**. Dort stehen:
 Klein.Buch rechnet jeden Beleg mit dem Steuerstatus **seines Datums**,
 nicht mit dem von heute:
 
-- **Rechnungen:** das Leistungsdatum, ohne Leistungsdatum das
-  Rechnungsdatum (§ 13 Abs. 1 Nr. 1 UStG). Beim Festschreiben friert
+- **Rechnungen:** das Leistungsdatum, bei einem Leistungszeitraum dessen
+  Ende, ohne beides das Rechnungsdatum (§ 13 Abs. 1 Nr. 1 UStG). Beim Festschreiben friert
   Klein.Buch den Status der Rechnung ein; ein späterer Eintrag ändert
   sie nicht. Ein Storno übernimmt immer den Status der stornierten
   Rechnung.
 - **Angebote:** das Angebotsdatum. Wandelst Du ein Angebot in eine
   Rechnung um, gilt der Status am Leistungsdatum der Rechnung (siehe
   "Angebot und Rechnung über einen Wechsel").
-- **Abo-Rechnungen:** der Termin, für den die Rechnung entsteht.
+- **Abo-Rechnungen:** das Ende des Abrechnungszeitraums, für den die
+  Rechnung entsteht.
 - **Kosten:** das Belegdatum. Ob Du Vorsteuer abziehen darfst, hängt
   von Deinem Status bei Leistungsbezug ab (§ 15 Abs. 1 UStG), nicht vom
   Jahr der Zahlung.

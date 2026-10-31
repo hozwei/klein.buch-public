@@ -2,7 +2,8 @@
   // Block 17a — PDF-Vorlagen-Switcher (globale Standard-Vorlage).
   // U4: Vorlagennamen zentral aus `labels.ts` (Warteliste (17)); je Vorlage, ob sie
   // Stornos darstellt, sonst mit welcher Vorlage Storno-Belege entstehen
-  // (Warteliste (11), `PdfTemplateMeta.supportsStorno`/`stornoFallback`).
+  // (Warteliste (11), `PdfTemplateMeta.supportsStorno`/`stornoFallback`); ebenso, ob
+  // sie einen Leistungszeitraum zeigt (ADR 0042 Nr. 10, `supportsServicePeriod`).
   // U4 (V2-06/V2-07): Ladefehler mit „Erneut laden“; Knöpfe und Datei-Felder während eines
   // Laufs `aria-disabled` statt `disabled` (Fokus bleibt, ADR 0041 Nr. 33).
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
@@ -320,6 +321,9 @@
           {#if !t.supportsStorno}
             <Badge tone="warning">Ohne Storno-Darstellung</Badge>
           {/if}
+          {#if !t.supportsServicePeriod}
+            <Badge tone="warning">Ohne Leistungszeitraum</Badge>
+          {/if}
         </div>
 
         {#if !t.supportsStorno}
@@ -328,6 +332,15 @@
           <p class="hint">
             Diese Vorlage stellt Storno-Belege nicht dar. Stornos zu Rechnungen mit dieser
             Vorlage erzeugt Klein.Buch mit der Vorlage „{label(t.stornoFallback ?? "klassisch")}“.
+          </p>
+        {/if}
+
+        {#if !t.supportsServicePeriod}
+          <!-- ADR 0042 Nr. 10: Rechnungen mit Leistungszeitraum entstehen dann mit
+               derselben mitgelieferten Vorlage wie Stornos (Rechnungs-Pipeline). -->
+          <p class="hint">
+            Diese Vorlage zeigt keinen Leistungszeitraum. Rechnungen mit Leistungszeitraum
+            erzeugt Klein.Buch mit der Vorlage „{label(t.servicePeriodFallback ?? "klassisch")}“.
           </p>
         {/if}
 

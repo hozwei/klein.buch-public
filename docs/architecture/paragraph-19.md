@@ -22,16 +22,17 @@ und eine textuelle Klausel.
 `tax_status_changes`: ab einem Wirkungsdatum gilt ein Status, mit Grund
 (Verzicht, Wegfall wegen des Vorjahres, im laufenden Jahr oder im
 Gründungsjahr, Rückkehr). Maßgeblich ist der Status am Datum des Belegs
-(Leistungsdatum, sonst Rechnungs- bzw. Angebotsdatum; bei Kosten das
-Belegdatum). `seller_profile.is_kleinunternehmer` und
+(Leistungsdatum bzw. Ende des Leistungszeitraums, sonst Rechnungs- bzw.
+Angebotsdatum; bei Kosten das Belegdatum). `seller_profile.is_kleinunternehmer` und
 `waived_paragraph_19_since` sind nur noch Spiegel, die kein Code liest.
 
 ---
 
 ## 2. UI-Sperren
 
-Gilt am **maßgeblichen Datum des Belegs** §19 (ADR 0042 Nr. 3: Leistungsdatum,
-sonst Rechnungs- bzw. Angebotsdatum; Abo-Vorlage: nächster Termin), sperrt das
+Gilt am **maßgeblichen Datum des Belegs** §19 (ADR 0042 Nr. 3/10: Leistungsdatum
+bzw. Ende des Leistungszeitraums, sonst Rechnungs- bzw. Angebotsdatum;
+Abo-Vorlage: Ende des Abrechnungszeitraums des nächsten Termins), sperrt das
 Frontend alle USt-relevanten Eingabefelder. Den Status je Datum holen die
 Editoren über `tax_status_at` (`src/lib/taxStatusAt.svelte.ts`, je Datum
 zwischengespeichert); `applyTaxRules` (`src/lib/tax.ts`) läuft nur mit dem
@@ -249,7 +250,8 @@ sich am Klausel-Erfordernis nichts.
 
 ### 8.2 Abo-Rechnungen mit §19 (Phase 4)
 
-Jeder Termin trägt den Status seines Leistungsdatums (ADR 0042 Nr. 3). Ein
+Jeder Termin trägt den Status am Ende seines Abrechnungszeitraums (ADR 0042
+Nr. 3/10; Zeitraum = Stichtag bis Tag vor dem nächsten Stichtag). Ein
 nachgeholter Termin vor einem Wechsel bleibt §19; passt die Steuerart der
 Vorlage nicht zum Status am Termin, entsteht dort keine Rechnung (Hinweis,
 keine Nummer), bis die Vorlage umgestellt ist.

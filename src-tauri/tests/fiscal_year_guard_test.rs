@@ -172,6 +172,9 @@ fn asset_input(date: NaiveDate) -> AssetInput {
 
 fn invoice_input(date: NaiveDate) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: Some(date),

@@ -171,10 +171,16 @@ pub fn verzicht_binding_until(effective_from: NaiveDate) -> NaiveDate {
 }
 
 /// Maßgebliches Datum eines Ausgangsbelegs (ADR 0042 Nr. 3): Leistungsdatum,
-/// ersatzweise das Rechnungs- bzw. Angebotsdatum (§ 13 Abs. 1 Nr. 1 Buchst. a
-/// UStG).
-pub fn document_date(delivery_date: Option<NaiveDate>, document_date: NaiveDate) -> NaiveDate {
-    delivery_date.unwrap_or(document_date)
+/// bei einem Leistungszeitraum dessen Ende (ADR 0042 Nr. 10), ersatzweise das
+/// Rechnungs- bzw. Angebotsdatum (§ 13 Abs. 1 Nr. 1 Buchst. a UStG).
+pub fn document_date(
+    delivery_date: Option<NaiveDate>,
+    service_period_end: Option<NaiveDate>,
+    document_date: NaiveDate,
+) -> NaiveDate {
+    delivery_date
+        .or(service_period_end)
+        .unwrap_or(document_date)
 }
 
 /// Ein Eintrag der Historie.
@@ -993,6 +999,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// ADR 0042 Nr. 3 mit Nr. 10 (V3-R01): maßgeblich ist das Leistungsdatum,
+    /// bei einem Leistungszeitraum dessen Ende, ersatzweise das Belegdatum.
+    #[test]
+    fn document_date_prefers_delivery_then_period_end_then_document() {
+        let rechnung = d(2026, 9, 10);
+        let ende = d(2026, 9, 30);
+        assert_eq!(document_date(None, Some(ende), rechnung), ende);
+        assert_eq!(
+            document_date(Some(d(2026, 9, 5)), Some(ende), rechnung),
+            d(2026, 9, 5),
+            "Leistungsdatum geht dem Ende des Zeitraums vor"
+        );
+        assert_eq!(document_date(None, None, rechnung), rechnung);
+        // Wegfall am 15.09.: Zeitraum bis 30.09. → Regel, bis 14.09. → §19.
+        let h = TaxStatusHistory::new([
+            initial(K),
+            entry("b", d(2026, 9, 15), G, R::WegfallLaufend, None),
+        ]);
+        assert!(!h.is_klein_at(document_date(None, Some(ende), rechnung)));
+        assert!(h.is_klein_at(document_date(None, Some(d(2026, 9, 14)), rechnung)));
     }
 
     #[test]

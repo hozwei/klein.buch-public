@@ -251,6 +251,8 @@ pub struct ChangeResult {
     pub consequences: ChangeConsequences,
 }
 
+/// Maßgebliches Datum (ADR 0042 Nr. 3/10): `delivery` ist schon
+/// `COALESCE(delivery_date, service_period_end)`.
 fn relevant_date(delivery: Option<&str>, document: &str) -> Result<NaiveDate> {
     repo::parse_document_date(delivery.unwrap_or(document), "Beleg")
 }
@@ -273,7 +275,8 @@ pub async fn consequences(
     // Festgeschriebene Rechnungen (ohne Stornos und stornierte Originale; ein
     // Storno folgt stets seinem Original).
     let locked: Vec<(String, String, Option<String>, String, i64)> = sqlx::query_as(
-        "SELECT id, invoice_number, delivery_date, invoice_date, is_kleinunternehmer
+        "SELECT id, invoice_number, COALESCE(delivery_date, service_period_end), invoice_date,
+                is_kleinunternehmer
            FROM invoices
           WHERE direction = 'issued' AND locked_at IS NOT NULL
             AND is_storno_for IS NULL AND status != 'canceled'
@@ -300,7 +303,8 @@ pub async fn consequences(
 
     // Offene Entwürfe: Status am Datum ändert sich.
     let drafts: Vec<(String, Option<String>, String)> = sqlx::query_as(
-        "SELECT invoice_number, delivery_date, invoice_date FROM invoices
+        "SELECT invoice_number, COALESCE(delivery_date, service_period_end), invoice_date
+           FROM invoices
           WHERE direction = 'issued' AND locked_at IS NULL AND voided_at IS NULL
             AND is_storno_for IS NULL
          UNION ALL
@@ -317,8 +321,9 @@ pub async fn consequences(
     }
 
     // Aktive Abo-Vorlagen: Positionen passen nicht zum Status am nächsten Termin.
-    let templates: Vec<(String, String, String, i64)> = sqlx::query_as(
-        "SELECT r.label, r.next_due_date, i.tax_category_code, i.position
+    let templates: Vec<(String, String, String, i64, String, i64)> = sqlx::query_as(
+        "SELECT r.label, r.next_due_date, i.tax_category_code, i.position, r.frequency,
+                r.day_of_period
            FROM recurring_invoices r
            JOIN recurring_invoice_items i ON i.recurring_invoice_id = r.id
           WHERE r.active = 1
@@ -326,8 +331,13 @@ pub async fn consequences(
     )
     .fetch_all(pool)
     .await?;
-    for (label, next_due, code, _) in templates {
-        let d = repo::parse_document_date(&next_due, "Abo-Vorlage")?;
+    for (label, next_due, code, _, frequency, day) in templates {
+        // ADR 0042 Nr. 10: Status am Ende des nächsten Abrechnungszeitraums.
+        let d = crate::domain::recurring::status_day_for(
+            &frequency,
+            day,
+            repo::parse_document_date(&next_due, "Abo-Vorlage")?,
+        );
         let klein = new.is_klein_at(d);
         let exempt = code == crate::domain::kleinunternehmer::EXEMPT_CATEGORY;
         if klein != exempt && !out.recurring_templates.contains(&label) {

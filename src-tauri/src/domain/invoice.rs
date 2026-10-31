@@ -92,6 +92,17 @@ pub struct InvoiceInput {
     pub direction: InvoiceDirection,
     pub invoice_date: NaiveDate,
     pub delivery_date: Option<NaiveDate>,
+    /// Leistungszeitraum (BG-14, BT-73/BT-74) statt eines Leistungsdatums:
+    /// beide Grenzen oder keine, nie zugleich mit `delivery_date` (ADR 0042
+    /// Nr. 10). Ohne Datum und Zeitraum gilt das Rechnungsdatum.
+    #[serde(default)]
+    pub service_period_start: Option<NaiveDate>,
+    #[serde(default)]
+    pub service_period_end: Option<NaiveDate>,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10), am Entwurf gespeichert und beim
+    /// Ausstellen übernommen (ADR 0042 Nr. 12). `None` = „N/A“.
+    #[serde(default)]
+    pub buyer_reference: Option<String>,
     pub due_date: Option<NaiveDate>,
     pub currency_code: String,
     pub items: Vec<InvoiceItemInput>,
@@ -269,10 +280,19 @@ pub enum InvoiceValidationError {
         invoice_date: NaiveDate,
         due_date: NaiveDate,
     },
-    DeliveryDateAfterInvoiceDate {
-        invoice_date: NaiveDate,
-        delivery_date: NaiveDate,
+    /// Leistungszeitraum mit nur einer Grenze (ADR 0042 Nr. 10: beide oder
+    /// keine).
+    ServicePeriodIncomplete,
+    /// Ende des Leistungszeitraums vor dessen Beginn (EN 16931 BR-29).
+    ServicePeriodEndBeforeStart {
+        start: NaiveDate,
+        end: NaiveDate,
     },
+    /// Leistungsdatum und Leistungszeitraum zugleich — eines von beiden
+    /// (ADR 0042 Nr. 10; BT-72 entfällt bei Zeitraum).
+    ServiceDateAndPeriod,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10) zu lang oder mit Steuerzeichen.
+    BuyerReferenceInvalid,
     NoItems,
     CurrencyEmpty,
     /// Währung ist gesetzt, aber nicht in der unterstützten Liste (v0.1: nur `EUR`).
@@ -377,13 +397,22 @@ pub fn message(e: &InvoiceValidationError) -> String {
             de_date(due_date),
             de_date(invoice_date)
         ),
-        E::DeliveryDateAfterInvoiceDate {
-            invoice_date,
-            delivery_date,
-        } => format!(
-            "Das Leistungsdatum ({}) liegt nach dem Rechnungsdatum ({}).",
-            de_date(delivery_date),
-            de_date(invoice_date)
+        E::ServicePeriodIncomplete => {
+            "Beim Leistungszeitraum fehlt der Beginn oder das Ende — bitte beide Daten angeben."
+                .into()
+        }
+        E::ServicePeriodEndBeforeStart { start, end } => format!(
+            "Das Ende des Leistungszeitraums ({}) liegt vor dessen Beginn ({}).",
+            de_date(end),
+            de_date(start)
+        ),
+        E::ServiceDateAndPeriod => {
+            "Bitte entweder ein Leistungsdatum oder einen Leistungszeitraum angeben, nicht beides."
+                .into()
+        }
+        E::BuyerReferenceInvalid => format!(
+            "Die Leitweg-ID bzw. Käuferreferenz darf höchstens {BUYER_REFERENCE_MAX_CHARS} \
+             Zeichen lang sein und keine Steuerzeichen enthalten."
         ),
         E::NoItems => "Mindestens eine Position ist erforderlich.".into(),
         E::CurrencyEmpty => "Die Währung fehlt.".into(),
@@ -511,12 +540,25 @@ pub fn validate_for_issue(
             });
         }
     }
-    if let Some(deliv) = input.delivery_date {
-        if deliv > input.invoice_date {
-            errs.push(E::DeliveryDateAfterInvoiceDate {
-                invoice_date: input.invoice_date,
-                delivery_date: deliv,
-            });
+    // ADR 0042 Nr. 10/11: Leistungsdatum ODER Zeitraum (beide Grenzen, Beginn
+    // ≤ Ende). Ein Leistungszeitpunkt nach dem Rechnungsdatum ist erlaubt
+    // (Vorausrechnung, § 14 Abs. 4 Satz 1 Nr. 6 UStG); die frühere Regel
+    // „nicht nach dem Rechnungsdatum“ war strenger als das Gesetz.
+    match (input.service_period_start, input.service_period_end) {
+        (Some(start), Some(end)) => {
+            if end < start {
+                errs.push(E::ServicePeriodEndBeforeStart { start, end });
+            }
+            if input.delivery_date.is_some() {
+                errs.push(E::ServiceDateAndPeriod);
+            }
+        }
+        (None, None) => {}
+        _ => errs.push(E::ServicePeriodIncomplete),
+    }
+    if let Some(r) = input.buyer_reference.as_deref() {
+        if !buyer_reference_valid(r) {
+            errs.push(E::BuyerReferenceInvalid);
         }
     }
 
@@ -675,6 +717,35 @@ pub fn validate_for_issue(
     }
 }
 
+/// Höchstlänge der Leitweg-ID bzw. Käuferreferenz (BT-10) in Zeichen; wie der
+/// CHECK in Migration 0035. Eine Leitweg-ID hat höchstens 46 Zeichen.
+pub const BUYER_REFERENCE_MAX_CHARS: usize = 200;
+
+/// Leitweg-ID bzw. Käuferreferenz wie gespeichert (ADR 0042 Nr. 12): getrimmt;
+/// leer oder „N/A“ (der Platzhalter im XML) wird zu `None`.
+pub fn normalize_buyer_reference(raw: Option<&str>) -> Option<String> {
+    let s = raw?.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("N/A") {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// Zulässige Käuferreferenz: höchstens [`BUYER_REFERENCE_MAX_CHARS`] Zeichen,
+/// keine Steuerzeichen. Das Format der Leitweg-ID (Prüfziffer) prüft die
+/// Eingangsplattform, nicht Klein.Buch.
+pub fn buyer_reference_valid(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().count() <= BUYER_REFERENCE_MAX_CHARS
+        && !s.chars().any(char::is_control)
+}
+
+/// Leistungszeitraum (Beginn, Ende), wenn beide Grenzen gesetzt sind.
+pub fn service_period(input: &InvoiceInput) -> Option<(NaiveDate, NaiveDate)> {
+    input.service_period_start.zip(input.service_period_end)
+}
+
 /// Bequemer Check, ob die Rechnung im milderen §33-Modus ist.
 pub fn is_kleinbetragsrechnung(input: &InvoiceInput) -> bool {
     let totals = compute_totals(&input.items);
@@ -733,6 +804,9 @@ mod tests {
 
     fn good_invoice() -> InvoiceInput {
         InvoiceInput {
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
             direction: InvoiceDirection::Issued,
             invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
             delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -821,6 +895,114 @@ mod tests {
         assert!(err
             .iter()
             .any(|e| matches!(e, InvoiceValidationError::InvoiceDateInFuture { .. })));
+    }
+
+    // ---- ADR 0042 Nr. 10–12: Leistungszeitpunkt und Leitweg-ID ----
+
+    fn ymd(m: u32, t: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, m, t).unwrap()
+    }
+
+    fn errs_of(inv: &InvoiceInput) -> Vec<InvoiceValidationError> {
+        validate_for_issue(inv, &seller_klein(), &buyer_full(), ymd(5, 20))
+            .err()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn validate_allows_advance_invoice_with_later_delivery_date() {
+        // Nr. 11: Leistungsdatum nach dem Rechnungsdatum (Vorausrechnung).
+        let mut inv = good_invoice();
+        inv.delivery_date = Some(ymd(9, 30));
+        assert!(errs_of(&inv).is_empty(), "{:?}", errs_of(&inv));
+    }
+
+    #[test]
+    fn validate_accepts_service_period_also_in_the_future() {
+        let mut inv = good_invoice();
+        inv.delivery_date = None;
+        inv.service_period_start = Some(ymd(5, 1));
+        inv.service_period_end = Some(ymd(7, 31));
+        assert!(errs_of(&inv).is_empty(), "{:?}", errs_of(&inv));
+        // ein Tag als Zeitraum (Beginn = Ende) ist zulässig
+        inv.service_period_end = Some(ymd(5, 1));
+        assert!(errs_of(&inv).is_empty());
+    }
+
+    #[test]
+    fn validate_flags_service_period_end_before_start() {
+        let mut inv = good_invoice();
+        inv.delivery_date = None;
+        inv.service_period_start = Some(ymd(5, 10));
+        inv.service_period_end = Some(ymd(5, 9));
+        assert!(
+            errs_of(&inv).contains(&InvoiceValidationError::ServicePeriodEndBeforeStart {
+                start: ymd(5, 10),
+                end: ymd(5, 9),
+            })
+        );
+    }
+
+    #[test]
+    fn validate_flags_incomplete_service_period() {
+        for (s, e) in [(Some(ymd(5, 1)), None), (None, Some(ymd(5, 31)))] {
+            let mut inv = good_invoice();
+            inv.delivery_date = None;
+            inv.service_period_start = s;
+            inv.service_period_end = e;
+            assert!(errs_of(&inv).contains(&InvoiceValidationError::ServicePeriodIncomplete));
+        }
+    }
+
+    #[test]
+    fn validate_flags_delivery_date_together_with_service_period() {
+        let mut inv = good_invoice();
+        inv.delivery_date = Some(ymd(5, 19));
+        inv.service_period_start = Some(ymd(5, 1));
+        inv.service_period_end = Some(ymd(5, 31));
+        assert!(errs_of(&inv).contains(&InvoiceValidationError::ServiceDateAndPeriod));
+    }
+
+    #[test]
+    fn validate_without_date_and_period_falls_back_silently() {
+        // Rückfall auf das Rechnungsdatum (Pipeline) — kein Fehler.
+        let mut inv = good_invoice();
+        inv.delivery_date = None;
+        assert!(errs_of(&inv).is_empty());
+    }
+
+    #[test]
+    fn invoice_date_in_future_stays_an_error_for_advance_invoices() {
+        let mut inv = good_invoice();
+        inv.invoice_date = ymd(5, 21);
+        inv.due_date = Some(ymd(6, 4));
+        inv.delivery_date = Some(ymd(6, 1));
+        assert!(errs_of(&inv)
+            .iter()
+            .any(|e| matches!(e, InvoiceValidationError::InvoiceDateInFuture { .. })));
+    }
+
+    #[test]
+    fn buyer_reference_is_normalized_and_checked() {
+        assert_eq!(normalize_buyer_reference(None), None);
+        assert_eq!(normalize_buyer_reference(Some("  ")), None);
+        assert_eq!(normalize_buyer_reference(Some("N/A")), None);
+        assert_eq!(normalize_buyer_reference(Some(" n/a ")), None);
+        assert_eq!(
+            normalize_buyer_reference(Some(" 04011000-12345-67 ")).as_deref(),
+            Some("04011000-12345-67")
+        );
+        assert!(buyer_reference_valid("04011000-12345-67"));
+        assert!(!buyer_reference_valid("a\nb"));
+        assert!(buyer_reference_valid(
+            &"x".repeat(BUYER_REFERENCE_MAX_CHARS)
+        ));
+        assert!(!buyer_reference_valid(
+            &"x".repeat(BUYER_REFERENCE_MAX_CHARS + 1)
+        ));
+        let mut inv = good_invoice();
+        inv.buyer_reference = Some("Abt.\t4".into());
+        assert!(errs_of(&inv).contains(&InvoiceValidationError::BuyerReferenceInvalid));
     }
 
     #[test]

@@ -437,6 +437,9 @@ async fn storno_date_not_before_payment_and_storno_draft_is_audited() {
 
 fn invoice_input(date: NaiveDate, price: i64) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: Some(date),

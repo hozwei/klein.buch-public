@@ -1192,52 +1192,83 @@ async fn roll_back_0034(pool: &sqlx::SqlitePool) {
     }
 }
 
+/// `CREATE TRIGGER <name> … END;` aus einer Migrationsdatei.
+fn trigger_block(sql: &str, name: &str) -> String {
+    let start = sql
+        .find(&format!("CREATE TRIGGER {name} "))
+        .unwrap_or_else(|| panic!("Trigger {name} fehlt"));
+    let len = sql[start..].find("END;").expect("END;") + "END;".len();
+    sql[start..start + len].to_string()
+}
+
+/// Macht Migration 0035 rückgängig (Testhilfe für ein Backup mit Schema 34):
+/// die beiden verschärften Trigger in ihrer Fassung aus 0028 bzw. 0032 (aus
+/// den Migrationsdateien) und die Spalten für Leistungszeitraum und Leitweg-ID.
+async fn roll_back_0035(pool: &sqlx::SqlitePool) {
+    let m0028 = include_str!("../migrations/0028_append_only_hardening.sql");
+    let m0032 = include_str!("../migrations/0032_gobd_hardening.sql");
+    let stmts = [
+        "DROP TRIGGER trg_invoices_immutable".to_string(),
+        "DROP TRIGGER trg_invoices_voided_final".to_string(),
+        trigger_block(m0028, "trg_invoices_immutable"),
+        trigger_block(m0032, "trg_invoices_voided_final"),
+        "ALTER TABLE invoices DROP COLUMN buyer_reference".into(),
+        "ALTER TABLE invoices DROP COLUMN service_period_end".into(),
+        "ALTER TABLE invoices DROP COLUMN service_period_start".into(),
+        "ALTER TABLE recurring_invoices DROP COLUMN buyer_reference".into(),
+    ];
+    // Eine Verbindung für alle Schritte: DROP und CREATE desselben Triggers
+    // sehen denselben Schema-Stand.
+    let mut conn = pool.acquire().await.unwrap();
+    for sql in &stmts {
+        sqlx::query(sql)
+            .execute(&mut *conn)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+}
+
 /// Setzt die Datenbank einer laufenden Test-Instanz auf Schema `target`
-/// zurück (33: ohne 0034; 32: zusätzlich ohne 0033; 31: zusätzlich ohne 0032;
-/// 30: zusätzlich ohne 0031 = Tabelle `secrets`).
+/// zurück (34: ohne 0035; 33: zusätzlich ohne 0034; 32: zusätzlich ohne 0033;
+/// 31: zusätzlich ohne 0032; 30: zusätzlich ohne 0031 = Tabelle `secrets`).
 async fn roll_back_to(pool: &sqlx::SqlitePool, target: i32) {
     let migrations = &klein_buch_lib::db::MIGRATOR.migrations;
     let n = migrations.len();
     let last = migrations.last().unwrap();
     assert!(
-        last.description.contains("invoice payment ledger"),
-        "Test setzt 0034 zurück: {}",
+        last.description.contains("service period buyer reference"),
+        "Test setzt 0035 zurück: {}",
         last.description
     );
-    roll_back_0034(pool).await;
-    if target <= 32 {
-        let prev = &migrations[n - 2];
-        assert!(
-            prev.description.contains("tax status history"),
-            "{}",
-            prev.description
-        );
-        roll_back_0033(pool).await;
+    roll_back_0035(pool).await;
+    let steps: [(i32, &str); 4] = [
+        (33, "invoice payment ledger"),
+        (32, "tax status history"),
+        (31, "gobd hardening"),
+        (30, "secrets"),
+    ];
+    for (i, (below, desc)) in steps.iter().enumerate() {
+        if target > *below {
+            break;
+        }
+        let m = &migrations[n - 2 - i];
+        assert!(m.description.contains(desc), "{}", m.description);
+        match below {
+            33 => roll_back_0034(pool).await,
+            32 => roll_back_0033(pool).await,
+            31 => roll_back_0032(pool).await,
+            _ => {
+                sqlx::query("DROP TABLE secrets")
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
     }
-    if target <= 31 {
-        let prev = &migrations[n - 3];
-        assert!(
-            prev.description.contains("gobd hardening"),
-            "{}",
-            prev.description
-        );
-        roll_back_0032(pool).await;
-    }
-    if target <= 30 {
-        let prev = &migrations[n - 4];
-        assert!(prev.description.contains("secrets"), "{}", prev.description);
-        sqlx::query("DROP TABLE secrets")
-            .execute(pool)
-            .await
-            .unwrap();
-    }
+    // Letzte verbleibende Migration: Index n - 1 - (35 - target).
+    let keep = n - 1 - (35 - target as usize);
     sqlx::query("DELETE FROM _sqlx_migrations WHERE version > ?")
-        .bind(match target {
-            33 => migrations[n - 2].version,
-            32 => migrations[n - 3].version,
-            31 => migrations[n - 4].version,
-            _ => migrations[n - 5].version,
-        })
+        .bind(migrations[keep].version)
         .execute(pool)
         .await
         .unwrap();
@@ -1756,6 +1787,106 @@ async fn schema_33_backup_payment_history_moves_into_the_ledger() {
     );
 }
 
+/// ADR 0042 Nr. 10–12: `.kbk` mit Schema 34 (vor Leistungszeitraum und
+/// Leitweg-ID) → Restore → beim Entsperren Pflicht-Backup (Schema 34) →
+/// Migration 0035. Bestandsrechnungen behalten ihr Leistungsdatum, Zeitraum
+/// und Leitweg-ID sind leer; die verschärften Trigger gelten danach auch für
+/// den Bestand.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schema_34_backup_is_restored_and_gets_service_period_columns() {
+    let old = 34;
+    assert!((MIN_RESTORE_SCHEMA_VERSION..EXPECTED_SCHEMA_VERSION).contains(&old));
+    let a = test_server();
+    let cookie_a = setup(&a).await;
+    {
+        let pool = a.state.ctx.pool().unwrap();
+        roll_back_to(&pool, old).await;
+        let cols: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('invoices')
+              WHERE name IN ('service_period_start','service_period_end','buyer_reference')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cols, 0, "Schema 34 ohne die neuen Spalten");
+        sqlx::query(
+            "INSERT INTO contacts (id, contact_type, name, email, country_code)
+             VALUES ('c-alt', 'customer', 'Kunde Altbestand', 'kunde@example.org', 'DE')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO invoices (
+                id, invoice_number, fiscal_year, direction, invoice_date, delivery_date,
+                contact_id, seller_name, seller_street, seller_postal_code, seller_city,
+                net_amount_cents, gross_amount_cents, status, locked_at,
+                buyer_name, buyer_country_code
+             ) VALUES ('inv-34', 'RE-2026-0934', 2026, 'issued', '2026-02-20', '2026-02-19',
+                'c-alt', 'Verkäufer', 'Beispielweg 1', '84028', 'Landshut',
+                10000, 10000, 'issued', '2026-02-20 10:00:00',
+                'Kunde Altbestand', 'DE')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let kbk = backup_bytes(&a, &cookie_a).await;
+    let m = klein_buch_lib::backup::manifest::read_manifest_only(&kbk).unwrap();
+    assert_eq!(m.schema_version, old);
+
+    let b = test_server();
+    let cookie_b = setup(&b).await;
+    let cookie_b = reauth_cookie(&b, &cookie_b).await;
+    let r = restore_upload(&b, &cookie_b, &kbk, PASS).await;
+    assert_eq!(r.json()["state"], "done", "{}", r.text());
+    let b = restart(b).await;
+    let r = login(&b, PASS).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT CAST(value AS INTEGER) FROM app_settings WHERE key = 'schema_version'"
+        )
+        .await,
+        EXPECTED_SCHEMA_VERSION as i64
+    );
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT COUNT(*) FROM invoices WHERE id = 'inv-34' AND delivery_date = '2026-02-19'
+                AND service_period_start IS NULL AND service_period_end IS NULL
+                AND buyer_reference IS NULL"
+        )
+        .await,
+        1
+    );
+    {
+        let pool = b.state.ctx.pool().unwrap();
+        for sql in [
+            "UPDATE invoices SET buyer_reference = '991-1' WHERE id = 'inv-34'",
+            "UPDATE invoices SET delivery_date = NULL, service_period_start = '2026-02-01',
+                                 service_period_end = '2026-02-28' WHERE id = 'inv-34'",
+        ] {
+            let err = sqlx::query(sql).execute(&pool).await.unwrap_err();
+            assert!(
+                err.to_string().contains("invoice is locked"),
+                "{sql}: {err}"
+            );
+        }
+    }
+    assert_eq!(
+        scalar_i64(
+            &b,
+            "SELECT db_schema_version FROM backup_history WHERE trigger_reason = 'manual'
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        )
+        .await,
+        old as i64,
+        "Pflicht-Backup mit Schema {old}"
+    );
+}
+
 /// ADR 0042 Nr. 7, ADR 0039 Nr. 124: Ein Backup mit Schema 33, dessen
 /// Zahlungshistorie nicht zum gezahlten Betrag passt, lehnt schon die
 /// Restore-Prüfung ab (sonst bliebe die Instanz nach dem Tausch gesperrt).
@@ -2119,6 +2250,7 @@ fn tmpl_today(contact: &str, label: &str, mode: &str) -> RecurringInvoiceInput {
         payment_terms_days: 14,
         pdf_template: "default".into(),
         service_period_note: true,
+        buyer_reference: None,
         notes: None,
         items: vec![klein_buch_lib::domain::invoice::InvoiceItemInput {
             position: 1,

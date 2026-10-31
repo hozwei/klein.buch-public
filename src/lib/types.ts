@@ -154,6 +154,12 @@ export interface PdfTemplateMeta {
   /** Ohne Storno-Darstellung: eingebaute Vorlage, mit der Stornos entstehen
    *  (z. B. "klassisch"); sonst null. */
   stornoFallback: string | null;
+  /** Zeigt die Vorlage einen Leistungszeitraum (`service_period_start`/`_end`,
+   *  ADR 0042 Nr. 10)? */
+  supportsServicePeriod: boolean;
+  /** Ohne Leistungszeitraum: eingebaute Vorlage, mit der Rechnungen mit
+   *  Zeitraum entstehen; sonst null. */
+  servicePeriodFallback: string | null;
 }
 
 export interface Paragraph19Info {
@@ -228,6 +234,11 @@ export interface Invoice {
   /** Verworfener Entwurf (Migration 0032): Zeitpunkt (UTC) und Grund; die Nummer bleibt verbraucht. */
   voidedAt: Iso8601 | null;
   voidReason: string | null;
+  /** Leistungszeitraum (BG-14, JJJJ-MM-TT) statt Leistungsdatum (Migration 0035, ADR 0042 Nr. 10). */
+  servicePeriodStart: Iso8601 | null;
+  servicePeriodEnd: Iso8601 | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10), am Entwurf gespeichert; `null` = „N/A“ (ADR 0042 Nr. 12). */
+  buyerReference: string | null;
 }
 
 export interface InvoiceItem {
@@ -326,6 +337,11 @@ export interface InvoiceInputDto {
   direction: InvoiceDirection;
   invoiceDate: string;     // YYYY-MM-DD
   deliveryDate: string | null;
+  /** Leistungszeitraum statt Leistungsdatum: beide Grenzen oder keine, nie zugleich mit `deliveryDate` (ADR 0042 Nr. 10). */
+  servicePeriodStart?: string | null;
+  servicePeriodEnd?: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10); hat Vorrang vor `CreateDraftArgs.buyerReference` (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   dueDate: string | null;
   currencyCode: string;
   items: InvoiceItemInput[];
@@ -339,7 +355,8 @@ export interface InvoiceInputDto {
 
 export interface CreateDraftArgs {
   contactId: Uuid;
-  buyerReference: string | null;
+  /** Ältere Form der Leitweg-ID; `input.buyerReference` hat Vorrang (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   input: InvoiceInputDto;
 }
 
@@ -658,6 +675,11 @@ export interface QuoteConvertArgs {
   /** Rechnungsdatum (YYYY-MM-DD). Bestimmt auch das Geschäftsjahr. */
   invoiceDate: string;
   deliveryDate: string | null;
+  /** Leistungszeitraum statt Leistungsdatum (ADR 0042 Nr. 10), beide oder keiner. */
+  servicePeriodStart?: string | null;
+  servicePeriodEnd?: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) der Rechnung (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   dueDate: string | null;
   /** null → Template des Angebots übernehmen. */
   pdfTemplate: string | null;
@@ -985,6 +1007,9 @@ export interface ParsedEInvoice {
   typeCode: string | null;
   invoiceDate: Iso8601 | null;
   dueDate: Iso8601 | null;
+  /** BG-14 — Rechnungszeitraum auf Kopfebene (ADR 0042 Nr. 10). */
+  servicePeriodStart?: Iso8601 | null;
+  servicePeriodEnd?: Iso8601 | null;
   currencyCode: string | null;
   sellerName: string | null;
   sellerVatId: string | null;
@@ -1170,6 +1195,8 @@ export interface RecurringInvoiceRow {
   notes: string | null;
   createdAt: Iso8601;
   updatedAt: Iso8601;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung; `null` = „N/A“ (Migration 0035). */
+  buyerReference: string | null;
 }
 
 /** Korrespondiert zu `RecurringInvoiceItemRow` in Rust. */
@@ -1209,8 +1236,11 @@ export interface RecurringInvoiceInputDto {
   autoMode: RecurringInvoiceMode;
   paymentTermsDays: number;
   pdfTemplate: string;
+  /** Nur noch der Klartext in Position 1; den Abrechnungszeitraum (BG-14) trägt jede Abo-Rechnung (ADR 0042 Nr. 10). */
   servicePeriodNote: boolean;
   notes: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   items: InvoiceItemInput[];
 }
 

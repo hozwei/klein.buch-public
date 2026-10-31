@@ -16,6 +16,7 @@ import {
   lastEntry,
   nextChangeAfter,
   nextJanFirst,
+  invoiceTaxDate,
   quoteConversionHint,
   relevantTaxDate,
   statusAt,
@@ -60,6 +61,20 @@ describe("relevantTaxDate", () => {
     expect(relevantTaxDate("2026-02-30", "2026-03-01", "2026-10-27")).toBe("2026-03-01");
     expect(relevantTaxDate("2026-0", undefined, "2026-10-27")).toBe("2026-10-27");
     expect(relevantTaxDate("2026-07-14T00:00:00", null, "2026-10-27")).toBe("2026-07-14");
+  });
+});
+
+describe("invoiceTaxDate", () => {
+  it("Leistungsdatum, sonst Ende des Zeitraums, sonst Rechnungsdatum (ADR 0042 Nr. 3/10)", () => {
+    expect(invoiceTaxDate({ deliveryDate: "2026-07-14", invoiceDate: "2026-07-20" }, "2026-10-27")).toBe("2026-07-14");
+    expect(
+      invoiceTaxDate({ deliveryDate: null, servicePeriodEnd: "2026-12-31", invoiceDate: "2026-12-01" }, "2026-10-27"),
+    ).toBe("2026-12-31");
+    expect(invoiceTaxDate({ deliveryDate: null, servicePeriodEnd: null, invoiceDate: "2026-07-20" }, "2026-10-27")).toBe(
+      "2026-07-20",
+    );
+    expect(invoiceTaxDate({}, "2026-10-27")).toBe("2026-10-27");
+    expect(invoiceTaxDate({ servicePeriodEnd: "2026-13-01", invoiceDate: "2026-07-20" }, "2026-10-27")).toBe("2026-07-20");
   });
 });
 

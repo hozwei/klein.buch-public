@@ -34,6 +34,12 @@ offenen Punkte aus Lauf 2026.11.
   abgeschlossenen Geschäftsjahr lehnt Klein.Buch ab und verweist auf § 153 AO. EÜR,
   ELSTER-Ausfüllhilfe, DATEV-Stapel, Steuerberater-Paket und DSGVO-Auskunft zeigen
   Gegenbuchungen.
+- **Leistungszeitraum, Vorausrechnung, Leitweg-ID am Entwurf** (ADR 0042 Nr. 10–12, 22–24):
+  Rechnungen tragen wahlweise ein Leistungsdatum oder einen Leistungszeitraum (XRechnung BG-14,
+  alle vier PDF-Vorlagen); das Leistungsdatum darf nach dem Rechnungsdatum liegen (Rechnung vor
+  der Leistung). Abo-Rechnungen setzen den tatsächlichen Abrechnungszeitraum, auch bei
+  quartalsweiser, halbjährlicher und jährlicher Abrechnung; ein Storno übernimmt den Zeitraum.
+  Die Leitweg-ID wird schon am Entwurf (und an der Abo-Vorlage) gespeichert.
 
 ### Hinweise für Betreiber (Update von 2026.11.0)
 

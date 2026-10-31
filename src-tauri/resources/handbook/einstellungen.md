@@ -100,7 +100,7 @@ andere Vorlage wählen.
 Eigene Vorlagen legt der Betreiber als `.typ`-Datei in
 `/inputs/pdf-templates/` ab. Sie erscheinen dann automatisch in der
 Liste, gekennzeichnet als "Eigene Vorlage" (die mitgelieferten als
-"Mitgeliefert"). Zwei Dinge prüft Klein.Buch vor jedem Rendern:
+"Mitgeliefert"). Drei Dinge prüft Klein.Buch vor jedem Rendern:
 
 1. **§19-Klausel.** Als Kleinunternehmer braucht die Vorlage den
    Kommentar `// §19-KLAUSEL-BLOCK: REQUIRED` und muss das Feld
@@ -118,7 +118,19 @@ Liste, gekennzeichnet als "Eigene Vorlage" (die mitgelieferten als
    der eingebauten Vorlage gleichen Namens, sonst mit "Klassisch".
    Beim Storno legt Klein.Buch dann einen Eintrag unter "Hinweise" an.
    So erscheint ein Storno nie als Rechnung mit Zahlungsaufforderung.
-   Die mitgelieferte `default.typ` zeigt, wie beides aussieht.
+3. **Leistungszeitraum.** Trägt eine Rechnung statt eines
+   Leistungsdatums einen Leistungszeitraum, zeigt die Vorlage ihn über
+   die Felder `invoice.service_period_start` und
+   `invoice.service_period_end` (Beginn und Ende). Nutzt Deine Vorlage
+   diese Felder nicht, trägt sie in der Liste "Ohne Leistungszeitraum"
+   mit dem Hinweis, mit welcher Vorlage Klein.Buch Rechnungen mit
+   Zeitraum stattdessen erzeugt: wie beim Storno mit der eingebauten
+   Vorlage gleichen Namens, sonst mit "Klassisch". Beim Ausstellen
+   legt Klein.Buch dann einen Eintrag unter "Hinweise" an. So fehlt auf
+   der Rechnung nie der Leistungszeitpunkt. Rechnungen mit
+   Leistungsdatum erzeugt Deine Vorlage wie gewohnt.
+
+Die mitgelieferte `default.typ` zeigt, wie alles aussieht.
 
 Die Vorlagen laufen mit Typst 0.15. Die Belegdaten liest eine Vorlage
 mit `json(bytes(sys.inputs.at("data-json")))` ein. Die frühere

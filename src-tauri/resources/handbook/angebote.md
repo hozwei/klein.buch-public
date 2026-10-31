@@ -116,8 +116,10 @@ dort korrigierst Du die Rechnung.
 
 Bei einem angenommenen Angebot ist **"In Rechnung umwandeln"** der
 nächste Schritt. Auf der folgenden Seite passt Du Rechnungsdatum,
-Leistungsdatum, Fälligkeit und Positionen noch an; **"Rechnung
-erstellen"** legt eine neue Rechnung mit einem Querverweis auf das
+Leistungsdatum oder Leistungszeitraum ("Leistung", wie bei einer neuen
+Rechnung), Fälligkeit und Positionen noch an; für eine Behörde trägst
+Du dort auch die "Leitweg-ID (optional)" ein. **"Rechnung erstellen"**
+legt eine neue Rechnung mit einem Querverweis auf das
 Angebot an. Die Rechnung ist zunächst ein Entwurf; ausgestellt wird
 erst die Rechnung selbst.
 

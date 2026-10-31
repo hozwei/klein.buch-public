@@ -352,7 +352,7 @@
     {/if}
     <p class="kb-muted">
       Klein.Buch rechnet jeden Beleg mit dem Steuerstatus seines Datums: Rechnungen nach dem
-      Leistungsdatum (sonst Rechnungsdatum), Angebote nach dem Angebotsdatum, Kosten nach dem
+      Leistungsdatum bzw. dem Ende des Leistungszeitraums (sonst Rechnungsdatum), Angebote nach dem Angebotsdatum, Kosten nach dem
       Belegdatum. Beim Festschreiben bleibt der Status einer Rechnung unverändert.
     </p>
 

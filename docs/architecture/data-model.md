@@ -6,9 +6,9 @@
 > in `klein-buch/src-tauri/migrations/*.sql` und sind die kanonische Quelle —
 > diese Doku ist die navigationsfreundliche Sicht darauf.
 
-**Schema-Stand: v34.** Migrationen 0001–0034, forward-only; nächste freie
-Migration 0035. Schema-Version liegt in `app_settings.schema_version`; geprüft
-wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (34) — eine neuere DB
+**Schema-Stand: v35.** Migrationen 0001–0035, forward-only; nächste freie
+Migration 0036. Schema-Version liegt in `app_settings.schema_version`; geprüft
+wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (35) — eine neuere DB
 lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 
 **Globale Konventionen** (ADR 0003):
@@ -72,6 +72,7 @@ lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 | 0032 | `0032_gobd_hardening.sql` | GoBD- und Schema-Absicherungen (Lauf F, Block F2a; ADR 0039 Nr. 124): Unique-Index `ux_invoices_one_locked_storno` (höchstens ein festgeschriebener Storno je Original; Vorab-Prüfung bricht bei Bestandsduplikaten mit klarer Meldung ab), `invoices.voided_at`/`void_reason` (Entwurf verwerfen ohne Löschen), `archive_integrity_checks.files_missing`/`files_unreadable`/`missing_archive_ids_json`/`unreadable_archive_ids_json`, Trigger für Positionen festgeschriebener Belege, Archiv ohne DELETE, endgültigen Storno, zurückgezogene Angebote, verworfene Entwürfe und den Anlagen-Abgang, Partial Unique Index `uq_payment_accounts_default` (Bestand mit Audit bereinigt), Seed `rule_recurring_due` |
 | 0033 | `0033_tax_status_history.sql` | Steuerstatus nach § 19 UStG als Historie (Lauf 2026.11.1, Block V1; ADR 0042 Nr. 1–6): `tax_status_changes` (STRICT, append-only: kein DELETE, UPDATE nur als einmaliger Widerruf mit Grund; CHECKs Grund ↔ Status, 1. Januar bei Verzicht/Vorjahr/Rückkehr, Bindung = 01.01. Wirkungsjahr + 5; Teil-Unique-Index je Wirkungsdatum), Übernahme des Bestands aus `seller_profile` mit festen IDs im UUIDv7-Format (für jedes Jahr dasselbe Ergebnis wie bisher), Audit `tax_status.migrated`, Seed `rule_tax_threshold` |
 | 0034 | `0034_invoice_payment_ledger.sql` | Zahlungsbuch (Lauf 2026.11.1, Block V2; ADR 0042 Nr. 7–9): `invoice_payments` (STRICT, append-only; Zahlung `payment` > 0 bzw. Gegenbuchung `reversal` < 0 mit Verweis und Grund, höchstens eine je Zahlung), Übernahme der JSON-Historie und des Altbestands mit festen IDs im UUIDv7-Format, Vorab-Prüfung mit benanntem CHECK „Migration 0034 abgebrochen: …“, Trigger: Buchungen nur auf festgeschriebene, nicht stornierte Ausgangsrechnungen im offenen Jahr, Cache `paid_amount_cents`/`paid_at`/`status` an das Buch gebunden, `payment_history_json` eingefroren, neue Rechnung ohne Zahlung; `paid_at` des Bestands einmalig auf das jüngste Zahldatum (ohne Uhrzeit); Audit `invoice.payments_migrated` mit altem und neuem Zahldatum |
+| 0035 | `0035_service_period_buyer_reference.sql` | Leistungszeitraum und Leitweg-ID (Lauf 2026.11.1, Block V3; ADR 0042 Nr. 10–12): `invoices.service_period_start`/`service_period_end` (JJJJ-MM-TT, beide oder keiner, Beginn ≤ Ende, nie zugleich mit `delivery_date`), `invoices.buyer_reference` und `recurring_invoices.buyer_reference` (BT-10, 1–200 Zeichen, NULL = „N/A“); `trg_invoices_immutable` und `trg_invoices_voided_final` per DROP/CREATE um die drei Spalten verschärft |
 
 **Down-Migrations gibt es nicht.** Wer eine Migration „rückgängig" braucht,
 muss eine neue, höher nummerierte Migration schreiben, die den Zustand
@@ -99,7 +100,8 @@ seit Migration 0033 nur noch Spiegel der Statushistorie, gepflegt von
 Rückkehr), `trigger_document`, `note`, `created_at`, `revoked_at`/`revoke_reason`.
 Ohne gültigen Eintrag gilt §19. Den Status an einem Datum liefert
 `domain::tax_status::TaxStatusHistory::status_at`; maßgeblich ist bei
-Ausgangsbelegen das Leistungsdatum, sonst das Rechnungs- bzw. Angebotsdatum,
+Ausgangsbelegen das Leistungsdatum bzw. das Ende des Leistungszeitraums (Abo-Rechnung: Ende
+des Abrechnungszeitraums), sonst das Rechnungs- bzw. Angebotsdatum,
 bei Kosten das Belegdatum.
 
 **`contacts`** — Kunden + Lieferanten. Felder: `id`, `display_name`,
@@ -126,7 +128,10 @@ oder Benutzer, verfällt das gespeicherte Passwort (Amendment ADR 0011).
 ### 2b. Beleg-Stamm (festschreibbar)
 
 **`invoices`** — Ausgangsrechnungen. Felder: `id`, `invoice_number`
-(`RE-{YYYY}-{NNNN}` oder `ST-…` für Storno), `date`, `delivery_date`,
+(`RE-{YYYY}-{NNNN}` oder `ST-…` für Storno), `date`, `delivery_date`
+bzw. Leistungszeitraum `service_period_start`/`service_period_end` (Migration
+0035, BG-14; eines von beiden), `buyer_reference` (Leitweg-ID/BT-10 am Entwurf,
+beim Festschreiben im selben UPDATE wie `locked_at` gesetzt, ADR 0042 Nr. 12),
 `contact_id`, `is_kleinunternehmer`, `direction` (`outgoing`/`incoming`),
 `fiscal_year` (Jahr des Belegdatums, auch beim Storno — ADR 0039 Nr. 122), `status`
 (`draft`/`issued`/`sent`/`canceled`), `is_storno_for` (FK, NULL bei Original;
@@ -204,7 +209,10 @@ Felder: `id`, `label`, `interval`, `next_due_on`, `payment_account_id`, …
 **`recurring_invoices`** — Vorlagen für ausgangsseitige Abo-Rechnungen.
 Felder: `id`, `label`, `contact_id`, `interval` (`monthly`/`quarterly`/`yearly`),
 `auto_mode` (`draft`/`issue`/`issue_send`), `next_due_on`, `is_active`,
-Buyer-Snapshot-Felder, Sender-Snapshot (Default-Konto).
+Buyer-Snapshot-Felder, Sender-Snapshot (Default-Konto). `buyer_reference` (Leitweg-ID für
+jede erzeugte Rechnung, Migration 0035). Den Leistungszeitraum einer
+Abo-Rechnung leitet der Lauf ab: Stichtag bis Tag vor dem nächsten Stichtag
+(`domain::recurring::billing_period`).
 
 **`recurring_invoice_items`** — Items der Vorlage. UNIQUE
 `(recurring_invoice_id, position)`.
@@ -376,9 +384,9 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_audit_no_delete` | `audit_log` | DELETE verboten |
 | `trg_archive_no_update` | `archive_entries` | UPDATE auf `hash`/`path`/`size` verboten |
 | `trg_archive_no_delete` | `archive_entries` | DELETE verboten (0032, KB-0004) |
-| `trg_invoices_immutable` | `invoices` | nach `locked_at`: UPDATE auf Kernfelder verboten (`invoice_number`, `date`, Beträge, `contact_id`, `fiscal_year`, `is_kleinunternehmer`, `direction`). Erlaubt: State-Transitions (`status`, `paid_*`, `sent_*`, `canceled_*`, `notes`, `archive_ids`). |
+| `trg_invoices_immutable` | `invoices` | nach `locked_at`: UPDATE auf Kernfelder verboten (`invoice_number`, `date`, Beträge, `contact_id`, `fiscal_year`, `is_kleinunternehmer`, `direction`, Leistungsdatum, Leistungszeitraum, `buyer_reference` (0035)). Erlaubt: State-Transitions (`status`, `paid_*`, `sent_*`, `canceled_*`, `notes`, `archive_ids`). |
 | `trg_invoices_no_delete` | `invoices` | DELETE verboten (0028) |
-| `trg_invoices_voided_final` | `invoices` | verworfener Entwurf: jede Änderung verboten, auch das Festschreiben; einzige Ausnahme: Anonymisierung des Kontakts setzt `buyer_*` (außer Land) und `notes` auf Platzhalter bzw. `NULL` (0032, F2c) |
+| `trg_invoices_voided_final` | `invoices` | verworfener Entwurf: jede Änderung verboten, auch das Festschreiben; einzige Ausnahme: Anonymisierung des Kontakts setzt `buyer_*` (außer Land) und `notes` auf Platzhalter bzw. `NULL` (0032, F2c; seit 0035 mit Leistungszeitraum und `buyer_reference`) |
 | `trg_invoices_void_draft_only` | `invoices` | `voided_at` nur auf offenen Entwürfen, nur mit Grund, nie zugleich mit `locked_at` (0032) |
 | `trg_invoices_void_not_on_insert` | `invoices` | INSERT mit `voided_at`/`void_reason` verboten (0032) |
 | `trg_invoices_canceled_final` | `invoices` | `status = 'canceled'` endgültig; `canceled_at`, `canceled_by_storno_id`, `cancel_reason` unveränderlich (0032) |

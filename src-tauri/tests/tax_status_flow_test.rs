@@ -14,6 +14,8 @@
 //! * Profil-Upsert ändert den Status nicht; Status an einem Datum für Editoren;
 //!   Paket-Position nach dem Datum des Zielbelegs; Angebot → Rechnung über die
 //!   Grenze.
+//! * Leistungszeitraum über den Stichtag: es zählt das Ende (Entwurf, Prüfung,
+//!   Festschreiben, Angebotsumwandlung mit Leitweg-ID; ADR 0042 Nr. 10).
 //!
 //! Tempfile-DB mit den echten Migrationen, Mock-Sidecar; Testdaten nur mit
 //! Dokumentations-Adressen (example.org). Feste Daten im Jahr 2026 (offenes
@@ -218,6 +220,9 @@ fn item(position: u32, price: i64, code: &str, rate: f64) -> InvoiceItemInput {
 
 fn input(invoice_date: NaiveDate, delivery: NaiveDate, it: InvoiceItemInput) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date,
         delivery_date: Some(delivery),
@@ -1035,6 +1040,7 @@ async fn lock_rechecks_the_tax_status_in_its_write_transaction() {
         is_kleinunternehmer: Some(true),
         tax_status_date: Some(d(2026, 8, 20)),
         totals: None,
+        buyer_reference: None,
     };
     let err = klein_buch_lib::db::repo::invoices::lock(&env.pool, &id, &update)
         .await
@@ -1109,4 +1115,233 @@ async fn preview_warns_on_late_verzicht_and_return_above_threshold() {
     add(&env, Some("2027-01-01"), "kleinunternehmer", "rueckkehr")
         .await
         .expect("Warnung sperrt nicht");
+}
+
+// ============================================================================
+// Leistungszeitraum über den Stichtag (ADR 0042 Nr. 3 mit Nr. 10, V3-R01)
+// ============================================================================
+
+fn with_period(mut inp: InvoiceInput, start: NaiveDate, end: NaiveDate) -> InvoiceInput {
+    inp.delivery_date = None;
+    inp.service_period_start = Some(start);
+    inp.service_period_end = Some(end);
+    inp
+}
+
+async fn issue_codes(env: &Env, id: &str) -> Vec<String> {
+    inv_cmd::invoices_validate_draft(
+        &env.ctx,
+        inv_cmd::InvoicesValidateDraftArgs { id: id.into() },
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|i| i.code)
+    .collect()
+}
+
+/// Wegfall am 15.09.; Rechnung vom 10.09. über den Zeitraum 01.–30.09.: Es
+/// zählt das Ende des Zeitraums (Regelbesteuerung) — nicht der Beginn, nicht
+/// das Rechnungsdatum. Entwurf, Prüfung und Festschreiben stimmen überein.
+/// Gegenprobe 01.–14.09.: §19.
+#[tokio::test]
+async fn service_period_end_decides_the_tax_status() {
+    let env = setup().await;
+    add(
+        &env,
+        Some("2026-09-15"),
+        "regelbesteuerung",
+        "wegfall_laufend",
+    )
+    .await
+    .expect("Wegfall laufend");
+    let (invoice_date, start) = (d(2026, 9, 10), d(2026, 9, 1));
+
+    // Zeitraum bis 30.09.: USt-Ausweis als Entwurf zulässig (kein §14c-Block).
+    let regel = create_draft(
+        &env,
+        with_period(
+            input(invoice_date, invoice_date, item(1, 10_000, "S", 19.0)),
+            start,
+            d(2026, 9, 30),
+        ),
+    )
+    .await
+    .expect("Regel-Entwurf");
+    assert!(issue_codes(&env, &regel).await.is_empty());
+    // Steuerart E: Prüfung meldet die Position, Festschreiben lehnt ab.
+    let exempt = create_draft(
+        &env,
+        with_period(
+            input(invoice_date, invoice_date, item(1, 10_000, "E", 0.0)),
+            start,
+            d(2026, 9, 30),
+        ),
+    )
+    .await
+    .expect("Entwurf mit Steuerart E speicherbar");
+    let codes = issue_codes(&env, &exempt).await;
+    assert!(
+        codes.contains(&"ItemExemptWithoutKleinunternehmer".to_string()),
+        "{codes:?}"
+    );
+    let err = lock(&env, &exempt).await.unwrap_err().to_string();
+    assert!(err.contains("Steuerart E"), "{err}");
+    let regel = lock(&env, &regel)
+        .await
+        .expect("Regel am Ende des Zeitraums");
+    assert_eq!(regel.invoice.is_kleinunternehmer, 0);
+    assert_eq!(regel.invoice.tax_amount_cents, 1_900);
+    assert!(!xml_of(&env, &regel).await.contains(HINWEIS_TEXT));
+
+    // Gegenprobe: Zeitraum bis 14.09. bleibt §19.
+    let err = create_draft(
+        &env,
+        with_period(
+            input(invoice_date, invoice_date, item(1, 10_000, "S", 19.0)),
+            start,
+            d(2026, 9, 14),
+        ),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("Entwurf kann nicht gespeichert werden"),
+        "§14c-Schutz: {err}"
+    );
+    let klein = create_draft(
+        &env,
+        with_period(
+            input(invoice_date, invoice_date, item(1, 10_000, "E", 0.0)),
+            start,
+            d(2026, 9, 14),
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(issue_codes(&env, &klein).await.is_empty());
+    let klein = lock(&env, &klein).await.expect("§19 bis 14.09.");
+    assert_eq!(klein.invoice.is_kleinunternehmer, 1);
+    assert_eq!(klein.invoice.tax_amount_cents, 0);
+    assert!(xml_of(&env, &klein).await.contains(HINWEIS_TEXT));
+}
+
+/// V3-R08 (ADR 0042 Nr. 3, 10, 12): Angebot → Rechnung mit Leistungszeitraum
+/// und Leitweg-ID über den Command. Zeitraum gespeichert, Leitweg-ID getrimmt,
+/// kein Leistungsdatum; der Status folgt dem Ende des Zeitraums (Wegfall am
+/// 15.09., Angebot und Rechnungsdatum noch unter §19). Eine einzelne Grenze
+/// wird abgelehnt, das Angebot bleibt angenommen.
+#[tokio::test]
+async fn quote_conversion_takes_service_period_and_buyer_reference() {
+    use klein_buch_lib::commands::quotes as quotes_cmd;
+    use klein_buch_lib::domain::quote::{QuoteInput, QuoteItemInput};
+    let env = setup().await;
+    add(
+        &env,
+        Some("2026-09-15"),
+        "regelbesteuerung",
+        "wegfall_laufend",
+    )
+    .await
+    .expect("Wegfall laufend");
+    let q = quotes_cmd::create_draft_core(
+        &env.pool,
+        quotes_cmd::CreateDraftArgs {
+            contact_id: env.contact.clone(),
+            input: QuoteInput {
+                quote_date: d(2026, 9, 1),
+                valid_until: d(2026, 10, 1),
+                currency_code: "EUR".into(),
+                items: vec![QuoteItemInput {
+                    position: 1,
+                    description: "Wartung".into(),
+                    quantity: 1.0,
+                    unit_code: "C62".into(),
+                    unit_price_cents: 10_000,
+                    tax_rate_percent: 0.0,
+                    tax_category_code: "E".into(),
+                    description_title: None,
+                    description_markup: None,
+                    source_package_id: None,
+                    source_package_revision: None,
+                }],
+                notes: None,
+                pdf_template: "default".into(),
+            },
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(q.quote.is_kleinunternehmer, 1, "Angebot am 01.09.: §19");
+    let quote_id = q.quote.id.clone();
+    quotes_cmd::quotes_issue(
+        &env.ctx,
+        quotes_cmd::QuotesIssueArgs {
+            id: quote_id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    let accept: quotes_cmd::QuotesAcceptArgs = serde_json::from_value(serde_json::json!({
+        "args": { "quoteId": quote_id, "acceptedDate": "2026-09-05", "attachmentLabel": null }
+    }))
+    .unwrap();
+    quotes_cmd::quotes_accept(&env.ctx, accept).await.unwrap();
+    let convert = |extra: serde_json::Value| {
+        let mut args = serde_json::json!({
+            "quoteId": quote_id,
+            "invoiceDate": "2026-09-10",
+            "deliveryDate": null,
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            args[k] = v.clone();
+        }
+        serde_json::from_value::<quotes_cmd::QuotesConvertToInvoiceArgs>(
+            serde_json::json!({ "args": args }),
+        )
+        .unwrap()
+    };
+
+    // Nur eine Grenze: abgelehnt, kein Entwurf, Angebot bleibt angenommen.
+    let err = quotes_cmd::quotes_convert_to_invoice(
+        &env.ctx,
+        convert(serde_json::json!({ "servicePeriodStart": "2026-09-01" })),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("fehlt der Beginn oder das Ende"), "{err}");
+    assert_eq!(count(&env.pool, "SELECT COUNT(*) FROM invoices").await, 0);
+    let status: String = sqlx::query_scalar("SELECT status FROM quotes WHERE id = ?")
+        .bind(&quote_id)
+        .fetch_one(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "accepted");
+
+    let inv = quotes_cmd::quotes_convert_to_invoice(
+        &env.ctx,
+        convert(serde_json::json!({
+            "servicePeriodStart": "2026-09-01",
+            "servicePeriodEnd": "2026-09-30",
+            "buyerReference": "  04011000-12345-67 ",
+        })),
+    )
+    .await
+    .expect("Umwandlung mit Zeitraum");
+    let row = &inv.invoice;
+    assert_eq!(row.service_period_start.as_deref(), Some("2026-09-01"));
+    assert_eq!(row.service_period_end.as_deref(), Some("2026-09-30"));
+    assert_eq!(row.delivery_date, None);
+    assert_eq!(row.buyer_reference.as_deref(), Some("04011000-12345-67"));
+    // Ende des Zeitraums nach dem Wegfall: Regelbesteuerung, die „E“-Position
+    // des §19-Angebots bleibt stehen und wird von der Prüfung gemeldet.
+    assert_eq!(row.is_kleinunternehmer, 0);
+    assert!(inv.items.iter().all(|it| it.tax_category_code == "E"));
+    let codes = issue_codes(&env, &row.id).await;
+    assert!(
+        codes.contains(&"ItemExemptWithoutKleinunternehmer".to_string()),
+        "{codes:?}"
+    );
 }

@@ -172,6 +172,9 @@ fn item(position: u32, qty: f64, price: i64, code: &str, rate: f64) -> InvoiceIt
 
 fn input(items: Vec<InvoiceItemInput>) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: today(),
         delivery_date: Some(today()),
@@ -220,6 +223,7 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
         invoice_number: &detail.invoice.invoice_number,
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
+        service_period: None,
         items: detail
             .items
             .iter()
@@ -1216,6 +1220,7 @@ async fn package_provenance_is_enforced_on_quotes_and_templates() {
         payment_terms_days: 14,
         pdf_template: "default".into(),
         service_period_note: true,
+        buyer_reference: None,
         notes: None,
         items: vec![tmpl_item(120_000, 1), tmpl_item(1_000, 2)],
     };

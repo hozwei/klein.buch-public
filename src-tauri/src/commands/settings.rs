@@ -240,6 +240,9 @@ pub async fn pdf_template_preview(
         email: Some("einkauf@beispielkunde.example"),
     };
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
         delivery_date: chrono::NaiveDate::from_ymd_opt(2026, 1, 12),

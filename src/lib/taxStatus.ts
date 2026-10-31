@@ -36,6 +36,23 @@ export function relevantTaxDate(
   return fallback;
 }
 
+/**
+ * Maßgebliches Datum einer Rechnung (ADR 0042 Nr. 3/10, wie
+ * `domain::tax_status::document_date`): Leistungsdatum, sonst Ende des
+ * Leistungszeitraums, sonst Rechnungsdatum, sonst `fallback`.
+ */
+export function invoiceTaxDate(
+  inv: {
+    deliveryDate?: string | null;
+    servicePeriodEnd?: string | null;
+    invoiceDate?: string | null;
+  },
+  fallback: string,
+): string {
+  const service = relevantTaxDate(inv.deliveryDate, inv.servicePeriodEnd, "");
+  return relevantTaxDate(service, inv.invoiceDate, fallback);
+}
+
 export const TAX_STATUS_LABEL: Record<TaxStatus, string> = {
   kleinunternehmer: "Kleinunternehmer nach §19 UStG",
   regelbesteuerung: "Regelbesteuerung",

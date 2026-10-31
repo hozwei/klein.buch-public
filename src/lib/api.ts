@@ -378,6 +378,11 @@ export function invoicesValidateDraft(id: string): Promise<ValidationIssueDto[]>
   return invoke<ValidationIssueDto[]>("invoices_validate_draft", { id });
 }
 
+/**
+ * Stellt einen Entwurf aus. `buyerReference` ist optional (ADR 0042 Nr. 12):
+ * ein Wert (nicht leer, nicht „N/A“) ersetzt die am Entwurf gespeicherte
+ * Leitweg-ID; ohne Wert gilt die gespeicherte, sonst „N/A“.
+ */
 export function invoicesLockAndIssue(
   id: string,
   buyerReference: string | null = null,

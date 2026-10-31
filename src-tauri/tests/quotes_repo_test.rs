@@ -130,6 +130,9 @@ async fn mk_invoice_draft(
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
         delivery_date: None,
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         due_date: None,
         currency_code: "EUR".into(),
         items: vec![InvoiceItemInput {

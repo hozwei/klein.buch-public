@@ -45,6 +45,13 @@ rückgängig machen, die Rechnung selbst bleibt erhalten. Erst
    Überschrift „Stornorechnung“ — auch in der E-Rechnung (XML)
 5. Der Leitweg-ID der Original-Rechnung in der E-Rechnung, falls die
    Rechnung eine hatte (Rechnung an eine Behörde)
+6. Dem Leistungszeitraum der Original-Rechnung, falls sie einen hatte
+   (sonst dem Storno-Datum als Leistungsdatum)
+
+Die Karte "Original-Rechnung" auf der Storno-Seite zeigt Leistungsdatum
+bzw. Leistungszeitraum und, falls vorhanden, die Leitweg-ID der
+Rechnung, damit Du vor dem Stornieren siehst, was der Storno-Beleg
+übernimmt.
 
 Das Storno-Datum liegt zwischen dem Rechnungsdatum und heute. Ist die
 Rechnung schon (ganz oder teilweise) bezahlt, frühestens am Tag des letzten

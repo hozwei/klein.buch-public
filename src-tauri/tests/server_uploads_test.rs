@@ -352,6 +352,9 @@ fn sample_xrechnung() -> String {
         email: Some("kontakt@example.org"),
     };
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
         delivery_date: None,

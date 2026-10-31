@@ -36,8 +36,17 @@
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
-  import { quoteConversionHint, relevantTaxDate } from "#lib/taxStatus.ts";
+  import { invoiceTaxDate, quoteConversionHint } from "#lib/taxStatus.ts";
   import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
+  import ServiceDateFields from "#lib/ServiceDateFields.svelte";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import {
+    buyerReferenceError,
+    normalizeBuyerReference,
+    serviceDateInvalid,
+    serviceDatePayload,
+    type ServiceDateMode,
+  } from "#lib/serviceDate.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge.
@@ -88,17 +97,24 @@
   let submitted = $state(false);
 
   // Rechnungs-spezifische Felder (das Angebot trägt sie nicht).
-  // Heute = Obergrenze für Rechnungs- und Leistungsdatum (keine Zukunft).
+  // Heute = Obergrenze für das Rechnungsdatum (keine Zukunft). Das Leistungsdatum
+  // darf danach liegen (Vorausrechnung, ADR 0042 Nr. 11).
   const today = todayBerlin();
   let invoiceDate = $state(today);
-  // U1: Leistungsdatum (Pflicht, §14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
+  // U1: Leistungsdatum (§14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
   // vorbelegt — sichtbar und änderbar; es folgt dem Rechnungsdatum, bis es von
   // Hand geändert wird (Angebote tragen kein eigenes Leistungsdatum).
+  // ADR 0042 Nr. 10: alternativ ein Leistungszeitraum von–bis.
+  let serviceMode = $state<ServiceDateMode>("date");
   let deliveryDate = $state(today);
   let deliveryDateTouched = $state(false);
   $effect(() => {
     if (!deliveryDateTouched) deliveryDate = invoiceDate;
   });
+  let periodStart = $state("");
+  let periodEnd = $state("");
+  // ADR 0042 Nr. 12: Leitweg-ID der Rechnung, am Entwurf gespeichert.
+  let buyerReference = $state("");
   let dueDate = $state("");
   let pdfTemplate = $state("default");
   let notes = $state("");
@@ -137,7 +153,9 @@
 
   // ADR 0042 Nr. 3: Status am Leistungsdatum der Rechnung (sonst Rechnungsdatum),
   // nicht der von heute und nicht der eingefrorene des Angebots.
-  let taxDate = $derived(relevantTaxDate(deliveryDate, invoiceDate, today));
+  // Bei einem Zeitraum gilt dessen Ende (ADR 0042 Nr. 10).
+  let serviceFields = $derived(serviceDatePayload(serviceMode, deliveryDate, periodStart, periodEnd));
+  let taxDate = $derived(invoiceTaxDate({ ...serviceFields, invoiceDate }, today));
   const taxAt = taxStatusAtDate(() => taxDate);
   let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
   let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
@@ -174,13 +192,9 @@
         ? "Das Rechnungsdatum darf nicht in der Zukunft liegen."
         : "",
   );
-  let errDeliveryDate = $derived(
-    !deliveryDate
-      ? "Bitte das Leistungsdatum angeben."
-      : deliveryDate > (invoiceDate || today)
-        ? "Das Leistungsdatum darf nicht nach dem Rechnungsdatum liegen."
-        : "",
-  );
+  // Leistungsdatum bzw. -zeitraum: Meldungen stehen am Feld (ServiceDateFields).
+  let errServiceDate = $derived(serviceDateInvalid(serviceMode, deliveryDate, periodStart, periodEnd));
+  let errBuyerReference = $derived(buyerReferenceError(buyerReference));
   // V1-04: Fälligkeit ist Pflicht für die E-Rechnung (domain::invoice, XRechnungDueDateMissing
   // bei offenem Betrag) — Meldung schon beim Umwandeln statt erst beim Ausstellen.
   let errDueDate = $derived(
@@ -352,7 +366,7 @@
       return;
     }
     submitted = true;
-    if (errInvoiceDate || errDeliveryDate || errDueDate || items.some(itemInvalid)) {
+    if (errInvoiceDate || errServiceDate || errBuyerReference || errDueDate || items.some(itemInvalid)) {
       await focusFirstInvalid();
       return;
     }
@@ -369,7 +383,9 @@
       const args: QuoteConvertArgs = {
         quoteId: detail.quote.id,
         invoiceDate,
-        deliveryDate: deliveryDate || null,
+        // ADR 0042 Nr. 10/12: Leistungsdatum ODER Zeitraum, Leitweg-ID (leer = keine).
+        ...serviceFields,
+        buyerReference: normalizeBuyerReference(buyerReference),
         dueDate: dueDate || null,
         pdfTemplate: pdfTemplate || null,
         notes: notes.trim() || null,
@@ -423,7 +439,7 @@
     </Banner>
   {:else}
     <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
-      dateLabel={deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
+      dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung" />
     {#if conversionHint}
       <Banner kind="warning" title="Anderer Steuerstatus als im Angebot.">{conversionHint}</Banner>
     {/if}
@@ -447,20 +463,6 @@
             {#if submitted && errInvoiceDate}<span id="err-invoice-date" class="field-err">{errInvoiceDate}</span>{/if}
           </label>
           <label>
-            <span>Leistungsdatum <span class="req" aria-hidden="true">*</span></span>
-            <input
-              type="date"
-              class="kb-w-date"
-              bind:value={deliveryDate}
-              oninput={() => (deliveryDateTouched = true)}
-              max={invoiceDate || today}
-              required
-              aria-invalid={submitted && errDeliveryDate ? "true" : undefined}
-              aria-describedby={submitted && errDeliveryDate ? "err-delivery-date" : undefined}
-            />
-            {#if submitted && errDeliveryDate}<span id="err-delivery-date" class="field-err">{errDeliveryDate}</span>{/if}
-          </label>
-          <label>
             <span>Fälligkeit <span class="req" aria-hidden="true">*</span></span>
             <input
               type="date"
@@ -477,6 +479,19 @@
               <span id="hint-due-date" class="field-hint">Pflicht für die E-Rechnung.</span>
             {/if}
           </label>
+          <!-- ADR 0042 Nr. 10/11: Leistungsdatum oder -zeitraum; Vorausrechnung erlaubt (Hinweis). -->
+          <div class="span-all">
+            <ServiceDateFields
+              bind:mode={serviceMode}
+              bind:deliveryDate
+              bind:periodStart
+              bind:periodEnd
+              {invoiceDate}
+              showErrors={submitted}
+              idPrefix="conv-svc"
+              ondeliveryinput={() => (deliveryDateTouched = true)}
+            />
+          </div>
           <!-- V1-04: Währung fest (nur Euro), kein Eingabefeld. -->
           <div class="fixed-field">
             <span class="fixed-lbl">Währung</span>
@@ -495,6 +510,8 @@
             </select>
             {#if stornoHint}<span id="hint-pdf-template" class="field-hint">{stornoHint}</span>{/if}
           </label>
+          <!-- ADR 0042 Nr. 12: Leitweg-ID am Rechnungs-Entwurf. -->
+          <BuyerReferenceField bind:value={buyerReference} id="conv-buyer-ref" showErrors={submitted} class="span-all" />
         </div>
         <p class="muted small">Jahr der Rechnung: {fiscalYear()} · Empfänger: {detail.buyer?.name ?? "—"}</p>
       </section>
@@ -758,7 +775,7 @@
   .card-hdr { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
   /* Vorlage über die volle Zeile, Felder so breit wie ihr Inhalt (U3-031). */
-  .grid > .span-all { grid-column: 1 / -1; }
+  .grid > .span-all, .grid > :global(.span-all) { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   .paid-note { margin-top: var(--sp-2); }
   input, select, textarea {

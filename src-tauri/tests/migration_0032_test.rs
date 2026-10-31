@@ -483,6 +483,7 @@ async fn storno_pair_is_final_and_idempotent() {
         is_kleinunternehmer: None,
         tax_status_date: None,
         totals: None,
+        buyer_reference: None,
     };
     // Archiv-IDs sind FKs — echte Einträge anlegen
     for (id, p) in [("ap", "/a/p.pdf"), ("ax", "/a/x.xml")] {

@@ -34,7 +34,9 @@ normalen Rechnung. Setze unter "Frequenz" den Rhythmus:
 **monatlich**, **vierteljährlich**, **halbjährlich** oder
 **jährlich**, dazu den "Stichtag (Tag im Monat, 1–31)" und das
 "Zahlungsziel" in Tagen. Trage die "Nächste Fälligkeit" ein und
-optional ein "Laufzeit-Ende". Die erste Fälligkeit darf nicht in der
+optional ein "Laufzeit-Ende". Schreibst Du an eine Behörde, trägst
+Du die "Leitweg-ID (optional)" ein; jede Rechnung aus der Vorlage
+bekommt sie. Die erste Fälligkeit darf nicht in der
 Vergangenheit liegen; Rechnungen für zurückliegende Zeiträume legst
 Du einzeln an. Danach schreibt Klein.Buch die Fälligkeit selbst fort;
 beim Bearbeiten lässt sie sich nicht mehr ändern.
@@ -55,9 +57,21 @@ falsch), bleibt die Rechnung ausgestellt liegen und Klein.Buch legt
 einen Eintrag unter "Hinweise" an. Du kannst die Rechnung dann
 manuell verschicken.
 
-Mit dem Schalter "Leistungszeitraum automatisch auf die Rechnung
-schreiben" steht auf jeder erzeugten Rechnung der Zeitraum, zum
-Beispiel "Leistungszeitraum: Mai 2026".
+Jede erzeugte Rechnung trägt den Abrechnungszeitraum als
+Leistungszeitraum: vom Stichtag bis zum Tag vor dem nächsten Stichtag,
+bei einem quartalsweisen Abo ab 01.04.2026 also 01.04.2026 – 30.06.2026
+(im PDF und als Rechnungszeitraum in der E-Rechnung). Das Formular
+zeigt unter dem Schalter, welchen Zeitraum die nächste Rechnung
+trägt. Mit dem Schalter "Leistungszeitraum zusätzlich in Position 1
+nennen" steht er auch im Text der ersten Position, zum Beispiel
+"Leistungszeitraum: Mai 2026" bei einem ganzen Monat; ohne Schalter
+fehlt nur dieser Text, der Zeitraum selbst bleibt auf der Rechnung.
+Eine Leitweg-ID der Vorlage bekommt jede erzeugte Rechnung.
+
+Für den Steuerstatus (§19 oder Regelbesteuerung) zählt bei
+Abo-Rechnungen das Ende des Abrechnungszeitraums. Der Hinweis über dem
+Formular nennt deshalb den Status am Ende des nächsten
+Abrechnungszeitraums.
 
 Klick auf "Abo-Vorlage anlegen". Die Liste zeigt danach die nächste
 Fälligkeit.

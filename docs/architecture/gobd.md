@@ -55,7 +55,8 @@ im Trigger ergänzen.
 **Geschützt:** `locked_at` (kein Zurücksetzen, kein neuer Wert),
 `invoice_number`, `invoice_date`, `net_amount_cents`, `gross_amount_cents`,
 `tax_amount_cents`, `contact_id`, `fiscal_year`, `is_kleinunternehmer`,
-`direction`, `delivery_date`, `due_date`, `currency_code`, `pdf_template`,
+`direction`, `delivery_date`, `service_period_start`, `service_period_end`,
+`buyer_reference` (seit Migration 0035), `due_date`, `currency_code`, `pdf_template`,
 `is_storno_for`, `derived_from_quote_id`, `paid_to_account_id`, `payment_note`,
 `pdf_archive_id`, `xml_archive_id`, alle `buyer_*`- und `seller_*`-Snapshot-
 Spalten.

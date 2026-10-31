@@ -15,7 +15,7 @@
 //! schreibt danach `next_due_date` + `last_*` fort.
 
 use crate::db::models::{RecurringInvoiceDetail, RecurringInvoiceItemRow, RecurringInvoiceRow};
-use crate::domain::invoice::compute_totals;
+use crate::domain::invoice::{compute_totals, normalize_buyer_reference};
 use crate::domain::recurring_invoice::RecurringInvoiceInput;
 use crate::error::{Error, Result};
 use sqlx::{SqliteConnection, SqlitePool};
@@ -39,8 +39,8 @@ pub async fn create(
         "INSERT INTO recurring_invoices (
             id, label, contact_id, frequency, day_of_period, next_due_date,
             start_date, end_date, auto_mode, payment_terms_days, pdf_template,
-            service_period_note, notes
-         ) VALUES (?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?)",
+            service_period_note, notes, buyer_reference
+         ) VALUES (?, ?, ?, ?, ?, ?,  ?, ?, ?, ?, ?,  ?, ?, ?)",
     )
     .bind(&id)
     .bind(input.label.trim())
@@ -59,6 +59,7 @@ pub async fn create(
         0i64
     })
     .bind(input.notes.as_deref())
+    .bind(normalize_buyer_reference(input.buyer_reference.as_deref()))
     .execute(&mut *tx)
     .await?;
 
@@ -89,7 +90,7 @@ pub async fn update(
         "UPDATE recurring_invoices SET
             label = ?, contact_id = ?, frequency = ?, day_of_period = ?,
             start_date = ?, end_date = ?, auto_mode = ?, payment_terms_days = ?,
-            pdf_template = ?, service_period_note = ?, notes = ?,
+            pdf_template = ?, service_period_note = ?, notes = ?, buyer_reference = ?,
             updated_at = datetime('now','utc')
          WHERE id = ?",
     )
@@ -108,6 +109,7 @@ pub async fn update(
         0i64
     })
     .bind(input.notes.as_deref())
+    .bind(normalize_buyer_reference(input.buyer_reference.as_deref()))
     .bind(id)
     .execute(&mut *tx)
     .await?;

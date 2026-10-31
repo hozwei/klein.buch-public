@@ -103,6 +103,10 @@ pub struct RecurringInvoiceInput {
     /// Interne Notiz (optional).
     #[serde(default)]
     pub notes: Option<String>,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung
+    /// (ADR 0042 Nr. 12). Leer oder „N/A“ = keine.
+    #[serde(default)]
+    pub buyer_reference: Option<String>,
     /// Positionen — kanonischer Rechnungs-Positionstyp.
     pub items: Vec<InvoiceItemInput>,
 }
@@ -113,17 +117,43 @@ pub struct RecurringInvoiceInput {
 pub enum RecurringInvoiceValidationError {
     LabelMissing,
     ContactMissing,
-    FrequencyInvalid { value: String },
-    DayOfPeriodOutOfRange { day: i64 },
-    AutoModeInvalid { value: String },
-    PaymentTermsNegative { days: i64 },
-    EndDateBeforeNextDue { end: NaiveDate, next_due: NaiveDate },
+    FrequencyInvalid {
+        value: String,
+    },
+    DayOfPeriodOutOfRange {
+        day: i64,
+    },
+    AutoModeInvalid {
+        value: String,
+    },
+    PaymentTermsNegative {
+        days: i64,
+    },
+    EndDateBeforeNextDue {
+        end: NaiveDate,
+        next_due: NaiveDate,
+    },
     NoItems,
-    ItemDescriptionMissing { position: u32 },
-    ItemQuantityNotPositive { position: u32, quantity: f64 },
-    ItemUnitPriceNegative { position: u32, cents: i64 },
-    ItemTaxCategoryInvalid { position: u32, code: String },
-    TotalNotPositive { total: i64 },
+    ItemDescriptionMissing {
+        position: u32,
+    },
+    ItemQuantityNotPositive {
+        position: u32,
+        quantity: f64,
+    },
+    ItemUnitPriceNegative {
+        position: u32,
+        cents: i64,
+    },
+    ItemTaxCategoryInvalid {
+        position: u32,
+        code: String,
+    },
+    TotalNotPositive {
+        total: i64,
+    },
+    /// Leitweg-ID zu lang oder mit Steuerzeichen (ADR 0042 Nr. 12).
+    BuyerReferenceInvalid,
 }
 
 /// Validiert eine [`RecurringInvoiceInput`]. Aggregiert alle Fehler (kein
@@ -198,6 +228,14 @@ pub fn validate_recurring_invoice(
         }
     }
 
+    if let Some(r) =
+        crate::domain::invoice::normalize_buyer_reference(input.buyer_reference.as_deref())
+    {
+        if !crate::domain::invoice::buyer_reference_valid(&r) {
+            errs.push(E::BuyerReferenceInvalid);
+        }
+    }
+
     // Gesamt-Netto muss positiv sein (eine Vorlage über 0,00 € ergibt keinen
     // sinnvollen Beleg). Nur prüfen, wenn überhaupt Positionen da sind.
     if !input.items.is_empty() {
@@ -255,6 +293,11 @@ pub fn message(e: &RecurringInvoiceValidationError) -> String {
         E::TotalNotPositive { total } => {
             format!("Gesamtbetrag muss größer als 0 sein ({}).", eur(*total))
         }
+        E::BuyerReferenceInvalid => format!(
+            "Die Leitweg-ID darf höchstens {} Zeichen lang sein und keine Steuerzeichen \
+             enthalten.",
+            crate::domain::invoice::BUYER_REFERENCE_MAX_CHARS
+        ),
     }
 }
 
@@ -275,6 +318,7 @@ pub fn variant_name(e: &RecurringInvoiceValidationError) -> &'static str {
         E::ItemUnitPriceNegative { .. } => "ItemUnitPriceNegative",
         E::ItemTaxCategoryInvalid { .. } => "ItemTaxCategoryInvalid",
         E::TotalNotPositive { .. } => "TotalNotPositive",
+        E::BuyerReferenceInvalid => "BuyerReferenceInvalid",
     }
 }
 
@@ -315,6 +359,7 @@ mod tests {
             payment_terms_days: 14,
             pdf_template: "default".into(),
             service_period_note: true,
+            buyer_reference: None,
             notes: None,
             items: vec![item()],
         }

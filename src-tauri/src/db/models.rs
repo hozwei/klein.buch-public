@@ -211,6 +211,11 @@ pub struct InvoiceRow {
     // Grund. Die Nummer bleibt verbraucht; status bleibt 'draft'.
     pub voided_at: Option<String>,
     pub void_reason: Option<String>,
+    // Leistungszeitraum (BG-14, JJJJ-MM-TT) und Leitweg-ID bzw. Käuferreferenz
+    // (BT-10; `None` = „N/A“) — Migration 0035, ADR 0042 Nr. 10–12.
+    pub service_period_start: Option<String>,
+    pub service_period_end: Option<String>,
+    pub buyer_reference: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -684,6 +689,9 @@ pub struct RecurringInvoiceRow {
     pub notes: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung
+    /// (Migration 0035, ADR 0042 Nr. 12). `None` = „N/A“.
+    pub buyer_reference: Option<String>,
 }
 
 /// Eine Position einer Abo-Rechnungs-Vorlage. Spiegelt [`InvoiceItemRow`]

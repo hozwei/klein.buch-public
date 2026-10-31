@@ -27,7 +27,9 @@
   import { euro, date, dateTime, dateTimeShort, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { todayBerlin } from "#lib/date.ts";
-  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { invoiceTaxDate } from "#lib/taxStatus.ts";
+  import { buyerReferenceError, normalizeBuyerReference, serviceSummary } from "#lib/serviceDate.ts";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
   import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import { dayClock } from "#lib/dayClock.svelte.ts";
   import Banner from "#lib/Banner.svelte";
@@ -78,8 +80,21 @@
   // Ablehnung beim Ausstellen: Gründe als stehendes Banner (ADR 0041 Nr. 22).
   let issueFailure = $state<string[] | null>(null);
   let issueBannerEl: HTMLDivElement | undefined = $state();
-  // V1-21: Leitweg-ID leer; beim Ausstellen gilt leer als „N/A“ (wie bisher).
+  // ADR 0042 Nr. 12: Leitweg-ID mit dem am Entwurf gespeicherten Wert vorbelegt.
+  // Ein geänderter Wert gilt beim Ausstellen; leer gilt der gespeicherte, sonst „N/A“.
   let buyerReference = $state("");
+  let issueTried = $state(false);
+  // Leitweg-ID, die beim Ausstellen in die E-Rechnung geht (Feld vor gespeichertem Wert).
+  let effectiveBuyerReference = $derived(
+    normalizeBuyerReference(buyerReference) ?? normalizeBuyerReference(detail?.invoice.buyerReference),
+  );
+  let buyerReferenceNote = $derived.by(() => {
+    const stored = normalizeBuyerReference(detail?.invoice.buyerReference);
+    if (!stored) return "";
+    return normalizeBuyerReference(buyerReference)
+      ? "Am Entwurf gespeichert; eine Änderung hier gilt für diese E-Rechnung."
+      : `Leer gilt die am Entwurf gespeicherte Leitweg-ID „${stored}“. Entfernen lässt sie sich über „Entwurf bearbeiten“.`;
+  });
   let sendLog = $state<EmailLogEntry[]>([]);
   // Lauf F3b: Entwurf verwerfen (Grund ≥ 10 Zeichen, Re-Auth im Server).
   let showVoid = $state(false);
@@ -101,14 +116,14 @@
   const todayIso = $derived(todayBerlin(dayClock.now));
 
   // ADR 0042 Nr. 3 (V1-R06): Ein Entwurf zeigt den Steuerstatus seines Datums
-  // (Leistungsdatum, sonst Rechnungsdatum) wie der Editor; der gespeicherte Wert
-  // ist bis zum Festschreiben nur vorläufig. Festgeschriebene Belege zeigen den
-  // eingefrorenen Wert, Storno-Belege den des Originals, verworfene Entwürfe den
-  // gespeicherten.
+  // (Leistungsdatum, sonst Ende des Leistungszeitraums, sonst Rechnungsdatum) wie
+  // der Editor; der gespeicherte Wert ist bis zum Festschreiben nur vorläufig.
+  // Festgeschriebene Belege zeigen den eingefrorenen Wert, Storno-Belege den des
+  // Originals, verworfene Entwürfe den gespeicherten.
   const draftTaxDate = $derived.by(() => {
     const i = detail?.invoice;
     if (!i || i.lockedAt || i.voidedAt || i.isStornoFor) return "";
-    return relevantTaxDate(i.deliveryDate, i.invoiceDate, todayIso);
+    return invoiceTaxDate(i, todayIso);
   });
   const draftTaxAt = taxStatusAtDate(() => draftTaxDate);
   let isKlein = $derived(
@@ -126,7 +141,11 @@
       if (!detail) {
         notFound = true;
         error = "Rechnung nicht gefunden.";
-      } else await loadRelated(detail);
+      } else {
+        buyerReference = detail.invoice.buyerReference ?? "";
+        issueTried = false;
+        await loadRelated(detail);
+      }
       try {
         sendLog = await emailLogFor("invoice", id);
       } catch {
@@ -212,7 +231,14 @@
 
   async function lockAndIssue() {
     if (!detail || issuing) return;
-    const ref = buyerReference.trim();
+    // Meldung am Feld Leitweg-ID statt Rückfrage (ADR 0041, Fehler am Feld).
+    issueTried = true;
+    if (buyerReferenceError(buyerReference)) {
+      await tick();
+      document.getElementById("buyer-ref")?.focus();
+      return;
+    }
+    const ref = effectiveBuyerReference;
     if (
       !(await confirmDialog({
         title: "Rechnung jetzt ausstellen?",
@@ -229,7 +255,8 @@
     issuing = true;
     issueFailure = null;
     try {
-      await invoicesLockAndIssue(detail.invoice.id, ref || "N/A");
+      // ADR 0042 Nr. 12: ohne Wert gilt die am Entwurf gespeicherte Leitweg-ID.
+      await invoicesLockAndIssue(detail.invoice.id, normalizeBuyerReference(buyerReference));
       flash(`Rechnung ${detail.invoice.invoiceNumber} ausgestellt.`);
       await load();
     } catch (e) {
@@ -662,8 +689,12 @@
       <h2>Daten</h2>
       <dl>
         <dt>Jahr</dt><dd>{inv.fiscalYear}</dd>
-        <dt>Leistung</dt><dd>{date(inv.deliveryDate)}</dd>
+        <!-- ADR 0042 Nr. 10/12: Leistungsdatum oder -zeitraum, Leitweg-ID (BT-10). -->
+        <dt>{serviceSummary(inv).label}</dt><dd>{serviceSummary(inv).text}</dd>
         <dt>Fällig</dt><dd>{date(inv.dueDate)}</dd>
+        {#if inv.buyerReference}
+          <dt>Leitweg-ID</dt><dd>{inv.buyerReference}</dd>
+        {/if}
         <dt>PDF-Vorlage</dt><dd>{pdfTemplateLabel(inv.pdfTemplate)}</dd>
         {#if inv.paymentNote}
           <!-- V1-08: Bezahlt-Hinweis (reiner Text auf dem Beleg, keine Buchung). -->
@@ -738,7 +769,7 @@
 
   {#if !inv.lockedAt && !inv.voidedAt && !inv.isStornoFor}
     <!-- V1-06/V1-03: Karte „Ausstellen“ unter den Positionen — Prüfung, Leitweg-ID (BT-10,
-         der Entwurf speichert sie nicht, ADR 0041 Nr. 91) und die Hauptaktion am Ende. -->
+         vom Entwurf vorbelegt, ADR 0042 Nr. 12) und die Hauptaktion am Ende. -->
     <section class="card issue-card" aria-labelledby="issue-h">
       <h2 id="issue-h">Ausstellen</h2>
       <p class="check-line" class:ok={!issueFailure && issues !== null && issues.length === 0} role="status">{issueFailure ? "" : checkText}</p>
@@ -775,20 +806,10 @@
           </ul>
         {/if}
       {/if}
-      <label class="ref-lbl" for="buyer-ref">Leitweg-ID (optional)</label>
-      <input
-        id="buyer-ref"
-        type="text"
-        class="kb-input kb-w-medium"
-        bind:value={buyerReference}
-        autocomplete="off"
-        spellcheck="false"
-        aria-describedby="buyer-ref-hint"
-      />
-      <p id="buyer-ref-hint" class="field-hint">
-        Nur bei öffentlichen Auftraggebern (Behörden): Die Leitweg-ID steht als Käuferreferenz in
-        der E-Rechnung. Leer lassen, wenn der Auftraggeber keine Behörde ist.
-      </p>
+      <!-- ADR 0042 Nr. 12: am Entwurf gespeicherte Leitweg-ID vorbelegt; ein geänderter Wert gilt für diese E-Rechnung. -->
+      <div class="ref-field">
+        <BuyerReferenceField bind:value={buyerReference} id="buyer-ref" showErrors={issueTried} note={buyerReferenceNote} />
+      </div>
       <!-- U1/V1-06: Hauptaktion am Ende (Handy, Daumen; PageBar klebt dort nicht). -->
       <div class="kb-form-end">
         <Button onclick={lockAndIssue} ariaDisabled={issuing}>
@@ -1000,8 +1021,7 @@
   .meta { display: inline-flex; align-items: center; white-space: nowrap; }
   /* V3-14: Das Leerzeichen vor dem Trennpunkt bleibt auch am Anfang eines Flex-Elements. */
   .meta > .sep { white-space: pre; }
-  .ref-lbl { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin: var(--sp-3) 0 var(--sp-1); }
-  .issue-card .field-hint { margin-top: var(--sp-1); }
+  .ref-field { margin-top: var(--sp-3); }
   .check-line { margin: 0 0 var(--sp-2); }
   /* Leer bleibt die Zeile im Accessibility-Tree (Live-Region), nur ohne Abstand. */
   .check-line:empty { margin: 0; }
