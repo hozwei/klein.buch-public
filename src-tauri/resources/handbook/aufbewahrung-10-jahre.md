@@ -8,18 +8,26 @@ keywords: [aufbewahrung, frist, 10 jahre, §147 ao, archiv, prüfung, beleg]
 
 # Aufbewahrung 10 Jahre
 
-Rechnungen und alle steuerlich relevanten Belege musst Du in
-Deutschland 10 Jahre aufbewahren. Die genaue Frist regelt §147 AO
-(Abgabenordnung). Sie beginnt mit Ablauf des Kalenderjahres, in
-dem der Beleg entstanden ist (Rechnungsdatum, Quittungsdatum,
-Buchungs-Eintrag) — also am 1. Januar des Folgejahres.
+Steuerlich relevante Unterlagen musst Du in Deutschland mehrere Jahre
+aufbewahren. Die Fristen regelt §147 AO (Abgabenordnung): 10 Jahre
+für Bücher und Aufzeichnungen (bei Dir etwa die EÜR, das
+Anlagenverzeichnis und die Buchungen in Klein.Buch), seit 2025 8 Jahre
+für Buchungsbelege wie Rechnungen und Quittungen (§147 Abs. 3 AO und
+§14b UStG in der Fassung des Vierten Bürokratieentlastungsgesetzes)
+und 6 Jahre für Geschäftsbriefe. Die Frist beginnt mit Ablauf des
+Kalenderjahres, in dem die Unterlage entstanden ist (Rechnungsdatum,
+Quittungsdatum, Buchungs-Eintrag) — also am 1. Januar des Folgejahres.
+Klein.Buch bewahrt alles einheitlich 10 Jahre auf, weil Belege und
+Buchungen in derselben Datenbank stehen; länger aufzubewahren ist
+erlaubt.
 
 ## Beispiel
 
 Eine Rechnung mit Rechnungsdatum Mai 2026 ist 2026 entstanden.
-Die Aufbewahrungs-Frist beginnt am 1. Januar 2027 und endet am
-31. Dezember 2036. Du musst die Rechnung also bis zum
-31. Dezember 2036 nachweisbar vorhalten können.
+Die Aufbewahrungs-Frist beginnt am 1. Januar 2027; für die Rechnung
+als Buchungsbeleg endet sie am 31. Dezember 2034, für die Buchung in
+Deiner EÜR am 31. Dezember 2036. Klein.Buch hält beides bis
+mindestens Ende 2036 vor.
 
 Auch wenn Du Dein Gewerbe vorher abmeldest, läuft die Frist
 weiter. Du musst die Belege auch dann noch zugänglich haben, wenn
@@ -36,8 +44,7 @@ Du gar nicht mehr selbständig bist.
 7. Geschäfts-Korrespondenz, soweit steuerlich relevant (für reine
    Handels- und Geschäftsbriefe gilt nach §147 Abs. 3 AO eine
    kürzere 6-Jahres-Frist; Klein.Buch behandelt seine Inhalte
-   einheitlich mit 10 Jahren, weil Rechnungen und Buchungen so
-   eingestuft sind)
+   einheitlich mit 10 Jahren)
 8. Sonstige Aufzeichnungen, die für die Besteuerung relevant sind
    (Fahrtenbuch, Reisekosten-Aufstellungen)
 
@@ -87,14 +94,15 @@ Belege. Es gibt absichtlich keinen Knopf, der eine einzelne
 Rechnung aus der Datenbank entfernt. Es gibt auch keine Funktion,
 die alle Daten auf einmal löscht. Eine Instanz endet nur, wenn Du als
 Betreiber ihr Daten-Volume auf dem Server löschst. Dann trägst Du
-selbst die Verantwortung dafür, dass die Belege der letzten 10 Jahre
-anderswo erhalten bleiben, zum Beispiel in einem Export oder einem
-Backup samt Passphrase.
+selbst die Verantwortung dafür, dass die Unterlagen, die Du noch
+aufbewahren musst (Bücher und Aufzeichnungen 10 Jahre, Buchungsbelege
+8 Jahre, Geschäftsbriefe 6 Jahre), anderswo erhalten bleiben, zum
+Beispiel in einem Export oder einem Backup samt Passphrase.
 
 Das wirkt am Anfang umständlich. Es schützt Dich aber
 verlässlich: Bei einer späteren Prüfung kannst Du dem Finanzamt
-zeigen, dass Du die 10-Jahres-Frist von Anfang an architektonisch
-nicht brechen konntest.
+zeigen, dass Du die Aufbewahrungsfristen von Anfang an
+architektonisch nicht brechen konntest.
 
 ## Nach Ablauf der Frist
 
@@ -143,4 +151,4 @@ Kapitel "Notfall: Instanz neu aufsetzen und wiederherstellen".
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

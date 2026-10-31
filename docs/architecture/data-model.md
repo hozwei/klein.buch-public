@@ -350,7 +350,8 @@ Standard (`ensure_one_default`).
 
 Für die Oberfläche liefern einige Lese-Commands Felder, die keine eigene Spalte
 haben, sondern aus bestehenden Daten abgeleitet werden (ADR 0041 Nr. 80–86).
-Schema und Schreibwege bleiben unverändert (Schema v32).
+Schema und Schreibwege bleiben dafür unverändert (eingeführt mit Schema v32; die
+Zeilen mit ADR 0042 kamen in Lauf 2026.11.1 hinzu, Schema v35).
 
 | Feld (Frontend-Typ) | Command | Quelle | ADR 0041 |
 |---|---|---|---|
@@ -365,6 +366,9 @@ Schema und Schreibwege bleiben unverändert (Schema v32).
 | `TaxStatusOverview` (neuer Command) | `tax_status_overview` | `tax_status_changes` (Verlauf mit widerrufenen Einträgen, Status heute, Bindung, frühestmögliche Rückkehr, widerrufbarer Eintrag) und Zahlungseingänge (Gesamtumsatz Vorjahr/laufendes Jahr, Grenzhinweise); Abschnitt „Steuerstatus“ in „Meine Firmendaten“ | ADR 0042 |
 | `InvoiceDetail.payments` (`InvoicePayment[]`) | `invoices_get` | `invoice_payments` (Zahlungen und Gegenbuchungen in Erfassungsreihenfolge, `reversedById` aus dem Verweis der Gegenbuchung; `reversible`/`notReversibleReason` aus Rechnung, Storno-Stand und `fiscal_year_locks`). Die Oberfläche liest nur dieses Feld (`routes/invoices/paymentHistory.ts`: Verweise, wirksame Zahlungen, frühestes Storno-Datum ohne stornierte Paare); `Invoice.paymentHistoryJson` ist eingefroren und wird nicht mehr angezeigt | ADR 0042 Nr. 8 |
 | `EuerIncomeItem.isReversal`, `reversed` | `euer_package` | `invoice_payments.kind` bzw. Verweis einer Gegenbuchung; Kennzeichnung in der Einzelaufstellung der Seite „EÜR-Export“ („Gegenbuchung“, „Storniert“), Betrag mit Vorzeichen | ADR 0042 Nr. 9 |
+| `InvoiceDetail.restoreConflict`, `QuoteDetail.restoreConflict` (`"flagged"` \| `"confirmed"` \| `null`) | `invoices_get`, `quotes_get` | Restore-Vormerkung eines offenen Entwurfs (`backup::after_restore::draft_restore_state`); nur für nicht verworfene Entwürfe ohne `locked_at`. Die Editoren zeigen den Zustand vor dem Speichern | ADR 0042 Nr. 25 |
+| `BacklogPreview` (neuer Command) | `recurring_backlog_preview` | Abo-Rechnung bzw. Kosten-Abo: fällige Termine bis heute, die ersten Daten bis zur Grenze, Folge von „ab heute fortsetzen“; gerechnet wie der Lauf, ohne zu buchen | ADR 0042 Nr. 27 |
+| `VatAdjustmentOverview` (neuer Command) | `vat_adjustment_overview` | Anlagen aus nicht stornierten Kosten mit bekannter Vorsteuer und `tax_status_changes`: Berichtigungszeitraum, Anteil je Jahr, Vereinfachungen nach § 44 UStDV; nicht gespeichert, ohne Buchung | ADR 0042 Nr. 14, 30 |
 
 Berater- und Mandantennummer für den DATEV-Export stehen nicht in der Datenbank:
 Die Oberfläche merkt sie im Browser (`localStorage`) und übergibt sie je Export
@@ -534,8 +538,8 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). 2026-10-27 (Lauf 2026.11.1, V1): Schema v33, `tax_status_changes`, Spiegelspalten im Profil (gegen `migrations/0033_tax_status_history.sql` und `src/db/repo/tax_status.rs` geprüft). 2026-10-31 (Lauf 2026.11.1, V2): Schema v34, `invoice_payments` samt Triggern, Cache-Spalten der Rechnung, `InvoiceDetail.payments` (gegen `migrations/0034_invoice_payment_ledger.sql`, `src/db/repo/invoice_payments.rs` und `src/db/models.rs` geprüft). Quelle:
-`klein-buch/src-tauri/migrations/0001..0034.sql`,
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). 2026-10-27 (Lauf 2026.11.1, V1): Schema v33, `tax_status_changes`, Spiegelspalten im Profil (gegen `migrations/0033_tax_status_history.sql` und `src/db/repo/tax_status.rs` geprüft). 2026-10-31 (Lauf 2026.11.1, V2): Schema v34, `invoice_payments` samt Triggern, Cache-Spalten der Rechnung, `InvoiceDetail.payments` (gegen `migrations/0034_invoice_payment_ledger.sql`, `src/db/repo/invoice_payments.rs` und `src/db/models.rs` geprüft). 2026-10-31 (Lauf 2026.11.1, V7): Schema v35 (0035 Leistungszeitraum, `buyer_reference` an Rechnung und Abo-Vorlage, Trigger), §2g um `restoreConflict`, `BacklogPreview` und `VatAdjustmentOverview` ergänzt (gegen `migrations/0035_service_period_buyer_reference.sql`, `src/lib/types.ts`, `src/lib/api.ts`, `commands/{invoices,quotes,recurring}.rs` geprüft). Quelle:
+`klein-buch/src-tauri/migrations/0001.. 0035.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
 `src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:
 Migrations-Liste, `mail_accounts`, `app_settings`, `secrets`, `backup_log`,

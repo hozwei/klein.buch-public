@@ -263,7 +263,9 @@ der Einrichtung zählt als Tages-Backup dieses Tages.
   erfolgreich war, sonst 30 / 12 / 7.
 - **Off-Site-Ziele**, beliebig kombinierbar (höchstens 10): Ordner unter
   `/backup-targets/…` und SFTP-Server (Passwort-Anmeldung, Host-Key-Fingerprint
-  wird beim Anlegen aus dem Verbindungstest übernommen und danach geprüft). Jedes
+  wird beim Anlegen aus dem Verbindungstest übernommen und danach geprüft; ein
+  fremder Host-Schlüssel wird vor der Anmeldung abgewiesen, ein SSH-Agent wird
+  nicht benutzt und Agent-Weiterleitung abgelehnt). Jedes
   Backup geht an jedes Ziel, je Ziel mit Zeitlimit; Aufbewahrung je Ordner-Ziel
   30 Tage / 12 Monate / 7 Jahre. **Auf SFTP-Zielen löscht Klein.Buch nichts**
   (Schutz der Off-Site-Kopien vor einer kompromittierten Instanz); dort rotiert
@@ -336,6 +338,13 @@ App gibt es nicht (er bräuchte `docker.sock`, also praktisch root auf dem Host)
    das Entsperren länger als 25 s (großes Archiv), antwortet der Server mit 202
    und der Browser wartet, bis die Umstellung fertig ist (Abholung über
    `POST /api/auth/login/poll`, Lauf F4a) — ein Proxy-Timeout von 60 s reicht.
+   **2026.11.0 → 2026.11.1:** Migrationen 0033–0035 (Schema 35: Steuerstatus-Historie,
+   Zahlungsbuch, Leistungszeitraum und Leitweg-ID am Entwurf); das Backup vor der
+   Migration hat Format 3, das 2026.11.0 einspielt. Der bisherige §19-Stand erscheint
+   als Eintrag „Wechsel aus dem bisherigen Schalter übernommen“ (ADR 0042 Nr. 6, 20);
+   vorhandene Zahlungen übernimmt die Migration ins Zahlungsbuch und bricht bei einer
+   Abweichung mit benannter Meldung ab, bevor etwas umgestellt ist (Instanz bleibt
+   gesperrt, siehe `fehlersuche-im-container`).
 5. Neue Fassungen der mitgelieferten Vorlagen landen in `/inputs` (§5).
 
 **Rückfall** nach einem gescheiterten Update: vorheriges Tag starten und das
@@ -348,6 +357,7 @@ Off-Site-Zielen. Spätere Backups der neuen Version kann die ältere unter
 Umständen nicht lesen (neues Backup-Format, z. B. Format 3 ab 2026.11 — die
 ältere meldet dann „Backup-Format 3 wird nicht unterstützt“); für den Rückfall
 zählen das Backup von vor der Migration und das manuelle Backup aus Schritt 2.
+Ein Image 2026.11.0 öffnet eine Datenbank oder ein Backup mit Schema 35 nicht.
 
 Kapitel: `updates-und-rueckfall`.
 
@@ -361,7 +371,8 @@ unbekannter Upload, leere Passphrase) wird mit 400 abgelehnt, bevor der Server
 `30 ≤ Version ≤ aktuelle Version` (neuere Backups werden abgelehnt) →
 entschlüsseln (eine falsche Passphrase verändert nichts) → Audit
 `backup.restore.requested` → Platzprüfung → gehärtet entpacken und gestagte
-Datenbank prüfen → Pre-Restore-Backup des aktuellen Stands → zweite Platzprüfung →
+Datenbank prüfen (Archivpfade prüft Klein.Buch selbst: keine absoluten Pfade,
+kein `..`, `.`, `\`, `:` oder leere Bestandteile) → Pre-Restore-Backup des aktuellen Stands → zweite Platzprüfung →
 Marker. Ein Backup, das schon bei der Prüfung der gestagten Datenbank scheitert,
 erzeugt kein Pre-Restore-Backup (Lauf F3c, ADR 0039 Nr. 129 (2)).
 Danach lehnt der Server Änderungen ab, beendet sich geordnet (Exit 0), und die
@@ -654,10 +665,13 @@ Kapitel: `totp-einrichten-und-wiederherstellen`.
   `/data` können einen Export nur in diesem kurzen Fenster im Klartext enthalten.
 - **Geschäftsjahres-Abschluss** (Seitenleiste → Geschäftsjahr): nur für
   abgelaufene Jahre, unumkehrbar; Korrekturen danach nur per Storno-Beleg.
-- **DATEV-Berater- und Mandantennummer** (EÜR-Export, seit 2026.11) stehen nicht
-  in der Datenbank: Der Browser merkt sie sich wie den Kontenrahmen (Local
-  Storage, je Browser und Gerät). Sie sind deshalb nicht Teil der Backups und auf
-  einem anderen Gerät neu einzutragen; die Grenzen prüft der Server beim Export.
+- **DATEV-Berater- und Mandantennummer** (EÜR-Export, seit 2026.11; Pflicht für den
+  Buchungsstapel seit 2026.11.1, ADR 0042 Nr. 15, 28) stehen nicht in der Datenbank:
+  Der Browser merkt sie sich wie den Kontenrahmen (Local Storage, je Browser und
+  Gerät). Sie sind deshalb nicht Teil der Backups und auf einem anderen Gerät neu
+  einzutragen; die Grenzen (Berater 1001–9999999, Mandant 1–99999) prüft der Server
+  beim Export. Ohne beide Nummern lehnt der DATEV-Export ab, das Steuerberater-Paket
+  entsteht ohne Stapel (Grund im LIESMICH).
 - **Meldungstexte der API** (seit 2026.11 in der Sprache der Oberfläche: feste
   Vorsätze wie „Die Rechnung kann nicht ausgestellt werden: …“, Gründe mit „; “
   getrennt, Daten als TT.MM.JJJJ, „Firmendaten“, keine Regel-Kennungen der
@@ -692,3 +706,7 @@ Nachtrag 2026-10-27 (Lauf 2026.11, U6): §1 Oberfläche und Web-App-Manifest
 und Meldungstexte (`src-tauri/src/server/errors.rs`, `src/routes/euer/export`),
 Begriffe der Oberfläche („Hinweise“, „Sicherheit & Anmeldung“, „E-Mail-Protokoll“,
 „Protokoll & Datensicherheit“).
+Nachtrag 2026-10-31 (Lauf 2026.11.1, V7; Schema v35): §3 SFTP (russh 0.65, kein Agent), §8
+Update 2026.11.0 → 2026.11.1 und Rückfall, §9 Archivpfade im Restore, §13 DATEV-Pflichtnummern;
+gegen `src/backup/{restore,sftp}.rs`, `src/backup/manifest.rs` (`READABLE_FORMAT_BY_SCHEMA`),
+`src/euer/datev_csv.rs` und `migrations/0033..0035` geprüft.

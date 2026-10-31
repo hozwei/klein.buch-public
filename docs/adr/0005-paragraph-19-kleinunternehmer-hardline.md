@@ -32,3 +32,15 @@ Nutzer überlassen.
 ## Referenzen
 
 §19 UStG, §14c UStG, EN 16931 (BT-22/BT-120).
+
+## Amendment 2026-10-31 — Statushistorie (ADR 0042, Lauf 2026.11.1)
+
+Der Settings-Toggle ist abgelöst. Der Status nach § 19 UStG steht in der append-only Tabelle
+`tax_status_changes` (Migration 0033) mit Wirkungsdatum, Grund und Bindungsende; ein Irrtum
+wird mit Grund widerrufen, nicht gelöscht. Maßgeblich ist der Status am Leistungsdatum des
+Belegs (bei Leistungszeitraum dessen Ende, sonst Rechnungsdatum; Kosten: Belegdatum).
+Ein Verzicht nach § 19 Abs. 3 UStG bindet fünf Kalenderjahre einschließlich des
+Wirkungsjahres, ein gesetzlicher Wegfall bindet nicht. Die Hardline bleibt: Solange ein
+Beleg unter § 19 fällt, weist er keine Umsatzsteuer aus, trägt die Klausel (PDF und BT-22)
+und der §14c-Schutz greift. `seller_profile.is_kleinunternehmer` und
+`waived_paragraph_19_since` sind nur noch Spiegel. Einzelheiten: ADR 0042 Nr. 1–6, 17–21.

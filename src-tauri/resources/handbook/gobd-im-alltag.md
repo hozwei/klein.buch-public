@@ -41,10 +41,12 @@ Einstellungen unter "Protokoll & Datensicherheit".
 
 ## Aufbewahrung 10 Jahre
 
-Rechnungen und alle steuerlich relevanten Belege musst Du 10 Jahre
-aufbewahren, gerechnet ab Ende des Kalenderjahres, in dem der
-Beleg entstanden ist (§147 Abs. 4 AO). Eine Rechnung mit
-Rechnungsdatum 2026 ist also bis zum 31.12.2036 aufzuheben.
+Bücher und Aufzeichnungen (etwa Deine EÜR und die Buchungen)
+musst Du 10 Jahre aufbewahren, Buchungsbelege wie Rechnungen seit
+2025 8 Jahre (§147 Abs. 3 AO), gerechnet ab Ende des Kalenderjahres,
+in dem die Unterlage entstanden ist (§147 Abs. 4 AO). Klein.Buch
+bewahrt alles einheitlich 10 Jahre auf: Eine Rechnung mit
+Rechnungsdatum 2026 steht also mindestens bis zum 31.12.2036 bereit.
 
 Klein.Buch hat kein "Beleg löschen"-Werkzeug. Das ist Absicht.
 Auch eine Funktion, die alle Daten auf einmal löscht, gibt es nicht.
@@ -88,4 +90,4 @@ einzelne Punkte denken musst.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

@@ -206,4 +206,4 @@ das EÜR-Jahr 2027. Das ist die Cash-Basis nach §11 EStG.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

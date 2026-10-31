@@ -181,8 +181,8 @@ steht dann im Audit-Log und unter "Hinweise".
 Wenn Du selbst über ELSTER abgibst: ELSTER-Ausfüllhilfe (CSV) plus
 Anlage-EÜR-PDF zur eigenen Ablage.
 
-Wenn Du einen Steuerberater hast: das Steuerberater-Paket. Es
-enthält den DATEV-Stapel sowieso.
+Wenn Du einen Steuerberater hast: das Steuerberater-Paket. Mit
+Berater- und Mandantennummer enthält es den DATEV-Stapel gleich mit.
 
 ## Was nicht im Export enthalten ist
 
@@ -193,4 +193,4 @@ ausgespart.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

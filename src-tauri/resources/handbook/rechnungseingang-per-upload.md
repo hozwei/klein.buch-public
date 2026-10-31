@@ -116,8 +116,8 @@ wegen des Hinweises nichts an Beträgen oder §13b-Haken.
 
 Mit "Kosten festschreiben" wird die Kosten-Position sofort
 unveränderlich. Die hochgeladene Original-Datei legt Klein.Buch
-unverändert im Archiv ab, wo sie die gesetzlichen 10 Jahre
-aufbewahrt wird. Danach läuft automatisch ein Backup. Hast Du Dich
+unverändert im Archiv ab und bewahrt sie 10 Jahre auf (länger als
+die gesetzlichen 8 Jahre für Belege). Danach läuft automatisch ein Backup. Hast Du Dich
 vertippt, stornierst Du die Position und erfasst sie neu.
 
 In der Kosten-Position findest Du später den Knopf "Roh-XML
@@ -153,4 +153,4 @@ Kapitel "Probleme beim Rechnungseingang" unter "Fehlerbehebung".
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

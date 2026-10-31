@@ -172,4 +172,4 @@ Klein.Buch zur Klarheit auch im Angebot den Hinweis auf §19 UStG.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

@@ -14,7 +14,18 @@ offenen Punkte aus Lauf 2026.11.
   Gesamtumsatz nach vereinnahmten Entgelten, Gründungsjahr, Verzicht nach Abs. 3 mit fünf
   Kalenderjahren ab dem Wirkungsjahr, unrichtiger Steuerausweis nach § 14c Abs. 1), § 13b UStG
   (auch Kleinunternehmer schulden die Steuer), Pflichtangaben nach § 14 UStG und § 34a UStDV,
-  DATEV-Format (Präfix `EXTF_`, Kopf Version 700, Pflichtnummern).
+  DATEV-Format (Präfix `EXTF_`, Kopf Version 700, Pflichtnummern). Dazu EN 16931
+  (Empfangsprofile EN 16931, EXTENDED und XRECHNUNG, MINIMUM und BASIC WL abgelehnt;
+  Leitweg-ID BT-10 nach BR-DE-15; Rechnungszeitraum BG-14 und Vorausrechnung; Storno-Beleg
+  Typ 384; BR-E-02 und BR-E-10 mit Befreiungsgrund als Code BT-121 oder Text BT-120;
+  BR-CO-25; die §-19-Klausel in BT-22 als Pflichtangabe nach § 34a UStDV, nicht der Norm),
+  ELSTER (kein CSV-Import, XBRL nur für die E-Bilanz, Übermittlung nach § 60 Abs. 4 EStDV,
+  Kz 111/112/140 nach Steuerstatus), EÜR (Zu- und Abflussprinzip nach § 11 EStG,
+  Buchführungsgrenzen nach § 141 AO von 800.000 € Umsatz und 80.000 € Gewinn) und GoBD
+  (Änderungen vom 11.03.2024 und 14.07.2025, Fristen nach § 147 Abs. 3 AO: 10 Jahre für
+  Bücher und Aufzeichnungen, 8 Jahre für Buchungsbelege, 6 Jahre für Geschäftsbriefe).
+  Die Fristen sind auch im Handbuch nachgezogen (`aufbewahrung-10-jahre`, `gobd-im-alltag`,
+  `glossar`, `rechnungseingang-per-upload`, `volumes-und-rechte`).
 - **Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund** (ADR 0042 Nr. 1–6): Statt des
   Schalters unter „Meine Firmendaten“ führt Klein.Buch eine unveränderliche Historie
   (Verzicht, Wegfall wegen des Vorjahres, Wegfall im laufenden Jahr bzw. im Gründungsjahr,
@@ -74,8 +85,8 @@ offenen Punkte aus Lauf 2026.11.
 - **Steuerstatus:** Der bisherige Stand erscheint als „Wechsel aus dem bisherigen Schalter
   übernommen“ (Bindung nach § 19 Abs. 3 UStG). War der Wechsel in Wahrheit ein gesetzlicher
   Wegfall, den Eintrag widerrufen und mit dem richtigen Grund neu eintragen.
-- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`; das Herunterfahren
-  dauert bis zu 75 s, zusammen höchstens 75 s.
+- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`; Jobs und Backup
+  brauchen höchstens 40 s; das Herunterfahren dauert bis zu 75 s, insgesamt höchstens 75 s.
 
 ## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, veröffentlicht 2026-10-27
 

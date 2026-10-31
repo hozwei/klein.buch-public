@@ -428,11 +428,12 @@ ADRs: 0010, 0022, 0026.
 
 ## 14. `commands/` — Command-Kerne + Registry
 
-26 Dateien: ein Modul pro Domäne (`assets`, `attachments`, `backup`,
+28 Dateien: ein Modul pro Domäne (`assets`, `attachments`, `backup`,
 `contacts`, `depreciation`, `dsgvo`, `euer`, `expenses`, `fiscal_year`,
 `invoices`, `legal_documents`, `mail`, `migration_export`, `notifications`,
 `packages`, `payment_accounts`, `pdf`, `private_movements`, `quotes`,
-`recurring`, `recurring_invoice`, `settings`, `system`), dazu `reauth`
+`recurring`, `recurring_invoice`, `settings`, `system`, `tax_status`,
+`vat_adjustment`), dazu `reauth`
 (`require_fresh`, Lauf F4a), `registry` und `mod.rs`. Bis W4 waren das Tauri-Commands; seit W4/W5 sind es Kerne, die der
 HTTP-Dispatcher (`server::dispatch`) aufruft (ADR 0039 Nr. 19–21).
 
@@ -480,11 +481,19 @@ Kopie aus dem Backup-Protokoll; Nr. 86); `euer_compute_report` liefert
 möglicher Ablehnungsgrund kommt als `blocked_reason` mit denselben Texten
 (Integrationstests sichern die Gleichheit; Nr. 81).
 
+**Lauf 2026.11.1 (ADR 0042).** Neue Commands: `tax_status_overview`, `tax_status_at`,
+`tax_status_change_preview` (lesend) und `tax_status_change_add`,
+`tax_status_change_revoke` (Re-Auth; Nr. 1–6, 17); `invoices_reverse_payment`
+(Re-Auth, Gegenbuchung; Nr. 8); `quotes_update_draft` (Angebots-Entwurf bearbeiten;
+Nr. 13); `recurring_backlog_preview` (lesend, gleiche Rechnung wie der Lauf; Nr. 27);
+`vat_adjustment_overview` (lesend, § 15a UStG; Nr. 14, 30). Lesefelder: `payments` in
+`invoices_get`, `restoreConflict` in `invoices_get`/`quotes_get` (Nr. 25).
+
 **Tests.** Kerne haben Integrations-Tests, die die ganze Pipeline durchlaufen
 (Repo-Layer + Trigger + Audit). Reine Args-Validierung wird über Domain-Tests
 abgedeckt.
 
-ADRs: 0004, 0039, 0041.
+ADRs: 0004, 0039, 0041, 0042.
 
 ---
 
@@ -547,7 +556,7 @@ ADRs: 0035 (Bootstrap-Inversion), 0039 (Server-Betrieb).
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13), Schema damals v31; nachgetragen in Lauf F bis 2026-10-25 (entfernte Module F6a, Sidecar-Grenzen F7a, Uhr im `AppCtx` F1; Schema v32, ADRs 0001–0040); Lauf 2026.11 (U6, 2026-10-27): Lesefelder und `assets_disposal_preview` (§1, §2, §3, §7, §11, §13, §14), ADRs 0001–0041. Quelle:
+Stand: 2026-10-24 (Phase W, Block W13), Schema damals v31; nachgetragen in Lauf F bis 2026-10-25 (entfernte Module F6a, Sidecar-Grenzen F7a, Uhr im `AppCtx` F1; Schema v32, ADRs 0001–0040); Lauf 2026.11 (U6, 2026-10-27): Lesefelder und `assets_disposal_preview` (§1, §2, §3, §7, §11, §13, §14), ADRs 0001–0041. Lauf 2026.11.1 (V7, 2026-10-31): §14 um die Commands aus ADR 0042 ergänzt (gegen `commands/registry.rs` geprüft), Schema v35, ADRs 0001–0042. Quelle:
 Verzeichnis-Listing von `klein-buch/src-tauri/src/**/*.rs`, die
 `mod.rs`-/Datei-Header-Kommentare und die öffentlichen Funktionsnamen der
 genannten Module; `server/` abgeglichen mit `../ARCHITECTURE.md` §2f. Die

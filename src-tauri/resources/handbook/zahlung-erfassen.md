@@ -181,4 +181,4 @@ daran, die Zahlung über "+ Zahlung" zu erfassen.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

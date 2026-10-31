@@ -51,12 +51,18 @@ Speichern geht auch ohne sie (mit Warnung), ausstellen lässt sich eine Rechnung
 erst mit beiden. Solange eine dieser Angaben fehlt, erinnert die Startseite mit
 einem Hinweis und der ersten Aufgabe „Firmendaten ergänzen“.
 
-Der Schalter **Kleinunternehmer (§19)** ist standardmäßig aktiv. In diesem Modus
-weist Klein.Buch keine Umsatzsteuer aus und setzt automatisch den Pflichthinweis
-„Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen." auf jede Rechnung und in die
-E-Rechnung. Der Wechsel zur Regelbesteuerung fragt vorher nach und erklärt beide
-Fälle: Ein freiwilliger Verzicht auf §19 bindet dich 5 Jahre, der Wegfall durch
-die 100.000-€-Grenze bindet nicht.
+Ohne weiteren Eintrag bist du **Kleinunternehmer nach §19 UStG**. Dann weist
+Klein.Buch keine Umsatzsteuer aus und setzt automatisch den Pflichthinweis
+„Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen.“ auf jede Rechnung und in die
+E-Rechnung. Der Abschnitt **Steuerstatus** unter den Firmendaten zeigt den Verlauf,
+den aktuellen Status und den Gesamtumsatz von Vorjahr und laufendem Jahr (mit
+Hinweis, wenn eine Grenze erreicht ist). Einen Wechsel trägst du mit
+**Statuswechsel eintragen …** ein, mit Wirkungsdatum und Grund: Ein freiwilliger
+Verzicht auf §19 wirkt ab 1. Januar und bindet dich fünf Kalenderjahre
+einschließlich des Wirkungsjahres; ein Wegfall wegen der Umsatzgrenzen (Vorjahr
+über 25.000 €, laufendes Jahr über 100.000 €, im Gründungsjahr über 25.000 €) bindet nicht. Einträge lassen sich
+nicht ändern oder löschen; einen Irrtum widerrufst du mit Grund. Jeder Beleg
+nimmt den Status an seinem Leistungsdatum (Kosten: Belegdatum).
 
 ### 1.3 E-Mail-Versand
 
@@ -141,7 +147,12 @@ Escape, F1) steht im Handbuch-Kapitel „Willkommen in Klein.Buch“.
   Sitzung übernommen hat); Betreff und Text änderst du ohne Rückfrage. Das gilt
   auch beim Angebotsversand.
 - **+ Zahlung** erfasst Zahlungseingänge mit Datum und Konto; für die EÜR zählt
-  das Zahlungsdatum (Cash-Basis), Teilzahlungen auch über Jahresgrenzen. Status
+  das Zahlungsdatum (Cash-Basis), Teilzahlungen auch über Jahresgrenzen. Eine
+  falsch erfasste Zahlung nimmst du in der Karte **Zahlungen** über **Mehr →
+  Zahlung stornieren …** mit Grund zurück: Klein.Buch bucht eine Gegenbuchung zum
+  ursprünglichen Zahldatum (nur im offenen Geschäftsjahr), danach erfasst du die
+  Zahlung richtig neu. Eine echte Rückzahlung an den Kunden ist dagegen ein
+  Storno der Rechnung mit Erstattung. Status
   in Liste und Detail: Entwurf, Ausgestellt, Versendet, Teilbezahlt, Bezahlt,
   Überfällig (Fälligkeit vorbei, Betrag offen), Storniert, Verworfen; ein
   Storno-Beleg trägt statt eines Zahlstatus „Storno-Beleg“.
@@ -149,9 +160,11 @@ Escape, F1) steht im Handbuch-Kapitel „Willkommen in Klein.Buch“.
   Frequenz und Stichtag; je Vorlage „Nur Entwurf“, „Automatisch ausstellen“ oder
   „Ausstellen + senden“. „Jetzt erstellen“ fragt bei den beiden automatischen
   Modi vorher nach; Pausieren geht ohne Rückfrage und lässt sich rückgängig
-  machen. Das Belegdatum ist immer der Erstellungstag. Bis drei verpasste
-  Perioden holt Klein.Buch selbst nach (ältere als Entwurf, nie automatisch
-  versendet), bei mehr fragt es über „Rückstand …“ nach.
+  machen. Das Belegdatum ist immer der Erstellungstag; jede Abo-Rechnung trägt
+  ihren Abrechnungszeitraum (vom Stichtag bis zum Tag vor dem nächsten). Bis
+  drei verpasste Perioden holt Klein.Buch selbst nach (ältere als Entwurf, nie
+  automatisch versendet), bei mehr fragt es über „Rückstand …“ nach und nennt
+  Anzahl und Daten der offenen Termine.
 
 ## 3. Angebote
 
@@ -159,7 +172,8 @@ Eigener Belegkreis (`AN-{Jahr}-{Nummer}`) und Lebenszyklus: *Entwurf →
 Fertiggestellt → Angenommen/Abgelehnt → Umgewandelt*. **Fertigstellen** schreibt
 das Angebot fest, verschickt es aber nicht; danach ist **Senden** der nächste
 Schritt, und die Detailseite zeigt „versendet am …“ aus dem E-Mail-Protokoll.
-Ein Entwurf wird **verworfen**, ein fertiggestelltes Angebot **storniert**.
+Einen Entwurf änderst du über **Bearbeiten** (Nummer und Geschäftsjahr bleiben);
+ein Entwurf wird **verworfen**, ein fertiggestelltes Angebot **storniert**.
 Festgeschriebene Angebote sind unveränderlich. **PDF öffnen** zeigt das Angebot,
 **Mehr → Druck-PDF (mit AGB)** fügt Angebot, AGB und Datenschutz zu einem PDF
 zusammen; der Versand schickt sie als drei Anhänge. Beim **Annehmen** kannst du
@@ -214,7 +228,10 @@ Abgang zu diesem Datum nicht möglich, steht der Grund am Datumsfeld. Die selbst
 geschuldete §13b-Steuer zu einer Anschaffung erfasst du über „Steuer als Kosten
 erfassen“ auf der Anschaffung und übernimmst sie mit „Als Anlage übernehmen“; die
 Auswahl „Selbst geschuldete Steuer (§13b) zu Anschaffung“ belegt dabei Datum,
-Methode, Nutzungsdauer, Kategorie und Anteil vor. Die AfA-Sätze
+Methode, Nutzungsdauer, Kategorie und Anteil vor. Nach einem Wechsel des
+Steuerstatus zeigt **Vorsteuerberichtigung (§ 15a)** je Anschaffung mit bekannter
+Vorsteuer den Berichtigungszeitraum und den Anteil je Jahr — als Übersicht für die
+Erklärung, ohne Buchung. Die AfA-Sätze
 kommen aus der Tabelle `afa-tabellen.json` im Volume `/inputs`.
 
 ## 6. EÜR und Steuer-Export
@@ -230,7 +247,8 @@ ohne DATEV-Stapel; beides merkt sich dein Browser) und das Steuerberater-Paket
 (ZIP). Alle Exporte kommen als
 Download in den Browser; jede Datei lässt sich nur einmal abrufen. Die
 Konten-Zuordnung im DATEV-Export ist ein Vorschlag und vom Steuerberater zu
-prüfen.
+prüfen; der Import des Stapels in DATEV ist noch nicht mit einem Prüfprotokoll
+belegt. Gegenbuchungen stornierter Zahlungen erscheinen in EÜR und Exporten.
 
 ## 7. Geschäftsjahr und Hinweise
 
@@ -299,4 +317,5 @@ Belege. Im §19-Modus stehen nur Vorlagen mit der Kleinunternehmer-Klausel zur
 Wahl. Eigene Vorlagen legt der Betreiber als `.typ`-Datei in
 `/inputs/pdf-templates/` ab; stellt eine Vorlage keine Stornos dar (Kennzeichen
 „Ohne Storno-Darstellung“), entstehen Storno-Belege mit der dort genannten
-mitgelieferten Vorlage.
+mitgelieferten Vorlage. Kennt eine eigene Vorlage keinen Leistungszeitraum, nimmt
+Klein.Buch für Rechnungen mit Zeitraum die eingebaute Vorlage und meldet das.

@@ -23,8 +23,8 @@ ungefähr so groß wie Datenbank und Archiv zusammen.
 
 Die aktuelle Größe siehst Du unter "Einstellungen" und "Backups" in der
 Spalte "Größe" des Backup-Verlaufs oder im Backup-Protokoll. Sie wächst
-mit jedem Beleg. Weil Belege zehn Jahre lang aufbewahrt werden müssen und
-Klein.Buch nichts davon löscht, wird sie mit den Jahren nur größer. Schau
+mit jedem Beleg. Weil Klein.Buch Belege und Buchungen mindestens zehn Jahre aufbewahrt und
+nichts davon löscht, wird sie mit den Jahren nur größer. Schau
 deshalb ab und zu nach und passe die Werte unten an.
 
 ## Arbeitsspeicher
@@ -177,4 +177,4 @@ Container-Log höchstens fünf Dateien mit je 10 MB belegt.
 
 ---
 
-*Letzte Aktualisierung: 25.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

@@ -2,10 +2,11 @@
 
 > Vertiefung zu „§19 Kleinunternehmer" in `../ARCHITECTURE.md` §7. Wie die
 > Kleinunternehmer-Regelung (§19 UStG) durch das ganze System gewahrt wird:
-> UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Verzicht auf
-> §19 mit 5-Jahres-Bindung, §14c-Schutz im Backend.
+> UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Steuerstatus als
+> Historie (Verzicht mit Bindung von fünf Kalenderjahren einschließlich des
+> Wirkungsjahres, gesetzlicher Wegfall ohne Bindung), §14c-Schutz im Backend.
 
-ADR-Basis: 0005 (§19 als Hardline-Default). Querverweise: 0007 (CII/BT-22),
+ADR-Basis: 0005 (§19 als Hardline-Default), 0042 (Statushistorie, Lauf 2026.11.1). Querverweise: 0007 (CII/BT-22),
 0019 (Eingangsseitige USt-Behandlung), 0030 (PDF-Templates), 0033 (Abo-Rechnungen).
 
 ---
@@ -308,8 +309,9 @@ allen Tax-Categories, der Klein.Buch-Nutzer ist „nur Empfänger".
 
 ## 10. Tests
 
-- `domain::kleinunternehmer::tests`: Klausel-Text ist wortgleich; 5-Jahres-
-  Fenster greift bei Tag 0, Tag-1-vor-Ende, Tag-genau-Ende, Tag-nach-Ende.
+- `domain::kleinunternehmer::tests`: Klausel-Text ist wortgleich; `assert_no_vat`
+  verlangt bei §19 Kategorie `E` und 0 je Position (die Bindungsfrist prüft
+  `domain::tax_status`, siehe unten).
 - `domain::invoice::tests`: Validate schlägt fehl bei §19 + Tax-Rate > 0; OK
   bei §19 + alle Items `E`/0; OK bei Verzicht + USt-Block.
 - `einvoice::generator::tests`: BT-22 erscheint, Item-Tax-Category `E`,
@@ -348,4 +350,5 @@ Stand: 2026-05-26, ADR 0005; 2026-10-27 (Lauf 2026.11.1, V1): §1, §5, §6, §7
 `domain::tax_status`, `db::repo::tax_status`, `commands::tax_status`,
 `domain::kleinunternehmer`,
 `domain::invoice::validate_for_issue`, `einvoice::generator::build_cii`,
-`pdf::klausel_check`, `commands::settings::seller_profile_upsert`.
+`pdf::klausel_check`, `commands::settings::seller_profile_upsert`. Nachtrag 2026-10-31 (Lauf 2026.11.1, V7): Kopf und §10
+(`domain::kleinunternehmer::tests`) gegen `src/domain/kleinunternehmer.rs` geprüft.

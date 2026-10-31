@@ -805,6 +805,12 @@ Unit-Tests in den Modulen):
   `src/routes/invoices/paymentHistory.test.ts` (Verweise Zahlung ↔
   Gegenbuchung, wirksame Zahlungen, frühestes Storno-Datum ohne stornierte
   Paare, Grund wie im Server).
+- **Leistungszeitraum und Leitweg-ID:** `tests/migration_0035_test.rs` (CHECKs, Zeitraum
+  und Leitweg-ID nach dem Festschreiben und am verworfenen Entwurf unveränderlich,
+  Vorwärtsmigration von Schema 34), `tests/service_period_test.rs`.
+- **Angebots-Entwürfe:** `tests/v4_quote_draft_test.rs` (Bearbeiten nur als Entwurf im
+  offenen Jahr, Trigger unverändert, vorgemerkte Entwürfe nach einem Restore,
+  `restoreConflict`).
 - **Archiv:** Unit-Tests in `src/archive/store.rs` (Schreiben mit `0o400`,
   idempotent, Waise beiseitelegen, neue Dateiversion, anderer Inhalt abgelehnt,
   Tamper beim Lesen, Pfadtrenner im Namen) und `src/archive/integrity_check.rs`
@@ -855,4 +861,7 @@ ergänzt, gegen `migrations/0034_invoice_payment_ledger.sql`,
 (`reverse_payment_core`) und `tests/payment_ledger_test.rs` geprüft; §2.9
 „Oberfläche“ gegen `src/routes/invoices/[id]/+page.svelte`,
 `src/routes/invoices/paymentHistory.ts` und die Seiten `payment`/`cancel`
-geprüft.
+geprüft. Nachtrag 2026-10-31 (Lauf 2026.11.1, V7; Schema v35): §2.1 (Spalten aus 0035),
+§5.4b und §9 gegen `migrations/0035_service_period_buyer_reference.sql`,
+`src/commands/quotes.rs`, `tests/migration_0035_test.rs` und
+`tests/v4_quote_draft_test.rs` geprüft.

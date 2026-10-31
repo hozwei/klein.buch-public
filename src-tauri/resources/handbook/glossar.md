@@ -102,9 +102,10 @@ Einmal-Codes. Jeder davon ersetzt genau einmal den App-Code.
 ## Aufbewahrungsfrist
 
 Die gesetzliche Pflicht, bestimmte Belege eine Mindestzeit
-aufzuheben. Für Rechnungen und alle steuerlich relevanten Belege
-sind das in Deutschland 10 Jahre nach Ende des jeweiligen
-Geschäftsjahres. Klein.Buch hat absichtlich keine Lösch-Funktion
+aufzuheben: in Deutschland 10 Jahre für Bücher und Aufzeichnungen,
+seit 2025 8 Jahre für Buchungsbelege wie Rechnungen, 6 Jahre für
+Geschäftsbriefe, jeweils ab Ende des Kalenderjahres. Klein.Buch
+bewahrt alles einheitlich 10 Jahre auf. Klein.Buch hat absichtlich keine Lösch-Funktion
 für festgeschriebene Belege, damit Du diese Pflicht nicht
 versehentlich brichst. Gesetzliche Grundlage: §147 AO.
 
@@ -743,9 +744,10 @@ Pflichtangaben.
 
 ### §147 AO
 
-Schreibt die Aufbewahrungsfristen für Buchhaltungs-Unterlagen vor.
-Für Rechnungen und alle steuerlich relevanten Belege gilt eine
-Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
+Schreibt die Aufbewahrungsfristen für Buchhaltungs-Unterlagen vor:
+10 Jahre für Bücher und Aufzeichnungen, seit 2025 8 Jahre für
+Buchungsbelege wie Rechnungen, 6 Jahre für Geschäftsbriefe, jeweils
+ab Ende des Kalenderjahres.
 
 ### §153 AO
 
@@ -757,4 +759,4 @@ liegt und sich deshalb nicht mehr stornieren lässt.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

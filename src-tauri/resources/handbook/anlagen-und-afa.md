@@ -421,4 +421,4 @@ reinen Cash-Basis und steht ausdrücklich in §4 Abs. 3 Satz 3 EStG.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*
