@@ -61,6 +61,7 @@ import type {
   TravelSettings,
   TravelLine,
   RecordPaymentArgs,
+  ReversePaymentArgs,
   RenderedMail,
   SellerProfile,
   SellerProfileInput,
@@ -386,6 +387,15 @@ export function invoicesLockAndIssue(
 
 export function invoicesRecordPayment(args: RecordPaymentArgs): Promise<Invoice> {
   return invoke<Invoice>("invoices_record_payment", { args });
+}
+
+/**
+ * Storniert eine falsch erfasste Zahlung durch eine Gegenbuchung (Re-Auth,
+ * ADR 0042 Nr. 8): Betrag, Datum und Konto der Zahlung mit umgekehrtem
+ * Vorzeichen, Grund mindestens 10 Zeichen. Danach richtig neu buchen.
+ */
+export function invoicesReversePayment(args: ReversePaymentArgs): Promise<Invoice> {
+  return invoke<Invoice>("invoices_reverse_payment", args);
 }
 
 export function invoicesCancel(args: CancelArgs): Promise<CancelResponse> {

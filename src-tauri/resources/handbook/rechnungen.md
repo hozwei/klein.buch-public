@@ -147,7 +147,11 @@ Sobald der Kunde bezahlt hat, klick in der Detail-Ansicht auf
 **"+ Zahlung"**. Nach dem Versand ist das der Hauptknopf oben auf der
 Seite; vorher steht er neben "Senden" (auf dem Handy im Menü "Mehr").
 Gebuchte Zahlungen stehen in der Karte "Zahlungen" mit Zahldatum,
-Betrag, Konto und Notiz. Mehr dazu im Kapitel "Zahlung erfassen".
+Betrag, Konto und Notiz. Eine falsch erfasste Zahlung stornierst Du dort
+über "Mehr" → "Zahlung stornieren …": Klein.Buch bucht eine
+Gegenbuchung mit Grund, die Zahlung bleibt als "Storniert" sichtbar.
+Mehr dazu im Kapitel "Zahlung erfassen", Abschnitt "Falsch erfasste
+Zahlung stornieren".
 
 Einen Bezahlt-Hinweis aus dem Entwurf zeigt die Karte "Daten". Ist
 trotzdem noch ein Betrag offen, erinnert der Hinweis "Bezahlt-Hinweis

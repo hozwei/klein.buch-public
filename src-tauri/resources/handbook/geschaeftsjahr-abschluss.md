@@ -11,8 +11,8 @@ keywords: [geschäftsjahr, abschluss, jahres-lock, festschreibung, prüfungssich
 Der Geschäftsjahr-Abschluss ist das endgültige Festschreiben eines
 kompletten Jahres. Nach dem Abschluss kannst Du im abgeschlossenen
 Jahr nichts mehr ändern: keine neuen Belege nachtragen, keine
-Zahlung erfassen, keine Anschaffung anlegen, keine AfA-Buchung
-korrigieren.
+Zahlung erfassen oder stornieren, keine Anschaffung anlegen, keine
+AfA-Buchung korrigieren.
 
 ## Wann Du abschließt
 
@@ -30,7 +30,11 @@ Bevor Du abschließt, gehe diese Liste durch:
    mehr offen). Offene Entwürfe blockieren den Abschluss nicht, weil sie
    nicht zur EÜR gehören. Nach dem Abschluss lassen sie sich aber nicht
    mehr ausstellen, sondern nur noch verwerfen (Kapitel "Rechnungen").
-2. Alle bis dahin eingegangenen Zahlungen sind erfasst.
+2. Alle bis dahin eingegangenen Zahlungen sind erfasst. Eine falsch
+   erfasste Zahlung dieses Jahres stornierst Du vorher und erfasst sie
+   richtig neu (Kapitel "Zahlung erfassen", Abschnitt "Falsch erfasste
+   Zahlung stornieren"). Nach dem Abschluss lässt sie sich nicht mehr
+   stornieren.
 3. Alle Kosten des Jahres sind erfasst, einschließlich Beleg-
    Anhang.
 4. Alle Anschaffungen sind angelegt und die AfA des Jahres ist erzeugt.
@@ -135,6 +139,15 @@ darfst Du nicht in das geschlossene Jahr zurück. Stattdessen
 erzeugst Du im laufenden Jahr einen Storno. Klein.Buch ordnet den
 Storno korrekt: Ursprung im alten Jahr, EÜR-Effekt im laufenden
 Jahr. Das ist gesetzlich der saubere Weg.
+
+Anders bei einer falsch erfassten **Zahlung**: Ihre Gegenbuchung
+gehört an das ursprüngliche Zahldatum, also in das abgeschlossene Jahr.
+Deshalb lehnt Klein.Buch "Zahlung stornieren" dort ab. Ist die
+Erklärung für dieses Jahr schon abgegeben und führt die falsche Zahlung
+zu zu niedriger Steuer, ist die Erklärung zu berichtigen (§ 153 AO); zu
+hoch erfasste Einnahmen lassen sich auf Antrag ändern (§ 173 Abs. 1
+Nr. 2, § 164 Abs. 2 AO). Kläre das mit Deiner Steuerberatung. Ein Storno der Rechnung ist dafür nicht der
+richtige Weg, weil er die Einnahme erst im laufenden Jahr ausgleicht.
 
 ## Notfälle
 

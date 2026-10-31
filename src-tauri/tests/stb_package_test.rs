@@ -95,16 +95,20 @@ async fn stb_zip_contains_receipts_readme_and_matching_manifest() {
     sqlx::query(
         "INSERT INTO invoices (id, invoice_number, fiscal_year, direction, invoice_date,
             contact_id, seller_name, seller_street, seller_postal_code, seller_city,
-            net_amount_cents, gross_amount_cents, status, paid_amount_cents, paid_at,
+            net_amount_cents, gross_amount_cents, status,
             pdf_archive_id, locked_at)
          VALUES ('i-1', 'RE-2025-0001', 2025, 'issued', '2025-03-01', 'c-1', 'V', 'W',
-            '12345', 'O', 50000, 50000, 'paid', 50000, '2025-03-10', ?,
+            '12345', 'O', 50000, 50000, 'issued', ?,
             '2025-03-01 10:00:00')",
     )
     .bind(&stored.archive_id)
     .execute(&pool)
     .await
     .unwrap();
+    // Zahlung über das Zahlungsbuch (Migration 0034).
+    klein_buch_lib::db::repo::invoices::record_payment(&pool, "i-1", 50_000, "2025-03-10", None)
+        .await
+        .unwrap();
 
     // Kostenbeleg mit Original im Archiv.
     let receipt = b"%PDF-1.7 Beleg KO-2025-0001".to_vec();

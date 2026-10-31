@@ -15,14 +15,18 @@
 //!   - Eine Rechnungs-Zahlung zählt im Jahr ihres Zahlungseingangs
 //!     (`paid_date` der einzelnen Zahlung — Teilzahlungen werden pro Zahlung
 //!     dem jeweiligen Jahr zugeordnet).
+//!   - Eine **Gegenbuchung** („Zahlung stornieren“, ADR 0042 Nr. 8–9) ist ein
+//!     negativer Betrag am Datum der stornierten Zahlung: eine nie geflossene
+//!     Zahlung war kein Zufluss, das Paar hebt sich im selben Jahr auf. Nur im
+//!     offenen Geschäftsjahr möglich, deshalb ändert sie kein abgeschlossenes.
 //!   - Eine **Erstattung nach Storno** ist ein negativer Zufluss (Abfluss) und
 //!     wird im Jahr des **Storno-Belegs** gegengerechnet — NICHT rückwirkend im
 //!     Ursprungsjahr. Das wahrt zugleich die GoBD-Periodenfestschreibung
 //!     (§146 AO): ein abgeschlossenes Jahr ändert sich nie nachträglich.
 //!     (Hintergrund: ein Storno-Beleg kann technisch keine eigene Zahlung
-//!     tragen — `record_payment` verlangt `amount > 0` und verbietet
-//!     Überzahlung; der erstattete Betrag = der auf dem Original tatsächlich
-//!     gezahlte Betrag.)
+//!     tragen — das Zahlungsbuch nimmt keine Buchung auf Storno-Belege an;
+//!     der erstattete Betrag = der auf dem Original tatsächlich gezahlte
+//!     Betrag nach Gegenbuchungen.)
 //!   - Eine Kosten-Position zählt im Jahr ihres Zahlungsausgangs (`paid_date`);
 //!     nicht bezahlte Kosten (`paid_date IS NULL`) bleiben außen vor.
 //! - **AfA** ist eine Jahres-Größe (§7 EStG): sie zählt im `fiscal_year` der

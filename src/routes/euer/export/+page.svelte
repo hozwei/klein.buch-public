@@ -512,12 +512,16 @@
         <caption class="kb-visually-hidden">Zahlungseingänge {selectedYear}</caption>
         <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
         <tbody>
-          {#each pkg.income as i (i.invoiceNumber + i.paidDate + i.amountCents)}
-            <tr>
+          <!-- ADR 0042 Nr. 9: Zahlung und Gegenbuchung stehen beide da (gleiches Datum,
+               gleiche Nummer, auch gleicher Betrag nach Neubuchung) — Schlüssel ist die Position. -->
+          {#each pkg.income as i, n (n)}
+            <tr class:reduce={i.isReversal}>
               <td data-label="Datum">{date(i.paidDate)}</td>
               <td data-label="Rechnungsnr."><DocNo value={i.invoiceNumber} /></td>
               <td class="wrap" data-label="Kunde">{i.customer}</td>
-              <td class="cards-full wrap" data-label="Beschreibung">{i.description}</td>
+              <td class="cards-full wrap" data-label="Beschreibung">
+                {#if i.isReversal}<Badge kind="tag">Gegenbuchung</Badge>{" "}{:else if i.reversed}<Badge strike>Storniert</Badge>{" "}{/if}{i.description}
+              </td>
               <td class="num" data-label="Betrag">{euro(i.amountCents)}</td>
             </tr>
           {/each}

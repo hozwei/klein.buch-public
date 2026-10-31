@@ -7,10 +7,10 @@
 //!
 //! ## Cash-Basis-Quellen (siehe `euer::aggregate` für die Rechtsgrundlage)
 //!
-//! - **Einnahmen** = einzelne Zahlungseingänge ausgehender, NICHT-Storno-
-//!   Rechnungen. Teilzahlungen werden aus `payment_history_json` aufgelöst, damit
-//!   jede Zahlung ihrem tatsächlichen Zuflussjahr zugeordnet wird (§11 EStG).
-//!   Fallback ohne Historie: `paid_amount_cents` am `paid_at`.
+//! - **Einnahmen** = die Buchungen des Zahlungsbuchs `invoice_payments`
+//!   (Migration 0034) auf ausgehende, NICHT-Storno-Rechnungen: jede Zahlung im
+//!   Jahr ihres Zahldatums (§11 EStG), Gegenbuchungen („Zahlung stornieren“,
+//!   ADR 0042 Nr. 8–9) negativ am Datum der stornierten Zahlung.
 //! - **Storno-Erstattungen** = der auf dem stornierten Original gezahlte Betrag,
 //!   erfasst zum `invoice_date` des Storno-Belegs (Abfluss-Jahr).
 //! - **Ausgaben** = bezahlte (`paid_date IS NOT NULL`), nicht stornierte und
@@ -33,7 +33,6 @@
 use chrono::NaiveDate;
 use sqlx::SqlitePool;
 
-use crate::db::repo::invoices::parse_payment_history;
 use crate::error::{Error, Result};
 use crate::euer::aggregate::{
     DepreciationView, DisposalView, EuerInputs, ExpenseView, PaymentView, StornoReversalView,
@@ -54,11 +53,10 @@ fn parse_date(s: &str) -> Result<NaiveDate> {
         .map_err(|e| Error::Domain(format!("EÜR: ungültiges Datum '{s}': {e}")))
 }
 
-/// Einzelne Zahlungseingänge ausgehender, NICHT-Storno-Rechnungen.
-///
-/// Teilzahlungen aus `payment_history_json` werden je Zahlung als eigener
-/// [`PaymentView`] geliefert. Fehlt die Historie (ältere Daten), greift der
-/// Fallback `paid_amount_cents` @ `paid_at`.
+/// Einzelne Buchungen des Zahlungsbuchs auf ausgehende, NICHT-Storno-
+/// Rechnungen (Migration 0034, ADR 0042 Nr. 9): Zahlungen positiv,
+/// Gegenbuchungen negativ am Datum der stornierten Zahlung — ein storniertes
+/// Paar hebt sich im Jahr des Zahldatums auf.
 pub async fn income_payments<'e, E: sqlx::SqliteExecutor<'e>>(pool: E) -> Result<Vec<PaymentView>> {
     // R2-008: defensiver Lock-Guard. Drafts dürfen niemals als Einnahme
     // gezählt werden. **NICHT** zusätzlich `status != 'canceled'` filtern —
@@ -66,45 +64,40 @@ pub async fn income_payments<'e, E: sqlx::SqliteExecutor<'e>>(pool: E) -> Result
     // (Cash-Basis §11 EStG); der Storno-Refund wird separat im Storno-Jahr
     // verbucht (`storno_reversals`). Rückwirkendes Ausblenden der Original-
     // Einnahme würde die Periodengetreuheit der GoBD brechen.
-    let rows: Vec<(i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT paid_amount_cents, paid_at, payment_history_json
-           FROM invoices
-          WHERE direction = 'issued'
-            AND is_storno_for IS NULL
-            AND locked_at IS NOT NULL
-            AND paid_amount_cents > 0",
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT p.paid_date, p.amount_cents
+           FROM invoice_payments p
+           JOIN invoices i ON i.id = p.invoice_id
+          WHERE i.direction = 'issued'
+            AND i.is_storno_for IS NULL
+            AND i.locked_at IS NOT NULL
+          ORDER BY p.paid_date, p.invoice_id, p.seq",
     )
     .fetch_all(pool)
     .await?;
 
-    let mut out = Vec::new();
-    for (paid_amount_cents, paid_at, history_json) in rows {
-        let history = parse_payment_history(history_json.as_deref())?;
-        if !history.is_empty() {
-            for entry in history {
-                if entry.amount_cents == 0 {
-                    continue;
-                }
-                out.push(PaymentView {
-                    paid_date: parse_date(&entry.paid_date)?,
-                    amount_cents: entry.amount_cents,
-                });
-            }
-        } else if let Some(at) = paid_at.as_deref() {
-            // Fallback: keine Historie, aber als bezahlt markiert.
-            out.push(PaymentView {
-                paid_date: parse_date(at)?,
-                amount_cents: paid_amount_cents,
-            });
-        }
-        // Wenn weder Historie noch paid_at gesetzt sind, ist die Zahlung nicht
-        // datierbar → konservativ ausgelassen (kein Zuflussdatum bekannt).
-    }
-    Ok(out)
+    rows.into_iter()
+        .map(|(paid_date, amount_cents)| {
+            Ok(PaymentView {
+                paid_date: parse_date(&paid_date)?,
+                amount_cents,
+            })
+        })
+        .collect()
 }
 
-/// Storno-Erstattungen: der auf dem Original tatsächlich gezahlte Betrag,
-/// erfasst zum Datum des Storno-Belegs.
+/// Summe des Zahlungsbuchs des Originals `o` (Zahlungen minus Gegenbuchungen):
+/// die Erstattung im Storno-Jahr. Gelesen aus dem Buch, nicht aus dem Cache
+/// `paid_amount_cents`, damit Zahlungsjahr und Storno-Jahr dieselbe Quelle
+/// haben (ADR 0042 Nr. 7–8).
+macro_rules! refunded_from_ledger {
+    () => {
+        "(SELECT COALESCE(SUM(p.amount_cents), 0) FROM invoice_payments p WHERE p.invoice_id = o.id)"
+    };
+}
+
+/// Storno-Erstattungen: der auf dem Original tatsächlich gezahlte Betrag
+/// (Summe des Zahlungsbuchs), erfasst zum Datum des Storno-Belegs.
 pub async fn storno_reversals<'e, E: sqlx::SqliteExecutor<'e>>(
     pool: E,
 ) -> Result<Vec<StornoReversalView>> {
@@ -114,14 +107,17 @@ pub async fn storno_reversals<'e, E: sqlx::SqliteExecutor<'e>>(
     // bleiben, während der Original noch nicht `canceled` ist — die EÜR
     // würde dann denselben Refund doppelt rechnen (Original positiv +
     // Draft-Storno negativ). Filter blockt das.
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT s.invoice_date AS storno_date, o.paid_amount_cents AS refunded
-           FROM invoices s
-           JOIN invoices o ON o.id = s.is_storno_for
-          WHERE s.is_storno_for IS NOT NULL
-            AND s.locked_at IS NOT NULL
-            AND o.paid_amount_cents > 0",
-    )
+    let rows: Vec<(String, i64)> = sqlx::query_as(concat!(
+        "SELECT storno_date, refunded FROM (
+            SELECT s.invoice_date AS storno_date, ",
+        refunded_from_ledger!(),
+        " AS refunded
+              FROM invoices s
+              JOIN invoices o ON o.id = s.is_storno_for
+             WHERE s.is_storno_for IS NOT NULL
+               AND s.locked_at IS NOT NULL)
+          WHERE refunded > 0"
+    ))
     .fetch_all(pool)
     .await?;
 
@@ -315,43 +311,59 @@ async fn invoice_tax_groups(
 }
 
 /// Einzelne Zahlungseingänge (Betriebseinnahmen) eines Geschäftsjahres —
-/// Teilzahlungen je eigene Zeile, mit Rechnungsnummer, Kunde, eingefrorenem
-/// §19-Status, Aufteilung auf die Steuergruppen und Zahlungskonto (Lauf F5b).
+/// je Buchung des Zahlungsbuchs eine Zeile, mit Rechnungsnummer, Kunde,
+/// eingefrorenem §19-Status, Aufteilung auf die Steuergruppen und
+/// Zahlungskonto (Lauf F5b). Gegenbuchungen („Zahlung stornieren“, ADR 0042
+/// Nr. 9) stehen negativ am Datum der stornierten Zahlung, mit Kennzeichen
+/// und Grund; die stornierte Zahlung bleibt sichtbar (keine Spur geht
+/// verloren, das Paar hebt sich auf).
 pub async fn income_detail(pool: &SqlitePool, year: i32) -> Result<Vec<IncomeItem>> {
     #[derive(sqlx::FromRow)]
     struct Row {
-        id: String,
+        invoice_id: String,
         invoice_number: String,
         buyer_name: Option<String>,
-        paid_amount_cents: i64,
-        paid_at: Option<String>,
-        payment_history_json: Option<String>,
+        kind: String,
+        amount_cents: i64,
+        paid_date: String,
+        account_id: Option<String>,
+        reason: Option<String>,
+        reversed: i64,
         description: Option<String>,
         is_kleinunternehmer: i64,
         account_type: Option<String>,
     }
+    let yp = format!("{year:04}");
     let rows: Vec<Row> = sqlx::query_as(
         // R2-008: defensiver Lock-Guard, siehe income_payments. `status` wird
         // bewusst NICHT gefiltert — Periodengetreuheit (Original-Einnahme bleibt
         // im Zahlungsjahr, Storno-Refund im Storno-Jahr).
-        "SELECT i.id, i.invoice_number, i.buyer_name, i.paid_amount_cents, i.paid_at,
-                i.payment_history_json, i.is_kleinunternehmer,
+        "SELECT i.id AS invoice_id, i.invoice_number, i.buyer_name, i.is_kleinunternehmer,
+                p.kind, p.amount_cents, p.paid_date, p.account_id, p.reason,
+                EXISTS (SELECT 1 FROM invoice_payments r
+                         WHERE r.reverses_payment_id = p.id) AS reversed,
                 (SELECT group_concat(d, '; ') FROM (
                      SELECT description AS d FROM invoice_items
                       WHERE invoice_id = i.id ORDER BY position
                  )) AS description,
                 pa.type AS account_type
-           FROM invoices i
+           FROM invoice_payments p
+           JOIN invoices i ON i.id = p.invoice_id
            LEFT JOIN payment_accounts pa ON pa.id = i.paid_to_account_id
           WHERE i.direction = 'issued'
             AND i.is_storno_for IS NULL
             AND i.locked_at IS NOT NULL
-            AND i.paid_amount_cents > 0",
+            AND substr(p.paid_date, 1, 4) = ?
+          ORDER BY p.paid_date, i.invoice_number, p.seq",
     )
+    .bind(&yp)
     .fetch_all(pool)
     .await?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
     let groups = invoice_tax_groups(pool).await?;
-    // R2-011: Konto je Zahlungseingang aus der Zahlungshistorie.
+    // R2-011: Konto je Zahlungseingang aus dem Zahlungsbuch.
     let account_types: std::collections::HashMap<String, String> =
         sqlx::query_as::<_, (String, String)>("SELECT id, type FROM payment_accounts")
             .fetch_all(pool)
@@ -359,50 +371,43 @@ pub async fn income_detail(pool: &SqlitePool, year: i32) -> Result<Vec<IncomeIte
             .into_iter()
             .collect();
 
-    let yp = format!("{year:04}");
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(rows.len());
     for r in rows {
-        let customer = r.buyer_name.unwrap_or_default();
-        let description = r.description.unwrap_or_default();
-        let is_klein = r.is_kleinunternehmer == 1;
-        let g = groups.get(&r.id).map(Vec::as_slice).unwrap_or(&[]);
-        let mk = |paid_date: &str, amount: i64, account: Option<&str>| IncomeItem {
-            paid_date: trim_date(paid_date),
-            invoice_number: r.invoice_number.clone(),
-            customer: customer.clone(),
-            description: description.clone(),
-            amount_cents: amount,
-            is_kleinunternehmer: is_klein,
-            shares: split_payment(g, amount),
-            account_type: account
-                .and_then(|a| account_types.get(a).cloned())
-                .or_else(|| r.account_type.clone()),
+        let g = groups.get(&r.invoice_id).map(Vec::as_slice).unwrap_or(&[]);
+        let is_reversal = r.kind == crate::db::repo::invoice_payments::KIND_REVERSAL;
+        let description = if is_reversal {
+            format!(
+                "Storno der Zahlung vom {}: {}",
+                parse_date(&r.paid_date)?.format("%d.%m.%Y"),
+                r.reason.as_deref().unwrap_or_default()
+            )
+        } else {
+            r.description.unwrap_or_default()
         };
-        let history = parse_payment_history(r.payment_history_json.as_deref())?;
-        if !history.is_empty() {
-            for entry in history {
-                if entry.amount_cents == 0 || !entry.paid_date.starts_with(&yp) {
-                    continue;
-                }
-                out.push(mk(
-                    &entry.paid_date,
-                    entry.amount_cents,
-                    entry.account_id.as_deref(),
-                ));
-            }
-        } else if let Some(at) = r.paid_at.as_deref() {
-            if at.starts_with(&yp) {
-                out.push(mk(at, r.paid_amount_cents, None));
-            }
-        }
+        out.push(IncomeItem {
+            paid_date: trim_date(&r.paid_date),
+            invoice_number: r.invoice_number,
+            customer: r.buyer_name.unwrap_or_default(),
+            description,
+            amount_cents: r.amount_cents,
+            is_kleinunternehmer: r.is_kleinunternehmer == 1,
+            shares: split_payment(g, r.amount_cents),
+            account_type: r
+                .account_id
+                .as_deref()
+                .and_then(|a| account_types.get(a).cloned())
+                .or(r.account_type),
+            is_reversal,
+            reversed: r.reversed == 1,
+        });
     }
-    out.sort_by(|a, b| a.paid_date.cmp(&b.paid_date));
     Ok(out)
 }
 
 /// Storno-Erstattungen eines Geschäftsjahres (negative Einnahmen) — mit dem
 /// §19-Status und den Steuergruppen des Originals. Geldkonto der Erstattung:
-/// das Konto des letzten Zahlungseingangs mit Konto, sonst Bank (R2-011).
+/// das Konto des letzten nicht stornierten Zahlungseingangs mit Konto, sonst
+/// das Konto der Rechnung bzw. Bank (R2-011, ADR 0042 Nr. 9).
 pub async fn storno_detail(pool: &SqlitePool, year: i32) -> Result<Vec<StornoItem>> {
     #[derive(sqlx::FromRow)]
     struct Row {
@@ -413,45 +418,41 @@ pub async fn storno_detail(pool: &SqlitePool, year: i32) -> Result<Vec<StornoIte
         refunded: i64,
         is_kleinunternehmer: i64,
         account_type: Option<String>,
-        history: Option<String>,
+        payment_account_type: Option<String>,
     }
     let yp = format!("{year:04}");
-    let rows: Vec<Row> = sqlx::query_as(
-        // R2-007: Storno-Beleg muss gelockt sein (siehe storno_reversals).
-        "SELECT s.invoice_number AS storno_number, s.invoice_date AS storno_date,
-                o.id AS original_id, o.invoice_number AS original_number,
-                o.paid_amount_cents AS refunded, o.is_kleinunternehmer,
-                pa.type AS account_type, o.payment_history_json AS history
-           FROM invoices s
-           JOIN invoices o ON o.id = s.is_storno_for
-           LEFT JOIN payment_accounts pa ON pa.id = o.paid_to_account_id
-          WHERE s.is_storno_for IS NOT NULL
-            AND s.locked_at IS NOT NULL
-            AND o.paid_amount_cents > 0
-            AND substr(s.invoice_date, 1, 4) = ?
-          ORDER BY s.invoice_date",
-    )
-    .bind(&yp)
-    .fetch_all(pool)
-    .await?;
+    // R2-007: Storno-Beleg muss gelockt sein (siehe storno_reversals);
+    // Erstattung aus dem Zahlungsbuch (refunded_from_ledger!).
+    let sql = concat!(
+        "SELECT * FROM (
+            SELECT s.invoice_number AS storno_number, s.invoice_date AS storno_date,
+                   o.id AS original_id, o.invoice_number AS original_number, ",
+        refunded_from_ledger!(),
+        " AS refunded, o.is_kleinunternehmer,
+                   pa.type AS account_type,
+                   (SELECT ppa.type FROM invoice_payments p
+                      JOIN payment_accounts ppa ON ppa.id = p.account_id
+                     WHERE p.invoice_id = o.id AND p.kind = 'payment'
+                       AND NOT EXISTS (SELECT 1 FROM invoice_payments r
+                                        WHERE r.reverses_payment_id = p.id)
+                     ORDER BY p.seq DESC LIMIT 1) AS payment_account_type
+              FROM invoices s
+              JOIN invoices o ON o.id = s.is_storno_for
+              LEFT JOIN payment_accounts pa ON pa.id = o.paid_to_account_id
+             WHERE s.is_storno_for IS NOT NULL
+               AND s.locked_at IS NOT NULL
+               AND substr(s.invoice_date, 1, 4) = ?)
+          WHERE refunded > 0
+          ORDER BY storno_date"
+    );
+    let rows: Vec<Row> = sqlx::query_as(sql).bind(&yp).fetch_all(pool).await?;
     if rows.is_empty() {
         return Ok(Vec::new());
     }
     let groups = invoice_tax_groups(pool).await?;
-    let account_types: std::collections::HashMap<String, String> =
-        sqlx::query_as::<_, (String, String)>("SELECT id, type FROM payment_accounts")
-            .fetch_all(pool)
-            .await?
-            .into_iter()
-            .collect();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let g = groups.get(&r.original_id).map(Vec::as_slice).unwrap_or(&[]);
-        let history_account = parse_payment_history(r.history.as_deref())?
-            .into_iter()
-            .rev()
-            .find_map(|e| e.account_id)
-            .and_then(|a| account_types.get(&a).cloned());
         out.push(StornoItem {
             storno_date: trim_date(&r.storno_date),
             storno_number: r.storno_number,
@@ -459,7 +460,7 @@ pub async fn storno_detail(pool: &SqlitePool, year: i32) -> Result<Vec<StornoIte
             refunded_cents: r.refunded,
             is_kleinunternehmer: r.is_kleinunternehmer == 1,
             shares: split_payment(g, r.refunded),
-            account_type: history_account.or(r.account_type),
+            account_type: r.payment_account_type.or(r.account_type),
         });
     }
     Ok(out)
@@ -846,10 +847,10 @@ pub async fn available_years(pool: &SqlitePool) -> Result<Vec<i32>> {
         // Selector. `status='canceled'` wird bei Einnahmen NICHT gefiltert
         // (Periodengetreuheit, siehe income_payments).
         "SELECT DISTINCT y FROM (
-            SELECT CAST(substr(paid_at, 1, 4) AS INTEGER) AS y
-              FROM invoices
-             WHERE paid_at IS NOT NULL AND direction = 'issued'
-               AND locked_at IS NOT NULL
+            SELECT CAST(substr(p.paid_date, 1, 4) AS INTEGER) AS y
+              FROM invoice_payments p
+              JOIN invoices i ON i.id = p.invoice_id
+             WHERE i.direction = 'issued' AND i.locked_at IS NOT NULL
             UNION
             SELECT CAST(substr(invoice_date, 1, 4) AS INTEGER)
               FROM invoices

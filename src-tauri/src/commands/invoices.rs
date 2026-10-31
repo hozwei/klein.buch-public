@@ -1214,6 +1214,11 @@ pub async fn invoices_record_payment(
             "Das Zahldatum darf nicht in der Zukunft liegen (Zufluss-Prinzip §11 EStG).".into(),
         ));
     }
+    // ADR 0042 Nr. 7: nie parallel zu Storno oder Gegenbuchung derselben
+    // Rechnung (sonst läge z. B. eine Zahlung nach der Datumsprüfung des
+    // Stornos). Reihenfolge wie beim Storno: erst die Belegsperre, dann die
+    // Buchungserlaubnis.
+    let _invoice_guard = crate::locks::INVOICES.lock(&args.invoice_id).await;
     // GJ-Festschreibung (Block 15): eine Zahlung mit Zahldatum in einem
     // abgeschlossenen Geschäftsjahr ist nicht mehr erfassbar (Storno bleibt möglich).
     let _fy = crate::fiscal_year::guard::ensure_year_open(
@@ -1221,7 +1226,8 @@ pub async fn invoices_record_payment(
         chrono::Datelike::year(&args.paid_date) as i64,
     )
     .await?;
-    let row = invoices::record_payment_to_account(
+    // Buchzeile, Cache und Audit in einer Transaktion (ADR 0042 Nr. 7).
+    invoices::record_payment_to_account(
         pool,
         &args.invoice_id,
         args.amount_cents,
@@ -1229,16 +1235,76 @@ pub async fn invoices_record_payment(
         args.note.as_deref(),
         args.account_id.as_deref(),
     )
-    .await?;
-    audit_log::append(
-        pool,
-        "invoice.payment_recorded",
-        "invoice",
+    .await
+}
+
+/// Argumente von [`invoices_reverse_payment`] (JSON-Objekt, Schlüssel in camelCase wie bei `invoke`).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicesReversePaymentArgs {
+    pub invoice_id: String,
+    pub payment_id: String,
+    /// Grund (Pflicht, mindestens 10 Zeichen) — steht an der Gegenbuchung und
+    /// im Audit-Log.
+    pub reason: String,
+}
+
+/// „Zahlung stornieren“ (ADR 0042 Nr. 8, Re-Auth): neutralisiert eine falsch
+/// erfasste Zahlung durch eine Gegenbuchung mit Betrag, Datum und Konto der
+/// Zahlung und umgekehrtem Vorzeichen. Danach wird richtig neu gebucht
+/// ([`invoices_record_payment`]). Die Gegenbuchung wirkt am ursprünglichen
+/// Zahldatum (eine nie geflossene Zahlung war kein Zufluss nach § 11 EStG),
+/// deshalb nur im offenen Geschäftsjahr dieses Datums; echte Rückzahlungen
+/// bleiben Storno mit Erstattung.
+pub async fn invoices_reverse_payment(
+    ctx: &Arc<AppCtx>,
+    args: InvoicesReversePaymentArgs,
+) -> Result<InvoiceRow> {
+    let pool = ctx.pool()?;
+    reverse_payment_core(&pool, &args, ctx.clock().now_utc()).await
+}
+
+/// Testbarer Kern von [`invoices_reverse_payment`] (`now` aus der Uhr des
+/// Aufrufers): Belegsperre wie Erfassen und Storno, Buchungserlaubnis für das
+/// Jahr des ursprünglichen Zahldatums bis nach dem Commit, Gegenbuchung, Cache
+/// und Audit `invoice.payment_reversed` in einer Transaktion.
+pub async fn reverse_payment_core(
+    pool: &SqlitePool,
+    args: &InvoicesReversePaymentArgs,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<InvoiceRow> {
+    use crate::db::repo::invoice_payments;
+    let reason = invoice_payments::clean_reason(&args.reason)?;
+    let _invoice_guard = crate::locks::INVOICES.lock(&args.invoice_id).await;
+    let payment = invoice_payments::get(pool, &args.payment_id)
+        .await?
+        .filter(|p| p.invoice_id == args.invoice_id)
+        .ok_or_else(|| Error::Domain("Die Zahlung gibt es zu dieser Rechnung nicht.".into()))?;
+    let year = chrono::Datelike::year(&parse_date(&payment.paid_date)?) as i64;
+    let permit = crate::fiscal_year::guard::booking_permit().await;
+    if crate::fiscal_year::guard::is_closed(pool, year).await? {
+        return Err(Error::Domain(invoice_payments::closed_year_message(year)));
+    }
+    let mut tx = crate::db::begin_immediate(pool).await?;
+    let reversed = invoice_payments::reverse_in(
+        &mut tx,
         &args.invoice_id,
-        Some(serde_json::json!({ "amount": args.amount_cents, "paid_date": args.paid_date, "status": row.status, "account": args.account_id })),
+        &args.payment_id,
+        &reason,
+        &crate::clock::to_db_utc(now),
     )
     .await?;
-    Ok(row)
+    tx.commit().await?;
+    drop(permit);
+    tracing::info!(
+        "Zahlung {} auf Rechnung {} storniert (Gegenbuchung {})",
+        reversed.original.id,
+        args.invoice_id,
+        reversed.reversal.id
+    );
+    invoices::get(pool, &args.invoice_id)
+        .await?
+        .ok_or_else(|| Error::Domain("reverse_payment: post-INSERT SELECT leer".into()))
 }
 
 // =============================================================================
@@ -1319,7 +1385,7 @@ pub async fn invoices_cancel(
     // am Storno-Datum an. Vor dem (letzten) Zahlungseingang läge sie in einem
     // Zeitraum, in dem das Geld noch gar nicht zugeflossen war.
     if original.invoice.paid_amount_cents > 0 {
-        if let Some(last_paid) = last_payment_date(&original.invoice)? {
+        if let Some(last_paid) = last_payment_date(&original.payments)? {
             if storno_date < last_paid {
                 return Err(Error::Domain(format!(
                     "Das Storno-Datum liegt vor dem letzten Zahlungseingang ({0}). \
@@ -1977,21 +2043,17 @@ fn detail_to_input(detail: &InvoiceDetail) -> Result<InvoiceInput> {
     })
 }
 
-/// Jüngstes Zahlungsdatum einer Rechnung (Lauf F8): aus der Zahlungshistorie,
-/// ohne Historie `paid_at`.
-fn last_payment_date(invoice: &InvoiceRow) -> Result<Option<NaiveDate>> {
-    let history = invoices::parse_payment_history(invoice.payment_history_json.as_deref())?;
-    let mut last: Option<NaiveDate> = None;
-    for entry in history.iter().filter(|e| e.amount_cents != 0) {
-        let d = parse_date(&entry.paid_date)?;
-        last = Some(last.map_or(d, |l| l.max(d)));
-    }
-    if last.is_none() {
-        if let Some(at) = invoice.paid_at.as_deref() {
-            last = Some(parse_date(at)?);
-        }
-    }
-    Ok(last)
+/// Jüngstes Zahlungsdatum einer Rechnung (Lauf F8) aus dem Zahlungsbuch, ohne
+/// stornierte Zahlungen und ihre Gegenbuchungen (ADR 0042 Nr. 8): ein falsch
+/// erfasstes, storniertes spätes Datum blockiert das Storno-Datum nicht.
+fn last_payment_date(
+    payments: &[crate::db::models::InvoicePaymentView],
+) -> Result<Option<NaiveDate>> {
+    let rows: Vec<crate::db::models::InvoicePaymentRow> =
+        payments.iter().map(|p| p.row.clone()).collect();
+    crate::db::repo::invoice_payments::last_effective_paid_date(&rows)
+        .map(parse_date)
+        .transpose()
 }
 
 fn parse_date(s: &str) -> Result<NaiveDate> {

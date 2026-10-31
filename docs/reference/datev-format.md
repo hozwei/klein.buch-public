@@ -45,6 +45,7 @@ Geldkonto (Lauf F, F5-fix, 25.10.2026).
 | Vorgang | Konto | S/H | Gegenkonto |
 |---|---|---|---|
 | Einnahme (Zahlungseingang) | Geldkonto | S | Erlöskonto (§19 bzw. je Steuergruppe) |
+| Gegenbuchung („Zahlung stornieren“, ADR 0042 Nr. 9) | Geldkonto der Zahlung | H | Erlöskonto der Zahlung; Belegdatum und Belegfeld 1 der stornierten Zahlung, Buchungstext „Storno Zahlung …“ |
 | Storno-Erstattung | Geldkonto | H | Erlöskonto des Originals |
 | Ausgabe (bezahlte Kosten) | Geldkonto | H | Aufwandskonto je Kategorie (ggf. mit BU-Schlüssel) |
 | Aktivierte Kosten (Anlage aus Kostenposition) | Geldkonto | H | Anlagekonto (ggf. mit BU-Schlüssel) |
@@ -72,10 +73,13 @@ als Vorschlag wie die Kontenwahl.
 | `cash` | 1000 Kasse | 1600 Kasse |
 | `paypal`, `stripe`, `other` | 1360 Geldtransit | 1460 Geldtransit |
 
-Das Konto eines Zahlungseingangs steht in der Zahlungshistorie der Rechnung
-(Feld „Zahlungs-Konto“ beim Erfassen), bei Kosten in `paid_from_account_id`, bei
-Privatbewegungen in `account_id`. Eine Storno-Erstattung nimmt das Konto des
-letzten Zahlungseingangs des Originals.
+Das Konto eines Zahlungseingangs steht im Zahlungsbuch `invoice_payments`
+(`account_id`, Feld „Zahlungs-Konto“ beim Erfassen; Schema 34), bei Kosten in
+`paid_from_account_id`, bei Privatbewegungen in `account_id`. Eine Gegenbuchung
+trägt das Konto der stornierten Zahlung. Eine Storno-Erstattung nimmt das Konto
+des letzten nicht stornierten Zahlungseingangs des Originals mit Konto, sonst
+das Konto der Rechnung bzw. Bank; ihr Betrag ist die Summe des Zahlungsbuchs
+(Zahlungen minus Gegenbuchungen).
 
 ## Konten (SKR03 / SKR04), am DATEV-Kontenrahmen geprüft
 

@@ -7,7 +7,7 @@
 //! * KB-0014: Kategorie E nur mit §19.
 //! * LE-CUSTOM-TEMPLATE-STORNO: eigene Vorlage ohne `storno_of` → eingebaute
 //!   Vorlage für Stornos + Inbox-Hinweis.
-//! * R1-S2-PAYHIST: Zahlungshistorie ohne stillen Rückfall, Invariante.
+//! * R1-S2-PAYHIST → Zahlungsbuch (0034): JSON-Historie eingefroren, Cache an das Buch gebunden.
 //! * R5-S2-QUOTEDATE: Annahmedatum geprüft.
 //! * KB-0046/KB-0047: Paket-Hardline (Revisionen, Provenienz, Klartext, §19).
 //!
@@ -422,11 +422,13 @@ async fn storno_with_template_without_storno_of_uses_builtin_and_notifies() {
 }
 
 // ============================================================================
-// R1-S2-PAYHIST
+// R1-S2-PAYHIST → Zahlungsbuch (Migration 0034, ADR 0042 Nr. 7)
 // ============================================================================
 
+/// Seit 0034 ist die JSON-Historie Altbestand und unveränderlich; die EÜR liest
+/// das Zahlungsbuch.
 #[tokio::test]
-async fn payment_history_corrupt_json_is_an_error_not_a_fallback() {
+async fn payment_history_json_is_frozen_ledger_is_the_source() {
     let env = setup(true).await;
     let id = create_draft(&env, input(vec![item(1, 1.0, 50_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
@@ -434,65 +436,70 @@ async fn payment_history_corrupt_json_is_an_error_not_a_fallback() {
     invoices::record_payment(&env.pool, &id, 10_000, &iso, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE invoices SET payment_history_json = '{kaputt' WHERE id = ?")
+    let err = sqlx::query("UPDATE invoices SET payment_history_json = '{kaputt' WHERE id = ?")
         .bind(&id)
         .execute(&env.pool)
         .await
-        .unwrap();
-    let err = invoices::record_payment(&env.pool, &id, 5_000, &iso, None)
-        .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("beschädigt"), "{err}");
-    let eur = klein_buch_lib::db::repo::euer::income_payments(&env.pool).await;
-    assert!(
-        eur.is_err(),
-        "EÜR darf kaputte Historie nicht still überspringen"
-    );
-    // Bezahlt-Betrag unverändert (keine zweite Buchung auf kaputter Basis).
+    assert!(err.contains("payment_history_json"), "{err}");
     let row = invoices::get(&env.pool, &id).await.unwrap().unwrap();
-    assert_eq!(row.paid_amount_cents, 10_000);
+    assert_eq!(row.payment_history_json, None, "neue Zahlungen nur im Buch");
+    let eur = klein_buch_lib::db::repo::euer::income_payments(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(eur.iter().map(|p| p.amount_cents).sum::<i64>(), 10_000);
 }
 
+/// Der Zahlungsstand der Rechnung ist ein Cache des Buchs: ein Roh-UPDATE, das
+/// davon abweicht, scheitert; Buchungen halten Buch und Cache gleich.
 #[tokio::test]
-async fn payment_history_invariant_and_legacy_seed() {
+async fn payment_cache_is_bound_to_the_ledger() {
     let env = setup(true).await;
     let id = create_draft(&env, input(vec![item(1, 1.0, 50_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
     let iso = today().to_string();
-    // Altbestand: bezahlt ohne Historie.
-    sqlx::query(
-        "UPDATE invoices SET paid_amount_cents = 20000, paid_at = ?, status = 'partially_paid',
-                payment_history_json = NULL WHERE id = ?",
-    )
-    .bind(&iso)
-    .bind(&id)
-    .execute(&env.pool)
-    .await
-    .unwrap();
+    for sql in [
+        "UPDATE invoices SET paid_amount_cents = 20000 WHERE id = ?",
+        "UPDATE invoices SET status = 'paid' WHERE id = ?",
+        "UPDATE invoices SET paid_at = '2026-01-01' WHERE id = ?",
+    ] {
+        let err = sqlx::query(sql)
+            .bind(&id)
+            .execute(&env.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Zahlungsbuch"), "{sql}: {err}");
+    }
     let row = invoices::record_payment(&env.pool, &id, 5_000, &iso, None)
         .await
         .unwrap();
-    assert_eq!(row.paid_amount_cents, 25_000);
-    let history = invoices::parse_payment_history(row.payment_history_json.as_deref()).unwrap();
-    assert_eq!(history.len(), 2);
-    assert_eq!(history.iter().map(|e| e.amount_cents).sum::<i64>(), 25_000);
-    // Die EÜR sieht weiter beide Zahlungen.
-    let payments = klein_buch_lib::db::repo::euer::income_payments(&env.pool)
+    assert_eq!(
+        (row.paid_amount_cents, row.status.as_str()),
+        (5_000, "partially_paid")
+    );
+    let row = invoices::record_payment(&env.pool, &id, 45_000, &iso, None)
         .await
         .unwrap();
-    assert_eq!(payments.iter().map(|p| p.amount_cents).sum::<i64>(), 25_000);
-    // Historie und gezahlter Betrag laufen auseinander → Fehler statt Buchung.
-    sqlx::query("UPDATE invoices SET paid_amount_cents = 30000 WHERE id = ?")
-        .bind(&id)
-        .execute(&env.pool)
-        .await
-        .unwrap();
-    let err = invoices::record_payment(&env.pool, &id, 1_000, &iso, None)
+    assert_eq!(
+        (row.paid_amount_cents, row.status.as_str()),
+        (50_000, "paid")
+    );
+    assert_eq!(row.paid_at.as_deref(), Some(iso.as_str()));
+    let sum: i64 =
+        sqlx::query_scalar("SELECT SUM(amount_cents) FROM invoice_payments WHERE invoice_id = ?")
+            .bind(&id)
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(sum, 50_000);
+    // Überzahlung lehnt der Server ab, die DB als zweite Linie ebenso.
+    let err = invoices::record_payment(&env.pool, &id, 1, &iso, None)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("stimmt nicht"), "{err}");
+    assert!(err.contains("Überzahlung"), "{err}");
 }
 
 // ============================================================================

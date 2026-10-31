@@ -142,7 +142,10 @@ fn auth_of(name: &str) -> Auth {
         // ADR 0042 Nr. 1: Steuerstatus nach §19 eintragen oder widerrufen —
         // bestimmt, ob künftige Rechnungen Umsatzsteuer ausweisen (§14c).
         | "tax_status_change_add"
-        | "tax_status_change_revoke" => Auth::Reauth,
+        | "tax_status_change_revoke"
+        // ADR 0042 Nr. 8: Zahlung stornieren — Gegenbuchung im Zahlungsbuch,
+        // unumkehrbar und wirksam im Jahr des ursprünglichen Zahldatums.
+        | "invoices_reverse_payment" => Auth::Reauth,
         _ => Auth::Session,
     }
 }
@@ -312,6 +315,7 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "fiscal_year_close"
         | "invoices_create_draft"
         | "invoices_record_payment"
+        | "invoices_reverse_payment"
         | "invoices_update_draft"
         | "invoices_void_draft"
         | "legal_documents_activate"
@@ -506,6 +510,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("invoices_validate_draft", h::invoices_validate_draft),
     ("invoices_lock_and_issue", h::invoices_lock_and_issue),
     ("invoices_record_payment", h::invoices_record_payment),
+    ("invoices_reverse_payment", h::invoices_reverse_payment),
     ("invoices_cancel", h::invoices_cancel),
     ("invoices_void_draft", h::invoices_void_draft),
     ("invoices_update_draft", h::invoices_update_draft),
@@ -1227,6 +1232,15 @@ mod h {
             let args: crate::commands::invoices::InvoicesRecordPaymentArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::invoices::invoices_record_payment(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn invoices_reverse_payment(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::invoices::InvoicesReversePaymentArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::invoices::invoices_reverse_payment(&ctx, args).await?,
             )?)
         })
     }

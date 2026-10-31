@@ -179,15 +179,15 @@ ADRs: 0006.
 | `db::mod` | Shell | `open_pool(db_file, key)` (SQLCipher-Pool, `PRAGMA key`), `open_and_init`, `begin_immediate` (Schreib-Transaktion, W2), `prepare_filesystem` (vor jedem Pool-Open: Seed von `/inputs`, vorgemerkter Factory Reset → Start-Abbruch (E7), Restore-Staging aufräumen, vorgemerkten Restore anwenden), `run_migrations` (`sqlx::migrate!` aus `migrations/`, Schema-Check, Restore-Audit), `rekey_db_file` (Passphrase-Wechsel, W6), `db_file_is_plaintext` |
 | `db::models` | Shell | sqlx-Row-Typen (DB-nahe), nicht zu verwechseln mit Domain-Typen — Mapping in den Repos |
 | `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq`; `snapshot` und `raise_in` (nur aufwärts) für Restore und `numbering_raise` (Lauf F, D-24) |
-| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (32), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
+| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (34), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
 | `db::triggers` | Shell-Stub | Dokumentiert die in den Migrations-SQLs definierten Trigger (Code-Stub, die Wahrheit lebt in `migrations/*.sql`) |
-| `db::repo::*` | Shell | Repo pro Domäne (21 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
+| `db::repo::*` | Shell | Repo pro Domäne (23 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
 
-**Repos:** `invoices`, `quotes`, `expenses`, `private_movements`,
+**Repos:** `invoices`, `invoice_payments` (Zahlungsbuch, Zahlung erfassen und stornieren in einer Transaktion samt Cache und Audit, Lesemodell mit Stornierbarkeit; ADR 0042 Nr. 7–9), `quotes`, `expenses`, `private_movements`,
 `payment_accounts`, `assets`, `depreciation`, `recurring`, `recurring_invoice`,
 `packages`, `legal_documents`, `attachments`, `contacts`, `seller_profile`,
 `audit_log`, `email_log`, `backup_log`, `mail_accounts`, `euer`, `dsgvo`,
-`app_settings`. Zugangsdaten liegen nicht in einem Repo, sondern in
+`tax_status`, `app_settings`. Zugangsdaten liegen nicht in einem Repo, sondern in
 `crate::secrets` (§16). `audit_log::append`/`append_in` nehmen die Details nur
 als `serde_json::Value` und setzen den Akteur aus dem Task-Kontext
 (`with_actor`: `owner`/`scheduler`, sonst `system`; Lauf F, ADR 0039 Nr. 125).

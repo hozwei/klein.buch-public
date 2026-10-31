@@ -23,6 +23,11 @@
 //!   DELETE — `voided_at` + `void_reason` werden gesetzt, die Nummer bleibt
 //!   verbraucht und der Entwurf ist danach unveränderlich
 //!   (`trg_invoices_voided_final`).
+//! - **Zahlungen** stehen im Zahlungsbuch `invoice_payments` (Migration 0034,
+//!   [`crate::db::repo::invoice_payments`]); eine Gegenbuchung („Zahlung
+//!   stornieren“) führt `partially_paid`/`paid` zurück bis auf `sent` bzw.
+//!   `issued`. `paid_amount_cents`, `paid_at` und `status` folgen dem Buch
+//!   (Trigger `trg_invoices_payment_cache_bound`).
 
 use crate::db::models::{InvoiceDetail, InvoiceItemRow, InvoiceListItem, InvoiceRow};
 use crate::domain::invoice::{InvoiceInput, Totals};
@@ -330,10 +335,12 @@ pub async fn get_detail(pool: &SqlitePool, id: &str) -> Result<Option<InvoiceDet
     };
     let items = get_items(pool, id).await?;
     let buyer = crate::db::repo::contacts::get(pool, &invoice.contact_id).await?;
+    let payments = crate::db::repo::invoice_payments::views(pool, &invoice).await?;
     Ok(Some(InvoiceDetail {
         invoice,
         items,
         buyer,
+        payments,
     }))
 }
 
@@ -582,13 +589,12 @@ pub async fn lock_with_pair_cancel(
 
 // ---- PAYMENT ---------------------------------------------------------------
 
-/// Buchung einer (Teil-)Zahlung. Aktualisiert `paid_amount_cents`,
-/// `paid_at` (Cash-Basis-Eingangsdatum für EÜR), `payment_history_json`,
-/// und übergibt den Status automatisch:
+/// Buchung einer (Teil-)Zahlung ins Zahlungsbuch (Migration 0034, ADR 0042
+/// Nr. 7). Der Cache der Rechnung folgt dem Buch:
 ///
-/// - `paid_amount_cents == gross_amount_cents` → `paid`
-/// - `0 < paid_amount_cents < gross_amount_cents` → `partially_paid`
-/// - `paid_amount_cents == 0` → keine Statusänderung
+/// - Summe == `gross_amount_cents` → `paid`
+/// - 0 < Summe < `gross_amount_cents` → `partially_paid`
+/// - `paid_at` = jüngstes Zahldatum der nicht stornierten Zahlungen
 pub async fn record_payment(
     pool: &SqlitePool,
     id: &str,
@@ -600,9 +606,11 @@ pub async fn record_payment(
 }
 
 /// Wie [`record_payment`], mit dem Zahlungskonto, auf dem das Geld einging
-/// (R2-011, Lauf F5b). Das Konto steht im Eintrag der Zahlungshistorie —
-/// `paid_to_account_id` ist nach dem Festschreiben gesperrt und bleibt
-/// unberührt. Ein angegebenes Konto muss existieren und aktiv sein.
+/// (R2-011, Lauf F5b). Buchzeile, Cache der Rechnung und Audit
+/// `invoice.payment_recorded` in **einer** Transaktion
+/// ([`crate::db::repo::invoice_payments::record_in`]). Ein angegebenes Konto
+/// muss existieren und aktiv sein; `paid_to_account_id` (Snapshot beim
+/// Festschreiben) bleibt unberührt.
 pub async fn record_payment_to_account(
     pool: &SqlitePool,
     id: &str,
@@ -611,164 +619,25 @@ pub async fn record_payment_to_account(
     note: Option<&str>,
     account_id: Option<&str>,
 ) -> Result<InvoiceRow> {
-    if amount_cents <= 0 {
-        return Err(Error::Domain(format!(
-            "record_payment: amount_cents muss > 0 sein, got {amount_cents}"
-        )));
-    }
-    // F5-fix: Domänengrenze statt Überlauf (overflow-checks im Release-Profil).
-    if !crate::domain::money::amount_in_range(amount_cents) {
-        return Err(Error::Domain(
-            crate::domain::money::amount_out_of_range_message(),
-        ));
-    }
-
+    let created_at = crate::clock::to_db_utc(crate::clock::now_utc());
     let mut tx = crate::db::begin_immediate(pool).await?;
-
-    let invoice = sqlx::query(
-        "SELECT gross_amount_cents, paid_amount_cents, paid_at, payment_history_json, status,
-                locked_at
-         FROM invoices WHERE id = ?",
+    crate::db::repo::invoice_payments::record_in(
+        &mut tx,
+        id,
+        &crate::db::repo::invoice_payments::NewPayment {
+            amount_cents,
+            paid_date: paid_date_iso,
+            note,
+            account_id,
+            created_at: &created_at,
+        },
     )
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| Error::Domain(format!("Rechnung nicht gefunden: {id}")))?;
-
-    if let Some(acc) = account_id {
-        let (n,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM payment_accounts WHERE id = ? AND active = 1")
-                .bind(acc)
-                .fetch_one(&mut *tx)
-                .await?;
-        if n == 0 {
-            return Err(Error::Domain(
-                "Das gewählte Zahlungskonto gibt es nicht oder es ist deaktiviert.".into(),
-            ));
-        }
-    }
-
-    let gross: i64 = invoice.try_get("gross_amount_cents")?;
-    let prev_paid: i64 = invoice.try_get("paid_amount_cents")?;
-    let locked: Option<String> = invoice.try_get("locked_at")?;
-    let status: String = invoice.try_get("status")?;
-    let history_str: Option<String> = invoice.try_get("payment_history_json")?;
-    let prev_paid_at: Option<String> = invoice.try_get("paid_at")?;
-
-    if locked.is_none() {
-        return Err(Error::Domain(format!(
-            "record_payment: invoice {id} ist nicht gelockt (status={status})"
-        )));
-    }
-    if status == "canceled" {
-        return Err(Error::Domain(format!(
-            "record_payment: invoice {id} ist storniert"
-        )));
-    }
-
-    let new_paid = prev_paid.saturating_add(amount_cents);
-    if new_paid > gross {
-        return Err(Error::Domain(format!(
-            "record_payment: Summe {new_paid} > gross {gross} (Überzahlung)"
-        )));
-    }
-
-    // History pflegen (R1-S2-PAYHIST): kaputtes JSON ist ein Fehler, kein stiller
-    // Neuanfang, und die Summe der Historie muss `paid_amount_cents` ergeben.
-    let mut history = parse_payment_history(history_str.as_deref())?;
-    if history.is_empty() && prev_paid > 0 {
-        // Altbestand: bezahlt ohne Historie. Die bisherige Zahlung wird als
-        // erster Eintrag übernommen — sonst fiele sie aus der EÜR, sobald die
-        // Historie nicht mehr leer ist (die EÜR liest dann nur noch sie).
-        let paid_date = prev_paid_at
-            .as_deref()
-            .and_then(|s| s.get(..10))
-            .ok_or_else(|| {
-                Error::Domain(format!(
-                    "record_payment: Rechnung {id} ist bezahlt, aber ohne Zahldatum und Historie"
-                ))
-            })?
-            .to_string();
-        history.push(PaymentEntry {
-            amount_cents: prev_paid,
-            paid_date,
-            note: Some("Übernommen aus dem Altbestand (ohne Zahlungshistorie)".into()),
-            recorded_at: crate::clock::now_utc().to_rfc3339(),
-            account_id: None,
-        });
-    }
-    let history_sum = history
-        .iter()
-        .try_fold(0i64, |acc, e| acc.checked_add(e.amount_cents));
-    if history_sum != Some(prev_paid) {
-        return Err(Error::Domain(format!(
-            "Die Zahlungshistorie der Rechnung {id} stimmt nicht mit dem gezahlten Betrag überein \
-             (Historie {history_sum:?}, gezahlt {prev_paid}). Bitte die Daten prüfen lassen."
-        )));
-    }
-    history.push(PaymentEntry {
-        amount_cents,
-        paid_date: paid_date_iso.to_string(),
-        note: note.map(|s| s.to_string()),
-        recorded_at: crate::clock::now_utc().to_rfc3339(),
-        account_id: account_id.map(str::to_string),
-    });
-    let history_json = serde_json::to_string(&history)?;
-
-    let new_status = if new_paid == gross {
-        "paid"
-    } else {
-        "partially_paid"
-    };
-
-    sqlx::query(
-        "UPDATE invoices SET
-            paid_amount_cents = ?,
-            paid_at = ?,
-            payment_history_json = ?,
-            status = ?,
-            updated_at = datetime('now','utc')
-         WHERE id = ?",
-    )
-    .bind(new_paid)
-    .bind(paid_date_iso)
-    .bind(&history_json)
-    .bind(new_status)
-    .bind(id)
-    .execute(&mut *tx)
     .await?;
-
     tx.commit().await?;
 
     get(pool, id)
         .await?
         .ok_or_else(|| Error::Domain("record_payment: post-UPDATE SELECT leer".into()))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentEntry {
-    pub amount_cents: i64,
-    pub paid_date: String,
-    pub note: Option<String>,
-    pub recorded_at: String,
-    /// Zahlungskonto des Eingangs (R2-011); fehlt bei älteren Einträgen.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-}
-
-/// Liest `payment_history_json` (R1-S2-PAYHIST). `None` → leere Historie;
-/// kaputtes JSON ist ein Fehler statt eines stillen Rückfalls (sonst
-/// verschwänden Einnahmen aus der EÜR oder die Historie würde überschrieben).
-pub fn parse_payment_history(json: Option<&str>) -> Result<Vec<PaymentEntry>> {
-    match json {
-        None => Ok(Vec::new()),
-        Some(s) => serde_json::from_str(s).map_err(|e| {
-            Error::Domain(format!(
-                "Die Zahlungshistorie einer Rechnung ist beschädigt und lässt sich nicht lesen ({e})."
-            ))
-        }),
-    }
 }
 
 // ---- SEND ------------------------------------------------------------------

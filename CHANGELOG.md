@@ -26,6 +26,14 @@ offenen Punkte aus Lauf 2026.11.
   Wechseljahr. Klein.Buch zeigt den Gesamtumsatz nach vereinnahmten Entgelten (Vorjahr und
   laufendes Jahr) und meldet erreichte Grenzen; einen rückwirkenden Wechsel nimmt es nur in
   offenen Geschäftsjahren an und nennt betroffene festgeschriebene Rechnungen.
+- **Zahlungsbuch und „Zahlung stornieren“** (ADR 0042 Nr. 7–9): Zahlungen auf Rechnungen stehen
+  in einem unveränderlichen Zahlungsbuch; Betrag, Datum, Status und Historie einer Rechnung sind
+  daran gebunden (bisher ließ sich die Zahlungshistorie einer festgeschriebenen Rechnung
+  ändern). Eine falsch erfasste Zahlung wird mit Grund durch eine Gegenbuchung storniert, die am
+  ursprünglichen Zahldatum wirkt (§ 11 EStG), danach wird richtig neu erfasst; im
+  abgeschlossenen Geschäftsjahr lehnt Klein.Buch ab und verweist auf § 153 AO. EÜR,
+  ELSTER-Ausfüllhilfe, DATEV-Stapel, Steuerberater-Paket und DSGVO-Auskunft zeigen
+  Gegenbuchungen.
 
 ### Hinweise für Betreiber (Update von 2026.11.0)
 

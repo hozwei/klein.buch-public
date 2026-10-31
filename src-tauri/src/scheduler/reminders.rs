@@ -267,10 +267,23 @@ async fn invoice_overdue(
     today: NaiveDate,
 ) -> Result<usize> {
     let today_str = today.format("%Y-%m-%d").to_string();
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, invoice_number, due_date
+    // ADR 0042 Nr. 8: Nach einer Gegenbuchung kann eine Rechnung wieder offen
+    // sein; der Schlüssel zählt die Gegenbuchungen mit, damit ein früherer,
+    // schon abgehakter Hinweis den neuen nicht unterdrückt. Steht zur Rechnung
+    // noch ein offener (nicht abgehakter) Überfällig-Hinweis, entsteht kein
+    // zweiter.
+    let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT id, invoice_number, due_date,
+                (SELECT COUNT(*) FROM invoice_payments p
+                  WHERE p.invoice_id = invoices.id AND p.kind = 'reversal') AS reversals
            FROM invoices
-          WHERE direction = 'issued'
+          WHERE NOT EXISTS (
+                    SELECT 1 FROM notifications n
+                     WHERE n.dismissed_at IS NULL
+                       AND (n.dedup_key = 'invoice_overdue:' || invoices.id
+                            OR substr(n.dedup_key, 1, length(invoices.id) + 18)
+                               = 'invoice_overdue:' || invoices.id || ':r'))
+            AND direction = 'issued'
             AND is_storno_for IS NULL
             AND canceled_at IS NULL
             AND status IN ('issued','sent','partially_paid')
@@ -284,8 +297,12 @@ async fn invoice_overdue(
     .await?;
 
     let mut created = 0usize;
-    for (id, number, due_date) in rows {
-        let key = format!("invoice_overdue:{id}");
+    for (id, number, due_date, reversals) in rows {
+        let key = if reversals == 0 {
+            format!("invoice_overdue:{id}")
+        } else {
+            format!("invoice_overdue:{id}:r{reversals}")
+        };
         let body = format!("Die Rechnung {number} ist seit {due_date} überfällig.");
         let action = format!("/invoices/{id}");
         created += emit_one(

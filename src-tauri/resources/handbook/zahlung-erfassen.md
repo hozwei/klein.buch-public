@@ -3,7 +3,7 @@ slug: zahlung-erfassen
 title: Zahlung erfassen
 category: erste-schritte
 order: 60
-keywords: [zahlung, bezahlt, teilzahlung, teilbezahlt, zahlungskonto, cash-basis, eür, paid-at, überfällig]
+keywords: [zahlung, bezahlt, teilzahlung, teilbezahlt, zahlungskonto, cash-basis, eür, paid-at, überfällig, gegenbuchung, zahlung stornieren, fehlbuchung]
 ---
 
 # Zahlung erfassen
@@ -72,18 +72,85 @@ EÜR-Jahr 2026 und die zweite im EÜR-Jahr 2027.
 
 ## Gebuchte Zahlungen
 
-Die Detail-Ansicht der Rechnung zeigt alle gebuchten Zahlungen in der
-Karte "Zahlungen" mit Zahldatum, Betrag, Konto und Notiz.
+Die Detail-Ansicht der Rechnung zeigt alle Buchungen in der Karte
+"Zahlungen": Zahldatum, Art ("Zahlung" oder "Gegenbuchung"), Betrag,
+Konto und Notiz bzw. Grund. Eine stornierte Zahlung bleibt in der
+Liste stehen und trägt den Vermerk "Storniert" mit dem Zeitpunkt der
+Gegenbuchung; die Gegenbuchung nennt die Zahlung, die sie storniert,
+und ihren Grund. Die Karte bleibt auch dann sichtbar, wenn nach einer
+Gegenbuchung nichts mehr bezahlt ist.
 
-Eine gebuchte Zahlung lässt sich nicht ändern oder löschen; einen
-Knopf dafür gibt es nicht. Prüf Betrag, Datum und Konto deshalb vor
-"Zahlung buchen". Eine falsch gebuchte Zahlung korrigierst Du über
-einen Storno der Rechnung (siehe Kapitel "Storno statt Löschung") und
-eine neue Rechnung, auf der Du die Zahlung richtig erfasst.
+Eine gebuchte Zahlung wird nie geändert oder gelöscht. Klein.Buch
+führt die Zahlungen in einem Zahlungsbuch, in dem nichts überschrieben
+wird. Eine falsch erfasste Zahlung korrigierst Du mit einer
+Gegenbuchung (nächster Abschnitt) und erfasst sie danach richtig neu.
+Prüf Betrag, Datum und Konto trotzdem vor "Zahlung buchen" — jede
+Korrektur bleibt als Paar sichtbar.
 
 Nach dem Geschäftsjahr-Abschluss nimmt Klein.Buch keine Zahlung mit
-einem Datum in diesem Jahr mehr an. Eine Korrektur geht dann nur noch
-über einen Storno im aktuellen Jahr.
+einem Datum in diesem Jahr mehr an.
+
+## Falsch erfasste Zahlung stornieren
+
+Hast Du eine Zahlung falsch erfasst (falscher Betrag, falsches Datum,
+falsches Konto, falsche Rechnung oder das Geld kam gar nicht), stornierst
+Du sie mit einer Gegenbuchung: derselbe Betrag mit umgekehrtem
+Vorzeichen, mit Datum und Konto der falschen Zahlung. Beide Buchungen
+bleiben sichtbar, in der Rechnung, in der EÜR-Einzelaufstellung und im
+DATEV-Stapel.
+
+1. Öffne die Rechnung. In der Karte "Zahlungen" klickst Du in der Zeile
+   der falschen Zahlung auf **"Mehr"** und wählst **"Zahlung
+   stornieren …"**.
+2. Der Dialog "Zahlung stornieren?" nennt Rechnung, Betrag, Zahldatum
+   und Konto der Zahlung. Trag unter **"Grund"** ein, was falsch war,
+   zum Beispiel "Betrag falsch erfasst, laut Kontoauszug 450,00 €". Der
+   Grund ist Pflicht (mindestens 10 Zeichen) und steht an der
+   Gegenbuchung und im Protokoll. Ist er zu kurz, steht die Meldung am
+   Feld.
+3. Klick auf **"Zahlung stornieren"**. Klein.Buch fragt zur Bestätigung
+   Daten-Passwort und App-Code ab, wie bei anderen unumkehrbaren
+   Schritten.
+4. Klein.Buch bestätigt mit "Zahlung vom … über … storniert." und bietet
+   **"Zahlung neu erfassen"** an. Der Knopf öffnet die Seite "+ Zahlung"
+   mit Datum, Konto und Notiz der stornierten Zahlung als Vorschlag;
+   prüf sie und trag Betrag und Datum laut Kontoauszug ein. Kam das
+   Geld gar nicht, erfasst Du nichts neu.
+
+- **Wirkung:** Die Gegenbuchung wirkt am ursprünglichen Zahldatum. Eine
+  Zahlung, die so nie geflossen ist, war keine Einnahme (§ 11 EStG). Die
+  EÜR des Jahres der falschen Zahlung ändert sich also. Hast Du die
+  Auswertungen dieses Jahres schon an Deine Steuerberatung gegeben, gib
+  ihr die neuen.
+- **Status:** Die Rechnung geht zurück auf "Teilbezahlt" oder, ohne
+  verbleibende Zahlung, auf "Versendet" bzw. "Ausgestellt". Ist sie
+  fällig, zeigt Klein.Buch sie wieder als "Überfällig".
+
+Nicht möglich ist das Stornieren einer Zahlung — der Eintrag im Menü
+ist dann gesperrt und nennt den Grund:
+
+- wenn das Geschäftsjahr des Zahldatums abgeschlossen ist. Ist die
+  Erklärung für dieses Jahr schon abgegeben und führt die falsche
+  Zahlung zu zu niedriger Steuer, ist die Erklärung zu berichtigen
+  (§ 153 AO); zu hoch erfasste Einnahmen lassen sich auf Antrag ändern
+  (§ 173 Abs. 1 Nr. 2, § 164 Abs. 2 AO). Kläre das mit Deiner
+  Steuerberatung;
+- bei einer stornierten Rechnung, einem Storno-Beleg oder solange es zur
+  Rechnung einen offenen Storno-Entwurf gibt. Willst Du eine Rechnung
+  stornieren und ist eine ihrer Zahlungen falsch erfasst, storniere
+  deshalb zuerst die Zahlung, dann die Rechnung.
+
+Eine Zahlung, die schon storniert ist, und eine Gegenbuchung haben kein
+Menü.
+
+Lehnt Klein.Buch das Stornieren ab (zum Beispiel, weil das Jahr
+inzwischen abgeschlossen wurde), steht der Grund im Dialog; es ist dann
+nichts gebucht.
+
+**Abgrenzung:** "Zahlung stornieren" ist nur für Fehlbuchungen da. Hast
+Du dem Kunden Geld zurückgezahlt, ist das kein Fehler in der Buchung,
+sondern ein Abfluss am Tag der Rückzahlung. Den bildest Du über den
+Storno der Rechnung ab (siehe Kapitel "Storno statt Löschung").
 
 ## Mahnung
 

@@ -376,7 +376,9 @@ pub fn log_foreign_key_violations(context: &str, violations: &[ForeignKeyViolati
 
 /// Prüfung vor einer Umstellung (Lauf F2c): verletzte Fremdschlüssel und —
 /// für die Umstellung auf Schema 32 — mehrere festgeschriebene Stornos zu
-/// einem Original (dieselbe Bedingung wie der benannte CHECK in 0032). Ein
+/// einem Original (dieselbe Bedingung wie der benannte CHECK in 0032), für
+/// die Umstellung auf Schema 34 eine nicht übernehmbare Zahlungshistorie
+/// ([`payment_ledger_problem`], ADR 0042 Nr. 7). Ein
 /// Befund lehnt ab, **bevor** eine Migration etwas speichert: die Datenbank
 /// bleibt auf Schema `from`, das vorige Image öffnet sie weiter, ein Restore
 /// bleibt möglich. Billig gegenüber dem Pflicht-Backup, das danach entsteht.
@@ -406,7 +408,133 @@ pub async fn precheck_before_migration(pool: &SqlitePool, from: i32) -> Result<(
         tracing::error!("{msg}");
         return Err(Error::Config(msg));
     }
+    if from < 34 {
+        if let Some(problem) = payment_ledger_problem(pool).await? {
+            log_payment_ledger_invoices(
+                &format!("vor der Umstellung von Schema {from}"),
+                &payment_ledger_invoices(pool).await?,
+            );
+            let msg = format!(
+                "{INTEGRITY_REFUSED}: Migration 0034 abgebrochen: {problem} Die Datenbank steht \
+                 unverändert auf Schema {from}; es wurde nichts umgestellt (Handbuch: Fehlersuche \
+                 im Container)."
+            );
+            tracing::error!("{msg}");
+            return Err(Error::Config(msg));
+        }
+    }
     Ok(())
+}
+
+/// Befunde der Vorab-Prüfung der Migration 0034 je Rechnung (0/1 je Grund),
+/// gemeinsame Grundlage von [`payment_ledger_problem`] und
+/// [`payment_ledger_invoices`]. Dieselben Bedingungen wie der benannte CHECK
+/// in 0034. `json_each` läuft nur über gültige JSON-Arrays (sonst über
+/// `'[]'`), damit eine kaputte Historie als Befund zählt statt die Abfrage
+/// abzubrechen.
+const PAYMENT_LEDGER_FLAGS: &str = "WITH entries AS (
+        SELECT i.id AS invoice_id, j.value AS entry
+          FROM invoices i,
+               json_each(CASE WHEN json_valid(i.payment_history_json)
+                               AND json_type(i.payment_history_json) = 'array'
+                              THEN i.payment_history_json ELSE '[]' END) j
+         WHERE i.payment_history_json IS NOT NULL
+     ),
+     flags AS (
+        SELECT i.invoice_number AS number,
+               CASE WHEN (i.payment_history_json IS NOT NULL
+                          AND (NOT json_valid(i.payment_history_json)
+                               OR json_type(i.payment_history_json) IS NOT 'array'))
+                      OR EXISTS (SELECT 1 FROM entries e
+                                  WHERE e.invoice_id = i.id
+                                    AND (json_type(e.entry) IS NOT 'object'
+                                     OR json_type(e.entry, '$.amountCents') IS NOT 'integer'
+                                     OR json_extract(e.entry, '$.amountCents') < 0
+                                     OR json_type(e.entry, '$.paidDate') IS NOT 'text'
+                                     OR date(substr(json_extract(e.entry, '$.paidDate'), 1, 10))
+                                            IS NOT substr(json_extract(e.entry, '$.paidDate'), 1, 10)
+                                     OR json_type(e.entry, '$.accountId') NOT IN ('text', 'null')))
+                    THEN 1 ELSE 0 END AS unreadable,
+               CASE WHEN json_valid(i.payment_history_json)
+                         AND json_type(i.payment_history_json) = 'array'
+                         AND json_array_length(i.payment_history_json) > 0
+                         AND i.paid_amount_cents IS NOT
+                             (SELECT COALESCE(SUM(json_extract(e.entry, '$.amountCents')), 0)
+                                FROM entries e WHERE e.invoice_id = i.id)
+                    THEN 1 ELSE 0 END AS mismatched,
+               CASE WHEN i.paid_amount_cents > 0
+                         AND (i.payment_history_json IS NULL
+                              OR (json_valid(i.payment_history_json)
+                                  AND json_type(i.payment_history_json) = 'array'
+                                  AND json_array_length(i.payment_history_json) = 0))
+                         AND (i.paid_at IS NULL
+                              OR date(substr(i.paid_at, 1, 10)) IS NOT substr(i.paid_at, 1, 10))
+                    THEN 1 ELSE 0 END AS undated,
+               CASE WHEN EXISTS (SELECT 1 FROM entries e
+                                  WHERE e.invoice_id = i.id
+                                    AND json_type(e.entry, '$.accountId') = 'text'
+                                    AND NOT EXISTS (SELECT 1 FROM payment_accounts pa
+                                                     WHERE pa.id = json_extract(e.entry, '$.accountId')))
+                    THEN 1 ELSE 0 END AS unknown
+          FROM invoices i
+     )";
+
+/// Vorab-Prüfung der Migration 0034 (Zahlungsbuch, ADR 0042 Nr. 7) — dieselben
+/// Bedingungen wie der benannte CHECK dort: Zahlungshistorie nicht lesbar,
+/// Summe der Historie ≠ gezahlter Betrag, bezahlt ohne Historie und ohne
+/// Zahldatum, Verweis auf ein unbekanntes Zahlungskonto. `None`: übernehmbar.
+/// Nur sinnvoll auf einer Datenbank vor Schema 34 (danach ist die Historie
+/// eingefroren und das Buch maßgeblich). Phase A eines Restores lehnt solche
+/// Backups ab, statt die Instanz nach dem Tausch gesperrt zu lassen.
+pub async fn payment_ledger_problem(pool: &SqlitePool) -> Result<Option<&'static str>> {
+    let (unreadable, mismatched, undated, unknown): (i64, i64, i64, i64) =
+        sqlx::query_as(&format!(
+            "{PAYMENT_LEDGER_FLAGS}
+             SELECT COALESCE(SUM(unreadable), 0), COALESCE(SUM(mismatched), 0),
+                    COALESCE(SUM(undated), 0), COALESCE(SUM(unknown), 0)
+               FROM flags"
+        ))
+        .fetch_one(pool)
+        .await?;
+    Ok(if unreadable > 0 {
+        Some("Die Zahlungshistorie mindestens einer Rechnung ist nicht lesbar.")
+    } else if mismatched > 0 {
+        Some(
+            "Bei mindestens einer Rechnung ergibt die Zahlungshistorie nicht den gezahlten Betrag.",
+        )
+    } else if undated > 0 {
+        Some(
+            "Mindestens eine Rechnung ist bezahlt, hat aber weder Zahlungshistorie noch Zahldatum.",
+        )
+    } else if unknown > 0 {
+        Some("Die Zahlungshistorie mindestens einer Rechnung verweist auf ein unbekanntes Zahlungskonto.")
+    } else {
+        None
+    })
+}
+
+/// Rechnungsnummern der Rechnungen mit einem Befund aus
+/// [`payment_ledger_problem`] (höchstens 20, sortiert), damit der Betreiber
+/// im Log sieht, welche Rechnung die Umstellung blockiert. Keine Beträge.
+pub async fn payment_ledger_invoices(pool: &SqlitePool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(&format!(
+        "{PAYMENT_LEDGER_FLAGS}
+         SELECT number FROM flags
+          WHERE unreadable + mismatched + undated + unknown > 0
+          ORDER BY number LIMIT 20"
+    ))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Schreibt die betroffenen Rechnungsnummern ins Log (ERROR), mit dem
+/// Kontext der Prüfung (wie [`log_foreign_key_violations`]).
+pub fn log_payment_ledger_invoices(context: &str, numbers: &[String]) {
+    for n in numbers {
+        tracing::error!(
+            "Zahlungshistorie nicht übernehmbar ({context}): Rechnung {n} (Migration 0034)"
+        );
+    }
 }
 
 /// Meldung für verletzte Fremdschlüssel **nach** den Migrationen. Mit

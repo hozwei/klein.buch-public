@@ -14,6 +14,7 @@ pub mod dsgvo;
 pub mod email_log;
 pub mod euer;
 pub mod expenses;
+pub mod invoice_payments;
 pub mod invoices;
 pub mod legal_documents;
 pub mod mail_accounts;

@@ -45,6 +45,31 @@ Konkrete Folgen für Deine Buchhaltung:
    laufende Jahr, auch wenn das Lieferdatum schon im Vorjahr lag.
 3. Offene unbezahlte Rechnungen tauchen in der EÜR nicht auf.
 
+## Falsch erfasste Zahlung und Rückzahlung
+
+Zwei Fälle sehen ähnlich aus, gehören aber in verschiedene Jahre:
+
+1. **Falsch erfasste Zahlung.** Du hast eine Zahlung gebucht, die so
+   nie eingegangen ist (falscher Betrag, falsches Datum, falsches Konto
+   oder gar kein Geld). Dann gab es an diesem Tag keinen Zufluss in
+   dieser Höhe. Klein.Buch storniert die Zahlung mit einer Gegenbuchung
+   am **ursprünglichen Zahldatum**: In der EÜR-Einzelaufstellung stehen
+   die Zahlung und die Gegenbuchung (negativ, als "Gegenbuchung"
+   gekennzeichnet, mit "Storno der Zahlung vom …" und Grund); in der
+   Summe heben sie sich auf. Danach erfasst Du die richtige Zahlung neu.
+   Ist das Jahr der falschen Zahlung schon abgeschlossen, geht das nicht
+   mehr. Führt die falsche Zahlung zu zu niedriger Steuer, ist die
+   abgegebene Erklärung zu berichtigen (§ 153 AO); zu hoch erfasste
+   Einnahmen lassen sich auf Antrag ändern (§ 173 Abs. 1 Nr. 2, § 164
+   Abs. 2 AO). Kläre das mit Deiner Steuerberatung.
+   Wie das geht: Kapitel "Zahlung erfassen", Abschnitt "Falsch erfasste
+   Zahlung stornieren".
+2. **Rückzahlung an den Kunden.** Das Geld war da, und Du hast es
+   später zurückgezahlt. Die Einnahme bleibt im Jahr des Eingangs; die
+   Rückzahlung mindert die Einnahmen am **Tag der Rückzahlung** (§ 11
+   Abs. 2 EStG). Das bildest Du über den Storno der Rechnung ab
+   (Kapitel "Storno statt Löschung"), nicht über "Zahlung stornieren".
+
 ## Ausnahmen von der Cash-Basis
 
 Es gibt zwei nennenswerte Ausnahmen:

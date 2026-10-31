@@ -370,22 +370,10 @@ async fn insert_paid_invoice(pool: &SqlitePool, date: NaiveDate, paid: NaiveDate
     .execute(pool)
     .await
     .unwrap();
-    let history = serde_json::json!([{
-        "amountCents": 10000, "paidDate": paid.to_string(), "note": null,
-        "recordedAt": format!("{paid} 12:00:00")
-    }])
-    .to_string();
-    sqlx::query(
-        "UPDATE invoices SET paid_amount_cents = 10000, paid_at = ?, status = 'paid',
-                payment_history_json = ?
-          WHERE id = ?",
-    )
-    .bind(format!("{paid} 12:00:00"))
-    .bind(history)
-    .bind(&id)
-    .execute(pool)
-    .await
-    .unwrap();
+    // Seit 0034 über das Zahlungsbuch (ADR 0042 Nr. 7).
+    klein_buch_lib::db::repo::invoices::record_payment(pool, &id, 10_000, &paid.to_string(), None)
+        .await
+        .unwrap();
     id
 }
 

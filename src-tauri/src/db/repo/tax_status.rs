@@ -311,7 +311,14 @@ pub async fn turnover_items(pool: &SqlitePool, years: &[i32]) -> Result<Vec<Umsa
     };
     let mut out = Vec::new();
     for &y in years {
-        for i in crate::db::repo::euer::income_detail(pool, y).await? {
+        // ADR 0042 Nr. 9: Eine stornierte Zahlung war kein Zufluss — das Paar
+        // aus Zahlung und Gegenbuchung bleibt ganz außen vor (auch als
+        // auslösender Beleg einer Grenze).
+        for i in crate::db::repo::euer::income_detail(pool, y)
+            .await?
+            .into_iter()
+            .filter(|i| !i.is_reversal && !i.reversed)
+        {
             let net: i64 = if i.shares.is_empty() {
                 i.amount_cents
             } else {
@@ -347,9 +354,10 @@ pub async fn turnover_items(pool: &SqlitePool, years: &[i32]) -> Result<Vec<Umsa
 pub async fn has_turnover_before(pool: &SqlitePool, year: i32) -> Result<bool> {
     let years = crate::db::repo::euer::available_years(pool).await?;
     for y in years.into_iter().filter(|y| *y < year) {
-        if !crate::db::repo::euer::income_detail(pool, y)
+        if crate::db::repo::euer::income_detail(pool, y)
             .await?
-            .is_empty()
+            .iter()
+            .any(|i| !i.is_reversal && !i.reversed)
         {
             return Ok(true);
         }

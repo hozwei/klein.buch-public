@@ -570,11 +570,11 @@ async fn reauth_commands_require_fresh_reauth() {
         .collect();
     assert_eq!(
         reauth_cmds.len(),
-        31,
+        32,
         "22 + numbering_raise (Lauf F1b) + numbering_restored_draft_confirm (F1d) \
          + invoices_void_draft (F2a) + backup_download (F3a) + euer_export_datev/_elster/_pdf \
          + payment_accounts_set_active (F4a) - seller_profile_upsert (F4a: bedingt) \
-         + tax_status_change_add/_revoke (ADR 0042)"
+         + tax_status_change_add/_revoke (ADR 0042) + invoices_reverse_payment (ADR 0042 Nr. 8)"
     );
     // W14-038 (Lauf F4a) und W14-009 (Lauf F5c): bedingte Re-Auth; die Matrizen
     // prüfen `seller_profile_reauth_matrix` und `mail_send_reauth_matrix`.

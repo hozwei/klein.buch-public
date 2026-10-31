@@ -120,6 +120,14 @@ pub struct IncomeItem {
     /// Typ des Zahlungskontos (`bank`, `cash`, `paypal`, `stripe`, `other`);
     /// `None` = kein Konto hinterlegt (DATEV: Bank, R2-011).
     pub account_type: Option<String>,
+    /// Gegenbuchung einer storniert erfassten Zahlung (ADR 0042 Nr. 9): Betrag
+    /// negativ, Datum der stornierten Zahlung, Grund in der Beschreibung.
+    #[serde(default)]
+    pub is_reversal: bool,
+    /// Diese Zahlung ist durch eine Gegenbuchung storniert (sie war kein
+    /// Zufluss; Gesamtumsatz nach § 19 Abs. 2 UStG ohne das Paar).
+    #[serde(default)]
+    pub reversed: bool,
 }
 
 /// Eine Storno-Erstattung (negative Betriebseinnahme im Storno-Jahr).

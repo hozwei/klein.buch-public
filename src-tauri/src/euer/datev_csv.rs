@@ -458,12 +458,20 @@ fn expense_bookings(
 pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<DatevBooking> {
     let mut out = Vec::new();
 
-    // Einnahmen: Geldkonto (Soll) an Erlöskonto (Haben).
+    // Einnahmen: Geldkonto (Soll) an Erlöskonto (Haben). Gegenbuchungen
+    // („Zahlung stornieren“, ADR 0042 Nr. 9) sind negativ: dieselben Konten mit
+    // umgekehrtem Soll/Haben, Belegdatum und Belegfeld 1 wie die stornierte
+    // Zahlung — sonst wiche der Stapel still von der EÜR ab.
     for i in inp.income {
-        if i.amount_cents <= 0 {
+        if i.amount_cents == 0 {
             continue;
         }
         if let Some(d) = parse_iso(&i.paid_date) {
+            let text = if i.is_reversal || i.amount_cents < 0 {
+                format!("Storno Zahlung {} {}", i.invoice_number, i.customer)
+            } else {
+                format!("{} {}", i.customer, i.description)
+            };
             revenue_bookings(
                 &mut out,
                 skr,
@@ -475,7 +483,7 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
                 d,
                 &i.invoice_number,
                 "",
-                &format!("{} {}", i.customer, i.description),
+                &text,
             );
         }
     }
@@ -1049,6 +1057,7 @@ mod tests {
             is_kleinunternehmer: true,
             shares: Vec::new(),
             account_type: acct.map(str::to_string),
+            ..Default::default()
         }
     }
 
@@ -1510,5 +1519,88 @@ mod tests {
         assert!(lines[0].starts_with("\"EXTF\";700;21;"));
         assert!(lines[1].starts_with("\"Umsatz (ohne Soll/Haben-Kz)\";"));
         assert!(lines[2].starts_with("1000,00;"));
+    }
+
+    /// ADR 0042 Nr. 9: Eine Gegenbuchung („Zahlung stornieren“) erscheint als
+    /// Buchung mit umgekehrtem Soll/Haben auf dieselben Konten, mit Belegdatum
+    /// und Belegfeld 1 der stornierten Zahlung; die Geldkonto-Bewegungen
+    /// summieren sich wie die EÜR auf 0 — auch bei mehreren Steuergruppen.
+    #[test]
+    fn payment_reversal_books_inverse_with_same_accounts() {
+        use crate::euer::detail::{split_payment, InvoiceTaxGroup};
+        let mut payment = klein_income("2026-03-01", "RE-2026-0001", 50_000, Some("cash"));
+        payment.reversed = true;
+        let mut reversal = klein_income("2026-03-01", "RE-2026-0001", -50_000, Some("cash"));
+        reversal.is_reversal = true;
+        reversal.description = "Storno der Zahlung vom 01.03.2026: Betrag falsch".into();
+        let income = vec![payment, reversal];
+        let inp = DatevInputs {
+            income: &income,
+            ..empty_inputs()
+        };
+        let b = build_bookings(Skr::Skr03, 2026, &inp);
+        assert_eq!(b.len(), 2, "die Gegenbuchung fällt nicht weg");
+        assert_eq!(
+            (b[0].konto, b[0].gegenkonto, b[0].soll_haben),
+            (1000, 8195, 'S')
+        );
+        assert_eq!(
+            (b[1].konto, b[1].gegenkonto, b[1].soll_haben),
+            (1000, 8195, 'H')
+        );
+        assert_eq!(b[1].amount_cents, 50_000);
+        assert_eq!(b[1].belegdatum, b[0].belegdatum);
+        assert_eq!(b[1].belegfeld1, "RE-2026-0001");
+        assert!(b[1].buchungstext.starts_with("Storno Zahlung RE-2026-0001"));
+
+        // Regelbesteuerung, zwei Steuergruppen: Anteile exakt negiert.
+        let groups = vec![
+            InvoiceTaxGroup {
+                category_code: "S".into(),
+                rate_basis_points: 1900,
+                net_cents: 10_001,
+                tax_cents: 1_900,
+            },
+            InvoiceTaxGroup {
+                category_code: "S".into(),
+                rate_basis_points: 700,
+                net_cents: 3_333,
+                tax_cents: 233,
+            },
+        ];
+        let regel = |cents: i64, rev: bool| IncomeItem {
+            paid_date: "2026-04-01".into(),
+            invoice_number: "RE-2026-0002".into(),
+            amount_cents: cents,
+            is_kleinunternehmer: false,
+            shares: split_payment(&groups, cents),
+            is_reversal: rev,
+            reversed: !rev,
+            ..Default::default()
+        };
+        let income = vec![regel(7_777, false), regel(-7_777, true)];
+        let inp = DatevInputs {
+            income: &income,
+            ..empty_inputs()
+        };
+        let b = build_bookings(Skr::Skr03, 2026, &inp);
+        let signed: i64 = b
+            .iter()
+            .map(|x| {
+                if x.soll_haben == 'S' {
+                    x.amount_cents
+                } else {
+                    -x.amount_cents
+                }
+            })
+            .sum();
+        assert_eq!(signed, 0, "Geldkonto netto wie die EÜR");
+        assert_eq!(b.len() % 2, 0);
+        let half = b.len() / 2;
+        for k in 0..half {
+            assert_eq!(b[k].gegenkonto, b[half + k].gegenkonto);
+            assert_eq!(b[k].amount_cents, b[half + k].amount_cents);
+            assert_ne!(b[k].soll_haben, b[half + k].soll_haben);
+        }
     }
 }

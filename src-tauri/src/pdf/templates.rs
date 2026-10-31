@@ -667,6 +667,23 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
         )).flatten()
       )
     ]
+    // Zahlungsbuch (ADR 0042 Nr. 7): Zahlungen und Gegenbuchungen samt Notiz
+    // bzw. Grund — Art. 15 Abs. 3 DSGVO, Kopie in lesbarer Form.
+    #if inv.at("payments", default: ()).len() > 0 [
+      #text(weight: "bold")[Zahlungen]
+      #table(
+        columns: (auto, auto, auto, 1fr),
+        align: (left, left, right, left),
+        inset: 3pt,
+        table.header([Zahldatum], [Art], [Betrag], [Notiz bzw. Grund]),
+        ..inv.payments.map(p => (
+          [#format_date(p.paidDate)],
+          [#if p.kind == "reversal" [Gegenbuchung] else [Zahlung]],
+          [#format_euro(p.amountCents)],
+          [#if p.kind == "reversal" [#dash(p.at("reason", default: none))] else [#dash(p.at("note", default: none))]],
+        )).flatten()
+      )
+    ]
     #if inv.at("paymentNote", default: none) != none [
       #text(size: 8.5pt, fill: muted)[Hinweis auf dem Beleg: #inv.paymentNote]
     ]

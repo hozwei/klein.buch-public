@@ -153,7 +153,8 @@ Migrations-Export, DSGVO-Auskunft), neue Einmal-Codes, den zweiten
 Faktor neu einrichten, das Daten-Passwort ändern, andere Sitzungen
 abmelden, Zahlungskonten anlegen, ändern, aktivieren und deaktivieren,
 einen Kontakt anonymisieren, ein Geschäftsjahr abschließen, einen
-Rechnungs-Entwurf verwerfen, die automatischen Abo-Läufe nach einer
+Rechnungs-Entwurf verwerfen, eine gebuchte Zahlung stornieren, die
+automatischen Abo-Läufe nach einer
 Pause freigeben ("Prüfen und freigeben"), einen Nummernkreis anheben
 und den Abgleich eines wiederhergestellten Entwurfs bestätigen. Bei den
 Firmendaten fragt Klein.Buch nur, wenn sich die Bankverbindung (IBAN,

@@ -24,8 +24,8 @@
 use serde::Serialize;
 
 use crate::db::models::{
-    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow,
-    QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
+    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoicePaymentRow, InvoiceRow,
+    QuoteItemRow, QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
 };
 
 /// Steuert, ob rein interne `notes`-Felder (Kontakt/Rechnung/Angebot/Kosten) in
@@ -46,6 +46,8 @@ pub const VOIDED_STATUS: &str = "voided";
 pub struct RawInvoice<'a> {
     pub invoice: &'a InvoiceRow,
     pub items: &'a [InvoiceItemRow],
+    /// Zahlungsbuch der Rechnung (Migration 0034, ADR 0042 Nr. 7).
+    pub payments: &'a [InvoicePaymentRow],
 }
 
 /// Ein Angebot samt Positionen.
@@ -298,6 +300,23 @@ pub struct InvoiceEntry {
     /// Eingefrorener Empfänger-Stand zur Rechnungszeit (GoBD-Snapshot).
     pub buyer_snapshot: Option<BuyerSnapshot>,
     pub items: Vec<ItemEntry>,
+    /// Zahlungen und Gegenbuchungen (Art. 15 DSGVO: Zahlungsdaten zum Kontakt;
+    /// ADR 0042 Nr. 7).
+    pub payments: Vec<PaymentEntry>,
+}
+
+/// Eine Buchung des Zahlungsbuchs (Zahlung oder Gegenbuchung).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentEntry {
+    /// `payment` oder `reversal` (Gegenbuchung).
+    pub kind: String,
+    pub amount_cents: i64,
+    pub paid_date: String,
+    pub note: Option<String>,
+    /// Grund der Gegenbuchung.
+    pub reason: Option<String>,
+    pub recorded_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -544,6 +563,18 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 payment_note: inv.payment_note.clone(),
                 buyer_snapshot: if buyer.is_empty() { None } else { Some(buyer) },
                 items: map_invoice_items(ri.items),
+                payments: ri
+                    .payments
+                    .iter()
+                    .map(|p| PaymentEntry {
+                        kind: p.kind.clone(),
+                        amount_cents: p.amount_cents,
+                        paid_date: p.paid_date.clone(),
+                        note: p.note.clone(),
+                        reason: p.reason.clone(),
+                        recorded_at: p.created_at.clone(),
+                    })
+                    .collect(),
             }
         })
         .collect();
@@ -913,6 +944,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let docs = vec![raw_doc()];
@@ -972,6 +1004,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let docs = vec![raw_doc()];
@@ -1020,6 +1053,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let raw = RawData {
@@ -1062,6 +1096,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &[],
+            payments: &[],
         }];
         let raw = RawData {
             contact: &c,

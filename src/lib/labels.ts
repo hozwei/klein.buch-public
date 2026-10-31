@@ -155,6 +155,9 @@ export const AUDIT_ACTION_LABELS_ADDITIONAL: Record<string, string> = {
   "fiscal_year.lock_restored_after_restore": "Jahresabschluss nach Wiederherstellung übernommen",
   "invoice.cancel_pair_completed": "Storno abgeschlossen",
   "invoice.lock.backup_pending": "Festgeschrieben, Backup ausstehend",
+  // ADR 0042 Nr. 8: Gegenbuchung im Zahlungsbuch (Migration 0034).
+  "invoice.payment_reversed": "Zahlung storniert (Gegenbuchung)",
+  "invoice.payments_migrated": "Zahlungen ins Zahlungsbuch übernommen (Migration)",
   "legal_document.activate": "Rechtstext aktiviert",
   "legal_document.deactivate": "Rechtstext deaktiviert",
   "legal_document.upload": "Rechtstext hochgeladen",
@@ -394,6 +397,7 @@ const REAUTH_ACTIONS: Record<string, string> = {
   numbering_raise: "Nummernkreis anheben",
   numbering_restored_draft_confirm: "Abgleich des Entwurfs bestätigen",
   invoices_void_draft: "Entwurf verwerfen",
+  invoices_reverse_payment: "Zahlung stornieren",
   tax_status_change_add: "Steuerstatus ändern",
   tax_status_change_revoke: "Steuerstatus-Eintrag widerrufen",
   "/api/auth/sessions/others/revoke": "Andere Sitzungen abmelden",

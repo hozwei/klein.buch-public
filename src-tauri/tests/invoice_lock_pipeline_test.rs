@@ -608,7 +608,7 @@ async fn parallel_lock_and_payments_do_not_hit_sqlite_busy() {
                 assert!(!is_busy(&e), "Zahlung scheiterte an SQLITE_BUSY: {e}");
                 // Erlaubt: Zahlung auf A, bevor A festgeschrieben war.
                 assert!(
-                    target == a && e.to_string().contains("nicht gelockt"),
+                    target == a && e.to_string().contains("festgeschriebene Rechnungen"),
                     "{e}"
                 );
             }

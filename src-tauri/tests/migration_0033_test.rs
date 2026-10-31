@@ -101,8 +101,12 @@ async fn insert_raw(
 #[tokio::test]
 async fn schema_33_and_threshold_rule_seeded() {
     let (pool, _dir) = setup().await;
-    assert_eq!(EXPECTED_SCHEMA_VERSION, 33);
-    assert_eq!(schema_version(&pool).await, "33");
+    // Seit 0034 (ADR 0042 Nr. 7) steht das Schema höher; 0033 ist darin enthalten.
+    const { assert!(EXPECTED_SCHEMA_VERSION >= 33) };
+    assert_eq!(
+        schema_version(&pool).await,
+        EXPECTED_SCHEMA_VERSION.to_string()
+    );
     let (rule_type, enabled): (String, i64) = sqlx::query_as(
         "SELECT rule_type, enabled FROM notification_rules WHERE id = 'rule_tax_threshold'",
     )
@@ -400,7 +404,10 @@ async fn backfill_matches_old_result_for_every_year() {
             .unwrap();
         }
         MIGRATOR.run(&pool).await.unwrap();
-        assert_eq!(schema_version(&pool).await, "33");
+        assert_eq!(
+            schema_version(&pool).await,
+            EXPECTED_SCHEMA_VERSION.to_string()
+        );
 
         let hist = tax_status::history(&pool).await.unwrap();
         for year in 2000..=2040 {

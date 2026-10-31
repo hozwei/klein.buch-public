@@ -117,6 +117,11 @@ async fn export_core_in(
         .map(|(inv, items)| RawInvoice {
             invoice: inv,
             items,
+            payments: gathered
+                .invoice_payments
+                .get(&inv.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
         })
         .collect();
     let quotes: Vec<RawQuote> = gathered

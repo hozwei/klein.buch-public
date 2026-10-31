@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, einheit]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren]
 ---
 
 # Glossar
@@ -243,6 +243,19 @@ Erfassen festgeschrieben; deshalb heißen die Knöpfe dort "Kosten
 festschreiben" und "Privatbewegung festschreiben" und fragen vorher
 nach.
 
+## Gegenbuchung
+
+Die Buchung, mit der Klein.Buch eine falsch erfasste Zahlung
+storniert: derselbe Betrag mit umgekehrtem Vorzeichen, mit Datum und
+Konto der falschen Zahlung, dazu ein Grund. Sie steht im Zahlungsbuch
+der Rechnung als "Gegenbuchung" mit dem Vermerk "Storno der Zahlung
+vom …"; die Zahlung selbst bleibt stehen und trägt den Vermerk
+"Storniert". Du startest sie in der Karte "Zahlungen" der Rechnung über
+"Mehr" und "Zahlung stornieren …". Sie wirkt am ursprünglichen
+Zahldatum, weil die falsche Zahlung nie ein Zufluss war (§ 11 EStG).
+Eine Rückzahlung an den Kunden ist keine Gegenbuchung, sondern gehört
+zum Storno der Rechnung (siehe Storno).
+
 ## Gesamtumsatz
 
 Die Summe Deiner Umsätze in einem Kalenderjahr, nach der sich die
@@ -252,7 +265,8 @@ Umsätze mit Anlagevermögen. Klein.Buch zeigt den Gesamtumsatz des
 Vorjahres und des laufenden Jahres im Abschnitt "Steuerstatus" unter
 Einstellungen → "Meine Firmendaten" und meldet, wenn eine Grenze
 erreicht oder überschritten ist. Es zählt nur die in Klein.Buch
-erfassten Zahlungen.
+erfassten Zahlungen; eine stornierte Zahlung und ihre Gegenbuchung
+zählen beide nicht.
 
 ## Geschäftsjahr
 
@@ -550,7 +564,9 @@ zulässige Weg, einen Fehler zu korrigieren. Kosten stornierst Du
 ebenfalls über "Mehr" und "Stornieren", mit Grund; sie stehen danach
 als "Storniert" in der Liste, ein eigener Beleg entsteht dabei nicht.
 Einen noch nicht ausgestellten Entwurf stornierst Du nicht, Du
-verwirfst ihn (siehe Verwerfen).
+verwirfst ihn (siehe Verwerfen). Eine falsch erfasste Zahlung
+stornierst Du nicht über die Rechnung, sondern einzeln mit "Zahlung
+stornieren …" (siehe Gegenbuchung); die Rechnung bleibt dabei gültig.
 
 ## Verkäuferprofil
 
@@ -591,6 +607,15 @@ XRechnung ist kein PDF, sondern eine maschinenlesbare XML-Datei.
 Behörden und größere Kunden verlangen sie seit 2025. Klein.Buch
 erzeugt in einem Arbeitsschritt beides: ein PDF zum Anschauen und
 die XRechnung-Datei zum Verschicken.
+
+## Zahlungsbuch
+
+Die Liste aller Buchungen auf eine Rechnung: Zahlungen und
+Gegenbuchungen, jede mit Zahldatum, Betrag, Konto und Notiz bzw. Grund.
+Klein.Buch hängt nur an; eine Buchung wird nie geändert oder gelöscht
+(GoBD). "Bezahlt", "Offen" und der Status der Rechnung ("Teilbezahlt",
+"Bezahlt") ergeben sich aus der Summe des Zahlungsbuchs. Du siehst es
+in der Karte "Zahlungen" der Rechnung.
 
 ## ZUGFeRD
 
@@ -669,6 +694,14 @@ Pflichtangaben.
 Schreibt die Aufbewahrungsfristen für Buchhaltungs-Unterlagen vor.
 Für Rechnungen und alle steuerlich relevanten Belege gilt eine
 Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
+
+### §153 AO
+
+Verlangt, eine abgegebene Steuererklärung zu berichtigen, wenn Du
+nachträglich erkennst, dass sie unrichtig ist und dadurch zu wenig
+Steuer festgesetzt werden kann. Klein.Buch verweist darauf, wenn eine
+falsch erfasste Zahlung in einem schon abgeschlossenen Geschäftsjahr
+liegt und sich deshalb nicht mehr stornieren lässt.
 
 ---
 

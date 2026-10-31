@@ -139,7 +139,7 @@ async fn insert_invoice(
              net_amount_cents, gross_amount_cents, status, pdf_archive_id)
          VALUES (?, ?, 2026, 'issued', '2026-03-01', ?,
              'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
-             10000, 10000, 'paid', ?)",
+             10000, 10000, 'issued', ?)",
     )
     .bind(id)
     .bind(number)
@@ -592,4 +592,105 @@ async fn export_includes_templates_subscriptions_assets_and_voided_drafts() {
     assert_eq!(details["recurringInvoices"], 1);
     assert_eq!(details["subscriptions"], 1);
     assert_eq!(details["assets"], 1);
+}
+
+/// Text aller Seiten eines PDFs (ToUnicode der eingebetteten Schriften), ohne
+/// Leerraum — Typst setzt Wörter teils als einzelne Glyphenläufe.
+fn pdf_text_compact(pdf: &[u8]) -> String {
+    let doc = lopdf::Document::load_mem(pdf).expect("PDF lesbar");
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    doc.extract_text(&pages)
+        .expect("Text lesbar")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// V2-10 (ADR 0042 Nr. 7): Das PDF der Auskunft (Art. 15 Abs. 3 DSGVO, Kopie
+/// in lesbarer Form) zeigt das Zahlungsbuch der Rechnung wie das JSON —
+/// Zahlungen und Gegenbuchungen mit Datum, Betrag, Notiz bzw. Grund.
+#[tokio::test]
+async fn export_pdf_lists_payments_and_reversals_with_note_and_reason() {
+    let env = setup_env().await;
+    let pool = &env.pool;
+    let target = create_contact(pool, "Ziel Kunde", Some("ziel@example.org"), None).await;
+    insert_invoice(pool, "i-pay", "RE-2026-0001", &target, None).await;
+    sqlx::query("UPDATE invoices SET locked_at = '2026-03-01 10:00:00' WHERE id = 'i-pay'")
+        .execute(pool)
+        .await
+        .unwrap();
+    klein_buch_lib::db::repo::invoices::record_payment_to_account(
+        pool,
+        "i-pay",
+        4_000,
+        "2026-03-10",
+        Some("Anzahlung laut Auszug"),
+        None,
+    )
+    .await
+    .unwrap();
+    klein_buch_lib::db::repo::invoices::record_payment_to_account(
+        pool,
+        "i-pay",
+        2_500,
+        "2026-03-12",
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let wrong: String = sqlx::query_scalar(
+        "SELECT id FROM invoice_payments WHERE invoice_id = 'i-pay' AND seq = 2",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let args: klein_buch_lib::commands::invoices::InvoicesReversePaymentArgs =
+        serde_json::from_value(serde_json::json!({
+            "invoiceId": "i-pay",
+            "paymentId": wrong,
+            "reason": "Betrag doppelt erfasst"
+        }))
+        .unwrap();
+    klein_buch_lib::commands::invoices::reverse_payment_core(pool, &args, chrono::Utc::now())
+        .await
+        .unwrap();
+
+    let res = export_core(pool, &env.paths, &target, "2026-05-24 12:00", "2026-05-24")
+        .await
+        .unwrap();
+    let file = std::fs::File::open(&res.zip_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let mut json = String::new();
+    zip.by_name("auskunft.json")
+        .unwrap()
+        .read_to_string(&mut json)
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let kinds: Vec<&str> = report["invoices"][0]["payments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, vec!["payment", "payment", "reversal"]);
+
+    let mut pdf = Vec::new();
+    zip.by_name("auskunft.pdf")
+        .unwrap()
+        .read_to_end(&mut pdf)
+        .unwrap();
+    let text = pdf_text_compact(&pdf);
+    for want in [
+        "Zahlungen",
+        "Gegenbuchung",
+        "10.03.2026",
+        "12.03.2026",
+        "40,00€",
+        "-25,00€",
+        "AnzahlunglautAuszug",
+        "Betragdoppelterfasst",
+    ] {
+        assert!(text.contains(want), "„{want}“ fehlt im PDF: {text}");
+    }
 }

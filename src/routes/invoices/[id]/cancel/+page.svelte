@@ -11,7 +11,7 @@
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import DocNo from "#lib/DocNo.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
-  import { parsePaymentHistory } from "../../paymentHistory.ts";
+  import { earliestStornoDate, effectivePayments } from "../../paymentHistory.ts";
   import PageBar from "#lib/PageBar.svelte";
   import { flash } from "#lib/toast.svelte.ts";
 
@@ -34,21 +34,12 @@
   );
   // Lauf F8 (§ 11 EStG): Die Erstattung kann erst nach dem Zufluss erfolgen —
   // frühestes Storno-Datum ist der späteste von Rechnungsdatum und letztem
-  // Zahlungseingang (der Server prüft dasselbe).
-  let minStornoDate = $derived(detail ? earliestStornoDate(detail) : "");
-
-  function earliestStornoDate(d: InvoiceDetail): string {
-    let min = d.invoice.invoiceDate.slice(0, 10);
-    if (d.invoice.paidAmountCents <= 0) return min;
-    const dates: string[] = [];
-    // Beschädigte Historie (null): der Server lehnt mit klarer Meldung ab.
-    for (const e of parsePaymentHistory(d.invoice.paymentHistoryJson) ?? []) {
-      if (e.amountCents !== 0) dates.push(e.paidDate.slice(0, 10));
-    }
-    if (dates.length === 0 && d.invoice.paidAt) dates.push(d.invoice.paidAt.slice(0, 10));
-    for (const x of dates) if (x > min) min = x;
-    return min;
-  }
+  // Zahlungseingang aus dem Zahlungsbuch; stornierte Zahlungspaare zählen nicht
+  // (ADR 0042 Nr. 8, der Server prüft dasselbe).
+  let minStornoDate = $derived(detail ? earliestStornoDate(detail.invoice.invoiceDate, detail.payments ?? []) : "");
+  // Nach dem Storno lässt sich keine Zahlung mehr stornieren (die Erstattung
+  // beruht auf den gebuchten Zahlungen): Hinweis, solange es Zahlungen gibt.
+  let hasPayments = $derived(effectivePayments(detail?.payments ?? []).length > 0);
 
   async function load() {
     loading = true;
@@ -171,6 +162,15 @@
         Storno-Beleg danach an den Kunden. Hat die Rechnung eine Leitweg-ID (Rechnung an eine
         Behörde), trägt der Storno-Beleg dieselbe.
       </p>
+      {#if hasPayments}
+        <!-- ADR 0042 Nr. 8: Nach dem Storno lässt sich keine Zahlung mehr stornieren. -->
+        <p class="pay-note">
+          Gebucht sind {euro(inv.paidAmountCents)}; der Storno erstattet diesen Betrag am Storno-Datum.
+          Ist eine Zahlung falsch erfasst (Geld nicht oder anders eingegangen), storniere zuerst die
+          Zahlung auf der <a class="kb-link" href={`/invoices/${id}`}>Rechnungsseite</a> — nach dem
+          Storno der Rechnung geht das nicht mehr.
+        </p>
+      {/if}
       <form id="cancel-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
         <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
         <label>
@@ -229,6 +229,7 @@
     font: inherit; font-weight: 400; color: var(--text);
   }
   textarea { resize: vertical; }
+  .pay-note { margin: 0 0 1rem; font-size: var(--fs-sm); color: var(--text); }
   .req-legend { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
   .req { color: var(--status-danger-fg); }
   .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }

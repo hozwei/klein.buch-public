@@ -86,7 +86,7 @@ async fn insert_invoice(
              buyer_country_code, buyer_vat_id, buyer_email)
          VALUES (?, ?, 2026, 'issued', '2026-03-01', ?,
              'Beispiel IT', 'Beispielweg 1', '84028', 'Landshut',
-             10000, 10000, 'paid', ?,
+             10000, 10000, 'issued', ?,
              ?, 'Hauptstr. 7', '80331', 'München', 'DE', 'DE123456789', 'erika@example.org')",
     )
     .bind(id)

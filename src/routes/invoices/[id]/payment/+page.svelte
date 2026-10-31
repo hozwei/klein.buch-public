@@ -4,9 +4,10 @@
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { invoicesGet, invoicesRecordPayment, paymentAccountsList } from "#lib/api.ts";
-  import type { InvoiceDetail, PaymentAccount } from "#lib/types.ts";
-  import { euro, iban } from "#lib/format.ts";
+  import type { InvoiceDetail, InvoicePayment, PaymentAccount } from "#lib/types.ts";
+  import { date, euro, iban } from "#lib/format.ts";
   import { shortIban } from "../../paymentHistory.ts";
+  import { isTechnicalError } from "../../invoiceStatus.ts";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import DocNo from "#lib/DocNo.svelte";
@@ -35,6 +36,13 @@
   // R2-011: Konto des Zahlungseingangs (DATEV-Geldkonto); Standardkonto vorbelegt.
   let accounts = $state<PaymentAccount[]>([]);
   let accountId = $state("");
+  // ADR 0042 Nr. 8: „Zahlung neu erfassen“ nach einer Gegenbuchung
+  // (`?ersetzt=<Zahlungs-ID>`): Datum, Konto und Notiz der stornierten Zahlung
+  // als Vorschlag; Betrag bleibt der offene Betrag.
+  let replaces = $state<InvoicePayment | null>(null);
+  // Ablehnung des Servers als stehendes Banner (ADR 0041 Nr. 22), Fokus dorthin.
+  let serverError = $state<string | null>(null);
+  let serverErrorEl: HTMLDivElement | undefined = $state();
 
   let id = $derived(page.params.id ?? "");
   let outstanding = $derived(detail
@@ -44,7 +52,8 @@
     !!detail &&
       !!detail.invoice.lockedAt &&
       detail.invoice.status !== "canceled" &&
-      detail.invoice.status !== "paid",
+      detail.invoice.status !== "paid" &&
+      !detail.invoice.isStornoFor,
   );
 
   async function load() {
@@ -56,6 +65,15 @@
       accounts = await paymentAccountsList(false);
       const def = accounts.find((a) => a.isDefault === 1);
       if (def) accountId = def.id;
+      const replacedId = page.url.searchParams.get("ersetzt");
+      const old = replacedId ? (detail?.payments ?? []).find((p) => p.id === replacedId && p.kind === "payment") : undefined;
+      if (old && old.reversedById) {
+        replaces = old;
+        if (old.paidDate.slice(0, 10) <= today) paidDate = old.paidDate.slice(0, 10);
+        // Ein inzwischen deaktiviertes Konto steht nicht zur Wahl — dann bleibt das Standardkonto.
+        if (old.accountId && accounts.some((a) => a.id === old.accountId)) accountId = old.accountId;
+        if (old.note) note = old.note;
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -101,6 +119,7 @@
     }
     const cents = amountCents;
     submitting = true;
+    serverError = null;
     try {
       await invoicesRecordPayment({
         invoiceId: detail.invoice.id,
@@ -112,7 +131,15 @@
       flash("Zahlung gebucht.");
       goto(`/invoices/${detail.invoice.id}`);
     } catch (e) {
-      flash(String(e), "error");
+      const msg = String(e);
+      if (isTechnicalError(msg)) {
+        flash(msg, "error");
+      } else {
+        // Fachliche Ablehnung (z. B. abgeschlossenes Geschäftsjahr) bleibt stehen.
+        serverError = msg;
+        await tick();
+        serverErrorEl?.focus();
+      }
     } finally {
       submitting = false;
     }
@@ -146,9 +173,26 @@
     <Banner kind="warning">Zahlungen können nur auf ausgestellten Rechnungen erfasst werden.</Banner>
   {:else if inv.status === "canceled"}
     <Banner kind="warning">Stornierte Rechnungen können keine Zahlungen mehr aufnehmen.</Banner>
+  {:else if inv.isStornoFor}
+    <Banner kind="warning">Auf einem Storno-Beleg werden keine Zahlungen erfasst; die Erstattung gehört zur Original-Rechnung.</Banner>
   {:else if inv.status === "paid"}
-    <Banner kind="info">Rechnung ist bereits vollständig bezahlt.</Banner>
+    <Banner kind="info">
+      Rechnung ist bereits vollständig bezahlt. Ist eine Zahlung falsch erfasst, storniere sie auf der
+      <a class="kb-link" href={`/invoices/${id}`}>Rechnungsseite</a> und erfasse sie danach richtig neu.
+    </Banner>
   {:else}
+    {#if replaces}
+      <!-- ADR 0042 Nr. 8: Neu erfassen nach „Zahlung stornieren“. -->
+      <Banner kind="info" title="Zahlung richtig neu erfassen.">
+        Die Zahlung vom {date(replaces.paidDate)} über {euro(replaces.amountCents)} ist storniert. Datum,
+        Konto und Notiz sind von ihr übernommen — prüfe sie und trag Betrag und Datum laut Kontoauszug ein.
+      </Banner>
+    {/if}
+    {#if serverError}
+      <div class="srv-err" tabindex="-1" bind:this={serverErrorEl}>
+        <Banner kind="error" title="Die Zahlung wurde nicht gebucht.">{serverError}</Banner>
+      </div>
+    {/if}
     <section class="card">
       <h2>Rechnung</h2>
       <dl>
@@ -248,4 +292,6 @@
   .info { background: var(--status-info-bg); color: var(--text); padding: 0.75rem 1rem; border-left: 4px solid var(--status-info-line); border-radius: var(--r-sm); font-size: var(--fs-base); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .muted { color: var(--text-muted); }
+  .srv-err { outline: none; }
+  .srv-err:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); border-radius: var(--radius-control); }
 </style>

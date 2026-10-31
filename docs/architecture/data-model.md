@@ -6,9 +6,9 @@
 > in `klein-buch/src-tauri/migrations/*.sql` und sind die kanonische Quelle —
 > diese Doku ist die navigationsfreundliche Sicht darauf.
 
-**Schema-Stand: v33.** Migrationen 0001–0033, forward-only; nächste freie
-Migration 0034. Schema-Version liegt in `app_settings.schema_version`; geprüft
-wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (33) — eine neuere DB
+**Schema-Stand: v34.** Migrationen 0001–0034, forward-only; nächste freie
+Migration 0035. Schema-Version liegt in `app_settings.schema_version`; geprüft
+wird beim Entsperren gegen `EXPECTED_SCHEMA_VERSION` (34) — eine neuere DB
 lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 
 **Globale Konventionen** (ADR 0003):
@@ -71,6 +71,7 @@ lässt sich nicht entsperren (Down-Migration-Schutz, §4).
 | 0031 | `0031_secrets.sql` | `secrets` (STRICT) — Zugangsdaten in der verschlüsselten DB statt im OS-Keychain (Plan W8, ADR 0039 E6, Amendment ADR 0011/0028): Schlüssel `smtp:<konto-id>`, `oauth:<konto-id>`, `sftp:<ziel-id>`; nie im Migrations- oder DSGVO-Export, nie in Log oder Audit |
 | 0032 | `0032_gobd_hardening.sql` | GoBD- und Schema-Absicherungen (Lauf F, Block F2a; ADR 0039 Nr. 124): Unique-Index `ux_invoices_one_locked_storno` (höchstens ein festgeschriebener Storno je Original; Vorab-Prüfung bricht bei Bestandsduplikaten mit klarer Meldung ab), `invoices.voided_at`/`void_reason` (Entwurf verwerfen ohne Löschen), `archive_integrity_checks.files_missing`/`files_unreadable`/`missing_archive_ids_json`/`unreadable_archive_ids_json`, Trigger für Positionen festgeschriebener Belege, Archiv ohne DELETE, endgültigen Storno, zurückgezogene Angebote, verworfene Entwürfe und den Anlagen-Abgang, Partial Unique Index `uq_payment_accounts_default` (Bestand mit Audit bereinigt), Seed `rule_recurring_due` |
 | 0033 | `0033_tax_status_history.sql` | Steuerstatus nach § 19 UStG als Historie (Lauf 2026.11.1, Block V1; ADR 0042 Nr. 1–6): `tax_status_changes` (STRICT, append-only: kein DELETE, UPDATE nur als einmaliger Widerruf mit Grund; CHECKs Grund ↔ Status, 1. Januar bei Verzicht/Vorjahr/Rückkehr, Bindung = 01.01. Wirkungsjahr + 5; Teil-Unique-Index je Wirkungsdatum), Übernahme des Bestands aus `seller_profile` mit festen IDs im UUIDv7-Format (für jedes Jahr dasselbe Ergebnis wie bisher), Audit `tax_status.migrated`, Seed `rule_tax_threshold` |
+| 0034 | `0034_invoice_payment_ledger.sql` | Zahlungsbuch (Lauf 2026.11.1, Block V2; ADR 0042 Nr. 7–9): `invoice_payments` (STRICT, append-only; Zahlung `payment` > 0 bzw. Gegenbuchung `reversal` < 0 mit Verweis und Grund, höchstens eine je Zahlung), Übernahme der JSON-Historie und des Altbestands mit festen IDs im UUIDv7-Format, Vorab-Prüfung mit benanntem CHECK „Migration 0034 abgebrochen: …“, Trigger: Buchungen nur auf festgeschriebene, nicht stornierte Ausgangsrechnungen im offenen Jahr, Cache `paid_amount_cents`/`paid_at`/`status` an das Buch gebunden, `payment_history_json` eingefroren, neue Rechnung ohne Zahlung; `paid_at` des Bestands einmalig auf das jüngste Zahldatum (ohne Uhrzeit); Audit `invoice.payments_migrated` mit altem und neuem Zahldatum |
 
 **Down-Migrations gibt es nicht.** Wer eine Migration „rückgängig" braucht,
 muss eine neue, höher nummerierte Migration schreiben, die den Zustand
@@ -136,6 +137,18 @@ höchstens ein festgeschriebener Storno je Original, Migration 0032), `derived_f
 `payment_account_id`, `payment_note`, `voided_at`/`void_reason` (Migration
 0032: verworfener Entwurf — `status` bleibt `draft`, die Nummer bleibt
 verbraucht, danach unveränderlich; kein DELETE).
+`paid_amount_cents`, `paid_at` und `status` sind seit Migration 0034 ein Cache
+des Zahlungsbuchs `invoice_payments`; `payment_history_json` ist Altbestand
+(eingefroren, nicht mehr gelesen).
+
+**`invoice_payments`** — Zahlungsbuch der Ausgangsrechnungen (Migration 0034,
+ADR 0042 Nr. 7–9): `id` (UUIDv7; übernommener Bestand `00000000-0000-7034-8000-…`),
+`invoice_id`, `seq` (laufend je Rechnung), `kind` (`payment`/`reversal`),
+`amount_cents` (Zahlung > 0, Gegenbuchung < 0), `paid_date` (Zufluss; bei der
+Gegenbuchung das der stornierten Zahlung), `account_id` (Zahlungskonto),
+`note`, `reverses_payment_id` (Gegenbuchung: stornierte Zahlung, höchstens eine
+je Zahlung), `reason` (Gegenbuchung: 10–500 Zeichen), `created_at`. Append-only;
+Quelle für EÜR, ELSTER, DATEV, Gesamtumsatz und DSGVO-Auskunft.
 
 **`invoice_items`** — Rechnungs-Positionen. Felder: `id`, `invoice_id`,
 `position`, `description`, `description_title`, `quantity_thousandths`,
@@ -342,6 +355,8 @@ Schema und Schreibwege bleiben unverändert (Schema v32).
 | `AssetDisposalPreview` (neuer Command) | `assets_disposal_preview` | `assets` und `depreciation_entries` über `plan_disposal`, ohne zu buchen; `blockedReason` mit den Texten von `assets_dispose` | Nr. 81 |
 | `SellerProfile.isKleinunternehmer`, `waivedParagraph19Since` | `seller_profile_get`/`_upsert` | Status heute aus `tax_status_changes` (ADR 0042 Nr. 1), nicht aus den Spiegelspalten; die Oberfläche nutzt ihn nur für Hinweise „anders als heute“, Belege rechnen mit dem Status ihres Datums (`tax_status_at`) | ADR 0042 |
 | `TaxStatusOverview` (neuer Command) | `tax_status_overview` | `tax_status_changes` (Verlauf mit widerrufenen Einträgen, Status heute, Bindung, frühestmögliche Rückkehr, widerrufbarer Eintrag) und Zahlungseingänge (Gesamtumsatz Vorjahr/laufendes Jahr, Grenzhinweise); Abschnitt „Steuerstatus“ in „Meine Firmendaten“ | ADR 0042 |
+| `InvoiceDetail.payments` (`InvoicePayment[]`) | `invoices_get` | `invoice_payments` (Zahlungen und Gegenbuchungen in Erfassungsreihenfolge, `reversedById` aus dem Verweis der Gegenbuchung; `reversible`/`notReversibleReason` aus Rechnung, Storno-Stand und `fiscal_year_locks`). Die Oberfläche liest nur dieses Feld (`routes/invoices/paymentHistory.ts`: Verweise, wirksame Zahlungen, frühestes Storno-Datum ohne stornierte Paare); `Invoice.paymentHistoryJson` ist eingefroren und wird nicht mehr angezeigt | ADR 0042 Nr. 8 |
+| `EuerIncomeItem.isReversal`, `reversed` | `euer_package` | `invoice_payments.kind` bzw. Verweis einer Gegenbuchung; Kennzeichnung in der Einzelaufstellung der Seite „EÜR-Export“ („Gegenbuchung“, „Storniert“), Betrag mit Vorzeichen | ADR 0042 Nr. 9 |
 
 Berater- und Mandantennummer für den DATEV-Export stehen nicht in der Datenbank:
 Die Oberfläche merkt sie im Browser (`localStorage`) und übergibt sie je Export
@@ -388,14 +403,21 @@ versucht. Detail-Diskussion in `gobd.md`. Hier die Liste mit Tabelle und Wirkung
 | `trg_backup_log_no_update`/`_no_delete` | `backup_log` | append-only |
 | `trg_tax_status_changes_no_delete` | `tax_status_changes` | DELETE verboten (0033) |
 | `trg_tax_status_changes_revoke_only` | `tax_status_changes` | UPDATE nur als einmaliger Widerruf (`revoked_at` + `revoke_reason`), alle übrigen Spalten unveränderlich (0033) |
+| `trg_invoice_payments_no_update`/`_no_delete` | `invoice_payments` | append-only (0034) |
+| `trg_invoice_payments_insert_checks` | `invoice_payments` | INSERT nur auf festgeschriebene, nicht stornierte Ausgangsrechnungen (kein Storno-Beleg), nicht im abgeschlossenen Jahr, Gegenbuchung passend zur noch nicht stornierten Zahlung und ohne offenen Storno-Entwurf, laufende Nummer lückenlos, keine Überzahlung (0034) |
+| `trg_invoices_payment_cache_bound` | `invoices` | `paid_amount_cents`, `paid_at`, `status` nur passend zum Zahlungsbuch; Status bei jeder Änderung von Summe oder Status am Endzustand geprüft, `draft` nur unfestgeschrieben ohne Zahlung (0034) |
+| `trg_invoices_payment_cache_insert` | `invoices` | neue Rechnung ohne Zahlung (0034) |
+| `trg_invoices_payment_history_frozen` | `invoices` | `payment_history_json` unveränderlich (0034) |
 
 **Indizes mit Hardline-Wirkung (0032):** `ux_invoices_one_locked_storno`
 (`invoices(is_storno_for) WHERE is_storno_for IS NOT NULL AND locked_at IS NOT
 NULL`), `uq_payment_accounts_default` (`payment_accounts(is_default) WHERE
 is_default = 1`). Seit 0033: `uq_tax_status_changes_active`
-(`tax_status_changes(effective_from) WHERE revoked_at IS NULL`). Tests:
+(`tax_status_changes(effective_from) WHERE revoked_at IS NULL`). Seit 0034:
+`ux_invoice_payments_one_reversal` (`invoice_payments(reverses_payment_id) WHERE
+reverses_payment_id IS NOT NULL`). Tests:
 `tests/migration_0028_test.rs`, `tests/migration_0032_test.rs`,
-`tests/migration_0033_test.rs`.
+`tests/migration_0033_test.rs`, `tests/payment_ledger_test.rs`.
 
 **Reason-Mapping.** `backup::db_trigger_reason` (privat in `backup/mod.rs`)
 bildet die Auslöser-Labels der Lock-Events auf die vom CHECK erlaubten Werte
@@ -413,15 +435,17 @@ migrate_with_backup`), nicht beim Prozessstart — vorher ist die DB zu:
 
 - **DB-Version < EXPECTED:** zuerst die Vorab-Prüfung
   `db::precheck_before_migration` (Fremdschlüssel per `PRAGMA
-  foreign_key_check`, für Schema < 32 auch doppelte festgeschriebene Stornos;
-  Lauf F2c): ein Altfehler lehnt mit 409 `db_integrity_failed` ab, solange die
-  DB unverändert auf dem alten Schema steht — das vorige Image öffnet sie
+  foreign_key_check`, für Schema < 32 auch doppelte festgeschriebene Stornos,
+  für Schema < 34 auch eine nicht übernehmbare Zahlungshistorie —
+  `db::payment_ledger_problem`, betroffene Rechnungsnummern als `ERROR` im
+  Log; Lauf F2c, ADR 0042 Nr. 7): ein Altfehler lehnt mit 409
+  `db_integrity_failed` ab, solange die DB unverändert auf dem alten Schema steht — das vorige Image öffnet sie
   weiter. Dann ein Pflicht-Backup (`manual`) mit der
   alten Version, vollständig gelesen und geprüft, Audit `backup.pre_migration`
   (ADR 0039 E15, W7). Scheitert es, wird nicht migriert und die Instanz bleibt
   gesperrt (409 `pre_migration_backup_failed`). Danach läuft
   `db::run_migrations` (`sqlx::migrate!`) die fehlenden Migrationen.
-- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 32): `db::run_migrations`
+- **DB-Version > EXPECTED** (`EXPECTED_SCHEMA_VERSION`, 34): `db::run_migrations`
   lehnt vor dem Migrations-Runner mit `Error::SchemaMismatch` und dem Hinweis
   auf das Image der passenden Version ab, kein Entsperren (ein älteres Programm
   liest keine neuere DB — unklar, welche neuen Constraints existieren; Lauf F).
@@ -502,8 +526,8 @@ Aus dem Schema lesbar, hier als explizite Negativ-Liste:
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). 2026-10-27 (Lauf 2026.11.1, V1): Schema v33, `tax_status_changes`, Spiegelspalten im Profil (gegen `migrations/0033_tax_status_history.sql` und `src/db/repo/tax_status.rs` geprüft). Quelle:
-`klein-buch/src-tauri/migrations/0001..0033.sql`,
+Stand: 2026-10-24 (Lauf F, Block F2a), Schema v32; 2026-10-25 (F7b) §5 um `ON DELETE CASCADE` ergänzt (gegen Migrationen und Repo-Code geprüft); 2026-10-27 (Lauf 2026.11, U6) §2g „Abgeleitete Lesefelder“ ergänzt (gegen `src/lib/types.ts`, `src/lib/api.ts` und die Kerne in `commands/{quotes,settings,backup,euer,expenses,assets}.rs` geprüft). 2026-10-27 (Lauf 2026.11.1, V1): Schema v33, `tax_status_changes`, Spiegelspalten im Profil (gegen `migrations/0033_tax_status_history.sql` und `src/db/repo/tax_status.rs` geprüft). 2026-10-31 (Lauf 2026.11.1, V2): Schema v34, `invoice_payments` samt Triggern, Cache-Spalten der Rechnung, `InvoiceDetail.payments` (gegen `migrations/0034_invoice_payment_ledger.sql`, `src/db/repo/invoice_payments.rs` und `src/db/models.rs` geprüft). Quelle:
+`klein-buch/src-tauri/migrations/0001..0034.sql`,
 `src/db/schema_version.rs`, `src/secrets.rs`, `src/backup/{mod,target}.rs`,
 `src/commands/{mail,backup}.rs`, `src/db/mod.rs`. Gegen den Code geprüft:
 Migrations-Liste, `mail_accounts`, `app_settings`, `secrets`, `backup_log`,

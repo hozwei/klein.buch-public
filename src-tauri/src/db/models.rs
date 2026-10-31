@@ -242,6 +242,46 @@ pub struct InvoiceDetail {
     pub invoice: InvoiceRow,
     pub items: Vec<InvoiceItemRow>,
     pub buyer: Option<ContactRow>,
+    /// Zahlungsbuch der Rechnung mit Gegenbuchungen und Verweisen
+    /// (Migration 0034, ADR 0042 Nr. 7–8), in der Reihenfolge der Erfassung.
+    #[serde(default)]
+    pub payments: Vec<InvoicePaymentView>,
+}
+
+/// Eine Zeile des Zahlungsbuchs `invoice_payments` (Migration 0034, ADR 0042
+/// Nr. 7): Zahlung (`kind = 'payment'`, Betrag > 0) oder Gegenbuchung
+/// (`'reversal'`, Betrag < 0, Verweis auf die stornierte Zahlung, Grund).
+/// Append-only.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicePaymentRow {
+    pub id: String,
+    pub invoice_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub amount_cents: i64,
+    pub paid_date: String,
+    pub account_id: Option<String>,
+    pub note: Option<String>,
+    pub reverses_payment_id: Option<String>,
+    pub reason: Option<String>,
+    pub created_at: String,
+}
+
+/// Lesemodell einer Buchung für die Detailansicht (ADR 0042 Nr. 8): die Zeile
+/// samt Verweis auf ihre Gegenbuchung und der Angabe, ob „Zahlung stornieren“
+/// möglich ist (sonst mit Grund).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicePaymentView {
+    #[serde(flatten)]
+    pub row: InvoicePaymentRow,
+    /// ID der Gegenbuchung, wenn diese Zahlung storniert ist.
+    pub reversed_by_id: Option<String>,
+    /// „Zahlung stornieren“ ist möglich.
+    pub reversible: bool,
+    /// Warum nicht (nur bei Zahlungen, die sich nicht stornieren lassen).
+    pub not_reversible_reason: Option<String>,
 }
 
 /// Kondensierter Listen-Eintrag — nur die Felder, die das UI in der

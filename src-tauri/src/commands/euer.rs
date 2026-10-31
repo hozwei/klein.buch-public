@@ -1094,6 +1094,12 @@ fn build_stb_readme(
     s.push_str("    vor der Verbuchung zu prüfen. Geldkonto je hinterlegtem Zahlungskonto:\n");
     s.push_str("    Bank 1200/1800, Kasse 1000/1600, PayPal/Stripe/sonstige 1360/1460\n");
     s.push_str("    (Geldtransit). Zahlungen ohne hinterlegtes Konto laufen über Bank.\n");
+    // ADR 0042 Nr. 9: Gegenbuchungen und Doppelimport.
+    s.push_str("    Eine stornierte Zahlung (Fehlbuchung) steht als Gegenbuchung mit\n");
+    s.push_str("    umgekehrtem Soll/Haben, Belegdatum und Belegfeld 1 der Zahlung und\n");
+    s.push_str("    dem Buchungstext \"Storno Zahlung ...\". Der Stapel enthält immer das\n");
+    s.push_str("    ganze Jahr; wurde ein früherer Stapel schon importiert, nicht doppelt\n");
+    s.push_str("    importieren.\n");
     if datev_numbers_set {
         s.push_str("    Berater- und Mandantennummer stehen im Kopf der Datei.\n\n");
     } else {

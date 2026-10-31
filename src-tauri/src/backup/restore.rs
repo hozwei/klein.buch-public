@@ -570,6 +570,21 @@ async fn stage(
                     .into(),
             ));
         }
+        // ADR 0042 Nr. 7: Vorab-Prüfung der Migration 0034 (Zahlungsbuch) —
+        // eine nicht übernehmbare Zahlungshistorie ließe die Instanz nach dem
+        // Tausch gesperrt.
+        if found < 34 {
+            if let Some(problem) = crate::db::payment_ledger_problem(&pool).await? {
+                crate::db::log_payment_ledger_invoices(
+                    "Restore-Prüfung",
+                    &crate::db::payment_ledger_invoices(&pool).await?,
+                );
+                return Err(Error::Backup(format!(
+                    "{problem} Diese Version könnte die Datenbank im Backup nicht umstellen \
+                     (Migration 0034) — Restore abgebrochen."
+                )));
+            }
+        }
         Ok(())
     }
     .await;
@@ -1543,7 +1558,11 @@ mod tests {
             "CREATE TABLE recurring_subscriptions (id TEXT PRIMARY KEY NOT NULL,
                 next_due_date TEXT NOT NULL) STRICT",
             "CREATE TABLE invoices (id TEXT PRIMARY KEY NOT NULL, invoice_number TEXT NOT NULL,
-                locked_at TEXT, is_storno_for TEXT) STRICT",
+                locked_at TEXT, is_storno_for TEXT,
+                paid_amount_cents INTEGER NOT NULL DEFAULT 0, paid_at TEXT,
+                payment_history_json TEXT) STRICT",
+            // Vorab-Prüfung der Migration 0034 (ADR 0042 Nr. 7) in Phase A
+            "CREATE TABLE payment_accounts (id TEXT PRIMARY KEY NOT NULL) STRICT",
             "CREATE TABLE quotes (id TEXT PRIMARY KEY NOT NULL, quote_number TEXT NOT NULL,
                 locked_at TEXT) STRICT",
             // Abschlüsse (Phase A hält sie fest, Lauf F8)

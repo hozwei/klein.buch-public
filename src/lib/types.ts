@@ -192,8 +192,11 @@ export interface Invoice {
   pdfTemplate: string;
   status: InvoiceStatus;
   sentAt: Iso8601 | null;
+  /** Cache des Zahlungsbuchs: Summe aller Buchungen (ADR 0042 Nr. 7). */
   paidAmountCents: Cents;
+  /** Cache: jüngstes Zahldatum der nicht stornierten Zahlungen. */
   paidAt: Iso8601 | null;
+  /** Eingefroren seit Migration 0034 (Altbestand); Anzeige über `InvoiceDetail.payments`. */
   paymentHistoryJson: string | null;
   canceledAt: Iso8601 | null;
   canceledByStornoId: Uuid | null;
@@ -249,6 +252,32 @@ export interface InvoiceDetail {
   invoice: Invoice;
   items: InvoiceItem[];
   buyer: Contact | null;
+  /** Zahlungsbuch mit Gegenbuchungen (Migration 0034, ADR 0042 Nr. 7–8). */
+  payments: InvoicePayment[];
+}
+
+/** Eine Buchung des Zahlungsbuchs (`InvoicePaymentView` in Rust). */
+export interface InvoicePayment {
+  id: Uuid;
+  invoiceId: Uuid;
+  seq: number;
+  /** `payment` (Betrag > 0) oder `reversal` (Gegenbuchung, Betrag < 0). */
+  kind: "payment" | "reversal";
+  amountCents: Cents;
+  paidDate: string;
+  accountId: Uuid | null;
+  note: string | null;
+  /** Gegenbuchung: die stornierte Zahlung. */
+  reversesPaymentId: Uuid | null;
+  /** Gegenbuchung: Grund. */
+  reason: string | null;
+  createdAt: string;
+  /** Zahlung: ihre Gegenbuchung, falls storniert. */
+  reversedById: Uuid | null;
+  /** „Zahlung stornieren“ möglich. */
+  reversible: boolean;
+  /** Warum nicht (Zahlung, die sich nicht stornieren lässt). */
+  notReversibleReason: string | null;
 }
 
 export interface InvoiceListItem {
@@ -347,6 +376,14 @@ export interface RecordPaymentArgs {
   /** Zahlungskonto des Eingangs (DATEV-Geldkonto, R2-011). */
   accountId?: Uuid | null;
 }
+
+/** Argumente von `invoices_reverse_payment` (ADR 0042 Nr. 8). */
+export type ReversePaymentArgs = {
+  invoiceId: Uuid;
+  paymentId: Uuid;
+  /** Grund, mindestens 10 Zeichen. */
+  reason: string;
+};
 
 // ---- Mail (Block 5) --------------------------------------------------------
 
@@ -1461,7 +1498,12 @@ export interface EuerIncomeItem {
   invoiceNumber: string;
   customer: string;
   description: string;
+  /** Mit Vorzeichen: eine Gegenbuchung ist negativ (ADR 0042 Nr. 9). */
   amountCents: Cents;
+  /** Gegenbuchung einer storniert erfassten Zahlung (am ursprünglichen Zahldatum). */
+  isReversal?: boolean;
+  /** Diese Zahlung ist durch eine Gegenbuchung storniert. */
+  reversed?: boolean;
 }
 
 /** Eine Storno-Erstattung (`euer::detail::StornoItem`). */
