@@ -54,6 +54,13 @@ async fn passphrase_change_waits_for_running_backup() {
     assert!(klein_buch_lib::backup::verify_passphrase(&pool, PASS)
         .await
         .unwrap());
+    // ADR 0042 Nr. 16 (U7-A06): Ein von der gehaltenen Sperre aufgestautes
+    // Backup erst zu Ende laufen lassen.
+    drop(
+        klein_buch_lib::backup::exclusive_against_backups(std::time::Duration::from_secs(120))
+            .await
+            .expect("Backup nach 120 s nicht fertig"),
+    );
     let r = {
         let _serial = kdf_serial().await;
         send(
@@ -62,7 +69,46 @@ async fn passphrase_change_waits_for_running_backup() {
         )
         .await
     };
-    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    if r.status == StatusCode::SERVICE_UNAVAILABLE && r.json()["code"] == "timeout" {
+        // Unter Last (Debug-Build, volle Suite) braucht das Neuverschlüsseln
+        // länger als der Antwort-Timeout; der Wechsel läuft dann im Hintergrund
+        // zu Ende (er hält `transition` bis zum Schluss).
+        //
+        // ADR 0042 Nr. 16 (V6-R02): Weg der Oberfläche. `/api/auth/passphrase`
+        // läuft nicht über die Idempotenz der Commands; `authChangePassphrase`
+        // (transport.ts) wiederholt deshalb nicht, sondern meldet bei genau
+        // diesem Code „Ergebnis unklar“ (`PassphraseChangeUnclear`) und rät,
+        // zuerst die neue Passphrase zu versuchen. Geprüft wird, dass dieser
+        // Rat stimmt: Der Wechsel wird wirksam, die Sitzung bleibt gültig, die
+        // bisherige Passphrase gilt nicht mehr.
+        let _done = tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            srv.state.transition.lock(),
+        )
+        .await
+        .expect("Passphrase-Wechsel nach 180 s nicht fertig");
+    } else {
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    }
+    // Die Sitzung des Wechsels bleibt gültig (W14: nur andere Sitzungen enden).
+    let s = call(&srv.app, &cookie, "contacts_list", serde_json::json!({})).await;
+    assert_eq!(s.status, StatusCode::OK, "{}", s.text());
+    let pool = srv
+        .state
+        .ctx
+        .pool()
+        .expect("entsperrt mit der neuen Passphrase");
+    assert!(
+        klein_buch_lib::backup::verify_passphrase(&pool, "ganz neue lange Passphrase 2026")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !klein_buch_lib::backup::verify_passphrase(&pool, PASS)
+            .await
+            .unwrap(),
+        "bisherige Passphrase gilt nicht mehr"
+    );
 }
 
 /// Lauf F8 (ADR 0040 Nr. 63): „Datenbank sperren“ bricht nach dem Beenden der

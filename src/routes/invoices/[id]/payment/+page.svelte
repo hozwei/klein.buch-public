@@ -205,10 +205,10 @@
 
     <section class="card">
       <h2>Zahlung</h2>
-      <p class="info">
-        <strong>Wichtig fürs Finanzamt:</strong> Trag das Datum ein, an dem das Geld
+      <Banner kind="info" title="Wichtig fürs Finanzamt:">
+        Trag das Datum ein, an dem das Geld
         tatsächlich da war (laut Kontoauszug). Danach richtet sich das Steuerjahr.
-      </p>
+      </Banner>
       <form id="payment-form" onsubmit={(e) => { e.preventDefault(); submit(); }} novalidate>
         <p class="req-legend">Felder mit <span aria-hidden="true">*</span><span class="kb-visually-hidden">Stern</span> sind Pflicht.</p>
         <MoneyInput
@@ -289,7 +289,6 @@
   .req { color: var(--status-danger-fg); }
   .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
   .field-hint { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
-  .info { background: var(--status-info-bg); color: var(--text); padding: 0.75rem 1rem; border-left: 4px solid var(--status-info-line); border-radius: var(--r-sm); font-size: var(--fs-base); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .muted { color: var(--text-muted); }
   .srv-err { outline: none; }

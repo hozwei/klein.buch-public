@@ -422,11 +422,12 @@
 <section class="card" aria-labelledby="sec-pass-h">
   <h2 id="sec-pass-h">Daten-Passwort ändern</h2>
   {#if passphraseUnclear}
-    <div class="caveat unclear" role="alert">
-      <strong>Ergebnis unklar.</strong>
+    <!-- V6-R04 (ADR 0042 Nr. 16): sofort ansagen (role=alert) — offen ist, welche Passphrase
+         gilt; Verlust = Totalverlust (ADR 0035). -->
+    <Banner kind="warning" live="assertive" title="Ergebnis unklar.">
       {passphraseUnclear}
       Die Felder bleiben gefüllt, damit du die neue Passphrase notieren kannst.
-    </div>
+    </Banner>
   {/if}
   <form
     novalidate
@@ -526,7 +527,6 @@
 </section>
 
 <style>
-  .unclear { font-size: var(--fs-base); }
   label {
     display: block;
     margin: 0.75rem 0 0.25rem;

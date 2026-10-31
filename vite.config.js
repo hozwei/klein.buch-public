@@ -277,9 +277,45 @@ export function precompress() {
   };
 }
 
+// Handbuch-Kopfdaten für das Start-Bundle (ADR 0042 Nr. 16, U7-A02): Ein Import
+// `<seite>.md?kbmeta` liefert nur den Front-Matter-Block der Datei (`---` … `---`)
+// als String, ohne den Seitentext. `src/lib/handbook/meta.ts` lädt so alle Titel
+// und Slugs, ohne das Handbuch ins Start-Bundle zu ziehen; Titel und Slugs werden
+// weiter nur in den Markdown-Dateien gepflegt. Gilt für Build, Dev und Vitest.
+const HANDBOOK_META_QUERY = "kbmeta";
+const HANDBOOK_FRONT_MATTER = /^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+
+/**
+ * Front-Matter-Block (mit den beiden `---`-Zeilen) einer Markdown-Datei, sonst "".
+ * @param {string} raw
+ * @returns {string}
+ */
+export function handbookFrontMatter(raw) {
+  const m = HANDBOOK_FRONT_MATTER.exec(raw.replace(/^\uFEFF/, ""));
+  return m ? m[0] : "";
+}
+
+/**
+ * Vite-Plugin für `*.md?kbmeta` (ohne npm-Abhängigkeit).
+ * @returns {import("vite").Plugin}
+ */
+export function handbookMeta() {
+  return {
+    name: "klein-buch-handbook-meta",
+    enforce: "pre",
+    load(id) {
+      const [file, query] = id.split("?", 2);
+      if (query !== HANDBOOK_META_QUERY || !file.endsWith(".md")) return null;
+      this.addWatchFile(file);
+      return `export default ${JSON.stringify(handbookFrontMatter(readFileSync(file, "utf8")))};\n`;
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
+    handbookMeta(),
     // SvelteKit-Konfiguration (seit SvelteKit 3 hier statt in svelte.config.js):
     // Die SPA wird statisch gebaut und vom Rust-Server ausgeliefert (ADR 0039),
     // adapter-static mit Fallback auf index.html (SPA-Modus, kein SSR), Ausgabe

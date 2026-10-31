@@ -675,7 +675,6 @@
   .ts-dialog h3 { font-size: var(--fs-md); margin: 1rem 0 0.25rem; }
   .ts-dialog ul { padding-left: 1.2rem; }
   .ts-dialog li { margin-bottom: 0.3rem; }
-  .ts-dialog a { text-decoration: underline; }
   .reasons { border: 0; padding: 0; margin: 1rem 0; min-width: 0; }
   .reasons legend { font-weight: 600; padding: 0; margin-bottom: 0.4rem; }
   .reason {

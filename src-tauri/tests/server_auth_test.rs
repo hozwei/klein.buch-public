@@ -1527,16 +1527,19 @@ async fn totp_streak_lock_spares_recovery_codes_and_known_devices() {
     .unwrap();
     assert!(reloaded.totp_locked(), "Zähler in /data/auth");
     // Bekanntes Gerät: TOTP-Anmeldung geht und hebt die Sperre auf.
-    let code = next_totp(&srv);
-    let mut req = from_peer(
-        post("/api/auth/login", &login_body(PASS, &code), None, None),
-        "198.51.100.32:4000",
-    );
-    req.headers_mut()
-        .insert(header::COOKIE, device.parse().unwrap());
+    // ADR 0042 Nr. 16 (U7-A06): Code erst nach dem Warten auf `kdf_serial`
+    // rechnen — unter Last dauert das Warten länger als das Code-Fenster.
     let r = {
         let _serial = kdf_serial().await;
-        send(&srv.app, req).await
+        let code = next_totp(&srv);
+        let mut req = from_peer(
+            post("/api/auth/login", &login_body(PASS, &code), None, None),
+            "198.51.100.32:4000",
+        );
+        req.headers_mut()
+            .insert(header::COOKIE, device.parse().unwrap());
+        let reply = send(&srv.app, req).await;
+        follow_pending(&srv.app, reply).await
     };
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert!(!srv.state.ratelimit.totp_locked());

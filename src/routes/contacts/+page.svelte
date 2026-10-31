@@ -139,15 +139,15 @@
     <tbody>
       {#each contacts as c (c.id)}
         <tr class:archived={c.archived === 1}>
-          <td data-label="Name">
-            <a class="name" href={`/contacts/${c.id}`}>{c.name}</a>
+          <td class="kb-card-head" data-label="Name">
+            <a class="kb-link kb-target name" href={`/contacts/${c.id}`}>{c.name}</a>
             {#if c.archived === 1}<Badge tone="neutral">Archiviert</Badge>{/if}
           </td>
           <td data-label="Typ">{typeLabel(c.contactType)}</td>
-          <td data-label="Ort">{[c.postalCode, c.city].filter(Boolean).join(" ") || "—"}</td>
-          <td class="kb-col-opt2" data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
-          <td data-label="E-Mail">{c.email ?? "—"}</td>
-          <td class="right"><Button variant="secondary" href={`/contacts/${c.id}`} ariaLabel={`${c.name} öffnen`}>Öffnen</Button></td>
+          <td class:kb-card-omit={!c.postalCode && !c.city} data-label="Ort">{[c.postalCode, c.city].filter(Boolean).join(" ") || "—"}</td>
+          <td class="kb-col-opt2" class:kb-card-omit={!c.vatId} data-label="USt-IdNr.">{c.vatId ?? "—"}</td>
+          <td class:kb-card-omit={!c.email} data-label="E-Mail">{c.email ?? "—"}</td>
+          <td class="actions"><Button variant="secondary" href={`/contacts/${c.id}`} ariaLabel={`${c.name} öffnen`}>Öffnen</Button></td>
         </tr>
       {/each}
     </tbody>
@@ -166,11 +166,11 @@
   /* Ganze Beschriftung ist Trefferfläche (U1). */
   .chk { display: flex; align-items: center; gap: 0.5rem; min-height: var(--target); color: var(--c-text-muted); cursor: pointer; }
   .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); min-height: 1.4em; }
-  /* Name als Kartentitel: Trefferfläche ≥ --target (U1, 2.5.8). */
-  a.name { display: inline-flex; align-items: center; min-height: var(--target); overflow-wrap: anywhere; }
+  /* Name als Kartentitel: `.kb-link .kb-target` (Trefferfläche ≥ --target, V2-21). */
+  a.name { overflow-wrap: anywhere; }
   .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 0.6rem; }
   .empty p { margin: 0; }
-  td.right { text-align: right; }
+  td.actions { text-align: right; }
   @media screen and (max-width: 820px) { td { overflow-wrap: anywhere; } }
   tr.archived td { color: var(--c-text-subtle); }
   .muted { color: var(--c-text-muted); }

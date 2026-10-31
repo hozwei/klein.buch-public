@@ -10,6 +10,7 @@
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
+  import Banner from "#lib/Banner.svelte";
   import MoneyInput from "#lib/MoneyInput.svelte";
 
   let accounts = $state<PaymentAccount[]>([]);
@@ -111,11 +112,11 @@
     <HelpAnchor slug="privatbewegungen" />
   {/snippet}
 </PageBar>
-<p class="caveat">
+<Banner kind="warning">
   Das ist keine Einnahme oder Ausgabe und zählt nicht für die Steuer. Einmal
   festgeschrieben, lässt es sich nicht mehr ändern — korrigieren kannst du mit einer
   Gegenbuchung.
-</p>
+</Banner>
 
 <section class="card">
   <form novalidate onsubmit={(e) => { e.preventDefault(); save(); }}>
@@ -207,7 +208,7 @@
 </section>
 
 <style>
-  /* .caveat / .card / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }

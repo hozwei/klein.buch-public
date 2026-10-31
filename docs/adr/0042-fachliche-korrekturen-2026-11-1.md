@@ -183,6 +183,16 @@ nennt ihre Fundstelle. Festgeschriebene Belege bleiben unverändert (GoBD-Hardli
     Verwendungsdauer (§ 15a Abs. 5 Satz 2) und nimmt nur Anlagen aus nicht stornierten Kosten mit
     bekannter Vorsteuer.
 
+### Umsetzung V6 (Ergänzungen zu Nr. 16)
+
+31. **Handbuch aus dem Start-Bundle:** Hilfe-Symbole und Hilfe-Navigation lesen nur Titel und Slugs
+    (Vite-Plugin `klein-buch-handbook-meta`, Quelle bleiben die Markdown-Dateien); die Seitentexte
+    lädt nur `/help`. Start-JavaScript 248 → 79 KiB gzip.
+32. **Zeitangaben:** Die Versand-Historie einer Rechnung ist eine Liste (TT.MM.JJJJ, HH:MM, ADR 0041
+    Nr. 18); Protokollseiten (Audit, Backup-Verlauf, E-Mail, Sicherheit) behalten Sekunden.
+33. **Banner** kennt eine Live-Region (`live`, `label`) für Ergebnisse, die sich ohne Seitenwechsel
+    ändern; alte Hinweisflächen, Zahl- und Linkklassen sind auf die Bausteine umgestellt.
+
 ## Konsequenzen
 
 - Schema 35. Ein Image 2026.11.0 kann eine Datenbank oder ein Backup mit Schema 35 nicht öffnen;

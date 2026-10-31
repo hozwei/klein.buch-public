@@ -146,7 +146,9 @@
 {:else if loading}
   <p class="muted" role="status">Wird geladen …</p>
 {:else if ov}
-  <div class="auto">
+  <!-- V6-R06 (ADR 0042 Nr. 16): Einstellung als normale Card-Zeile, keine Statusfarbe für etwas,
+       das kein Status ist (Anti-Muster V3-07/08). -->
+  <div class="card">
     <Toggle
       bind:checked={ov.autoYearClose}
       label="Abschreibungen (AfA) zur Jahreswende automatisch buchen"
@@ -178,9 +180,9 @@
           <tr>
             <th>Jahr</th>
             <th>Status</th>
-            <th class="num">Einnahmen</th>
-            <th class="num">Ausgaben</th>
-            <th class="num">Ergebnis</th>
+            <th class="kb-num">Einnahmen</th>
+            <th class="kb-num">Ausgaben</th>
+            <th class="kb-num">Ergebnis</th>
             <th><span class="kb-visually-hidden">Aktion</span></th>
           </tr>
         </thead>
@@ -201,9 +203,9 @@
                   {/if}
                 </span>
               </td>
-              <td class="num" data-label="Einnahmen">{euro(y.incomeTotalCents)}</td>
-              <td class="num" data-label="Ausgaben">{euro(y.expenseTotalCents)}</td>
-              <td class="num" class:loss={y.surplusCents < 0} data-label="Ergebnis">{euro(y.surplusCents)}</td>
+              <td class="kb-num" data-label="Einnahmen">{euro(y.incomeTotalCents)}</td>
+              <td class="kb-num" data-label="Ausgaben">{euro(y.expenseTotalCents)}</td>
+              <td class="kb-num" class:loss={y.surplusCents < 0} data-label="Ergebnis">{euro(y.surplusCents)}</td>
               <td class="act" data-label="Abschluss">
                 {#if y.closed}
                   <span class="muted small">festgeschrieben</span>
@@ -248,7 +250,7 @@
             <th>Kunde</th>
             <th>Datum</th>
             <th>Fällig</th>
-            <th class="num">Offen</th>
+            <th class="kb-num">Offen</th>
           </tr>
         </thead>
         <tbody>
@@ -258,7 +260,7 @@
               <td class="wrap" data-label="Kunde">{customerByInvoice.get(r.id) ?? "—"}</td>
               <td data-label="Datum">{date(r.invoiceDate)}</td>
               <td data-label="Fällig">{date(r.dueDate)}</td>
-              <td class="num" data-label="Offen">{euro(r.outstandingCents)}</td>
+              <td class="kb-num" data-label="Offen">{euro(r.outstandingCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -282,10 +284,10 @@
             <tr>
               <th>Jahr</th>
               <th>Abgeschlossen</th>
-              <th class="num">Einnahmen</th>
-              <th class="num">Ausgaben</th>
-              <th class="num">darin AfA</th>
-              <th class="num">Ergebnis</th>
+              <th class="kb-num">Einnahmen</th>
+              <th class="kb-num">Ausgaben</th>
+              <th class="kb-num">darin AfA</th>
+              <th class="kb-num">Ergebnis</th>
               <th>Festgeschrieben</th>
             </tr>
           </thead>
@@ -294,10 +296,10 @@
               <tr>
                 <td data-label="Jahr"><strong>{c.fiscalYear}</strong></td>
                 <td data-label="Abgeschlossen">{dateTimeShort(c.closedAt)}</td>
-                <td class="num" data-label="Einnahmen">{euro(c.incomeTotalCents)}</td>
-                <td class="num" data-label="Ausgaben">{euro(c.expenseTotalCents)}</td>
-                <td class="num" data-label="darin AfA">{euro(c.afaTotalCents)}</td>
-                <td class="num" class:loss={c.surplusCents < 0} data-label="Ergebnis">{euro(c.surplusCents)}</td>
+                <td class="kb-num" data-label="Einnahmen">{euro(c.incomeTotalCents)}</td>
+                <td class="kb-num" data-label="Ausgaben">{euro(c.expenseTotalCents)}</td>
+                <td class="kb-num" data-label="darin AfA">{euro(c.afaTotalCents)}</td>
+                <td class="kb-num" class:loss={c.surplusCents < 0} data-label="Ergebnis">{euro(c.surplusCents)}</td>
                 <td class="muted small" data-label="Festgeschrieben">
                   {c.assetsLocked} {c.assetsLocked === 1 ? "Anschaffung" : "Anschaffungen"},
                   {c.depreciationEntriesLocked} {c.depreciationEntriesLocked === 1 ? "AfA-Buchung" : "AfA-Buchungen"}
@@ -322,17 +324,10 @@
   /* .card / .card h2 / .lead: globale Definitionen aus tokens.css. */
   .muted { color: var(--text-muted); }
   .small { font-size: var(--fs-sm); }
-  .auto {
-    background: var(--status-info-bg);
-    border: 1px solid var(--status-info-line);
-    border-radius: var(--r-md);
-    padding: var(--sp-3) var(--sp-4);
-    margin: var(--sp-2) 0 var(--sp-5);
-    max-width: 46rem;
-  }
   table { width: 100%; border-collapse: collapse; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.num.loss { color: var(--status-danger-fg); }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16), hier ohne Umbruch. */
+  .kb-num { white-space: nowrap; }
+  td.kb-num.loss { color: var(--status-danger-fg); }
   .act { text-align: right; }
   .status-cell { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
   .warn { color: var(--status-warning-fg); margin-right: var(--sp-2); }

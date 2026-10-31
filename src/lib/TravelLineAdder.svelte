@@ -61,7 +61,7 @@
     {#if rateCents <= 0}
       <span class="hint">
         Kein Kilometersatz hinterlegt —
-        <a href="/settings/travel">jetzt festlegen</a>, dann lässt sich die Anfahrt automatisch berechnen.
+        <a class="kb-link" href="/settings/travel">jetzt festlegen</a>, dann lässt sich die Anfahrt automatisch berechnen.
       </span>
     {:else}
       <label class="lbl" for={kmId}>Anfahrt (km)</label>
@@ -87,9 +87,8 @@
   .rt { display: inline-flex; align-items: center; gap: 0.5rem; min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); cursor: pointer; }
   .rate { color: var(--text-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
   .hint { color: var(--text-muted); font-size: var(--fs-sm); }
-  /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31). Vorher inline-flex mit
-     44 px Mindesthöhe — das riss auf dem Handy jede Zeile des Satzes auseinander (U1-Sichtprüfung). */
-  .hint a { text-decoration: underline; }
+  /* Link im Satz: `.kb-link`, 2.5.8-Ausnahme „inline“ ohne 44-px-Zeile (ADR 0041 Nr. 31,
+     ADR 0042 Nr. 16). */
   /* Lokale btn-Defs entfernt — globale aus tokens.css greifen
      (Manuel-Hardline 2026-05-26: alle Buttons app-weit gleich groß). */
 </style>

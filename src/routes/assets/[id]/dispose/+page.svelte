@@ -201,13 +201,13 @@
   <Banner>{error} <a class="kb-link" href={`/assets/${id}`}>Zur Anschaffung</a></Banner>
 {:else if detail}
   {@const a = detail.asset}
-  <p class="caveat">
+  <Banner kind="warning">
     Die Anschaffung wird nicht gelöscht, sondern als veräußert markiert (GoBD). Beim
     Bestätigen bucht Klein.Buch die AfA bis zum Monat des Abgangs (schon gebuchte
     AfA ab dem Abgangsjahr wird dabei ersetzt, fehlende Vorjahre werden nachgeholt) und
     hält den Restbuchwert danach als Schlussstand fest. Die Vorschau unten rechnet genau
     das zum gewählten Datum. Der Abgang lässt sich nicht rückgängig machen.
-  </p>
+  </Banner>
 
   {#if saveError}
     <Banner title="Nicht gespeichert:">{saveError}</Banner>
@@ -268,19 +268,19 @@
             hint="Zeitwert (Teilwert) bei Privatentnahme, 0 bei einem betrieblichen Geschenk."
           />
           <div class="field">
-            <p class="info-banner">
+            <Banner kind="info" flush>
               Bei einer <strong>Privatentnahme</strong> zählt der Zeitwert (Teilwert) als
               Betriebseinnahme, der Restbuchwert zum Abgang von {euro(residual)} als Ausgabe. Bei
               einem <strong>betrieblichen Geschenk</strong> an Dritte 0 eintragen (Grenzen nach
               § 4 Abs. 5 Nr. 1 EStG beachten).
-            </p>
+            </Banner>
           </div>
         {:else}
           <div class="field span2">
-            <p class="info-banner">
+            <Banner kind="info" flush>
               Ohne Erlös (Verschrottung) wird der Restbuchwert zum Abgang von
               {euro(residual)} als Verlust ausgebucht.
-            </p>
+            </Banner>
           </div>
         {/if}
       </div>
@@ -349,7 +349,7 @@
 {/if}
 
 <style>
-  /* .caveat / .card / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .who { margin: 0 0 1rem; overflow-wrap: anywhere; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
@@ -361,7 +361,6 @@
   .msg.err { color: var(--status-danger-fg); font-weight: 600; }
   .grid :global(.money-field.with-label) { margin-bottom: 0; }
   .grid :global(.money-field label) { color: var(--text); }
-  .info-banner { margin: 0; }
   .result { margin: 0; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); border: 1px solid; display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: baseline; }
   .result.gain { background: var(--status-success-bg); border-color: var(--status-success-line); color: var(--status-success-fg); }
   .result.loss { background: var(--status-danger-bg); border-color: var(--status-danger-line); color: var(--status-danger-fg); }

@@ -368,6 +368,8 @@ mod tests {
             .create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(1)
+            // ADR 0042 Nr. 16 (V6-R01): Test-Pool mit demselben Zeitlimit.
+            .acquire_timeout(crate::db::ACQUIRE_TIMEOUT)
             .connect_with(opts)
             .await
             .unwrap()

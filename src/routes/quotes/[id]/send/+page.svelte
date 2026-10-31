@@ -157,7 +157,7 @@
   {/if}
   <section class="card summary">
     <div>
-      <strong><DocNo value={q.quoteNumber} /></strong> · {date(q.quoteDate)} · <span class="num">{euro(q.grossAmountCents)}</span>
+      <strong><DocNo value={q.quoteNumber} /></strong> · {date(q.quoteDate)} · <span class="kb-num">{euro(q.grossAmountCents)}</span>
     </div>
     <div class="muted">
       Angehängt werden: <code>{q.quoteNumber}.pdf</code> · <code>AGB.pdf</code> · <code>Datenschutz.pdf</code>
@@ -255,7 +255,6 @@
     background: var(--status-warning-bg); border-left: 3px solid var(--status-warning-line);
     padding: 4px 8px; border-radius: var(--r-sm); overflow-wrap: anywhere;
   }
-  .num { font-variant-numeric: tabular-nums; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   code { background: var(--surface-sunken); padding: 0.05rem 0.3rem; border-radius: 3px; overflow-wrap: anywhere; }
   .muted { color: var(--text-muted); }

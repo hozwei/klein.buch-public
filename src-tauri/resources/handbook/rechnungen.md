@@ -125,10 +125,10 @@ andere Adresse als die beim Kontakt hinterlegte, fragt Klein.Buch zur
 Bestätigung Daten-Passwort und App-Code ab.
 
 Nach dem Versand steht neben dem Status "versendet am …", und die
-Karte "Versand-Historie" zeigt jeden Versuch. Klein.Buch protokolliert
-jeden Versand im E-Mail-Protokoll: Zeitpunkt, Empfänger, Antwort des
-Mail-Servers. Das vollständige Protokoll findest Du unter
-"Einstellungen → E-Mail-Protokoll".
+Karte "Versand-Historie" zeigt jeden Versuch (Zeitpunkt auf die Minute).
+Klein.Buch protokolliert jeden Versand im E-Mail-Protokoll: Zeitpunkt auf
+die Sekunde, Empfänger, Antwort des Mail-Servers. Das vollständige
+Protokoll findest Du unter "Einstellungen → E-Mail-Protokoll".
 
 Wenn Du noch kein Postfach eingerichtet hast, lies das Kapitel
 "Konten und Mail-Versand".

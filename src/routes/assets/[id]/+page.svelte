@@ -134,11 +134,11 @@
   </p>
 
   {#if hasUnlockedAfa && a.disposed === 0}
-    <p class="edit-hint">
+    <Banner kind="info">
       Es ist bereits eine Abschreibung gebucht. Zum Korrigieren der Angaben erst
       „Abschreibung zurücksetzen“ (Menü „Mehr“) — möglich, solange das Geschäftsjahr nicht
       abgeschlossen ist.
-    </p>
+    </Banner>
   {/if}
 
   {#if reverseChargeKlein}
@@ -223,20 +223,20 @@
         <thead>
           <tr>
             <th>Jahr</th>
-            <th class="num">Monate</th>
-            <th class="num">Restbuchwert davor</th>
-            <th class="num">Abschreibung</th>
-            <th class="num">Restbuchwert danach</th>
+            <th class="kb-num">Monate</th>
+            <th class="kb-num">Restbuchwert davor</th>
+            <th class="kb-num">Abschreibung</th>
+            <th class="kb-num">Restbuchwert danach</th>
           </tr>
         </thead>
         <tbody>
           {#each detail.depreciationEntries as e (e.id)}
             <tr>
-              <td data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}{" "}<Badge kind="tag">Sofort</Badge>{/if}</td>
-              <td class="num" data-label="Monate">{e.monthsInYear}</td>
-              <td class="num" data-label="Restbuchwert davor">{euro(e.bookValueBeforeCents)}</td>
-              <td class="num" data-label="Abschreibung">{euro(e.depreciationAmountCents)}</td>
-              <td class="num" data-label="Restbuchwert danach">{euro(e.bookValueAfterCents)}</td>
+              <td class="kb-card-head" data-label="Jahr">{e.fiscalYear}{#if e.isFullWriteoff === 1}{" "}<Badge kind="tag">Sofort</Badge>{/if}</td>
+              <td class="kb-num" data-label="Monate">{e.monthsInYear}</td>
+              <td class="kb-num" data-label="Restbuchwert davor">{euro(e.bookValueBeforeCents)}</td>
+              <td class="kb-num kb-card-figure" data-label="Abschreibung">{euro(e.depreciationAmountCents)}</td>
+              <td class="kb-num" data-label="Restbuchwert danach">{euro(e.bookValueAfterCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -258,9 +258,7 @@
   @media (max-width: 600px) { dl { grid-template-columns: 1fr; } }
   dd.gain { color: var(--status-success-fg); font-weight: 600; }
   dd.loss { color: var(--status-danger-fg); font-weight: 600; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
   .rc-text { margin: 0 0 var(--sp-3); max-width: 72ch; line-height: var(--lh-body); }
   .muted { color: var(--text-muted); }
   .small { font-size: var(--fs-sm); }
-  .edit-hint { color: var(--text-muted); font-size: var(--fs-sm); margin: 0 0 var(--sp-2); max-width: 46rem; }
 </style>

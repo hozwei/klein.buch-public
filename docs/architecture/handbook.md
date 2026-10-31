@@ -15,7 +15,7 @@
   aus der Desktop-Fassung; deren Ressourcen-Bündel gibt es seit Phase W nicht
   mehr, ADR 0039). Eingebunden werden sie beim Build der SPA:
   `src/lib/handbook/index.ts` lädt sie per Vite-Glob
-  (`import.meta.glob`, `?raw`, eager) in das Frontend-Bundle. Der Server
+  (`import.meta.glob`, `?raw`, eager) in den Chunk der `/help`-Routen. Der Server
   liefert das Handbuch damit als Teil der SPA unter `/help/<slug>` aus;
   zur Laufzeit liest niemand diesen Ordner, das `Dockerfile` kopiert ihn
   nur in die Node-Stufe (SPA-Build). Das Verzeichnis enthält zusätzlich
@@ -45,6 +45,21 @@
   sortiert sie nach Kategorie + `order` + Titel und stellt sie über
   `listEntries()`, `getEntry(slug)`, `listByCategory()`, `listSlugs()`
   bereit. Keine JS-Dependency (kein `gray-matter` o. ä.).
+- **Start-Bundle ohne Handbuch (ADR 0042 Nr. 16, U7-A02):** `index.ts` (mit
+  allen Seitentexten) und `render.ts` (mit `marked`) dürfen nur aus den Routen
+  unter `/help` importiert werden; SvelteKit lädt deren Chunk erst beim Aufruf.
+  Was außerhalb von `/help` nur Titel oder Slugs braucht (`HelpAnchor` im
+  Root-Layout über `BackupGate`, der Kapitelbaum im `/help`-Layout), nimmt
+  `src/lib/handbook/meta.ts` (`listMeta()`, `getMeta(slug)`,
+  `listMetaByCategory()`) und `src/lib/handbook/slug.ts` (`slugifyHeading`).
+  `meta.ts` lädt dieselben Dateien per Glob mit der Abfrage `?kbmeta`; das
+  Vite-Plugin `klein-buch-handbook-meta` (`vite.config.js`) liefert dafür nur
+  den Front-Matter-Block, ohne Text. Titel und Slugs werden so nur in den
+  Markdown-Dateien gepflegt; den Parser teilen sich beide Module
+  (`frontmatter.ts`). `meta.test.ts` prüft, dass die Kopfdaten zu den Dateien
+  und zum vollen Index passen und keinen Text tragen. Messung (`pnpm build`,
+  modulepreload-Chunks in `build/index.html`, gzip -9): initiales JS vorher
+  248 KiB, nachher 79 KiB.
 
 ## 2. Routen
 
@@ -63,8 +78,8 @@
 ## 3. Heading-Slugs (tiefe Sprünge)
 
 `renderHandbookMarkdown` setzt auf jede `h2`/`h3` eine deterministische
-ID, die mit `slugifyHeading(text)` aus `src/lib/handbook/render.ts`
-gebildet wird:
+ID, die mit `slugifyHeading(text)` aus `src/lib/handbook/slug.ts`
+(von `render.ts` weiter exportiert) gebildet wird:
 
 - Lowercase
 - `ä → ae`, `ö → oe`, `ü → ue`, `ß → ss`

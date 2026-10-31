@@ -357,11 +357,11 @@
     <HelpAnchor slug="afa-grundlagen" />
   {/snippet}
 </PageBar>
-<p class="caveat">
+<Banner kind="warning">
   Sobald die erste Abschreibung gebucht ist, lässt sich eine Anschaffung
   <strong>nicht mehr ändern</strong> (gesetzliche Vorgabe). Bis dahin kannst du sie
   korrigieren.
-</p>
+</Banner>
 
 {#if loadError}
   <Banner>{loadError}</Banner>
@@ -534,7 +534,7 @@
       {:else}
         <div class="field">
           <span class="lbl">Nutzungsdauer</span>
-          <p class="info-banner info">Sofortabschreibung im Anschaffungsjahr — keine Nutzungsdauer nötig.</p>
+          <Banner kind="info" flush>Sofortabschreibung im Anschaffungsjahr — keine Nutzungsdauer nötig.</Banner>
         </div>
       {/if}
       {#if suggestionReason}
@@ -581,7 +581,7 @@
 </section>
 
 <style>
-  /* .caveat / .card / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
@@ -600,7 +600,6 @@
   .grid :global(.money-field label), .grid :global(.qty-field label) { color: var(--text); }
   .cost-field { min-width: 0; }
   .field-note { font-size: var(--fs-sm); color: var(--text-muted); margin: var(--sp-1) 0 0; line-height: 1.45; }
-  .info-banner { margin: 0; }
   .share { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5); align-items: flex-start; }
   .share :global(.qty-field) { flex: 0 1 14rem; }
   .share-basis { margin: 1.9rem 0 0; color: var(--text-muted); }

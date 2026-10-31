@@ -159,14 +159,14 @@
              Archiv (ADR 0041 Nr. 250), der Text unten sagt es deshalb neutral (V3-R05). -->
         <dt>{serviceSummary(inv).label}</dt><dd>{serviceSummary(inv).text}</dd>
         {#if inv.buyerReference}<dt>Leitweg-ID</dt><dd>{inv.buyerReference}</dd>{/if}
-        <dt>Brutto</dt><dd class="kb-num-l">{euro(inv.grossAmountCents)}</dd>
+        <dt>Brutto</dt><dd class="amt">{euro(inv.grossAmountCents)}</dd>
         <dt>Empfänger</dt><dd>{detail.buyer?.name ?? "—"}</dd>
       </dl>
     </section>
 
     <section class="card">
       <h2>Storno erstellen</h2>
-      <p class="info">
+      <Banner kind="warning">
         Es entsteht ein <strong>neuer</strong> Beleg, der Storno-Beleg: eigene Nummer (ST-…),
         negativer Betrag, er gleicht die Original-Rechnung aus. Die Original-Rechnung wird
         <strong>nicht gelöscht</strong> — sie bleibt erhalten und gilt ab jetzt als storniert. So
@@ -178,7 +178,7 @@
         {:else}
           Als Leistungsdatum trägt er das Storno-Datum.
         {/if}
-      </p>
+      </Banner>
       {#if hasPayments}
         <!-- ADR 0042 Nr. 8: Nach dem Storno lässt sich keine Zahlung mehr stornieren. -->
         <p class="pay-note">
@@ -239,7 +239,7 @@
   dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.75rem; }
   dt { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .kb-num-l { font-variant-numeric: tabular-nums; }
+  .amt { font-variant-numeric: tabular-nums; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin-bottom: 1rem; }
   input, textarea {
     padding: 9px 11px; border: 1px solid var(--line-control); border-radius: var(--r-md);
@@ -251,7 +251,6 @@
   .req { color: var(--status-danger-fg); }
   .field-err { font-size: var(--fs-xs); font-weight: 400; color: var(--status-danger-fg); }
   .field-hint { font-size: var(--fs-xs); font-weight: 400; color: var(--text-muted); }
-  .info { background: var(--status-warning-bg); color: var(--text); padding: 0.75rem 1rem; border-left: 4px solid var(--status-warning-line); border-radius: var(--r-sm); font-size: var(--fs-base); }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   .muted { color: var(--text-muted); }
 </style>

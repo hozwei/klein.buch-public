@@ -14,7 +14,7 @@
   import Badge from "#lib/Badge.svelte";
   import Banner from "#lib/Banner.svelte";
   import DocNo from "#lib/DocNo.svelte";
-  import { dateTime } from "#lib/format.ts";
+  import { dateTime, dateTimeShort } from "#lib/format.ts";
   import { daysUntilBerlin } from "#lib/date.ts";
   import { dayClock } from "#lib/dayClock.svelte.ts";
   import Button from "#lib/Button.svelte";
@@ -682,7 +682,7 @@
       <dt>Backup-Passwort</dt>
       <dd>{settings.passphraseSet ? "eingerichtet" : "nicht eingerichtet"}</dd>
       <dt>Letzte lokale Sicherung</dt>
-      <dd>{lastLocal ? `${dateTime(lastLocal.createdAt)} (${ageLabel(lastLocal.createdAt)})` : "noch keine"}</dd>
+      <dd>{lastLocal ? `${dateTimeShort(lastLocal.createdAt)} (${ageLabel(lastLocal.createdAt)})` : "noch keine"}</dd>
       <dt>Tägliches Backup</dt>
       <dd>ab {settings.dailyTime} Uhr</dd>
       <dt>Externe Ziele</dt>
@@ -698,7 +698,7 @@
         <dt>Stand extern</dt>
         <dd>
           {settings.offsiteLastCopyAt && settings.offsiteAgeDays !== null
-            ? `${dateTime(settings.offsiteLastCopyAt)} (${daysAgoLabel(settings.offsiteAgeDays)})`
+            ? `${dateTimeShort(settings.offsiteLastCopyAt)} (${daysAgoLabel(settings.offsiteAgeDays)})`
             : "noch nicht auf jedem Ziel eine Kopie"}
         </dd>
       {/if}
@@ -777,23 +777,23 @@
   <section class="card" aria-labelledby="bk-targets-h">
     <h2 id="bk-targets-h">Externe Ziele <HelpAnchor slug="backup-ziel-einrichten" /></h2>
     {#if settings.offsiteStatus === "missing"}
-      <p class="caveat" role="status">
+      <Banner kind="warning">
         Kein externes Ziel eingerichtet — die Backups liegen nur im Datenverzeichnis
         des Servers. Bitte mindestens ein Ziel hinzufügen.
-      </p>
+      </Banner>
     {:else if settings.offsiteStatus === "failing"}
-      <p class="caveat" role="status">
+      <Banner kind="warning">
         Mindestens ein Ziel ist beim letzten Backup fehlgeschlagen — Einzelheiten unten
         und im Backup-Protokoll.
-      </p>
+      </Banner>
     {:else if settings.offsiteStatus === "stale"}
-      <p class="caveat" role="status">
+      <Banner kind="warning">
         Mindestens ein Ziel hat keine aktuelle Kopie: noch keine (z. B. gerade
         hinzugefügt) oder die letzte ist älter als die Frist der Regel „Backup
         überfällig“. Nach einer Wiederherstellung ruht die Spiegelung bis zur Freigabe;
         sonst schreibt das nächste Backup oder „Jetzt sichern“ eine neue Kopie. Den
         Stand je Ziel zeigt die Liste unten.
-      </p>
+      </Banner>
     {/if}
     <p class="muted">
       Eine <strong>lokale Sicherung läuft immer</strong> automatisch:
@@ -812,14 +812,14 @@
               {#if t.lastResult}
                 {#if t.lastResult.ok}
                   <div class="sub">
-                    Letzte Kopie: {dateTime(t.lastResult.at)} <strong>({ageLabel(t.lastResult.at)})</strong>
+                    Letzte Kopie: {dateTimeShort(t.lastResult.at)} <strong>({ageLabel(t.lastResult.at)})</strong>
                   </div>
                 {:else}
-                  <div class="bad">Fehlgeschlagen ({dateTime(t.lastResult.at)}): {t.lastResult.error}</div>
+                  <div class="bad">Fehlgeschlagen ({dateTimeShort(t.lastResult.at)}): {t.lastResult.error}</div>
                   <!-- U4 (Lauf F3): letzte gute Kopie auch nach einem Fehlschlag. -->
                   <div class="sub">
                     {#if t.lastCopyAt}
-                      Letzte erfolgreiche Kopie: {dateTime(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
+                      Letzte erfolgreiche Kopie: {dateTimeShort(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
                     {:else}
                       Noch keine erfolgreiche Kopie auf diesem Ziel.
                     {/if}
@@ -827,7 +827,7 @@
                 {/if}
               {:else if t.lastCopyAt}
                 <div class="sub">
-                  Letzte Kopie: {dateTime(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
+                  Letzte Kopie: {dateTimeShort(t.lastCopyAt)} <strong>({ageLabel(t.lastCopyAt)})</strong>
                 </div>
               {:else}
                 <div class="sub">Noch kein Backup auf dieses Ziel.</div>
@@ -1000,7 +1000,7 @@
     <p class="muted">
       Wiederherstellbare Sicherungen, die du zurückspielen oder herunterladen kannst. Den
       lückenlosen Nachweis jeder Sicherung (auch fehlgeschlagene externe
-      Spiegelungen) findest du im <a class="inline" href="/settings/backup-log">Backup-Protokoll</a>.
+      Spiegelungen) findest du im <a class="kb-link" href="/settings/backup-log">Backup-Protokoll</a>.
     </p>
     {#if history.length === 0}
       <p class="muted">Noch keine Backups. Erstelle das erste mit „Jetzt sichern“.</p>
@@ -1013,7 +1013,7 @@
             <th>Grund</th>
             <th>Ort</th>
             <th>Aufbewahrung</th>
-            <th class="num">Größe</th>
+            <th class="kb-num">Größe</th>
             <th><span class="kb-visually-hidden">Aktionen</span></th>
           </tr>
         </thead>
@@ -1027,7 +1027,7 @@
                 <div class="path">{item.targetPath}</div>
               </td>
               <td data-label="Aufbewahrung">{retentionLabel(item.retentionTag)}</td>
-              <td class="num nowrap" data-label="Größe">{fmtBytes(item.fileSizeBytes)}</td>
+              <td class="kb-num nowrap" data-label="Größe">{fmtBytes(item.fileSizeBytes)}</td>
               <td>
                 <!-- U4 (U3-036): Aktionen untereinander gleich breit. -->
                 <div class="kb-actions kb-stack">
@@ -1101,7 +1101,7 @@
     {/if}
 
     {#if restoreReport}
-      <p class="ok-box" role="status">{restoreReport}</p>
+      <Banner kind="success">{restoreReport}</Banner>
     {/if}
   </section>
   </div>
@@ -1116,25 +1116,26 @@
       Begründung im Audit-Log.
     </p>
     {#if restoredDrafts.length > 0}
-      <div class="bad-box">
-        <p>
+      <Banner kind="warning">
+        <p class="drafts-text">
           Diese Entwürfe stammen aus dem eingespielten Backup. Ihre Nummern waren vor der
           Wiederherstellung bereits festgeschrieben und vermutlich versandt. Passe den Entwurf an
           das versandte Original an und bestätige danach den Abgleich — erst dann lässt er sich
           festschreiben (nie zwei verschiedene Belege mit derselben Nummer). Bearbeitest du den
           Entwurf nach dem Bestätigen noch einmal, erscheint er hier wieder.
         </p>
-        <ul class="drafts">
-          {#each restoredDrafts as c (c.kind + c.id)}
-            <li>
-              <DocNo value={c.number} href={c.kind === "quote" ? `/quotes/${c.id}` : `/invoices/${c.id}`} />
-              <Button variant="secondary" onclick={() => ((confirmFor = c), (confirmReason = ""), (confirmReasonError = ""))} ariaDisabled={busy} ariaLabel={`Abgleich bestätigen, ${c.number}`}>
-                Abgleich bestätigen …
-              </Button>
-            </li>
-          {/each}
-        </ul>
-      </div>
+      </Banner>
+      <!-- V6-R04 (ADR 0042 Nr. 16): Liste mit Knöpfen außerhalb der Live-Region des Banners. -->
+      <ul class="drafts">
+        {#each restoredDrafts as c (c.kind + c.id)}
+          <li>
+            <DocNo value={c.number} href={c.kind === "quote" ? `/quotes/${c.id}` : `/invoices/${c.id}`} />
+            <Button variant="secondary" onclick={() => ((confirmFor = c), (confirmReason = ""), (confirmReasonError = ""))} ariaDisabled={busy} ariaLabel={`Abgleich bestätigen, ${c.number}`}>
+              Abgleich bestätigen …
+            </Button>
+          </li>
+        {/each}
+      </ul>
       {#if confirmFor}
         <form class="raise-form" novalidate onsubmit={(e) => { e.preventDefault(); doConfirmDraft(); }}>
           <p><strong>{confirmFor.number}</strong> entspricht dem versandten Original</p>
@@ -1168,7 +1169,7 @@
         <thead>
           <tr>
             <th>Belegart</th>
-            <th class="num">Jahr</th>
+            <th class="kb-num">Jahr</th>
             <th>Zuletzt vergeben</th>
             <th><span class="kb-visually-hidden">Aktionen</span></th>
           </tr>
@@ -1177,7 +1178,7 @@
           {#each counters as c (c.docType + c.fiscalYear)}
             <tr>
               <td data-label="Belegart">{c.label}</td>
-              <td class="num" data-label="Jahr">{c.fiscalYear}</td>
+              <td class="kb-num" data-label="Jahr">{c.fiscalYear}</td>
               <td data-label="Zuletzt vergeben"><DocNo value={c.lastNumber} /></td>
               <td>
                 <div class="kb-actions">
@@ -1236,7 +1237,7 @@
 {/if}
 
 <style>
-  /* .card / .card.danger / .caveat — globale Definitionen aus tokens.css.
+  /* .card / .card.danger — globale Definitionen aus tokens.css; Hinweise über Banner (V3-18).
      Formular-Karten bleiben auf 48rem gedeckelt; Tabellen-Karten (.wide) nicht. */
   .card { max-width: 48rem; }
   .card.wide { max-width: none; }
@@ -1273,7 +1274,6 @@
   .muted { color: var(--text-muted); font-size: var(--fs-sm); }
   .sub { display: block; color: var(--text-muted); font-size: var(--fs-sm); margin-top: 0.3rem; overflow-wrap: anywhere; }
   .err { display: block; color: var(--status-danger-fg); font-weight: 600; font-size: var(--fs-sm); margin-top: 0.3rem; }
-  .inline { text-decoration: underline; }
   .path {
     font-family: var(--font-mono);
     font-size: var(--fs-xs);
@@ -1317,8 +1317,7 @@
     color: var(--text);
   }
   table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
-  th, td { text-align: left; vertical-align: top; }
-  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th, td { vertical-align: top; }
   td.ort { overflow-wrap: anywhere; }
   @media (min-width: 821px) {
     .nowrap { white-space: nowrap; }
@@ -1331,14 +1330,7 @@
     border-radius: var(--r-md);
   }
   .bad { color: var(--status-danger-fg); font-weight: 700; }
-  .bad-box {
-    color: var(--status-danger-fg);
-    background: var(--status-danger-bg);
-    border: 1px solid var(--status-danger-line);
-    border-radius: var(--r-md);
-    padding: 0.6rem 0.8rem;
-  }
-  .bad-box p { margin: 0 0 0.5rem; }
+  .drafts-text { margin: 0; }
   .drafts { list-style: none; padding: 0; margin: 0; }
   .drafts li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding: 0.25rem 0; }
   ul.targets { list-style: none; padding: 0; margin: 0.6rem 0 1rem; }
@@ -1370,12 +1362,4 @@
     background: var(--surface-sunken);
   }
   .raise-form p { margin: 0 0 0.4rem; }
-  .ok-box {
-    margin-top: 0.8rem;
-    padding: 0.7rem;
-    background: var(--status-success-bg);
-    border: 1px solid var(--status-success-line);
-    border-radius: var(--r-md);
-    color: var(--status-success-fg);
-  }
 </style>

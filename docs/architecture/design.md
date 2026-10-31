@@ -205,7 +205,10 @@ Gesperrte Bedienelemente (`opacity: .5`) sind nach 1.4.3 ausgenommen; ihr Grund 
 - Feine Lineatur (`--rule` je Zeile, keine Zebrastreifen, keine senkrechten Linien), Kopf
   `--type-caption` in Versalien, `--text-subtle`, linksbündig; Beträge `.kb-num` (rechtsbündig,
   tabellarische Ziffern) — an `th` und `td`, der Kopf steht dann über den Werten (V3-10).
-  Summenzeile mit Linie oben (`tfoot`); die Gesamtsumme (Brutto, Summe der EÜR-Zeilen) als
+  Seiteneigene Ausrichtungsklassen (`.num`, `.right`) gibt es nicht mehr (ADR 0042 Nr. 16);
+  Seiten setzen an `th`/`td` kein eigenes `text-align: left` (es schlüge `.kb-num`), die
+  Bezeichnung einer Summenzeile richtet `td.sum-label` der Seite rechts aus, Aktionszellen
+  `td.actions`. Summenzeile mit Linie oben (`tfoot`); die Gesamtsumme (Brutto, Summe der EÜR-Zeilen) als
   `<tr class="kb-sum">` mit doppelter Linie (`--rule-sum`, eine Regel in `tokens.css`, im
   Tabellenmodus und Druck; V3-13). Aufstellungen ohne Tabelle: `.kb-ledger` (§4.8).
 - Gruppen einer Liste (Pakete je Kategorie) teilen dieselben festen Spaltenbreiten
@@ -213,6 +216,21 @@ Gesperrte Bedienelemente (`opacity: .5`) sind nach 1.4.3 ausgenommen; ihr Grund 
 - Listen stehen **immer** im Baustein (weiße Karte), nie frei auf dem Seitenhintergrund (U3-030).
 - Bis 820 px Karten (`cards`, jede `<td>` mit `data-label`), 601–820 px zweispaltig mit
   `cardGrid` (nur Listen mit Detailseite). Breite Tabellen scrollen in sich (Name per `caption`).
+- **Hierarchie in der Kartenansicht** (V3-12, ADR 0042 Nr. 16; Klassen in `tokens.css`, nur
+  ≤ 820 px am Bildschirm wirksam):
+
+  | Klasse an `td` | Rolle in der Karte |
+  |---|---|
+  | `.kb-card-head` | Kopfzeile links: Belegnummer (`DocNo`) bzw. Name in `--type-heading`, fett; Label nur für Screenreader |
+  | `.kb-card-status` | rechts neben dem Kopf (Status-`Badge`; bei Privatbewegungen die Art); Label nur für Screenreader. Nur die Anzeige rückt nach oben, Fokus- und Lesereihenfolge folgen dem DOM — die Zelle enthält nichts Fokussierbares |
+  | `.kb-card-figure` | Hauptbetrag in `--type-heading`, fett, tabellarisch (Brutto, Restbuchwert, Betrag) — höchstens einer je Karte |
+  | `.kb-card-omit` | Nebenangabe ohne Wert („—“) entfällt in der Karte (`class:kb-card-omit={!wert}`); im Tabellenmodus bleibt „—“ |
+
+  Alle übrigen Zellen bleiben „LABEL … Wert“ in `--type-body`. Ohne Statuszelle reicht der Kopf
+  über die volle Breite. Übernommen in: Rechnungen, Angebote, Kosten, Kosten-Abos,
+  Abo-Rechnungen, Anschaffungen (Liste und Abschreibungs-Verlauf), Privatbewegungen, Kontakte,
+  Pakete, Konten, Backup- und E-Mail-Protokoll, Zahlungen und Versand-Historie der
+  Rechnung, Versand-Historie des Angebots, Beispieltabelle unter `/design`.
 - Nebenspalten mit `.kb-col-opt1..3` (Spaltenpriorität nach Inhaltsbreite, ADR 0041 Nr. 42/53).
 - Aktionsspalte: Kopf nur für Screenreader („Aktion“), höchstens eine sichtbare Aktion
   (`secondary`) plus `ActionMenu` (`ghost`) — nicht drei Knöpfe untereinander.
@@ -282,8 +300,9 @@ Gesperrte Bedienelemente (`opacity: .5`) sind nach 1.4.3 ausgenommen; ihr Grund 
 | `.kb-form-grid`, `.kb-span-all`, `.kb-sections` | Formular-Raster (ADR 0041 Nr. 41) |
 | `.kb-form-end` | Wiederholung der Hauptaktion am Formularende (≤ 600 px Breite, ≤ 500 px Höhe) |
 | `.kb-col-opt1..3`, `.kb-card-grid` | Spaltenpriorität, Kartenraster (über `Table cardGrid`) |
+| `.kb-card-head`, `.kb-card-status`, `.kb-card-figure`, `.kb-card-omit` | Hierarchie der Kartenansicht (§4.5, V3-12) |
 | `.kb-docno`, `.kb-num`, `.kb-nowrap` | Belegnummer, Betrag (auch Spaltenkopf), kein Umbruch („z. B.“, Zahl + Einheit, U3-037) |
-| `.kb-link` | einzige Link-Klasse: unterstrichen (ADR 0041 Nr. 31), auch auf `<button>` für Aktionen im Text; `.txt-link`/`.inline-link` sind ersetzt (V2-21, V3-18) |
+| `.kb-link` | einzige Link-Klasse: unterstrichen (ADR 0041 Nr. 31), auch auf `<button>` für Aktionen im Text; `.txt-link`/`.inline-link` sind ersetzt (V2-21, V3-18), ebenso die seiteneigenen `.linklike` (Über-Dialog), `.inline` (Backups, E-Mail-Versand), `a.name` (Kontakte), `.pkg-name` als Link (Pakete) und `.tgt` (Angebot) — Namen als Link in Listen `kb-link kb-target` (ADR 0041 Nr. 166, ADR 0042 Nr. 16) |
 | `.kb-linklist` (+ `.kb-ll-title`, `.kb-ll-sub`) | Linkliste: `<ul>` mit Links aus Titel und Unterzeile in einer Karte, 1-px-Linien in `--line`, Spalten ab 18rem (Seiten dürfen feste Spaltenzahlen setzen), Fokusring innen (V3-04) |
 | `.kb-ledger` (+ `.kb-sum`) | Aufstellung als `<dl>`: je `<div>` Posten (`dt`) und Betrag (`dd`, rechtsbündig, tabellarisch), Linie je Zeile, `<div class="kb-sum">` mit doppelter Linie darüber (EÜR, Abgang einer Anschaffung; V3-13) |
 | `tr.kb-sum` | Summenzeile einer Tabelle mit doppelter Linie (`--rule-sum`, V3-13) |
@@ -335,14 +354,21 @@ ein dringender Hinweis offen ist, Weiß auf `--danger-solid` (Screenreader: „�
 - **Banner** (`Banner kind="error|warning|info|success"`, optional `title`) für Zustände, die
   bleiben, bis sie behoben sind: nicht gefunden, Firmendaten fehlen, Pause der Abo-Läufe,
   Server-Ablehnung mit mehreren Gründen. `error` = `role="alert"`, sonst `role="status"`.
+  Abweichend davon `live` (V6-R04, ADR 0042 Nr. 16): `live="assertive"` (`role="alert"`) für einen
+  Warnzustand, der sofort ankommen muss (Passphrase-Wechsel „Ergebnis unklar“), `live="off"` mit
+  `label` (`role="note"`) für stehende Hinweise ohne Live-Region (Steuer-Disclaimer im Handbuch).
+  Knöpfe und Listen, die sich ändern, stehen unter dem Banner, nicht in seiner Live-Region
+  (Restore-Entwürfe unter Einstellungen → Backups).
   Einziger Baustein für Hinweisflächen (U4, V2-21): `href` + `linkLabel` für den nächsten Schritt als
   Link („Link-Banner“, z. B. fällige Kosten-Abos), Snippet `actions` für Knöpfe, `id` für
-  `aria-describedby`. Links im Banner sind unterstrichen und tragen die Statusfarbe. Belegnummern
+  `aria-describedby`, `flush` ohne Außenabstand in einer Zelle des Formular-Rasters (über alle
+  Spalten). Links im Banner sind unterstrichen und tragen die Statusfarbe. Belegnummern
   im Text und in der fetten Kurzaussage über `DocNo` (die Kurzaussage dann als `<strong>` im
-  Inhalt statt `title`, V3-23). Seiteneigene Flächen (`.info`, `.edit-hint`, `.due-banner`) und
-  die Altklassen `.info-banner`, `.caveat`, `.danger-banner` ersetzen die Seiten durch `Banner`
-  (Übernahme durch die Seiten; übernommen: Einrichtungs- und Anmeldemaske `BackupGate`, Vorschlag
-  in „Neue Anschaffung“; offen: rund 25 Stellen in 14 Seiten, danach entfallen die Altklassen).
+  Inhalt statt `title`, V3-23). Die seiteneigenen Flächen (`.info`, `.edit-hint`, `.due-banner`,
+  `.hint`, `.legal-banner`, `.report`, `.ok-box`, `.bad-box`) und die Altklassen `.info-banner`,
+  `.caveat`, `.danger-banner` sind durch `Banner` ersetzt und gelöscht (V3-18, ADR 0042 Nr. 16;
+  `.caveat` → `warning` bzw. `info` bei Tipps, `.info-banner` → `info`, Ergebnisse → `success`). Hinweise **am Feld**
+  (`.msg.note`, `.field-warn`, `.note` unter einem Feld) bleiben Feldhinweise (§4.7), keine Banner.
 - **Toast** nur über `flash(text, kind, opts?)`: `ok` (Erfolg, schließt nach 5 s, Pause bei
   Zeiger/Fokus), `info` (neutral, z. B. „Abgebrochen – nichts geändert.“, schließt wie Erfolg),
   `warning` (gelungen, aber etwas braucht Aufmerksamkeit, z. B. „E-Mail-Protokoll unvollständig“;
@@ -395,7 +421,7 @@ für die Auswahlfelder); `PageBar.svelte` 24 → 0, `MarkdownEditor.svelte` 2 �
 | `.kb-visually-hidden` | Hilfsklasse, muss jede Element- und Seitenregel schlagen |
 | Fehlerkante `[aria-invalid="true"]` | Zustand muss gegen seitenlokale `border`-Kurzschreibweisen gleicher Spezifität gewinnen |
 | Pfeil und Pfeil-Abstand der Auswahlfelder | Seiten setzen `background:`/`padding:` als Kurzschreibweise; ohne `!important` verschwände der Pfeil bzw. Text liefe darunter |
-| `th`/`td` (Lineatur, Kopf in Versalien, Innenabstand; Desktop-Dichte; Kartenansicht) | Seiten haben noch eigene `th`/`td`-Regeln (Fläche, Schriftgröße, Abstände; vor U4 24 Seiten, nach Phase 2 noch 22 Dateien, teils nur Ausrichtung wie `td.num`). Abbau, sobald sie entfernt sind |
+| `th`/`td` (Lineatur, Kopf in Versalien, Innenabstand; Desktop-Dichte; Kartenansicht) | Seiten haben noch eigene `th`/`td`-Regeln (Fläche, Schriftgröße, Abstände; vor U4 24 Seiten, nach Phase 2 noch 22 Dateien; die Ausrichtungsklassen `td.num`/`.right` sind seit ADR 0042 Nr. 16 durch `.kb-num` ersetzt). Abbau, sobald sie entfernt sind |
 | Schrift 16 px in Feldern im Drawer-Band | Seiten setzen Feldschriftgrößen (z. B. 14 px); unter 16 px zoomt iOS beim Fokus |
 | Druck, `prefers-reduced-motion` | müssen alles überstimmen |
 
@@ -554,7 +580,7 @@ gleicher Herkunft; statische Dateien liefert der Server ohne Sitzung aus.
 | Betrag | `1.234,56 €` (U+00A0 vor `€`); negativ mit echtem Minus `−450,00 €` (U+2212, so breit wie eine Ziffer; auch im Eingabefeld, der Parser liest `−` und `-`; V3-22) | `euro()`, `formatCents()` |
 | Prozent | `19 %` (U+00A0) | `percent()` |
 | Datum | `TT.MM.JJJJ`, nie `JJJJ-MM-TT` in Leseansichten | `date()` |
-| Datum mit Zeit | Listen `TT.MM.JJJJ, HH:MM`, Protokolle mit Sekunden | `dateTimeShort()`, `dateTime()` |
+| Datum mit Zeit | Listen und Hinweise `TT.MM.JJJJ, HH:MM` (auch die Versand-Historie auf Rechnung und Angebot: Liste der Detailseite, kein Protokoll im Sinne von ADR 0041 Nr. 18; ADR 0042 Nr. 16); mit Sekunden die Protokollseiten (Audit, Backup-Protokoll, E-Mail-Protokoll, Sitzungen) und als Ausnahme der Backup-Verlauf unter Einstellungen → Backups (Auswahl zum Wiederherstellen: Backups derselben Minute bleiben unterscheidbar) | `dateTimeShort()`, `dateTime()` |
 | IBAN | Vierergruppen | `iban()` |
 | Einheit | Klartext („Stunde“), Code nur im XML; Code außerhalb der Liste wird am Feld gemeldet (§4.7) | `unitLabel()`, `unitShort()`, `unitOptions()`, `unitCodeError()` (`labels.ts`) |
 | PDF-Vorlage | „Standard“, Option „Wie in den Einstellungen (Standard)“ | `pdfTemplateLabel()`, `pdfTemplateDefaultOptionLabel()` |
@@ -592,7 +618,7 @@ Design-Runde gegen die Bögen `u4a-d`, `u4a-m`, `u4a-t` (Befunde V3-01 … V3-23
 | Emoji als Icons | kein Befund (Inline-SVG) | —; V3: „✓/✗“ als Versandstatus durch Badge ersetzt (V3-17) |
 | Hero-Fläche, Floskel | **Befund Start**: „Willkommen, Beispiel“ in Display-Größe belegt auf 320 px rund ein Drittel (U1-064) | zentral: `--type-display` 24 px auf 320 px; Seite übernommen: Sachstand (Datum, Geschäftsjahr, Firma, §19-Zeile) statt Begrüßung; V3: Datum der Startseite in `--type-heading` statt `--type-display`, nicht größer als der Seitentitel (V3-03) |
 | Violett-blau | kein Befund (Petrol) | — |
-| Übergroße Abstände | Teilbefund: Positionen als lange Kartenliste auf dem Tablet (U2-020) | übernommen: Positionstabellen messen ihre Kartenbreite (Tabelle ab 560/720 px, ADR 0041 Nr. 95); offen: Prop `cardsBelow` im `Table` statt Messung je Seite; V3: Start-Kennzahlen auf dem Handy zweispaltig, Backup über die volle Breite (V3-02); offen: Kartenansicht der Listen ohne Hierarchie (V3-12) |
+| Übergroße Abstände | Teilbefund: Positionen als lange Kartenliste auf dem Tablet (U2-020) | übernommen: Positionstabellen messen ihre Kartenbreite (Tabelle ab 560/720 px, ADR 0041 Nr. 95); offen: Prop `cardsBelow` im `Table` statt Messung je Seite; V3: Start-Kennzahlen auf dem Handy zweispaltig, Backup über die volle Breite (V3-02); V3-12 (ADR 0042 Nr. 16): Karten mit Kopf (Nummer bzw. Name + Status), hervorgehobenem Hauptbetrag und ohne leere Nebenangaben (§4.5) |
 | Animation um ihrer selbst willen | Teilbefund: Anheben der Kennzahl-Kacheln (Start) | übernommen: kein Anheben mehr (Start, Einstellungen-Hub); sonst nur Seitenwechsel 200 ms und Toast-Einblenden, beides aus bei reduzierter Bewegung; V3: Lade-Platzhalter statisch statt pulsierend, `--t-slow` entfernt (V3-06) |
 | Status nur über Farbe | kein Befund bei Badges; Toasts nur Farbe + Gruppenname | zentral: Symbol je Toast-Art; V3: Statusfarbe nur für Status — Merkmale und Arten als `Badge kind="tag"` ohne Punkt, Status-Wörter aus den Helfern, Hinweis-Zähler nur bei dringenden Hinweisen rot (V3-07/08/09/16) |
 | Information nur per Tooltip | **Befund** Markdown-Werkzeugleiste „H1/H2/F/K“ (U2-018) | zentral: Klartext-Beschriftung; Seiten: `title`-Tooltips in Abo-Zeilen und auf der Kontakt-Detailseite entfernt, Gründe stehen als Text (gesperrte Menüeinträge mit `hint`) |

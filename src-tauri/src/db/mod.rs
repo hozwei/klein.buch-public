@@ -60,6 +60,41 @@ pub async fn begin_immediate(
 /// (Plan W2.5).
 pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Wartezeit auf eine freie Verbindung des Pools. Im Betrieb 30 s (wie der
+/// sqlx-Standard und der Antwort-Timeout der Anfragen, ADR 0039). In den
+/// Unit-Tests der Bibliothek 120 s (ADR 0042 Nr. 16, U7-A06): Jede neue
+/// SQLCipher-Verbindung leitet den Schlüssel neu ab; parallel unter Last
+/// liefen die Restore-Tests sonst in `PoolTimedOut`.
+pub const ACQUIRE_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(120)
+} else {
+    std::time::Duration::from_secs(30)
+};
+
+/// Anhebung von [`ACQUIRE_TIMEOUT`] für die Integrationstests (`tests/`): Sie
+/// binden die Bibliothek ohne `cfg(test)` (ADR 0042 Nr. 16, V6-R01). 0 = keine
+/// Anhebung; der Betrieb ruft den Setter nie auf und bleibt bei 30 s.
+static ACQUIRE_TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Wartezeit auf eine freie Pool-Verbindung: [`ACQUIRE_TIMEOUT`] oder die
+/// Anhebung der Integrationstests.
+pub fn acquire_timeout() -> std::time::Duration {
+    match ACQUIRE_TIMEOUT_OVERRIDE_MS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => ACQUIRE_TIMEOUT,
+        ms => std::time::Duration::from_millis(ms),
+    }
+}
+
+/// Hebt die Wartezeit auf eine freie Pool-Verbindung an (nur Tests).
+#[doc(hidden)]
+pub fn set_acquire_timeout_for_tests(wait: std::time::Duration) {
+    ACQUIRE_TIMEOUT_OVERRIDE_MS.store(
+        u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Öffnet (oder erstellt) den SQLite-Pool für `db_file`.
 ///
 /// - `key = Some(passphrase)` → **SQLCipher**: die Datei ist seitenweise
@@ -108,6 +143,7 @@ pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> 
 
     let pool: SqlitePool = SqlitePoolOptions::new()
         .max_connections(5)
+        .acquire_timeout(acquire_timeout())
         .connect_with(opts)
         .await?;
 
@@ -1085,6 +1121,8 @@ async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &
         }
         let src = SqlitePoolOptions::new()
             .max_connections(1)
+            // ADR 0042 Nr. 16 (V6-R01): dasselbe Zeitlimit wie `open_pool`.
+            .acquire_timeout(acquire_timeout())
             .connect_with(opts)
             .await?;
         let mut conn = src.acquire().await?;

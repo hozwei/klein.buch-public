@@ -300,11 +300,11 @@
         </div>
       </div>
 
-      <p class="info-banner note">
+      <Banner kind="info">
         Erzeugte Kosten setzen Netto = Brutto, USt = 0 (das Abo kennt keine
         Aufteilung in Netto und USt). Weicht der echte Beleg ab, korrigierst du per
         Storno und Neuerfassung. Betrag je Termin: <strong class="kb-num">{euro(expectedCents ?? 0)}</strong>.
-      </p>
+      </Banner>
       <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
       <div class="kb-form-end"><button type="button" class="btn-primary" onclick={save} aria-disabled={busy ? "true" : undefined} aria-busy={busy}>{busy ? "Speichert …" : editId ? "Änderungen speichern" : "Abo anlegen"}</button></div>
     </form>
@@ -312,7 +312,7 @@
 {/if}
 
 <style>
-  /* .card / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
@@ -336,6 +336,5 @@
   label.radio input { width: auto; margin-top: 0.15rem; padding: 0; flex: none; }
   label.radio.sel { border-color: var(--accent); background: var(--accent-soft); }
   label.radio:focus-within { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
-  .note { margin: var(--sp-4) 0 0; }
   .muted { color: var(--text-muted); }
 </style>

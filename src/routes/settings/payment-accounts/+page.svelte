@@ -369,7 +369,7 @@
           </tr>
         {:else}
           <tr class:inactive={a.active !== 1}>
-            <td data-label="Bezeichnung"><strong>{a.label}</strong></td>
+            <td class="kb-card-head" data-label="Bezeichnung"><strong>{a.label}</strong></td>
             <td class="kb-col-opt2" data-label="Typ">{typeLabel(a.accountType)}</td>
             <td class="muted" data-label="IBAN / BIC">
               {#if a.iban || a.bic}
@@ -377,10 +377,10 @@
                 {#if a.bic}<span class="mono bic-show">{a.bic}</span>{/if}
               {:else}—{/if}
             </td>
-            <td class="muted kb-col-opt1" data-label="Details">{a.details ?? "—"}</td>
+            <td class="muted kb-col-opt1" class:kb-card-omit={!a.details} data-label="Details">{a.details ?? "—"}</td>
             <td data-label="Auf Beleg">{a.showOnInvoice === 1 ? "ja" : "nein"}</td>
             <td data-label="Standard">{#if a.isDefault === 1}<Badge kind="tag">Standard</Badge>{:else}—{/if}</td>
-            <td data-label="Status">{#if a.active === 1}<Badge tone="success">Aktiv</Badge>{:else}<Badge>Inaktiv</Badge>{/if}</td>
+            <td class="kb-card-status" data-label="Status">{#if a.active === 1}<Badge tone="success">Aktiv</Badge>{:else}<Badge>Inaktiv</Badge>{/if}</td>
             <td>
               <!-- U4 (U3-036, design.md §4.5): eine sichtbare Aktion + Menü „Mehr“. -->
               <div class="kb-actions">

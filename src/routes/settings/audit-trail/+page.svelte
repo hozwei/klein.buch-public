@@ -235,11 +235,11 @@
         <thead>
           <tr>
             <th>Zeitpunkt</th>
-            <th class="num">Geprüft</th>
-            <th class="num">Ok</th>
-            <th class="num">Fehler</th>
-            <th class="num">Davon fehlend</th>
-            <th class="num">Nicht lesbar</th>
+            <th class="kb-num">Geprüft</th>
+            <th class="kb-num">Ok</th>
+            <th class="kb-num">Fehler</th>
+            <th class="kb-num">Davon fehlend</th>
+            <th class="kb-num">Nicht lesbar</th>
             <th>Betroffene Dateien</th>
           </tr>
         </thead>
@@ -248,11 +248,11 @@
             {@const aff = affected(h)}
             <tr class:bad={h.filesFailed > 0}>
               <td class="ts" data-label="Zeitpunkt">{dateTime(h.startedAt)}</td>
-              <td class="num" data-label="Geprüft">{h.filesChecked}</td>
-              <td class="num" data-label="Ok">{h.filesPassed}</td>
-              <td class="num" data-label="Fehler">{h.filesFailed}</td>
-              <td class="num" data-label="Davon fehlend">{h.filesMissing ?? "–"}</td>
-              <td class="num" data-label="Nicht lesbar">{h.filesUnreadable ?? "–"}</td>
+              <td class="kb-num" data-label="Geprüft">{h.filesChecked}</td>
+              <td class="kb-num" data-label="Ok">{h.filesPassed}</td>
+              <td class="kb-num" data-label="Fehler">{h.filesFailed}</td>
+              <td class="kb-num" data-label="Davon fehlend">{h.filesMissing ?? "–"}</td>
+              <td class="kb-num" data-label="Nicht lesbar">{h.filesUnreadable ?? "–"}</td>
               {#if aff.length > 0}
                 <td class="cards-full" data-label="Betroffene Dateien">
                   <details>
@@ -334,8 +334,7 @@
     gap: 0.5rem 1rem;
   }
   table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-  th, td { font-size: var(--fs-sm); text-align: left; overflow-wrap: anywhere; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  th, td { font-size: var(--fs-sm); overflow-wrap: anywhere; }
   tr.bad td { color: var(--status-danger-fg); font-weight: 600; }
   .ts { font-variant-numeric: tabular-nums; }
   @media (min-width: 821px) {

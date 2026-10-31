@@ -199,14 +199,14 @@
           <th>Auslöser</th>
           <th>Ziel</th>
           <th>Datei</th>
-          <th class="num">Größe</th>
+          <th class="kb-num">Größe</th>
         </tr>
       </thead>
       <tbody>
         {#each entries as e (e.id)}
           <tr class:bad={e.status === "failed"}>
-            <td class="ts" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-            <td data-label="Status">
+            <td class="ts kb-card-head" data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
+            <td class="kb-card-status" data-label="Status">
               {#if e.status === "ok"}
                 <Badge tone={e.detail ? "warning" : "success"}>{e.detail ? "Gesichert, unvollständig" : "Gesichert"}</Badge>
               {:else}
@@ -225,7 +225,7 @@
                 <span class="warntext">{e.detail}</span>
               {/if}
             </td>
-            <td class="size num" data-label="Größe">{fmtSize(e.sizeBytes)}</td>
+            <td class="size kb-num" data-label="Größe">{fmtSize(e.sizeBytes)}</td>
           </tr>
         {/each}
       </tbody>
@@ -244,8 +244,7 @@
   .filterbar label.grow { flex: 1 1 18rem; max-width: 100%; }
   .filterbar input, .filterbar select { padding: 0.4rem 0.55rem; border: 1px solid var(--line-control); border-radius: var(--r-sm); font: inherit; font-weight: 400; color: var(--text); background: var(--surface-card); min-height: var(--target); }
   .btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-left: auto; }
-  th, td { font-size: var(--fs-sm); text-align: left; vertical-align: top; }
-  th.num, td.num { text-align: right; }
+  th, td { font-size: var(--fs-sm); vertical-align: top; }
   tr.bad td { background: var(--status-danger-bg); }
   .ts { font-variant-numeric: tabular-nums; }
   @media (min-width: 821px) {

@@ -192,13 +192,13 @@
           </p>
           <p class="links">
             <a
-              class="linklike"
+              class="kb-link kb-target"
               href="https://wildbach-computerhilfe.de"
               target="_blank"
               rel="noopener noreferrer">wildbach-computerhilfe.de</a
             >
             <span class="sep">·</span>
-            <a class="linklike" href="mailto:schmidm@wildbach-computerhilfe.de"
+            <a class="kb-link kb-target" href="mailto:schmidm@wildbach-computerhilfe.de"
               >schmidm@wildbach-computerhilfe.de</a
             >
           </p>
@@ -252,7 +252,7 @@
           </p>
           <p class="links">
             <a
-              class="linklike"
+              class="kb-link kb-target"
               href="/legal/LICENSE.txt"
               target="_blank"
               rel="noopener noreferrer"
@@ -260,7 +260,7 @@
             >
             <span class="sep">·</span>
             {#if sourceLink}
-              <a class="linklike" href={sourceLink} target="_blank" rel="noopener noreferrer"
+              <a class="kb-link kb-target" href={sourceLink} target="_blank" rel="noopener noreferrer"
                 >Quellcode dieser Version ({sourceLabel(effectiveSource)})</a
               >
             {:else if effectiveSource}
@@ -385,24 +385,6 @@
   .sep {
     color: var(--text-subtle);
     margin: 0 0.45rem;
-  }
-  /* Trefferfläche ≥ --target, ohne die Zeile optisch zu sprengen. */
-  .linklike {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    background: transparent;
-    border: 0;
-    padding: 0;
-    color: var(--accent);
-    text-decoration: underline;
-    cursor: pointer;
-    font: inherit;
-  }
-  @media (hover: hover) {
-    .linklike:hover {
-      color: var(--accent-hover);
-    }
   }
   dl {
     display: grid;

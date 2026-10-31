@@ -360,7 +360,7 @@
   zu verschicken. Das Passwort wird verschlüsselt in der Datenbank dieser
   Instanz gespeichert — nie in Protokollen oder Exporten — und gilt nur für den
   eingetragenen Server, Port und Benutzer. Den lückenlosen Nachweis jedes
-  Versands findest du im <a class="inline" href="/settings/mail-log">E-Mail-Protokoll</a>.
+  Versands findest du im <a class="kb-link" href="/settings/mail-log">E-Mail-Protokoll</a>.
 </p>
 
 <section class="card" aria-labelledby="mail-accounts-h">
@@ -679,7 +679,6 @@
   .hint { font-weight: 400; color: var(--text-muted); font-size: var(--fs-sm); margin: 0; }
   .err { font-weight: 600; color: var(--status-danger-fg); font-size: var(--fs-sm); }
   .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
-  .inline { text-decoration: underline; }
   h2[tabindex="-1"]:focus { outline: none; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; font-size: var(--fs-sm); }

@@ -112,9 +112,10 @@ Menü "Mehr". Mit **"PDF öffnen"** öffnest Du nur das Angebot ohne
 Bundle.
 
 Nach dem Versand steht neben dem Status "versendet am …", und die
-Karte "Versand-Historie" zeigt Zeitpunkt und Empfänger jedes
-Versands. Der Status bleibt "Fertiggestellt": Er sagt, dass das
-Angebot festgeschrieben ist, nicht, ob es verschickt wurde.
+Karte "Versand-Historie" zeigt Zeitpunkt (auf die Minute) und Empfänger
+jedes Versands; sekundengenau steht er im E-Mail-Protokoll. Der Status
+bleibt "Fertiggestellt": Er sagt, dass das Angebot festgeschrieben ist,
+nicht, ob es verschickt wurde.
 
 ## Antwort des Kunden vermerken
 

@@ -490,14 +490,14 @@
           <tr>
             <th scope="col">#</th>
             <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
-            <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Menge <span class="req" aria-hidden="true">*</span></th>
             <th scope="col">Einheit</th>
-            <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
             {#if !isKlein}
-              <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="kb-num">USt-Satz <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">USt-Art</th>
             {/if}
-            <th scope="col" class="right">Netto</th>
+            <th scope="col" class="kb-num">Netto</th>
             <th scope="col"><span class="kb-visually-hidden">Aktionen</span></th>
           </tr>
         </thead>
@@ -530,7 +530,7 @@
                   {/if}
                 </td>
                 {#if linked}
-                  <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
+                  <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
                   {#if unitErr}
                     <td class="c-unit" data-label="Einheit">
                       <select
@@ -548,7 +548,7 @@
                   {:else}
                     <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
                   {/if}
-                  <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
+                  <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                 {:else}
                   <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
@@ -570,10 +570,10 @@
                   </td>
                 {/if}
                 {#if !isKlein}
-                  <td class="right" data-label="USt-Satz">{percent(it.taxRatePercent ?? 0)}</td>
+                  <td class="kb-num" data-label="USt-Satz">{percent(it.taxRatePercent ?? 0)}</td>
                   <td data-label="USt-Art">{it.taxCategoryCode}</td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if linked || items.length > 1}
                   <td class="c-actions">
                     <div class="kb-actions">
@@ -647,7 +647,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if items.length > 1}
                   <td class="c-actions">
                     <button type="button" class="btn-danger" onclick={() => removeItem(i)} aria-label={`Position ${n} entfernen`}>×</button>
@@ -661,20 +661,20 @@
         </tbody>
         <tfoot>
           <tr>
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Netto</strong></td>
-            <td class="right" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Netto</strong></td>
+            <td class="kb-num" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
             <td class="c-actions"></td>
           </tr>
           {#if !isKlein}
             <tr>
-              <td colspan="7" class="right sum-label">USt</td>
-              <td class="right" data-label="USt">{euro(totals.tax)}</td>
+              <td colspan="7" class="sum-label">USt</td>
+              <td class="kb-num" data-label="USt">{euro(totals.tax)}</td>
               <td class="c-actions"></td>
             </tr>
           {/if}
           <tr class="kb-sum">
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
-            <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Brutto</strong></td>
+            <td class="kb-num" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
             <td class="c-actions"></td>
           </tr>
         </tfoot>
@@ -709,7 +709,7 @@
         bind:checked={servicePeriodNote}
         label={`Leistungszeitraum zusätzlich in Position 1 nennen (z.\u00a0B. „Leistungszeitraum: ${nextPeriod ? servicePeriodLabel(nextPeriod.start, nextPeriod.end) : "Mai 2026"}“)`}
       />
-      <p class="hint">
+      <Banner kind="info">
         {#if nextPeriod}
           Die Rechnung zum Termin {date(nextPeriod.start)} gilt für den Leistungszeitraum
           {formatServicePeriod(nextPeriod.start, nextPeriod.end)} — bis zum Tag vor dem folgenden
@@ -720,7 +720,7 @@
         {/if}
         Belegdatum jeder erzeugten Rechnung ist der Erstellungstag (rechtlich vorgegeben).
         Pakete und Anfahrt fügst du oben wie bei einer normalen Rechnung hinzu.
-      </p>
+      </Banner>
     </section>
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
     <div class="kb-form-end"><Button type="submit" ariaDisabled={busy}>{busy ? "Speichere …" : editId ? "Änderungen speichern" : "Abo-Vorlage anlegen"}</Button></div>
@@ -748,7 +748,6 @@
   label.radio em { font-style: normal; font-weight: 600; color: var(--accent-on-soft); }
   label.radio input { width: auto; margin-top: 0.15rem; }
   label.radio.sel { border-color: var(--accent); background: var(--accent-soft); }
-  .hint { font-size: var(--fs-sm); color: var(--status-info-fg); background: var(--status-info-bg); border: 1px solid var(--status-info-line); padding: 0.5rem 0.75rem; border-radius: var(--r-sm); margin-top: 0.75rem; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   input, select {
@@ -756,9 +755,10 @@
     font: inherit; font-weight: 400; color: var(--text); background: var(--surface-card);
   }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   td.c-qty { width: 7.5rem; }
   /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
   td.c-unit { width: 9rem; }

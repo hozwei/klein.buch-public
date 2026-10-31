@@ -23,7 +23,7 @@
     EmailLogEntry,
     PaymentAccount,
   } from "#lib/types.ts";
-  import { euro, date, dateTime, dateTimeShort, percent } from "#lib/format.ts";
+  import { euro, date, dateTimeShort, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { todayBerlin } from "#lib/date.ts";
   import { invoiceTaxDate } from "#lib/taxStatus.ts";
@@ -599,7 +599,7 @@
     <section class="card">
       <h2>Verworfen</h2>
       <p>
-        Am {dateTime(inv.voidedAt)} verworfen. Der Entwurf wurde nie ausgestellt; die Nummer
+        Am {dateTimeShort(inv.voidedAt)} verworfen. Der Entwurf wurde nie ausgestellt; die Nummer
         <DocNo value={inv.invoiceNumber} inline /> bleibt vergeben und wird nicht erneut benutzt.
       </p>
       {#if inv.voidReason}<p><strong>Grund:</strong> {inv.voidReason}</p>{/if}
@@ -714,14 +714,14 @@
           <tr>
             <th>#</th>
             <th>Beschreibung</th>
-            <th class="right">Menge</th>
+            <th class="kb-num">Menge</th>
             <th>Einheit</th>
-            <th class="right">Einzelpreis</th>
+            <th class="kb-num">Einzelpreis</th>
             {#if !isKlein}
-              <th class="right">USt %</th>
+              <th class="kb-num">USt %</th>
               <th>USt-Art</th>
             {/if}
-            <th class="right">Netto</th>
+            <th class="kb-num">Netto</th>
           </tr>
         </thead>
         <tbody>
@@ -729,32 +729,32 @@
             <tr>
               <td data-label="Pos.">{it.position}</td>
               <td class="cards-full desc" data-label="Beschreibung">{it.description}</td>
-              <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
+              <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity)}</td>
               <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
-              <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
+              <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
               {#if !isKlein}
-                <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
+                <td class="kb-num" data-label="USt %">{percent(it.taxRatePercent)}</td>
                 <td data-label="USt-Art">{it.taxCategoryCode}</td>
               {/if}
-              <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
+              <td class="kb-num" data-label="Netto">{euro(it.netAmountCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
-          <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Netto</td>
-              <td class="right" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
+          <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Netto</td>
+              <td class="kb-num" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
           {#if inv.taxAmountCents !== 0}
-            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">USt</td>
-                <td class="right" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">USt</td>
+                <td class="kb-num" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
           {/if}
-          <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="right sum-label">
+          <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="sum-label">
                 <strong>Brutto</strong></td>
-              <td class="right" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
+              <td class="kb-num" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
           {#if inv.paidAmountCents > 0 || payments.length > 0}
-            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Bezahlt</td>
-                <td class="right" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
-            <tr><td colspan={isKlein ? 5 : 7} class="right sum-label">Offen</td>
-                <td class="right" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Bezahlt</td>
+                <td class="kb-num" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Offen</td>
+                <td class="kb-num" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
           {/if}
         </tfoot>
       </table>
@@ -830,7 +830,7 @@
             <tr>
               <th>Zahldatum</th>
               <th>Buchung</th>
-              <th class="right">Betrag</th>
+              <th class="kb-num">Betrag</th>
               <th>Konto</th>
               <th>Notiz bzw. Grund</th>
               <th><span class="kb-visually-hidden">Aktion</span></th>
@@ -857,7 +857,7 @@
                     {/if}
                   {/if}
                 </td>
-                <td class="right kb-nowrap" data-label="Betrag">
+                <td class="kb-num kb-nowrap kb-card-figure" data-label="Betrag">
                   {#if line.reversedBy}<s>{euro(p.amountCents)}</s>{:else}{euro(p.amountCents)}{/if}
                 </td>
                 <td data-label="Konto">{accountText(paymentAccountId(p, inv), accounts)}</td>
@@ -903,8 +903,8 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-              <td data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
+              <td class="kb-card-head" data-label="Zeitpunkt">{dateTimeShort(e.createdAt)}</td>
+              <td class="kb-card-status" data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
               <td class="cards-full" data-label="Antwort des Anbieters">
@@ -1031,11 +1031,12 @@
   dt { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   /* Beträge und Mengen in der Tabelle nicht umbrechen; die Beschreibung bricht. */
-  .items-table td.right { white-space: nowrap; }
+  .items-table td.kb-num { white-space: nowrap; }
   .items-table:not(.cards) td.desc { overflow-wrap: break-word; hyphens: auto; }
   .klein-note { color: var(--status-info-fg); font-size: var(--fs-sm); }
   .issues { padding-left: 1.25rem; margin: 0 0 var(--sp-2); }

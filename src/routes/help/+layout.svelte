@@ -81,7 +81,8 @@
 
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
-  import { listByCategory, getEntry } from "#lib/handbook/index.ts";
+  // ADR 0042 Nr. 16: Kapitelbaum aus den Kopfdaten; die Texte lädt die Seite selbst.
+  import { listMetaByCategory, getMeta } from "#lib/handbook/meta.ts";
   // `HandbookCategory` ist über das `<script module>` oben bereits im Scope —
   // Svelte 5 teilt Identifier zwischen Modul- und Instanz-Skript. Erneuter
   // Import würde svelte-check mit „Duplicate identifier" abbrechen.
@@ -92,7 +93,7 @@
     type HandbookHit,
   } from "#lib/handbook/search.ts";
 
-  const groups = listByCategory();
+  const groups = listMetaByCategory();
   let { children } = $props();
 
   // TOC ist Page-spezifisch (Slug-Loader). Defensive Lesart, damit das
@@ -109,7 +110,7 @@
   function activeCategory(pathname: string): HandbookCategory | null {
     const m = pathname.match(/^\/help\/([^/?#]+)/);
     if (!m) return null;
-    const entry = getEntry(m[1]);
+    const entry = getMeta(m[1]);
     return entry ? entry.category : null;
   }
 

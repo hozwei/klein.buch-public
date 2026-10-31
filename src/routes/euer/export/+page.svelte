@@ -340,12 +340,12 @@
   <!-- Export-Aktionen -->
   <section class="card export" aria-labelledby="exp-h">
     <h2 id="exp-h">Exportieren</h2>
-    <p class="info-banner dl-note">
+    <Banner kind="info">
       Jede Datei wird beim Klick neu erzeugt und kann <strong>einmal</strong> abgerufen
       werden. Bricht der Download ab, klickst du einfach noch einmal. Exportieren ist
       geschützt: Beim ersten Export fragt Klein.Buch dein Daten-Passwort und den App-Code
       ab; danach gilt die Bestätigung 5 Minuten lang.
-    </p>
+    </Banner>
     <div class="exp-row">
       <span class="exp-label" id="exp-pdf-l">Vollständige EÜR (PDF)</span>
       <Button variant="secondary" onclick={exportPdf} ariaDisabled={busyPdf} ariaDescribedby="exp-pdf-l">
@@ -492,14 +492,14 @@
     {/if}
     <table class="cards">
       <caption class="kb-visually-hidden">Anlage EÜR {selectedYear}: Zeilen und Beträge</caption>
-      <thead><tr><th class="z">Zeile</th><th class="z">Kz</th><th>Position</th><th class="num">Betrag</th></tr></thead>
+      <thead><tr><th class="z">Zeile</th><th class="z">Kz</th><th>Position</th><th class="kb-num">Betrag</th></tr></thead>
       <tbody>
         {#each entryLines as l (l.zeile + l.bezeichnung)}
           <tr>
             <td class="z" data-label="Zeile">{l.zeile}</td>
             <td class="z" data-label="Kz">{l.kennzahl ?? "—"}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
-            <td class="num" data-label="Betrag">{euro(l.amountCents)}</td>
+            <td class="kb-num" data-label="Betrag">{euro(l.amountCents)}</td>
           </tr>
         {/each}
       </tbody>
@@ -509,7 +509,7 @@
             <td class="z" data-label="Zeile">{l.zeile}</td>
             <td class="z" data-label="Kz">{l.kennzahl ?? "—"}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
-            <td class="num" data-label="Summe">{euro(l.amountCents)}</td>
+            <td class="kb-num" data-label="Summe">{euro(l.amountCents)}</td>
           </tr>
         {/each}
       </tfoot>
@@ -531,8 +531,8 @@
         <thead>
           <tr>
             <th class="z">AV-Nr.</th><th>Bezeichnung</th><th>Anschaffung</th>
-            <th class="num">AK/HK</th><th>Methode</th>
-            <th class="num">AfA {selectedYear}</th><th class="num">Restwert Ende</th>
+            <th class="kb-num">AK/HK</th><th>Methode</th>
+            <th class="kb-num">AfA {selectedYear}</th><th class="kb-num">Restwert Ende</th>
           </tr>
         </thead>
         <tbody>
@@ -541,10 +541,10 @@
               <td class="z" data-label="AV-Nr."><DocNo value={a.assetNumber} /></td>
               <td class="wrap" data-label="Bezeichnung">{a.label}{#if a.disposedInYear}{" "}<Badge kind="tag">Abgang {date(a.disposalDate)}</Badge>{/if}</td>
               <td data-label="Anschaffung">{date(a.acquisitionDate)}</td>
-              <td class="num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
+              <td class="kb-num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
               <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted">{" "}· {percent(a.businessSharePercent)} betrieblich</span>{/if}</td>
-              <td class="num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
-              <td class="num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
+              <td class="kb-num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
+              <td class="kb-num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -561,7 +561,7 @@
     {:else}
       <table class="cards">
         <caption class="kb-visually-hidden">Zahlungseingänge {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
+        <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="kb-num">Betrag</th></tr></thead>
         <tbody>
           <!-- ADR 0042 Nr. 9: Zahlung und Gegenbuchung stehen beide da (gleiches Datum,
                gleiche Nummer, auch gleicher Betrag nach Neubuchung) — Schlüssel ist die Position. -->
@@ -573,7 +573,7 @@
               <td class="cards-full wrap" data-label="Beschreibung">
                 {#if i.isReversal}<Badge kind="tag">Gegenbuchung</Badge>{" "}{:else if i.reversed}<Badge strike>Storniert</Badge>{" "}{/if}{i.description}
               </td>
-              <td class="num" data-label="Betrag">{euro(i.amountCents)}</td>
+              <td class="kb-num" data-label="Betrag">{euro(i.amountCents)}</td>
             </tr>
           {/each}
           {#each pkg.storno as s (s.stornoNumber)}
@@ -582,14 +582,14 @@
               <td data-label="Rechnungsnr."><DocNo value={s.stornoNumber} /></td>
               <td data-label="Kunde">Storno zu <DocNo value={s.originalNumber} /></td>
               <td class="no-card" data-label="Beschreibung">—</td>
-              <td class="num" data-label="Betrag">−{euro(s.refundedCents)}</td>
+              <td class="kb-num" data-label="Betrag">−{euro(s.refundedCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum kb-sum">
             <td colspan="4" class="sum-label">Summe Zahlungseingänge</td>
-            <td class="num" data-label="Summe Zahlungseingänge">{euro(incomeSum)}</td>
+            <td class="kb-num" data-label="Summe Zahlungseingänge">{euro(incomeSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -604,7 +604,7 @@
     {:else}
       <table class="cards">
         <caption class="kb-visually-hidden">Bezahlte Kosten {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Lieferant</th><th>Kategorie</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
+        <thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Lieferant</th><th>Kategorie</th><th>Beschreibung</th><th class="kb-num">Betrag</th></tr></thead>
         <tbody>
           {#each pkg.expenses as e (e.expenseNumber)}
             <tr>
@@ -613,14 +613,14 @@
               <td class="wrap" data-label="Lieferant">{e.vendor}</td>
               <td data-label="Kategorie">{expenseCategoryLabel(e.category)}</td>
               <td class="cards-full wrap" data-label="Beschreibung">{e.description}</td>
-              <td class="num" data-label="Betrag">{euro(e.grossCents)}</td>
+              <td class="kb-num" data-label="Betrag">{euro(e.grossCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum kb-sum">
             <td colspan="5" class="sum-label">Summe Betriebsausgaben (Kosten)</td>
-            <td class="num" data-label="Summe Betriebsausgaben">{euro(expenseSum)}</td>
+            <td class="kb-num" data-label="Summe Betriebsausgaben">{euro(expenseSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -633,16 +633,16 @@
       <h2 id="disp-h">Anlagen-Veräußerungen</h2>
       <table class="cards">
         <caption class="kb-visually-hidden">Anlagen-Veräußerungen {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>AV-Nr.</th><th>Bezeichnung</th><th class="num">Erlös</th><th class="num">Restwert</th><th class="num">Gewinn/Verlust</th></tr></thead>
+        <thead><tr><th>Datum</th><th>AV-Nr.</th><th>Bezeichnung</th><th class="kb-num">Erlös</th><th class="kb-num">Restwert</th><th class="kb-num">Gewinn/Verlust</th></tr></thead>
         <tbody>
           {#each pkg.disposals as d (d.assetNumber)}
             <tr>
               <td data-label="Datum">{date(d.disposalDate)}</td>
               <td class="z" data-label="AV-Nr."><DocNo value={d.assetNumber} /></td>
               <td class="wrap" data-label="Bezeichnung">{d.label}</td>
-              <td class="num" data-label="Erlös">{euro(d.proceedsCents)}</td>
-              <td class="num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
-              <td class="num" data-label="Gewinn/Verlust">{euro(d.gainLossCents)}</td>
+              <td class="kb-num" data-label="Erlös">{euro(d.proceedsCents)}</td>
+              <td class="kb-num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
+              <td class="kb-num" data-label="Gewinn/Verlust">{euro(d.gainLossCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -662,7 +662,7 @@
   @media screen and (max-width: 820px) { .tbl-scroll { overflow: visible; } }
   .year { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); align-self: center; }
   .year-select { width: auto; }
-  /* .card / .card h2 / .lead / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .card h2 / .lead / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   table { width: 100%; border-collapse: collapse; }
   td { vertical-align: top; }
   .z { width: 5.5rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -671,12 +671,12 @@
     /* Karten: Summentext steht im data-label der Betragszelle; leere Platzhalter weg. */
     tr.sum td.sum-label, td.no-card { display: none; }
   }
-  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16), hier ohne Umbruch. */
+  .kb-num { white-space: nowrap; }
   td.wrap { overflow-wrap: anywhere; }
   tr.reduce td { color: var(--status-danger-fg); }
   /* Doppelte Linie über der Summe: global tr.kb-sum (tokens.css, U4 V3-13). */
   tfoot tr.sum td { border-bottom: none !important; font-weight: 600; color: var(--text); }
-  .dl-note { margin: 0 0 var(--sp-4); }
   .export .exp-row { display: flex; gap: var(--sp-3); align-items: flex-end; flex-wrap: wrap; margin-bottom: var(--sp-3); }
   .export .exp-label { flex: 1; min-width: min(18rem, 100%); font-weight: 600; align-self: center; }
   /* ADR 0042 Nr. 15: Dateiname des Stapels vor dem Download. */

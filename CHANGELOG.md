@@ -53,6 +53,10 @@ offenen Punkte aus Lauf 2026.11.
   Anschaffungen zeigt Klein.Buch nach einem Wechsel des Steuerstatus je Anlage den
   Berichtigungszeitraum, den Anteil je Jahr und die Vereinfachungen nach § 44 UStDV — als
   Übersicht für die Erklärung, ohne Buchung.
+- **Oberfläche:** Kartenansichten der Listen heben Nummer, Betrag und Status hervor; verbliebene
+  Hinweisflächen, Zahl- und Linkklassen nutzen die gemeinsamen Bausteine; die Versand-Historie
+  zeigt Uhrzeiten ohne Sekunden. Das Handbuch lädt erst unter „Hilfe“ (Start-JavaScript etwa
+  ein Drittel; ADR 0042 Nr. 31–33).
 - **Sicherheit:** Die ZIP-Bibliothek ist von 2.4 auf 9.1 gehoben (CVE-2026-115905, kritisch, und
   CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
   Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`

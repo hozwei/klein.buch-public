@@ -369,8 +369,8 @@
       </div>
       <p class="kb-muted crossref">
         Bankverbindung und weitere Zahlwege pflegst du unter
-        <a href="/settings/payment-accounts">Einstellungen → Konten</a>. Logo, Unterschrift
-        und PDF-Vorlage unter <a href="/settings/pdf-templates">Einstellungen → Rechnungs-Layout</a>.
+        <a class="kb-link" href="/settings/payment-accounts">Einstellungen → Konten</a>. Logo, Unterschrift
+        und PDF-Vorlage unter <a class="kb-link" href="/settings/pdf-templates">Einstellungen → Rechnungs-Layout</a>.
       </p>
     </fieldset>
 
@@ -384,7 +384,7 @@
 {/if}
 
 <style>
-  /* .lead / .caveat / .kb-dialog* — globale Definitionen aus tokens.css. */
+  /* .lead / .kb-dialog* — globale Definitionen aus tokens.css. */
   form { max-width: 64rem; }
   fieldset {
     border: 1px solid var(--line);
@@ -417,6 +417,5 @@
     color: var(--text-muted);
   }
   .crossref { margin: 0.4rem 0 0; font-size: var(--fs-sm); }
-  .crossref a { text-decoration: underline; }
   .p19 { max-width: 48rem; margin: 1rem 0 0; font-size: var(--fs-sm); }
 </style>

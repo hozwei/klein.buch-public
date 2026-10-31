@@ -104,6 +104,10 @@ pub fn test_server_with_paths(
     // riskant (glibc-Umgebung ohne Sperre für nativen Code).
     static MOCK_ENV: std::sync::Once = std::sync::Once::new();
     MOCK_ENV.call_once(|| std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1"));
+    // ADR 0042 Nr. 16 (V6-R01): Die Integrationstests binden die Bibliothek
+    // ohne `cfg(test)`; das Pool-Zeitlimit wie in den Unit-Tests anheben (unter
+    // Last leitet jede neue SQLCipher-Verbindung den Schlüssel neu ab).
+    klein_buch_lib::db::set_acquire_timeout_for_tests(std::time::Duration::from_secs(120));
     let dir = tempfile::tempdir().unwrap();
     let mut paths = prepare_dirs(dir.path());
     adjust_paths(&mut paths);

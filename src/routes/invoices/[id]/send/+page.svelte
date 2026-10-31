@@ -159,7 +159,7 @@
   <section class="card summary">
     <div>
       {#if isStorno}Storno-Beleg{/if}
-      <strong><DocNo value={inv.invoiceNumber} /></strong> · {date(inv.invoiceDate)} · <span class="num">{euro(inv.grossAmountCents)}</span>
+      <strong><DocNo value={inv.invoiceNumber} /></strong> · {date(inv.invoiceDate)} · <span class="kb-num">{euro(inv.grossAmountCents)}</span>
     </div>
     {#if isStorno}
       <div>
@@ -259,7 +259,6 @@
     background: var(--status-warning-bg); border-left: 3px solid var(--status-warning-line);
     padding: 4px 8px; border-radius: var(--r-sm); overflow-wrap: anywhere;
   }
-  .num { font-variant-numeric: tabular-nums; }
   /* Pre-DS-Style-Block entfernt (G2-UX.3.x Konsistenz-Fix): tokens.css greift. */
   code { background: var(--surface-sunken); padding: 0.05rem 0.3rem; border-radius: 3px; overflow-wrap: anywhere; }
   .muted { color: var(--text-muted); }

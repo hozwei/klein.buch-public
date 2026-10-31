@@ -22,6 +22,7 @@
 
   import { onMount } from "svelte";
   import { page } from "$app/state";
+  import Banner from "#lib/Banner.svelte";
   import type { HandbookEntry } from "#lib/handbook/index.ts";
   import { HANDBOOK_CATEGORY_LABELS } from "#lib/handbook/categories.ts";
   import type { TocEntry } from "#lib/handbook/render.ts";
@@ -94,9 +95,9 @@
 </header>
 
 {#if data.entry.category === "recht-und-steuern"}
-  <aside class="legal-banner" role="note" aria-label="Steuer-Disclaimer">
-    {LEGAL_DISCLAIMER}
-  </aside>
+  <!-- V3-18 (ADR 0042 Nr. 16): Disclaimer über den Baustein Banner; stehender Hinweis ohne
+       Live-Region, benannt wie zuvor das <aside role="note"> (V6-R04). -->
+  <Banner kind="warning" live="off" label="Steuer-Disclaimer">{LEGAL_DISCLAIMER}</Banner>
 {/if}
 
 <div class="prose" bind:this={proseEl}>
@@ -122,21 +123,6 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
-  }
-
-  /* Disclaimer-Banner für „Recht und Steuern"-Kapitel.
-     Erscheint zwischen Header und Prose, damit niemand das Kapitel liest,
-     ohne den Hinweis gesehen zu haben. */
-  .legal-banner {
-    background: var(--status-warning-bg);
-    border: 1px solid var(--status-warning-line);
-    color: var(--status-warning-fg);
-    border-radius: var(--r-md);
-    padding: 0.65rem 0.9rem;
-    margin: 0 0 1.25rem;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    line-height: 1.4;
   }
 
   /* Prose-Styles für gerenderten Markdown-Content. Bewusst :global, weil
@@ -324,11 +310,6 @@
 
   /* --- Druck (G2-DOC.3.4) ------------------------------------------- */
   @media print {
-    .legal-banner {
-      background: transparent;
-      border: 1px solid #000;
-      color: #000;
-    }
     .prose :global(details.faq) {
       border: none;
       background: transparent;

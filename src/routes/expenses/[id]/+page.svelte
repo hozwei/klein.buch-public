@@ -277,11 +277,11 @@
   </p>
 
   {#if e.status === "canceled"}
-    <p class="caveat">
+    <Banner kind="warning">
       Diese Kosten wurden storniert{e.canceledReason ? ` — Grund: ${e.canceledReason}` : ""}.
       Stornierte Kosten zählen nicht für die Steuer. Mit „Korrigiert neu erfassen“ legst du
       neue Kosten mit diesen Werten an.
-    </p>
+    </Banner>
   {/if}
 
   <section class="card">
@@ -445,7 +445,7 @@
 
 <style>
   .sub { margin: 0 0 1rem; }
-  /* .card / .card.danger / .caveat / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .card.danger / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   dl { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2) var(--sp-5); margin: 0; }
   dl div { display: flex; flex-direction: column; min-width: 0; }
   dt { font-size: var(--fs-xs); color: var(--text-muted); }

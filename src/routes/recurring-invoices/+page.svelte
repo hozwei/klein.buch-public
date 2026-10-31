@@ -435,7 +435,7 @@
         {@const mode = modeBadge(s)}
         {@const act = rowActions(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
-          <td class="cards-full" data-label="Abo-Vorlage">
+          <td class="kb-card-head" data-label="Abo-Vorlage">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {contactInfo[s.contactId]?.name ?? "—"}

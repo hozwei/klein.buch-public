@@ -552,14 +552,14 @@
           <tr>
             <th scope="col">#</th>
             <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
-            <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Menge <span class="req" aria-hidden="true">*</span></th>
             <th scope="col">Einheit</th>
-            <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
             {#if !isKlein}
-              <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="kb-num">USt-Satz <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">USt-Art</th>
             {/if}
-            <th scope="col" class="right">Netto</th>
+            <th scope="col" class="kb-num">Netto</th>
             <th scope="col"><span class="kb-visually-hidden">Aktionen</span></th>
           </tr>
         </thead>
@@ -592,7 +592,7 @@
                   {/if}
                 </td>
                 {#if linked}
-                  <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
+                  <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
                   {#if unitErr}
                     <td class="c-unit" data-label="Einheit">
                       <select
@@ -610,7 +610,7 @@
                   {:else}
                     <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
                   {/if}
-                  <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
+                  <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                 {:else}
                   <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
@@ -643,7 +643,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if linked || items.length > 1}
                   <td class="c-actions">
                     <div class="kb-actions">
@@ -717,7 +717,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if items.length > 1}
                   <td class="c-actions">
                     <button type="button" class="btn-danger" onclick={() => removeItem(i)} aria-label={`Position ${n} entfernen`}>×</button>
@@ -731,20 +731,20 @@
         </tbody>
         <tfoot>
           <tr>
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Netto</strong></td>
-            <td class="right" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Netto</strong></td>
+            <td class="kb-num" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
             <td class="c-actions"></td>
           </tr>
           {#if !isKlein}
             <tr>
-              <td colspan="7" class="right sum-label">USt</td>
-              <td class="right" data-label="USt">{euro(totals.tax)}</td>
+              <td colspan="7" class="sum-label">USt</td>
+              <td class="kb-num" data-label="USt">{euro(totals.tax)}</td>
               <td class="c-actions"></td>
             </tr>
           {/if}
           <tr class="kb-sum">
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
-            <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Brutto</strong></td>
+            <td class="kb-num" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
             <td class="c-actions"></td>
           </tr>
         </tfoot>
@@ -786,9 +786,10 @@
   }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   td.c-qty { width: 7.5rem; }
   /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
   td.c-unit { width: 9rem; }

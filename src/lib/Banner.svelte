@@ -17,8 +17,12 @@
   // `linkLabel` setzen einen unterstrichenen Link ans Ende (Ziel ≥ `--target`).
   // Links im Text erben die Statusfarbe (≥ 4,5:1 auf der Fläche) und sind
   // unterstrichen; Knöpfe im Banner (`actions`) stehen am Ende in `.kb-actions`.
-  // Seiteneigene Flächen (`.info`, `.edit-hint`, `.due-banner`) und die alten
-  // Klassen `.info-banner`/`.caveat`/`.danger-banner` ersetzen die Seiten hierdurch.
+  // V3-18 (ADR 0042 Nr. 16): Die seiteneigenen Flächen (`.info`, `.edit-hint`, `.due-banner`)
+  // und die Altklassen `.info-banner`/`.caveat`/`.danger-banner` sind hierdurch ersetzt und
+  // entfernt. Im Formular-Raster `flush` (ohne Außenabstand) in einer Zelle über alle Spalten.
+  // V6-R04 (ADR 0042 Nr. 16): `live` weicht von der Rolle der Art ab, wo die Ansage es verlangt —
+  // „assertive“ (role=alert) für einen Warnzustand, der sofort ankommen muss, „off“
+  // (role=note, mit `label`) für stehende Hinweise ohne Live-Region (Disclaimer).
   import type { Snippet } from "svelte";
 
   let {
@@ -27,6 +31,9 @@
     href,
     linkLabel,
     id,
+    flush = false,
+    live,
+    label,
     children,
     actions,
   }: {
@@ -38,13 +45,24 @@
     linkLabel?: string;
     /** Für `aria-describedby` von Feldern oder Knöpfen. */
     id?: string;
+    /** Ohne Außenabstand — im Formular-Raster, dessen Lücke den Abstand trägt (V3-18). */
+    flush?: boolean;
+    /** Ansage: Standard nach Art (error → assertive, sonst polite); „off“ = keine Live-Region. */
+    live?: "assertive" | "polite" | "off";
+    /** Zugänglicher Name, z. B. für `live="off"` (role=note). */
+    label?: string;
     children?: Snippet;
     /** Knöpfe am Ende (z. B. „Erneut laden“). */
     actions?: Snippet;
   } = $props();
+
+  const role = $derived.by(() => {
+    const mode = live ?? (kind === "error" ? "assertive" : "polite");
+    return mode === "assertive" ? "alert" : mode === "polite" ? "status" : "note";
+  });
 </script>
 
-<div class="banner {kind}" role={kind === "error" ? "alert" : "status"} {id}>
+<div class="banner {kind}" class:flush {role} aria-label={label} {id}>
   {#if title}<strong class="banner-title">{title}</strong>{" "}{/if}{@render children?.()}
   {#if href && linkLabel}{" "}<a class="banner-link kb-link" {href}>{linkLabel}</a>{/if}
   {#if actions}<div class="kb-actions kb-start banner-actions">{@render actions()}</div>{/if}
@@ -66,6 +84,9 @@
   .banner :global(a:not([class*="btn"])) { color: inherit; text-decoration: underline; text-underline-offset: 0.15em; }
   .banner-link { font-weight: 600; display: inline-flex; align-items: center; min-height: var(--target); }
   .banner-actions { margin-top: var(--sp-2); }
+  .banner.flush { margin: 0; }
+  /* Druck: Text schwarz (tokens.css), die Kante in Textfarbe statt der hellen Statuslinie. */
+  @media print { .banner { border-color: currentColor; } }
   .banner.error {
     background: var(--status-danger-bg);
     color: var(--status-danger-fg);
