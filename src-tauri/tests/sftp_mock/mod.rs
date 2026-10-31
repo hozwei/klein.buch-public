@@ -26,11 +26,18 @@ pub struct SftpMock {
     pub fingerprint: String,
     /// Anzahl angenommener TCP-Verbindungen (für „ohne Verbindungsaufbau“).
     pub connections: Arc<AtomicUsize>,
+    /// Anzahl der Passwort-Anmeldeversuche (ADR 0042 V3c: nach abgelehntem
+    /// Host-Key darf keine Anmeldung stattfinden).
+    pub auth_attempts: Arc<AtomicUsize>,
 }
 
 impl SftpMock {
     pub fn connection_count(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
+    }
+
+    pub fn auth_attempt_count(&self) -> usize {
+        self.auth_attempts.load(Ordering::SeqCst)
     }
 }
 
@@ -54,11 +61,13 @@ pub async fn start_on(addr: &str, root: PathBuf, user: &str, password: &str) -> 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let connections = Arc::new(AtomicUsize::new(0));
+    let auth_attempts = Arc::new(AtomicUsize::new(0));
     let mut server = MockServer {
         root: Arc::new(root.clone()),
         user: Arc::new(user.to_string()),
         password: Arc::new(password.to_string()),
         connections: connections.clone(),
+        auth_attempts: auth_attempts.clone(),
     };
     tokio::spawn(async move {
         let _ = server.run_on_socket(config, &listener).await;
@@ -68,6 +77,7 @@ pub async fn start_on(addr: &str, root: PathBuf, user: &str, password: &str) -> 
         root,
         fingerprint,
         connections,
+        auth_attempts,
     }
 }
 
@@ -77,6 +87,7 @@ struct MockServer {
     user: Arc<String>,
     password: Arc<String>,
     connections: Arc<AtomicUsize>,
+    auth_attempts: Arc<AtomicUsize>,
 }
 
 impl russh::server::Server for MockServer {
@@ -100,6 +111,7 @@ impl russh::server::Handler for MockSession {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.server.auth_attempts.fetch_add(1, Ordering::SeqCst);
         if user == self.server.user.as_str() && password == self.server.password.as_str() {
             Ok(Auth::Accept)
         } else {

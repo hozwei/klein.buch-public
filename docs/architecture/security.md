@@ -493,12 +493,20 @@ OneDrive/iCloud ist entfallen (W7).
 
 ### 3.4 SFTP
 
-`backup::sftp` benutzt `russh`/`russh-sftp`. Nur **Passwort-Auth** (kein
-SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker). **Host-Key-
+`backup::sftp` benutzt `russh` 0.65/`russh-sftp`. Nur **Passwort-Auth** (kein
+SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker); **kein
+SSH-Agent** (kein Agent-Client; einen vom Server geöffneten Agent-Kanal
+`auth-agent@openssh.com` lehnt der Client-Handler ausdrücklich ab; CVE-2026-116794 in
+russh 0.64 betrifft nur den Agent-Pfad, behoben mit 0.65, ADR 0042 V3c). Die
+RSA-Crate dient nur zum Prüfen von RSA-Host-Key-Signaturen (öffentlicher
+Schlüssel); der Marvin-Angriff (RUSTSEC-2023-0071) braucht Privatschlüssel-
+Operationen und ist nicht erreichbar. **Host-Key-
 Pinning** über SHA-256 (Trust-On-First-Use): der Verbindungstest (`probe`)
 liefert den Fingerprint (`SHA256:…`), der Nutzer bestätigt ihn, und er wird im
 Ziel gespeichert (`app_settings.backup_targets`, Feld `host_fingerprint`). Ein
-Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz).
+Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz); ein
+abweichender Host-Key bricht schon im Handshake ab, vor der Passwort-Anmeldung
+(Test `sftp_upload_rejects_foreign_host_key_before_auth`, ADR 0042 V3c).
 Verbindungsaufbau mit 20 s Timeout.
 
 Das Passwort liegt je Ziel-ID im **SecretStore** der verschlüsselten DB (§4,

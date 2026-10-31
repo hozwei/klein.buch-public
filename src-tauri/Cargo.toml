@@ -156,9 +156,12 @@ url = "2"
 # libdbus entfallen.
 
 # --- SFTP-Backup-Ziel (ADR 0034, Block G1-BKP.3) ---
-# russh = reine-Rust-SSH (RustCrypto), KEIN OpenSSL/libssh → konsistent mit dem
-# rustls-only-/no-system-deps-Stack (kein cmake/NASM-Zwang; aws-lc-rs/ring sind in
-# russh nur optional, der Default-Backend ist RustCrypto). russh-sftp setzt das
+# russh = SSH in Rust, KEIN OpenSSL/libssh, keine System-Bibliothek. Transport-
+# Krypto teils RustCrypto (siehe unten), das Krypto-Backend ist aber Pflicht:
+# russh kompiliert nur mit `aws-lc-rs` oder `ring` (compile_error! in russh/lib.rs).
+# Genutzt wird `aws-lc-rs` (Default-Feature von russh; C-Code über aws-lc-sys,
+# statisch gelinkt, Build braucht einen C-Compiler) — aws-lc-rs kommt laut
+# `cargo tree -i aws-lc-rs` allein über russh. russh-sftp setzt das
 # SFTP-Subsystem auf einen russh-Channel (`channel.into_stream()`).
 # ACHTUNG (im Decision Log + G1-BKP.3-Report dokumentiert): russh 0.60 zieht
 # RustCrypto-Transport-Krypto der neuen Linie (heute aes-gcm 0.11, signature 3,
@@ -169,7 +172,13 @@ url = "2"
 # Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
 # unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist
 # die Client-API gegen genau diese Version neu zu verifizieren.
-russh = "0.64"
+# 0.65 statt 0.64 (ADR 0042 V3c: CVE-2026-116794, Signatur über den SSH-Agent).
+# Klein.Buch nutzt keinen SSH-Agent (nur Passwort-Auth); die genutzte Client-API
+# ist unverändert, keine neuen transitiven Crates. Features ausdrücklich (= die
+# Default-Features von russh 0.65), damit ein späteres Update sie nicht unbemerkt
+# ändert: aws-lc-rs (Krypto-Backend, Pflicht), rsa (Prüfen von RSA-Host-Keys),
+# flate2 (zlib-Kompression).
+russh = { version = "0.65", default-features = false, features = ["aws-lc-rs", "rsa", "flate2"] }
 russh-sftp = "2.1"
 
 # --- Archive ---

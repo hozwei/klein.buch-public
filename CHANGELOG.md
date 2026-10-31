@@ -48,6 +48,9 @@ offenen Punkte aus Lauf 2026.11.
   CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
   Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`
   oder leere Bestandteile).
+  Die SSH-Bibliothek für SFTP-Ziele ist auf 0.65 gehoben (CVE-2026-116794; Klein.Buch nutzt keinen
+  SSH-Agent, Agent-Weiterleitung wird abgelehnt); ein Test prüft, dass ein fremder Host-Schlüssel
+  vor der Anmeldung abgewiesen wird.
 
 ### Hinweise für Betreiber (Update von 2026.11.0)
 

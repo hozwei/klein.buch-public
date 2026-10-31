@@ -20,8 +20,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use russh::client::{self, Handle};
+use russh::client::{self, ChannelOpenHandle, Handle, Msg, Session};
 use russh::keys::{PublicKey, PublicKeyOrCertificate};
+use russh::{Channel, ChannelOpenFailure};
 use russh_sftp::client::SftpSession;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
@@ -119,6 +120,21 @@ impl client::Handler for HostKeyVerifier {
             Some(p) => *p == fp,
             None => self.accept_unknown,
         })
+    }
+
+    /// ADR 0042 V3c: kein SSH-Agent. Die Default-Implementierung von russh nimmt
+    /// einen vom Server geöffneten `auth-agent@openssh.com`-Kanal an; hier wird
+    /// er ausdrücklich abgelehnt (es hängt ohnehin kein Agent dahinter).
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        _channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> std::result::Result<(), Self::Error> {
+        reply
+            .reject(ChannelOpenFailure::AdministrativelyProhibited)
+            .await;
+        Ok(())
     }
 }
 
