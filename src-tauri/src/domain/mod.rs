@@ -18,7 +18,9 @@ pub mod quote;
 pub mod recurring;
 pub mod recurring_invoice;
 pub mod storno;
+pub mod tax_status;
 pub mod travel;
+pub mod vat_adjustment;
 
 #[cfg(test)]
 mod tests {

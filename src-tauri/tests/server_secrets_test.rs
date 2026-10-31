@@ -83,7 +83,7 @@ fn zip_entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
             let mut f = zip.by_index(i).unwrap();
             let mut out = Vec::new();
             f.read_to_end(&mut out).unwrap();
-            (f.name().to_string(), out)
+            (f.name().unwrap().into_owned(), out)
         })
         .collect()
 }
@@ -630,6 +630,126 @@ async fn sftp_target_with_probed_fingerprint() {
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text());
     assert_eq!(secret(&srv, &format!("sftp:{id}")).await, None);
+}
+
+/// ADR 0042 V3c: Host-Key-Pinning mit echtem russh-Handshake. Ein abweichender
+/// Host-Key (Fingerprint eines zweiten, im Test erzeugten Ed25519-Schlüssels)
+/// bricht den Upload vor der Anmeldung ab: MITM-Meldung, kein Passwort-Versuch
+/// am Server, keine Datei. Gegenprobe mit dem richtigen Pin: genau eine
+/// Anmeldung, Datei liegt auf dem Server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sftp_upload_rejects_foreign_host_key_before_auth() {
+    use klein_buch_lib::backup::sftp;
+    use russh::keys::ssh_key::private::Ed25519Keypair;
+    use russh::keys::PrivateKey;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mock = sftp_mock::start(dir.path().join("sftp-server"), "kb", SFTP_SECRET).await;
+    let seed: [u8; 32] = rand::random();
+    let foreign = PrivateKey::from(Ed25519Keypair::from_seed(&seed))
+        .public_key()
+        .fingerprint(Default::default())
+        .to_string();
+    assert_ne!(foreign, mock.fingerprint);
+
+    let err = sftp::upload(
+        Some(SFTP_SECRET),
+        "127.0.0.1",
+        mock.port,
+        "kb",
+        "kb/backups",
+        Some(&foreign),
+        "falscher-pin.kbk",
+        b"klein-buch",
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("weicht vom hinterlegten Fingerprint ab"),
+        "{err}"
+    );
+    assert!(
+        err.contains(&foreign) && err.contains(&mock.fingerprint),
+        "{err}"
+    );
+    assert_eq!(mock.connection_count(), 1, "Handshake fand statt");
+    assert_eq!(
+        mock.auth_attempt_count(),
+        0,
+        "keine Anmeldung nach Ablehnung"
+    );
+    let files = walk(&mock.root);
+    assert!(files.is_empty(), "nichts geschrieben: {files:?}");
+
+    // Gegenprobe: richtiger Pin → eine Anmeldung, Datei angekommen.
+    let uri = sftp::upload(
+        Some(SFTP_SECRET),
+        "127.0.0.1",
+        mock.port,
+        "kb",
+        "kb/backups",
+        Some(&mock.fingerprint),
+        "richtiger-pin.kbk",
+        b"klein-buch",
+    )
+    .await
+    .unwrap();
+    assert!(uri.ends_with("/kb/backups/richtiger-pin.kbk"), "{uri}");
+    assert_eq!(mock.auth_attempt_count(), 1);
+    assert_eq!(
+        std::fs::read(mock.root.join("kb/backups/richtiger-pin.kbk")).unwrap(),
+        b"klein-buch"
+    );
+}
+
+/// SEC-2026.11.1-02 (ADR 0042 V3c, „kein SSH-Agent“): Öffnet der Server nach
+/// der Anmeldung einen Agent-Kanal (OpenSSH-Kanaltyp `auth-agent`), lehnt der Client ihn mit
+/// `AdministrativelyProhibited` ab (russh nähme ihn ohne die Überschreibung in
+/// `backup::sftp` an); der Upload gelingt trotzdem.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sftp_client_rejects_agent_channel_from_server() {
+    use klein_buch_lib::backup::sftp;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mock =
+        sftp_mock::start_with_agent_probe(dir.path().join("sftp-server"), "kb", SFTP_SECRET).await;
+    let uri = sftp::upload(
+        Some(SFTP_SECRET),
+        "127.0.0.1",
+        mock.port,
+        "kb",
+        "kb/backups",
+        Some(&mock.fingerprint),
+        "agent-probe.kbk",
+        b"klein-buch",
+    )
+    .await
+    .unwrap();
+    assert!(uri.ends_with("/kb/backups/agent-probe.kbk"), "{uri}");
+    assert_eq!(
+        std::fs::read(mock.root.join("kb/backups/agent-probe.kbk")).unwrap(),
+        b"klein-buch"
+    );
+    assert_eq!(
+        mock.agent_open_result().await.as_deref(),
+        Some("rejected:AdministrativelyProhibited"),
+        "Agent-Kanal muss abgelehnt werden"
+    );
+}
+
+/// Alle Dateien unter `root` (rekursiv, ohne Ordner).
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(root).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// ASVS V5.2.6/V12.6.1 (Lauf F5c): Gespeicherte SMTP-Ports unterliegen derselben

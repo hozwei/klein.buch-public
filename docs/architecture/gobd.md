@@ -55,16 +55,18 @@ im Trigger ergänzen.
 **Geschützt:** `locked_at` (kein Zurücksetzen, kein neuer Wert),
 `invoice_number`, `invoice_date`, `net_amount_cents`, `gross_amount_cents`,
 `tax_amount_cents`, `contact_id`, `fiscal_year`, `is_kleinunternehmer`,
-`direction`, `delivery_date`, `due_date`, `currency_code`, `pdf_template`,
+`direction`, `delivery_date`, `service_period_start`, `service_period_end`,
+`buyer_reference` (seit Migration 0035), `due_date`, `currency_code`, `pdf_template`,
 `is_storno_for`, `derived_from_quote_id`, `paid_to_account_id`, `payment_note`,
 `pdf_archive_id`, `xml_archive_id`, alle `buyer_*`- und `seller_*`-Snapshot-
 Spalten.
 
-**Änderbar** (Status-Übergänge): `status`, `paid_amount_cents`, `paid_at`,
-`payment_history_json` (Zahlung, auch im Folge-GJ; je Eintrag Betrag, Datum, Notiz,
-Erfassungszeit und seit Lauf F5b optional das Zahlungskonto `accountId` — deshalb
-bleibt `paid_to_account_id` gesperrt), `sent_at`, `canceled_at`,
-`canceled_by_storno_id`, `cancel_reason`, `updated_at`. Das Festschreiben selbst
+**Änderbar** (Status-Übergänge): `status`, `paid_amount_cents`, `paid_at`
+(seit Migration 0034 nur passend zum Zahlungsbuch, §2.9), `sent_at`,
+`canceled_at`, `canceled_by_storno_id`, `cancel_reason`, `updated_at`.
+`payment_history_json` ist seit 0034 Altbestand und unveränderlich
+(`trg_invoices_payment_history_frozen`); `paid_to_account_id` bleibt gesperrt,
+das Konto steht je Zahlung im Zahlungsbuch. Das Festschreiben selbst
 (Setzen von `locked_at`, Validierung, Archiv-IDs) feuert nicht, weil
 `OLD.locked_at` dabei noch `NULL` ist.
 
@@ -167,12 +169,108 @@ vertippt, bucht eine Gegenbewegung. Kein `DELETE`.
 ### 2.7 Append-only-Tabellen (no-update + no-delete)
 
 `audit_log`, `email_log`, `backup_log`, `fiscal_year_locks`,
-`package_revisions`; dazu `legal_documents` und `quote_legal_documents`
+`package_revisions`, `invoice_payments` (§2.9; Korrektur per Gegenbuchung);
+dazu `legal_documents` und `quote_legal_documents`
 (Kernfelder unveränderlich, kein `DELETE`; bei `legal_documents` bleibt das
 Aktivieren/Deaktivieren möglich). Korrigiert wird nur per Insert eines neueren
 Datensatzes (z. B. neue Paket-Revision). `archive_entries` ist seit Migration
 0032 ebenfalls ohne `DELETE` (`trg_archive_no_delete`, KB-0004; Hash, Pfad und
 Größe waren schon unveränderlich).
+
+### 2.8 Steuerstatus nach § 19 UStG (`tax_status_changes`, Migration 0033)
+
+Der Steuerstatus ist eine append-only Historie (ADR 0042 Nr. 1; § 146 Abs. 4 AO,
+GoBD Rz. 58 ff.): Wirkungsdatum, Status, Grund, Bindungsende, auslösender Beleg,
+Notiz. `trg_tax_status_changes_no_delete` verbietet `DELETE`,
+`trg_tax_status_changes_revoke_only` erlaubt `UPDATE` nur einmal und nur als
+Widerruf (`revoked_at` + `revoke_reason`, Grund Pflicht); alle übrigen Spalten
+bleiben danach unveränderlich. Der widerrufene Eintrag bleibt sichtbar (Verlauf
+in „Meine Firmendaten“, durchgestrichen mit Datum und Grund). Höchstens ein
+gültiger Eintrag je Wirkungsdatum (`uq_tax_status_changes_active`).
+
+- **Festgeschriebene Belege bleiben unberührt.** Der Status einer Rechnung bzw.
+  eines Angebots wird beim Festschreiben wie bisher eingefroren
+  (`invoices.is_kleinunternehmer`, `quotes.is_kleinunternehmer`; Trigger 2.1
+  und 2.2 unverändert). Ein späterer Eintrag oder Widerruf ändert sie nicht;
+  Belege, deren eingefrorener Status nicht mehr passt, meldet Klein.Buch als
+  Hinweis (Berichtigung nach § 31 Abs. 5 UStDV bzw. Storno und Neuausstellung,
+  ADR 0042 Nr. 4).
+- **Abgeschlossene Jahre.** Ein Eintrag oder Widerruf, der den Status in einem
+  abgeschlossenen Geschäftsjahr ändern würde, wird abgelehnt
+  (`domain::tax_status::validate_change`/`validate_revoke`): Der
+  Jahres-Snapshot hängt über die Vorsteuer aktivierter Kosten vom Status ab
+  (6.1). Eintrag und Widerruf laufen mit einer Booking-Permit (6.2), damit kein
+  Abschluss dazwischenkommt.
+- **Audit.** Eintrag (`tax_status.changed`), Widerruf (`tax_status.revoked`) und
+  Übernahme des Bestands (`tax_status.migrated`) stehen im Audit-Log, in derselben
+  Transaktion wie der Eintrag; Re-Auth vorher (Registry).
+- **Kein Überschneiden, kein Umschreiben.** Neue Einträge wirken nach dem
+  jüngsten; widerrufen lässt sich nur der jüngste gültige Eintrag. Eine
+  Korrektur älterer Einträge geht nur über Widerruf der jüngeren und neue
+  Einträge — jeder Schritt bleibt nachvollziehbar.
+
+### 2.9 Zahlungsbuch (`invoice_payments`, Migration 0034)
+
+Zahlungen auf Ausgangsrechnungen stehen in der append-only Tabelle
+`invoice_payments` (ADR 0042 Nr. 7–9; § 146 Abs. 4 AO, § 239 Abs. 3 HGB,
+GoBD Rz. 58–60, 64): je Buchung eine Zeile mit laufender Nummer je Rechnung,
+Art (`payment` > 0 oder `reversal` < 0), Betrag, Zahldatum, Konto, Notiz,
+Erfassungszeit; eine Gegenbuchung zusätzlich mit Verweis auf die stornierte
+Zahlung und Grund (10–500 Zeichen).
+
+- **Append-only:** `trg_invoice_payments_no_update`/`_no_delete`.
+- **`trg_invoice_payments_insert_checks`** (Prüfungen in fester Reihenfolge):
+  nur auf festgeschriebene, nicht verworfene, nicht stornierte
+  Ausgangsrechnungen ohne festgeschriebenen Storno und nicht auf Storno-Belege;
+  nicht im abgeschlossenen Geschäftsjahr des Zahldatums (zweite Linie hinter
+  `fiscal_year::guard`, 6.2); Gegenbuchung nur auf eine noch nicht stornierte
+  Zahlung derselben Rechnung mit genau umgekehrtem Betrag, gleichem Datum und
+  Konto und ohne offenen Storno-Entwurf; laufende Nummer lückenlos; Summe
+  zwischen 0 und dem Bruttobetrag. `ux_invoice_payments_one_reversal`: höchstens
+  eine Gegenbuchung je Zahlung.
+- **Cache gebunden:** `trg_invoices_payment_cache_bound` lässt
+  `paid_amount_cents` nur als Summe des Buchs, `paid_at` nur als jüngstes
+  Zahldatum der nicht stornierten Zahlungen ändern; ändert sich Summe oder
+  Status, muss der Status zum Buch passen (`draft` nur unfestgeschrieben ohne
+  Zahlung, `issued`/`sent` ohne Zahlung, `partially_paid` darunter, `paid`
+  voll; `canceled` frei, aus `canceled` heraus wacht
+  `trg_invoices_canceled_final`). Die Migration setzt `paid_at` des Bestands
+  einmal auf das jüngste Zahldatum (vorher: Datum der zuletzt erfassten
+  Zahlung, teils mit Uhrzeit; altes und neues Datum im Audit
+  `invoice.payments_migrated`). Die EÜR liest die Storno-Erstattung aus der
+  Summe des Buchs, nicht aus dem Cache. `trg_invoices_payment_cache_insert`: eine neue
+  Rechnung beginnt ohne Zahlung. `trg_invoices_payment_history_frozen`: die
+  JSON-Historie des Altbestands bleibt unverändert.
+- **Zahlung stornieren** (`invoices_reverse_payment`, Re-Auth): Gegenbuchung am
+  ursprünglichen Zahldatum (eine nie geflossene Zahlung war kein Zufluss nach
+  § 11 EStG), nur im offenen Geschäftsjahr dieses Datums — sonst Ablehnung mit
+  Hinweis auf § 153 AO —, Belegsperre `locks::INVOICES` und Booking-Permit wie
+  beim Erfassen und beim Storno, Buchzeile, Cache und Audit
+  (`invoice.payment_reversed`; beim Erfassen `invoice.payment_recorded`) in
+  einer Transaktion. Echte Rückzahlungen bleiben Storno mit Erstattung (§5).
+- **Oberfläche** (`routes/invoices/[id]/+page.svelte`, `paymentHistory.ts`):
+  Die Karte „Zahlungen“ zeigt jede Buchung aus `InvoiceDetail.payments`, auch
+  nach einer vollen Gegenbuchung (bezahlt 0 €). Eine stornierte Zahlung bleibt
+  stehen und trägt das Badge „Storniert“ mit dem Zeitpunkt der Gegenbuchung;
+  die Gegenbuchung ist als „Gegenbuchung“ mit „Storno der Zahlung vom …“ und
+  Grund benannt (Text, nicht nur Farbe). Je nicht stornierter Zahlung steht
+  „Zahlung stornieren …“ im Menü „Mehr“ der Zeile; ist es nicht möglich, bleibt
+  der Eintrag gesperrt und nennt `notReversibleReason`. Der Gefahr-Dialog
+  (`alertdialog`, Startfokus „Abbrechen“) nennt Betrag, Zahldatum und Konto,
+  die Wirkung am ursprünglichen Zahldatum und die Abgrenzung zur Rückzahlung;
+  der Grund ist Pflicht (Fehler am Feld), Ablehnungen des Servers stehen als
+  Banner im Dialog. Nach Erfolg bietet der Toast „Zahlung neu erfassen“ an
+  (`/invoices/[id]/payment?ersetzt=<id>`, Datum/Konto/Notiz als Vorschlag).
+  Es gibt keinen Weg, eine Buchung zu ändern oder zu löschen. Die Storno-Seite
+  rechnet das früheste Storno-Datum ohne stornierte Paare (wie der Server), die
+  EÜR-Einzelaufstellung kennzeichnet Gegenbuchung und stornierte Zahlung.
+- **Übernahme:** Migration 0034 übernimmt die JSON-Historie und den Altbestand
+  ohne Historie mit festen IDs im UUIDv7-Format
+  (`00000000-0000-7034-8000-…`, deterministisch wie 0033) und bricht bei
+  nicht lesbarer Historie, Summenabweichung, fehlendem Zahldatum oder
+  unbekanntem Konto mit benannter Meldung ab (ADR 0039 Nr. 124); dieselbe
+  Prüfung läuft vor dem Pflicht-Backup (`db::payment_ledger_problem`) und in
+  der Restore-Prüfung.
 
 ---
 
@@ -278,7 +376,7 @@ Mutationen schreiben einen Eintrag (Auswahl, Namen wie im Code):
 
 - Rechnungen: `invoice.draft_create`, `invoice.lock`, `invoice.sent`,
   `invoice.payment_recorded`, `invoice.cancel`, `storno.create`.
-- Angebote: `quote.draft_create`, `quote.issue`, `quote.sent`,
+- Angebote: `quote.draft_create`, `quote.draft_updated`, `quote.issue`, `quote.sent`,
   `quote.accepted`, `quote.rejected`, `quote.converted`, `quote.cancel`,
   `quote.pdf_generated`.
 - Kosten und Privatbewegungen: `expense.create`, `expense.import_einvoice`,
@@ -399,6 +497,28 @@ Transaktion das Audit `invoice.draft_updated` (Nummer, Brutto vorher und
 nachher, Positionen, Empfängerwechsel). Beim Festschreiben friert der Server
 den §19-Status am Beleg ein; ein Storno übernimmt den Status des Originals.
 
+### 5.4b Angebots-Entwurf bearbeiten (ADR 0042 Nr. 13)
+
+Ein Angebot, das noch Entwurf ist, ist weder Handelsbrief noch Buchungsbeleg;
+die Unveränderbarkeit beginnt mit dem Fertigstellen (GoBD Rz. 58 ff.).
+`quotes_update_draft` (Sperre `locks::QUOTES`) überschreibt Kopf, Verkäufer-
+und Empfänger-Snapshot, Summen und Positionen — `repo::quotes::update_draft_in`
+mit `status = 'draft' AND locked_at IS NULL` im `WHERE`, Positionen ersetzt in
+derselben `begin_immediate`-Transaktion wie das Audit `quote.draft_updated`
+(Nummer, Brutto vorher und nachher, Positionen, Empfängerwechsel). Die Trigger
+(`trg_quotes_immutable`, `trg_quotes_canceled_final`, `trg_quote_items_frozen_*`)
+bleiben unverändert. Die Nummer bleibt, deshalb bleibt das Angebotsdatum im
+Geschäftsjahr der Nummer, und das Jahr muss offen sein. Anlegen und Bearbeiten
+prüfen dasselbe: Empfänger nicht anonymisiert, §19-Status am Angebotsdatum
+(ADR 0042 Nr. 3), Blocker wie beim Rechnungs-Entwurf einschließlich §14c-Schutz
+und Betragsgrenzen, Paket-Provenienz. Ein nach einem Restore vorgemerkter
+Entwurf lässt sich an das Original anpassen, aber erst nach der Bestätigung
+fertigstellen; ein bestätigter wird mit jeder Änderung wieder vorgemerkt
+(`reflag_confirmed_in`, Lauf F8), wie bei Rechnungen. `invoices_get` und
+`quotes_get` melden diesen Stand offener Entwürfe im Lesefeld
+`restoreConflict` (`flagged` | `confirmed` | `null`; ADR 0042 Nr. 16), damit
+die Oberfläche vor dem Speichern darauf hinweist.
+
 ### 5.5 Entwurf verwerfen (Lauf F, W14-032)
 
 Ein Rechnungs- oder Storno-Entwurf trägt seine Nummer ab dem Anlegen (der
@@ -499,13 +619,19 @@ sonst erneut frei. Deshalb:
 
 ## 6. Aufbewahrung und kein Löschen-UI
 
-§147 AO + UStG ⇒ 10 Jahre (Rechnungen, Buchungen, alles was zur Aufstellung
-beigetragen hat). Klein.Buch hat:
+Gesetzliche Fristen nach §147 Abs. 3 und 4 AO (seit dem Vierten
+Bürokratieentlastungsgesetz), jeweils ab Ende des Kalenderjahres: Bücher und
+Aufzeichnungen 10 Jahre, Buchungsbelege einschließlich Rechnungen 8 Jahre (auch
+§14b Abs. 1 UStG), Handels- und Geschäftsbriefe 6 Jahre; länger, solange die
+Festsetzungsfrist läuft (§147 Abs. 3 Satz 5 AO). Klein.Buch hält technisch alles
+einheitlich 10 Jahre vor und löscht auch danach nichts (DOC-01/DOC-11; die
+DSGVO-Auskunft nennt die Fristen so, `domain::dsgvo::RETENTION_TEXT`). Klein.Buch hat:
 
 - **Kein** UI-Button, um eine Rechnung, Kosten-Buchung, AfA-Zeile oder
   Privatbewegung zu **löschen**; die DB verbietet `DELETE` auf diesen Tabellen
   (ungelockte AfA-Buchungen ausgenommen, Reset-Pfad). Entwürfe werden verworfen
-  (§5.5), nicht gelöscht.
+  (§5.5), nicht gelöscht. Gebuchte Zahlungen lassen sich weder ändern noch
+  löschen, nur durch eine Gegenbuchung stornieren (§2.9).
 - **Kein** UI-Button für „Datenbank leeren" oder „nur dieses Jahr löschen",
   und im Server keinen Factory Reset (E7).
 - **Kein** Auto-Pruning von Belegen. Auch 12 Jahre alte Belege werden nicht
@@ -668,6 +794,28 @@ Unit-Tests in den Modulen):
   `tests/legal_documents_repo_test.rs` (`core_fields_immutable_and_no_delete`).
   `tests/migration_0032_test.rs` (`audit_log_is_append_only`,
   `package_revisions_are_immutable_and_append_only` — W13-TRIGGER-TESTS).
+- **Steuerstatus-Historie:** `tests/migration_0033_test.rs`
+  (`append_only_delete_and_update_blocked_revoke_once`,
+  `checks_reason_status_date_and_binding`,
+  `backfill_matches_old_result_for_every_year`), `tests/tax_status_flow_test.rs`
+  (Eintrag und Widerruf, abgeschlossene Jahre, festgeschriebene Rechnungen
+  bleiben), Unit-Tests in `src/domain/tax_status.rs`.
+- **Zahlungsbuch:** `tests/payment_ledger_test.rs` (Übernahme und Abbruch der
+  Migration 0034, append-only, Gegenbuchung passend und einmalig, keine Buchung
+  im abgeschlossenen Jahr bzw. auf Entwurf, Storno-Beleg oder stornierte
+  Rechnung, Cache gebunden, Erfassen/Stornieren/neu Erfassen, Ablehnungen,
+  EÜR/ELSTER/DATEV/Gesamtumsatz mit Gegenbuchung), `tests/server_restore_test.rs`
+  (Restore eines Backups mit Schema 33), Unit-Tests in
+  `src/db/repo/invoice_payments.rs` und `src/euer/datev_csv.rs`; Oberfläche:
+  `src/routes/invoices/paymentHistory.test.ts` (Verweise Zahlung ↔
+  Gegenbuchung, wirksame Zahlungen, frühestes Storno-Datum ohne stornierte
+  Paare, Grund wie im Server).
+- **Leistungszeitraum und Leitweg-ID:** `tests/migration_0035_test.rs` (CHECKs, Zeitraum
+  und Leitweg-ID nach dem Festschreiben und am verworfenen Entwurf unveränderlich,
+  Vorwärtsmigration von Schema 34), `tests/service_period_test.rs`.
+- **Angebots-Entwürfe:** `tests/v4_quote_draft_test.rs` (Bearbeiten nur als Entwurf im
+  offenen Jahr, Trigger unverändert, vorgemerkte Entwürfe nach einem Restore,
+  `restoreConflict`).
 - **Archiv:** Unit-Tests in `src/archive/store.rs` (Schreiben mit `0o400`,
   idempotent, Waise beiseitelegen, neue Dateiversion, anderer Inhalt abgelehnt,
   Tamper beim Lesen, Pfadtrenner im Namen) und `src/archive/integrity_check.rs`
@@ -708,4 +856,17 @@ Stand: 2026-10-25 (Lauf F, Blöcke F2a/F2b/F2c; Schema v32). Quellen:
 `src/archive/store.rs`, `src/archive/integrity_check.rs`, `src/db/mod.rs`
 (`prepare_filesystem`), `src/locks.rs`, `src/db/repo/audit_log.rs`,
 `src/fiscal_year/{guard,lock,snapshot}.rs`, `src/commands/euer.rs`; Testliste per Verzeichnis-Listing von
-`src-tauri/tests/` und den Test-Namen geprüft.
+`src-tauri/tests/` und den Test-Namen geprüft. Nachtrag 2026-10-27 (Lauf 2026.11.1, V1; Schema v33):
+§2.8 und §9 um `tax_status_changes` ergänzt, gegen
+`migrations/0033_tax_status_history.sql`, `src/domain/tax_status.rs`,
+`src/commands/tax_status.rs` und `tests/migration_0033_test.rs` geprüft. Nachtrag
+2026-10-31 (Lauf 2026.11.1, V2; Schema v34): §2.1 und §2.9 um das Zahlungsbuch
+ergänzt, gegen `migrations/0034_invoice_payment_ledger.sql`,
+`src/db/repo/invoice_payments.rs`, `src/commands/invoices.rs`
+(`reverse_payment_core`) und `tests/payment_ledger_test.rs` geprüft; §2.9
+„Oberfläche“ gegen `src/routes/invoices/[id]/+page.svelte`,
+`src/routes/invoices/paymentHistory.ts` und die Seiten `payment`/`cancel`
+geprüft. Nachtrag 2026-10-31 (Lauf 2026.11.1, V7; Schema v35): §2.1 (Spalten aus 0035),
+§5.4b und §9 gegen `migrations/0035_service_period_buyer_reference.sql`,
+`src/commands/quotes.rs`, `tests/migration_0035_test.rs` und
+`tests/v4_quote_draft_test.rs` geprüft.

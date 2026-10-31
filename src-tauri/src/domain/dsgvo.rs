@@ -24,8 +24,8 @@
 use serde::Serialize;
 
 use crate::db::models::{
-    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow,
-    QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
+    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoicePaymentRow, InvoiceRow,
+    QuoteItemRow, QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
 };
 
 /// Steuert, ob rein interne `notes`-Felder (Kontakt/Rechnung/Angebot/Kosten) in
@@ -46,6 +46,8 @@ pub const VOIDED_STATUS: &str = "voided";
 pub struct RawInvoice<'a> {
     pub invoice: &'a InvoiceRow,
     pub items: &'a [InvoiceItemRow],
+    /// Zahlungsbuch der Rechnung (Migration 0034, ADR 0042 Nr. 7).
+    pub payments: &'a [InvoicePaymentRow],
 }
 
 /// Ein Angebot samt Positionen.
@@ -205,11 +207,11 @@ impl ProcessingInfo {
                 "Finanzbehörden im Rahmen gesetzlicher Pflichten".into(),
                 "Kreditinstitute/Zahlungsdienstleister im Rahmen der Zahlungsabwicklung".into(),
             ],
-            retention: "Steuerlich relevante Belege werden gemäß § 147 AO und § 14b UStG 10 Jahre \
-                 aufbewahrt; eine frühere Löschung ist insoweit gesetzlich ausgeschlossen. \
-                 Nicht aufbewahrungspflichtige Stammdaten werden nach Wegfall des Zwecks gesperrt \
-                 bzw. anonymisiert."
-                .into(),
+            // DOC-01: Fristen nach § 147 Abs. 3 AO und § 14b UStG in der Fassung
+            // des Vierten Bürokratieentlastungsgesetzes (Rechnungen 8, nicht
+            // 10 Jahre); „gesetzlich ausgeschlossen“ nur innerhalb dieser
+            // Fristen. Klein.Buch hält technisch einheitlich 10 Jahre vor.
+            retention: RETENTION_TEXT.into(),
             rights: vec![
                 "Auskunft (Art. 15 DSGVO)".into(),
                 "Berichtigung (Art. 16 DSGVO)".into(),
@@ -273,6 +275,11 @@ pub struct InvoiceEntry {
     pub fiscal_year: i64,
     pub invoice_date: String,
     pub delivery_date: Option<String>,
+    /// Leistungszeitraum und Leitweg-ID bzw. Käuferreferenz (ADR 0042
+    /// Nr. 10/12); eine Käuferreferenz kann Personenbezug tragen.
+    pub service_period_start: Option<String>,
+    pub service_period_end: Option<String>,
+    pub buyer_reference: Option<String>,
     pub due_date: Option<String>,
     /// Status wie in der Datenbank; ein verworfener Entwurf steht als
     /// `voided` (Lauf F2c), nicht als `draft`.
@@ -298,6 +305,23 @@ pub struct InvoiceEntry {
     /// Eingefrorener Empfänger-Stand zur Rechnungszeit (GoBD-Snapshot).
     pub buyer_snapshot: Option<BuyerSnapshot>,
     pub items: Vec<ItemEntry>,
+    /// Zahlungen und Gegenbuchungen (Art. 15 DSGVO: Zahlungsdaten zum Kontakt;
+    /// ADR 0042 Nr. 7).
+    pub payments: Vec<PaymentEntry>,
+}
+
+/// Eine Buchung des Zahlungsbuchs (Zahlung oder Gegenbuchung).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentEntry {
+    /// `payment` oder `reversal` (Gegenbuchung).
+    pub kind: String,
+    pub amount_cents: i64,
+    pub paid_date: String,
+    pub note: Option<String>,
+    /// Grund der Gegenbuchung.
+    pub reason: Option<String>,
+    pub recorded_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -357,6 +381,8 @@ pub struct RecurringInvoiceEntry {
     pub active: bool,
     pub last_executed_at: Option<String>,
     pub created_at: String,
+    /// Leitweg-ID bzw. Käuferreferenz der Vorlage (ADR 0042 Nr. 12).
+    pub buyer_reference: Option<String>,
     pub items: Vec<ItemEntry>,
 }
 
@@ -427,11 +453,29 @@ pub struct AuditEventEntry {
     pub entity_id: Option<String>,
 }
 
+/// Speicherdauer in der Auskunft (Art. 15 Abs. 1 lit. d DSGVO), DOC-01: Fristen
+/// nach § 147 Abs. 3 und 4 AO und § 14b Abs. 1 UStG seit dem Vierten
+/// Bürokratieentlastungsgesetz; Löschausschluss (Art. 17 Abs. 3 lit. b DSGVO)
+/// nur innerhalb der jeweiligen Frist; tatsächliche Vorhaltedauer 10 Jahre.
+pub const RETENTION_TEXT: &str =
+    "Steuerlich relevante Unterlagen werden nach § 147 Abs. 3 und 4 AO ab dem Ende des \
+     Kalenderjahres, in dem sie entstanden sind, aufbewahrt: Bücher und Aufzeichnungen 10 Jahre, \
+     Buchungsbelege einschließlich Rechnungen 8 Jahre (auch § 14b Abs. 1 UStG), Handels- und \
+     Geschäftsbriefe wie Angebote 6 Jahre; solange die Festsetzungsfrist noch läuft, länger \
+     (§ 147 Abs. 3 Satz 5 AO). Innerhalb dieser Fristen ist eine Löschung gesetzlich \
+     ausgeschlossen (Art. 17 Abs. 3 lit. b DSGVO). Die Buchhaltung hält alle steuerlich \
+     relevanten Unterlagen einheitlich 10 Jahre vor; ist die gesetzliche Frist einer Unterlage \
+     abgelaufen, können Sie deren Löschung oder Einschränkung verlangen (Art. 17, 18 DSGVO). \
+     Nicht aufbewahrungspflichtige Stammdaten werden nach Wegfall des Zwecks gesperrt bzw. \
+     anonymisiert.";
+
 const DISCLAIMER: &str =
     "Diese Auskunft wurde automatisiert mit Klein.Buch nach Art. 15 DSGVO erstellt und ist \
      keine Rechtsberatung. Ein Teil der enthaltenen Daten unterliegt gesetzlichen \
-     Aufbewahrungspflichten (u. a. § 147 AO, § 14b UStG, 10 Jahre) und kann vor Fristablauf nicht \
-     gelöscht werden. Rein interne, subjektive Vermerke sind nicht Gegenstand dieser Auskunft. \
+     Aufbewahrungspflichten nach § 147 Abs. 3 AO (Bücher und Aufzeichnungen 10 Jahre, \
+     Buchungsbelege einschließlich Rechnungen 8 Jahre, auch § 14b Abs. 1 UStG, Handels- und \
+     Geschäftsbriefe 6 Jahre, jeweils ab Ende des Kalenderjahres) und kann vor Ablauf der \
+     jeweiligen Frist nicht gelöscht werden. Rein interne, subjektive Vermerke sind nicht Gegenstand dieser Auskunft. \
      Angaben Dritter in beigefügten Dokumenten sind vor einer Herausgabe zu prüfen (Art. 15 \
      Abs. 4 DSGVO). Verbindlichkeit und Vollständigkeit sind im Einzelfall rechtlich zu prüfen.";
 
@@ -522,6 +566,9 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 fiscal_year: inv.fiscal_year,
                 invoice_date: inv.invoice_date.clone(),
                 delivery_date: inv.delivery_date.clone(),
+                service_period_start: inv.service_period_start.clone(),
+                service_period_end: inv.service_period_end.clone(),
+                buyer_reference: inv.buyer_reference.clone(),
                 due_date: inv.due_date.clone(),
                 status: if inv.voided_at.is_some() {
                     VOIDED_STATUS.to_string()
@@ -544,6 +591,18 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 payment_note: inv.payment_note.clone(),
                 buyer_snapshot: if buyer.is_empty() { None } else { Some(buyer) },
                 items: map_invoice_items(ri.items),
+                payments: ri
+                    .payments
+                    .iter()
+                    .map(|p| PaymentEntry {
+                        kind: p.kind.clone(),
+                        amount_cents: p.amount_cents,
+                        paid_date: p.paid_date.clone(),
+                        note: p.note.clone(),
+                        reason: p.reason.clone(),
+                        recorded_at: p.created_at.clone(),
+                    })
+                    .collect(),
             }
         })
         .collect();
@@ -613,6 +672,7 @@ pub fn assemble(raw: &RawData) -> DataSubjectReport {
                 active: flag(t.active),
                 last_executed_at: t.last_executed_at.clone(),
                 created_at: t.created_at.clone(),
+                buyer_reference: t.buyer_reference.clone(),
                 items: rt
                     .items
                     .iter()
@@ -805,6 +865,9 @@ mod tests {
             paid_to_account_id: None,
             voided_at: None,
             void_reason: None,
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
         }
     }
 
@@ -913,6 +976,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let docs = vec![raw_doc()];
@@ -959,6 +1023,28 @@ mod tests {
         assert!(report.processing_info.retention.contains("147"));
     }
 
+    /// DOC-01: Speicherdauer nach § 147 Abs. 3 AO und § 14b UStG seit dem
+    /// Vierten Bürokratieentlastungsgesetz — Rechnungen 8, Geschäftsbriefe 6,
+    /// Bücher 10 Jahre; kein „§ 14b UStG … 10 Jahre“ mehr; die einheitliche
+    /// Vorhaltedauer von 10 Jahren ist als solche benannt.
+    #[test]
+    fn retention_texts_follow_fourth_bureaucracy_relief_act() {
+        for text in [RETENTION_TEXT, DISCLAIMER] {
+            assert!(
+                text.contains("Rechnungen 8 Jahre")
+                    && text.contains("Bücher und Aufzeichnungen 10 Jahre")
+                    && text.contains("Geschäftsbriefe")
+                    && text.contains("6 Jahre"),
+                "{text}"
+            );
+            assert!(!text.contains("§ 14b UStG 10"), "{text}");
+            assert!(!text.contains("§ 14b UStG, 10 Jahre"), "{text}");
+        }
+        assert!(RETENTION_TEXT.contains("einheitlich 10 Jahre vor"));
+        assert!(RETENTION_TEXT.contains("Innerhalb dieser Fristen"));
+        assert_eq!(ProcessingInfo::standard().retention, RETENTION_TEXT);
+    }
+
     /// Referenz-PDF der DSGVO-Auskunft für Typst-Updates (siehe `pdf::snapshot`).
     #[test]
     #[ignore = "erzeugt Referenz-PDFs nach KB_PDF_SNAPSHOT_DIR (Typst-Update)"]
@@ -972,6 +1058,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let docs = vec![raw_doc()];
@@ -1020,6 +1107,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &items,
+            payments: &[],
         }];
         let exps = vec![expense()];
         let raw = RawData {
@@ -1062,6 +1150,7 @@ mod tests {
         let invoices = vec![RawInvoice {
             invoice: &inv,
             items: &[],
+            payments: &[],
         }];
         let raw = RawData {
             contact: &c,

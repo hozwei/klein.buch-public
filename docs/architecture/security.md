@@ -102,7 +102,7 @@ nicht (E1).
 | Risiko | Gegenmaßnahme | Status |
 |---|---|---|
 | Manipulierte Backup-Datei | GCM-Tag + SHA-256 des Content-ZIP (§3.2) | umgesetzt |
-| Pfad-Traversal im Content-ZIP | Prüfung je Pfadkomponente (`..`, Wurzel, Laufwerkspräfix → Abbruch) | umgesetzt (W2) |
+| Pfad-Traversal im Content-ZIP | Prüfung des Rohnamens je Pfadkomponente unabhängig von der ZIP-Bibliothek (`backup::restore::safe_entry_path`: kein absoluter Pfad, keine leeren, `.`- oder `..`-Bestandteile, kein `\`, `:` oder NUL → Abbruch), zusätzlich `enclosed_name()`; ZIP-Bibliothek 9.1 (CVE-2026-115905, CVE-2026-115909 in 2.4) | umgesetzt (W2, verschärft Lauf 2026.11.1 V3b) |
 | Zip-Bombe, fremde Einträge, Symlinks | Allowlist `klein-buch.sqlite`, `archive/**`, `branding/**`; ≤ 200 000 Einträge; gelesene Bytes begrenzt; Abbruch über 200:1; Upload-Limit `KLEIN_BUCH_MAX_RESTORE_BYTES` (4 GiB) | umgesetzt (W7), dazu nur normale Pfadbestandteile |
 | Restore durch eine fremde Sitzung | Re-Auth; Hinweis „danach gilt die Passphrase dieses Backups" | umgesetzt (W6/W7) |
 | Schema-Konflikt | `30 ≤ schema ≤ EXPECTED` mit Pflicht-Backup und Vorwärtsmigration beim nächsten Entsperren; neuere Backups abgelehnt (Down-Migration-Schutz) | umgesetzt (W7); echte Vorwärtsmigration 30 → 31 seit W8 |
@@ -493,12 +493,20 @@ OneDrive/iCloud ist entfallen (W7).
 
 ### 3.4 SFTP
 
-`backup::sftp` benutzt `russh`/`russh-sftp`. Nur **Passwort-Auth** (kein
-SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker). **Host-Key-
+`backup::sftp` benutzt `russh` 0.65/`russh-sftp`. Nur **Passwort-Auth** (kein
+SSH-Key-Auth — vereinfacht das Onboarding für Nicht-Techniker); **kein
+SSH-Agent** (kein Agent-Client; einen vom Server geöffneten Agent-Kanal
+`auth-agent@openssh.com` lehnt der Client-Handler ausdrücklich ab; CVE-2026-116794 in
+russh 0.64 betrifft nur den Agent-Pfad, behoben mit 0.65, ADR 0042 V3c). Die
+RSA-Crate dient nur zum Prüfen von RSA-Host-Key-Signaturen (öffentlicher
+Schlüssel); der Marvin-Angriff (RUSTSEC-2023-0071) braucht Privatschlüssel-
+Operationen und ist nicht erreichbar. **Host-Key-
 Pinning** über SHA-256 (Trust-On-First-Use): der Verbindungstest (`probe`)
 liefert den Fingerprint (`SHA256:…`), der Nutzer bestätigt ihn, und er wird im
 Ziel gespeichert (`app_settings.backup_targets`, Feld `host_fingerprint`). Ein
-Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz).
+Upload ohne passenden Pin wird abgelehnt (Man-in-the-Middle-Schutz); ein
+abweichender Host-Key bricht schon im Handshake ab, vor der Passwort-Anmeldung
+(Test `sftp_upload_rejects_foreign_host_key_before_auth`, ADR 0042 V3c).
 Verbindungsaufbau mit 20 s Timeout.
 
 Das Passwort liegt je Ziel-ID im **SecretStore** der verschlüsselten DB (§4,
@@ -648,7 +656,8 @@ abgeschaltet und entfernt (E7).
   entschlüsseln + Content-Hash prüfen (unter der `KDF`-Semaphore; falsche
   Passphrase schreibt nichts), Pflicht-Audit `backup.restore.requested`, Platz
   prüfen, gehärtet ins Staging `restore-staging/` entpacken (Allowlist, nur
-  normale Pfadbestandteile, Größen- und Verhältnisgrenzen, keine Symlinks),
+  normale Pfadbestandteile nach `safe_entry_path`, Größen- und Verhältnisgrenzen,
+  keine Symlinks),
   gestagte DB mit der Backup-Passphrase öffnen (Schema, Archivpfade,
   Migrations-Prüfsummen, Fremdschlüssel, höchstens ein festgeschriebener Storno
   je Original — was das Entsperren nach dem Tausch verweigern würde, lehnt
@@ -878,7 +887,7 @@ Test; **entschieden** = bewusst so belassen, mit Begründung.
 | V2.8.5 (Wiederholung eines TOTP-Codes erkennen) | erfüllt (Lauf F4a) | Abgelehnt seit W6 (`last_used_step` persistiert); jetzt im Log eigens `reason=totp_replay` (gleiche Antwort an den Client, kein Orakel). Benachrichtigung über die Obergrenze in Folge (Inbox-Hinweis bei Sperre). |
 | V3.3.4 (aktive Sitzungen anzeigen und beenden) | erfüllt (Lauf F4a, W14-005) | `GET /api/auth/sessions` (Anmeldezeit, letzte Nutzung, gekürzte Kennung, „diese Sitzung“; keine IP, kein Gerätename) und `POST /api/auth/sessions/others/revoke` (Re-Auth, Audit mit Anzahl); Block in Einstellungen → Sicherheit. |
 | V8.2.2 (keine Geheimnisse im Browser-Speicher) | erfüllt (Lauf F4a, Teil von R5-S2-UI) | Passphrasen stehen nur im Zustand der jeweiligen Maske (Anmeldung, Einrichtung, Re-Auth, Passphrase-Wechsel, Restore) und werden nach dem Absenden bzw. Abbrechen geleert — nie in Stores, URL, `localStorage` oder `sessionStorage`. |
-| V11.1.4 (Anti-Automatisierung/Re-Auth für sensible Geschäftsfunktionen) | erfüllt (Lauf F4a, W14-028) | DATEV-, ELSTER- und PDF-Export sowie das Aktivieren/Deaktivieren von Zahlungskonten verlangen Re-Auth wie die übrigen Exporte; das Verkäuferprofil bedingt (nur IBAN, BIC, §19-Status; W14-038). Registry-Test der Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`, `seller_profile_reauth_matrix`). |
+| V11.1.4 (Anti-Automatisierung/Re-Auth für sensible Geschäftsfunktionen) | erfüllt (Lauf F4a, W14-028) | DATEV-, ELSTER- und PDF-Export sowie das Aktivieren/Deaktivieren von Zahlungskonten verlangen Re-Auth wie die übrigen Exporte; das Verkäuferprofil bedingt (nur IBAN, BIC; W14-038); Einträge und Widerruf des §19-Steuerstatus (`tax_status_change_add`/`_revoke`, ADR 0042) immer, ebenso „Zahlung stornieren“ (`invoices_reverse_payment`, ADR 0042 Nr. 8). Registry-Test der Re-Auth-Matrix (`server_auth_test::reauth_commands_require_fresh_reauth`, `seller_profile_reauth_matrix`). |
 | V5.1.1 (HTTP-Parameter-Pollution, doppelte JSON-Schlüssel) | entschieden (Lauf F4b) | Ein Körper wird genau einmal geparst (`serde_json` → typisiertes Args-Struct); bei doppelten Schlüsseln gewinnt der letzte. Es gibt keine vorgelagerte Prüfinstanz (WAF, zweiter Parser), die einen anderen Wert sähe als der Kern — damit keine Pollution zwischen Komponenten. |
 | 7.4.3 (letzte Fehlerbehandlung für Unerwartetes) | erfüllt (Lauf F4b) | `CatchPanicLayer` im Router (innerhalb von Policy, Headern und Zugriffsprotokoll): eine Panik ergibt 500 im API-Format mit `ref`, ERROR-Log nur mit der Referenz. Test `server_hardening_test::panic_in_handler_returns_500_with_reference`. |
 | V11.1.3 (Grenzen für billige Schreibvorgänge) | entschieden (Lauf F4b) | Nummernverbrauchende Entwürfe brauchen eine Sitzung (ein Inhaber); Render/JVM sind je Sitzung begrenzt (30/min), Jobs auf 8. Entwürfe sind keine Lücken im Nummernkreis, Verwerfen dokumentiert den Verbleib (W14-032, Lauf F2a). Ein eigenes Rate-Limit wäre für Ein-Nutzer-Betrieb unverhältnismäßig. |
@@ -979,7 +988,11 @@ dieser Benutzer nicht erreicht.
 Stand: 2026-10-25 (Phase W nach W12, Fließtext in W13 an die Tabellen
 angeglichen; Lauf F4a: Anmeldung, Sitzungen, Geheimnisse im Speicher, §11;
 Lauf F4b: Verbindungen, Inhaltstyp, Panik, `/healthz`, Exporte, Sidecar;
-Schema v32), ADRs 0009/0034/0035/0036/0039.
+Schema v32), ADRs 0009/0034/0035/0036/0039. Nachtrag 2026-10-31 (Lauf 2026.11.1, V7; Schema
+v35): Pfad-Traversal im Content-ZIP (zip 9.1, `safe_entry_path`, V3b) und §3.4 SFTP
+(russh 0.65, V3c) gegen `src/backup/restore.rs` und `src/backup/sftp.rs` geprüft;
+Re-Auth für `tax_status_change_*` und `invoices_reverse_payment` (ADR 0042) gegen
+`commands/registry.rs`.
 Quelle: `src/backup/` (`mod.rs`, `snapshot.rs`, `restore.rs`, `target.rs`,
 `sftp.rs`, `manifest.rs`, `encrypt.rs`, `rotation.rs`), `src/db/mod.rs`
 (Pool-Open, `prepare_filesystem`, Neuverschlüsseln), `src/server/` (`mod.rs`,

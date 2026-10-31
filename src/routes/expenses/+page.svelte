@@ -107,11 +107,10 @@
 </p>
 
 {#if dueAbos > 0}
-  <a class="due-banner" href="/expenses/recurring">
-    <span class="due-dot" aria-hidden="true"></span>
-    {dueAbos} {dueAbos === 1 ? "Kosten-Abo ist" : "Kosten-Abos sind"} fällig
-    <span class="due-cta">ansehen und buchen <span aria-hidden="true">→</span></span>
-  </a>
+  <!-- V3-18 (ADR 0042 Nr. 16): Link-Banner statt eigener Fläche `.due-banner`. -->
+  <Banner kind="warning" href="/expenses/recurring" linkLabel="ansehen und buchen">
+    {dueAbos} {dueAbos === 1 ? "Kosten-Abo ist" : "Kosten-Abos sind"} fällig –
+  </Banner>
 {/if}
 
 <div class="filters" role="search" aria-label="Kosten filtern">
@@ -177,7 +176,7 @@
           <th class="nw kb-col-opt1">Datum</th>
           <th class="vendor">Lieferant</th>
           <th class="desc">Beschreibung</th>
-          <th class="num nw">Brutto</th>
+          <th class="kb-num nw">Brutto</th>
           <th>Bezahlt am</th>
           <th>Status</th>
           <th><span class="kb-visually-hidden">Aktion</span></th>
@@ -188,7 +187,7 @@
           <!-- U4 (V3-09): Status aus expenseStatus.ts (Bezahlt/Unbezahlt/Storniert). -->
           {@const st = expenseStatusView(e)}
           <tr class={e.status === "canceled" ? "canceled" : ""}>
-            <td class="nw" data-label="Nummer"><DocNo value={e.expenseNumber} href={`/expenses/${e.id}`} muted={e.status === "canceled"} /></td>
+            <td class="nw kb-card-head" data-label="Nummer"><DocNo value={e.expenseNumber} href={`/expenses/${e.id}`} muted={e.status === "canceled"} /></td>
             <td class="nw kb-col-opt1" data-label="Datum">{date(e.expenseDate)}</td>
             <td class="wrap vendor" data-label="Lieferant">{e.vendorNameSnapshot}</td>
             <td class="desc wrap cards-full" data-label="Beschreibung">
@@ -200,9 +199,9 @@
                 {#if e.reverseCharge13b === 1}<Badge kind="tag">§13b</Badge>{/if}
               </span>
             </td>
-            <td class="num kb-num nw" data-label="Brutto">{euro(e.grossAmountCents)}</td>
-            <td class="nw" data-label="Bezahlt am">{e.paidDate ? date(e.paidDate) : "—"}</td>
-            <td data-label="Status">
+            <td class="kb-num kb-card-figure nw" data-label="Brutto">{euro(e.grossAmountCents)}</td>
+            <td class="nw" class:kb-card-omit={!e.paidDate} data-label="Bezahlt am">{e.paidDate ? date(e.paidDate) : "—"}</td>
+            <td class="kb-card-status" data-label="Status">
               <span class="badges">
                 <Badge tone={st.tone} strike={st.strike}>{st.label}</Badge>
                 {#if !e.receiptArchiveId && e.status !== "canceled"}
@@ -210,7 +209,7 @@
                 {/if}
               </span>
             </td>
-            <td class="right">
+            <td class="actions">
               <Button variant="secondary" size="sm" href={`/expenses/${e.id}`} ariaLabel={`Kosten ${e.expenseNumber} öffnen`}>Öffnen</Button>
             </td>
           </tr>
@@ -230,15 +229,13 @@
   .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); }
   .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
   .empty p { margin: 0; }
-  .num { text-align: right; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
   /* U2 (U1-063): nicht mitten im Wort trennen („Arbeitsplatzrec/hner“) — `anywhere` lässt
      die Spalte im Tabellenmodus unter die Wortbreite schrumpfen; Silbentrennung (lang="de"). */
   td.wrap { overflow-wrap: break-word; hyphens: auto; }
   /* U3: Firmennamen nur an Leerzeichen umbrechen („Sys-teme GmbH“ las sich wie ein Tippfehler);
      ein Wort, das breiter als die Spalte ist, bricht trotzdem (break-word). */
   td.vendor { hyphens: manual; }
-  td.right { text-align: right; }
+  td.actions { text-align: right; }
   /* U4 (U3-016): Tabellenmodus — feste Spalten so schmal wie ihr Inhalt; die frei
      werdende Breite teilen sich Lieferant und Beschreibung im Verhältnis 28 : 40
      (Vorgabe für die automatische Tabellenbreite, keine Mindestbreite, damit die Tabelle
@@ -254,17 +251,5 @@
     margin-top: 2px; font-size: var(--type-small); color: var(--text-muted);
   }
   .badges { display: inline-flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
-  .due-banner {
-    display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
-    min-height: var(--target);
-    background: var(--status-warning-bg); border: 1px solid var(--status-warning-line);
-    color: var(--status-warning-fg); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md);
-    text-decoration: none; margin: var(--sp-3) 0;
-  }
-  @media (hover: hover) {
-    .due-banner:hover { background: var(--surface-hover); text-decoration: none; }
-  }
-  .due-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--status-warning-line); flex: none; }
-  .due-cta { margin-left: auto; font-weight: 600; text-decoration: underline; }
   .muted { color: var(--text-muted); }
 </style>

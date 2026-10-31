@@ -2,7 +2,8 @@
   // Block 17a — PDF-Vorlagen-Switcher (globale Standard-Vorlage).
   // U4: Vorlagennamen zentral aus `labels.ts` (Warteliste (17)); je Vorlage, ob sie
   // Stornos darstellt, sonst mit welcher Vorlage Storno-Belege entstehen
-  // (Warteliste (11), `PdfTemplateMeta.supportsStorno`/`stornoFallback`).
+  // (Warteliste (11), `PdfTemplateMeta.supportsStorno`/`stornoFallback`); ebenso, ob
+  // sie einen Leistungszeitraum zeigt (ADR 0042 Nr. 10, `supportsServicePeriod`).
   // U4 (V2-06/V2-07): Ladefehler mit „Erneut laden“; Knöpfe und Datei-Felder während eines
   // Laufs `aria-disabled` statt `disabled` (Fokus bleibt, ADR 0041 Nr. 33).
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
@@ -18,6 +19,7 @@
   import {
     pdfTemplatesList,
     sellerProfileGet,
+    taxStatusOverview,
     sellerDefaultTemplateSet,
     pdfTemplatePreview,
     downloadUrl,
@@ -32,6 +34,7 @@
     quoteSignatureSet,
   } from "#lib/api.ts";
   import type { PdfTemplateMeta } from "#lib/types.ts";
+  import { kleinTodayOrLater } from "#lib/taxStatus.ts";
 
   let templates = $state<PdfTemplateMeta[]>([]);
   let selected = $state<string>("default");
@@ -71,6 +74,15 @@
       if (profile) {
         selected = profile.defaultPdfTemplate;
         isKlein = profile.isKleinunternehmer === 1;
+      }
+      // ADR 0042 Nr. 3: Die Klausel braucht die Standardvorlage auch, wenn §19 erst ab
+      // einem eingetragenen künftigen Wechsel gilt (wie der Server). Ohne Antwort bleibt
+      // der Status von heute.
+      try {
+        const ov = await taxStatusOverview();
+        isKlein = kleinTodayOrLater(ov.entries, ov.today);
+      } catch {
+        // Server prüft beim Wählen selbst.
       }
       logoUrl = await sellerLogoData();
       signatureUrl = await sellerSignatureData();
@@ -161,7 +173,8 @@
   }
 
   function blocked(t: PdfTemplateMeta): boolean {
-    // §19-Schutz: Kleinunternehmer dürfen nur §19-konforme Vorlagen wählen.
+    // §19-Schutz: Kleinunternehmer (heute oder ab einem künftigen Wechsel) dürfen nur
+    // §19-konforme Vorlagen wählen.
     return isKlein && !t.klauselStatus.isKleinCompatible;
   }
 
@@ -308,6 +321,9 @@
           {#if !t.supportsStorno}
             <Badge tone="warning">Ohne Storno-Darstellung</Badge>
           {/if}
+          {#if !t.supportsServicePeriod}
+            <Badge tone="warning">Ohne Leistungszeitraum</Badge>
+          {/if}
         </div>
 
         {#if !t.supportsStorno}
@@ -316,6 +332,15 @@
           <p class="hint">
             Diese Vorlage stellt Storno-Belege nicht dar. Stornos zu Rechnungen mit dieser
             Vorlage erzeugt Klein.Buch mit der Vorlage „{label(t.stornoFallback ?? "klassisch")}“.
+          </p>
+        {/if}
+
+        {#if !t.supportsServicePeriod}
+          <!-- ADR 0042 Nr. 10: Rechnungen mit Leistungszeitraum entstehen dann mit
+               derselben mitgelieferten Vorlage wie Stornos (Rechnungs-Pipeline). -->
+          <p class="hint">
+            Diese Vorlage zeigt keinen Leistungszeitraum. Rechnungen mit Leistungszeitraum
+            erzeugt Klein.Buch mit der Vorlage „{label(t.servicePeriodFallback ?? "klassisch")}“.
           </p>
         {/if}
 

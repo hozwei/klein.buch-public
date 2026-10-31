@@ -529,7 +529,18 @@ async fn allowed_status_transitions_still_work_on_locked_invoice() {
     .unwrap();
     assert_eq!(r.rows_affected(), 1);
 
-    // record_payment: setzt paid_amount_cents + paid_at + status → muss durchkommen.
+    // record_payment: seit 0034 Buchzeile im Zahlungsbuch, dann paid_amount_cents
+    // + paid_at + status passend dazu → muss durchkommen.
+    sqlx::query(
+        "INSERT INTO invoice_payments
+            (id, invoice_id, seq, kind, amount_cents, paid_date, created_at)
+         VALUES ('01928300-aa00-7000-8000-0000000000f1', ?, 1, 'payment', 10000,
+                 '2026-06-01', datetime('now','utc'))",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let r = sqlx::query(
         "UPDATE invoices SET paid_amount_cents = 10000,
                               paid_at = '2026-06-01',
@@ -788,7 +799,9 @@ async fn lock_with_pair_cancel_atomically_locks_storno_and_cancels_original() {
         pdf_archive_id: arc_pdf,
         xml_archive_id: arc_xml,
         is_kleinunternehmer: None,
+        tax_status_date: None,
         totals: None,
+        buyer_reference: None,
     };
     let pair = PairCancel {
         original_id: original,
@@ -867,7 +880,9 @@ async fn lock_with_pair_cancel_rolls_back_storno_lock_when_original_missing() {
         pdf_archive_id: arc_pdf,
         xml_archive_id: arc_xml,
         is_kleinunternehmer: None,
+        tax_status_date: None,
         totals: None,
+        buyer_reference: None,
     };
     let pair = PairCancel {
         original_id: "00000000-0000-0000-0000-000000000000", // existiert nicht
@@ -929,7 +944,9 @@ async fn lock_without_pair_still_works_for_normal_invoices() {
             pdf_archive_id: arc_pdf,
             xml_archive_id: arc_xml,
             is_kleinunternehmer: None,
+            tax_status_date: None,
             totals: None,
+            buyer_reference: None,
         },
     )
     .await

@@ -95,6 +95,12 @@ pub struct ParsedEInvoice {
     pub invoice_date: Option<NaiveDate>,
     /// BT-9 — Fälligkeitsdatum.
     pub due_date: Option<NaiveDate>,
+    /// BG-14 — Rechnungszeitraum (BT-73 Beginn, BT-74 Ende), nur auf
+    /// Kopfebene (ADR 0042 Nr. 10). Geht als Hinweis in die Notiz der Kosten.
+    #[serde(default)]
+    pub service_period_start: Option<NaiveDate>,
+    #[serde(default)]
+    pub service_period_end: Option<NaiveDate>,
     /// BT-5 — Währung.
     pub currency_code: Option<String>,
     /// BT-27 — Name des Verkäufers (Lieferant).
@@ -424,6 +430,20 @@ fn assign_cii(stack: &[String], scheme: Option<&str>, text: &str, p: &mut Parsed
         set_date_once(&mut p.invoice_date, text);
     } else if ends_with(stack, &["DueDateDateTime", "DateTimeString"]) {
         set_date_once(&mut p.due_date, text);
+    } else if contains(stack, "ApplicableHeaderTradeSettlement")
+        && ends_with(
+            stack,
+            &["BillingSpecifiedPeriod", "StartDateTime", "DateTimeString"],
+        )
+    {
+        set_date_once(&mut p.service_period_start, text);
+    } else if contains(stack, "ApplicableHeaderTradeSettlement")
+        && ends_with(
+            stack,
+            &["BillingSpecifiedPeriod", "EndDateTime", "DateTimeString"],
+        )
+    {
+        set_date_once(&mut p.service_period_end, text);
     } else if l == "InvoiceCurrencyCode" {
         set_once(&mut p.currency_code, text);
     }
@@ -491,6 +511,11 @@ fn assign_ubl(stack: &[String], text: &str, p: &mut ParsedEInvoice) {
         set_date_once(&mut p.invoice_date, text);
     } else if n == 2 && l == "DueDate" {
         set_date_once(&mut p.due_date, text);
+    } else if n == 3 && ends_with(stack, &["InvoicePeriod", "StartDate"]) {
+        // BG-14 auf Kopfebene (Positionen: tiefer, BG-26).
+        set_date_once(&mut p.service_period_start, text);
+    } else if n == 3 && ends_with(stack, &["InvoicePeriod", "EndDate"]) {
+        set_date_once(&mut p.service_period_end, text);
     } else if n == 2 && l == "DocumentCurrencyCode" {
         set_once(&mut p.currency_code, text);
     } else if n == 2 && (l == "InvoiceTypeCode" || l == "CreditNoteTypeCode") {
@@ -611,12 +636,29 @@ pub fn build_expense_input(p: &ParsedEInvoice, today: NaiveDate) -> ExpenseInput
         // ausgewiesener USt) bekommt stattdessen einen Hinweis; der Nutzer teilt
         // sie bei Bedarf selbst auf.
         reverse_charge_13b: p.reverse_charge && tax == 0,
-        notes: (p.reverse_charge && tax != 0).then(|| {
+        notes: expense_notes(p, tax),
+    }
+}
+
+/// Notiz der Kosten aus der E-Rechnung: §13b-Hinweis bei gemischter Rechnung
+/// (R1-S2-13B), Leistungszeitraum (BG-14, ADR 0042 Nr. 10) als Klartext.
+fn expense_notes(p: &ParsedEInvoice, tax: i64) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if p.reverse_charge && tax != 0 {
+        parts.push(
             "Die E-Rechnung enthält §13b-Positionen (Steuerkategorie AE) neben \
              ausgewiesener Umsatzsteuer. Den §13b-Anteil gesondert prüfen."
-                .to_string()
-        }),
+                .to_string(),
+        );
     }
+    let de = |d: NaiveDate| d.format("%d.%m.%Y").to_string();
+    match (p.service_period_start, p.service_period_end) {
+        (Some(s), Some(e)) => parts.push(format!("Leistungszeitraum: {} – {}", de(s), de(e))),
+        (Some(s), None) => parts.push(format!("Leistungszeitraum ab {}", de(s))),
+        (None, Some(e)) => parts.push(format!("Leistungszeitraum bis {}", de(e))),
+        (None, None) => {}
+    }
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 // =============================================================================
@@ -894,7 +936,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 
@@ -912,6 +953,9 @@ mod tests {
 
     fn invoice_two_items() -> InvoiceInput {
         InvoiceInput {
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
             direction: InvoiceDirection::Issued,
             invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
             delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -1259,6 +1303,21 @@ mod tests {
         assert!(matches!(parse(&crossed), Err(ParseError::Malformed(_))));
         // Vollständige Datei bleibt gültig.
         assert!(parse(UBL_FIXTURE).is_ok());
+    }
+
+    #[test]
+    fn ubl_reads_the_header_invoice_period() {
+        // ADR 0042 Nr. 10: BG-14 auf Kopfebene (cac:InvoicePeriod, Tiefe 3).
+        let xml = UBL_FIXTURE.replace(
+            "<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>",
+            "<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>\n  <cac:InvoicePeriod>\
+             <cbc:StartDate>2026-03-01</cbc:StartDate><cbc:EndDate>2026-03-31</cbc:EndDate>\
+             </cac:InvoicePeriod>",
+        );
+        let p = parse(&xml).unwrap();
+        assert_eq!(p.service_period_start, NaiveDate::from_ymd_opt(2026, 3, 1));
+        assert_eq!(p.service_period_end, NaiveDate::from_ymd_opt(2026, 3, 31));
+        assert_eq!(parse(UBL_FIXTURE).unwrap().service_period_start, None);
     }
 
     /// Lauf F5c (neuer Fund): UBL liest BT-3; Gutschriften werden in beiden

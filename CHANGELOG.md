@@ -3,6 +3,94 @@
 Folgt [Keep a Changelog](https://keepachangelog.com/de/1.1.0/). Versionen nach CalVer
 `JJJJ.M.PATCH` (Monats-Release, PATCH für Korrekturen im selben Monat).
 
+## [2026.11.1] — Fachliche Korrekturen, Zahlungsbuch und DATEV-Format, veröffentlicht 2026-10-31
+
+Korrekturen nach 2026.11.0: Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund,
+Leistungszeitraum und Vorausrechnung, Korrektur falsch gebuchter Zahlungen per Gegenbuchung,
+bearbeitbare Angebots-Entwürfe, DATEV-Buchungsstapel nach der Formatbeschreibung sowie die
+offenen Punkte aus Lauf 2026.11.
+
+- **Spezifikationen berichtigt** (`inputs/specs/`): § 19 UStG in der Fassung ab 2025 (Grenzen,
+  Gesamtumsatz nach vereinnahmten Entgelten, Gründungsjahr, Verzicht nach Abs. 3 mit fünf
+  Kalenderjahren ab dem Wirkungsjahr, unrichtiger Steuerausweis nach § 14c Abs. 1), § 13b UStG
+  (auch Kleinunternehmer schulden die Steuer), Pflichtangaben nach § 14 UStG und § 34a UStDV,
+  DATEV-Format (Präfix `EXTF_`, Kopf Version 700, Pflichtnummern). Dazu EN 16931
+  (Empfangsprofile EN 16931, EXTENDED und XRECHNUNG, MINIMUM und BASIC WL abgelehnt;
+  Leitweg-ID BT-10 nach BR-DE-15; Rechnungszeitraum BG-14 und Vorausrechnung; Storno-Beleg
+  Typ 384; BR-E-02 und BR-E-10 mit Befreiungsgrund als Code BT-121 oder Text BT-120;
+  BR-CO-25; die §-19-Klausel in BT-22 als Pflichtangabe nach § 34a UStDV, nicht der Norm),
+  ELSTER (kein CSV-Import, XBRL nur für die E-Bilanz, Übermittlung nach § 60 Abs. 4 EStDV,
+  Kz 111/112/140 nach Steuerstatus), EÜR (Zu- und Abflussprinzip nach § 11 EStG,
+  Buchführungsgrenzen nach § 141 AO von 800.000 € Umsatz und 80.000 € Gewinn) und GoBD
+  (Änderungen vom 11.03.2024 und 14.07.2025, Fristen nach § 147 Abs. 3 AO: 10 Jahre für
+  Bücher und Aufzeichnungen, 8 Jahre für Buchungsbelege, 6 Jahre für Geschäftsbriefe).
+  Die Fristen sind auch im Handbuch nachgezogen (`aufbewahrung-10-jahre`, `gobd-im-alltag`,
+  `glossar`, `rechnungseingang-per-upload`, `volumes-und-rechte`).
+- **Steuerstatus nach § 19 UStG mit Wirkungsdatum und Grund** (ADR 0042 Nr. 1–6): Statt des
+  Schalters unter „Meine Firmendaten“ führt Klein.Buch eine unveränderliche Historie
+  (Verzicht, Wegfall wegen des Vorjahres, Wegfall im laufenden Jahr bzw. im Gründungsjahr,
+  Rückkehr; ein Irrtum wird mit Grund widerrufen). Die Rückkehr ist nach einem gesetzlichen
+  Wegfall ohne Sperre möglich, nach einem Verzicht nach fünf Kalenderjahren einschließlich des
+  Wirkungsjahres (bisher ein Jahr zu lang). Ein Wechsel mitten im Jahr wirkt ab dem Umsatz,
+  der die Grenze überschreitet. Jeder Beleg nimmt den Status an seinem Leistungsdatum (sonst
+  Rechnungsdatum), Kosten am Belegdatum; EÜR, ELSTER-Ausfüllhilfe und DATEV-Stapel teilen ein
+  Wechseljahr. Klein.Buch zeigt den Gesamtumsatz nach vereinnahmten Entgelten (Vorjahr und
+  laufendes Jahr) und meldet erreichte Grenzen; einen rückwirkenden Wechsel nimmt es nur in
+  offenen Geschäftsjahren an und nennt betroffene festgeschriebene Rechnungen.
+- **Zahlungsbuch und „Zahlung stornieren“** (ADR 0042 Nr. 7–9): Zahlungen auf Rechnungen stehen
+  in einem unveränderlichen Zahlungsbuch; Betrag, Datum, Status und Historie einer Rechnung sind
+  daran gebunden (bisher ließ sich die Zahlungshistorie einer festgeschriebenen Rechnung
+  ändern). Eine falsch erfasste Zahlung wird mit Grund durch eine Gegenbuchung storniert, die am
+  ursprünglichen Zahldatum wirkt (§ 11 EStG), danach wird richtig neu erfasst; im
+  abgeschlossenen Geschäftsjahr lehnt Klein.Buch ab und verweist auf § 153 AO. EÜR,
+  ELSTER-Ausfüllhilfe, DATEV-Stapel, Steuerberater-Paket und DSGVO-Auskunft zeigen
+  Gegenbuchungen.
+- **Leistungszeitraum, Vorausrechnung, Leitweg-ID am Entwurf** (ADR 0042 Nr. 10–12, 22–24):
+  Rechnungen tragen wahlweise ein Leistungsdatum oder einen Leistungszeitraum (XRechnung BG-14,
+  alle vier PDF-Vorlagen); das Leistungsdatum darf nach dem Rechnungsdatum liegen (Rechnung vor
+  der Leistung). Abo-Rechnungen setzen den tatsächlichen Abrechnungszeitraum, auch bei
+  quartalsweiser, halbjährlicher und jährlicher Abrechnung; ein Storno übernimmt den Zeitraum.
+  Die Leitweg-ID wird schon am Entwurf (und an der Abo-Vorlage) gespeichert.
+- **Angebots-Entwürfe bearbeiten** (ADR 0042 Nr. 13, 25–27): Ein Angebot, das noch Entwurf ist,
+  lässt sich unter „Bearbeiten“ ändern; Nummer und Geschäftsjahr bleiben. Rechnungs- und
+  Angebots-Editor zeigen einen Restore-Abgleich schon vor dem Speichern. Der Rückstand-Dialog der
+  Abo-Rechnungen und Kosten-Abos nennt Anzahl und Daten der offenen Termine.
+- **DATEV-Buchungsstapel nach der Formatbeschreibung** (ADR 0042 Nr. 15, 28, 29): Dateiname
+  `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`, Berater- und Mandantennummer Pflicht (ohne sie enthält
+  das Steuerberater-Paket keinen Stapel), Textfelder nach den Feldregeln; ein Test prüft alle
+  Kopf- und Buchungsfelder gegen die Regeln der DATEV-Formatbeschreibung. Der Import in DATEV ist
+  ungeprüft, bis ein Prüfprotokoll vorliegt (DATEV stellt dafür ein kostenloses Prüfprogramm bereit).
+- **Übersicht zur Vorsteuerberichtigung nach § 15a UStG** (ADR 0042 Nr. 14, 30): Unter
+  Anschaffungen zeigt Klein.Buch nach einem Wechsel des Steuerstatus je Anlage den
+  Berichtigungszeitraum, den Anteil je Jahr und die Vereinfachungen nach § 44 UStDV — als
+  Übersicht für die Erklärung, ohne Buchung.
+- **Oberfläche:** Kartenansichten der Listen heben Nummer, Betrag und Status hervor; verbliebene
+  Hinweisflächen, Zahl- und Linkklassen nutzen die gemeinsamen Bausteine; die Versand-Historie
+  zeigt Uhrzeiten ohne Sekunden. Das Handbuch lädt erst unter „Hilfe“ (Start-JavaScript etwa
+  ein Drittel; ADR 0042 Nr. 31–33).
+- **Sicherheit:** Die ZIP-Bibliothek ist von 2.4 auf 9.1 gehoben (CVE-2026-115905, kritisch, und
+  CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
+  Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`
+  oder leere Bestandteile).
+  Die SSH-Bibliothek für SFTP-Ziele ist auf 0.65 gehoben (CVE-2026-116794; Klein.Buch nutzt keinen
+  SSH-Agent, Agent-Weiterleitung wird abgelehnt); ein Test prüft, dass ein fremder Host-Schlüssel
+  vor der Anmeldung abgewiesen wird.
+
+### Hinweise für Betreiber (Update von 2026.11.0)
+
+- **Datenbank-Migration:** Beim ersten Entsperren hebt Klein.Buch das Schema an (Migrationen
+  ab 0033) und legt vorher das übliche Pflicht-Backup an. Ein Image 2026.11.0 kann die
+  migrierte Datenbank und danach angelegte Backups nicht öffnen; zurück geht es nur über das
+  Pflicht-Backup.
+- **Steuerstatus:** Klein.Buch übernimmt den bisherigen Schalter in den Verlauf: als „Stand zu
+  Beginn“ (Kleinunternehmer bzw. von Anfang an Regelbesteuerung, ohne Bindung) und, wenn es einen
+  Wechsel mit Datum gab, als „Wechsel aus dem bisherigen Schalter übernommen“ mit Bindung nach
+  § 19 Abs. 3 UStG. War dieser Wechsel in Wahrheit ein gesetzlicher Wegfall, den Eintrag
+  widerrufen und mit dem richtigen Grund neu eintragen.
+- **Herunterfahren unverändert:** `stop_grace_period` mindestens `90s`. Das Herunterfahren dauert
+  bis zu 75 s: offene Verbindungen höchstens 30 s, Tick, Jobs und ein ausstehendes Lock-Backup
+  höchstens 40 s, Datenbank 5 s, zusammen höchstens 75 s; der Rest bis 90 s ist Puffer.
+
 ## [2026.11.0] — Oberfläche für Smartphone, Tablet und Desktop, veröffentlicht 2026-10-27
 
 Die Oberfläche für Smartphone, Tablet und Desktop (Lauf 2026.11), dazu die Umsetzung der

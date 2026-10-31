@@ -1,4 +1,4 @@
-# Klein.Buch — Architektur (Stand Lauf 2026.11, Server-Betrieb)
+# Klein.Buch — Architektur (Stand Lauf 2026.11.1, Server-Betrieb)
 
 Klein.Buch ist eine selbst gehostete EÜR-Buchhaltung für deutsche
 §19-Kleinunternehmer: ein Docker-Image, ein Nutzer pro Instanz, bedient im
@@ -12,16 +12,20 @@ ADR 0031) + DSGVO Auskunft/Anonymisierung (ADR 0032) + Phase 4 (Abo-Rechnungen,
 ADR 0033) + G1 Security/Backup-Härtung (ADRs 0034–0036) + Phase 7
 (E-Rechnungs-Empfang, ADR 0037) + **Phase W** (Web-/Docker-Betrieb, ADR 0039) + **Lauf E/F** (Entscheidungen,
 Funktion und Technik vor dem UI/UX-Lauf; ADR 0040) + **Lauf 2026.11**
-(Oberfläche für Smartphone, Tablet und Desktop; ADR 0041, §2g):
+(Oberfläche für Smartphone, Tablet und Desktop; ADR 0041, §2g) + **Lauf 2026.11.1**
+(§19-Statushistorie, Zahlungsbuch, Leistungszeitraum, DATEV nach der
+Formatbeschreibung; ADR 0042, §2h):
 Tauri und die Desktop-Fassung sind entfallen; ein HTTP-Server
 `klein-buch-server` (axum) liefert API und SPA aus.
 
-**Schema-Stand v32** (Migrationen 0001–0032 forward-only; 0031 = Tabelle
-`secrets` für Zugangsdaten, 0032 = GoBD-Absicherungen aus Lauf F). **ADRs
-0001–0041** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038
+**Schema-Stand v35** (Migrationen 0001–0035 forward-only; 0031 = Tabelle
+`secrets` für Zugangsdaten, 0032 = GoBD-Absicherungen aus Lauf F, 0033 =
+Steuerstatus-Historie, 0034 = Zahlungsbuch, 0035 = Leistungszeitraum und Leitweg-ID
+am Entwurf). **ADRs 0001–0042** in `docs/adr/`; ADR 0039 löst ADR 0002 (Tauri) und ADR 0038
 (Desktop-Release-Bundle) ab und ändert zwölf weitere per Amendment; ADR 0040 regelt
 Dauerbetrieb, Start- und Zeitlogik (Lauf F); ADR 0041 legt die UI/UX-Standards fest
-(Lauf 2026.11, in Arbeit bis U7).
+(Lauf 2026.11); ADR 0042 die fachlichen Korrekturen (Lauf 2026.11.1, in Arbeit bis
+zum Abschluss des Laufs).
 Betrieb: `docs/operations-guide.md`; Build und Release:
 `docs/architecture/build-and-release.md`.
 
@@ -115,8 +119,8 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 |---|---|---|
 | `domain::invoice` | Core | `validate_for_issue` (§14/§19/§33, Telefon und Fälligkeitsdatum für XRechnung), `compute_totals` (Cent, kaufm. Rundung), §14c-Schutz |
 | `domain::contact` | Core | Kontakt-Validierung |
-| `domain::kleinunternehmer` | Core | §19-Hinweistext (wortgleich), 5-Jahres-Bindung |
-| `domain::storno` | Core | Storno-Beleg aus Original ableiten (Mengen negiert) |
+| `domain::kleinunternehmer` | Core | §19-Hinweistext (wortgleich), Anwenden und Prüfen am Beleg; Status und Bindung in `domain::tax_status` (§2h) |
+| `domain::storno` | Core | Storno-Beleg aus Original ableiten (Mengen negiert, Leistungszeitraum übernommen) |
 | `domain::numbering` | Core | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) |
 | `einvoice::generator` | Core | XRechnung als UN/CEFACT **CII** (ADR 0007), BT-22/BT-120 §19, BG-6/BT-29 |
 | `pdf::klausel_check` | Core | strenger §19-Marker-Check vor Render (Rechnung + Angebot) |
@@ -146,7 +150,7 @@ Browser entsperrt (E3). Die Anmeldung verlangt zusätzlich TOTP (E5).
 | `pdf::bundle` | Core | PDF-Merge (lopdf) für das Angebots-Druck-Bundle (ADR 0018) |
 | `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver + `list_templates` (ADR 0030) |
 | `notify::{store,rules}` | Shell | In-App-Inbox (Quelle der Wahrheit und einziger Kanal), Regeln, Dedup (ADR 0027); OS-Benachrichtigungen gibt es im Server nicht |
-| `fiscal_year::{lock,transition,guard}` | Shell | prüfungssicherer GJ-Abschluss + `ensure_year_open`-Guard (ADR 0027) |
+| `fiscal_year::{lock,transition,guard}` | Shell | GJ-Abschluss mit Sperre (§ 146 Abs. 4 AO) + `ensure_year_open`-Guard (ADR 0027) |
 | `scheduler::{tick,recurring,reminders,integrity_check_cron,depreciation_year_close,recurring_invoice,update_check}` | Shell | 5-Min-Tick, nur entsperrt, Catch-up (ADR 0023/0027, §5) |
 | `assets::afa_tabellen` | Shell | AfA-Tabellen-Laden aus `inputs/afa-tabellen.json` |
 | `db::repo::{expenses,private_movements,payment_accounts,recurring,assets,depreciation,euer,email_log,app_settings,legal_documents,attachments,quotes}` | Shell | Repos der Phase-2-Domänen, AGB/Datenschutz-Versionierung (ADR 0018) |
@@ -237,6 +241,23 @@ Designleitlinie `architecture/design.md`; dieser Abschnitt nennt nur die Baustei
 Server-Seite: neue Lesefelder ohne Migration und der Lese-Command `assets_disposal_preview`
 (Nr. 80–86, `architecture/modules.md` §14, `architecture/data-model.md` §2g); Meldungen des
 Servers in der Sprache der Oberfläche, nur Texte, keine Logik (Nr. 168).
+
+### 2h. Lauf 2026.11.1 — Fachliche Korrekturen (ADR 0042)
+
+Migrationen 0033–0035 (Schema 35). Einzelheiten: `architecture/paragraph-19.md`,
+`architecture/gobd.md`, `architecture/data-model.md`, `architecture/modules.md`.
+
+| Modul | Schicht | Verantwortung |
+|---|---|---|
+| `domain::tax_status` | Core | Steuerstatus nach § 19 UStG als Historie: Status an einem Datum und je Jahr (Segmente bei Wechsel mitten im Jahr), maßgebliches Datum je Beleg (`document_date`), Bindung nach einem Verzicht (fünf Kalenderjahre einschließlich des Wirkungsjahres), Prüfung neuer Einträge und Widerrufe (Nr. 1–6, 17–21) |
+| `commands::tax_status` + `db::repo::tax_status` | Shell | `tax_status_overview`, `tax_status_at`, `tax_status_change_preview` (lesend); `tax_status_change_add`, `tax_status_change_revoke` (Re-Auth, Audit in derselben Transaktion); Gesamtumsatz nach vereinnahmten Entgelten und Grenzhinweis |
+| `db::repo::invoice_payments` | Shell | append-only Zahlungsbuch `invoice_payments`: Zahlung erfassen und per Gegenbuchung stornieren (`invoices_reverse_payment`, Re-Auth, Grund, nur offenes Geschäftsjahr des Originaldatums), Cache-Spalten der Rechnung per Trigger an das Buch gebunden (Nr. 7–9) |
+| `domain::invoice`, `einvoice::generator`, `pdf::templates` | Core | Leistungsdatum oder Leistungszeitraum (BG-14, BT-73/BT-74), Vorausrechnung erlaubt, Leitweg-ID (BT-10) am Entwurf; eigene Vorlagen ohne Zeitraum → eingebaute Vorlage mit Hinweis (Nr. 10–12, 22–24) |
+| `commands::quotes` (`quotes_update_draft`) | Shell | Angebots-Entwürfe bearbeiten, gleiche Prüfungen wie beim Anlegen; Lesefeld `restoreConflict` an Rechnung und Angebot (Nr. 13, 25, 26) |
+| `commands::recurring` (`recurring_backlog_preview`) | Shell | Rückstand-Vorschau aus derselben Funktion wie der Lauf (Anzahl und Daten bis zur Grenze von 24; Nr. 27) |
+| `euer::datev_csv` | Core | Buchungsstapel nach der DATEV-Formatbeschreibung: `EXTF_`-Dateiname, Berater- und Mandantennummer Pflicht, Feldregeln mit Regeltest, Gegenbuchungen mit umgekehrtem Soll/Haben (Nr. 9, 15, 28, 29) |
+| `domain::vat_adjustment` + `commands::vat_adjustment` | Core + Shell | Übersicht der Vorsteuerberichtigung nach § 15a UStG (`vat_adjustment_overview`, Route `/assets/vat-adjustment`): Berichtigungszeitraum monatsgenau nach § 45 UStDV, Anteil je Jahr, § 44 UStDV — ohne Buchung (Nr. 14, 30) |
+| Frontend | `src/` | Abschnitt „Steuerstatus“ unter „Meine Firmendaten“, „Zahlung stornieren“, Leistung als Datum oder Zeitraum, Angebots-Editor `/quotes/[id]/edit`; Hilfe-Symbole lesen nur Titel und Slugs des Handbuchs (Vite-Plugin `klein-buch-handbook-meta`), die Seitentexte lädt erst `/help` (Nr. 31–33) |
 
 ---
 
@@ -399,7 +420,9 @@ Passphrase einspielbar. TOTP und Einmal-Codes erneuert `POST
 Eigener Belegkreis `AN-{YYYY}-{NNNN}`. Lifecycle:
 `draft → (Festschreiben = Lock → sent) → accepted | rejected → converted | canceled`.
 Festschreiben setzt `locked_at`; ab da greift `trg_quotes_immutable` auf den
-Kernfeldern (Angebote sind keine E-Rechnungen → kein KoSIT/Mustang). Annahme
+Kernfeldern (Angebote sind keine E-Rechnungen → kein KoSIT/Mustang). Ein
+Entwurf lässt sich bis dahin bearbeiten (`quotes_update_draft`, ADR 0042 Nr. 13).
+Annahme
 archiviert optional den unterschriebenen Vertrag write-once (Upload-Art
 `vertrag`, `attachments`, `parent_type='quote'`). Konvertierung läuft **nur aus
 `accepted`**: `convert_to_invoice` (pure) → gemeinsamer Draft-Helper (setzt
@@ -429,8 +452,9 @@ write-once archiviert (`ReceivedEinvoice`). ADR 0024.
 Anlage anlegen → manueller AfA-Lauf (`domain::depreciation`, idempotent) →
 `depreciation_entries`. EÜR: `euer::load_inputs` (Shell) → `euer::aggregate`
 (Core, Cash-Basis §11 EStG, ADR 0022) → read-only Report. Export:
-`euer_export_*` → ELSTER-Ausfüllhilfe + „Anlage EÜR"-PDF (Typst), DATEV-EXTF
-(SKR03-Default), Steuerberater-ZIP — alle als Download-Ticket (E10, §4.21).
+`euer_export_*` → ELSTER-Ausfüllhilfe + „Anlage EÜR"-PDF (Typst), DATEV-Stapel
+`EXTF_Buchungsstapel_{Jahr}_{SKR}.csv` (SKR03-Default; Berater- und Mandantennummer
+Pflicht, ADR 0042 Nr. 15), Steuerberater-ZIP (ohne Nummern ohne Stapel) — alle als Download-Ticket (E10, §4.21).
 AfA-Safeguard warnt bei ungebuchter AfA. ADR 0025/0026.
 
 ### 4.12 Geschäftsjahres-Abschluss + Hinweise (Block 15)
@@ -483,13 +507,15 @@ offenen Entwürfe; einmalig + irreversibel. ADR 0032.
 Abo-Vorlage (`recurring_invoices`, Stammdatum) → der Scheduler-Job im Tick (nur
 entsperrt; die Seite löst beim Öffnen keinen Lauf aus) materialisiert am
 Stichtag über **dieselbe** draft→lock-Pipeline (§4.1): Belegdatum = **heute**
-(nie rückdatiert, §14 Abs. 4 Nr. 3), Leistungszeitraum als `delivery_date`.
+(nie rückdatiert, §14 Abs. 4 Nr. 3), Abrechnungszeitraum als Leistungszeitraum
+(`service_period_start`/`_end`, vom Stichtag bis zum Tag vor dem nächsten; ADR 0042 Nr. 22).
 `auto_mode` steuert je Vorlage Entwurf / Festschreiben / Festschreiben+Versand.
 §19 wird beim Speichern und vor jeder Materialisierung serverseitig erzwungen.
 Nummer, Entwurf, Audit und Vorrücken committen in einer Transaktion;
 Festschreiben/Versand setzt ein Lauf nach einem Abbruch fort (Marker). Bis drei
 fällige Termine holt der Lauf selbst nach (nur der jüngste nach `auto_mode`,
-ältere als Entwurf), mehr nur nach Bestätigung („Rückstand …“). Gegen Doppel:
+ältere als Entwurf), mehr nur nach Bestätigung („Rückstand …“ mit Vorschau aus
+`recurring_backlog_preview`). Gegen Doppel:
 Sperre je Vorlage (auch Bearbeiten/Pausieren) plus Compare-and-Swap. ADR 0033,
 ADR 0040.
 
@@ -662,9 +688,15 @@ den verlinkten ADRs.
   keine Totallöschung (Factory Reset im Server abgeschaltet, E7). Unter Linux
   heißt write-once Erkennung statt Verhinderung (`architecture/security.md`,
   „Write-once unter Linux").
-- **§19 Kleinunternehmer** (ADR 0005). Default `is_kleinunternehmer = true`,
-  USt-Felder im UI gesperrt, BT-22-Klausel Pflicht im XML + sichtbar im PDF,
-  §14c-Schutz im Backend, Verzicht-Toggle mit 5-Jahres-Bindungs-Warn-Dialog.
+- **§19 Kleinunternehmer** (ADR 0005, ADR 0042). Default Kleinunternehmer; der
+  Status ist eine append-only Historie (`tax_status_changes`) mit Wirkungsdatum
+  und Grund, jeder Beleg nimmt den Status an seinem Leistungsdatum (Kosten:
+  Belegdatum). Gilt §19: USt-Felder im UI gesperrt, BT-22-Klausel Pflicht im XML
+  + sichtbar im PDF, §14c-Schutz im Backend. Ein Verzicht bindet fünf
+  Kalenderjahre einschließlich des Wirkungsjahres, ein gesetzlicher Wegfall nicht.
+- **Zahlungen** (ADR 0042). append-only Zahlungsbuch `invoice_payments`; Korrektur
+  nur per Gegenbuchung mit Grund am ursprünglichen Zahldatum, im offenen
+  Geschäftsjahr.
 - **Backup** (ADR 0009 + 0034 + 0035 + 0039). Passphrase bei der Einrichtung
   erzwungen; Auto-Backup bei jedem Lock (vermerkt, kurz danach im Scheduler)
   + täglich im Scheduler; Pflicht-Backup
@@ -686,7 +718,7 @@ den verlinkten ADRs.
   (no-update/no-delete-Trigger), Abschluss nur für abgelaufene Jahre,
   unumkehrbar; Storno als Korrektur bleibt möglich.
 - **Schema-Disziplin** (ADR 0003). STRICT-Tabellen, forward-only Migrationen
-  (0001–0032, Version v32, LF-Zeilenenden), Schema-Version-Check beim
+  (0001–0035, Version v35, LF-Zeilenenden), Schema-Version-Check beim
   Entsperren (neuere DB ⇒ kein Entsperren), Geld als Integer-Cents, UUIDv7-PKs.
   Restore nimmt Backups mit `30 ≤ schema ≤ EXPECTED` und migriert vorwärts.
 - **`inputs/` tabu.** Vom Menschen gepflegt; der Container ergänzt das Volume
@@ -736,6 +768,11 @@ den verlinkten ADRs.
   Desktop: Tokens und Bausteine, deutsche Betragseingabe, Fehler am Feld, Menü
   „Mehr“, Seitentitel, F1 zum Kapitel, Begriffe der Oberfläche in Handbuch und
   Server-Meldungen, Lesefelder ohne Migration (§2g). Version 2026.11.0.
+- **Lauf 2026.11.1 (V1–V8, ADR 0042).** §19-Statushistorie (0033), Zahlungsbuch mit
+  „Zahlung stornieren“ (0034), Leistungszeitraum, Vorausrechnung und Leitweg-ID am
+  Entwurf (0035), Angebots-Entwürfe bearbeiten, Rückstand-Vorschau, DATEV-Stapel nach
+  der Formatbeschreibung, Übersicht § 15a UStG, Sicherheits-Updates (zip 9, russh
+  0.65), Handbuch aus dem Start-Bundle (§2h). Version 2026.11.1.
 
 **Auslieferung** ist das signierte Image `ghcr.io/hozwei/klein-buch:<CalVer>`
 aus dem öffentlichen Repository, mit SBOM und Quellarchiv je Release; betrieben
@@ -752,13 +789,13 @@ Dateien in `docs/architecture/`:
 
 | Datei | Inhalt | Stand |
 |---|---|---|
-| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | 2026-10-25 (Lauf F, inkl. §11 ASVS-Entscheidungen) |
-| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | 2026-10-25 (Lauf F2) |
+| [`architecture/security.md`](architecture/security.md) | Bedrohungsmodell für den Internetbetrieb (Phase W) mit Status je Maßnahme; SQLCipher-Kette, Verifier, Backup-Hülle, Off-Site-Ziele, SFTP, `secrets`-Store, Start und Entsperren, Restore-Phasen, Integritätsprüfung, Versand, Write-once unter Linux | 2026-10-25 (Lauf F, inkl. §11 ASVS-Entscheidungen), Nachtrag 2026-10-31 (Lauf 2026.11.1: zip 9, russh 0.65, Re-Auth) |
+| [`architecture/gobd.md`](architecture/gobd.md) | GoBD-Umsetzung: Lock-Trigger, Archiv write-once + SHA-256 + Re-Hash, Audit-Log append-only, Storno, Aufbewahrung, Tests | 2026-10-25 (Lauf F2), Nachträge 2026-10-27/31 (Lauf 2026.11.1: Statushistorie, Zahlungsbuch, 0035) |
 | [`architecture/build-and-release.md`](architecture/build-and-release.md) | Image-Build (`Dockerfile`), Sidecar aus geprüften Quellen, CI-Gates, Trockenlauf, Release mit Signatur/SBOM/Quellarchiv, Veröffentlichen | Phase W (W13) |
-| [`architecture/paragraph-19.md`](architecture/paragraph-19.md) | §19-Logik: UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Verzicht/5-Jahres-Bindung, §14c-Schutz | 2026-05-26 |
-| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0041) mit Querverweisen | 2026-10-27 (Lauf 2026.11, U6) |
-| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F und Lauf 2026.11 (Lesefelder, `assets_disposal_preview`) |
-| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste, abgeleitete Lesefelder (§2g) | 2026-10-27, Schema v32 (inkl. 0032 GoBD-Absicherungen, ON DELETE; Lesefelder Lauf 2026.11) |
+| [`architecture/paragraph-19.md`](architecture/paragraph-19.md) | §19-Logik: UI-Sperren, BT-22-Pfad in der XRechnung, PDF-Klausel-Check, Steuerstatus als Historie (Verzicht, Wegfall, Rückkehr), §19-Status je Beleg, §14c-Schutz, § 15a-Übersicht | 2026-10-31 (Lauf 2026.11.1) |
+| [`architecture/adr-index.md`](architecture/adr-index.md) | ADR-Index (0001–0042) mit Querverweisen | 2026-10-31 (Lauf 2026.11.1) |
+| [`architecture/modules.md`](architecture/modules.md) | Modul-Referenz je Verzeichnis | 2026-10-24 (Phase W, inkl. `server/*` §15 und Wurzel-Module §16), Nachträge Lauf F, Lauf 2026.11 (Lesefelder, `assets_disposal_preview`) und Lauf 2026.11.1 (Commands aus ADR 0042) |
+| [`architecture/data-model.md`](architecture/data-model.md) | Tabellen, GoBD-Trigger, Migrations-Liste, abgeleitete Lesefelder (§2g) | 2026-10-31, Schema v35 (inkl. 0033–0035 aus Lauf 2026.11.1; Lesefelder Lauf 2026.11 und 2026.11.1) |
 | [`architecture/handbook.md`](architecture/handbook.md) | Aufbau und Konventionen des eingebauten Handbuchs | — |
 | [`architecture/design.md`](architecture/design.md) | Designleitlinie: Tokens, Bausteine, Status-Wörter, Muster (Listen, Detailseiten, Editoren, Bestätigungen), Responsive, deutsche Formate | 2026-10-26 (Lauf 2026.11, U4) |
 | [`architecture/conventions.md`](architecture/conventions.md) | Doku-Konventionen (Sprache, Aufbau, „Letzte Verifikation") | 2026-05-26 |
@@ -782,3 +819,6 @@ W13 geprüft). Quellen: `src-tauri/src/server/` (`mod.rs`, `startup.rs`,
 ADRs 0001–0041): Stand-Zeile, ADR-Zählung, §2g Oberfläche (gegen `src/lib/`,
 `src/lib/styles/tokens.css`, `src/routes/+layout.svelte`, `pageTitle.svelte.ts`,
 `routeHelp.ts`, `static/manifest.webmanifest` und ADR 0041 geprüft), §8 und §9.
+Nachtrag 2026-10-31 (Lauf 2026.11.1, V7; Schema v35, ADRs 0001–0042): Kopf, §2a, §2h,
+§4.8, §4.11, §4.17, §7, §8 und §9 gegen `migrations/0033..0035`, `commands/registry.rs`,
+`src/domain/tax_status.rs`, `src/euer/datev_csv.rs`, `vite.config.js` und ADR 0042 geprüft.

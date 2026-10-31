@@ -314,10 +314,15 @@ impl ElsterLine {
 #[serde(rename_all = "camelCase")]
 pub struct ElsterForm {
     pub fiscal_year: i32,
-    /// §19-Status des Geschäftsjahres (Kopf der Ausfüllhilfe). Brutto/netto der
-    /// Ausgaben folgt seit Lauf F8d dem Status jeder Kostenposition bei
-    /// Leistungsbezug (`ExpenseItem::is_kleinunternehmer`).
+    /// §19 das ganze Geschäftsjahr (Kopf der Ausfüllhilfe); `false` bei
+    /// Regelbesteuerung und bei einem Wechsel im Jahr. Brutto/netto der Ausgaben
+    /// folgt dem Status jeder Kostenposition bei Leistungsbezug
+    /// (`ExpenseItem::is_kleinunternehmer`, Lauf F8d, ADR 0042 Nr. 3).
     pub is_kleinunternehmer: bool,
+    /// Wechsel des Steuerstatus im Jahr (ADR 0042 Nr. 3): Abschnitte als Text;
+    /// `None` = einheitlicher Status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_change: Option<String>,
     /// Jahr des Vordrucks, dem die Zeilennummern folgen.
     pub form_year: i32,
     /// `true` = Zeilennummern am Vordruck genau dieses Jahres geprüft.
@@ -348,9 +353,12 @@ pub struct ElsterInputs<'a> {
     /// Anschaffungskosten der Anlage vom Betrag der Kosten ab, weist die
     /// Ausfüllhilfe darauf hin.
     pub capitalized: &'a [ExpenseItem],
-    /// §19-Status des Geschäftsjahres (Kopf, Hinweise). Die Ausgaben tragen
-    /// ihren eigenen Status bei Leistungsbezug (Lauf F8d).
+    /// §19 das ganze Geschäftsjahr (Kopf, Hinweise). Die Ausgaben tragen ihren
+    /// eigenen Status bei Leistungsbezug (Lauf F8d).
     pub is_kleinunternehmer: bool,
+    /// Wechsel des Steuerstatus im Jahr als Text (ADR 0042 Nr. 3); `None` =
+    /// einheitlicher Status.
+    pub status_change: Option<String>,
 }
 
 // ============================================================================
@@ -477,7 +485,10 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
             vorsteuer += e.tax_cents;
             regel_expense |= e.tax_cents != 0;
         }
-        if e.is_kleinunternehmer != inp.is_kleinunternehmer && e.tax_cents != 0 {
+        if inp.status_change.is_none()
+            && e.is_kleinunternehmer != inp.is_kleinunternehmer
+            && e.tax_cents != 0
+        {
             other_status.push(&e.expense_number);
         }
     }
@@ -490,7 +501,10 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
             vorsteuer += e.tax_cents;
             regel_expense = true;
         }
-        if e.is_kleinunternehmer != inp.is_kleinunternehmer && e.tax_cents != 0 {
+        if inp.status_change.is_none()
+            && e.is_kleinunternehmer != inp.is_kleinunternehmer
+            && e.tax_cents != 0
+        {
             other_status.push(&e.expense_number);
         }
         let expected = crate::domain::asset::acquisition_cost_from_expense(
@@ -543,7 +557,7 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
     }
     if !mismatched.is_empty() {
         notes.push(format!(
-            "Aktivierte Kosten mit abweichenden Anschaffungskosten: {}. Die EÜR nimmt diese Kostenpositionen ganz heraus und setzt nur die AfA der Anlage an; maßgeblich ist nach dem Steuerstatus bei Leistungsbezug (Belegdatum der Kosten) als Kleinunternehmer der Bruttobetrag, bei Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Ursache ist oft ein späterer Verzicht auf §19; Klein.Buch wendet einen Wechsel des Steuerstatus immer ab Beginn des Kalenderjahres an. Ein nicht aktivierter Rest wird sonst in keinem Jahr abgezogen, ein Mehrbetrag ohne Ausgabe abgeschrieben. Korrigiere die Anschaffungskosten der Anlage (Anlage bearbeiten; eine gebuchte AfA vorher im offenen Geschäftsjahr zurücksetzen). Nicht korrigieren, sondern mit der Steuerberatung klären: wenn für die Anlage AfA in einem abgeschlossenen Jahr festgeschrieben oder die Anlage abgegangen ist, und wenn §19 im laufenden Jahr durch Überschreiten der 100.000-€-Grenze weggefallen ist (§ 19 Abs. 1 UStG). Im zweiten Fall bleiben Kosten mit Leistungsbezug vor dem Überschreiten beim Bruttobetrag ohne Vorsteuer; Klein.Buch bildet einen Wechsel mitten im Jahr nicht ab.",
+            "Aktivierte Kosten mit abweichenden Anschaffungskosten: {}. Die EÜR nimmt diese Kostenpositionen ganz heraus und setzt nur die AfA der Anlage an; maßgeblich ist nach dem Steuerstatus bei Leistungsbezug (Belegdatum der Kosten) als Kleinunternehmer der Bruttobetrag, bei Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Ursache ist oft ein späterer Wechsel des Steuerstatus (Klein.Buch bestimmt den Status taggenau aus der Steuerstatus-Historie). Ein nicht aktivierter Rest wird sonst in keinem Jahr abgezogen, ein Mehrbetrag ohne Ausgabe abgeschrieben. Korrigiere die Anschaffungskosten der Anlage (Anlage bearbeiten; eine gebuchte AfA vorher im offenen Geschäftsjahr zurücksetzen). Nicht korrigieren, sondern mit der Steuerberatung klären: wenn für die Anlage AfA in einem abgeschlossenen Jahr festgeschrieben oder die Anlage abgegangen ist.",
             mismatched.join(", "),
         ));
     }
@@ -553,6 +567,11 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
             other_status.join(", "),
         ));
     }
+    if let Some(change) = inp.status_change.as_deref() {
+        notes.push(format!(
+            "Wechsel des Steuerstatus in {year}: {change}. Einnahmen folgen dem beim Festschreiben eingefrorenen Status jeder Rechnung, Kosten dem Status am Belegdatum (Leistungsbezug, § 15 Abs. 1 UStG); vor dem Wechsel brutto ohne Vorsteuer, danach netto mit Vorsteuer."
+        ));
+    }
     if !inp.is_kleinunternehmer || regel_income || regel_expense {
         notes.push(regel_note(layout));
     }
@@ -560,6 +579,7 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
     ElsterForm {
         fiscal_year: year,
         is_kleinunternehmer: inp.is_kleinunternehmer,
+        status_change: inp.status_change.clone(),
         form_year: layout.form_year(),
         layout_verified: verified,
         lines,
@@ -574,7 +594,7 @@ pub fn build_form(inp: &ElsterInputs<'_>) -> ElsterForm {
 /// aufteilt und was der Steuerberater ergänzen muss.
 fn regel_note(layout: Layout) -> String {
     format!(
-        "Regelbesteuerung: Einnahmen stehen netto in Zeile {} (Kz 112), die vereinnahmte Umsatzsteuer in Zeile {} (Kz 140), Ausgaben netto mit der Vorsteuer in Zeile {} (Kz 185). Nicht abgebildet sind die an das Finanzamt gezahlte und die vom Finanzamt erstattete Umsatzsteuer (Kz 186 und 141), die Umsatzsteuer auf Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer und die Vorsteuer aus Anlagen, die nicht aus einer erfassten Kostenposition übernommen wurden; die Umsatzsteuer-Voranmeldung erstellt Klein.Buch nicht. Bitte mit dem Steuerberater ergänzen. Ist §19 in diesem Jahr durch Überschreiten der 100.000-€-Grenze weggefallen, wendet Klein.Buch die Regelbesteuerung auf alle Kosten des Jahres an: Kz 185 enthält dann auch die nicht abziehbare Umsatzsteuer aus Kosten mit Leistungsbezug vor dem Überschreiten, die dort brutto als Ausgabe gehört (§ 19 Abs. 1, § 15 Abs. 1 UStG); auch das bitte mit dem Steuerberater korrigieren.",
+        "Regelbesteuerung: Einnahmen stehen netto in Zeile {} (Kz 112), die vereinnahmte Umsatzsteuer in Zeile {} (Kz 140), Ausgaben netto mit der Vorsteuer in Zeile {} (Kz 185). Nicht abgebildet sind die an das Finanzamt gezahlte und die vom Finanzamt erstattete Umsatzsteuer (Kz 186 und 141), die Umsatzsteuer auf Anlagenverkäufe und Entnahmen, nicht abziehbare Vorsteuer und die Vorsteuer aus Anlagen, die nicht aus einer erfassten Kostenposition übernommen wurden; die Umsatzsteuer-Voranmeldung erstellt Klein.Buch nicht. Bitte mit dem Steuerberater ergänzen.",
         Pos::UstPflichtig.zeile(layout),
         Pos::VereinnahmteUst.zeile(layout),
         Pos::Vorsteuer.zeile(layout),
@@ -748,6 +768,7 @@ mod tests {
             expenses: &expenses,
             capitalized: &[],
             is_kleinunternehmer: klein,
+            status_change: None,
         })
     }
 
@@ -929,6 +950,7 @@ mod tests {
             expenses: &[regel(expense("office", 11_900, 1_900))],
             capitalized: &items,
             is_kleinunternehmer: false,
+            status_change: None,
         });
         assert_eq!(entry(&f, 185).unwrap().amount_cents, 20_900);
         assert_eq!(entry(&f, 229).unwrap().amount_cents, 10_000);
@@ -944,6 +966,7 @@ mod tests {
             expenses: &[],
             capitalized: &items,
             is_kleinunternehmer: true,
+            status_change: None,
         });
         assert!(entry(&f, 185).is_none());
         assert_eq!(f.expense_total_cents, 0);
@@ -965,6 +988,7 @@ mod tests {
             expenses: &[],
             capitalized: &items,
             is_kleinunternehmer: true,
+            status_change: None,
         });
         let note = f
             .notes
@@ -1001,6 +1025,7 @@ mod tests {
             expenses: std::slice::from_ref(&klein_supply),
             capitalized: &[],
             is_kleinunternehmer: false,
+            status_change: None,
         });
         assert_eq!(entry(&f, 229).unwrap().amount_cents, 11_900);
         assert!(entry(&f, 185).is_none());
@@ -1024,6 +1049,7 @@ mod tests {
             expenses: std::slice::from_ref(&regel_supply),
             capitalized: &[],
             is_kleinunternehmer: true,
+            status_change: None,
         });
         assert_eq!(entry(&f, 229).unwrap().amount_cents, 10_000);
         assert_eq!(entry(&f, 185).unwrap().amount_cents, 1_900);
@@ -1042,6 +1068,7 @@ mod tests {
             expenses: &[],
             capitalized: &items,
             is_kleinunternehmer: false,
+            status_change: None,
         });
         assert!(entry(&f, 185).is_none());
         assert!(!f.notes.iter().any(|n| n.contains("abweichenden")));

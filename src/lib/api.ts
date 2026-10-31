@@ -52,10 +52,17 @@ import type {
   EmailLogEntry,
   EmailLogFilter,
   Paragraph19Info,
+  TaxStatusAt,
+  TaxStatusChangeInput,
+  TaxStatusChangePreview,
+  TaxStatusChangeResult,
+  TaxStatusOverview,
+  VatAdjustmentOverview,
   PdfTemplateMeta,
   TravelSettings,
   TravelLine,
   RecordPaymentArgs,
+  ReversePaymentArgs,
   RenderedMail,
   SellerProfile,
   SellerProfileInput,
@@ -221,6 +228,39 @@ export function paragraph19Info(): Promise<Paragraph19Info> {
   return invoke<Paragraph19Info>("paragraph_19_info");
 }
 
+// ---- Steuerstatus nach § 19 UStG (ADR 0042) ---------------------------------
+
+/** Historie, Status heute, Bindung, Gesamtumsatz und Grenzhinweise. */
+export function taxStatusOverview(): Promise<TaxStatusOverview> {
+  return invoke<TaxStatusOverview>("tax_status_overview");
+}
+
+/** Status an einem Datum (YYYY-MM-DD): Leistungsdatum, sonst Belegdatum. */
+export function taxStatusAt(date: string): Promise<TaxStatusAt> {
+  return invoke<TaxStatusAt>("tax_status_at", { date });
+}
+
+/** Prüft einen geplanten Eintrag und liefert seine Folgen; schreibt nichts. */
+export function taxStatusChangePreview(input: TaxStatusChangeInput): Promise<TaxStatusChangePreview> {
+  return invoke<TaxStatusChangePreview>("tax_status_change_preview", { input });
+}
+
+/** Trägt einen Wechsel ein (frische Re-Auth). */
+export function taxStatusChangeAdd(input: TaxStatusChangeInput): Promise<TaxStatusChangeResult> {
+  return invoke<TaxStatusChangeResult>("tax_status_change_add", { input });
+}
+
+/** Widerruft den jüngsten gültigen Eintrag mit Grund (frische Re-Auth). */
+export function taxStatusChangeRevoke(id: string, reason: string): Promise<TaxStatusChangeResult> {
+  return invoke<TaxStatusChangeResult>("tax_status_change_revoke", { id, reason });
+}
+
+/** Übersicht der Vorsteuerberichtigung nach § 15a UStG für ein Kalenderjahr
+ *  (ADR 0042 Nr. 14): nur Übersicht, keine Buchung. */
+export function vatAdjustmentOverview(year: number): Promise<VatAdjustmentOverview> {
+  return invoke<VatAdjustmentOverview>("vat_adjustment_overview", { year });
+}
+
 /** Logo aus einem Upload der Art `logo` (Plan W7). */
 export function sellerLogoSet(uploadId: string): Promise<SellerProfile> {
   return invoke<SellerProfile>("seller_logo_set", { uploadId });
@@ -345,6 +385,11 @@ export function invoicesValidateDraft(id: string): Promise<ValidationIssueDto[]>
   return invoke<ValidationIssueDto[]>("invoices_validate_draft", { id });
 }
 
+/**
+ * Stellt einen Entwurf aus. `buyerReference` ist optional (ADR 0042 Nr. 12):
+ * ein Wert (nicht leer, nicht „N/A“) ersetzt die am Entwurf gespeicherte
+ * Leitweg-ID; ohne Wert gilt die gespeicherte, sonst „N/A“.
+ */
 export function invoicesLockAndIssue(
   id: string,
   buyerReference: string | null = null,
@@ -354,6 +399,15 @@ export function invoicesLockAndIssue(
 
 export function invoicesRecordPayment(args: RecordPaymentArgs): Promise<Invoice> {
   return invoke<Invoice>("invoices_record_payment", { args });
+}
+
+/**
+ * Storniert eine falsch erfasste Zahlung durch eine Gegenbuchung (Re-Auth,
+ * ADR 0042 Nr. 8): Betrag, Datum und Konto der Zahlung mit umgekehrtem
+ * Vorzeichen, Grund mindestens 10 Zeichen. Danach richtig neu buchen.
+ */
+export function invoicesReversePayment(args: ReversePaymentArgs): Promise<Invoice> {
+  return invoke<Invoice>("invoices_reverse_payment", args);
 }
 
 export function invoicesCancel(args: CancelArgs): Promise<CancelResponse> {
@@ -442,6 +496,11 @@ export function quotesGet(id: string): Promise<QuoteDetail | null> {
 
 export function quotesCreateDraft(args: QuoteCreateDraftArgs): Promise<QuoteDetail> {
   return invoke<QuoteDetail>("quotes_create_draft", { args });
+}
+
+/** Angebots-Entwurf bearbeiten (ADR 0042 Nr. 13); Nummer und Geschäftsjahr bleiben. */
+export function quotesUpdateDraft(id: string, args: QuoteCreateDraftArgs): Promise<QuoteDetail> {
+  return invoke<QuoteDetail>("quotes_update_draft", { id, args });
 }
 
 export function quotesValidateDraft(id: string): Promise<ValidationIssueDto[]> {
@@ -535,9 +594,16 @@ export function packagePreview(
 
 /** Materialisiert eine Beleg-Position aus der aktiven Revision eines Pakets.
  *  Reine Aufbereitung (schreibt nichts) — das Frontend hängt sie an die
- *  Positions-Liste. */
-export function packageMaterializeItem(packageId: string): Promise<MaterializedPackageItem> {
-  return invoke<MaterializedPackageItem>("package_materialize_item", { packageId });
+ *  Positions-Liste. `documentDate` (YYYY-MM-DD): maßgebliches Datum des
+ *  Zielbelegs für den §19-Status (ADR 0042 Nr. 3); ohne Angabe heute. */
+export function packageMaterializeItem(
+  packageId: string,
+  documentDate?: string | null,
+): Promise<MaterializedPackageItem> {
+  return invoke<MaterializedPackageItem>("package_materialize_item", {
+    packageId,
+    documentDate: documentDate ?? null,
+  });
 }
 
 // ---- Paket-Katalog-Broschüre (Block P4) -------------------------------------
@@ -941,13 +1007,15 @@ export function euerExportPdf(fiscalYear: number): Promise<EuerPdfExport> {
   return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear });
 }
 
-/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe.
- *  Berater- und Mandantennummer sind optional (Feld 11/12 des DATEV-Kopfs;
- *  1001–9999999 bzw. 1–99999, sonst lehnt der Server ab — F5, U4). */
+/** Erzeugt den DATEV-Buchungsstapel (`EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`,
+ *  CP1252) für die Steuerberater-Übergabe. Berater- und Mandantennummer sind
+ *  Pflicht (Feld 11/12 des DATEV-Kopfs; 1001–9999999 bzw. 1–99999). Fehlt eine
+ *  oder liegt sie außerhalb, lehnt der Server mit einer Meldung ab, die mit
+ *  „Beraternummer“ bzw. „Mandantennummer“ beginnt (ADR 0042 Nr. 15). */
 export function euerExportDatev(
   fiscalYear: number,
   skr: string,
-  numbers: DatevHeaderNumbers = {},
+  numbers: DatevHeaderNumbers,
 ): Promise<DatevExport> {
   return invoke<DatevExport>("euer_export_datev", {
     fiscalYear,
@@ -957,8 +1025,9 @@ export function euerExportDatev(
   });
 }
 
-/** Erzeugt das komplette Steuerberater-Paket (ZIP); Nummern wie bei
- *  `euerExportDatev` (gehen in den DATEV-Stapel im Paket). */
+/** Erzeugt das komplette Steuerberater-Paket (ZIP). Mit beiden Nummern liegt
+ *  der DATEV-Stapel im Paket; ohne beide fehlt er und LIESMICH nennt den Grund;
+ *  nur eine Nummer lehnt der Server ab (ADR 0042 Nr. 15). */
 export function euerExportStbZip(
   fiscalYear: number,
   skr: string,
@@ -1330,6 +1399,41 @@ export interface RestoreReviewList {
 
 export function recurringRestoreReviewList(): Promise<RestoreReviewList> {
   return invoke<RestoreReviewList>("recurring_restore_review_list");
+}
+
+/**
+ * Rückstand-Vorschau einer Reihe (ADR 0042 Nr. 16, V1-11): gerechnet wie die
+ * Wahl „nachholen“ bzw. „ab heute fortsetzen“ (Stand heute; der Server prüft
+ * bei der Wahl erneut).
+ */
+export interface BacklogPreview {
+  /** Nächster offener Termin (ISO). */
+  nextDueDate: string;
+  /** Verlangt die Reihe die Wahl? */
+  backlog: boolean;
+  /** Fällige Termine bis heute (innerhalb der Laufzeit). */
+  due: number;
+  /** Die ersten fälligen Termine (ISO), höchstens `cap`. */
+  dates: string[];
+  /** Höchstzahl beim Nachholen. */
+  cap: number;
+  /** Mehr Termine als `cap`: „nachholen“ wird abgelehnt. */
+  exceedsCap: boolean;
+  /** Prüfung nach einer Wiederherstellung offen. */
+  afterRestore: boolean;
+  /** Nächster Termin nach „ab heute fortsetzen“ (ISO). */
+  skipTo: string;
+  /** So viele Termine lässt „ab heute fortsetzen“ aus. */
+  skipped: number;
+  /** „Ab heute fortsetzen“ führt hinter das Laufzeit-Ende. */
+  skipEndsSeries: boolean;
+}
+
+export function recurringBacklogPreview(
+  kind: "template" | "subscription",
+  id: string,
+): Promise<BacklogPreview> {
+  return invoke<BacklogPreview>("recurring_backlog_preview", { kind, id });
 }
 
 export function appInfo(): Promise<AppInfo> {

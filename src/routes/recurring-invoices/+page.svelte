@@ -182,7 +182,7 @@
     if (busyId) return;
     let resumeMode: ResumeMode | undefined;
     if (hasBacklog(s)) {
-      const choice = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+      const choice = await askBacklogChoice("invoice", s, reviewIds.has(s.id));
       if (!choice) return;
       resumeMode = choice;
     }
@@ -257,7 +257,7 @@
   // Rückstand einer aktiven Vorlage (Hinweis „Entscheidung nötig“, W14-026).
   async function resolveBacklog(s: RecurringInvoiceRow) {
     if (busyId) return;
-    const mode = await askBacklogChoice("invoice", s.label, s.nextDueDate, reviewIds.has(s.id));
+    const mode = await askBacklogChoice("invoice", s, reviewIds.has(s.id));
     if (!mode) return;
     busyId = s.id;
     try {
@@ -435,7 +435,7 @@
         {@const mode = modeBadge(s)}
         {@const act = rowActions(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
-          <td class="cards-full" data-label="Abo-Vorlage">
+          <td class="kb-card-head" data-label="Abo-Vorlage">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {contactInfo[s.contactId]?.name ?? "—"}
@@ -481,7 +481,8 @@
   .actions-col { text-align: right; }
   /* U2: nicht mitten im Wort trennen („Betriebshaftpfli/cht“), Silbentrennung (lang="de"). */
   .abo-name { font-weight: 600; color: var(--text); overflow-wrap: break-word; hyphens: auto; }
-  .abo-meta { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
+  /* UI-13: eigenes Gewicht, sonst erbt die Nebenzeile in der Kartenansicht 700 von td.kb-card-head (tokens.css). */
+  .abo-meta { font-size: var(--fs-sm); font-weight: 400; color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   .muted-cell { color: var(--text-muted); }
   /* Pausiert: gedämpft über die Textfarbe statt Deckkraft (Kontrast 1.4.3). */

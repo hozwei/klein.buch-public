@@ -72,8 +72,11 @@ es nicht. Die Regeln sind:
 6. "Backup-Ergebnis": Hinweis nach einem erfolgreichen manuellen Backup
    und wenn die lokale Kopie eines Backups nicht geschrieben werden
    konnte oder unvollständig ist
-7. "Kosten-Abo fällig": Hinweis am Stichtag eines Kosten-Abos im Modus
-   "Erinnerung" (Kapitel "Kosten")
+. "Umsatzgrenzen nach §19 UStG": Hinweis, wenn Dein Gesamtumsatz eine
+   Grenze der Kleinunternehmer-Regelung erreicht oder überschreitet, mit
+   der auslösenden Rechnung und einem Vorschlag für das Wirkungsdatum
+   (Kapitel "Kleinunternehmer-Regelung"). Den Wechsel trägst Du selbst
+   ein; Klein.Buch wechselt nie von selbst.
 
 ## Hinweise, die sich nicht abschalten lassen
 
@@ -105,4 +108,4 @@ einen Hinweis. Ist das Problem am nächsten Tag noch da, kommt ein neuer.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

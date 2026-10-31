@@ -1,6 +1,6 @@
 [package]
 name = "klein-buch"
-version = "2026.11.0"
+version = "2026.11.1"
 description = "Lokale EÜR-Buchhaltung für deutsche §19-Kleinunternehmer"
 authors = ["Manuel Schmid <schmidm@wildbach-computerhilfe.de>"]
 edition = "2021"
@@ -156,9 +156,12 @@ url = "2"
 # libdbus entfallen.
 
 # --- SFTP-Backup-Ziel (ADR 0034, Block G1-BKP.3) ---
-# russh = reine-Rust-SSH (RustCrypto), KEIN OpenSSL/libssh → konsistent mit dem
-# rustls-only-/no-system-deps-Stack (kein cmake/NASM-Zwang; aws-lc-rs/ring sind in
-# russh nur optional, der Default-Backend ist RustCrypto). russh-sftp setzt das
+# russh = SSH in Rust, KEIN OpenSSL/libssh, keine System-Bibliothek. Transport-
+# Krypto teils RustCrypto (siehe unten), das Krypto-Backend ist aber Pflicht:
+# russh kompiliert nur mit `aws-lc-rs` oder `ring` (compile_error! in russh/lib.rs).
+# Genutzt wird `aws-lc-rs` (Default-Feature von russh; C-Code über aws-lc-sys,
+# statisch gelinkt, Build braucht einen C-Compiler) — aws-lc-rs kommt laut
+# `cargo tree -i aws-lc-rs` allein über russh. russh-sftp setzt das
 # SFTP-Subsystem auf einen russh-Channel (`channel.into_stream()`).
 # ACHTUNG (im Decision Log + G1-BKP.3-Report dokumentiert): russh 0.60 zieht
 # RustCrypto-Transport-Krypto der neuen Linie (heute aes-gcm 0.11, signature 3,
@@ -169,14 +172,21 @@ url = "2"
 # Host-Key-Pinning (SHA256-Fingerprint, TOFU-bestätigt). Falls die RC-Fläche
 # unerwünscht ist: auf eine stabile-Krypto-russh-Linie (~0.52) pinnen — dann ist
 # die Client-API gegen genau diese Version neu zu verifizieren.
-russh = "0.64"
+# 0.65 statt 0.64 (ADR 0042 V3c: CVE-2026-116794, Signatur über den SSH-Agent).
+# Klein.Buch nutzt keinen SSH-Agent (nur Passwort-Auth); die genutzte Client-API
+# ist unverändert, keine neuen transitiven Crates. Features ausdrücklich (= die
+# Default-Features von russh 0.65), damit ein späteres Update sie nicht unbemerkt
+# ändert: aws-lc-rs (Krypto-Backend, Pflicht), rsa (Prüfen von RSA-Host-Keys),
+# flate2 (zlib-Kompression).
+russh = { version = "0.65", default-features = false, features = ["aws-lc-rs", "rsa", "flate2"] }
 russh-sftp = "2.1"
 
 # --- Archive ---
 # Nur Deflate (Backups, Exporte) und Zeitstempel: ohne die Standard-Features
 # entfallen zstd/bzip2/xz samt statisch gelinktem C-Code (W12); fremde ZIPs mit
-# anderen Verfahren werden abgelehnt.
-zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+# anderen Verfahren werden abgelehnt. zip 9 statt 2 (ADR 0042 V3b: CVE-2026-115905,
+# CVE-2026-115909, RUSTSEC-2026-0367..0369); `deflate` = flate2 (zlib-rs) + zopfli.
+zip = { version = "9.1", default-features = false, features = ["deflate", "time"] }
 
 # --- Temp files (Sidecar-Bridges schreiben PDFs/XML in Temp-Dirs) ---
 tempfile = "3"
@@ -199,6 +209,9 @@ tokio = { version = "1", features = ["test-util", "macros", "rt"] }
 # Produktivcode (kein aws-lc-rs).
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# Nur Tests (ADR 0042 Nr. 15): Regeln der DATEV-Formatbeschreibung als reguläre
+# Ausdrücke mit Lookahead (`(?!0{1,10}\,00)`); liegt schon über syntect im Lockfile.
+fancy-regex = "0.16"
 
 [profile.release]
 opt-level = "z"

@@ -28,7 +28,7 @@
     {#if info}
       Klein.Buch {formatVersionDisplay(info.version)} · freie Software ({info.licenseSpdx}) ·
       {#if link}
-        <a href={link} target="_blank" rel="noopener noreferrer">Quellcode: {sourceLabel(info)}</a>
+        <a class="kb-link" href={link} target="_blank" rel="noopener noreferrer">Quellcode: {sourceLabel(info)}</a>
       {:else}
         {DEV_SOURCE_TEXT}
       {/if}
@@ -36,7 +36,7 @@
       Klein.Buch · freie Software (AGPL-3.0-or-later)
     {/if}
     ·
-    <a href="/legal/" target="_blank" rel="noopener noreferrer" data-sveltekit-reload>Lizenzen</a>
+    <a class="kb-link" href="/legal/" target="_blank" rel="noopener noreferrer" data-sveltekit-reload>Lizenzen</a>
   </p>
 {/if}
 
@@ -49,10 +49,6 @@
     font-size: var(--type-caption);
     line-height: 1.5;
     text-align: center;
-  }
-  .source-notice a {
-    color: var(--accent);
-    text-decoration: underline;
   }
   @media (pointer: coarse) {
     .source-notice a { display: inline-flex; align-items: center; min-height: var(--target); }

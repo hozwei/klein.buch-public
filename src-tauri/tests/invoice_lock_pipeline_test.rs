@@ -90,10 +90,10 @@ async fn setup_env(is_kleinunternehmer: bool) -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer,
+            // ADR 0042: der Status kommt aus der Historie (leer = §19); nur prüfen.
+            is_kleinunternehmer: Some(is_kleinunternehmer),
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await
@@ -146,6 +146,9 @@ async fn create_test_contact(pool: &SqlitePool) -> String {
 
 fn good_input() -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
         delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -218,7 +221,12 @@ async fn create_draft(env: &Env, contact_id: &str, input: InvoiceInput) -> Strin
     let payload = invoices::DraftCreatePayload {
         contact_id: contact_id.to_string(),
         fiscal_year: 2026,
-        is_kleinunternehmer: seller.is_kleinunternehmer == 1,
+        is_kleinunternehmer: klein_buch_lib::db::repo::tax_status::is_klein_at(
+            &env.pool,
+            klein_buch_lib::clock::today_berlin(),
+        )
+        .await
+        .unwrap(),
         input,
         derived_from_quote_id: None,
     };
@@ -437,6 +445,14 @@ async fn storno_creates_new_invoice_and_marks_original() {
         invoice_number: &detail.invoice.invoice_number,
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
+        service_period: None,
+        delivery_date: detail
+            .invoice
+            .delivery_date
+            .as_deref()
+            .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()),
+        invoice_date: chrono::NaiveDate::parse_from_str(&detail.invoice.invoice_date, "%Y-%m-%d")
+            .unwrap(),
         items: detail
             .items
             .iter()
@@ -603,7 +619,7 @@ async fn parallel_lock_and_payments_do_not_hit_sqlite_busy() {
                 assert!(!is_busy(&e), "Zahlung scheiterte an SQLITE_BUSY: {e}");
                 // Erlaubt: Zahlung auf A, bevor A festgeschrieben war.
                 assert!(
-                    target == a && e.to_string().contains("nicht gelockt"),
+                    target == a && e.to_string().contains("festgeschriebene Rechnungen"),
                     "{e}"
                 );
             }

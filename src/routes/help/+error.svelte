@@ -20,7 +20,7 @@
 </p>
 <p>
   Wähle ein Kapitel aus der Liste, suche im Handbuch oder beginne bei
-  <a href="/help/willkommen">Willkommen in Klein.Buch</a>.
+  <a class="kb-link" href="/help/willkommen">Willkommen in Klein.Buch</a>.
 </p>
 
 <style>
@@ -45,10 +45,5 @@
   p {
     max-width: 42rem;
     line-height: 1.6;
-  }
-  /* Link im Fließtext: unterstrichen (ADR 0041 Nr. 31). */
-  a {
-    text-decoration: underline;
-    text-underline-offset: 2px;
   }
 </style>

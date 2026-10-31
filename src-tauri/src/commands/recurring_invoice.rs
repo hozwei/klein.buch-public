@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crate::db::models::{RecurringInvoiceDetail, RecurringInvoiceRow};
 use crate::db::repo::{audit_log, recurring_invoice, seller_profile};
 use crate::domain::invoice::{compute_totals, InvoiceItemInput};
-use crate::domain::kleinunternehmer::{self, ItemVatCheck, KleinunternehmerStatus};
+use crate::domain::kleinunternehmer::{self, ItemVatCheck};
 use crate::domain::recurring_invoice::{self as domain, RecurringInvoiceInput};
 use crate::error::{Error, Result};
 use crate::scheduler::catch_up::ResumeMode;
@@ -97,7 +97,8 @@ pub async fn recurring_invoices_create(
             input.next_due_date.format("%d.%m.%Y")
         )));
     }
-    check_items_no_vat(&pool, &input.items).await?;
+    // ADR 0042 Nr. 3/10: Status am Ende des ersten Abrechnungszeitraums.
+    check_items_no_vat(&pool, &input.items, first_status_day(&input)).await?;
     let detail = recurring_invoice::create(&pool, &input).await?;
     audit_log::append(
         &pool,
@@ -127,7 +128,7 @@ pub async fn recurring_invoices_update(
 
     validate(&input)?;
     crate::commands::packages::enforce_package_provenance(&pool, &mut input.items).await?;
-    check_items_no_vat(&pool, &input.items).await?;
+    check_items_no_vat(&pool, &input.items, first_status_day(&input)).await?;
     // W14-031: nie gleichzeitig mit einem Lauf auf derselben Vorlage.
     let _guard = crate::locks::RECURRING_TEMPLATES.lock(&id).await;
     let detail = recurring_invoice::update(&pool, &id, &input).await?;
@@ -246,25 +247,22 @@ async fn has_backlog(
     let Ok(next) = chrono::NaiveDate::parse_from_str(&tmpl.next_due_date, "%Y-%m-%d") else {
         return Ok(false);
     };
-    let within = tmpl
+    let end = tmpl
         .end_date
         .as_deref()
-        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
-        .is_none_or(|end| next <= end);
-    if !within {
-        return Ok(false);
-    }
-    if next < today {
-        return Ok(true);
-    }
-    Ok(crate::scheduler::catch_up::restore_review_through(
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok());
+    let review = crate::scheduler::catch_up::restore_review_through(
         pool,
         crate::scheduler::catch_up::Series::Template,
         &tmpl.id,
         &tmpl.next_due_date,
     )
     .await?
-    .is_some_and(|_| next <= today))
+    .is_some();
+    // ADR 0042 Nr. 16: dieselbe Regel wie die Rückstand-Vorschau.
+    Ok(crate::domain::recurring::has_backlog(
+        next, today, end, review,
+    ))
 }
 
 // =============================================================================
@@ -313,6 +311,16 @@ pub async fn recurring_invoices_run_due_check(
 // Helpers
 // =============================================================================
 
+/// §19-Status-Tag der ersten Rechnung einer Vorlage (ADR 0042 Nr. 3/10): Ende
+/// des ersten Abrechnungszeitraums.
+fn first_status_day(input: &RecurringInvoiceInput) -> chrono::NaiveDate {
+    crate::domain::recurring::status_day_for(
+        &input.frequency,
+        input.day_of_period,
+        input.next_due_date,
+    )
+}
+
 fn validate(input: &RecurringInvoiceInput) -> Result<()> {
     if let Err(errs) = domain::validate_recurring_invoice(input) {
         return Err(Error::Domain(format!(
@@ -331,8 +339,9 @@ fn validate(input: &RecurringInvoiceInput) -> Result<()> {
 /// Scheduler. Bei aktivem §19 dürfen die Positionen keine USt tragen — sonst
 /// entstünden nummerierte Entwürfe, die erst beim Festschreiben (`assert_no_vat`
 /// in der Lock-Pipeline) scheitern. Nutzt denselben Domain-Check wie der
-/// Rechnungsweg (`kleinunternehmer::assert_no_vat`) mit dem aktuellen
-/// §19-Status.
+/// Rechnungsweg (`kleinunternehmer::assert_no_vat`) mit dem §19-Status am
+/// Termin `date` (Leistungsdatum der Rechnung, ADR 0042 Nr. 3): ein
+/// nachgeholter Termin vor einem Wechsel bleibt §19, einer danach nicht.
 ///
 /// Umgekehrt (KB-0014, F5-fix): Bei Regelbesteuerung darf keine Position die
 /// Steuerart E (§19) tragen — eine unter §19 gespeicherte Vorlage erzeugte nach
@@ -342,13 +351,15 @@ fn validate(input: &RecurringInvoiceInput) -> Result<()> {
 pub(crate) async fn check_items_no_vat(
     pool: &SqlitePool,
     items: &[InvoiceItemInput],
+    date: chrono::NaiveDate,
 ) -> Result<()> {
     // Onboarding erzwingt das Verkäuferprofil vor der ersten Rechnung; solange
     // keins existiert, ist der §19-Status nicht bestimmbar → kein Block.
-    let Some(seller) = seller_profile::get(pool).await? else {
+    if seller_profile::get(pool).await?.is_none() {
         return Ok(());
-    };
-    if seller.is_kleinunternehmer == 0 {
+    }
+    let is_klein = crate::db::repo::tax_status::is_klein_at(pool, date).await?;
+    if !is_klein {
         let mut exempt: Vec<u32> = items
             .iter()
             .filter(|it| it.tax_category_code == kleinunternehmer::EXEMPT_CATEGORY)
@@ -363,19 +374,13 @@ pub(crate) async fn check_items_no_vat(
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(Error::Domain(format!(
-                "Bei Regelbesteuerung gibt es die Steuerart E (§19) nicht. Betroffene \
-                 Position(en): {list}. Bitte die Vorlage auf Steuerart S und den Steuersatz \
-                 (z. B. 19 %) umstellen."
+                "Bei Regelbesteuerung (Termin {}) gibt es die Steuerart E (§19) nicht. \
+                 Betroffene Position(en): {list}. Bitte die Vorlage auf Steuerart S und den Steuersatz \
+                 (z. B. 19 %) umstellen.",
+                date.format("%d.%m.%Y")
             )));
         }
     }
-    let status = KleinunternehmerStatus {
-        is_kleinunternehmer: seller.is_kleinunternehmer != 0,
-        waived_since: seller
-            .waived_paragraph_19_since
-            .as_deref()
-            .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()),
-    };
     let checks: Vec<ItemVatCheck> = items
         .iter()
         .map(|it| ItemVatCheck {
@@ -385,7 +390,7 @@ pub(crate) async fn check_items_no_vat(
             tax_rate_percent: it.tax_rate_percent,
         })
         .collect();
-    if let Err(viol) = kleinunternehmer::assert_no_vat(&status, &checks) {
+    if let Err(viol) = kleinunternehmer::assert_no_vat(is_klein, &checks) {
         let mut positions: Vec<u32> = viol.iter().map(|v| v.position).collect();
         positions.sort_unstable();
         positions.dedup();

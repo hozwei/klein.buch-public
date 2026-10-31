@@ -28,6 +28,16 @@
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
+  import {
+    datevFileName,
+    datevNumberErrors,
+    numberHint,
+    packageWithoutDatev,
+    parseStoredNumber,
+    rangeError,
+    serverErrorField,
+    type DatevTarget,
+  } from "./datevNumbers.ts";
 
   let years = $state<number[]>([]);
   let selectedYear = $state<number | null>(null);
@@ -59,20 +69,18 @@
   });
 
   // U4 (Warteliste 1, Übergabe F5): Berater- und Mandantennummer für den Kopf des
-  // DATEV-Stapels (Feld 11/12), optional; gemerkt wie der Kontenrahmen. Die Grenzen
-  // prüft der Server (`datev_csv::validate_header_numbers`); hier nur die Meldung am
-  // Feld, bevor ein Export scheitert.
-  const CONSULTANT_RANGE = { min: 1001, max: 9_999_999 };
-  const CLIENT_RANGE = { min: 1, max: 99_999 };
+  // DATEV-Stapels (Feld 11/12), gemerkt wie der Kontenrahmen. ADR 0042 Nr. 15: beide
+  // Pflicht für den Stapel (Paket: beide oder keine). Meldungen am Feld beim Klick
+  // bzw. beim Verlassen, Fokus aufs erste fehlerhafte Feld; die Knöpfe bleiben
+  // bedienbar (ADR 0041 Nr. 15 (e), Nr. 22). Regeln in `datevNumbers.ts`.
   function storedNumber(key: string): number | null {
     if (typeof localStorage === "undefined") return null;
-    const v = Number(localStorage.getItem(key) ?? "");
-    return Number.isInteger(v) && v > 0 ? v : null;
+    return parseStoredNumber(localStorage.getItem(key));
   }
   let consultantNumber = $state<number | null>(storedNumber("datevConsultantNumber"));
   let clientNumber = $state<number | null>(storedNumber("datevClientNumber"));
-  // Meldung erst nach dem Verlassen eines Felds bzw. beim Export (ADR 0041 Nr. 15 (e)).
-  let numbersShown = $state(false);
+  let consultantMsg = $state("");
+  let clientMsg = $state("");
   let consultantInput: QuantityInput | undefined = $state();
   let clientInput: QuantityInput | undefined = $state();
   $effect(() => {
@@ -86,20 +94,36 @@
       else localStorage.setItem(key, String(v));
     }
   });
-  function rangeError(v: number | null, r: { min: number; max: number }, noun: string): string {
-    if (v == null || (v >= r.min && v <= r.max)) return "";
-    return `${noun} liegt zwischen ${r.min} und ${r.max}. Sonst das Feld leer lassen.`;
-  }
-  const consultantError = $derived(rangeError(consultantNumber, CONSULTANT_RANGE, "Die Beraternummer"));
-  const clientError = $derived(rangeError(clientNumber, CLIENT_RANGE, "Die Mandantennummer"));
-  /** Prüft beide Nummern vor einem DATEV-Export; Fokus aufs erste fehlerhafte Feld. */
-  function numbersValid(): boolean {
-    numbersShown = true;
-    const okC = (consultantInput?.validate() ?? true) && !consultantError;
-    const okM = (clientInput?.validate() ?? true) && !clientError;
+  const withoutDatev = $derived(packageWithoutDatev(consultantNumber, clientNumber));
+
+  /** Prüft beide Nummern vor einem Export; Fokus aufs erste fehlerhafte Feld. */
+  function numbersValid(target: DatevTarget): boolean {
+    // Erst die Eingabe selbst (z. B. Buchstaben), dann Pflicht und Bereich.
+    const parsedC = consultantInput?.validate() ?? true;
+    const parsedM = clientInput?.validate() ?? true;
+    const errs = datevNumberErrors(consultantNumber, clientNumber, target);
+    consultantMsg = parsedC ? errs.consultant : "";
+    clientMsg = parsedM ? errs.client : "";
+    const okC = parsedC && !consultantMsg;
+    const okM = parsedM && !clientMsg;
     if (!okC) consultantInput?.focus();
     else if (!okM) clientInput?.focus();
     return okC && okM;
+  }
+
+  /** Server-Ablehnung zu einer Nummer ans Feld, sonst als Fehler-Toast. */
+  function showExportError(e: unknown) {
+    const msg = String(e);
+    const field = serverErrorField(msg);
+    if (field === "consultant") {
+      consultantMsg = msg;
+      consultantInput?.focus();
+    } else if (field === "client") {
+      clientMsg = msg;
+      clientInput?.focus();
+    } else {
+      flash(msg, "error");
+    }
   }
 
   const currentYear = yearBerlin();
@@ -165,7 +189,7 @@
   }
 
   async function exportDatev() {
-    if (selectedYear == null || !numbersValid()) return;
+    if (selectedYear == null || !numbersValid("datev")) return;
     busyDatev = true;
     try {
       const r = await euerExportDatev(selectedYear, skr, { consultantNumber, clientNumber });
@@ -173,22 +197,27 @@
       lastDatev = r.download.fileName;
       flash(`DATEV-Buchungsstapel erstellt (${r.bookingCount} Buchungen, ${skr}).`);
     } catch (e) {
-      flash(String(e), "error");
+      showExportError(e);
     } finally {
       busyDatev = false;
     }
   }
 
   async function exportStb() {
-    if (selectedYear == null || !numbersValid()) return;
+    if (selectedYear == null || !numbersValid("package")) return;
     busyStb = true;
+    const noDatev = withoutDatev;
     try {
       const r = await euerExportStbZip(selectedYear, skr, { consultantNumber, clientNumber });
       saveDownload(r.download);
       lastStb = r.download.fileName;
-      flash(`Steuerberater-Paket erstellt (${r.fileCount} Dateien).`);
+      flash(
+        noDatev
+          ? `Steuerberater-Paket erstellt (${r.fileCount} Dateien, ohne DATEV-Stapel).`
+          : `Steuerberater-Paket erstellt (${r.fileCount} Dateien).`,
+      );
     } catch (e) {
-      flash(String(e), "error");
+      showExportError(e);
     } finally {
       busyStb = false;
     }
@@ -311,12 +340,12 @@
   <!-- Export-Aktionen -->
   <section class="card export" aria-labelledby="exp-h">
     <h2 id="exp-h">Exportieren</h2>
-    <p class="info-banner dl-note">
+    <Banner kind="info">
       Jede Datei wird beim Klick neu erzeugt und kann <strong>einmal</strong> abgerufen
       werden. Bricht der Download ab, klickst du einfach noch einmal. Exportieren ist
       geschützt: Beim ersten Export fragt Klein.Buch dein Daten-Passwort und den App-Code
       ab; danach gilt die Bestätigung 5 Minuten lang.
-    </p>
+    </Banner>
     <div class="exp-row">
       <span class="exp-label" id="exp-pdf-l">Vollständige EÜR (PDF)</span>
       <Button variant="secondary" onclick={exportPdf} ariaDisabled={busyPdf} ariaDescribedby="exp-pdf-l">
@@ -364,9 +393,10 @@
           noun="Beraternummer"
           label="Beraternummer"
           id="exp-consultant"
-          hint="optional"
-          error={numbersShown ? consultantError : undefined}
-          onchange={() => (numbersShown = true)}
+          fieldClass="kb-w-short"
+          hint={numberHint("consultant")}
+          error={consultantMsg || undefined}
+          onchange={(v) => (consultantMsg = rangeError("consultant", v))}
         />
         <QuantityInput
           bind:this={clientInput}
@@ -376,20 +406,24 @@
           noun="Mandantennummer"
           label="Mandantennummer"
           id="exp-client"
-          hint="optional"
-          error={numbersShown ? clientError : undefined}
-          onchange={() => (numbersShown = true)}
+          fieldClass="kb-w-short"
+          hint={numberHint("client")}
+          error={clientMsg || undefined}
+          onchange={(v) => (clientMsg = rangeError("client", v))}
         />
       </div>
+      <!-- ADR 0042 Nr. 15: Nummern Pflicht (Feld 11/12), Import beim Steuerberater ungeprüft. -->
       <p class="muted hint stb-hint">
-        Berater- und Mandantennummer bekommst du von deiner Steuerberatung (Beraternummer
-        1001 bis 9999999, Mandantennummer 1 bis 99999). Sie stehen dann im Kopf des
-        DATEV-Stapels. Ohne Nummern importiert DATEV den Stapel in den gerade geöffneten
-        Mandanten.
+        Berater- und Mandantennummer bekommst du von deiner Steuerberatung; sie stehen im Kopf
+        des DATEV-Stapels. Die DATEV-Formatbeschreibung verlangt beide, ohne sie entsteht kein
+        Stapel.
       </p>
 
       <div class="exp-row">
-        <span class="exp-label" id="exp-datev-l">DATEV-Buchungsstapel (Steuerberater)</span>
+        <span class="exp-label" id="exp-datev-l">
+          DATEV-Buchungsstapel (Steuerberater)
+          <span class="exp-file">Datei <code>{datevFileName(selectedYear ?? currentYear, skr)}</code>, Zeichensatz Windows-1252</span>
+        </span>
         <Button variant="secondary" onclick={exportDatev} ariaDisabled={busyDatev} ariaDescribedby="exp-datev-l">
           {busyDatev ? "Erstelle …" : "DATEV herunterladen"}
         </Button>
@@ -397,13 +431,29 @@
       {#if lastDatev}
         <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastDatev}</code></p>
       {/if}
+      <p class="muted hint stb-hint">
+        Klein.Buch prüft den Aufbau der Datei gegen die Regeln der DATEV-Formatbeschreibung. Ob
+        der Import beim Steuerberater klappt, ist damit nicht geprüft: Bitte beim ersten Mal das
+        Importprotokoll ansehen. Vorab hilft das kostenlose DATEV-Prüfprogramm (Windows).
+      </p>
 
       <div class="exp-row">
         <span class="exp-label" id="exp-stb-l">Steuerberater-Paket (ZIP, alles in einem)</span>
-        <Button variant="primary" onclick={exportStb} ariaDisabled={busyStb} ariaDescribedby="exp-stb-l">
+        <Button variant="primary" onclick={exportStb} ariaDisabled={busyStb} ariaDescribedby="exp-stb-l exp-stb-hint">
           {busyStb ? "Erstelle …" : "Paket herunterladen"}
         </Button>
       </div>
+      <p class="muted hint stb-hint" id="exp-stb-hint">
+        {#if withoutDatev}
+          Ohne Berater- und Mandantennummer entsteht das Paket ohne DATEV-Stapel; die
+          <code>LIESMICH.txt</code> im Paket nennt den Grund. Alle übrigen Unterlagen sind enthalten.
+        {:else if consultantNumber != null && clientNumber != null}
+          Mit beiden Nummern enthält das Paket den DATEV-Stapel ({skr}).
+        {:else}
+          Für den DATEV-Stapel im Paket fehlt noch eine Nummer. Lass beide leer, wenn das Paket
+          ohne DATEV-Stapel entstehen soll.
+        {/if}
+      </p>
       {#if lastStb}
         <p class="saved" role="status"><span class="ok"><span aria-hidden="true">✓</span> Heruntergeladen:</span> <code>{lastStb}</code></p>
       {/if}
@@ -415,7 +465,8 @@
       Der <strong>DATEV-Buchungsstapel</strong> ist für die Übergabe an den
       Steuerberater (Buchungen inkl. AfA; Konten als Vorschlag, vom Steuerberater zu
       prüfen). Das <strong>Steuerberater-Paket</strong> bündelt Deckblatt, EÜR-PDF,
-      DATEV-Stapel ({skr}), Einzelaufstellung und Stammdaten in einem ZIP.
+      DATEV-Stapel ({skr}, nur mit beiden Nummern), Einzelaufstellung und Stammdaten in
+      einem ZIP.
     </p>
   </section>
 
@@ -424,6 +475,10 @@
     <h2 id="form-h">Anlage EÜR — zum Übertragen ins ELSTER-Formular</h2>
     {#if form}
       <p class="muted">Zeilen nach dem Vordruck {form.formYear}; die Kennzahl (Kz) gilt in jedem Jahr.</p>
+      {#if form.statusChange}
+        <!-- ADR 0042 Nr. 3: Wechsel des Steuerstatus im Jahr. -->
+        <p class="muted">Steuerstatus {form.fiscalYear}: Wechsel im Jahr — {form.statusChange}.</p>
+      {/if}
       {#if form.notes.length > 0}
         <Banner kind="warning">
           <ul>
@@ -437,14 +492,14 @@
     {/if}
     <table class="cards">
       <caption class="kb-visually-hidden">Anlage EÜR {selectedYear}: Zeilen und Beträge</caption>
-      <thead><tr><th class="z">Zeile</th><th class="z">Kz</th><th>Position</th><th class="num">Betrag</th></tr></thead>
+      <thead><tr><th class="z">Zeile</th><th class="z">Kz</th><th>Position</th><th class="kb-num">Betrag</th></tr></thead>
       <tbody>
         {#each entryLines as l (l.zeile + l.bezeichnung)}
           <tr>
             <td class="z" data-label="Zeile">{l.zeile}</td>
             <td class="z" data-label="Kz">{l.kennzahl ?? "—"}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
-            <td class="num" data-label="Betrag">{euro(l.amountCents)}</td>
+            <td class="kb-num" data-label="Betrag">{euro(l.amountCents)}</td>
           </tr>
         {/each}
       </tbody>
@@ -454,7 +509,7 @@
             <td class="z" data-label="Zeile">{l.zeile}</td>
             <td class="z" data-label="Kz">{l.kennzahl ?? "—"}</td>
             <td class="cards-full" data-label="Position">{l.bezeichnung}</td>
-            <td class="num" data-label="Summe">{euro(l.amountCents)}</td>
+            <td class="kb-num" data-label="Summe">{euro(l.amountCents)}</td>
           </tr>
         {/each}
       </tfoot>
@@ -476,8 +531,8 @@
         <thead>
           <tr>
             <th class="z">AV-Nr.</th><th>Bezeichnung</th><th>Anschaffung</th>
-            <th class="num">AK/HK</th><th>Methode</th>
-            <th class="num">AfA {selectedYear}</th><th class="num">Restwert Ende</th>
+            <th class="kb-num">AK/HK</th><th>Methode</th>
+            <th class="kb-num">AfA {selectedYear}</th><th class="kb-num">Restwert Ende</th>
           </tr>
         </thead>
         <tbody>
@@ -486,10 +541,10 @@
               <td class="z" data-label="AV-Nr."><DocNo value={a.assetNumber} /></td>
               <td class="wrap" data-label="Bezeichnung">{a.label}{#if a.disposedInYear}{" "}<Badge kind="tag">Abgang {date(a.disposalDate)}</Badge>{/if}</td>
               <td data-label="Anschaffung">{date(a.acquisitionDate)}</td>
-              <td class="num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
+              <td class="kb-num" data-label="AK/HK">{euro(a.acquisitionCostCents)}</td>
               <td data-label="Methode">{depreciationMethodShort(a.depreciationMethod)}{#if a.businessSharePercent < 100}<span class="muted">{" "}· {percent(a.businessSharePercent)} betrieblich</span>{/if}</td>
-              <td class="num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
-              <td class="num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
+              <td class="kb-num" data-label="AfA {selectedYear}">{euro(a.afaYearCents)}</td>
+              <td class="kb-num" data-label="Restwert Ende">{euro(a.bookValueEndCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -506,15 +561,19 @@
     {:else}
       <table class="cards">
         <caption class="kb-visually-hidden">Zahlungseingänge {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
+        <thead><tr><th>Datum</th><th>Rechnungsnr.</th><th>Kunde</th><th>Beschreibung</th><th class="kb-num">Betrag</th></tr></thead>
         <tbody>
-          {#each pkg.income as i (i.invoiceNumber + i.paidDate + i.amountCents)}
-            <tr>
+          <!-- ADR 0042 Nr. 9: Zahlung und Gegenbuchung stehen beide da (gleiches Datum,
+               gleiche Nummer, auch gleicher Betrag nach Neubuchung) — Schlüssel ist die Position. -->
+          {#each pkg.income as i, n (n)}
+            <tr class:reduce={i.isReversal}>
               <td data-label="Datum">{date(i.paidDate)}</td>
               <td data-label="Rechnungsnr."><DocNo value={i.invoiceNumber} /></td>
               <td class="wrap" data-label="Kunde">{i.customer}</td>
-              <td class="cards-full wrap" data-label="Beschreibung">{i.description}</td>
-              <td class="num" data-label="Betrag">{euro(i.amountCents)}</td>
+              <td class="cards-full wrap" data-label="Beschreibung">
+                {#if i.isReversal}<Badge kind="tag">Gegenbuchung</Badge>{" "}{:else if i.reversed}<Badge strike>Storniert</Badge>{" "}{/if}{i.description}
+              </td>
+              <td class="kb-num" data-label="Betrag">{euro(i.amountCents)}</td>
             </tr>
           {/each}
           {#each pkg.storno as s (s.stornoNumber)}
@@ -523,14 +582,14 @@
               <td data-label="Rechnungsnr."><DocNo value={s.stornoNumber} /></td>
               <td data-label="Kunde">Storno zu <DocNo value={s.originalNumber} /></td>
               <td class="no-card" data-label="Beschreibung">—</td>
-              <td class="num" data-label="Betrag">−{euro(s.refundedCents)}</td>
+              <td class="kb-num" data-label="Betrag">−{euro(s.refundedCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum kb-sum">
             <td colspan="4" class="sum-label">Summe Zahlungseingänge</td>
-            <td class="num" data-label="Summe Zahlungseingänge">{euro(incomeSum)}</td>
+            <td class="kb-num" data-label="Summe Zahlungseingänge">{euro(incomeSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -545,7 +604,7 @@
     {:else}
       <table class="cards">
         <caption class="kb-visually-hidden">Bezahlte Kosten {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Lieferant</th><th>Kategorie</th><th>Beschreibung</th><th class="num">Betrag</th></tr></thead>
+        <thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Lieferant</th><th>Kategorie</th><th>Beschreibung</th><th class="kb-num">Betrag</th></tr></thead>
         <tbody>
           {#each pkg.expenses as e (e.expenseNumber)}
             <tr>
@@ -554,14 +613,14 @@
               <td class="wrap" data-label="Lieferant">{e.vendor}</td>
               <td data-label="Kategorie">{expenseCategoryLabel(e.category)}</td>
               <td class="cards-full wrap" data-label="Beschreibung">{e.description}</td>
-              <td class="num" data-label="Betrag">{euro(e.grossCents)}</td>
+              <td class="kb-num" data-label="Betrag">{euro(e.grossCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
           <tr class="sum kb-sum">
             <td colspan="5" class="sum-label">Summe Betriebsausgaben (Kosten)</td>
-            <td class="num" data-label="Summe Betriebsausgaben">{euro(expenseSum)}</td>
+            <td class="kb-num" data-label="Summe Betriebsausgaben">{euro(expenseSum)}</td>
           </tr>
         </tfoot>
       </table>
@@ -574,16 +633,16 @@
       <h2 id="disp-h">Anlagen-Veräußerungen</h2>
       <table class="cards">
         <caption class="kb-visually-hidden">Anlagen-Veräußerungen {selectedYear}</caption>
-        <thead><tr><th>Datum</th><th>AV-Nr.</th><th>Bezeichnung</th><th class="num">Erlös</th><th class="num">Restwert</th><th class="num">Gewinn/Verlust</th></tr></thead>
+        <thead><tr><th>Datum</th><th>AV-Nr.</th><th>Bezeichnung</th><th class="kb-num">Erlös</th><th class="kb-num">Restwert</th><th class="kb-num">Gewinn/Verlust</th></tr></thead>
         <tbody>
           {#each pkg.disposals as d (d.assetNumber)}
             <tr>
               <td data-label="Datum">{date(d.disposalDate)}</td>
               <td class="z" data-label="AV-Nr."><DocNo value={d.assetNumber} /></td>
               <td class="wrap" data-label="Bezeichnung">{d.label}</td>
-              <td class="num" data-label="Erlös">{euro(d.proceedsCents)}</td>
-              <td class="num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
-              <td class="num" data-label="Gewinn/Verlust">{euro(d.gainLossCents)}</td>
+              <td class="kb-num" data-label="Erlös">{euro(d.proceedsCents)}</td>
+              <td class="kb-num" data-label="Restwert">{euro(d.residualBookValueCents)}</td>
+              <td class="kb-num" data-label="Gewinn/Verlust">{euro(d.gainLossCents)}</td>
             </tr>
           {/each}
         </tbody>
@@ -603,7 +662,7 @@
   @media screen and (max-width: 820px) { .tbl-scroll { overflow: visible; } }
   .year { font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); align-self: center; }
   .year-select { width: auto; }
-  /* .card / .card h2 / .lead / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .card h2 / .lead / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   table { width: 100%; border-collapse: collapse; }
   td { vertical-align: top; }
   .z { width: 5.5rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -612,14 +671,17 @@
     /* Karten: Summentext steht im data-label der Betragszelle; leere Platzhalter weg. */
     tr.sum td.sum-label, td.no-card { display: none; }
   }
-  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16), hier ohne Umbruch. */
+  .kb-num { white-space: nowrap; }
   td.wrap { overflow-wrap: anywhere; }
   tr.reduce td { color: var(--status-danger-fg); }
   /* Doppelte Linie über der Summe: global tr.kb-sum (tokens.css, U4 V3-13). */
   tfoot tr.sum td { border-bottom: none !important; font-weight: 600; color: var(--text); }
-  .dl-note { margin: 0 0 var(--sp-4); }
   .export .exp-row { display: flex; gap: var(--sp-3); align-items: flex-end; flex-wrap: wrap; margin-bottom: var(--sp-3); }
   .export .exp-label { flex: 1; min-width: min(18rem, 100%); font-weight: 600; align-self: center; }
+  /* ADR 0042 Nr. 15: Dateiname des Stapels vor dem Download. */
+  .exp-file { display: block; font-weight: 400; font-size: var(--fs-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+  .exp-file code, .stb-hint code { font-size: var(--fs-sm); }
   .skr { display: flex; flex-direction: column; gap: var(--sp-1); }
   .skr label { font-weight: 600; font-size: var(--fs-sm); }
   /* U4 (Warteliste 1): Angaben für die Steuerberatung als eigene Gruppe; Felder nach
@@ -627,7 +689,7 @@
   .stb-set { border: 0; border-top: var(--rule); margin: var(--sp-4) 0 0; padding: var(--sp-4) 0 0; min-width: 0; }
   .stb-set legend { float: left; width: 100%; margin: 0 0 var(--sp-3); padding: 0; font-weight: 600; }
   .stb-fields { clear: both; display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-4); align-items: flex-start; }
-  .stb-fields > :global(*) { flex: 0 1 10rem; min-width: 0; }
+  .stb-fields > :global(*) { flex: 0 1 15rem; min-width: 0; }
   .stb-fields :global(.qty-field.with-label) { margin-bottom: 0; }
   .stb-fields :global(.qty-field label) { color: var(--text); }
   @media (max-width: 600px) { .stb-fields > :global(*) { flex-basis: 100%; } }

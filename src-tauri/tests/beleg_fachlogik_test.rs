@@ -7,7 +7,7 @@
 //! * KB-0014: Kategorie E nur mit §19.
 //! * LE-CUSTOM-TEMPLATE-STORNO: eigene Vorlage ohne `storno_of` → eingebaute
 //!   Vorlage für Stornos + Inbox-Hinweis.
-//! * R1-S2-PAYHIST: Zahlungshistorie ohne stillen Rückfall, Invariante.
+//! * R1-S2-PAYHIST → Zahlungsbuch (0034): JSON-Historie eingefroren, Cache an das Buch gebunden.
 //! * R5-S2-QUOTEDATE: Annahmedatum geprüft.
 //! * KB-0046/KB-0047: Paket-Hardline (Revisionen, Provenienz, Klartext, §19).
 //!
@@ -74,7 +74,7 @@ fn paths_for(dir: &Path) -> Paths {
     }
 }
 
-fn profile(is_kleinunternehmer: bool) -> seller_profile::SellerProfileInput {
+fn profile() -> seller_profile::SellerProfileInput {
     seller_profile::SellerProfileInput {
         name: "Beispiel IT-Service".into(),
         legal_form: None,
@@ -89,10 +89,9 @@ fn profile(is_kleinunternehmer: bool) -> seller_profile::SellerProfileInput {
         iban: None,
         bic: None,
         logo_filename: None,
-        is_kleinunternehmer,
+        is_kleinunternehmer: None,
         default_pdf_template: Some("default".into()),
         default_currency: Some("EUR".into()),
-        confirm_waive_paragraph_19: Some(true),
     }
 }
 
@@ -116,9 +115,10 @@ async fn setup(is_kleinunternehmer: bool) -> Env {
         .await
         .unwrap();
     MIGRATOR.run(&pool).await.unwrap();
-    seller_profile::upsert(&pool, &profile(is_kleinunternehmer))
-        .await
-        .unwrap();
+    seller_profile::upsert(&pool, &profile()).await.unwrap();
+    if !is_kleinunternehmer {
+        regel_from_start(&pool).await;
+    }
     let contact = mk_contact(&pool, "Kunde GmbH").await;
     let ctx = AppCtx::for_tests(paths);
     ctx.set_pool(pool.clone());
@@ -172,6 +172,9 @@ fn item(position: u32, qty: f64, price: i64, code: &str, rate: f64) -> InvoiceIt
 
 fn input(items: Vec<InvoiceItemInput>) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: today(),
         delivery_date: Some(today()),
@@ -220,6 +223,14 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
         invoice_number: &detail.invoice.invoice_number,
         currency_code: &detail.invoice.currency_code,
         pdf_template: &detail.invoice.pdf_template,
+        service_period: None,
+        delivery_date: detail
+            .invoice
+            .delivery_date
+            .as_deref()
+            .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()),
+        invoice_date: chrono::NaiveDate::parse_from_str(&detail.invoice.invoice_date, "%Y-%m-%d")
+            .unwrap(),
         items: detail
             .items
             .iter()
@@ -271,7 +282,7 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
         &invoices::DraftCreatePayload {
             contact_id: detail.invoice.contact_id.clone(),
             fiscal_year: i64::from(fy),
-            is_kleinunternehmer: seller.is_kleinunternehmer == 1,
+            is_kleinunternehmer: detail.invoice.is_kleinunternehmer == 1,
             input: storno_input,
             derived_from_quote_id: None,
         },
@@ -293,6 +304,46 @@ async fn storno(env: &Env, original_id: &str) -> klein_buch_lib::error::Result<S
     )
     .await?;
     Ok(draft.id)
+}
+
+/// Wechsel zur Regelbesteuerung ab heute (Wegfall im laufenden Jahr, ADR 0042).
+async fn regel_ab_heute(pool: &SqlitePool) {
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{ChangeReason, TaxStatus};
+    tax_status::insert(
+        pool,
+        &tax_status::NewEntry {
+            effective_from: today(),
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::WegfallLaufend,
+            binding_until: None,
+            trigger_document: None,
+            note: None,
+        },
+        today(),
+    )
+    .await
+    .unwrap();
+}
+
+/// Regelbesteuerung seit Beginn (Anfangsstand der Statushistorie, ADR 0042).
+async fn regel_from_start(pool: &SqlitePool) {
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{anfang, ChangeReason, TaxStatus};
+    tax_status::insert(
+        pool,
+        &tax_status::NewEntry {
+            effective_from: anfang(),
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::Initial,
+            binding_until: None,
+            trigger_document: None,
+            note: None,
+        },
+        klein_buch_lib::clock::today_berlin(),
+    )
+    .await
+    .unwrap();
 }
 
 async fn flag(pool: &SqlitePool, table: &str, id: &str) -> i64 {
@@ -352,9 +403,7 @@ async fn storno_mirrors_status_of_original_after_switch() {
     let id = create_draft(&env, input(vec![item(1, 1.0, 25_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
     // Wechsel zur Regelbesteuerung nach der Original-Rechnung.
-    seller_profile::upsert(&env.pool, &profile(false))
-        .await
-        .unwrap();
+    regel_ab_heute(&env.pool).await;
     // Der Storno hebt genau die §19-Rechnung auf: E/0 bleibt zulässig, der
     // Storno trägt §19 wie das Original.
     let storno_id = storno(&env, &id).await.expect("Storno nach dem Wechsel");
@@ -384,11 +433,13 @@ async fn storno_with_template_without_storno_of_uses_builtin_and_notifies() {
 }
 
 // ============================================================================
-// R1-S2-PAYHIST
+// R1-S2-PAYHIST → Zahlungsbuch (Migration 0034, ADR 0042 Nr. 7)
 // ============================================================================
 
+/// Seit 0034 ist die JSON-Historie Altbestand und unveränderlich; die EÜR liest
+/// das Zahlungsbuch.
 #[tokio::test]
-async fn payment_history_corrupt_json_is_an_error_not_a_fallback() {
+async fn payment_history_json_is_frozen_ledger_is_the_source() {
     let env = setup(true).await;
     let id = create_draft(&env, input(vec![item(1, 1.0, 50_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
@@ -396,65 +447,70 @@ async fn payment_history_corrupt_json_is_an_error_not_a_fallback() {
     invoices::record_payment(&env.pool, &id, 10_000, &iso, None)
         .await
         .unwrap();
-    sqlx::query("UPDATE invoices SET payment_history_json = '{kaputt' WHERE id = ?")
+    let err = sqlx::query("UPDATE invoices SET payment_history_json = '{kaputt' WHERE id = ?")
         .bind(&id)
         .execute(&env.pool)
         .await
-        .unwrap();
-    let err = invoices::record_payment(&env.pool, &id, 5_000, &iso, None)
-        .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("beschädigt"), "{err}");
-    let eur = klein_buch_lib::db::repo::euer::income_payments(&env.pool).await;
-    assert!(
-        eur.is_err(),
-        "EÜR darf kaputte Historie nicht still überspringen"
-    );
-    // Bezahlt-Betrag unverändert (keine zweite Buchung auf kaputter Basis).
+    assert!(err.contains("payment_history_json"), "{err}");
     let row = invoices::get(&env.pool, &id).await.unwrap().unwrap();
-    assert_eq!(row.paid_amount_cents, 10_000);
+    assert_eq!(row.payment_history_json, None, "neue Zahlungen nur im Buch");
+    let eur = klein_buch_lib::db::repo::euer::income_payments(&env.pool)
+        .await
+        .unwrap();
+    assert_eq!(eur.iter().map(|p| p.amount_cents).sum::<i64>(), 10_000);
 }
 
+/// Der Zahlungsstand der Rechnung ist ein Cache des Buchs: ein Roh-UPDATE, das
+/// davon abweicht, scheitert; Buchungen halten Buch und Cache gleich.
 #[tokio::test]
-async fn payment_history_invariant_and_legacy_seed() {
+async fn payment_cache_is_bound_to_the_ledger() {
     let env = setup(true).await;
     let id = create_draft(&env, input(vec![item(1, 1.0, 50_000, "E", 0.0)])).await;
     lock(&env, &id).await.unwrap();
     let iso = today().to_string();
-    // Altbestand: bezahlt ohne Historie.
-    sqlx::query(
-        "UPDATE invoices SET paid_amount_cents = 20000, paid_at = ?, status = 'partially_paid',
-                payment_history_json = NULL WHERE id = ?",
-    )
-    .bind(&iso)
-    .bind(&id)
-    .execute(&env.pool)
-    .await
-    .unwrap();
+    for sql in [
+        "UPDATE invoices SET paid_amount_cents = 20000 WHERE id = ?",
+        "UPDATE invoices SET status = 'paid' WHERE id = ?",
+        "UPDATE invoices SET paid_at = '2026-01-01' WHERE id = ?",
+    ] {
+        let err = sqlx::query(sql)
+            .bind(&id)
+            .execute(&env.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Zahlungsbuch"), "{sql}: {err}");
+    }
     let row = invoices::record_payment(&env.pool, &id, 5_000, &iso, None)
         .await
         .unwrap();
-    assert_eq!(row.paid_amount_cents, 25_000);
-    let history = invoices::parse_payment_history(row.payment_history_json.as_deref()).unwrap();
-    assert_eq!(history.len(), 2);
-    assert_eq!(history.iter().map(|e| e.amount_cents).sum::<i64>(), 25_000);
-    // Die EÜR sieht weiter beide Zahlungen.
-    let payments = klein_buch_lib::db::repo::euer::income_payments(&env.pool)
+    assert_eq!(
+        (row.paid_amount_cents, row.status.as_str()),
+        (5_000, "partially_paid")
+    );
+    let row = invoices::record_payment(&env.pool, &id, 45_000, &iso, None)
         .await
         .unwrap();
-    assert_eq!(payments.iter().map(|p| p.amount_cents).sum::<i64>(), 25_000);
-    // Historie und gezahlter Betrag laufen auseinander → Fehler statt Buchung.
-    sqlx::query("UPDATE invoices SET paid_amount_cents = 30000 WHERE id = ?")
-        .bind(&id)
-        .execute(&env.pool)
-        .await
-        .unwrap();
-    let err = invoices::record_payment(&env.pool, &id, 1_000, &iso, None)
+    assert_eq!(
+        (row.paid_amount_cents, row.status.as_str()),
+        (50_000, "paid")
+    );
+    assert_eq!(row.paid_at.as_deref(), Some(iso.as_str()));
+    let sum: i64 =
+        sqlx::query_scalar("SELECT SUM(amount_cents) FROM invoice_payments WHERE invoice_id = ?")
+            .bind(&id)
+            .fetch_one(&env.pool)
+            .await
+            .unwrap();
+    assert_eq!(sum, 50_000);
+    // Überzahlung lehnt der Server ab, die DB als zweite Linie ebenso.
+    let err = invoices::record_payment(&env.pool, &id, 1, &iso, None)
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("stimmt nicht"), "{err}");
+    assert!(err.contains("Überzahlung"), "{err}");
 }
 
 // ============================================================================
@@ -756,6 +812,7 @@ async fn package_item_is_a_snapshot_with_provenance_rules() {
         &env.ctx,
         PackageMaterializeItemArgs {
             package_id: pkg.id.clone(),
+            document_date: None,
         },
     )
     .await
@@ -850,7 +907,10 @@ async fn package_item_under_regelbesteuerung_gets_standard_rate() {
     .unwrap();
     let m = pkg_cmd::package_materialize_item(
         &env.ctx,
-        PackageMaterializeItemArgs { package_id: pkg.id },
+        PackageMaterializeItemArgs {
+            package_id: pkg.id,
+            document_date: None,
+        },
     )
     .await
     .unwrap();
@@ -914,9 +974,7 @@ async fn quote_pdf_klausel_check_uses_frozen_status() {
     let env = setup(true).await;
     let id = issued_quote(&env).await;
     // Wechsel zur Regelbesteuerung NACH dem Festschreiben.
-    seller_profile::upsert(&env.pool, &profile(false))
-        .await
-        .unwrap();
+    regel_ab_heute(&env.pool).await;
     // Eigene Angebotsvorlage ohne §19-Marker: das Angebot ist ein §19-Beleg,
     // also greift der Klausel-Check trotz des heutigen Profils.
     let quote_tpl = env
@@ -1105,6 +1163,7 @@ async fn package_provenance_is_enforced_on_quotes_and_templates() {
         &env.ctx,
         PackageMaterializeItemArgs {
             package_id: pkg.id.clone(),
+            document_date: None,
         },
     )
     .await
@@ -1168,6 +1227,7 @@ async fn package_provenance_is_enforced_on_quotes_and_templates() {
         payment_terms_days: 14,
         pdf_template: "default".into(),
         service_period_note: true,
+        buyer_reference: None,
         notes: None,
         items: vec![tmpl_item(120_000, 1), tmpl_item(1_000, 2)],
     };

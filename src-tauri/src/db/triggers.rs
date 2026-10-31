@@ -24,9 +24,16 @@
 //!   `ux_invoices_one_locked_storno` und `uq_payment_accounts_default`.
 //!   `trg_invoices_voided_final` lässt als einzige Änderung die Anonymisierung
 //!   des Empfänger-Snapshots zu (F2c, ADR 0039 Nr. 124 (3)).
+//! - Migration 0034 (Lauf 2026.11.1, V2, ADR 0042 Nr. 7–9): Zahlungsbuch
+//!   `invoice_payments` append-only (`trg_invoice_payments_no_update`/
+//!   `_no_delete`, `trg_invoice_payments_insert_checks`,
+//!   `ux_invoice_payments_one_reversal`); der Zahlungsstand der Rechnung ist an
+//!   das Buch gebunden (`trg_invoices_payment_cache_bound`,
+//!   `trg_invoices_payment_cache_insert`), die JSON-Historie eingefroren
+//!   (`trg_invoices_payment_history_frozen`).
 //!
 //! Tests, die diese Triggers verifizieren: `tests/migration_0028_test.rs`,
-//! `tests/migration_0032_test.rs` sowie die Repo-Tests je Beleg-Art
+//! `tests/migration_0032_test.rs`, `tests/payment_ledger_test.rs` sowie die Repo-Tests je Beleg-Art
 //! (Übersicht in `gobd.md` §9).
 
 #[cfg(test)]

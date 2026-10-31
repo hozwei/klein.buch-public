@@ -2,6 +2,7 @@
 //
 // Erwartet als injizierte Variable `data` mit folgendem Schema:
 //   data.invoice.{number, date, delivery_date, due_date, currency,
+//                 service_period_start, service_period_end (Leistungszeitraum, beide oder keiner),
 //                 is_kleinunternehmer, net_amount, tax_amount, gross_amount}
 //   data.invoice.items[].{position, description, quantity, unit, unit_price, net_amount, tax_rate, tax_category}
 //   data.invoice.storno_of = {number, date} nur bei Storno-Belegen (sonst fehlt das Feld)
@@ -109,7 +110,9 @@
     #if storno_of != none [
       Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \
     ]
-    #if data.invoice.at("delivery_date", default: none) != none [
+    #if data.invoice.at("service_period_start", default: none) != none and data.invoice.at("service_period_end", default: none) != none [
+      Leistungszeitraum: #format_date(data.invoice.service_period_start) – #format_date(data.invoice.service_period_end) \
+    ] else if data.invoice.at("delivery_date", default: none) != none [
       Leistungsdatum: #format_date(data.invoice.delivery_date) \
     ] else if data.invoice.at("delivery_date_fallback", default: none) != none [
       Leistungsdatum #data.invoice.delivery_date_fallback \

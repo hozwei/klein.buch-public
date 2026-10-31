@@ -20,10 +20,7 @@ unsound = "workspace"
 yanked = "warn"
 # Jede Ausnahme mit Begründung; bei jedem Update der betroffenen Crate neu prüfen.
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin): kein Fix verfügbar. rsa kommt über russh (SFTP-Client, Signatur mit einem RSA-Nutzerschlüssel einmal je Verbindung) und sqlx-mysql (nicht genutzt); der Angriff braucht sehr viele beobachtbare Privatschlüssel-Operationen. Ed25519-Schlüssel sind empfohlen." },
-    { id = "RUSTSEC-2026-0367", reason = "zip: betrifft nur ZipArchive::extract/ZipStreamReader::extract (SUID/SGID-Bits). Klein.Buch entpackt Backups und Exporte über by_name/by_index_raw in den Speicher, extract wird nicht aufgerufen. Fix erst in zip 9 (inkompatible API)." },
-    { id = "RUSTSEC-2026-0368", reason = "zip: betrifft nur ZipArchive::extract (Symlink-Ziele außerhalb des Zielordners); extract wird nicht aufgerufen. Fix erst in zip 9." },
-    { id = "RUSTSEC-2026-0369", reason = "zip: betrifft nur extract (Unix-Rechte über Symlinks); extract wird nicht aufgerufen. Fix erst in zip 9." },
+    { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin): kein Fix verfügbar. russh-Client nur mit Passwort-Anmeldung; rsa dient nur zur Prüfung von RSA-Host-Key-Signaturen (öffentlicher Schlüssel), keine Privatschlüssel-Operation, der Angriff ist damit nicht erreichbar (ADR 0042 V3c). sqlx-mysql kommt nur über sqlx und wird nicht genutzt." },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 nur über typst 0.15 → hayagriva 0.10 → citationberg 0.7 (neueste Fassung, verlangt quick-xml ^0.38; behoben erst ab 0.41). Klein.Buchs eigener E-Rechnungs-Parser nutzt quick-xml 0.42 (behoben). citationberg liest nur die in Typst eingebetteten CSL-Stile und -Locales sowie CSL-/Bibliografie-Dateien, die eine Vorlage ausdrücklich lädt; keine eingebaute Vorlage nutzt bibliography/cite, Vorlagen pflegt nur der Betreiber, Belegdaten gelangen escaped (AST, kein Markup) in Typst. Weg, sobald citationberg quick-xml ≥ 0.41 nutzt (Lauf F6b: typst 0.14/0.15 behebt es nicht)." },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 über citationberg 0.7 (wie RUSTSEC-2026-0194); citationberg nutzt keinen NsReader auf Nutzereingaben. Weg, sobald citationberg quick-xml ≥ 0.41 nutzt." },
 ]

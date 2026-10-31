@@ -281,11 +281,11 @@
     <HelpAnchor slug="kosten-erfassen" />
   {/snippet}
 </PageBar>
-<p class="caveat">
+<Banner kind="warning">
   Mit „Kosten festschreiben“ wird die Kostenposition <strong>unveränderlich</strong>
   — das schreibt das Gesetz so vor. Vertippt? Dann stornierst du sie und erfasst sie
   neu; „Korrigiert neu erfassen“ übernimmt dabei die Werte.
-</p>
+</Banner>
 
 {#if fromExpense}
   <!-- V3-23: Belegnummern als DocNo, auch in der fetten Kurzaussage (statt title-String). -->
@@ -466,11 +466,13 @@
         <label for="exp-gross">Brutto</label>
         <output id="exp-gross" class="kb-input ro kb-num kb-w-amount" aria-live="off">{euro(grossCents)}</output>
       </div>
-      <p class="info-banner span2">
-        Der Beleg ist maßgeblich: Weicht die ausgewiesene USt vom berechneten Wert
-        ab (Rundung beim Lieferanten), wähle „individuell“ und übernimm den
-        USt-Betrag genau vom Beleg.
-      </p>
+      <div class="span2">
+        <Banner kind="info" flush>
+          Der Beleg ist maßgeblich: Weicht die ausgewiesene USt vom berechneten Wert
+          ab (Rundung beim Lieferanten), wähle „individuell“ und übernimm den
+          USt-Betrag genau vom Beleg.
+        </Banner>
+      </div>
       <div class="field">
         <label for="exp-account">Zahlungs-Konto</label>
         <select id="exp-account" class="kb-input" bind:value={paidFromAccountId}>
@@ -488,9 +490,11 @@
         <span>§13b Reverse-Charge (Steuerschuldnerschaft des Leistungsempfängers)</span>
       </label>
       {#if reverseCharge13b}
-        <div id="exp-rc-hint" class="info-banner span2 rc-hint">
-          <strong>§13b aktiv:</strong> {REVERSE_CHARGE_13B_HINT}
-          <span class="rc-facts">USt-Satz 0 % · USt-Betrag 0 · Brutto = Netto ({euro(netCents ?? 0)})</span>
+        <div class="span2">
+          <Banner kind="info" id="exp-rc-hint" title="§13b aktiv:" flush>
+            {REVERSE_CHARGE_13B_HINT}
+            <span class="rc-facts">USt-Satz 0 % · USt-Betrag 0 · Brutto = Netto ({euro(netCents ?? 0)})</span>
+          </Banner>
         </div>
       {/if}
       <div class="field span2">
@@ -508,7 +512,7 @@
 </section>
 
 <style>
-  /* .caveat / .card / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
   .span2 { grid-column: 1 / -1; }
@@ -534,8 +538,6 @@
   label.chk { display: flex; flex-direction: row; align-items: center; gap: var(--sp-2); min-height: var(--target); font-size: var(--fs-base); color: var(--text); }
   .chk-inline { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); }
   .ro { background: var(--surface-sunken); font-weight: 600; display: block; }
-  .info-banner { margin: 0; }
-  .rc-hint strong { margin-right: var(--sp-1); }
   .rc-facts { display: block; margin-top: var(--sp-1); font-weight: 600; font-variant-numeric: tabular-nums; }
   /* MoneyInput bringt eigenen Abstand mit; im Grid übernimmt gap. */
   .grid :global(.money-field.with-label), .grid :global(.contact-select.with-label) { margin-bottom: 0; }

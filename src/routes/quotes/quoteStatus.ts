@@ -22,3 +22,13 @@ export function quoteStatusView(q: { status: string; lockedAt?: string | null })
     default:          return { label: q.status, tone: "neutral", strike: false };
   }
 }
+
+/**
+ * Lässt sich das Angebot bearbeiten? Nur ein offener Entwurf: Status `draft`
+ * und nicht festgeschrieben (ADR 0042 Nr. 13). Fertiggestellte, angenommene,
+ * abgelehnte, umgewandelte und verworfene Angebote nicht — der Server prüft
+ * dasselbe (`quotes_update_draft`).
+ */
+export function canEditQuote(q: { status: string; lockedAt?: string | null }): boolean {
+  return q.status === "draft" && !q.lockedAt;
+}

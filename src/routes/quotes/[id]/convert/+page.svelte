@@ -35,6 +35,18 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { invoiceTaxDate, quoteConversionHint } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
+  import ServiceDateFields from "#lib/ServiceDateFields.svelte";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import {
+    buyerReferenceError,
+    normalizeBuyerReference,
+    serviceDateInvalid,
+    serviceDatePayload,
+    type ServiceDateMode,
+  } from "#lib/serviceDate.ts";
 
   // Form-Position = QuoteItemInput, aber descriptionMarkup als String (für den
   // bind:value-Editor) + transienter Paket-Name fürs Badge.
@@ -85,17 +97,24 @@
   let submitted = $state(false);
 
   // Rechnungs-spezifische Felder (das Angebot trägt sie nicht).
-  // Heute = Obergrenze für Rechnungs- und Leistungsdatum (keine Zukunft).
+  // Heute = Obergrenze für das Rechnungsdatum (keine Zukunft). Das Leistungsdatum
+  // darf danach liegen (Vorausrechnung, ADR 0042 Nr. 11).
   const today = todayBerlin();
   let invoiceDate = $state(today);
-  // U1: Leistungsdatum (Pflicht, §14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
+  // U1: Leistungsdatum (§14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
   // vorbelegt — sichtbar und änderbar; es folgt dem Rechnungsdatum, bis es von
   // Hand geändert wird (Angebote tragen kein eigenes Leistungsdatum).
+  // ADR 0042 Nr. 10: alternativ ein Leistungszeitraum von–bis.
+  let serviceMode = $state<ServiceDateMode>("date");
   let deliveryDate = $state(today);
   let deliveryDateTouched = $state(false);
   $effect(() => {
     if (!deliveryDateTouched) deliveryDate = invoiceDate;
   });
+  let periodStart = $state("");
+  let periodEnd = $state("");
+  // ADR 0042 Nr. 12: Leitweg-ID der Rechnung, am Entwurf gespeichert.
+  let buyerReference = $state("");
   let dueDate = $state("");
   let pdfTemplate = $state("default");
   let notes = $state("");
@@ -132,7 +151,20 @@
   // Positionen werden aus dem Angebot übernommen und sind anpassbar.
   let items = $state<FormItem[]>([]);
 
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: Status am Leistungsdatum der Rechnung (sonst Rechnungsdatum),
+  // nicht der von heute und nicht der eingefrorene des Angebots.
+  // Bei einem Zeitraum gilt dessen Ende (ADR 0042 Nr. 10).
+  let serviceFields = $derived(serviceDatePayload(serviceMode, deliveryDate, periodStart, periodEnd));
+  let taxDate = $derived(invoiceTaxDate({ ...serviceFields, invoiceDate }, today));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
+  let conversionHint = $derived(
+    quoteConversionHint(
+      detail ? detail.quote.isKleinunternehmer === 1 : null,
+      taxAt.date === taxDate ? taxAt.isKlein : null,
+    ),
+  );
   // Konvertierung nur aus angenommenem Angebot (Hard-Rule). Backend prüft
   // ebenfalls — das hier ist die UI-Sperre.
   let convertible = $derived(detail?.quote.status === "accepted");
@@ -145,7 +177,8 @@
   // In-place pro Property mutieren (keine neue Array-Identität → kein Effect-Loop).
   // Regelbesteuerung: E wird S 19 % (KB-0014; lib/tax.ts).
   $effect(() => {
-    applyTaxRules(items as unknown as QuoteItemInput[], seller ? isKlein : null);
+    // Nur mit dem Status genau dieses Datums (kein Umschreiben mit einem veralteten Wert).
+    applyTaxRules(items as unknown as QuoteItemInput[], seller && taxAt.date === taxDate ? taxAt.isKlein : null);
   });
 
   // Wie der Server: USt je Steuergruppe aus der Nettosumme (BR-CO-17).
@@ -159,13 +192,9 @@
         ? "Das Rechnungsdatum darf nicht in der Zukunft liegen."
         : "",
   );
-  let errDeliveryDate = $derived(
-    !deliveryDate
-      ? "Bitte das Leistungsdatum angeben."
-      : deliveryDate > (invoiceDate || today)
-        ? "Das Leistungsdatum darf nicht nach dem Rechnungsdatum liegen."
-        : "",
-  );
+  // Leistungsdatum bzw. -zeitraum: Meldungen stehen am Feld (ServiceDateFields).
+  let errServiceDate = $derived(serviceDateInvalid(serviceMode, deliveryDate, periodStart, periodEnd));
+  let errBuyerReference = $derived(buyerReferenceError(buyerReference));
   // V1-04: Fälligkeit ist Pflicht für die E-Rechnung (domain::invoice, XRechnungDueDateMissing
   // bei offenem Betrag) — Meldung schon beim Umwandeln statt erst beim Ausstellen.
   let errDueDate = $derived(
@@ -230,6 +259,7 @@
       // Rechnung trüge kein „Fällig am".
       const terms = await documentTermsGet();
       dueDate = addDays(invoiceDate, terms.invoiceDueDays);
+      await taxAt.load(taxDate).catch(() => {});
     } catch (e) {
       error = String(e);
     } finally {
@@ -336,7 +366,7 @@
       return;
     }
     submitted = true;
-    if (errInvoiceDate || errDeliveryDate || errDueDate || items.some(itemInvalid)) {
+    if (errInvoiceDate || errServiceDate || errBuyerReference || errDueDate || items.some(itemInvalid)) {
       await focusFirstInvalid();
       return;
     }
@@ -353,7 +383,9 @@
       const args: QuoteConvertArgs = {
         quoteId: detail.quote.id,
         invoiceDate,
-        deliveryDate: deliveryDate || null,
+        // ADR 0042 Nr. 10/12: Leistungsdatum ODER Zeitraum, Leitweg-ID (leer = keine).
+        ...serviceFields,
+        buyerReference: normalizeBuyerReference(buyerReference),
         dueDate: dueDate || null,
         pdfTemplate: pdfTemplate || null,
         notes: notes.trim() || null,
@@ -406,11 +438,11 @@
       <a class="kb-link" href={`/quotes/${id}`}>Zurück zum Angebot</a>.
     </Banner>
   {:else}
-    {#if isKlein}
-      <Banner kind="info">
-        Du bist als Kleinunternehmer (§19) eingestellt — auf der Rechnung wird keine
-        Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
-      </Banner>
+    <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
+      dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung"
+      error={taxAt.error} />
+    {#if conversionHint}
+      <Banner kind="warning" title="Anderer Steuerstatus als im Angebot.">{conversionHint}</Banner>
     {/if}
 
     <form id="convert-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
@@ -432,20 +464,6 @@
             {#if submitted && errInvoiceDate}<span id="err-invoice-date" class="field-err">{errInvoiceDate}</span>{/if}
           </label>
           <label>
-            <span>Leistungsdatum <span class="req" aria-hidden="true">*</span></span>
-            <input
-              type="date"
-              class="kb-w-date"
-              bind:value={deliveryDate}
-              oninput={() => (deliveryDateTouched = true)}
-              max={invoiceDate || today}
-              required
-              aria-invalid={submitted && errDeliveryDate ? "true" : undefined}
-              aria-describedby={submitted && errDeliveryDate ? "err-delivery-date" : undefined}
-            />
-            {#if submitted && errDeliveryDate}<span id="err-delivery-date" class="field-err">{errDeliveryDate}</span>{/if}
-          </label>
-          <label>
             <span>Fälligkeit <span class="req" aria-hidden="true">*</span></span>
             <input
               type="date"
@@ -462,6 +480,19 @@
               <span id="hint-due-date" class="field-hint">Pflicht für die E-Rechnung.</span>
             {/if}
           </label>
+          <!-- ADR 0042 Nr. 10/11: Leistungsdatum oder -zeitraum; Vorausrechnung erlaubt (Hinweis). -->
+          <div class="span-all">
+            <ServiceDateFields
+              bind:mode={serviceMode}
+              bind:deliveryDate
+              bind:periodStart
+              bind:periodEnd
+              {invoiceDate}
+              showErrors={submitted}
+              idPrefix="conv-svc"
+              ondeliveryinput={() => (deliveryDateTouched = true)}
+            />
+          </div>
           <!-- V1-04: Währung fest (nur Euro), kein Eingabefeld. -->
           <div class="fixed-field">
             <span class="fixed-lbl">Währung</span>
@@ -480,6 +511,8 @@
             </select>
             {#if stornoHint}<span id="hint-pdf-template" class="field-hint">{stornoHint}</span>{/if}
           </label>
+          <!-- ADR 0042 Nr. 12: Leitweg-ID am Rechnungs-Entwurf. -->
+          <BuyerReferenceField bind:value={buyerReference} id="conv-buyer-ref" showErrors={submitted} class="span-all" />
         </div>
         <p class="muted small">Jahr der Rechnung: {fiscalYear()} · Empfänger: {detail.buyer?.name ?? "—"}</p>
       </section>
@@ -495,14 +528,14 @@
             <tr>
               <th scope="col">#</th>
               <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
-              <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="kb-num">Menge <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">Einheit</th>
-              <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="kb-num">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
               {#if !isKlein}
-                <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
+                <th scope="col" class="kb-num">USt-Satz <span class="req" aria-hidden="true">*</span></th>
                 <th scope="col">USt-Art</th>
               {/if}
-              <th scope="col" class="right">Netto</th>
+              <th scope="col" class="kb-num">Netto</th>
               <th scope="col"><span class="kb-visually-hidden">Aktionen</span></th>
             </tr>
           </thead>
@@ -535,7 +568,7 @@
                     {/if}
                   </td>
                   {#if linked}
-                    <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
+                    <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
                     {#if unitErr}
                       <td class="c-unit" data-label="Einheit">
                         <select
@@ -553,7 +586,7 @@
                     {:else}
                       <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
                     {/if}
-                    <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
+                    <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                   {:else}
                     <td class="c-qty" data-label="Menge *">
                       <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
@@ -575,10 +608,10 @@
                     </td>
                   {/if}
                   {#if !isKlein}
-                    <td class="right" data-label="USt-Satz">{percent(it.taxRatePercent ?? 0)}</td>
+                    <td class="kb-num" data-label="USt-Satz">{percent(it.taxRatePercent ?? 0)}</td>
                     <td data-label="USt-Art">{it.taxCategoryCode}</td>
                   {/if}
-                  <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                  <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                   {#if linked || items.length > 1}
                     <td class="c-actions">
                       <div class="kb-actions">
@@ -652,7 +685,7 @@
                       </select>
                     </td>
                   {/if}
-                  <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                  <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                   {#if items.length > 1}
                     <td class="c-actions">
                       <button type="button" class="btn-danger" onclick={() => removeItem(i)} aria-label={`Position ${n} entfernen`}>×</button>
@@ -666,26 +699,26 @@
           </tbody>
           <tfoot>
             <tr>
-              <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Netto</strong></td>
-              <td class="right" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
+              <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Netto</strong></td>
+              <td class="kb-num" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
               <td class="c-actions"></td>
             </tr>
             {#if !isKlein}
               <tr>
-                <td colspan="7" class="right sum-label">USt</td>
-                <td class="right" data-label="USt">{euro(totals.tax)}</td>
+                <td colspan="7" class="sum-label">USt</td>
+                <td class="kb-num" data-label="USt">{euro(totals.tax)}</td>
                 <td class="c-actions"></td>
               </tr>
             {/if}
             <tr class="kb-sum">
-              <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
-              <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
+              <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Brutto</strong></td>
+              <td class="kb-num" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
               <td class="c-actions"></td>
             </tr>
           </tfoot>
         </table>
         <TravelLineAdder onAdd={addTravelLine} />
-        <PackageItemAdder onAdd={addPackage} />
+        <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
       </section>
 
       <section class="card">
@@ -743,7 +776,7 @@
   .card-hdr { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; align-items: start; }
   /* Vorlage über die volle Zeile, Felder so breit wie ihr Inhalt (U3-031). */
-  .grid > .span-all { grid-column: 1 / -1; }
+  .grid > .span-all, .grid > :global(.span-all) { grid-column: 1 / -1; }
   label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); }
   .paid-note { margin-top: var(--sp-2); }
   input, select, textarea {
@@ -752,9 +785,10 @@
   }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   td.c-qty { width: 7.5rem; }
   /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
   td.c-unit { width: 9rem; }

@@ -100,20 +100,40 @@ Kleinbetragsrechnung nicht aus.
 ## Leistungsdatum genauer
 
 Das Leistungsdatum ist der Zeitpunkt, an dem Du die Leistung
-tatsächlich erbracht hast. Es ist Pflichtangabe nach §14 UStG.
+erbringst. §14 UStG verlangt es auf der Rechnung; als
+Kleinunternehmer mit vereinfachter Rechnung (§ 34a UStDV) brauchst Du
+es streng genommen nicht, Klein.Buch schreibt es trotzdem immer auf.
 Bei einer einmaligen Leistung (zum Beispiel ein Reparatur-Termin)
 ist es ein konkretes Datum. Bei laufenden Leistungen (zum Beispiel
-"Beratung im Monat April") ist es ein Zeitraum. Das Formular hat
-dafür ein einzelnes Datumsfeld; den Zeitraum nennst Du zusätzlich in
-der Beschreibung der Position. Bei Abo-Rechnungen schreibt Klein.Buch
-den Leistungszeitraum auf Wunsch selbst auf die Rechnung (siehe
-Kapitel "Abo-Rechnungen").
+"Beratung im April") wählst Du im Formular unter "Leistung" statt
+dessen **"Zeitraum (von–bis)"** und trägst "Beginn" und
+"Ende" ein, beide Daten, das Ende nicht vor dem Beginn. Leistungsdatum
+und Leistungszeitraum schließen sich aus: Du gibst das eine oder das
+andere an. Für einen ganzen Kalendermonat genügt der Zeitraum vom
+Ersten bis zum Letzten (§ 31 Abs. 4 UStDV).
 
-Im Rechnungs-Formular ist das Leistungsdatum ein Pflichtfeld.
-Klein.Buch belegt es mit dem Rechnungsdatum vor und zieht es mit, bis
-Du es selbst änderst; es darf nicht nach dem Rechnungsdatum liegen.
-Auf der fertigen Rechnung steht damit in jedem Fall ein
-Leistungsdatum.
+Auf dem PDF steht dann "Leistungszeitraum: TT.MM.JJJJ – TT.MM.JJJJ",
+in der E-Rechnung der Rechnungszeitraum (BG-14) statt des
+Leistungsdatums. Abo-Rechnungen tragen den Abrechnungszeitraum
+automatisch (siehe Kapitel "Abo-Rechnungen").
+
+Das Leistungsdatum oder der Zeitraum darf **nach** dem Rechnungsdatum
+liegen. Das ist eine Vorausrechnung: Du stellst die Rechnung, bevor
+Du die Leistung erbringst, und gibst den voraussichtlichen Zeitpunkt
+an (§14 Abs. 4 Satz 1 Nr. 6 UStG). Klein.Buch zeigt dann am Feld den
+Hinweis "Rechnung vor der Leistung"; das ist kein Fehler. Das
+Rechnungsdatum selbst darf nicht in der Zukunft liegen.
+
+Fehlen Leistungsdatum und Zeitraum (ältere Entwürfe), gilt das
+Rechnungsdatum als Leistungszeitpunkt; auf dem PDF steht dann
+"Leistungsdatum entspricht dem Rechnungsdatum". Nach dem Ausstellen
+lassen sich Leistungsdatum und Zeitraum nicht mehr ändern (GoBD);
+korrigieren lässt sich eine Rechnung nur per Storno.
+
+Eine eigene PDF-Vorlage aus der Zeit vor dem Leistungszeitraum kennt
+das Feld `service_period_start` nicht. Für Rechnungen mit Zeitraum
+nimmt Klein.Buch dann die eingebaute Vorlage und meldet das in der
+Inbox, damit der Leistungszeitpunkt auf dem Beleg steht.
 
 ## Steuernummer und USt-IdNr
 
@@ -131,11 +151,19 @@ voll abgebildet — siehe Disclaimer-Kapitel.
 
 Rechnungen an öffentliche Auftraggeber (Behörden) brauchen in der
 Regel eine Leitweg-ID, die Kennung, unter der die Behörde
-E-Rechnungen entgegennimmt. Du trägst sie unmittelbar vor dem
-Ausstellen in der Karte "Ausstellen" in das Feld "Leitweg-ID
-(optional)" ein; Klein.Buch schreibt sie als Käuferreferenz in die
-E-Rechnung. Der Entwurf speichert sie nicht. Für alle anderen Kunden
-bleibt das Feld leer.
+E-Rechnungen entgegennimmt. Du trägst sie im Entwurf in das Feld
+"Leitweg-ID (optional)" ein (Aufbau: Grobadressierung, optional
+Feinadressierung, zweistellige Prüfziffer, durch Bindestriche
+getrennt, zum Beispiel 04011000-1234512345-06). Die Prüfziffer prüft die
+Eingangsplattform der Behörde, nicht Klein.Buch; weicht der Aufbau
+ab, weist Klein.Buch nur darauf hin. Der Entwurf speichert sie, und
+beim Ausstellen schreibt Klein.Buch sie als Käuferreferenz (BT-10) in
+die E-Rechnung. In der Karte "Ausstellen" steht sie vorbelegt; ein
+Wert, den Du dort änderst, ersetzt den gespeicherten. Nach dem
+Ausstellen ist sie unveränderlich; ein Storno übernimmt sie aus der
+E-Rechnung des Originals. Abo-Vorlagen können eine Leitweg-ID tragen,
+die jede erzeugte Rechnung bekommt. Für alle anderen Kunden bleibt
+das Feld leer (in der E-Rechnung steht dann "N/A").
 
 ## Bewährter Ablauf
 
@@ -152,4 +180,4 @@ vollständig nach §14 UStG.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

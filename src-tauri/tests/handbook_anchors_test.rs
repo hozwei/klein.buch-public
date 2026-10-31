@@ -94,6 +94,8 @@ struct AnchorRef {
     file: PathBuf,
     line: usize,
     slug: String,
+    /// Optionaler `heading="…"` (Sprung auf eine H2/H3 der Seite).
+    heading: Option<String>,
 }
 
 /// Liefert 1-basierte Zeilennummer eines Byte-Offsets im Quelltext.
@@ -141,11 +143,12 @@ fn extract_anchor_refs(file: &Path, src: &str) -> Vec<AnchorRef> {
         let tag_body_end = find_tag_end(bytes, after_needle).unwrap_or(bytes.len());
         let tag_body = &src[after_needle..tag_body_end];
 
-        if let Some(slug) = parse_slug_attr(tag_body) {
+        if let Some(slug) = parse_attr(tag_body, "slug") {
             out.push(AnchorRef {
                 file: file.to_path_buf(),
                 line: line_of_offset(src, tag_start),
                 slug,
+                heading: parse_attr(tag_body, "heading"),
             });
         }
 
@@ -179,19 +182,20 @@ fn find_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-/// Sucht innerhalb eines Tag-Bodys nach `slug="…"` oder `slug='…'` und
-/// liefert den ent-quote-ten Wert. Ignoriert Treffer, deren `slug`-
-/// Match nicht an einer Attribut-Grenze sitzt (kein willkürliches
-/// Submatch wie `myslug=`).
-fn parse_slug_attr(tag_body: &str) -> Option<String> {
+/// Sucht innerhalb eines Tag-Bodys nach `<name>="…"` oder `<name>='…'`
+/// (z. B. `slug`, `heading`) und liefert den ent-quote-ten Wert.
+/// Ignoriert Treffer, die nicht an einer Attribut-Grenze sitzen (kein
+/// willkürliches Submatch wie `myslug=`).
+fn parse_attr(tag_body: &str, name: &str) -> Option<String> {
     let bytes = tag_body.as_bytes();
+    let n = name.len();
     let mut i = 0usize;
-    while i + 5 <= bytes.len() {
-        if &bytes[i..i + 4] == b"slug" {
+    while i + n < bytes.len() {
+        if &bytes[i..i + n] == name.as_bytes() {
             // Vorher: Tag-Start oder Whitespace?
             let left_ok = i == 0 || (bytes[i - 1] as char).is_whitespace();
             // Nachher: `=` mit ggf. Whitespace dazwischen?
-            let mut j = i + 4;
+            let mut j = i + n;
             while j < bytes.len() && (bytes[j] as char).is_whitespace() {
                 j += 1;
             }
@@ -290,6 +294,46 @@ fn every_help_anchor_slug_matches_a_handbook_page() {
         }
         panic!("{msg}");
     }
+
+    // Tiefe Sprünge (`heading="…"`): die Seite hat eine H2/H3 mit genau
+    // diesem Text (der Anker entsteht daraus über `slugifyHeading`).
+    let mut bad_headings: Vec<String> = Vec::new();
+    for r in &refs {
+        let Some(heading) = &r.heading else { continue };
+        let page =
+            fs::read_to_string(handbook_dir().join(format!("{}.md", r.slug))).unwrap_or_default();
+        let found = page.lines().any(|l| {
+            let l = l.trim();
+            l.strip_prefix("## ")
+                .or_else(|| l.strip_prefix("### "))
+                .is_some_and(|h| h.trim() == heading)
+        });
+        if !found {
+            bad_headings.push(format!(
+                "  - slug=\"{}\" heading=\"{heading}\" — {}:{}",
+                r.slug,
+                r.file.display(),
+                r.line
+            ));
+        }
+    }
+    assert!(
+        bad_headings.is_empty(),
+        "HelpAnchor-Überschriften ohne passende H2/H3 im Handbuch:\n{}",
+        bad_headings.join("\n")
+    );
+}
+
+#[test]
+fn parser_picks_heading_attribute() {
+    let src =
+        r#"<HelpAnchor slug="zahlung-erfassen" heading="Falsch erfasste Zahlung stornieren" />"#;
+    let refs = extract_anchor_refs(&PathBuf::from("dummy.svelte"), src);
+    assert_eq!(refs.len(), 1);
+    assert_eq!(
+        refs[0].heading.as_deref(),
+        Some("Falsch erfasste Zahlung stornieren")
+    );
 }
 
 // --- Innenleben ----------------------------------------------------------

@@ -328,6 +328,8 @@ async fn login_before_daily_time_after_locked_days_catches_up_once() {
 /// Tages-Backup des Tages schon lief.
 #[tokio::test]
 async fn deferred_lock_backup_survives_lock_and_is_caught_up() {
+    // Der Tick nimmt die Scan-Sperre (Monats-Prüfung), ADR 0042 Nr. 16.
+    let _serial = INTEGRITY_SERIAL.lock().await;
     let env = setup().await;
     let clock = FixedClock::at_berlin(d(2026, 6, 10), 12, 0);
     backup::mark_daily_done(&env.pool, d(2026, 6, 10))
@@ -395,6 +397,8 @@ async fn deferred_lock_backup_survives_lock_and_is_caught_up() {
 /// Der Tick holt ein ausgefallenes nach, ohne Doppel.
 #[tokio::test]
 async fn lock_event_requests_backup_and_wake_creates_one() {
+    // Der Tick nimmt die Scan-Sperre (Monats-Prüfung), ADR 0042 Nr. 16.
+    let _serial = INTEGRITY_SERIAL.lock().await;
     let env = setup().await;
     let clock = FixedClock::at_berlin(d(2026, 6, 10), 12, 0);
     backup::mark_daily_done(&env.pool, d(2026, 6, 10))
@@ -793,8 +797,9 @@ async fn rotation_rests_during_hold() {
 
 // ---- Integritäts-Cron (KB-0038, D-07) ---------------------------------------
 
-/// Die Scan-Sperre ist prozessweit; die Tests dieses Abschnitts laufen
-/// nacheinander.
+/// Die Scan-Sperre ist prozessweit; alle Tests dieses Binaries, die sie nehmen
+/// (dieser Abschnitt und jeder Test mit `tick::run_jobs`, der die Monats-Prüfung
+/// startet), laufen nacheinander (ADR 0042 Nr. 16, U7-A06).
 static INTEGRITY_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn archive_file(env: &Env, name: &str, bytes: &[u8]) -> String {
@@ -1328,6 +1333,8 @@ async fn gap_notice_also_while_restore_hold_persists() {
 /// Tag legt kein zweites an.
 #[tokio::test]
 async fn setup_creates_exactly_one_initial_backup() {
+    // Der Tick nimmt die Scan-Sperre (Monats-Prüfung), ADR 0042 Nr. 16.
+    let _serial = INTEGRITY_SERIAL.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let paths = paths_under(tmp.path());
     std::fs::create_dir_all(&paths.archive_dir).unwrap();

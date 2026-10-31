@@ -68,3 +68,13 @@ aufgeteilt (Zeilen 15/16/17, Vorsteuer Kz 185), ein Storno-Überhang ist Betrieb
 „Geldkonto fest Standard-Bank“ entfällt), bucht Anlagenverkäufe ohne Umsatzsteuer mit
 Restbuchwert, aktivierte Kosten als Zugang auf dem Anlagekonto und trägt den
 Sachkontenrahmen im Kopf. Einzelheiten und Quellen: ADR 0039 Nr. 135.
+
+## Amendment 2026-10-31 — DATEV nach der Formatbeschreibung (ADR 0042, Lauf 2026.11.1)
+
+Dateiname `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`; Berater- und Mandantennummer sind Pflicht
+(Felder 11/12). Ohne beide lehnt der Einzel-Export ab, das Steuerberater-Paket entsteht ohne
+Stapel und nennt den Grund im LIESMICH. Leere Textfelder als `""`, Bezeichnung im Kopf ohne
+Umlaut, unzulässige Zeichen in Belegfeldern als `_`; ein Test prüft Kopf und Buchungsfelder
+gegen die Regeln der DATEV-Formatbeschreibung. Gegenbuchungen stornierter Zahlungen erscheinen
+mit umgekehrtem Soll/Haben. Der Import in DATEV gilt als ungeprüft, bis ein Prüfprotokoll
+vorliegt. Einzelheiten: ADR 0042 Nr. 9, 15, 28, 29.

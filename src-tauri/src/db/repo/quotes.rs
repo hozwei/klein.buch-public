@@ -116,7 +116,25 @@ pub async fn create_draft(
     .execute(&mut *tx)
     .await?;
 
-    for (item, computed) in payload.input.items.iter().zip(totals.items.iter()) {
+    insert_items_in(&mut tx, &id, &payload.input, totals).await?;
+
+    tx.commit().await?;
+
+    get(pool, &id)
+        .await?
+        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+}
+
+/// Schreibt die Positionen eines Angebots (beim Anlegen und beim Bearbeiten
+/// eines Entwurfs, ADR 0042 Nr. 13). Die Trigger aus 0032
+/// (`trg_quote_items_frozen_*`) lassen das nur bei offenen Entwürfen zu.
+async fn insert_items_in(
+    conn: &mut sqlx::SqliteConnection,
+    quote_id: &str,
+    input: &QuoteInput,
+    totals: &Totals,
+) -> Result<()> {
+    for (item, computed) in input.items.iter().zip(totals.items.iter()) {
         let item_id = Uuid::now_v7().to_string();
         sqlx::query(
             "INSERT INTO quote_items (
@@ -126,7 +144,7 @@ pub async fn create_draft(
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?)",
         )
         .bind(&item_id)
-        .bind(&id)
+        .bind(quote_id)
         .bind(item.position as i64)
         .bind(&item.description)
         .bind(item.quantity)
@@ -139,15 +157,84 @@ pub async fn create_draft(
         .bind(item.description_markup.as_deref())
         .bind(item.source_package_id.as_deref())
         .bind(item.source_package_revision)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
+    Ok(())
+}
 
-    tx.commit().await?;
+/// Neuer Stand eines Angebots-Entwurfs für [`update_draft_in`].
+pub struct DraftUpdate<'a> {
+    pub contact_id: &'a str,
+    pub input: &'a QuoteInput,
+    pub is_kleinunternehmer: bool,
+    pub seller: &'a SellerSnapshot<'a>,
+    pub buyer: &'a BuyerSnapshot<'a>,
+    pub totals: &'a Totals,
+}
 
-    get(pool, &id)
-        .await?
-        .ok_or_else(|| Error::Domain("create_draft: post-INSERT SELECT leer".into()))
+/// Überschreibt einen offenen Angebots-Entwurf (ADR 0042 Nr. 13): Kopf,
+/// Verkäufer- und Empfänger-Snapshot und Summen; die Positionen werden ersetzt.
+/// Nummer und Geschäftsjahr bleiben. Nur für `status = 'draft'` und nicht
+/// festgeschrieben — die Bedingung steht im `WHERE`, die Trigger
+/// (`trg_quotes_immutable`, `trg_quotes_canceled_final`,
+/// `trg_quote_items_frozen_*`) sichern ab. Läuft in der Transaktion des
+/// Aufrufers (mit Audit).
+pub async fn update_draft_in(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+    update: &DraftUpdate<'_>,
+) -> Result<()> {
+    let input = update.input;
+    let res = sqlx::query(
+        "UPDATE quotes SET
+            quote_date = ?, valid_until = ?, contact_id = ?,
+            seller_name = ?, seller_street = ?, seller_postal_code = ?, seller_city = ?,
+            seller_tax_number = ?, seller_vat_id = ?,
+            net_amount_cents = ?, tax_amount_cents = ?, gross_amount_cents = ?,
+            currency_code = ?, is_kleinunternehmer = ?, pdf_template = ?, notes = ?,
+            buyer_name = ?, buyer_street = ?, buyer_postal_code = ?, buyer_city = ?,
+            buyer_country_code = ?, buyer_vat_id = ?, buyer_email = ?,
+            updated_at = datetime('now','utc')
+         WHERE id = ? AND status = 'draft' AND locked_at IS NULL",
+    )
+    .bind(input.quote_date.to_string())
+    .bind(input.valid_until.to_string())
+    .bind(update.contact_id)
+    .bind(update.seller.name)
+    .bind(update.seller.street)
+    .bind(update.seller.postal_code)
+    .bind(update.seller.city)
+    .bind(update.seller.tax_number)
+    .bind(update.seller.vat_id)
+    .bind(update.totals.net_amount_cents)
+    .bind(update.totals.tax_amount_cents)
+    .bind(update.totals.gross_amount_cents)
+    .bind(&input.currency_code)
+    .bind(i64::from(update.is_kleinunternehmer))
+    .bind(&input.pdf_template)
+    .bind(input.notes.as_deref())
+    .bind(update.buyer.name)
+    .bind(update.buyer.street)
+    .bind(update.buyer.postal_code)
+    .bind(update.buyer.city)
+    .bind(update.buyer.country_code)
+    .bind(update.buyer.vat_id)
+    .bind(update.buyer.email)
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    if res.rows_affected() == 0 {
+        return Err(Error::Domain(
+            "Der Angebots-Entwurf lässt sich nicht mehr ändern (fertiggestellt oder verworfen)."
+                .into(),
+        ));
+    }
+    sqlx::query("DELETE FROM quote_items WHERE quote_id = ?")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    insert_items_in(conn, id, input, update.totals).await
 }
 
 /// Schreibt/aktualisiert den Buyer-Snapshot eines Angebots (Block 19, Refresh
@@ -236,6 +323,8 @@ pub async fn get_detail(pool: &SqlitePool, id: &str) -> Result<Option<QuoteDetai
         items,
         buyer,
         attachments,
+        // Füllt nur `quotes_get` (ADR 0042 Nr. 16).
+        restore_conflict: None,
     }))
 }
 

@@ -60,6 +60,41 @@ pub async fn begin_immediate(
 /// (Plan W2.5).
 pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Wartezeit auf eine freie Verbindung des Pools. Im Betrieb 30 s (wie der
+/// sqlx-Standard und der Antwort-Timeout der Anfragen, ADR 0039). In den
+/// Unit-Tests der Bibliothek 120 s (ADR 0042 Nr. 16, U7-A06): Jede neue
+/// SQLCipher-Verbindung leitet den Schlüssel neu ab; parallel unter Last
+/// liefen die Restore-Tests sonst in `PoolTimedOut`.
+pub const ACQUIRE_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(120)
+} else {
+    std::time::Duration::from_secs(30)
+};
+
+/// Anhebung von [`ACQUIRE_TIMEOUT`] für die Integrationstests (`tests/`): Sie
+/// binden die Bibliothek ohne `cfg(test)` (ADR 0042 Nr. 16, V6-R01). 0 = keine
+/// Anhebung; der Betrieb ruft den Setter nie auf und bleibt bei 30 s.
+static ACQUIRE_TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Wartezeit auf eine freie Pool-Verbindung: [`ACQUIRE_TIMEOUT`] oder die
+/// Anhebung der Integrationstests.
+pub fn acquire_timeout() -> std::time::Duration {
+    match ACQUIRE_TIMEOUT_OVERRIDE_MS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => ACQUIRE_TIMEOUT,
+        ms => std::time::Duration::from_millis(ms),
+    }
+}
+
+/// Hebt die Wartezeit auf eine freie Pool-Verbindung an (nur Tests).
+#[doc(hidden)]
+pub fn set_acquire_timeout_for_tests(wait: std::time::Duration) {
+    ACQUIRE_TIMEOUT_OVERRIDE_MS.store(
+        u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// Öffnet (oder erstellt) den SQLite-Pool für `db_file`.
 ///
 /// - `key = Some(passphrase)` → **SQLCipher**: die Datei ist seitenweise
@@ -108,6 +143,7 @@ pub async fn open_pool(db_file: &Path, key: Option<&str>) -> Result<SqlitePool> 
 
     let pool: SqlitePool = SqlitePoolOptions::new()
         .max_connections(5)
+        .acquire_timeout(acquire_timeout())
         .connect_with(opts)
         .await?;
 
@@ -376,7 +412,9 @@ pub fn log_foreign_key_violations(context: &str, violations: &[ForeignKeyViolati
 
 /// Prüfung vor einer Umstellung (Lauf F2c): verletzte Fremdschlüssel und —
 /// für die Umstellung auf Schema 32 — mehrere festgeschriebene Stornos zu
-/// einem Original (dieselbe Bedingung wie der benannte CHECK in 0032). Ein
+/// einem Original (dieselbe Bedingung wie der benannte CHECK in 0032), für
+/// die Umstellung auf Schema 34 eine nicht übernehmbare Zahlungshistorie
+/// ([`payment_ledger_problem`], ADR 0042 Nr. 7). Ein
 /// Befund lehnt ab, **bevor** eine Migration etwas speichert: die Datenbank
 /// bleibt auf Schema `from`, das vorige Image öffnet sie weiter, ein Restore
 /// bleibt möglich. Billig gegenüber dem Pflicht-Backup, das danach entsteht.
@@ -406,7 +444,133 @@ pub async fn precheck_before_migration(pool: &SqlitePool, from: i32) -> Result<(
         tracing::error!("{msg}");
         return Err(Error::Config(msg));
     }
+    if from < 34 {
+        if let Some(problem) = payment_ledger_problem(pool).await? {
+            log_payment_ledger_invoices(
+                &format!("vor der Umstellung von Schema {from}"),
+                &payment_ledger_invoices(pool).await?,
+            );
+            let msg = format!(
+                "{INTEGRITY_REFUSED}: Migration 0034 abgebrochen: {problem} Die Datenbank steht \
+                 unverändert auf Schema {from}; es wurde nichts umgestellt (Handbuch: Fehlersuche \
+                 im Container)."
+            );
+            tracing::error!("{msg}");
+            return Err(Error::Config(msg));
+        }
+    }
     Ok(())
+}
+
+/// Befunde der Vorab-Prüfung der Migration 0034 je Rechnung (0/1 je Grund),
+/// gemeinsame Grundlage von [`payment_ledger_problem`] und
+/// [`payment_ledger_invoices`]. Dieselben Bedingungen wie der benannte CHECK
+/// in 0034. `json_each` läuft nur über gültige JSON-Arrays (sonst über
+/// `'[]'`), damit eine kaputte Historie als Befund zählt statt die Abfrage
+/// abzubrechen.
+const PAYMENT_LEDGER_FLAGS: &str = "WITH entries AS (
+        SELECT i.id AS invoice_id, j.value AS entry
+          FROM invoices i,
+               json_each(CASE WHEN json_valid(i.payment_history_json)
+                               AND json_type(i.payment_history_json) = 'array'
+                              THEN i.payment_history_json ELSE '[]' END) j
+         WHERE i.payment_history_json IS NOT NULL
+     ),
+     flags AS (
+        SELECT i.invoice_number AS number,
+               CASE WHEN (i.payment_history_json IS NOT NULL
+                          AND (NOT json_valid(i.payment_history_json)
+                               OR json_type(i.payment_history_json) IS NOT 'array'))
+                      OR EXISTS (SELECT 1 FROM entries e
+                                  WHERE e.invoice_id = i.id
+                                    AND (json_type(e.entry) IS NOT 'object'
+                                     OR json_type(e.entry, '$.amountCents') IS NOT 'integer'
+                                     OR json_extract(e.entry, '$.amountCents') < 0
+                                     OR json_type(e.entry, '$.paidDate') IS NOT 'text'
+                                     OR date(substr(json_extract(e.entry, '$.paidDate'), 1, 10))
+                                            IS NOT substr(json_extract(e.entry, '$.paidDate'), 1, 10)
+                                     OR json_type(e.entry, '$.accountId') NOT IN ('text', 'null')))
+                    THEN 1 ELSE 0 END AS unreadable,
+               CASE WHEN json_valid(i.payment_history_json)
+                         AND json_type(i.payment_history_json) = 'array'
+                         AND json_array_length(i.payment_history_json) > 0
+                         AND i.paid_amount_cents IS NOT
+                             (SELECT COALESCE(SUM(json_extract(e.entry, '$.amountCents')), 0)
+                                FROM entries e WHERE e.invoice_id = i.id)
+                    THEN 1 ELSE 0 END AS mismatched,
+               CASE WHEN i.paid_amount_cents > 0
+                         AND (i.payment_history_json IS NULL
+                              OR (json_valid(i.payment_history_json)
+                                  AND json_type(i.payment_history_json) = 'array'
+                                  AND json_array_length(i.payment_history_json) = 0))
+                         AND (i.paid_at IS NULL
+                              OR date(substr(i.paid_at, 1, 10)) IS NOT substr(i.paid_at, 1, 10))
+                    THEN 1 ELSE 0 END AS undated,
+               CASE WHEN EXISTS (SELECT 1 FROM entries e
+                                  WHERE e.invoice_id = i.id
+                                    AND json_type(e.entry, '$.accountId') = 'text'
+                                    AND NOT EXISTS (SELECT 1 FROM payment_accounts pa
+                                                     WHERE pa.id = json_extract(e.entry, '$.accountId')))
+                    THEN 1 ELSE 0 END AS unknown
+          FROM invoices i
+     )";
+
+/// Vorab-Prüfung der Migration 0034 (Zahlungsbuch, ADR 0042 Nr. 7) — dieselben
+/// Bedingungen wie der benannte CHECK dort: Zahlungshistorie nicht lesbar,
+/// Summe der Historie ≠ gezahlter Betrag, bezahlt ohne Historie und ohne
+/// Zahldatum, Verweis auf ein unbekanntes Zahlungskonto. `None`: übernehmbar.
+/// Nur sinnvoll auf einer Datenbank vor Schema 34 (danach ist die Historie
+/// eingefroren und das Buch maßgeblich). Phase A eines Restores lehnt solche
+/// Backups ab, statt die Instanz nach dem Tausch gesperrt zu lassen.
+pub async fn payment_ledger_problem(pool: &SqlitePool) -> Result<Option<&'static str>> {
+    let (unreadable, mismatched, undated, unknown): (i64, i64, i64, i64) =
+        sqlx::query_as(&format!(
+            "{PAYMENT_LEDGER_FLAGS}
+             SELECT COALESCE(SUM(unreadable), 0), COALESCE(SUM(mismatched), 0),
+                    COALESCE(SUM(undated), 0), COALESCE(SUM(unknown), 0)
+               FROM flags"
+        ))
+        .fetch_one(pool)
+        .await?;
+    Ok(if unreadable > 0 {
+        Some("Die Zahlungshistorie mindestens einer Rechnung ist nicht lesbar.")
+    } else if mismatched > 0 {
+        Some(
+            "Bei mindestens einer Rechnung ergibt die Zahlungshistorie nicht den gezahlten Betrag.",
+        )
+    } else if undated > 0 {
+        Some(
+            "Mindestens eine Rechnung ist bezahlt, hat aber weder Zahlungshistorie noch Zahldatum.",
+        )
+    } else if unknown > 0 {
+        Some("Die Zahlungshistorie mindestens einer Rechnung verweist auf ein unbekanntes Zahlungskonto.")
+    } else {
+        None
+    })
+}
+
+/// Rechnungsnummern der Rechnungen mit einem Befund aus
+/// [`payment_ledger_problem`] (höchstens 20, sortiert), damit der Betreiber
+/// im Log sieht, welche Rechnung die Umstellung blockiert. Keine Beträge.
+pub async fn payment_ledger_invoices(pool: &SqlitePool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(&format!(
+        "{PAYMENT_LEDGER_FLAGS}
+         SELECT number FROM flags
+          WHERE unreadable + mismatched + undated + unknown > 0
+          ORDER BY number LIMIT 20"
+    ))
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Schreibt die betroffenen Rechnungsnummern ins Log (ERROR), mit dem
+/// Kontext der Prüfung (wie [`log_foreign_key_violations`]).
+pub fn log_payment_ledger_invoices(context: &str, numbers: &[String]) {
+    for n in numbers {
+        tracing::error!(
+            "Zahlungshistorie nicht übernehmbar ({context}): Rechnung {n} (Migration 0034)"
+        );
+    }
 }
 
 /// Meldung für verletzte Fremdschlüssel **nach** den Migrationen. Mit
@@ -957,6 +1121,8 @@ async fn reencrypt_db_file(db_file: &Path, from_key: Option<&str>, passphrase: &
         }
         let src = SqlitePoolOptions::new()
             .max_connections(1)
+            // ADR 0042 Nr. 16 (V6-R01): dasselbe Zeitlimit wie `open_pool`.
+            .acquire_timeout(acquire_timeout())
             .connect_with(opts)
             .await?;
         let mut conn = src.acquire().await?;

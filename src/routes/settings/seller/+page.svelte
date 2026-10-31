@@ -3,22 +3,16 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { safeNextPath } from "#lib/nextPath.ts";
-  import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import RequiredLegend from "#lib/RequiredLegend.svelte";
   import LoadingState from "#lib/LoadingState.svelte";
-  import Toggle from "#lib/Toggle.svelte";
   import Banner from "#lib/Banner.svelte";
   import Button from "#lib/Button.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
-  import { focusTrap } from "#lib/focusTrap.ts";
-  import { portal } from "#lib/portal.ts";
-  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
-  import { date } from "#lib/format.ts";
+  import TaxStatusSection from "./TaxStatusSection.svelte";
   import {
     sellerProfileGet,
     sellerProfileUpsert,
-    paragraph19Info,
     sellerOwnerGet,
     sellerOwnerSet,
     documentTermsGet,
@@ -26,21 +20,22 @@
   } from "#lib/api.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import type {
-    Paragraph19Info,
     SellerProfile,
     SellerProfileInput,
+    TaxStatus,
   } from "#lib/types.ts";
 
-  let profile: SellerProfile | null = $state(null);
-  let info: Paragraph19Info | null = $state(null);
+  // ADR 0042 Nr. 1: Der Steuerstatus (§19) ist kein Feld der Firmendaten mehr,
+  // sondern eine Historie mit Grund und Wirkungsdatum (Abschnitt „Steuerstatus“,
+  // TaxStatusSection). Der Schalter und der §19-Wechseldialog (ADR 0041 Nr. 21/220/251)
+  // sind entfallen; `seller_profile_upsert` ändert den Status nicht.
+  let profile = $state<SellerProfile | null>(null);
   let loading = $state(true);
   /** U4 (V2-07): Nach einem Ladefehler kein leeres Formular (Speichern hätte die Firmendaten überschrieben). */
   let loadError = $state<string | null>(null);
   let saving = $state(false);
   /** Nach dem ersten Speicherversuch: fehlende Angaben fürs Ausstellen am Feld zeigen. */
   let triedSave = $state(false);
-  let showWaiveDialog = $state(false);
-  let pendingInput: SellerProfileInput | null = $state(null);
 
   let input: SellerProfileInput = $state(blankInput());
   let ownerName = $state("");
@@ -66,14 +61,6 @@
   const taxIdMissing = $derived(!(input.taxNumber ?? "").trim() && !(input.vatId ?? "").trim());
   const showIssueHints = $derived(triedSave || profile !== null);
 
-  // R5-SUB4/U1: App-Shell inert, solange der §19-Dialog offen ist.
-  $effect(() => {
-    if (showWaiveDialog) {
-      pushModal();
-      return () => popModal();
-    }
-  });
-
   function blankInput(): SellerProfileInput {
     return {
       name: "",
@@ -89,10 +76,8 @@
       iban: null,
       bic: null,
       logoFilename: null,
-      isKleinunternehmer: true, // §19-Default
       defaultPdfTemplate: "default",
       defaultCurrency: "EUR",
-      confirmWaiveParagraph19: null,
     };
   }
 
@@ -111,10 +96,8 @@
       iban: p.iban,
       bic: p.bic,
       logoFilename: p.logoFilename,
-      isKleinunternehmer: p.isKleinunternehmer === 1,
       defaultPdfTemplate: p.defaultPdfTemplate,
       defaultCurrency: p.defaultCurrency,
-      confirmWaiveParagraph19: null,
     };
   }
 
@@ -123,7 +106,6 @@
     loadError = null;
     try {
       profile = await sellerProfileGet();
-      info = await paragraph19Info();
       if (profile) input = fromProfile(profile);
       ownerName = (await sellerOwnerGet()) ?? "";
       const terms = await documentTermsGet();
@@ -138,9 +120,12 @@
 
   onMount(load);
 
-  function isWaiveTransition(): boolean {
-    return profile?.isKleinunternehmer === 1 && input.isKleinunternehmer === false;
-  }
+  /** Status heute aus dem Abschnitt „Steuerstatus“ (nach jedem Laden, auch nach einem
+   *  Eintrag); bis dahin aus den Firmendaten. */
+  let currentStatus = $state<TaxStatus | null>(null);
+  const statusToday = $derived<TaxStatus>(
+    currentStatus ?? (profile?.isKleinunternehmer === 0 ? "regelbesteuerung" : "kleinunternehmer"),
+  );
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -164,12 +149,6 @@
     if (quoteDaysInput && !quoteDaysInput.validate()) { quoteDaysInput.focus(); return; }
     if (dueDaysInput && !dueDaysInput.validate()) { dueDaysInput.focus(); return; }
 
-    if (isWaiveTransition() && !input.confirmWaiveParagraph19) {
-      // Modal-Dialog öffnen statt Backend abzulehnen.
-      pendingInput = { ...input };
-      showWaiveDialog = true;
-      return;
-    }
     await save(input);
   }
 
@@ -182,7 +161,6 @@
       await sellerOwnerSet(ownerName);
       // Leere Tage-Felder: bisherige Werte behalten (wie vorher bei 0 nicht möglich).
       await documentTermsSet(quoteValidDays ?? 30, invoiceDueDays ?? 14);
-      info = await paragraph19Info();
       input = fromProfile(profile);
       const missing = [
         phoneMissing ? "Telefon" : "",
@@ -204,21 +182,6 @@
     }
     // Rücksprung erst nach dem Speichern; ein Navigationsfehler ist kein Speicherfehler.
     if (saved && nextPath) await goto(nextPath);
-  }
-
-  async function confirmWaive() {
-    if (!pendingInput) return;
-    const payload = { ...pendingInput, confirmWaiveParagraph19: true };
-    showWaiveDialog = false;
-    pendingInput = null;
-    await save(payload);
-  }
-
-  function cancelWaive() {
-    showWaiveDialog = false;
-    pendingInput = null;
-    // Toggle visuell zurücksetzen
-    if (profile) input.isKleinunternehmer = profile.isKleinunternehmer === 1;
   }
 </script>
 
@@ -332,38 +295,12 @@
         {/if}
       </div>
 
-      <div class="paragraph19">
-        <div class="p19-head">
-          <Toggle
-            bind:checked={input.isKleinunternehmer}
-            label="Kleinunternehmer nach §19 UStG"
-          />
-          <HelpAnchor slug="kleinunternehmer-regelung" />
-        </div>
-        {#if input.isKleinunternehmer}
-          <p class="hint">
-            <strong>Eingeschaltet.</strong> Auf jeder Rechnung erscheint automatisch der
-            Hinweis „{info?.hinweisText}“. Du weist keine Umsatzsteuer aus — Rechnungen
-            und Angebote blenden die USt-Felder aus, damit dir kein Fehler passiert.
-          </p>
-        {:else}
-          <!-- U6-002/U7 (R1-02): Gespeichert ist nur das Datum des Wechsels, nicht sein Grund
-               (freiwilliger Verzicht oder Wegfall durch eine Umsatzgrenze, ADR 0041 Nr. 21/220).
-               Deshalb die Fälle nennen; der Server lässt die Rückkehr in allen erst ab diesem
-               Datum zu. -->
-          <p class="caveat">
-            <strong>Regelbesteuerung.</strong> Du weist auf deinen Rechnungen
-            Umsatzsteuer aus und meldest sie regelmäßig ans Finanzamt.{#if info?.returnDateAfterWaiver}{" "}
-              Hast du freiwillig verzichtet, bist du mindestens 5 Kalenderjahre gebunden: Zurück
-              zur Kleinunternehmer-Regelung kannst du frühestens am
-              <strong>{date(info.returnDateAfterWaiver)}</strong>. Beim Wegfall durch eine
-              Umsatzgrenze (über 25.000 € im Vorjahr oder über 100.000 € im laufenden Jahr) gilt
-              diese Bindung nicht; Klein.Buch kennt den Grund des Wechsels aber nicht und lässt
-              die Rückkehr erst ab diesem Datum zu.
-            {/if}
-          </p>
-        {/if}
-      </div>
+      <p class="p19">
+        <strong>Steuerstatus heute:</strong>
+        {statusToday === "regelbesteuerung" ? "Regelbesteuerung" : "Kleinunternehmer nach §19 UStG"}.
+        Wechsel (Verzicht, Wegfall, Rückkehr) trägst du mit Grund und Wirkungsdatum im Abschnitt
+        <a class="kb-link" href="#steuerstatus">Steuerstatus</a> unten ein.
+      </p>
     </fieldset>
 
     <fieldset>
@@ -432,111 +369,22 @@
       </div>
       <p class="kb-muted crossref">
         Bankverbindung und weitere Zahlwege pflegst du unter
-        <a href="/settings/payment-accounts">Einstellungen → Konten</a>. Logo, Unterschrift
-        und PDF-Vorlage unter <a href="/settings/pdf-templates">Einstellungen → Rechnungs-Layout</a>.
+        <a class="kb-link" href="/settings/payment-accounts">Einstellungen → Konten</a>. Logo, Unterschrift
+        und PDF-Vorlage unter <a class="kb-link" href="/settings/pdf-templates">Einstellungen → Rechnungs-Layout</a>.
       </p>
     </fieldset>
 
     <!-- U1: Hauptaktion auch am Formularende (Handy, Daumen; PageBar klebt dort nicht). -->
     <div class="kb-form-end kb-span-all"><Button type="submit" busy={saving}>{saving ? "Speichert …" : "Speichern"}</Button></div>
   </form>
-{/if}
 
-{#if showWaiveDialog}
-  <!-- Gefahr-Dialog: kein Schließen über den Hintergrund, Startfokus „Abbrechen“,
-       Escape bricht ab (ADR 0041 Nr. 11). Eigener Dialog statt confirmDialog,
-       weil er drei Fälle mit Zwischenüberschriften erklärt (R5-004, F8e, U7 R1-02). -->
-  <div class="kb-backdrop" use:portal>
-    <div
-      class="kb-dialog waive"
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="waive-title"
-      aria-describedby="waive-lead"
-      use:focusTrap={{ onEscape: cancelWaive }}
-    >
-      <header class="kb-dialog-head">
-        <h2 id="waive-title">Zur Regelbesteuerung wechseln?</h2>
-      </header>
-      <div class="kb-dialog-body">
-        <p id="waive-lead">
-          Du schaltest die Kleinunternehmer-Regelung aus. Neue Rechnungen weisen dann
-          <strong>Umsatzsteuer</strong> aus. Für den Wechsel gibt es drei Gründe mit
-          unterschiedlichen Folgen — lies den passenden Abschnitt. Die Hinweise ersetzen keine
-          Steuerberatung.
-        </p>
-
-        <h3>Freiwilliger Verzicht (§ 19 Abs. 3 UStG)</h3>
-        <p>
-          Der Verzicht gilt ab Beginn des Kalenderjahres, für das du ihn erklärst, und bindet
-          dich <strong>mindestens 5 Kalenderjahre</strong>. Zurück zur Kleinunternehmer-Regelung
-          kannst du erst danach. Hast du in diesem Jahr schon Rechnungen mit §19-Hinweis
-          ausgestellt, klärst du mit deiner Steuerberatung, wie du mit ihnen umgehst. Willst du
-          erst ab dem nächsten Jahr verzichten, schalte erst im neuen Jahr um.
-        </p>
-
-        <h3>Wegfall, weil dein Vorjahresumsatz über 25.000 € lag</h3>
-        <p>
-          Lag dein Gesamtumsatz im Vorjahr über 25.000 €, gilt die Regelung ab dem 1. Januar
-          nicht mehr (§ 19 Abs. 1 UStG). Eine 5-Jahres-Bindung gibt es dabei
-          <strong>nicht</strong>. Schalte um, bevor du die erste Rechnung des Jahres ausstellst.
-        </p>
-
-        <h3>Wegfall, weil dein Umsatz in diesem Jahr 100.000 € überschreitet</h3>
-        <p>
-          Überschreitet dein Umsatz im laufenden Jahr 100.000 €, endet die Regelung mit dem
-          Umsatz, der die Grenze überschreitet (§ 19 Abs. 1 UStG). Auch hier gilt
-          <strong>keine</strong> 5-Jahres-Bindung.
-        </p>
-        <ul>
-          <li>
-            Schalte um, <strong>bevor</strong> du die Rechnung ausstellst, mit der du die Grenze
-            überschreitest. Ausgestellte Rechnungen behalten ihren Status; hast du sie noch mit
-            §19-Hinweis ausgestellt, stornierst du sie und stellst sie mit Umsatzsteuer neu aus.
-          </li>
-          <li>
-            Kosten vor dem Überschreiten bleiben ohne Vorsteuerabzug; Klein.Buch rechnet für das
-            ganze Jahr mit Vorsteuer — das korrigierst du mit deiner Steuerberatung.
-          </li>
-          <li>
-            Die Anschaffungskosten von Anlagen, die du vorher angeschafft hast, korrigierst du in
-            diesem Fall nicht.
-          </li>
-        </ul>
-
-        <h3>In allen Fällen</h3>
-        <ul>
-          <li>Du weist auf allen neuen Rechnungen Umsatzsteuer aus,</li>
-          <li>schickst regelmäßig eine Umsatzsteuer-Voranmeldung ans Finanzamt</li>
-          <li>und kümmerst dich um den Vorsteuerabzug.</li>
-        </ul>
-        <p>
-          Nutzt du Anlagen weiter, die du als Kleinunternehmer angeschafft hast, kann der
-          Wechsel eine Berichtigung der Vorsteuer nach § 15a UStG auslösen (der Übergang gilt
-          als Änderung der Verhältnisse). Klein.Buch berechnet sie nicht; kläre das mit deiner
-          Steuerberatung.
-        </p>
-        <p>
-          Klein.Buch unterstützt das nur teilweise: Es weist die Umsatzsteuer auf
-          Rechnungen aus und teilt die EÜR-Ausfüllhilfe in netto und Umsatzsteuer
-          auf. Die Umsatzsteuer-Voranmeldung, Zahlungen an und Erstattungen vom
-          Finanzamt sowie die Umsatzsteuer auf Anlagenverkäufe bildet Klein.Buch
-          nicht ab — das klärst du mit deiner Steuerberatung. Klein.Buch kennt den Grund des
-          Wechsels nicht und lässt eine Rückkehr zur Kleinunternehmer-Regelung in allen drei
-          Fällen erst nach Ablauf der 5-Jahres-Frist zu. Mehr im Handbuch, Kapitel
-          <a href="/help/kleinunternehmer-regelung">Kleinunternehmer-Regelung</a>.
-        </p>
-      </div>
-      <footer class="kb-dialog-foot">
-        <Button variant="secondary" initialFocus onclick={cancelWaive}>Abbrechen</Button>
-        <Button variant="danger" onclick={confirmWaive}>Zur Regelbesteuerung wechseln</Button>
-      </footer>
-    </div>
-  </div>
+  <!-- ADR 0042 Nr. 1–6: eigener Abschnitt außerhalb des Formulars; Einträge gelten sofort
+       (mit Rückfrage und Re-Auth), nicht erst mit „Speichern“. -->
+  <TaxStatusSection onStatus={(s) => (currentStatus = s)} />
 {/if}
 
 <style>
-  /* .lead / .caveat / .kb-dialog* — globale Definitionen aus tokens.css. */
+  /* .lead / .kb-dialog* — globale Definitionen aus tokens.css. */
   form { max-width: 64rem; }
   fieldset {
     border: 1px solid var(--line);
@@ -561,19 +409,6 @@
   .city { flex: 1 1 12rem; }
   .country { flex: 0 0 7rem; }
   .days { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr)); gap: 0 0.75rem; }
-  .paragraph19 {
-    max-width: 48rem; /* U2: lesbare Zeilenlänge im breiten Steuer-Kasten */
-    margin-top: 1rem;
-    padding: 0.75rem;
-    background: var(--surface-sunken);
-    border-radius: var(--r-sm);
-  }
-  .p19-head { display: flex; align-items: center; gap: 0.25rem; }
-  .hint {
-    background: var(--status-info-bg); color: var(--status-info-fg);
-    padding: 0.6rem; border-radius: var(--r-sm);
-    margin-top: 0.5rem; font-size: var(--fs-sm);
-  }
   .warn { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--status-warning-fg); }
   .issue-req { font-weight: 400; color: var(--text-muted); }
   .hint-inline {
@@ -582,9 +417,5 @@
     color: var(--text-muted);
   }
   .crossref { margin: 0.4rem 0 0; font-size: var(--fs-sm); }
-  .crossref a, .waive a { text-decoration: underline; }
-  .waive { --dialog-w: 40rem; }
-  .waive h3 { font-size: var(--fs-md); margin: 1rem 0 0.25rem; }
-  .waive ul { padding-left: 1.2rem; }
-  .waive li { margin-bottom: 0.3rem; }
+  .p19 { max-width: 48rem; margin: 1rem 0 0; font-size: var(--fs-sm); }
 </style>

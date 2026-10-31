@@ -90,11 +90,15 @@ stornierst sie.
 
 ## Ausstellen (Festschreiben)
 
-In der Karte "Ausstellen" steht über dem Knopf das Feld "Leitweg-ID
-(optional)". Die Leitweg-ID ist die Kennung, unter der eine Behörde
-E-Rechnungen entgegennimmt; Klein.Buch schreibt sie als
-Käuferreferenz in die E-Rechnung. Ist Dein Auftraggeber keine
-Behörde, lässt Du das Feld leer.
+Die Leitweg-ID ist die Kennung, unter der eine Behörde E-Rechnungen
+entgegennimmt; Klein.Buch schreibt sie als Käuferreferenz in die
+E-Rechnung. Du trägst sie im Entwurf ein (Feld "Leitweg-ID
+(optional)" in der Karte "Allgemein"), der Entwurf speichert sie. In
+der Karte "Ausstellen" steht sie vorbelegt; ein Wert, den Du dort
+änderst, ersetzt den gespeicherten. Ein leeres Feld dort lässt die
+gespeicherte gelten; entfernen lässt sie sich über "Entwurf
+bearbeiten". Ist Dein Auftraggeber keine Behörde, lässt Du das Feld
+leer.
 
 Wenn die Rechnung fertig ist, klick auf **"Rechnung ausstellen"**
 (oben auf der Seite oder am Ende der Karte "Ausstellen"). Klein.Buch
@@ -121,10 +125,10 @@ andere Adresse als die beim Kontakt hinterlegte, fragt Klein.Buch zur
 Bestätigung Daten-Passwort und App-Code ab.
 
 Nach dem Versand steht neben dem Status "versendet am …", und die
-Karte "Versand-Historie" zeigt jeden Versuch. Klein.Buch protokolliert
-jeden Versand im E-Mail-Protokoll: Zeitpunkt, Empfänger, Antwort des
-Mail-Servers. Das vollständige Protokoll findest Du unter
-"Einstellungen → E-Mail-Protokoll".
+Karte "Versand-Historie" zeigt jeden Versuch (Zeitpunkt auf die Minute).
+Klein.Buch protokolliert jeden Versand im E-Mail-Protokoll: Zeitpunkt auf
+die Sekunde, Empfänger, Antwort des Mail-Servers. Das vollständige
+Protokoll findest Du unter "Einstellungen → E-Mail-Protokoll".
 
 Wenn Du noch kein Postfach eingerichtet hast, lies das Kapitel
 "Konten und Mail-Versand".
@@ -147,7 +151,11 @@ Sobald der Kunde bezahlt hat, klick in der Detail-Ansicht auf
 **"+ Zahlung"**. Nach dem Versand ist das der Hauptknopf oben auf der
 Seite; vorher steht er neben "Senden" (auf dem Handy im Menü "Mehr").
 Gebuchte Zahlungen stehen in der Karte "Zahlungen" mit Zahldatum,
-Betrag, Konto und Notiz. Mehr dazu im Kapitel "Zahlung erfassen".
+Betrag, Konto und Notiz. Eine falsch erfasste Zahlung stornierst Du dort
+über "Mehr" → "Zahlung stornieren …": Klein.Buch bucht eine
+Gegenbuchung mit Grund, die Zahlung bleibt als "Storniert" sichtbar.
+Mehr dazu im Kapitel "Zahlung erfassen", Abschnitt "Falsch erfasste
+Zahlung stornieren".
 
 Einen Bezahlt-Hinweis aus dem Entwurf zeigt die Karte "Daten". Ist
 trotzdem noch ein Betrag offen, erinnert der Hinweis "Bezahlt-Hinweis
@@ -182,4 +190,4 @@ Kapitel "Abo-Rechnungen".
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

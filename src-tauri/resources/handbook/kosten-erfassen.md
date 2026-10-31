@@ -94,9 +94,11 @@ Klein.Buch v1.0 ist für §19-Kleinunternehmer gebaut. Regelbesteuerte
 Workflows (Vorsteuer-Abzug, Umsatzsteuer-Voranmeldung) sind nicht
 voll abgebildet.
 
-Hast Du auf §19 verzichtet, zählt für jede Kostenposition Dein
-Steuerstatus bei Leistungsbezug, nicht der im Jahr der Zahlung (§15
-Abs. 1 UStG). Klein.Buch nimmt dafür das Belegdatum. Eine Rechnung
+Wechselt Dein Steuerstatus (Verzicht auf §19, Wegfall, Rückkehr), zählt
+für jede Kostenposition Dein Steuerstatus bei Leistungsbezug, nicht der
+im Jahr der Zahlung (§15 Abs. 1 UStG). Klein.Buch nimmt dafür das
+Belegdatum, tagesgenau: Bei einem Wegfall am 15.07. bleiben Kosten vom
+14.07. ohne Vorsteuer, Kosten vom 15.07. haben sie. Eine Rechnung
 vom Dezember, als Du noch Kleinunternehmer warst, bleibt brutto ohne
 Vorsteuer, auch wenn Du sie erst im Januar unter Regelbesteuerung
 bezahlst. In welchem Jahr die Ausgabe in der EÜR steht, bestimmt
@@ -221,4 +223,4 @@ dazu im Kapitel "Privatbewegungen".
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

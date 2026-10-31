@@ -1,21 +1,33 @@
 # §14 UStG — Pflichtangaben einer Rechnung
 
-§14 Abs. 4 UStG definiert die Pflichtangaben. Klein.Buch's
-`domain::invoice::validate()` (Block 3) prüft live, bevor eine
-Rechnung in den `issued`-Status übergeht.
+Quellen: https://www.gesetze-im-internet.de/ustg_1980/__14.html ·
+https://www.gesetze-im-internet.de/ustdv_1980/__31.html (§ 31 UStDV) ·
+https://www.gesetze-im-internet.de/ustdv_1980/__34a.html (§ 34a UStDV)
 
-Quelle: https://www.gesetze-im-internet.de/ustg_1980/__14.html
+Klein.Buch prüft die Angaben vor dem Ausstellen (`domain::invoice::validate_for_issue`).
 
-Pflichtangaben:
-1. Vollständiger Name + Anschrift Leistender + Leistungsempfänger.
-2. Steuernummer oder USt-IdNr des Leistenden.
+**§ 14 Abs. 4 UStG (Regelfall):**
+1. Vollständiger Name und Anschrift von Leistendem und Leistungsempfänger.
+2. Steuernummer oder USt-IdNr. des Leistenden.
 3. Ausstellungsdatum.
-4. Fortlaufende Rechnungsnummer (RE-{YYYY}-{NNNN}).
-5. Menge + handelsübliche Bezeichnung der Leistung.
-6. Zeitpunkt der Lieferung/Leistung (Leistungsdatum).
-7. Entgelt + jeden im Voraus vereinbarten Rabatt.
-8. Anzuwendender Steuersatz, ggf. Hinweis Steuerbefreiung.
-9. Bei §19: Hinweis "Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."
+4. Fortlaufende Rechnungsnummer (Klein.Buch: `RE-{JJJJ}-{NNNN}`).
+5. Menge und handelsübliche Bezeichnung der Leistung.
+6. Zeitpunkt der Leistung — als Datum oder Zeitraum; der Kalendermonat genügt
+   (§ 31 Abs. 4 UStDV). Bei einer Rechnung vor der Leistung (Vorausrechnung) der
+   voraussichtliche Leistungszeitpunkt. Wurde das Entgelt vor der Leistung schon vereinnahmt
+   (Anzahlung, § 14 Abs. 5 Satz 1 UStG), zusätzlich der Zeitpunkt der Vereinnahmung, sofern er
+   feststeht und vom Ausstellungsdatum abweicht (§ 14 Abs. 4 Satz 1 Nr. 6 UStG).
+7. Entgelt und jede im Voraus vereinbarte Minderung.
+8. Steuersatz und Steuerbetrag bzw. Hinweis auf eine Steuerbefreiung.
 
-Kleinbetragsrechnungen (≤ 250 € brutto, §33 UStDV) haben reduzierte
-Pflichtangaben — siehe `ust-paragraph-33-kleinbetrag.md`.
+**Kleinunternehmer (§ 34a UStDV, seit 2025):** Mindestangaben sind Name und Anschrift von
+Leistendem und Empfänger, Steuernummer bzw. USt-IdNr. des Leistenden, Ausstellungsdatum, Menge
+und Art der Leistung, Entgelt sowie der Hinweis auf die Steuerbefreiung nach § 19 UStG.
+Klein.Buch verlangt trotzdem Rechnungsnummer und Leistungszeitpunkt (GoBD, E-Rechnung).
+
+**Klein.Buch:** Leistungsdatum oder Leistungszeitraum (XRechnung BT-72 bzw. BG-14 mit
+BT-73/BT-74); ohne Angabe gilt das Rechnungsdatum. Das Leistungsdatum darf nach dem
+Rechnungsdatum liegen (ADR 0042 Nr. 10, 11). Leitweg-ID: BT-10.
+
+Kleinbetragsrechnungen (≤ 250 € brutto, § 33 UStDV) haben weniger Pflichtangaben —
+siehe `ust-paragraph-33-kleinbetrag.md`.

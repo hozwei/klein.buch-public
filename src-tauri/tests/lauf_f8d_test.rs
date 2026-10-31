@@ -17,7 +17,8 @@
 //!   Ausfüllhilfe nennen die Anlage mit dem Handlungsweg.
 //! - Lauf F8e: Anschaffungsdatum (Lieferung) und Belegdatum in Jahren mit
 //!   unterschiedlichem Status: Anlegen/Bearbeiten abgelehnt, nach einem
-//!   späteren Verzicht nicht korrigierbar; Hinweis zur 100.000-€-Grenze.
+//!   späteren Verzicht nicht korrigierbar (Status taggenau aus der Historie,
+//!   ADR 0042).
 
 use std::path::Path;
 use std::str::FromStr;
@@ -27,7 +28,7 @@ use chrono::{Datelike, NaiveDate};
 use klein_buch_lib::app_ctx::AppCtx;
 use klein_buch_lib::commands::{
     assets as assets_cmd, euer as euer_cmd, expenses as expenses_cmd, reauth,
-    settings as settings_cmd,
+    settings as settings_cmd, tax_status as tax_cmd,
 };
 use klein_buch_lib::config::Paths;
 use klein_buch_lib::db::repo::{euer as euer_repo, seller_profile};
@@ -69,7 +70,7 @@ fn paths_for(dir: &Path) -> Paths {
     }
 }
 
-fn profile(klein: bool) -> seller_profile::SellerProfileInput {
+fn profile() -> seller_profile::SellerProfileInput {
     seller_profile::SellerProfileInput {
         name: "Beispiel IT-Service".into(),
         legal_form: None,
@@ -84,15 +85,14 @@ fn profile(klein: bool) -> seller_profile::SellerProfileInput {
         iban: None,
         bic: None,
         logo_filename: None,
-        is_kleinunternehmer: klein,
+        is_kleinunternehmer: None,
         default_pdf_template: Some("default".into()),
         default_currency: Some("EUR".into()),
-        confirm_waive_paragraph_19: (!klein).then_some(true),
     }
 }
 
-/// `klein = false`: Verzicht auf §19 ab heute — Regelbesteuerung ab Beginn des
-/// laufenden Jahres, das Vorjahr bleibt §19.
+/// `klein = false`: Verzicht auf §19 ab Beginn des laufenden Jahres (ADR 0042:
+/// Eintrag in der Statushistorie), das Vorjahr bleibt §19.
 async fn setup(klein: bool) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let paths = paths_for(dir.path());
@@ -107,19 +107,31 @@ async fn setup(klein: bool) -> Env {
         .await
         .unwrap();
     MIGRATOR.run(&pool).await.unwrap();
-    seller_profile::upsert(&pool, &profile(true)).await.unwrap();
-    if !klein {
-        seller_profile::upsert(&pool, &profile(false))
-            .await
-            .unwrap();
-    }
+    seller_profile::upsert(&pool, &profile()).await.unwrap();
     let ctx = AppCtx::for_tests(paths);
     ctx.set_pool(pool.clone());
+    if !klein {
+        verzicht_ctx(&ctx).await.expect("Verzicht");
+    }
     Env {
         pool,
         ctx,
         _dir: dir,
     }
+}
+
+/// Verzicht auf §19 ab dem 1. Januar des laufenden Jahres über den Command
+/// (frische Re-Auth, ADR 0042 Nr. 1–2).
+async fn verzicht_ctx(ctx: &Arc<AppCtx>) -> Result<tax_cmd::ChangeResult> {
+    let args: tax_cmd::TaxStatusChangeAddArgs = serde_json::from_value(serde_json::json!({
+        "input": {
+            "effectiveFrom": format!("{}-01-01", today().year()),
+            "status": "regelbesteuerung",
+            "reason": "verzicht",
+        }
+    }))
+    .unwrap();
+    reauth::with_reauth(true, tax_cmd::tax_status_change_add(ctx, args)).await
 }
 
 fn today() -> NaiveDate {
@@ -461,11 +473,10 @@ async fn waiver_after_capitalizing_names_affected_assets() {
     .await
     .unwrap();
 
-    let args: settings_cmd::SellerProfileUpsertArgs =
-        serde_json::from_value(serde_json::json!({ "input": profile(false) })).unwrap();
-    let row = reauth::with_reauth(true, settings_cmd::seller_profile_upsert(&env.ctx, args))
+    verzicht_ctx(&env.ctx)
         .await
         .expect("Verzicht wird nicht blockiert");
+    let row = seller_profile::get_view(&env.pool).await.unwrap().unwrap();
     assert_eq!(row.is_kleinunternehmer, 0);
 
     let (title, body): (String, String) = sqlx::query_as(
@@ -515,7 +526,7 @@ async fn waiver_after_capitalizing_names_affected_assets() {
 
     // Ein erneutes Speichern ohne Statuswechsel legt keinen Hinweis an.
     let args: settings_cmd::SellerProfileUpsertArgs =
-        serde_json::from_value(serde_json::json!({ "input": profile(false) })).unwrap();
+        serde_json::from_value(serde_json::json!({ "input": profile() })).unwrap();
     reauth::with_reauth(true, settings_cmd::seller_profile_upsert(&env.ctx, args))
         .await
         .unwrap();
@@ -590,7 +601,7 @@ async fn acquisition_date_in_year_with_other_status_than_document_is_rejected() 
     let msg = err.to_string();
     assert!(
         msg.contains("(Regelbesteuerung) und Belegdatum")
-            && msg.contains("(Kleinunternehmer nach §19) liegen"),
+            && msg.contains("(Kleinunternehmer nach §19) fallen"),
         "{msg}"
     );
 }
@@ -598,9 +609,8 @@ async fn acquisition_date_in_year_with_other_status_than_document_is_rejected() 
 /// Lauf F8e: Ein späterer Verzicht kann Anschaffungs- und Belegdatum einer
 /// bestehenden Anlage unter verschiedene Status bringen. Dann ist der
 /// Soll-Betrag nach dem Belegdatum kein sicherer Korrekturweg: Die Anlage gilt
-/// als nicht korrigierbar (Steuerberatung). Inbox und Ausfüllhilfe nennen
-/// außerdem den Wegfall von §19 beim Überschreiten der 100.000-€-Grenze, in
-/// dem Anlagen nicht zu korrigieren sind.
+/// als nicht korrigierbar (Steuerberatung). Inbox und Ausfüllhilfe nennen den
+/// Handlungsweg; den Status bestimmt Klein.Buch taggenau (ADR 0042 Nr. 3).
 #[tokio::test]
 async fn waiver_splitting_delivery_and_document_year_is_not_correctable() {
     let env = setup(true).await;
@@ -611,9 +621,7 @@ async fn waiver_splitting_delivery_and_document_year_is_not_correctable() {
         .await
         .expect("beide Jahre §19");
 
-    let args: settings_cmd::SellerProfileUpsertArgs =
-        serde_json::from_value(serde_json::json!({ "input": profile(false) })).unwrap();
-    reauth::with_reauth(true, settings_cmd::seller_profile_upsert(&env.ctx, args))
+    verzicht_ctx(&env.ctx)
         .await
         .expect("Verzicht wird nicht blockiert");
 
@@ -632,9 +640,8 @@ async fn waiver_splitting_delivery_and_document_year_is_not_correctable() {
     .expect("Inbox-Hinweis");
     assert!(
         body.contains(&format!("Anlage {asset_number} (Kosten {number})"))
-            && body.contains("Anschaffungsdatum in einem Jahr mit anderem Steuerstatus")
-            && body.contains("100.000-€-Grenze")
-            && body.contains("nicht korrigieren"),
+            && body.contains("Anschaffungsdatum unter einem anderen Steuerstatus")
+            && body.contains("taggenau"),
         "{body}"
     );
 
@@ -646,14 +653,14 @@ async fn waiver_splitting_delivery_and_document_year_is_not_correctable() {
         .find(|n| n.contains("abweichenden Anschaffungskosten"))
         .expect("Hinweis der Ausfüllhilfe");
     assert!(
-        note.contains("Nicht korrigieren") && note.contains("100.000-€-Grenze"),
+        note.contains("Nicht korrigieren") && note.contains("taggenau"),
         "{note}"
     );
     assert!(
         pkg.form
             .notes
             .iter()
-            .any(|n| n.starts_with("Regelbesteuerung:") && n.contains("100.000-€-Grenze")),
+            .any(|n| n.starts_with("Regelbesteuerung:")),
         "{:?}",
         pkg.form.notes
     );

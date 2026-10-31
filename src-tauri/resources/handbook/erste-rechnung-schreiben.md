@@ -35,13 +35,24 @@ Pflichtfelder tragen einen Stern.
 
 In "Allgemein" wählst Du den Empfänger aus der Auswahl-Liste. Ab acht
 Kontakten steht darüber ein Suchfeld ("Suchen: Name oder Ort"), das
-die Liste eingrenzt. Das Rechnungsdatum steht auf heute. Das
-Leistungsdatum ist Pflichtfeld nach §14 UStG; Klein.Buch belegt es
+die Liste eingrenzt. Das Rechnungsdatum steht auf heute.
+
+Unter "Leistung" wählst Du zwischen **"Datum"** (ein Leistungsdatum)
+und **"Zeitraum (von–bis)"** (ein Leistungszeitraum). Das
+Leistungsdatum ist Pflichtangabe nach §14 UStG; Klein.Buch belegt es
 mit dem Rechnungsdatum vor und zieht es mit, bis Du es selbst
-änderst. Es darf nicht nach dem Rechnungsdatum liegen. Auch die
-Fälligkeit ist Pflicht, weil die E-Rechnung sie verlangt; Klein.Buch
-schlägt sie aus dem Zahlungsziel in Deinen Firmendaten vor. Die
-Währung steht fest auf "Euro (EUR)".
+änderst. Für Leistungen über eine Zeitspanne (zum Beispiel einen
+Monat Beratung) wählst Du "Zeitraum (von–bis)" und trägst "Beginn"
+und "Ende" ein; das Ende darf nicht vor dem Beginn liegen. Beides
+darf nach dem Rechnungsdatum liegen: Klein.Buch zeigt dann unter dem
+Feld den Hinweis "Rechnung vor der Leistung" (Vorausrechnung, siehe
+Glossar). Das ist erlaubt und kein Fehler.
+
+Auch die Fälligkeit ist Pflicht, weil die E-Rechnung sie verlangt;
+Klein.Buch schlägt sie aus dem Zahlungsziel in Deinen Firmendaten
+vor. Die Währung steht fest auf "Euro (EUR)". Schreibst Du an eine
+Behörde, trägst Du unten in der Karte "Allgemein" die "Leitweg-ID
+(optional)" ein (siehe Schritt 5); sonst bleibt das Feld leer.
 
 Die Rechnungsnummer vergibt Klein.Buch automatisch beim Speichern des
 Entwurfs in der Form `RE-JJJJ-NNNN` (zum Beispiel `RE-2026-0001`,
@@ -58,9 +69,9 @@ vor den Cent und auf Wunsch mit Punkt als Tausendertrenner, zum
 Beispiel 1.234,56. Ein Minuszeichen nimmt das Feld nicht an. Netto
 und Brutto rechnet Klein.Buch automatisch aus.
 
-Wenn Du als Kleinunternehmer arbeitest, blendet Klein.Buch die
-Umsatzsteuer-Felder aus und sagt das in einem Hinweis über dem
-Formular. Das schützt Dich vor einer versehentlichen
+Gilt am Leistungsdatum der Rechnung die Kleinunternehmer-Regelung,
+blendet Klein.Buch die Umsatzsteuer-Felder aus und sagt das in einem
+Hinweis über dem Formular. Das schützt Dich vor einer versehentlichen
 falschen Umsatzsteuer-Angabe, die nach §14c UStG dazu führen
 würde, dass Du die ausgewiesene Umsatzsteuer tatsächlich ans
 Finanzamt abführen musst.
@@ -104,9 +115,16 @@ XRechnung-XML. Du musst sie nicht selbst eintippen.
 
 ## Schritt 5: Ausstellen (Festschreiben)
 
-In der Karte "Ausstellen" steht das Feld "Leitweg-ID (optional)".
 Die Leitweg-ID brauchst Du nur, wenn Dein Auftraggeber eine Behörde
-ist; sonst lässt Du das Feld leer.
+ist; sonst lässt Du das Feld leer. Du trägst sie schon im Entwurf ein
+(Karte "Allgemein"), der Entwurf speichert sie. Aufgebaut ist sie aus
+Grobadressierung, optional Feinadressierung und einer zweistelligen
+Prüfziffer, durch Bindestriche getrennt (zum Beispiel
+04011000-1234512345-06). In der Karte "Ausstellen" steht sie noch einmal
+vorbelegt: Ein geänderter Wert gilt für diese E-Rechnung, ein leeres
+Feld lässt die gespeicherte gelten. Entfernen lässt sie sich über
+"Entwurf bearbeiten". Beim Ausstellen übernimmt Klein.Buch sie als
+Käuferreferenz in die E-Rechnung.
 
 Klick auf **"Rechnung ausstellen"**. Klein.Buch fragt einmal nach
 ("Rechnung jetzt ausstellen?"). Bestätige mit "Ausstellen". Ab
@@ -154,4 +172,4 @@ vor dem Vorwurf, Du hättest Belege nachträglich verändert.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

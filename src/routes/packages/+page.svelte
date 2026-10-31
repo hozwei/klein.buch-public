@@ -236,10 +236,10 @@
         <tbody>
           {#each group.items as p (p.id)}
             <tr class:archived={p.status === "archived"}>
-              <td data-label="Paket"><a class="pkg-name" href={`/packages/${p.id}`}>{p.name}</a></td>
+              <td class="kb-card-head" data-label="Paket"><a class="kb-link kb-target pkg-name" href={`/packages/${p.id}`}>{p.name}</a></td>
               <td class="kb-num" data-label="Version">{p.currentRevision ?? "—"}</td>
               <td class="kb-col-opt2" data-label="Geändert">{date(p.updatedAt)}</td>
-              <td data-label="Status">
+              <td class="kb-card-status" data-label="Status">
                 {#if p.status === "archived"}
                   <Badge tone="neutral">Archiviert</Badge>
                 {:else}
@@ -385,13 +385,8 @@
     font-size: var(--type-heading);
     margin: 0 0 var(--sp-3);
   }
-  .pkg-name {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--target);
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
+  /* Paketname als Link: `.kb-link .kb-target` (V2-21, ADR 0041 Nr. 166). */
+  .pkg-name { font-weight: 600; overflow-wrap: anywhere; }
   /* Archiviert: gedämpfter Text statt Transparenz (ADR 0041 Nr. 26), Badge trägt den Status. */
   tr.archived .pkg-name { color: var(--text-muted); }
   .empty {

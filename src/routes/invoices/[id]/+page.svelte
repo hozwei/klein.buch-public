@@ -3,32 +3,59 @@
   import { pdfTemplateLabel, unitLabel } from "#lib/labels.ts";
   import { onMount, tick } from "svelte";
   import { page } from "$app/state";
+  import { goto } from "$app/navigation";
   import {
     invoicesGet,
     invoicesValidateDraft,
     invoicesLockAndIssue,
     invoicesVoidDraft,
+    invoicesReversePayment,
     archiveUrl,
     saveArchiveFile,
     emailLogFor,
     paymentAccountsList,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
-  import type { Invoice, InvoiceDetail, ValidationIssueDto, EmailLogEntry, PaymentAccount } from "#lib/types.ts";
-  import { euro, date, dateTime, percent } from "#lib/format.ts";
+  import type {
+    Invoice,
+    InvoiceDetail,
+    InvoicePayment,
+    ValidationIssueDto,
+    EmailLogEntry,
+    PaymentAccount,
+  } from "#lib/types.ts";
+  import { euro, date, dateTimeShort, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import { todayBerlin } from "#lib/date.ts";
+  import { invoiceTaxDate } from "#lib/taxStatus.ts";
+  import { buyerReferenceError, normalizeBuyerReference, serviceSummary } from "#lib/serviceDate.ts";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import { dayClock } from "#lib/dayClock.svelte.ts";
   import Banner from "#lib/Banner.svelte";
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
   import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
-  import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
+  import HelpAnchor from "#lib/HelpAnchor.svelte";
+  import ActionMenu, { type ActionMenuItem } from "#lib/ActionMenu.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import { voidReasonError } from "#lib/voidDraft.ts";
-  import { accountText, parsePaymentHistory, paymentAccountId } from "../paymentHistory.ts";
+  import { focusTrap } from "#lib/focusTrap.ts";
+  import { portal } from "#lib/portal.ts";
+  import { pushModal, popModal } from "#lib/modalStack.svelte.ts";
+  import { REAUTH_CANCELED } from "#lib/transport.ts";
+  import { focusLost } from "#lib/focusAfterRemoval.ts";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
+  import {
+    accountText,
+    cleanReverseReason,
+    isReasonRejection,
+    paymentAccountId,
+    paymentLines,
+    REVERSE_REASON_MAX_CHARS,
+    reverseReasonError,
+  } from "../paymentHistory.ts";
   import {
     docKind,
     invoiceStatusView,
@@ -53,8 +80,21 @@
   // Ablehnung beim Ausstellen: Gründe als stehendes Banner (ADR 0041 Nr. 22).
   let issueFailure = $state<string[] | null>(null);
   let issueBannerEl: HTMLDivElement | undefined = $state();
-  // V1-21: Leitweg-ID leer; beim Ausstellen gilt leer als „N/A“ (wie bisher).
+  // ADR 0042 Nr. 12: Leitweg-ID mit dem am Entwurf gespeicherten Wert vorbelegt.
+  // Ein geänderter Wert gilt beim Ausstellen; leer gilt der gespeicherte, sonst „N/A“.
   let buyerReference = $state("");
+  let issueTried = $state(false);
+  // Leitweg-ID, die beim Ausstellen in die E-Rechnung geht (Feld vor gespeichertem Wert).
+  let effectiveBuyerReference = $derived(
+    normalizeBuyerReference(buyerReference) ?? normalizeBuyerReference(detail?.invoice.buyerReference),
+  );
+  let buyerReferenceNote = $derived.by(() => {
+    const stored = normalizeBuyerReference(detail?.invoice.buyerReference);
+    if (!stored) return "";
+    return normalizeBuyerReference(buyerReference)
+      ? "Am Entwurf gespeichert; eine Änderung hier gilt für diese E-Rechnung."
+      : `Leer gilt die am Entwurf gespeicherte Leitweg-ID „${stored}“. Entfernen lässt sie sich über „Entwurf bearbeiten“.`;
+  });
   let sendLog = $state<EmailLogEntry[]>([]);
   // Lauf F3b: Entwurf verwerfen (Grund ≥ 10 Zeichen, Re-Auth im Server).
   let showVoid = $state(false);
@@ -68,12 +108,27 @@
   let relatedStorno = $state<Invoice | null>(null);
   // Warteliste (7): Konto je Zahlung (auch deaktivierte Konten).
   let accounts = $state<PaymentAccount[]>([]);
-  // Warteliste (8): Entwurf nach einer Wiederherstellung vorgemerkt.
-  let restoreFlagged = $state(false);
 
   let id = $derived(page.params.id ?? "");
   // Heute in Europe/Berlin, reaktiv über Mitternacht (V2-03: „Überfällig“ wie auf Start).
   const todayIso = $derived(todayBerlin(dayClock.now));
+
+  // ADR 0042 Nr. 3 (V1-R06): Ein Entwurf zeigt den Steuerstatus seines Datums
+  // (Leistungsdatum, sonst Ende des Leistungszeitraums, sonst Rechnungsdatum) wie
+  // der Editor; der gespeicherte Wert ist bis zum Festschreiben nur vorläufig.
+  // Festgeschriebene Belege zeigen den eingefrorenen Wert, Storno-Belege den des
+  // Originals, verworfene Entwürfe den gespeicherten.
+  const draftTaxDate = $derived.by(() => {
+    const i = detail?.invoice;
+    if (!i || i.lockedAt || i.voidedAt || i.isStornoFor) return "";
+    return invoiceTaxDate(i, todayIso);
+  });
+  const draftTaxAt = taxStatusAtDate(() => draftTaxDate);
+  let isKlein = $derived(
+    draftTaxDate && draftTaxAt.date === draftTaxDate && draftTaxAt.isKlein !== null
+      ? draftTaxAt.isKlein
+      : detail?.invoice.isKleinunternehmer !== 0,
+  );
 
   async function load() {
     loading = true;
@@ -84,7 +139,11 @@
       if (!detail) {
         notFound = true;
         error = "Rechnung nicht gefunden.";
-      } else await loadRelated(detail);
+      } else {
+        buyerReference = detail.invoice.buyerReference ?? "";
+        issueTried = false;
+        await loadRelated(detail);
+      }
       try {
         sendLog = await emailLogFor("invoice", id);
       } catch {
@@ -98,20 +157,30 @@
     if (detail && !detail.invoice.lockedAt && !detail.invoice.voidedAt && !detail.invoice.isStornoFor) await check();
   }
 
+  // Neu lesen ohne Ladezustand (nach „Zahlung stornieren“): die Seite bleibt stehen,
+  // nur Rechnung, Zahlungen und Summen ändern sich.
+  async function refresh() {
+    try {
+      const d = await invoicesGet(id);
+      if (d) {
+        detail = d;
+        await loadRelated(d);
+      }
+    } catch {
+      // Der Stand bleibt; die Meldung der eigentlichen Aktion steht schon.
+    }
+  }
+
   // Nur zur Anzeige; fehlt der Bezug, bleibt der Hinweis ohne Nummer.
   async function loadRelated(d: InvoiceDetail) {
     relatedOriginal = null;
     relatedStorno = null;
-    restoreFlagged = false;
     try {
       if (d.invoice.isStornoFor) relatedOriginal = (await invoicesGet(d.invoice.isStornoFor))?.invoice ?? null;
       if (d.invoice.canceledByStornoId) relatedStorno = (await invoicesGet(d.invoice.canceledByStornoId))?.invoice ?? null;
-      if (d.invoice.paidAmountCents > 0) accounts = await paymentAccountsList(true);
-      if (!d.invoice.lockedAt && !d.invoice.voidedAt) {
-        restoreFlagged = (await numberingRestoredDraftsList()).some(
-          (c) => c.kind === "invoice" && c.id === d.invoice.id,
-        );
-      }
+      // ADR 0042 Nr. 8: auch nach einer vollen Gegenbuchung (bezahlt 0 €) zeigt die
+      // Historie Konten — also laden, sobald es Buchungen gibt.
+      if (d.invoice.paidAmountCents > 0 || (d.payments ?? []).length > 0) accounts = await paymentAccountsList(true);
     } catch {
       // Bezug ist Zusatzinformation — Fehler hier nicht hochziehen.
     }
@@ -154,7 +223,14 @@
 
   async function lockAndIssue() {
     if (!detail || issuing) return;
-    const ref = buyerReference.trim();
+    // Meldung am Feld Leitweg-ID statt Rückfrage (ADR 0041, Fehler am Feld).
+    issueTried = true;
+    if (buyerReferenceError(buyerReference)) {
+      await tick();
+      document.getElementById("buyer-ref")?.focus();
+      return;
+    }
+    const ref = effectiveBuyerReference;
     if (
       !(await confirmDialog({
         title: "Rechnung jetzt ausstellen?",
@@ -171,7 +247,8 @@
     issuing = true;
     issueFailure = null;
     try {
-      await invoicesLockAndIssue(detail.invoice.id, ref || "N/A");
+      // ADR 0042 Nr. 12: ohne Wert gilt die am Entwurf gespeicherte Leitweg-ID.
+      await invoicesLockAndIssue(detail.invoice.id, normalizeBuyerReference(buyerReference));
       flash(`Rechnung ${detail.invoice.invoiceNumber} ausgestellt.`);
       await load();
     } catch (e) {
@@ -297,8 +374,104 @@
     return { secondary, more };
   });
 
-  // ---- Zahlungen (Warteliste (7)) ----
-  let payments = $derived(detail ? parsePaymentHistory(detail.invoice.paymentHistoryJson) : []);
+  // ---- Zahlungen (Warteliste (7); Zahlungsbuch, ADR 0042 Nr. 7–9) ----
+  let payments = $derived(paymentLines(detail?.payments ?? []));
+  let paymentsHeadingEl: HTMLHeadingElement | undefined = $state();
+
+  // „Zahlung stornieren …“ (ADR 0042 Nr. 8): Gefahr-Dialog mit Grund, Re-Auth im
+  // Server. Der Dialog hält eine Kopie der Zahlung, damit ein Neuladen ihn nicht leert.
+  let showReverse = $state(false);
+  let reverseTarget = $state<InvoicePayment | null>(null);
+  let reverseReason = $state("");
+  let reverseTried = $state(false);
+  let reverseFieldError = $state("");
+  let reverseServerError = $state<string | null>(null);
+  let reversing = $state(false);
+  const reverseReasonShown = $derived(
+    reverseFieldError || (reverseTried ? (reverseReasonError(reverseReason) ?? "") : ""),
+  );
+  const reverseYear = $derived(reverseTarget ? reverseTarget.paidDate.slice(0, 4) : "");
+
+  $effect(() => {
+    if (showReverse) {
+      pushModal();
+      return () => popModal();
+    }
+  });
+
+  function paymentLabel(p: InvoicePayment): string {
+    return `Zahlung vom ${date(p.paidDate)} über ${euro(p.amountCents)}`;
+  }
+
+  function reverseItems(p: InvoicePayment): ActionMenuItem[] {
+    return [
+      {
+        label: "Zahlung stornieren …",
+        onSelect: () => openReverse(p),
+        danger: true,
+        disabled: !p.reversible || reversing,
+        hint: p.reversible ? undefined : (p.notReversibleReason ?? undefined),
+      },
+    ];
+  }
+
+  function openReverse(p: InvoicePayment) {
+    if (!p.reversible) return;
+    reverseTarget = { ...p };
+    reverseReason = "";
+    reverseTried = false;
+    reverseFieldError = "";
+    reverseServerError = null;
+    showReverse = true;
+  }
+
+  function closeReverse() {
+    showReverse = false;
+  }
+
+  async function confirmReverse() {
+    if (reversing || !detail || !reverseTarget) return;
+    reverseTried = true;
+    reverseFieldError = "";
+    if (reverseReasonError(reverseReason)) {
+      document.getElementById("rp-reason")?.focus();
+      return;
+    }
+    const target = reverseTarget;
+    const invoiceId = detail.invoice.id;
+    reversing = true;
+    // Wie beim Widerruf des Steuerstatus: Dialog zu, solange der Re-Auth-Dialog fragt;
+    // bei einer Ablehnung öffnet er wieder mit Banner bzw. Fehler am Feld.
+    showReverse = false;
+    try {
+      await invoicesReversePayment({ invoiceId, paymentId: target.id, reason: cleanReverseReason(reverseReason) });
+      await refresh();
+      flash(`${paymentLabel(target)} storniert. Ist Geld eingegangen, erfasse die Zahlung jetzt richtig neu.`, "ok", {
+        action: {
+          label: "Zahlung neu erfassen",
+          run: () => void goto(`/invoices/${invoiceId}/payment?ersetzt=${encodeURIComponent(target.id)}`),
+        },
+      });
+      // Die Zeilenaktion ist mit der Gegenbuchung weg — Fokus nie auf <body> (ADR 0041 Nr. 33).
+      await tick();
+      if (focusLost()) paymentsHeadingEl?.focus();
+    } catch (e) {
+      if (e === REAUTH_CANCELED) {
+        flash(String(e), "info");
+      } else {
+        const msg = String(e);
+        if (isReasonRejection(msg)) reverseFieldError = msg;
+        else reverseServerError = msg;
+        // Stand neu lesen (z. B. Jahr inzwischen abgeschlossen); der Dialog behält seine Kopie.
+        await refresh();
+        showReverse = true;
+        await tick();
+        if (reverseFieldError) document.getElementById("rp-reason")?.focus();
+      }
+    } finally {
+      reversing = false;
+    }
+  }
 
   // ---- Positionen (U2-020): Kartenansicht nur, wenn die Tabelle nicht passt —
   // Schwelle je Tabelle nach Spaltenzahl statt global 820 px. Gemessen wird die
@@ -314,7 +487,7 @@
     return () => ro.disconnect();
   });
   // 6 Spalten (§19) passen ab rund 35rem, 8 Spalten (Regelbesteuerung) ab 45rem.
-  let itemsAsCards = $derived(itemsWidth < (detail?.invoice.isKleinunternehmer === 0 ? 720 : 560));
+  let itemsAsCards = $derived(itemsWidth < (!isKlein ? 720 : 560));
 
   // V4-08: Überschrift auch beim Laden und bei „nicht gefunden“.
   let pageTitle = $derived(detail ? docTitle(detail.invoice) : notFound ? "Rechnung nicht gefunden" : "Rechnung");
@@ -411,20 +584,22 @@
       gilt und in der EÜR zählt.
     </Banner>
   {/if}
-  {#if restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <DocNo value={inv.invoiceNumber} inline /> war vor der Wiederherstellung schon
-      festgeschrieben. Ausstellen geht erst, wenn du unter
-      <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) bestätigt hast, dass der Entwurf dem versandten Original entspricht.
-    </Banner>
+  {#if !inv.lockedAt && !inv.voidedAt}
+    <!-- Warteliste (8), ADR 0042 Nr. 16: aus dem Lesefeld des Entwurfs (keine Listenabfrage). -->
+    <RestoreConflictBanner
+      conflict={detail.restoreConflict}
+      number={inv.invoiceNumber}
+      doc="invoice"
+      where="detail"
+      editHref={inv.isStornoFor ? undefined : `/invoices/${inv.id}/edit`}
+    />
   {/if}
 
   {#if inv.voidedAt}
     <section class="card">
       <h2>Verworfen</h2>
       <p>
-        Am {dateTime(inv.voidedAt)} verworfen. Der Entwurf wurde nie ausgestellt; die Nummer
+        Am {dateTimeShort(inv.voidedAt)} verworfen. Der Entwurf wurde nie ausgestellt; die Nummer
         <DocNo value={inv.invoiceNumber} inline /> bleibt vergeben und wird nicht erneut benutzt.
       </p>
       {#if inv.voidReason}<p><strong>Grund:</strong> {inv.voidReason}</p>{/if}
@@ -437,7 +612,8 @@
       <p class="muted">
         Der Entwurf wird nicht gelöscht: Zeitpunkt und Grund stehen daran und im Protokoll, die
         Nummer <DocNo value={inv.invoiceNumber} inline /> bleibt vergeben. Danach lässt er sich weder
-        ändern noch ausstellen. Klein.Buch fragt zur Bestätigung Daten-Passwort und App-Code ab.
+        ändern noch ausstellen. Liegt deine letzte Bestätigung länger als 5 Minuten zurück, fragt
+        Klein.Buch Daten-Passwort und App-Code ab.
       </p>
       <label class="void-reason" for="void-reason">
         <span>Grund <span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></span>
@@ -478,7 +654,7 @@
         {#if inv.sellerTaxNumber}<small>StNr: {inv.sellerTaxNumber}</small><br/>{/if}
         {#if inv.sellerVatId}<small>USt-IdNr: {inv.sellerVatId}</small>{/if}
       </p>
-      {#if inv.isKleinunternehmer === 1}
+      {#if isKlein}
         <p class="klein-note">Kleinunternehmer (§19) — es wird keine Umsatzsteuer ausgewiesen.</p>
       {/if}
     </section>
@@ -508,8 +684,12 @@
       <h2>Daten</h2>
       <dl>
         <dt>Jahr</dt><dd>{inv.fiscalYear}</dd>
-        <dt>Leistung</dt><dd>{date(inv.deliveryDate)}</dd>
+        <!-- ADR 0042 Nr. 10/12: Leistungsdatum oder -zeitraum, Leitweg-ID (BT-10). -->
+        <dt>{serviceSummary(inv).label}</dt><dd>{serviceSummary(inv).text}</dd>
         <dt>Fällig</dt><dd>{date(inv.dueDate)}</dd>
+        {#if inv.buyerReference}
+          <dt>Leitweg-ID</dt><dd>{inv.buyerReference}</dd>
+        {/if}
         <dt>PDF-Vorlage</dt><dd>{pdfTemplateLabel(inv.pdfTemplate)}</dd>
         {#if inv.paymentNote}
           <!-- V1-08: Bezahlt-Hinweis (reiner Text auf dem Beleg, keine Buchung). -->
@@ -535,14 +715,14 @@
           <tr>
             <th>#</th>
             <th>Beschreibung</th>
-            <th class="right">Menge</th>
+            <th class="kb-num">Menge</th>
             <th>Einheit</th>
-            <th class="right">Einzelpreis</th>
-            {#if inv.isKleinunternehmer === 0}
-              <th class="right">USt %</th>
+            <th class="kb-num">Einzelpreis</th>
+            {#if !isKlein}
+              <th class="kb-num">USt %</th>
               <th>USt-Art</th>
             {/if}
-            <th class="right">Netto</th>
+            <th class="kb-num">Netto</th>
           </tr>
         </thead>
         <tbody>
@@ -550,32 +730,32 @@
             <tr>
               <td data-label="Pos.">{it.position}</td>
               <td class="cards-full desc" data-label="Beschreibung">{it.description}</td>
-              <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
+              <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity)}</td>
               <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
-              <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
-              {#if inv.isKleinunternehmer === 0}
-                <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
+              <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
+              {#if !isKlein}
+                <td class="kb-num" data-label="USt %">{percent(it.taxRatePercent)}</td>
                 <td data-label="USt-Art">{it.taxCategoryCode}</td>
               {/if}
-              <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
+              <td class="kb-num" data-label="Netto">{euro(it.netAmountCents)}</td>
             </tr>
           {/each}
         </tbody>
         <tfoot>
-          <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
-              <td class="right" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
+          <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Netto</td>
+              <td class="kb-num" data-label="Netto">{euro(inv.netAmountCents)}</td></tr>
           {#if inv.taxAmountCents !== 0}
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
-                <td class="right" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">USt</td>
+                <td class="kb-num" data-label="USt">{euro(inv.taxAmountCents)}</td></tr>
           {/if}
-          <tr class="kb-sum"><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
+          <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="sum-label">
                 <strong>Brutto</strong></td>
-              <td class="right" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
-          {#if inv.paidAmountCents > 0}
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Bezahlt</td>
-                <td class="right" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
-            <tr><td colspan={inv.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Offen</td>
-                <td class="right" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
+              <td class="kb-num" data-label="Brutto"><strong>{euro(inv.grossAmountCents)}</strong></td></tr>
+          {#if inv.paidAmountCents > 0 || payments.length > 0}
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Bezahlt</td>
+                <td class="kb-num" data-label="Bezahlt">{euro(inv.paidAmountCents)}</td></tr>
+            <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Offen</td>
+                <td class="kb-num" data-label="Offen">{euro(inv.grossAmountCents - inv.paidAmountCents)}</td></tr>
           {/if}
         </tfoot>
       </table>
@@ -584,7 +764,7 @@
 
   {#if !inv.lockedAt && !inv.voidedAt && !inv.isStornoFor}
     <!-- V1-06/V1-03: Karte „Ausstellen“ unter den Positionen — Prüfung, Leitweg-ID (BT-10,
-         der Entwurf speichert sie nicht, ADR 0041 Nr. 91) und die Hauptaktion am Ende. -->
+         vom Entwurf vorbelegt, ADR 0042 Nr. 12) und die Hauptaktion am Ende. -->
     <section class="card issue-card" aria-labelledby="issue-h">
       <h2 id="issue-h">Ausstellen</h2>
       <p class="check-line" class:ok={!issueFailure && issues !== null && issues.length === 0} role="status">{issueFailure ? "" : checkText}</p>
@@ -621,20 +801,10 @@
           </ul>
         {/if}
       {/if}
-      <label class="ref-lbl" for="buyer-ref">Leitweg-ID (optional)</label>
-      <input
-        id="buyer-ref"
-        type="text"
-        class="kb-input kb-w-medium"
-        bind:value={buyerReference}
-        autocomplete="off"
-        spellcheck="false"
-        aria-describedby="buyer-ref-hint"
-      />
-      <p id="buyer-ref-hint" class="field-hint">
-        Nur bei öffentlichen Auftraggebern (Behörden): Die Leitweg-ID steht als Käuferreferenz in
-        der E-Rechnung. Leer lassen, wenn der Auftraggeber keine Behörde ist.
-      </p>
+      <!-- ADR 0042 Nr. 12: am Entwurf gespeicherte Leitweg-ID vorbelegt; ein geänderter Wert gilt für diese E-Rechnung. -->
+      <div class="ref-field">
+        <BuyerReferenceField bind:value={buyerReference} id="buyer-ref" showErrors={issueTried} note={buyerReferenceNote} />
+      </div>
       <!-- U1/V1-06: Hauptaktion am Ende (Handy, Daumen; PageBar klebt dort nicht). -->
       <div class="kb-form-end">
         <Button onclick={lockAndIssue} ariaDisabled={issuing}>
@@ -644,38 +814,75 @@
     </section>
   {/if}
 
-  {#if inv.paidAmountCents > 0}
-    <section class="card">
-      <h2>Zahlungen</h2>
-      {#if payments === null}
-        <p class="err">Die Zahlungshistorie ist beschädigt und lässt sich nicht lesen. Bezahlt: {euro(inv.paidAmountCents)}.</p>
-      {:else if payments.length === 0}
-        <!-- Altbestand ohne Historie: nur Summe und letztes Zahldatum. -->
+  {#if inv.paidAmountCents > 0 || payments.length > 0}
+    <!-- ADR 0042 Nr. 7–9: Zahlungsbuch. Die Karte bleibt, solange es Buchungen gibt —
+         auch nach einer vollen Gegenbuchung (bezahlt 0 €); nichts verschwindet. -->
+    <section class="card" aria-labelledby="pay-h">
+      <h2 id="pay-h" tabindex="-1" bind:this={paymentsHeadingEl}>Zahlungen</h2>
+      {#if payments.length === 0}
+        <!-- Altbestand ohne Buchung im Zahlungsbuch (vor 0034 nicht vorgesehen): nur Summe. -->
         <p>
           {euro(inv.paidAmountCents)} am {date(inv.paidAt)}, Konto: {accountText(inv.paidToAccountId, accounts)}.
         </p>
       {:else}
-        <table class="cards">
+        <table class="cards pay-table">
           <caption class="kb-visually-hidden">Zahlungen zur {docTitle(inv)}</caption>
           <thead>
             <tr>
               <th>Zahldatum</th>
-              <th class="right">Betrag</th>
+              <th>Buchung</th>
+              <th class="kb-num">Betrag</th>
               <th>Konto</th>
-              <th>Notiz</th>
+              <th>Notiz bzw. Grund</th>
+              <th><span class="kb-visually-hidden">Aktion</span></th>
             </tr>
           </thead>
           <tbody>
-            {#each payments as p, i (i)}
-              <tr>
-                <td data-label="Zahldatum">{date(p.paidDate)}</td>
-                <td class="right" data-label="Betrag">{euro(p.amountCents)}</td>
+            {#each payments as line (line.entry.id)}
+              {@const p = line.entry}
+              <tr class:reversed={!!line.reversedBy} class:reversal={p.kind === "reversal"}>
+                <td data-label="Zahldatum" class="kb-nowrap">{date(p.paidDate)}</td>
+                <td data-label="Buchung">
+                  {#if p.kind === "reversal"}
+                    <!-- Gegenbuchung: als solche benannt, mit Verweis — nicht nur über Farbe. -->
+                    <Badge kind="tag">Gegenbuchung</Badge>
+                    <small class="pay-sub">
+                      Storno der Zahlung vom {date(line.reverses?.paidDate ?? p.paidDate)}{#if line.reverses}{" "}über {euro(line.reverses.amountCents)}{/if},
+                      erfasst am {dateTimeShort(p.createdAt)}
+                    </small>
+                  {:else}
+                    Zahlung
+                    {#if line.reversedBy}
+                      <Badge strike>Storniert</Badge>
+                      <small class="pay-sub">durch Gegenbuchung vom {dateTimeShort(line.reversedBy.createdAt)}</small>
+                    {/if}
+                  {/if}
+                </td>
+                <td class="kb-num kb-nowrap kb-card-figure" data-label="Betrag">
+                  {#if line.reversedBy}<s>{euro(p.amountCents)}</s>{:else}{euro(p.amountCents)}{/if}
+                </td>
                 <td data-label="Konto">{accountText(paymentAccountId(p, inv), accounts)}</td>
-                <td data-label="Notiz">{p.note ?? "—"}</td>
+                <td data-label={p.kind === "reversal" ? "Grund" : "Notiz"} class="pay-text">
+                  {#if p.kind === "reversal"}<span class="kb-visually-hidden">Grund: </span>{p.reason ?? "—"}{:else}{p.note ?? "—"}{/if}
+                </td>
+                <td data-label="Aktion">
+                  {#if p.kind === "payment" && !line.reversedBy && inv.lockedAt}
+                    <ActionMenu ariaLabel={`Mehr zur ${paymentLabel(p)}`} items={reverseItems(p)} />
+                  {/if}
+                </td>
               </tr>
             {/each}
           </tbody>
         </table>
+        <p class="muted hist-note">
+          Gebuchte Zahlungen werden nie geändert oder gelöscht. Eine falsch erfasste Zahlung stornierst du
+          über „Mehr“ → „Zahlung stornieren …“ und erfasst sie danach richtig neu.
+          <HelpAnchor
+            slug="zahlung-erfassen"
+            heading="Falsch erfasste Zahlung stornieren"
+            label="Falsch erfasste Zahlung stornieren"
+          />
+        </p>
       {/if}
     </section>
   {/if}
@@ -697,8 +904,8 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-              <td data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
+              <td class="kb-card-head" data-label="Zeitpunkt">{dateTimeShort(e.createdAt)}</td>
+              <td class="kb-card-status" data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
               <td class="cards-full" data-label="Antwort des Anbieters">
@@ -732,14 +939,85 @@
   {/if}
 {/if}
 
+{#if showReverse && reverseTarget && detail}
+  {@const rp = reverseTarget}
+  <!-- Gefahr-Dialog „Zahlung stornieren“ (ADR 0042 Nr. 8, ADR 0041 Nr. 11): kein Schließen
+       über den Hintergrund, Startfokus „Abbrechen“, Escape bricht ab. -->
+  <div class="kb-backdrop" use:portal>
+    <div
+      class="kb-dialog rp-dialog"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="rp-title"
+      aria-describedby="rp-lead"
+      use:focusTrap={{ onEscape: closeReverse }}
+    >
+      <header class="kb-dialog-head">
+        <h2 id="rp-title">Zahlung stornieren?</h2>
+      </header>
+      <div class="kb-dialog-body">
+        <p id="rp-lead">
+          Klein.Buch bucht eine Gegenbuchung über {euro(-rp.amountCents)} mit Datum und Konto dieser
+          Zahlung. Sie wirkt am ursprünglichen Zahldatum, die EÜR {reverseYear} ändert sich also. Die
+          Zahlung bleibt sichtbar und gilt als storniert; ist Geld eingegangen, erfasse danach die richtige Zahlung.
+        </p>
+        <dl class="rp-facts">
+          <dt>Rechnung</dt><dd><DocNo value={detail.invoice.invoiceNumber} inline /></dd>
+          <dt>Betrag</dt><dd class="kb-nowrap">{euro(rp.amountCents)}</dd>
+          <dt>Zahldatum</dt><dd>{date(rp.paidDate)}</dd>
+          <dt>Konto</dt><dd>{accountText(paymentAccountId(rp, detail.invoice), accounts)}</dd>
+          {#if rp.note}<dt>Notiz</dt><dd>{rp.note}</dd>{/if}
+        </dl>
+
+        {#if reverseServerError}
+          <Banner title="Nicht storniert.">{reverseServerError}</Banner>
+        {/if}
+
+        <p class="rp-note">
+          Nur für Fehlbuchungen: Das Geld ist nicht, mit anderem Betrag, an einem anderen Tag oder auf
+          einem anderen Konto eingegangen. Hast du dem Kunden Geld zurückgezahlt, storniere stattdessen
+          die Rechnung; die Erstattung zählt am Tag der Rückzahlung.
+        </p>
+
+        <div class="rp-field">
+          <label for="rp-reason">Grund<span class="req" aria-hidden="true">*</span><span class="kb-visually-hidden">(Pflicht)</span></label>
+          <textarea
+            id="rp-reason"
+            class="kb-input"
+            rows="3"
+            maxlength={REVERSE_REASON_MAX_CHARS}
+            bind:value={reverseReason}
+            oninput={() => {
+              reverseFieldError = "";
+            }}
+            required
+            aria-required="true"
+            aria-invalid={reverseReasonShown ? "true" : undefined}
+            aria-describedby={reverseReasonShown ? "rp-reason-err rp-reason-hint" : "rp-reason-hint"}
+          ></textarea>
+          {#if reverseReasonShown}<span id="rp-reason-err" class="field-err">{reverseReasonShown}</span>{/if}
+          <small id="rp-reason-hint" class="field-hint">
+            Mindestens 10 Zeichen, z. B. „Betrag falsch erfasst, laut Kontoauszug 450,00 €“. Ohne Namen von Personen.
+          </small>
+        </div>
+        <!-- UI-11: Re-Auth mit 5-Minuten-Fenster (REAUTH_WINDOW); eine frische Anmeldung zählt. -->
+        <p class="rp-auth">Liegt deine letzte Bestätigung länger als 5 Minuten zurück, fragt Klein.Buch Daten-Passwort und App-Code ab.</p>
+      </div>
+      <footer class="kb-dialog-foot">
+        <Button variant="secondary" initialFocus onclick={closeReverse}>Abbrechen</Button>
+        <Button variant="danger" onclick={confirmReverse} ariaDisabled={reversing}>Zahlung stornieren</Button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
 <style>
   .sub { color: var(--text-muted); margin: 0 0 1rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
   /* Teile der Metazeile brechen nur zwischen sich um; der Trennpunkt steht am Ende. */
   .meta { display: inline-flex; align-items: center; white-space: nowrap; }
   /* V3-14: Das Leerzeichen vor dem Trennpunkt bleibt auch am Anfang eines Flex-Elements. */
   .meta > .sep { white-space: pre; }
-  .ref-lbl { display: block; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); margin: var(--sp-3) 0 var(--sp-1); }
-  .issue-card .field-hint { margin-top: var(--sp-1); }
+  .ref-field { margin-top: var(--sp-3); }
   .check-line { margin: 0 0 var(--sp-2); }
   /* Leer bleibt die Zeile im Accessibility-Tree (Live-Region), nur ohne Abstand. */
   .check-line:empty { margin: 0; }
@@ -755,11 +1033,12 @@
   dt { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   /* Beträge und Mengen in der Tabelle nicht umbrechen; die Beschreibung bricht. */
-  .items-table td.right { white-space: nowrap; }
+  .items-table td.kb-num { white-space: nowrap; }
   .items-table:not(.cards) td.desc { overflow-wrap: break-word; hyphens: auto; }
   .klein-note { color: var(--status-info-fg); font-size: var(--fs-sm); }
   .issues { padding-left: 1.25rem; margin: 0 0 var(--sp-2); }
@@ -777,6 +1056,20 @@
     background: var(--surface-card);
   }
   .void-actions { margin-top: 0.5rem; }
+  /* Zahlungsbuch (ADR 0042 Nr. 7–9): Storniert/Gegenbuchung stehen als Text (Badge,
+     Unterzeile), die gedämpfte Farbe ist nur Zusatz (1.4.1). */
+  .pay-sub { display: block; color: var(--text-muted); font-size: var(--fs-sm); }
+  .pay-table tr.reversed td, .pay-table tr.reversal td { color: var(--text-muted); }
+  .pay-table td.pay-text { overflow-wrap: anywhere; }
+  #pay-h { outline: none; }
+  #pay-h:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); }
+  .rp-dialog { --dialog-w: 36rem; }
+  .rp-facts { margin: 0.75rem 0; }
+  .rp-note { font-size: var(--fs-sm); margin: 0.75rem 0; }
+  .rp-auth { font-size: var(--fs-sm); color: var(--text-muted); margin: 0.5rem 0 0; }
+  .rp-field { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+  .rp-field > label { font-size: var(--fs-sm); font-weight: 600; }
+  .rp-field textarea { width: 100%; box-sizing: border-box; min-height: var(--target); font: inherit; resize: vertical; }
   /* Kartenansicht (nur bis 820 px, tokens.css): Summenzeilen zeigen das Label per
      data-label an der Betragszelle, die colspan-Beschriftung entfällt; lange Werte
      brechen um. */

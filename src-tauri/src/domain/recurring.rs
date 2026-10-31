@@ -197,6 +197,29 @@ pub fn compute_next_due_date(
     add_months_clamped(from, frequency.months(), day_of_period)
 }
 
+/// Abrechnungszeitraum eines Termins (ADR 0042 Nr. 10): vom Stichtag bis zum
+/// Tag vor dem folgenden Stichtag (Stichtag + Periode − 1 Tag). Die Zeiträume
+/// aufeinanderfolgender Termine schließen lückenlos aneinander an, auch bei
+/// Stichtag 29.–31. (Monatsende-Klemme wie [`compute_next_due_date`]).
+pub fn billing_period(
+    frequency: Frequency,
+    day_of_period: u32,
+    occurrence: NaiveDate,
+) -> (NaiveDate, NaiveDate) {
+    let next = compute_next_due_date(frequency, day_of_period, occurrence);
+    let end = next.pred_opt().unwrap_or(occurrence).max(occurrence);
+    (occurrence, end)
+}
+
+/// Maßgebliches Datum für den §19-Status einer Abo-Rechnung (ADR 0042 Nr. 3/10):
+/// Ende des Abrechnungszeitraums; bei ungültiger Frequenz der Termin selbst.
+pub fn status_day_for(frequency: &str, day_of_period: i64, occurrence: NaiveDate) -> NaiveDate {
+    match Frequency::from_db(frequency) {
+        Some(f) => billing_period(f, day_of_period.clamp(1, 31) as u32, occurrence).1,
+        None => occurrence,
+    }
+}
+
 /// Ist der Stichtag erreicht oder überschritten? (`<= today`).
 pub fn is_due(next_due_date: NaiveDate, today: NaiveDate) -> bool {
     next_due_date <= today
@@ -213,13 +236,63 @@ pub fn count_due_occurrences(
     end: Option<NaiveDate>,
     cap: usize,
 ) -> usize {
-    let mut n = 0usize;
+    due_occurrences(frequency, day_of_period, first, today, end, cap).len()
+}
+
+/// Die fälligen Termine selbst (ADR 0042 Nr. 16, V1-11): dieselbe Reihe und
+/// dieselben Grenzen wie [`count_due_occurrences`], das darauf zurückgeht — ab
+/// `first` (einschließlich) bis `today`, höchstens bis `end`, höchstens `cap`
+/// Termine. Die Rückstand-Vorschau zeigt damit genau, was der Lauf zählt.
+pub fn due_occurrences(
+    frequency: Frequency,
+    day_of_period: u32,
+    first: NaiveDate,
+    today: NaiveDate,
+    end: Option<NaiveDate>,
+    cap: usize,
+) -> Vec<NaiveDate> {
+    let mut out = Vec::new();
     let mut at = first;
-    while n < cap && at <= today && end.is_none_or(|e| at <= e) {
-        n += 1;
+    while out.len() < cap && at <= today && end.is_none_or(|e| at <= e) {
+        out.push(at);
         at = compute_next_due_date(frequency, day_of_period, at);
     }
-    n
+    out
+}
+
+/// Verlangt die Reihe die Wahl „nachholen“ oder „ab heute fortsetzen“? (pure,
+/// ADR 0042 Nr. 16): ein verpasster Termin (Stichtag vor heute, innerhalb der
+/// Laufzeit) oder eine offene Prüfung nach einer Wiederherstellung — dann
+/// zählt auch ein heute fälliger Termin (F1d).
+pub fn has_backlog(
+    next_due: NaiveDate,
+    today: NaiveDate,
+    end: Option<NaiveDate>,
+    after_restore: bool,
+) -> bool {
+    if end.is_some_and(|e| next_due > e) {
+        return false;
+    }
+    next_due < today || (after_restore && next_due <= today)
+}
+
+/// Ziel von „ab heute fortsetzen“ (pure, ADR 0042 Nr. 16): erster Termin ab
+/// heute, nach einer Wiederherstellung ab morgen (der heutige Termin kann vor
+/// dem Ausfall schon abgerechnet worden sein, F1d). Liefert zusätzlich die Zahl
+/// ausgelassener Termine.
+pub fn skip_target(
+    frequency: Frequency,
+    day_of_period: u32,
+    next_due: NaiveDate,
+    today: NaiveDate,
+    after_restore: bool,
+) -> (NaiveDate, usize) {
+    let from = if after_restore {
+        today.succ_opt().unwrap_or(today)
+    } else {
+        today
+    };
+    first_occurrence_on_or_after(frequency, day_of_period, next_due, from)
 }
 
 /// Erster Termin der Reihe ab `first`, der auf oder nach `date` liegt
@@ -282,6 +355,162 @@ pub fn variant_name(e: &RecurringValidationError) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 0042 Nr. 16 (V1-11): `due_occurrences` liefert genau die Termine,
+    /// die `count_due_occurrences` zählt — mit Laufzeit-Ende und Obergrenze.
+    #[test]
+    fn due_occurrences_match_the_count() {
+        let d = |y, m, t| NaiveDate::from_ymd_opt(y, m, t).unwrap();
+        assert_eq!(
+            due_occurrences(
+                Frequency::Monthly,
+                31,
+                d(2026, 1, 31),
+                d(2026, 4, 30),
+                None,
+                100
+            ),
+            vec![
+                d(2026, 1, 31),
+                d(2026, 2, 28),
+                d(2026, 3, 31),
+                d(2026, 4, 30)
+            ]
+        );
+        let cases = [
+            (
+                Frequency::Monthly,
+                31,
+                d(2026, 1, 31),
+                d(2026, 4, 30),
+                None,
+                100,
+            ),
+            (
+                Frequency::Monthly,
+                1,
+                d(2024, 1, 1),
+                d(2026, 10, 31),
+                None,
+                1000,
+            ),
+            (
+                Frequency::Monthly,
+                1,
+                d(2024, 1, 1),
+                d(2026, 10, 31),
+                None,
+                24,
+            ),
+            (
+                Frequency::Quarterly,
+                15,
+                d(2025, 1, 15),
+                d(2026, 10, 31),
+                Some(d(2026, 1, 15)),
+                1000,
+            ),
+            (
+                Frequency::Annually,
+                1,
+                d(2027, 1, 1),
+                d(2026, 10, 31),
+                None,
+                1000,
+            ),
+            (
+                Frequency::SemiAnnually,
+                30,
+                d(2025, 8, 30),
+                d(2026, 8, 30),
+                None,
+                1000,
+            ),
+        ];
+        for (freq, day, first, today, end, cap) in cases {
+            let list = due_occurrences(freq, day, first, today, end, cap);
+            assert_eq!(
+                list.len(),
+                count_due_occurrences(freq, day, first, today, end, cap)
+            );
+            assert!(list.len() <= cap);
+            assert!(list
+                .iter()
+                .all(|x| *x <= today && end.is_none_or(|e| *x <= e)));
+        }
+        // Laufzeit-Ende vor dem Termin: nichts fällig.
+        assert!(due_occurrences(
+            Frequency::Monthly,
+            1,
+            d(2026, 5, 1),
+            d(2026, 9, 1),
+            Some(d(2026, 4, 30)),
+            10
+        )
+        .is_empty());
+    }
+
+    /// ADR 0042 Nr. 16: Rückstand und Ziel von „ab heute fortsetzen“.
+    #[test]
+    fn backlog_and_skip_target() {
+        let d = |y, m, t| NaiveDate::from_ymd_opt(y, m, t).unwrap();
+        let today = d(2026, 10, 31);
+        assert!(has_backlog(d(2026, 10, 30), today, None, false));
+        assert!(!has_backlog(today, today, None, false));
+        assert!(has_backlog(today, today, None, true));
+        assert!(!has_backlog(d(2026, 11, 1), today, None, true));
+        assert!(!has_backlog(
+            d(2026, 9, 1),
+            today,
+            Some(d(2026, 8, 31)),
+            false
+        ));
+        assert_eq!(
+            skip_target(Frequency::Monthly, 31, d(2026, 8, 31), today, false),
+            (d(2026, 10, 31), 2)
+        );
+        assert_eq!(
+            skip_target(Frequency::Monthly, 31, d(2026, 8, 31), today, true),
+            (d(2026, 11, 30), 3)
+        );
+    }
+
+    #[test]
+    fn billing_period_spans_until_the_day_before_the_next_due_date() {
+        // ADR 0042 Nr. 10: Stichtag bis Stichtag + Periode − 1 Tag.
+        let d = |y, m, t| NaiveDate::from_ymd_opt(y, m, t).unwrap();
+        assert_eq!(
+            billing_period(Frequency::Monthly, 1, d(2026, 6, 1)),
+            (d(2026, 6, 1), d(2026, 6, 30))
+        );
+        assert_eq!(
+            billing_period(Frequency::Quarterly, 1, d(2026, 4, 1)),
+            (d(2026, 4, 1), d(2026, 6, 30))
+        );
+        assert_eq!(
+            billing_period(Frequency::SemiAnnually, 15, d(2026, 1, 15)),
+            (d(2026, 1, 15), d(2026, 7, 14))
+        );
+        assert_eq!(
+            billing_period(Frequency::Annually, 1, d(2026, 1, 1)),
+            (d(2026, 1, 1), d(2026, 12, 31))
+        );
+        // Monatsende: 31.01. → nächster Stichtag 28.02. → Zeitraum bis 27.02.;
+        // danach 28.02.–30.03. (lückenlos).
+        assert_eq!(
+            billing_period(Frequency::Monthly, 31, d(2026, 1, 31)),
+            (d(2026, 1, 31), d(2026, 2, 27))
+        );
+        assert_eq!(
+            billing_period(Frequency::Monthly, 31, d(2026, 2, 28)),
+            (d(2026, 2, 28), d(2026, 3, 30))
+        );
+        // Quartal über den Jahreswechsel
+        assert_eq!(
+            billing_period(Frequency::Quarterly, 1, d(2026, 11, 1)),
+            (d(2026, 11, 1), d(2027, 1, 31))
+        );
+    }
 
     // KB-0006/KB-0007: Fehlertexte rein über i64, Vorzeichen und Cent exakt.
     #[test]

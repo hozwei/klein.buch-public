@@ -11,7 +11,12 @@
   const selId = `pkg-sel-${randomId()}`;
   const errId = `${selId}-err`;
 
-  let { onAdd }: { onAdd: (item: MaterializedPackageItem) => void } = $props();
+  // ADR 0042 Nr. 3: `documentDate` = maßgebliches Datum des Zielbelegs; die
+  // Position bekommt die Steuerart des Status an diesem Datum (ohne Angabe heute).
+  let {
+    onAdd,
+    documentDate = null,
+  }: { onAdd: (item: MaterializedPackageItem) => void; documentDate?: string | null } = $props();
 
   let packages = $state<Package[]>([]);
   let categories = $state<PackageCategory[]>([]);
@@ -66,7 +71,7 @@
     pkgError = "";
     adding = true;
     try {
-      const item = await packageMaterializeItem(selected);
+      const item = await packageMaterializeItem(selected, documentDate);
       onAdd(item);
       flash(`Paket „${item.packageName}“ eingefügt.`);
       selected = "";
@@ -108,7 +113,7 @@
   <div class="pkg">
     <span class="hint">
       Keine aktiven Pakete —
-      <a href="/packages">Paket-Katalog öffnen</a>, um eins anzulegen.
+      <a class="kb-link" href="/packages">Paket-Katalog öffnen</a>, um eins anzulegen.
     </span>
   </div>
 {/if}
@@ -120,9 +125,8 @@
   .sel { min-width: min(16rem, 100%); max-width: 100%; }
   .hint { color: var(--text-muted); font-size: var(--fs-sm); }
   .err { flex-basis: 100%; font-size: var(--fs-xs); color: var(--status-danger-fg); }
-  /* Link im Hinweistext: Trefferfläche ≥ --target ohne Zeilensprung. */
-  /* Link im Satz: 2.5.8-Ausnahme „inline“ (ADR 0041 Nr. 31), keine 44-px-Zeile (U1-Sichtprüfung). */
-  .hint a { text-decoration: underline; }
+  /* Link im Satz: `.kb-link`, 2.5.8-Ausnahme „inline“ ohne 44-px-Zeile (ADR 0041 Nr. 31,
+     ADR 0042 Nr. 16). */
   /* Lokale btn-Defs entfernt — globale aus tokens.css greifen
      (Manuel-Hardline 2026-05-26: alle Buttons app-weit gleich groß). */
 </style>

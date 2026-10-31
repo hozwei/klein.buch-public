@@ -11,8 +11,10 @@
 //! ## Verhalten
 //!
 //! - **Belegdatum = Erstellungstag (heute), nie rückdatiert** (§14 Abs. 4 Nr. 3
-//!   UStG + GoBD). Der Leistungszeitraum der Periode geht ins `delivery_date`
-//!   und — bei `service_period_note` — als Klartext in die erste Position.
+//!   UStG + GoBD). Der Abrechnungszeitraum des Termins (Stichtag bis Stichtag +
+//!   Periode − 1 Tag) wird Leistungszeitraum (BG-14, ADR 0042 Nr. 10) und —
+//!   bei `service_period_note` — Klartext in der ersten Position. Die
+//!   Leitweg-ID der Vorlage geht an jede Rechnung (ADR 0042 Nr. 12).
 //! - **Absturzfest (W14-025):** Nummer, Entwurf, Audit `recurring_invoice.run`
 //!   und das Vorrücken der Vorlage (Compare-and-Swap) committen in **einer**
 //!   Transaktion. Festschreiben und Versand folgen danach; bis sie erledigt
@@ -54,7 +56,7 @@ use crate::db::repo::{
 };
 use crate::domain::invoice::{InvoiceDirection, InvoiceInput, InvoiceItemInput};
 use crate::domain::recurring::{
-    compute_next_due_date, count_due_occurrences, first_occurrence_on_or_after, Frequency,
+    billing_period, compute_next_due_date, count_due_occurrences, skip_target, Frequency,
 };
 use crate::domain::recurring_invoice::AutoMode;
 use crate::error::{Error, Result};
@@ -195,10 +197,10 @@ pub async fn run_now(job: &JobCtx<'_>, id: &str) -> Result<String> {
             ));
         }
         let items = recurring_invoice::items_for(job.pool, id).await?;
-        if let Some(reason) = blocker(job.pool, &tmpl, &items).await? {
+        let occurrence = parse_date(&tmpl.next_due_date)?;
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, occurrence).await? {
             return Err(Error::Domain(reason));
         }
-        let occurrence = parse_date(&tmpl.next_due_date)?;
         if occurrence > today {
             return Err(Error::Domain(format!(
                 "Vorlage ist erst am {occurrence} fällig — eine vorzeitige Erstellung würde ein zukünftiges Periodendatum erzeugen."
@@ -277,12 +279,8 @@ pub async fn apply_resume_mode(
             .is_some();
     match mode {
         ResumeMode::Skip => {
-            let from = if review {
-                today.succ_opt().unwrap_or(today)
-            } else {
-                today
-            };
-            let (target, skipped) = first_occurrence_on_or_after(freq, day, next, from);
+            // ADR 0042 Nr. 16: dasselbe Ziel wie die Rückstand-Vorschau.
+            let (target, skipped) = skip_target(freq, day, next, today, review);
             catch_up::clear(pool, Series::Template, &tmpl.id).await?;
             catch_up::clear_restore_review(pool, Series::Template, &tmpl.id).await?;
             if skipped == 0 {
@@ -380,7 +378,7 @@ async fn process_template(job: &JobCtx<'_>, id: &str, today: NaiveDate) -> Resul
             return Ok(TmplOutcome::Created(0));
         }
         let items = recurring_invoice::items_for(job.pool, id).await?;
-        if let Some(reason) = blocker(job.pool, &tmpl, &items).await? {
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, first).await? {
             blocked_notice(job, &tmpl, &reason).await;
             return Ok(TmplOutcome::Blocked);
         }
@@ -432,6 +430,12 @@ async fn process_template(job: &JobCtx<'_>, id: &str, today: NaiveDate) -> Resul
         let end = end_date(&tmpl);
         let next = parse_date(&tmpl.next_due_date)?;
         if next > today || end.is_some_and(|e| next > e) {
+            break;
+        }
+        // ADR 0042 Nr. 3: §19-Status je Termin — ein nachgeholter Termin nach einem
+        // Wechsel erzeugt keine Rechnung mit unpassender Steuerart (§14c-Schutz).
+        if let Some(reason) = blocker(job.pool, &tmpl, &items, next).await? {
+            blocked_notice(job, &tmpl, &reason).await;
             break;
         }
         let remaining = count_due_occurrences(freq, day, next, today, end, catch_up::COUNT_CAP);
@@ -493,6 +497,7 @@ async fn blocker(
     pool: &SqlitePool,
     tmpl: &RecurringInvoiceRow,
     items: &[RecurringInvoiceItemRow],
+    occurrence: NaiveDate,
 ) -> Result<Option<String>> {
     match contacts::get(pool, &tmpl.contact_id).await? {
         None => return Ok(Some("Der Kunde der Vorlage existiert nicht mehr.".into())),
@@ -518,9 +523,13 @@ async fn blocker(
     }
     // R1-017: §14c-Schutz auch im Scheduler — keine Entwürfe mit USt-Ausweis
     // bei aktivem §19 (sonst nummerierte Entwürfe, die erst beim Festschreiben
-    // scheitern).
+    // scheitern). Status am maßgeblichen Datum: Ende des Abrechnungszeitraums
+    // (ADR 0042 Nr. 3/10), ersatzweise der Termin.
+    let status_day = template_period(tmpl, occurrence).map_or(occurrence, |(_, end)| end);
     let inputs: Vec<InvoiceItemInput> = items.iter().map(row_to_item_input).collect();
-    if let Err(e) = crate::commands::recurring_invoice::check_items_no_vat(pool, &inputs).await {
+    if let Err(e) =
+        crate::commands::recurring_invoice::check_items_no_vat(pool, &inputs, status_day).await
+    {
         return Ok(Some(e.to_string()));
     }
     Ok(None)
@@ -1042,9 +1051,37 @@ async fn template_notice(
     }
 }
 
+/// Abrechnungszeitraum eines Termins (ADR 0042 Nr. 10, pure): Stichtag bis
+/// Stichtag + Periode − 1 Tag. `None` bei ungültiger Frequenz (dann bleibt der
+/// Stichtag das Leistungsdatum).
+fn template_period(
+    template: &RecurringInvoiceRow,
+    occurrence: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let freq = Frequency::from_db(&template.frequency)?;
+    let day = template.day_of_period.clamp(1, 31) as u32;
+    Some(billing_period(freq, day, occurrence))
+}
+
+/// Klartext des Zeitraums für die erste Position: ein voller Kalendermonat als
+/// „Juni 2026“, sonst „01.04.2026 – 30.06.2026“.
+fn period_label(start: NaiveDate, end: NaiveDate) -> String {
+    let full_month = start.day() == 1
+        && end.year() == start.year()
+        && end.month() == start.month()
+        && end.succ_opt().is_some_and(|n| n.day() == 1);
+    if full_month {
+        format!("{} {}", month_de(start.month()), start.year())
+    } else {
+        format!("{} – {}", start.format("%d.%m.%Y"), end.format("%d.%m.%Y"))
+    }
+}
+
 /// Baut die [`InvoiceInput`] aus der Vorlage + dem Perioden-Stichtag (pure).
-/// Belegdatum = `today`; Leistungsdatum = `occurrence`; Fälligkeit = `today` +
-/// Zahlungsziel. Liefert zusätzlich das Geschäftsjahr (= Jahr des Belegdatums).
+/// Belegdatum = `today`; Leistungszeitraum = Abrechnungszeitraum des Termins
+/// (ADR 0042 Nr. 10, BG-14); Leitweg-ID aus der Vorlage (Nr. 12); Fälligkeit =
+/// `today` + Zahlungsziel. Liefert zusätzlich das Geschäftsjahr (= Jahr des
+/// Belegdatums).
 fn build_invoice_input(
     template: &RecurringInvoiceRow,
     items: &[RecurringInvoiceItemRow],
@@ -1052,10 +1089,14 @@ fn build_invoice_input(
     today: NaiveDate,
 ) -> (InvoiceInput, i64) {
     let mut invoice_items: Vec<InvoiceItemInput> = items.iter().map(row_to_item_input).collect();
+    let period = template_period(template, occurrence);
 
     if template.service_period_note != 0 {
         if let Some(first) = invoice_items.first_mut() {
-            let label = format!("{} {}", month_de(occurrence.month()), occurrence.year());
+            let label = match period {
+                Some((start, end)) => period_label(start, end),
+                None => format!("{} {}", month_de(occurrence.month()), occurrence.year()),
+            };
             // KB-0054: Trägt die erste Position einen Markdown-Body, würde
             // `recompute_markup_descriptions` (commands::invoices) die an
             // `description` angehängte Periode wieder aus dem Markup
@@ -1081,7 +1122,12 @@ fn build_invoice_input(
     let input = InvoiceInput {
         direction: InvoiceDirection::Issued,
         invoice_date: today, // Ausstellungsdatum = Erstellungstag (rechtlich)
-        delivery_date: Some(occurrence), // Leistungsdatum = Periodenstichtag
+        // Leistungszeitraum statt Stichtag (ADR 0042 Nr. 10); ohne gültige
+        // Frequenz bleibt der Stichtag das Leistungsdatum.
+        delivery_date: period.is_none().then_some(occurrence),
+        service_period_start: period.map(|(s, _)| s),
+        service_period_end: period.map(|(_, e)| e),
+        buyer_reference: template.buyer_reference.clone(),
         due_date,
         currency_code: "EUR".to_string(),
         items: invoice_items,
@@ -1197,6 +1243,7 @@ mod tests {
             notes: None,
             created_at: "2026-05-24 00:00:00".into(),
             updated_at: "2026-05-24 00:00:00".into(),
+            buyer_reference: None,
         }
     }
 
@@ -1232,11 +1279,10 @@ mod tests {
         let today = d(2026, 5, 24); // Catch-up: erstellt heute, nicht rückdatiert
         let (input, fy) = build_invoice_input(&template(), &[item()], occurrence, today);
         assert_eq!(input.invoice_date, today, "Belegdatum = Erstellungstag");
-        assert_eq!(
-            input.delivery_date,
-            Some(occurrence),
-            "Leistungsdatum = Periodenstichtag"
-        );
+        // ADR 0042 Nr. 10: Leistungszeitraum = Abrechnungszeitraum, kein BT-72.
+        assert_eq!(input.delivery_date, None);
+        assert_eq!(input.service_period_start, Some(occurrence));
+        assert_eq!(input.service_period_end, Some(d(2026, 3, 31)));
         assert_eq!(fy, 2026, "Geschäftsjahr = Jahr des Belegdatums");
         assert!(matches!(input.direction, InvoiceDirection::Issued));
         assert_eq!(input.currency_code, "EUR");
@@ -1266,6 +1312,58 @@ mod tests {
             "Periode in der ersten Position: {}",
             input.items[0].description
         );
+    }
+
+    #[test]
+    fn build_input_sets_the_billing_period_for_every_frequency() {
+        // ADR 0042 Nr. 10: Stichtag bis Stichtag + Periode − 1 Tag; der
+        // Klartext nennt den ganzen Zeitraum (nicht nur den ersten Monat).
+        let today = d(2026, 4, 1);
+        for (freq, end, label) in [
+            ("monthly", d(2026, 4, 30), "Leistungszeitraum: April 2026"),
+            (
+                "quarterly",
+                d(2026, 6, 30),
+                "Leistungszeitraum: 01.04.2026 – 30.06.2026",
+            ),
+            (
+                "semiannually",
+                d(2026, 9, 30),
+                "Leistungszeitraum: 01.04.2026 – 30.09.2026",
+            ),
+            (
+                "annually",
+                d(2027, 3, 31),
+                "Leistungszeitraum: 01.04.2026 – 31.03.2027",
+            ),
+        ] {
+            let mut t = template();
+            t.frequency = freq.into();
+            let (input, _) = build_invoice_input(&t, &[item()], d(2026, 4, 1), today);
+            assert_eq!(input.service_period_start, Some(d(2026, 4, 1)), "{freq}");
+            assert_eq!(input.service_period_end, Some(end), "{freq}");
+            assert_eq!(input.delivery_date, None, "{freq}");
+            assert!(
+                input.items[0].description.contains(label),
+                "{freq}: {}",
+                input.items[0].description
+            );
+        }
+        // Ohne Klartext bleibt der Zeitraum (BG-14) trotzdem gesetzt.
+        let mut t = template();
+        t.frequency = "quarterly".into();
+        t.service_period_note = 0;
+        let (input, _) = build_invoice_input(&t, &[item()], d(2026, 4, 1), today);
+        assert_eq!(input.service_period_end, Some(d(2026, 6, 30)));
+    }
+
+    #[test]
+    fn build_input_takes_the_buyer_reference_of_the_template() {
+        // ADR 0042 Nr. 12: Leitweg-ID der Vorlage an jede Rechnung.
+        let mut t = template();
+        t.buyer_reference = Some("991-12345-67".into());
+        let (input, _) = build_invoice_input(&t, &[item()], d(2026, 6, 1), d(2026, 6, 1));
+        assert_eq!(input.buyer_reference.as_deref(), Some("991-12345-67"));
     }
 
     #[test]
@@ -1365,10 +1463,9 @@ mod pipeline_tests {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: None,
             default_currency: None,
-            confirm_waive_paragraph_19: None,
         };
         seller_profile::upsert(pool, &input).await.unwrap();
     }
@@ -1423,6 +1520,7 @@ mod pipeline_tests {
             payment_terms_days: 14,
             pdf_template: "default".into(),
             service_period_note: true,
+            buyer_reference: None,
             notes: None,
             items: vec![ri_item()],
         }
@@ -1513,7 +1611,10 @@ mod pipeline_tests {
             inv.invoice_date, "2026-05-20",
             "Belegdatum = Erstellungstag"
         );
-        assert_eq!(inv.delivery_date.as_deref(), Some("2026-05-01"));
+        // ADR 0042 Nr. 10: Abrechnungszeitraum statt Stichtag.
+        assert_eq!(inv.delivery_date, None);
+        assert_eq!(inv.service_period_start.as_deref(), Some("2026-05-01"));
+        assert_eq!(inv.service_period_end.as_deref(), Some("2026-05-31"));
         assert_eq!(inv.fiscal_year, 2026);
         assert_eq!(
             notice_count(&pool, "recurring_invoice_catch_up:").await,
@@ -1657,7 +1758,9 @@ mod pipeline_tests {
             inv.invoice_date, "2026-05-20",
             "Belegdatum = heute, nicht der Periodenstichtag 05-01"
         );
-        assert_eq!(inv.delivery_date.as_deref(), Some("2026-05-01"));
+        assert_eq!(inv.delivery_date, None);
+        assert_eq!(inv.service_period_start.as_deref(), Some("2026-05-01"));
+        assert_eq!(inv.service_period_end.as_deref(), Some("2026-05-31"));
 
         let after = recurring_invoice::get_row(&pool, &detail.template.id)
             .await

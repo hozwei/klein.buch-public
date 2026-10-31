@@ -100,10 +100,9 @@ async fn setup_env() -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await
@@ -163,6 +162,9 @@ async fn happy_path_invoice_lock_payment_expense_flows_into_euer() {
 
     // 2. Rechnungs-Entwurf (§19: 1 Position, 1000 € netto = brutto, USt 0).
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: d(2026, 5, 20),
         delivery_date: Some(d(2026, 5, 20)),

@@ -28,6 +28,8 @@ pub mod recurring_invoice;
 pub mod registry;
 pub mod settings;
 pub mod system;
+pub mod tax_status;
+pub mod vat_adjustment;
 
 // Phase 2C
 pub mod assets;

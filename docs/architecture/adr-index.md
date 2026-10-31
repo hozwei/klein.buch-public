@@ -1,15 +1,16 @@
 # ADR-Index
 
 > Vertiefung zu „ADR-Liste in `docs/adr/`" aus `../ARCHITECTURE.md`. Diese
-> Datei ist die navigations-freundliche Sicht auf alle 40 Architecture
+> Datei ist die navigations-freundliche Sicht auf alle 42 Architecture
 > Decision Records: Titel, Themenkreis, Status, Querverweis auf das
 > Architektur-Vertiefungs-Dokument, das die Entscheidung weiterführt.
 
-Quelle: `klein-buch/docs/adr/0001-…0041-….md`. Jeder ADR-Datei-Header
+Quelle: `klein-buch/docs/adr/0001-…0042-….md`. Jeder ADR-Datei-Header
 gilt; wenn diese Index-Tabelle einmal hinterherhängt, ist die ADR-Datei
 selbst maßgeblich.
 
-**Status-Konvention:** die ADRs 0001–0041 sind **akzeptiert** (Stand 2026-10-27);
+**Status-Konvention:** die ADRs 0001–0041 sind **akzeptiert** (Stand 2026-10-31);
+ADR 0042 ist **akzeptiert** (Lauf 2026.11.1, 2026-10-31);
 ADR 0002 und 0038 sind durch ADR 0039 (Web-/Docker-Betrieb) **abgelöst** und
 bleiben als Historie stehen (Status-Zeile „Abgelöst durch ADR 0039“).
 Spätere Erweiterungen werden als „Amendment" im selben ADR ergänzt
@@ -63,6 +64,7 @@ Argon2id-Raw-Key; die Amendments 2026-10-23 zum Web-/Docker-Betrieb).
 | 0039 | Web-/Docker-Betrieb | Plattform / Betrieb | `security.md` |
 | 0040 | Dauerbetrieb: Start- und Zeitlogik (Uhr im AppCtx, Abo-Läufe atomar, Nachhol-Grenze, Pause bei Uhrsprung und nach Restore, Nummernkreise nach Restore, Tages-Backup kalenderfest, Rotation nach Kalender-Eimern, SFTP ohne Löschung, Integritäts-Cron mit Sperre, gestaffelt nach dem Entsperren, Herunterfahren mit Zeitgrenze, Lock-Backup im Hintergrund, Off-Site „veraltet“, WAL beim Restore-Tausch, Anzeige in Europe/Berlin, Seed-`.neu` einmal je Fassung, nur Inbox, Texte und Doku des Dauerbetriebs) | Scheduler / Backup / Betrieb | `../ARCHITECTURE.md` §4.4 + §5, `modules.md` §6–7, `security.md` §3, `gobd.md` §5.4 |
 | 0041 | UI/UX-Standards (2026.11): Orientierung an WCAG 2.2 AA (keine Konformitätsaussage), Prüf-Harness mit axe-core und Abdeckungsbericht über Mobil, Tablet und Desktop, Design über Rollen-Tokens und Bausteine (PageBar mit Menü „Mehr“, DocNo, ContactSelect, MoneyInput/QuantityInput), Container Queries, deutsche Formate und Betragseingabe, Fehler am Feld, Seitentitel je Route, F1 zum passenden Handbuch-Kapitel, Begriffe der Oberfläche, Lesefelder ohne Migration | UX / Frontend | `design.md`, `../ARCHITECTURE.md` §2g, `modules.md` §14, `data-model.md` §2g |
+| 0042 | Fachliche Korrekturen 2026.11.1 (akzeptiert): Steuerstatus nach § 19 UStG als append-only Historie mit Wirkungsdatum und Grund (Migration 0033; Verzicht bindet fünf Kalenderjahre einschließlich des Wirkungsjahres, Wegfall ohne Bindung, Status je Beleg am Leistungsdatum), Zahlungsbuch mit Gegenbuchung (0034), Leistungszeitraum, Vorausrechnung und Leitweg-ID am Entwurf (0035), Angebots-Entwürfe bearbeiten, Rückstand-Vorschau, DATEV-Stapel nach der Formatbeschreibung (`EXTF_`, Pflichtnummern), Übersicht § 15a UStG; löst ADR 0041 Nr. 21, 91, 220, 251 und ADR 0039 Nr. 135 (6) ab | §19 / GoBD / Export | `paragraph-19.md`, `gobd.md`, `data-model.md` |
 
 ---
 
@@ -73,11 +75,13 @@ Wer ein Thema verstehen will, hier die ADR-Cluster:
 **Foundation / Architektur-Stil:** 0002 (abgelöst), 0039, 0003, 0004, 0013,
 0014, 0015.
 
-**GoBD-Substanz:** 0006, 0027 (GJ-Lock), 0036 (Factory Reset als Ausnahme).
+**GoBD-Substanz:** 0006, 0027 (GJ-Lock), 0036 (Factory Reset als Ausnahme), 0042
+(Zahlungsbuch, Statushistorie).
 Plus auf Beleg-Ebene: 0016 (Quote-Lock), 0019 (Expense sofort gelockt),
 0020 (Private Movements immutable), 0025 (AfA-Lock zum GJ-Wechsel).
 
-**§19 und USt:** 0005 (§19-Hardline), 0019 (eingangsseitig).
+**§19 und USt:** 0005 (§19-Hardline), 0019 (eingangsseitig), 0042 (Statushistorie,
+Leistungszeitraum, § 15a-Übersicht).
 
 **E-Rechnung:** 0007 (CII), 0008 (PDF/A-3 + Mustang), 0024 (Empfang),
 0037 (Empfangs-Politur + Drop-Folder, ZUGFeRD-Profile-Whitelist, Roh-XML-
@@ -88,7 +92,8 @@ Encryption), 0036 (Factory Reset), 0039 (Bedrohungsmodell Internetbetrieb).
 Plus Mail-Credentials: 0011, 0028
 (OAuth-Refresh-Token-Chunking der Desktop-Fassung; Graph-Code seit Lauf F6 entfernt).
 
-**EÜR + Export:** 0010 (Cash-Basis), 0022 (Zufluss/Abfluss), 0026 (Export).
+**EÜR + Export:** 0010 (Cash-Basis), 0022 (Zufluss/Abfluss), 0026 (Export), 0042
+(DATEV nach der Formatbeschreibung, Gegenbuchungen).
 Plus AfA: 0025.
 
 **Belege:** 0012 (Nummernformat), 0016/0017 (Quote-Lifecycle + Konvertierung),
@@ -206,6 +211,17 @@ das bleibt der inhaltlichen Kontinuität zuliebe. Bekannte Amendments:
   §19-Wechsel wird nicht blockiert, Inbox und Ausfüllhilfe nennen betroffene Anlagen
   (ADR 0039 Nr. 148).
 
+**Amendments 2026-10-31 — Lauf 2026.11.1 (ADR 0042):**
+
+- **ADR 0005** — Statushistorie statt Settings-Toggle; Bindung nach einem Verzicht fünf
+  Kalenderjahre einschließlich des Wirkungsjahres, gesetzlicher Wegfall ohne Bindung.
+- **ADR 0026** — DATEV-Stapel nach der Formatbeschreibung (`EXTF_`, Berater- und
+  Mandantennummer Pflicht, Paket ohne Nummern ohne Stapel), Gegenbuchungen.
+- **ADR 0034** — russh 0.65 ohne SSH-Agent (CVE-2026-116794).
+- **ADR 0039** Nr. 135 (6) — Berater- und Mandantennummer nicht mehr optional.
+- **ADR 0041** Nr. 21, 91, 220, 251 — §19-Wechseldialog und Leitweg-ID erst beim
+  Ausstellen abgelöst.
+
 Bei einem **echten Reversal** einer ADR (eine Entscheidung wird rückgängig
 gemacht) wird eine neue ADR mit höherer Nummer eröffnet, die die alte
 explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
@@ -220,7 +236,7 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 0035 → 0036. Dann nach Themen-Interesse weiter.
 
 **Für Steuerberater-Audit:** 0006, 0005, 0010, 0019, 0022, 0025, 0026,
-0027, 0032.
+0027, 0032, 0042.
 
 **Für Security-Audit:** 0039, 0009, 0011, 0013, 0028, 0034, 0035, 0036.
 
@@ -230,6 +246,7 @@ explizit ersetzt. Erstmals geschehen am 2026-10-23: ADR 0039
 
 ## Letzte Verifikation
 
-Stand: 2026-10-27, ADR-Files 0001–0041 (Amendments bis Lauf 2026.11: ADR 0021, 0029). Bei einer neuen
+Stand: 2026-10-31, ADR-Files 0001–0042 (Amendments bis Lauf 2026.11.1: ADR 0005, 0021,
+0026, 0029, 0034, 0039, 0041). Bei einer neuen
 ADR diese Tabelle am Ende verlängern und das passende Vertiefungs-Dokument verlinken;
 bei einem neuen Amendment eine Zeile in Abschnitt 3 ergänzen.

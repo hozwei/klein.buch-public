@@ -123,6 +123,9 @@ async fn mk_draft_invoice(
     is_storno_for: Option<String>,
 ) -> String {
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date,
         delivery_date: None,
@@ -508,7 +511,8 @@ async fn drafts_never_count_as_income_or_storno_refund() {
         Some(orig.clone()),
     )
     .await;
-    // Entwurf mit eingetragener Zahlung (nur per Direkt-UPDATE möglich).
+    // Entwurf mit eingetragener Zahlung: seit 0034 auch per Direkt-UPDATE bzw.
+    // direkt ins Zahlungsbuch nicht mehr möglich (ADR 0042 Nr. 7).
     let draft = mk_draft_invoice(&pool, &cust, "RE-2026-0002", d(2026, 5, 1), 50_000, None).await;
     sqlx::query(
         "UPDATE invoices SET paid_amount_cents = 50000, paid_at = '2026-05-02' WHERE id = ?",
@@ -516,7 +520,16 @@ async fn drafts_never_count_as_income_or_storno_refund() {
     .bind(&draft)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect_err("Zahlungsstand nur passend zum Zahlungsbuch");
+    sqlx::query(
+        "INSERT INTO invoice_payments
+            (id, invoice_id, seq, kind, amount_cents, paid_date, created_at)
+         VALUES ('p-draft', ?, 1, 'payment', 50000, '2026-05-02', '2026-05-02 10:00:00')",
+    )
+    .bind(&draft)
+    .execute(&pool)
+    .await
+    .expect_err("keine Zahlung auf einen Entwurf");
 
     let inputs = euer_repo::load_inputs(&pool).await.unwrap();
     let r = aggregate::aggregate(2026, &inputs);

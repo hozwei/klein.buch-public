@@ -11,7 +11,7 @@ keywords: [update, aktualisieren, version, image-tag, migration, rückfall, roll
 Klein.Buch aktualisiert sich nie selbst. Du entscheidest, wann eine neue
 Version läuft, indem Du in Deiner Container-Verwaltung das Image-Tag
 änderst, also die Versionsnummer hinter dem Doppelpunkt in
-`ghcr.io/hozwei/klein-buch:2026.11.0`. Einen Update-Knopf in der App
+`ghcr.io/hozwei/klein-buch:2026.11.1`. Einen Update-Knopf in der App
 gibt es absichtlich nicht: Dafür bräuchte der Container Zugriff auf
 Docker selbst und damit praktisch volle Rechte über Deinen Server. Bei
 einem Dienst, der aus dem Internet erreichbar ist, wäre das zu
@@ -52,7 +52,7 @@ zu jeder Version, was sich geändert hat.
    Rückfall in jedem Fall einspielen.
 3. Wenn Du willst, prüfe die Signatur des neuen Images (siehe unten).
 4. Trag die neue Nummer in der Compose-Datei ein, zum Beispiel
-   `image: ghcr.io/hozwei/klein-buch:2026.11.0`.
+   `image: ghcr.io/hozwei/klein-buch:2026.11.1`.
 5. Lade das Image und starte den Container neu:
 
 ```
@@ -98,7 +98,7 @@ Du sie mit dem Werkzeug cosign:
 cosign verify ghcr.io/hozwei/klein-buch:<v> --certificate-identity-regexp '^https://github\.com/hozwei/klein\.buch-public/\.github/workflows/release-image\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-Ersetze `<v>` durch die Version, zum Beispiel `2026.11.0`. Meldet cosign
+Ersetze `<v>` durch die Version, zum Beispiel `2026.11.1`. Meldet cosign
 einen Fehler, starte dieses Image nicht. Wer ganz sichergehen will,
 schreibt zusätzlich den Digest (die Prüfsumme des Images) aus den
 Release-Notizen hinter die Version in die Compose-Datei.
@@ -150,4 +150,4 @@ neueren Version nimmt eine ältere dagegen nie an.
 
 ---
 
-*Letzte Aktualisierung: 24.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

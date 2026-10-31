@@ -39,6 +39,8 @@ pub fn allowed_content_type(mime: &str) -> &'static str {
         "application/xml" | "text/xml" => "application/xml",
         "application/zip" => "application/zip",
         "text/csv" | "text/csv; charset=utf-8" => "text/csv; charset=utf-8",
+        // DATEV-Buchungsstapel (CP1252, ADR 0042 Nr. 15).
+        "text/csv; charset=windows-1252" => "text/csv; charset=windows-1252",
         "application/json" => "application/json",
         _ => "application/octet-stream",
     }

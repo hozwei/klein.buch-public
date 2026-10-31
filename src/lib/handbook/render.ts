@@ -30,6 +30,10 @@
 //   ab marked v8 entfernt; dann müsste DOMPurify dazu.
 
 import { Marked, type Tokens } from "marked";
+import { slugifyHeading } from "./slug";
+
+// ADR 0042 Nr. 16: Der Slugifier liegt in `./slug.ts` (Start-Bundle ohne `marked`).
+export { slugifyHeading };
 
 export type TocLevel = 2 | 3;
 
@@ -74,27 +78,6 @@ function resolveImage(href: string | null | undefined): string {
 }
 
 // --- Slug- und HTML-Helfer ------------------------------------------------
-
-/**
- * Deutsche-aware Slugifier für Heading-IDs.
- *
- * Ä/Ö/Ü → ae/oe/ue, ß → ss, alles übrige Nicht-Wort-Zeichen wird zu
- * Space normalisiert und mit `-` zusammengezogen. Bewusst lossy, aber
- * deterministisch — gleiches Heading liefert immer denselben Slug.
- */
-export function slugifyHeading(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/ä/g, "ae")
-    .replace(/ö/g, "oe")
-    .replace(/ü/g, "ue")
-    .replace(/ß/g, "ss")
-    .replace(/[^a-z0-9\s-]+/g, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .join("-");
-}
 
 function stripHtml(html: string): string {
   return html

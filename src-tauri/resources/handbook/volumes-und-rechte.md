@@ -46,7 +46,8 @@ Start, dass beide wirklich eingebunden sind.
 Drei Einstellungen liegen nicht auf dem Server, sondern im Browser: den
 Kontenrahmen sowie die Berater- und Mandantennummer für den
 DATEV-Export merkt sich jeder Browser selbst. Sie stehen deshalb in
-keinem Backup. In einem anderen Browser, auf einem anderen Gerät oder
+keinem Backup. Ohne die beiden Nummern startet der DATEV-Export nicht,
+und das Steuerberater-Paket entsteht ohne DATEV-Stapel. In einem anderen Browser, auf einem anderen Gerät oder
 nach einem Wechsel der Adresse in `KLEIN_BUCH_PUBLIC_URL` trägst Du sie
 auf der Seite "EÜR-Export" einmal neu ein.
 
@@ -145,11 +146,12 @@ jede Datei, die vom Image abweicht, für von Dir verändert und legt
 ## Ein Volume löschen
 
 Eine Funktion "Alles löschen" gibt es im Server-Betrieb nicht. Wer
-`/data` löscht, löscht damit auch die festgeschriebenen Belege, die Du
-zehn Jahre aufbewahren musst. Diese Verantwortung liegt bei Dir als
+`/data` löscht, löscht damit auch die Unterlagen, die Du aufbewahren
+musst (Bücher und Aufzeichnungen 10 Jahre, Belege 8 Jahre; Klein.Buch
+hält alles 10 Jahre vor). Diese Verantwortung liegt bei Dir als
 Betreiber. Willst Du neu anfangen, leg eine neue Instanz mit einem neuen,
 leeren Ordner an und bewahre den alten samt Backups auf.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

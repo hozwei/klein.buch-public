@@ -153,11 +153,13 @@ Migrations-Export, DSGVO-Auskunft), neue Einmal-Codes, den zweiten
 Faktor neu einrichten, das Daten-Passwort ändern, andere Sitzungen
 abmelden, Zahlungskonten anlegen, ändern, aktivieren und deaktivieren,
 einen Kontakt anonymisieren, ein Geschäftsjahr abschließen, einen
-Rechnungs-Entwurf verwerfen, die automatischen Abo-Läufe nach einer
+Rechnungs-Entwurf verwerfen, eine gebuchte Zahlung stornieren, die
+automatischen Abo-Läufe nach einer
 Pause freigeben ("Prüfen und freigeben"), einen Nummernkreis anheben
 und den Abgleich eines wiederhergestellten Entwurfs bestätigen. Bei den
-Firmendaten fragt Klein.Buch nur, wenn sich Bankverbindung (IBAN, BIC)
-oder der Kleinunternehmer-Status ändern, beim Versand einer Rechnung
+Firmendaten fragt Klein.Buch nur, wenn sich die Bankverbindung (IBAN,
+BIC) ändert oder Du einen Wechsel des Steuerstatus einträgst oder
+widerrufst, beim Versand einer Rechnung
 oder eines Angebots nur, wenn der Empfänger von der hinterlegten
 Adresse abweicht; in beiden Fällen nicht in den ersten fünf Minuten
 nach der Anmeldung bzw. Einrichtung. So kann jemand, der Dein offenes
@@ -191,4 +193,4 @@ deshalb neu ein.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

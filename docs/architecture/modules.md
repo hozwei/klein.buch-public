@@ -36,7 +36,9 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 |---|---|---|
 | `domain::invoice` | Rechnungs-Validierung (§14/§19/§33 UStG, §14c-Schutz) und Totals-Berechnung in Cent | `validate_for_issue`, `compute_totals`, `is_kleinbetragsrechnung` |
 | `domain::contact` | Kontakt-Validierung | `validate`, `validate_vat_id` |
-| `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), 5-Jahres-Bindung nach Verzicht, USt-Sperre je Position | `HINWEIS_TEXT`, `KleinunternehmerStatus`, `waiver_deadline`, `assert_no_vat` |
+| `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), USt-Sperre je Position | `HINWEIS_TEXT`, `assert_no_vat` |
+| `domain::tax_status` | Steuerstatus nach § 19 UStG als Historie (ADR 0042): Status an einem Datum und je Jahr, Prüfung neuer Einträge und Widerrufe (Grund, Wirkungsdatum, Bindung, abgeschlossene Jahre), Gesamtumsatz und Grenzprüfung | `TaxStatusHistory`, `validate_change`, `validate_revoke`, `gesamtumsatz`, `grenzpruefung` |
+| `domain::vat_adjustment` | Übersicht der Vorsteuerberichtigung nach § 15a UStG (ADR 0042 Nr. 14): Berichtigungszeitraum (60 Monate bzw. kürzere Verwendungsdauer, Monatsregel § 45 UStDV), Jahresanteil, Richtung, Status je Monat aus der Historie, Abgang (§ 15a Abs. 8/9), Grenzen § 44 UStDV; keine Buchung | `period`, `compute`, `AssetAdjustment`, `YearShare` |
 | `domain::kleinbetragsrechnung` | §33 UStDV — vereinfachte Pflichtangaben bei ≤ 250 € Brutto | `KLEINBETRAG_THRESHOLD_CENTS`, `is_applicable` |
 | `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer); Geschäftsjahr aus dem Storno-Datum, Bezug aufs Original (Nummer, Datum) für XML und PDF (Lauf E) | `build_storno_input`, `storno_fiscal_year`, `PrecedingInvoice` |
 | `domain::numbering` | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) | `DocType`, `format`, `format_invoice`, `format_storno`, `format_quote`, `format_expense` |
@@ -48,7 +50,7 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 | `domain::depreciation` | AfA-Berechnung (linear/GWG/Computer/Privatanteil), idempotent; `plan_disposal` bildet die Schritte eines Abgangs ab (Nachholen, ersetzte AfA, anteilige AfA, Restbuchwert, Ablehnungsgrund) für `assets_dispose` und die Vorschau `assets_disposal_preview` (ADR 0041 Nr. 81) | `compute_yearly`, `compute_disposal_year_partial`, `annual_linear_cents`, `plan_disposal` |
 | `domain::package` | Revisions-Validierung, Markdown-Subset-Parser, AST→Typst (Injection-Schutz), Plaintext-Flatten für BT-154 | `validate_revision`, `parse_markup`, `to_typst`, `to_plaintext` |
 | `domain::travel` | Anfahrt km × Satz → Beleg-Position (kein Geocoding) | `compute_travel`, `TravelLine` |
-| `domain::recurring` | Recurring-Kosten-Vorlagen-Validierung, Fälligkeitsraster | `validate_recurring`, `compute_next_due_date`, `is_due` |
+| `domain::recurring` | Recurring-Kosten-Vorlagen-Validierung, Fälligkeitsraster, Rückstand (gemeinsame Regeln für Lauf und Vorschau, ADR 0042 Nr. 16) | `validate_recurring`, `compute_next_due_date`, `is_due`, `due_occurrences`, `has_backlog`, `skip_target` |
 | `domain::recurring_invoice` | Abo-Rechnungs-Vorlagen-Validierung + `AutoMode` (draft/issue/issue_send) | `validate_recurring_invoice`, `AutoMode` |
 | `domain::dsgvo` | Art.-15-Report-Aufbau (read-only, interne Notizen ausgelassen) | `assemble`, `DataSubjectReport` |
 | `domain::anonymize` | Art.-17-Regel: Platzhalter-Name `Anonymisiert #<hex>`, Sperre bei offenen Entwürfen, Namensprüfung für Buchungsvorlagen von Kosten-Abos (F3b; das Leeren der PII macht `db::repo::contacts`) | `anonymized_name`, `short_id`, `anonymization_blocker`, `mentions_name` |
@@ -124,7 +126,7 @@ ADRs: 0001 (Sidecar, Amendment: nur Linux), 0007, 0008, 0024, 0037
 |---|---|---|
 | `pdf::klausel_check` | Core | Strenger §19-Marker-Check vor jedem Render (Rechnung + Angebot): `verify_for_kleinunternehmer`, `inspect`. Schlägt fehl, wenn ein Template ohne `// §19-KLAUSEL-BLOCK: REQUIRED`-Marker für eine §19-Rechnung verwendet werden soll. |
 | `pdf::bundle` | Core | `merge_pdfs` (lopdf) für das Angebots-Druck-Bundle (Angebot + AGB + Datenschutz → ein Druck-PDF, ADR 0018); entfernt aktive Inhalte der hochgeladenen Teile (Aktionen, Medien-/3D-Annotationen, Links außer http(s)/mailto; ADR 0039 Nr. 136, 137). |
-| `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver (`resolve_invoice_template`, `resolve_quote_template`) + `list_templates`. Auflösung: `/inputs/pdf-templates/{name}.typ`-Override → Built-in; Sentinel `'default'` → `seller.default_pdf_template` (ADR 0030). Die Metadaten der Liste nennen `supports_storno` (Vorlage nutzt `storno_of`) und `storno_fallback` (`storno_fallback_name`: eingebaute Vorlage, mit der die Pipeline Stornos tatsächlich erzeugt; ADR 0041 Nr. 84). |
+| `pdf::templates` | Core+Shell | Built-in-Vorlagen + doctype-bewusster Resolver (`resolve_invoice_template`, `resolve_quote_template`) + `list_templates`. Auflösung: `/inputs/pdf-templates/{name}.typ`-Override → Built-in; Sentinel `'default'` → `seller.default_pdf_template` (ADR 0030). Die Metadaten der Liste nennen `supports_storno` (Vorlage nutzt `storno_of`) und `storno_fallback` (`storno_fallback_name`: eingebaute Vorlage, mit der die Pipeline Stornos tatsächlich erzeugt; ADR 0041 Nr. 84), ebenso `supports_service_period` (Vorlage nutzt `service_period_start`) und `service_period_fallback` (dieselbe Ersatzvorlage für Rechnungen mit Leistungszeitraum; ADR 0042 Nr. 10). |
 | `pdf::typst_render` | Shell | Typst-`World`-Impl: `render_invoice` (PDF/A-3b-fähig), `render_quote` (Plain-PDF), `render_euer` (Anlage EÜR), `render_package_catalog` (Paket-Broschüre); Logo aus `/data/branding` via `World::file()`. Läuft außerhalb der Runtime (`compile_async` über `limits::RENDER`). Typst 0.15; Fehler alter Vorlagen mit `json.decode` nennen den Ersatz. |
 | `pdf::snapshot` (nur Tests) | — | Feste Render-Aufträge aller Dokumentarten: Warnungstest der eingebauten Vorlagen und Referenz-PDFs für Typst-Updates (`KB_PDF_SNAPSHOT_DIR`, `--ignored pdf_snapshot_`; ADR 0039 Nr. 139). |
 
@@ -178,15 +180,15 @@ ADRs: 0006.
 | `db::mod` | Shell | `open_pool(db_file, key)` (SQLCipher-Pool, `PRAGMA key`), `open_and_init`, `begin_immediate` (Schreib-Transaktion, W2), `prepare_filesystem` (vor jedem Pool-Open: Seed von `/inputs`, vorgemerkter Factory Reset → Start-Abbruch (E7), Restore-Staging aufräumen, vorgemerkten Restore anwenden), `run_migrations` (`sqlx::migrate!` aus `migrations/`, Schema-Check, Restore-Audit), `rekey_db_file` (Passphrase-Wechsel, W6), `db_file_is_plaintext` |
 | `db::models` | Shell | sqlx-Row-Typen (DB-nahe), nicht zu verwechseln mit Domain-Typen — Mapping in den Repos |
 | `db::numbering` | Shell | Atomare Nummern-Allokation aus `doc_number_counters` je (Typ, GJ): `next_number`, `next_seq`, `peek_seq`; `snapshot` und `raise_in` (nur aufwärts) für Restore und `numbering_raise` (Lauf F, D-24) |
-| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (32), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
+| `db::schema_version` | Shell | `EXPECTED_SCHEMA_VERSION` (35), `MIN_RESTORE_SCHEMA_VERSION` (30), `read`, `check_compatible`; geprüft beim Entsperren — neuere DB ⇒ kein Entsperren (Down-Migration-Schutz) |
 | `db::triggers` | Shell-Stub | Dokumentiert die in den Migrations-SQLs definierten Trigger (Code-Stub, die Wahrheit lebt in `migrations/*.sql`) |
-| `db::repo::*` | Shell | Repo pro Domäne (21 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
+| `db::repo::*` | Shell | Repo pro Domäne (23 Dateien), CRUD + State-Transitions; alle Inserts/Updates über parametrisierte Queries; Locked-Belege werden über DB-Trigger geschützt |
 
-**Repos:** `invoices`, `quotes`, `expenses`, `private_movements`,
+**Repos:** `invoices`, `invoice_payments` (Zahlungsbuch, Zahlung erfassen und stornieren in einer Transaktion samt Cache und Audit, Lesemodell mit Stornierbarkeit; ADR 0042 Nr. 7–9), `quotes`, `expenses`, `private_movements`,
 `payment_accounts`, `assets`, `depreciation`, `recurring`, `recurring_invoice`,
 `packages`, `legal_documents`, `attachments`, `contacts`, `seller_profile`,
 `audit_log`, `email_log`, `backup_log`, `mail_accounts`, `euer`, `dsgvo`,
-`app_settings`. Zugangsdaten liegen nicht in einem Repo, sondern in
+`tax_status`, `app_settings`. Zugangsdaten liegen nicht in einem Repo, sondern in
 `crate::secrets` (§16). `audit_log::append`/`append_in` nehmen die Details nur
 als `serde_json::Value` und setzen den Akteur aus dem Task-Kontext
 (`with_actor`: `owner`/`scheduler`, sonst `system`; Lauf F, ADR 0039 Nr. 125).
@@ -247,7 +249,7 @@ ADRs: 0023, 0027, 0033, 0039 (Tages-Backup im Tick, Versionsprüfung E14), 0040
 | Datei | Schicht | Verantwortung |
 |---|---|---|
 | `backup::mod` | Shell | `BackupSession` (Passphrase der laufenden Sitzung, nur im RAM), `setup_passphrase`, `store_verifier`, `unlock`, `verify_passphrase`, `create_now`/`create_with` (prozessweit serialisiert: Snapshot → Hülle → Floor → Off-Site-Ziele → Rotation; Zeit aus der injizierten Uhr; während der Pause nach einem Restore nur Floor, während jeder Pause keine Rotation), `request_auto_backup` (Lock-Events: Vermerk mit Zähler, Audit `backup.requested`, weckt den Scheduler; Lauf F3a), `requested_backup_now` (geweckter Lauf), `auto_backup_at` (sofort: Tick, Nachholen), `auto_daily_if_due` (Tick, kalenderfest ab `backup_daily_time`, zuletzt fälliger Slot, Backoff persistiert), `mark_pending`/`pending_backup_if_due` (ausgefallenes Lock-Backup nachholen), `rescan_floor` (Historie nach Restore), `verify_backup_file`, Hinweis `rule_backup_result` (Inbox-only) |
-| `backup::after_restore` | Shell | Abgleich im ersten Entsperren nach einem Restore (Lauf F, F1d): Abo-Termine nur vorwärts, Prüfung für Reihen ohne bekannten Stand, Marker aus dem Backup verwerfen, Entwürfe mit vor dem Restore festgeschriebener Nummer vormerken (`ensure_no_conflict` in der Lock-Pipeline und bei `quotes_issue`, `confirm_conflict`) |
+| `backup::after_restore` | Shell | Abgleich im ersten Entsperren nach einem Restore (Lauf F, F1d): Abo-Termine nur vorwärts, Prüfung für Reihen ohne bekannten Stand, Marker aus dem Backup verwerfen, Entwürfe mit vor dem Restore festgeschriebener Nummer vormerken (`ensure_no_conflict` in der Lock-Pipeline und bei `quotes_issue`, `confirm_conflict`), Bestätigung nach Änderung neu vormerken (`reflag_confirmed_in`), Stand für das Lesefeld `restoreConflict` (`draft_restore_state`, ADR 0042 Nr. 16) |
 | `backup::snapshot` | Shell | Content-ZIP: DB-Snapshot per `VACUUM INTO` über eine eigene Verbindung (bleibt SQLCipher-verschlüsselt) + `archive/` + `branding/`; ohne versteckte `.tmp`/`.part`-Dateien und Symlinks, verschwundene Dateien werden übersprungen (Lauf F3a) |
 | `backup::manifest` | Shell | Klartext-Kopf der `.kbk` (Magic + einzeiliges Manifest-JSON: Format, Schema- und App-Version, Zeitpunkt, KDF-Parameter, Salt, Nonce, SHA-256 und Größe des Inhalts), damit der Restore die Angaben ohne Passphrase zeigen kann; ab Format 3 als AAD an AES-GCM gebunden (`header_bytes`, `parse_header`, Lauf F3a) |
 | `backup::encrypt` | Shell | Argon2id-Schlüsselableitung + AES-256-GCM für die Backup-Hülle; **getrennt** von der SQLCipher-Kette (die ist im DB-Header) |
@@ -391,7 +393,7 @@ ADRs: 0025.
 |---|---|---|
 | `euer::aggregate` | Core | `aggregate(fiscal_year, inputs)`: EÜR-Aggregation Cash-Basis §11 EStG (ADR 0022); Storno als negative Einnahme zum Storno-Datum (kein paid_amount-Netting möglich). Die Eingaben lädt `db::repo::euer::load_inputs`. |
 | `euer::elster_csv` | Core | `build_form`, `to_csv`: Ausfüllhilfe nach Kennzahl und Zeile des amtlichen Vordrucks je Jahr (`Pos`, `Layout`; 2024/2025, 2026), §19 brutto bzw. Regelbesteuerung netto/USt, Storno-Überhang als Betriebsausgabe (ADR 0039 Nr. 135) |
-| `euer::datev_csv` | Core | `build_bookings`, `to_datev`: DATEV-EXTF-Buchungsstapel (SKR03-Default, SKR04 wählbar), Geldkonto je Zahlungskonto, Erlöse je Steuergruppe, BU-Schlüssel, vollständiges CP1252 |
+| `euer::datev_csv` | Core | `build_bookings`, `to_datev`, `file_name`, `require_header_numbers`: DATEV-EXTF-Buchungsstapel (`EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`, SKR03-Default, SKR04 wählbar), Berater- und Mandantennummer Pflicht, leere Textfelder `""`, Geldkonto je Zahlungskonto, Erlöse je Steuergruppe, BU-Schlüssel, vollständiges CP1252; Test `format_rules` gegen die Ausdrücke der Formatbeschreibung (ADR 0042 Nr. 15) |
 | `euer::detail` | Core | Einzelposten mit Steuergruppen (`split_payment`), Zahlungskonto und Aktivierung; Einzelaufstellungen als CSV (`income_csv`, `expenses_csv`, `aveeur_csv`), `de_date` |
 
 Das Steuerberater-ZIP (Deckblatt, Anlage-EÜR-PDF, DATEV-CSV, ELSTER-CSV,
@@ -399,13 +401,20 @@ Einzelaufstellungen, Belege, Manifest) baut `commands::euer::euer_export_stb_zip
 in der Download-Ablage.
 
 **Ansicht.** `commands::euer::euer_compute_report` liefert neben dem Report
-(`EuerReportView`, Felder flach) `is_kleinunternehmer` (§19-Status des Jahres,
-Verzicht berücksichtigt, wie die Exporte) und `snapshot_check` (Abgleich mit dem
+(`EuerReportView`, Felder flach) `is_kleinunternehmer` (§19 das ganze Jahr, wie
+die Exporte), `year_status` und `status_change` (Wechsel im Jahr aus der
+Statushistorie, ADR 0042) und `snapshot_check` (Abgleich mit dem
 Festschreibungs-Snapshot, `None` bei offenem Jahr). Die Ansicht liest nur:
 weder Audit noch Hinweis (ADR 0041 Nr. 80). DATEV-Berater- und Mandantennummer
 übergibt die Oberfläche je Export (`consultantNumber`/`clientNumber`; der Browser
-merkt sie sich in `localStorage` wie den Kontenrahmen), die Grenzen prüft der
-Server (`datev_csv::validate_header_numbers`, ADR 0041 Nr. 113).
+merkt sie sich in `localStorage` wie den Kontenrahmen); Pflicht und Grenzen prüft
+der Server (`datev_csv::require_header_numbers`, ADR 0041 Nr. 113, ADR 0042
+Nr. 15). Das Steuerberater-Paket entsteht ohne beide Nummern ohne DATEV-Stapel
+(Grund im LIESMICH); nur eine Nummer lehnt der Server ab. Download des Stapels
+als `text/csv; charset=windows-1252` (`downloads::mime_for`). Die Oberfläche
+(`routes/euer/export/datevNumbers.ts`) bildet die Pflicht nur nach: Meldung am Feld
+beim Klick, Server-Meldungen „Beraternummer …“/„Mandantennummer …“ ebenfalls ans
+Feld (`serverErrorField`), Dateiname vor dem Download (`datevFileName`).
 
 **Cash-Basis.** Einnahmen am `paid_at`, Ausgaben am `paid_date`, Privatbewegungen
 EÜR-neutral. Teilzahlung pro Zahlungsjahr separat.
@@ -419,11 +428,12 @@ ADRs: 0010, 0022, 0026.
 
 ## 14. `commands/` — Command-Kerne + Registry
 
-26 Dateien: ein Modul pro Domäne (`assets`, `attachments`, `backup`,
+28 Dateien: ein Modul pro Domäne (`assets`, `attachments`, `backup`,
 `contacts`, `depreciation`, `dsgvo`, `euer`, `expenses`, `fiscal_year`,
 `invoices`, `legal_documents`, `mail`, `migration_export`, `notifications`,
 `packages`, `payment_accounts`, `pdf`, `private_movements`, `quotes`,
-`recurring`, `recurring_invoice`, `settings`, `system`), dazu `reauth`
+`recurring`, `recurring_invoice`, `settings`, `system`, `tax_status`,
+`vat_adjustment`), dazu `reauth`
 (`require_fresh`, Lauf F4a), `registry` und `mod.rs`. Bis W4 waren das Tauri-Commands; seit W4/W5 sind es Kerne, die der
 HTTP-Dispatcher (`server::dispatch`) aufruft (ADR 0039 Nr. 19–21).
 
@@ -471,11 +481,19 @@ Kopie aus dem Backup-Protokoll; Nr. 86); `euer_compute_report` liefert
 möglicher Ablehnungsgrund kommt als `blocked_reason` mit denselben Texten
 (Integrationstests sichern die Gleichheit; Nr. 81).
 
+**Lauf 2026.11.1 (ADR 0042).** Neue Commands: `tax_status_overview`, `tax_status_at`,
+`tax_status_change_preview` (lesend) und `tax_status_change_add`,
+`tax_status_change_revoke` (Re-Auth; Nr. 1–6, 17); `invoices_reverse_payment`
+(Re-Auth, Gegenbuchung; Nr. 8); `quotes_update_draft` (Angebots-Entwurf bearbeiten;
+Nr. 13); `recurring_backlog_preview` (lesend, gleiche Rechnung wie der Lauf; Nr. 27);
+`vat_adjustment_overview` (lesend, § 15a UStG; Nr. 14, 30). Lesefelder: `payments` in
+`invoices_get`, `restoreConflict` in `invoices_get`/`quotes_get` (Nr. 25).
+
 **Tests.** Kerne haben Integrations-Tests, die die ganze Pipeline durchlaufen
 (Repo-Layer + Trigger + Audit). Reine Args-Validierung wird über Domain-Tests
 abgedeckt.
 
-ADRs: 0004, 0039, 0041.
+ADRs: 0004, 0039, 0041, 0042.
 
 ---
 
@@ -538,7 +556,7 @@ ADRs: 0035 (Bootstrap-Inversion), 0039 (Server-Betrieb).
 
 ## Letzte Verifikation
 
-Stand: 2026-10-24 (Phase W, Block W13), Schema damals v31; nachgetragen in Lauf F bis 2026-10-25 (entfernte Module F6a, Sidecar-Grenzen F7a, Uhr im `AppCtx` F1; Schema v32, ADRs 0001–0040); Lauf 2026.11 (U6, 2026-10-27): Lesefelder und `assets_disposal_preview` (§1, §2, §3, §7, §11, §13, §14), ADRs 0001–0041. Quelle:
+Stand: 2026-10-24 (Phase W, Block W13), Schema damals v31; nachgetragen in Lauf F bis 2026-10-25 (entfernte Module F6a, Sidecar-Grenzen F7a, Uhr im `AppCtx` F1; Schema v32, ADRs 0001–0040); Lauf 2026.11 (U6, 2026-10-27): Lesefelder und `assets_disposal_preview` (§1, §2, §3, §7, §11, §13, §14), ADRs 0001–0041. Lauf 2026.11.1 (V7, 2026-10-31): §14 um die Commands aus ADR 0042 ergänzt (gegen `commands/registry.rs` geprüft), Schema v35, ADRs 0001–0042. Quelle:
 Verzeichnis-Listing von `klein-buch/src-tauri/src/**/*.rs`, die
 `mod.rs`-/Datei-Header-Kommentare und die öffentlichen Funktionsnamen der
 genannten Module; `server/` abgeglichen mit `../ARCHITECTURE.md` §2f. Die

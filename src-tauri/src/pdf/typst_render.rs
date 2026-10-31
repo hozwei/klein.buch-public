@@ -469,10 +469,12 @@ pub fn build_data_json(
     service_date_fallback: bool,
 ) -> std::result::Result<String, serde_json::Error> {
     let totals = compute_totals(&input.items);
-    // §14 Abs. 4 Nr. 6 UStG: fehlt das Leistungsdatum und ist der Fallback aktiv,
-    // zeigt die Vorlage „entspricht dem Rechnungsdatum" statt eines Datums.
+    // §14 Abs. 4 Nr. 6 UStG: fehlen Leistungsdatum und -zeitraum und ist der
+    // Fallback aktiv, zeigt die Vorlage „entspricht dem Rechnungsdatum" statt
+    // eines Datums (ADR 0042 Nr. 10).
+    let period = crate::domain::invoice::service_period(input);
     let delivery_date_fallback: Option<&str> =
-        if input.delivery_date.is_none() && service_date_fallback {
+        if input.delivery_date.is_none() && period.is_none() && service_date_fallback {
             Some(SERVICE_DATE_FALLBACK_NOTE)
         } else {
             None
@@ -505,7 +507,10 @@ pub fn build_data_json(
         "invoice": {
             "number": invoice_number,
             "date": input.invoice_date.to_string(),
-            "delivery_date": input.delivery_date.map(|d| d.to_string()),
+            "delivery_date": input.delivery_date.filter(|_| period.is_none()).map(|d| d.to_string()),
+            // ADR 0042 Nr. 10: Leistungszeitraum (BG-14), beide oder keiner.
+            "service_period_start": period.map(|(s, _)| s.to_string()),
+            "service_period_end": period.map(|(_, e)| e.to_string()),
             "delivery_date_fallback": delivery_date_fallback,
             "due_date": input.due_date.map(|d| d.to_string()),
             "payment_note": input.payment_note,
@@ -1077,7 +1082,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 
@@ -1095,6 +1099,9 @@ mod tests {
 
     fn invoice() -> InvoiceInput {
         InvoiceInput {
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
             direction: InvoiceDirection::Issued,
             invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
             delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -1655,7 +1662,7 @@ mod tests {
             "contents": [
                 "00-deckblatt.pdf — dieses Deckblatt",
                 "anlage-euer-2026.pdf — Anlage EÜR",
-                "datev-buchungsstapel.csv — DATEV (SKR03)",
+                "EXTF_Buchungsstapel_2026_SKR03.csv — DATEV (SKR03)",
             ],
         });
         let s = serde_json::to_string(&data).unwrap();
@@ -1922,6 +1929,125 @@ mod tests {
                 "{name}: Überweisungshinweis"
             );
         }
+    }
+
+    /// ADR 0042 Nr. 10: Alle vier Rechnungsvorlagen zeigen bei einem
+    /// Leistungszeitraum „Leistungszeitraum: TT.MM.JJJJ – TT.MM.JJJJ“ statt des
+    /// Leistungsdatums und ohne den Rückfalltext; ohne Zeitraum bleibt es beim
+    /// Leistungsdatum bzw. beim Rückfalltext (unverändert). Der Storno mit dem
+    /// Zeitraum des Originals zeigt ihn ebenso.
+    #[test]
+    fn service_period_is_shown_by_all_four_templates() {
+        use crate::pdf::templates::{TEMPLATE_KLASSISCH, TEMPLATE_MINIMAL, TEMPLATE_MODERN};
+        let default_src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../inputs/pdf-templates/default.typ"
+        ))
+        .expect("default.typ");
+        let accounts = serde_json::json!([]);
+        let mut period = invoice();
+        period.delivery_date = None;
+        period.service_period_start = NaiveDate::from_ymd_opt(2026, 4, 1);
+        period.service_period_end = NaiveDate::from_ymd_opt(2026, 6, 30);
+        let mut storno = period.clone();
+        storno.is_storno_for = Some("019a0000-0000-7000-8000-000000000001".into());
+        storno.items[0].unit_price_cents = -10_000;
+        let preceding = PrecedingInvoice {
+            number: "RE-2026-0042".into(),
+            issue_date: NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+        };
+        let no_date = InvoiceInput {
+            delivery_date: None,
+            ..invoice()
+        };
+        let laid_out = |tpl: &str, input: &InvoiceInput, p: Option<&PrecedingInvoice>| {
+            let job = invoice_job_with_storno(
+                tpl,
+                "RE-2026-0001",
+                input,
+                &seller(),
+                &buyer(),
+                None,
+                None,
+                Some("Max Mustermann"),
+                &accounts,
+                true,
+                p,
+            )
+            .unwrap();
+            let world = TemplateWorld::new(tpl, &job.data_json, None, &[]).unwrap();
+            let document = typst::compile::<PagedDocument>(&world)
+                .output
+                .unwrap_or_else(|e| panic!("Typst-Fehler: {e:?}"));
+            let mut text = String::new();
+            for page in document.pages() {
+                frame_text(&page.frame, &mut text);
+            }
+            without_whitespace(&text)
+        };
+        let want = without_whitespace("Leistungszeitraum: 01.04.2026 – 30.06.2026");
+        for (name, tpl) in [
+            ("default", default_src.as_str()),
+            ("modern", TEMPLATE_MODERN),
+            ("klassisch", TEMPLATE_KLASSISCH),
+            ("minimal", TEMPLATE_MINIMAL),
+        ] {
+            assert!(
+                crate::pdf::klausel_check::supports_service_period(tpl),
+                "{name}"
+            );
+            let t = laid_out(tpl, &period, None);
+            assert!(t.contains(&want), "{name}: Zeitraum");
+            assert!(!t.contains("Leistungsdatum"), "{name}: kein Leistungsdatum");
+            let s = laid_out(tpl, &storno, Some(&preceding));
+            assert!(s.contains(&want), "{name}: Storno mit Zeitraum");
+
+            let d = laid_out(tpl, &invoice(), None);
+            assert!(d.contains("Leistungsdatum:19.05.2026"), "{name}: Datum");
+            assert!(!d.contains("Leistungszeitraum"), "{name}");
+            let f = laid_out(tpl, &no_date, None);
+            assert!(
+                f.contains("Leistungsdatumentsprichtdem"),
+                "{name}: Rückfalltext unverändert"
+            );
+        }
+    }
+
+    #[test]
+    fn build_data_json_emits_service_period_and_no_fallback() {
+        let mut inv = invoice();
+        inv.delivery_date = None;
+        inv.service_period_start = NaiveDate::from_ymd_opt(2026, 4, 1);
+        inv.service_period_end = NaiveDate::from_ymd_opt(2026, 6, 30);
+        let out = build_data_json(
+            "RE-2026-0001",
+            &inv,
+            &seller(),
+            &buyer(),
+            None,
+            None,
+            &serde_json::json!([]),
+            true,
+        )
+        .unwrap();
+        assert!(
+            out.contains("\"service_period_start\":\"2026-04-01\""),
+            "{out}"
+        );
+        assert!(out.contains("\"service_period_end\":\"2026-06-30\""));
+        assert!(out.contains("\"delivery_date_fallback\":null"));
+        let plain = build_data_json(
+            "RE-2026-0001",
+            &invoice(),
+            &seller(),
+            &buyer(),
+            None,
+            None,
+            &serde_json::json!([]),
+            true,
+        )
+        .unwrap();
+        assert!(plain.contains("\"service_period_start\":null"));
     }
 
     /// Lauf F6b (LE-TYPST): Eine eigene Vorlage aus der Zeit vor Typst 0.15 mit

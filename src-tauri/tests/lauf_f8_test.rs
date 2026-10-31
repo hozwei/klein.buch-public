@@ -96,10 +96,9 @@ async fn setup() -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: None,
         },
     )
     .await
@@ -371,22 +370,10 @@ async fn insert_paid_invoice(pool: &SqlitePool, date: NaiveDate, paid: NaiveDate
     .execute(pool)
     .await
     .unwrap();
-    let history = serde_json::json!([{
-        "amountCents": 10000, "paidDate": paid.to_string(), "note": null,
-        "recordedAt": format!("{paid} 12:00:00")
-    }])
-    .to_string();
-    sqlx::query(
-        "UPDATE invoices SET paid_amount_cents = 10000, paid_at = ?, status = 'paid',
-                payment_history_json = ?
-          WHERE id = ?",
-    )
-    .bind(format!("{paid} 12:00:00"))
-    .bind(history)
-    .bind(&id)
-    .execute(pool)
-    .await
-    .unwrap();
+    // Seit 0034 über das Zahlungsbuch (ADR 0042 Nr. 7).
+    klein_buch_lib::db::repo::invoices::record_payment(pool, &id, 10_000, &paid.to_string(), None)
+        .await
+        .unwrap();
     id
 }
 
@@ -450,6 +437,9 @@ async fn storno_date_not_before_payment_and_storno_draft_is_audited() {
 
 fn invoice_input(date: NaiveDate, price: i64) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: Some(date),

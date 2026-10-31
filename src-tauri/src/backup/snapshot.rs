@@ -368,6 +368,8 @@ mod tests {
             .create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(1)
+            // ADR 0042 Nr. 16 (V6-R01): Test-Pool mit demselben Zeitlimit.
+            .acquire_timeout(crate::db::ACQUIRE_TIMEOUT)
             .connect_with(opts)
             .await
             .unwrap()
@@ -408,7 +410,7 @@ mod tests {
         // ZIP wieder öffnen und Inhalt prüfen.
         let mut archive = zip::ZipArchive::new(Cursor::new(content.zip_bytes.clone())).unwrap();
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert!(names.contains(&"klein-buch.sqlite".to_string()));
         assert!(names.contains(&"archive/2026/invoices/pdf/RE-2026-0001.pdf".to_string()));
@@ -522,7 +524,7 @@ mod tests {
     fn zip_names(zip_bytes: &[u8]) -> Vec<String> {
         let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes.to_vec())).unwrap();
         (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect()
     }
 

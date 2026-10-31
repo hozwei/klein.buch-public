@@ -412,7 +412,9 @@ pub fn to_xrechnung_with_preceding(
 
     // --- ApplicableHeaderTradeDelivery ---
     x.push_str("    <ram:ApplicableHeaderTradeDelivery>\n");
-    if let Some(deliv) = input.delivery_date {
+    // BT-72 nur ohne Leistungszeitraum (ADR 0042 Nr. 10; BG-14 folgt unten).
+    let period = crate::domain::invoice::service_period(input);
+    if let Some(deliv) = input.delivery_date.filter(|_| period.is_none()) {
         x.push_str("      <ram:ActualDeliverySupplyChainEvent>\n");
         x.push_str("        <ram:OccurrenceDateTime>\n");
         x.push_str(&format!(
@@ -507,6 +509,24 @@ pub fn to_xrechnung_with_preceding(
             fmt_rate(g.rate)
         ));
         x.push_str("      </ram:ApplicableTradeTax>\n");
+    }
+    // BG-14 Rechnungszeitraum (BT-73/BT-74, ADR 0042 Nr. 10). Im CII-Schema
+    // nach ApplicableTradeTax und vor SpecifiedTradePaymentTerms.
+    if let Some((start, end)) = period {
+        x.push_str("      <ram:BillingSpecifiedPeriod>\n");
+        x.push_str("        <ram:StartDateTime>\n");
+        x.push_str(&format!(
+            "          <udt:DateTimeString format=\"102\">{}</udt:DateTimeString>\n",
+            fmt_date(start)
+        ));
+        x.push_str("        </ram:StartDateTime>\n");
+        x.push_str("        <ram:EndDateTime>\n");
+        x.push_str(&format!(
+            "          <udt:DateTimeString format=\"102\">{}</udt:DateTimeString>\n",
+            fmt_date(end)
+        ));
+        x.push_str("        </ram:EndDateTime>\n");
+        x.push_str("      </ram:BillingSpecifiedPeriod>\n");
     }
     // Fälligkeit (BT-9) als SpecifiedTradePaymentTerms.
     if let Some(due) = input.due_date {
@@ -610,7 +630,6 @@ mod tests {
             iban: None,
             bic: None,
             is_kleinunternehmer: true,
-            waived_since: None,
         }
     }
 
@@ -628,6 +647,9 @@ mod tests {
 
     fn invoice_simple() -> InvoiceInput {
         InvoiceInput {
+            service_period_start: None,
+            service_period_end: None,
+            buyer_reference: None,
             direction: InvoiceDirection::Issued,
             invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
             delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -741,6 +763,62 @@ mod tests {
         )
         .unwrap();
         assert!(!without.contains("<ram:ActualDeliverySupplyChainEvent>"));
+    }
+
+    #[test]
+    fn service_period_emits_bg14_between_tax_and_payment_terms() {
+        // ADR 0042 Nr. 10: BG-14 (BT-73/BT-74) im HeaderTradeSettlement nach
+        // ApplicableTradeTax und vor SpecifiedTradePaymentTerms; BT-72 entfällt.
+        let mut inv = invoice_simple();
+        inv.delivery_date = None;
+        inv.service_period_start = NaiveDate::from_ymd_opt(2026, 4, 1);
+        inv.service_period_end = NaiveDate::from_ymd_opt(2026, 6, 30);
+        let xml =
+            to_xrechnung("RE-2026-0001", &inv, &seller_klein(), &buyer(), "N/A", &[]).unwrap();
+        assert!(!xml.contains("<ram:ActualDeliverySupplyChainEvent>"));
+        let bg14 = "      <ram:BillingSpecifiedPeriod>\n        <ram:StartDateTime>\n          \
+                    <udt:DateTimeString format=\"102\">20260401</udt:DateTimeString>\n        \
+                    </ram:StartDateTime>\n        <ram:EndDateTime>\n          \
+                    <udt:DateTimeString format=\"102\">20260630</udt:DateTimeString>\n        \
+                    </ram:EndDateTime>\n      </ram:BillingSpecifiedPeriod>\n";
+        let at = xml.find(bg14).expect("BG-14 vorhanden");
+        let last_tax = xml.rfind("</ram:ApplicableTradeTax>").unwrap();
+        let terms = xml.find("<ram:SpecifiedTradePaymentTerms>").unwrap();
+        assert!(last_tax < at && at < terms, "Reihenfolge laut CII-Schema");
+        // Selbst wenn ein Leistungsdatum mitkäme: mit Zeitraum kein BT-72.
+        inv.delivery_date = NaiveDate::from_ymd_opt(2026, 5, 19);
+        let xml =
+            to_xrechnung("RE-2026-0001", &inv, &seller_klein(), &buyer(), "N/A", &[]).unwrap();
+        assert!(!xml.contains("<ram:ActualDeliverySupplyChainEvent>"));
+        // Ohne Zeitraum kein BG-14.
+        let plain = to_xrechnung(
+            "RE-2026-0001",
+            &invoice_simple(),
+            &seller_klein(),
+            &buyer(),
+            "N/A",
+            &[],
+        )
+        .unwrap();
+        assert!(!plain.contains("BillingSpecifiedPeriod"));
+    }
+
+    #[test]
+    fn bg14_survives_the_parser_roundtrip() {
+        let mut inv = invoice_simple();
+        inv.delivery_date = None;
+        inv.service_period_start = NaiveDate::from_ymd_opt(2026, 4, 1);
+        inv.service_period_end = NaiveDate::from_ymd_opt(2026, 6, 30);
+        let xml =
+            to_xrechnung("RE-2026-0001", &inv, &seller_klein(), &buyer(), "N/A", &[]).unwrap();
+        let p = crate::einvoice::parser::parse(&xml).unwrap();
+        assert_eq!(p.service_period_start, inv.service_period_start);
+        assert_eq!(p.service_period_end, inv.service_period_end);
+        let e = crate::einvoice::parser::build_expense_input(&p, inv.invoice_date);
+        assert_eq!(
+            e.notes.as_deref(),
+            Some("Leistungszeitraum: 01.04.2026 – 30.06.2026")
+        );
     }
 
     #[test]

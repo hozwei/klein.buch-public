@@ -144,10 +144,10 @@
   nie gelöscht. Zum Versenden brauchst du je eine <strong>aktive</strong> AGB- und
   Datenschutz-Fassung.
 </p>
-<p class="caveat">
+<Banner kind="info">
   Tipp: Lass deine AGB- und Datenschutz-Texte vor dem echten Einsatz anwaltlich
   prüfen. Klein.Buch verwaltet die Dokumente, ersetzt aber keine Rechtsberatung.
-</p>
+</Banner>
 
 {#if loading}
   <LoadingState />
@@ -241,7 +241,7 @@
 {/if}
 
 <style>
-  /* .card / .lead / .caveat — globale Definitionen aus tokens.css. */
+  /* .card / .lead — globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .sec-hdr { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; align-items: center; }
   .sec-hdr h2 { margin: 0; }
   .upload { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.75rem; align-items: end; margin: 0.75rem 0 1rem; }

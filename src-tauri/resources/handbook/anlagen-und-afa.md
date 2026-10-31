@@ -3,7 +3,7 @@ slug: anlagen-und-afa
 title: Anschaffungen und AfA
 category: bedienen
 order: 170
-keywords: [anschaffung, anlage, afa, abschreibung, nutzungsdauer, anlagevermögen, gwg, computer, abgang, restbuchwert, §13b]
+keywords: [anschaffung, anlage, afa, abschreibung, nutzungsdauer, anlagevermögen, gwg, computer, abgang, restbuchwert, §13b, §15a, vorsteuerberichtigung, berichtigungszeitraum, bagatellgrenze, §44]
 ---
 
 # Anschaffungen und AfA
@@ -102,8 +102,8 @@ Seite, wenn
   Netto-Betrag). Die EÜR nimmt die ganze Kostenposition heraus; ein
   kleinerer Betrag würde den Rest nie abziehen, ein größerer ohne
   Ausgabe abschreiben,
-- das Anschaffungsdatum und das Belegdatum der Kosten in Jahren mit
-  unterschiedlichem Steuerstatus liegen (siehe "Steuerstatus und
+- am Anschaffungsdatum und am Belegdatum der Kosten ein
+  unterschiedlicher Steuerstatus gilt (siehe "Steuerstatus und
   Zahldatum").
 
 Ist nur ein Teil einer Sammelrechnung eine Anlage, teile die Rechnung
@@ -160,8 +160,8 @@ erst im Januar nach dem Verzicht auf §19, bleibt es beim Brutto-Betrag;
 eine Vorsteuer gibt es dafür nicht. Kosten haben kein eigenes
 Leistungsdatum, Klein.Buch nimmt das Belegdatum. Bei einer Anlage ist der
 Leistungsbezug allerdings die Lieferung (§9a EStDV), also das
-Anschaffungsdatum, das Du eingibst. Liegt es in einem Jahr mit anderem
-Steuerstatus als das Belegdatum (zum Beispiel Lieferung im Dezember als
+Anschaffungsdatum, das Du eingibst. Gilt an diesem Tag ein anderer
+Steuerstatus als am Belegdatum (zum Beispiel Lieferung im Dezember als
 Kleinunternehmer, Rechnung im Januar nach dem Verzicht), kann Klein.Buch
 das nicht abbilden und lehnt das Übernehmen oder Bearbeiten mit beiden
 Daten ab. Prüfe dann das Anschaffungsdatum; stimmt es, klärst Du die
@@ -170,33 +170,109 @@ jederzeit nachtragen oder ändern, es ändert am Steuerstatus
 nichts; es bestimmt nur, in welchem Jahr die Ausgabe (bei
 Regelbesteuerung die Vorsteuer) in der EÜR steht.
 
-**Nach einem Wechsel des Steuerstatus.** Ein Verzicht auf §19 gilt ab
-Beginn des Kalenderjahres, ebenso der Wegfall, weil Dein Vorjahresumsatz
-über 25.000 € lag. Hast Du in diesem Jahr schon Kosten als
-Anlage übernommen (brutto), passen deren Anschaffungskosten danach nicht
-mehr (netto wäre richtig). Klein.Buch blockiert den Wechsel nicht, legt
-aber unter "Hinweise" einen Hinweis an, der jede betroffene Anlage mit dem
+**Nach einem Wechsel des Steuerstatus.** Klein.Buch rechnet den Status
+Deiner Kosten datumsgenau nach dem Wirkungsdatum des Wechsels (Kapitel
+"Kleinunternehmer-Regelung"). Trägst Du einen Wechsel rückwirkend ein,
+etwa einen Verzicht auf §19 oder den Wegfall wegen des Vorjahresumsatzes
+zum 1. Januar, und hast Du ab diesem Datum schon Kosten als Anlage
+übernommen (brutto), passen deren Anschaffungskosten danach nicht mehr
+(netto wäre richtig). Klein.Buch blockiert den Wechsel nicht, nennt die
+Anlagen schon in der Vorschau des Dialogs "Statuswechsel eintragen?" und
+legt unter "Hinweise" einen Hinweis an, der jede betroffene Anlage mit dem
 richtigen Betrag nennt; die EÜR-Ausfüllhilfe zeigt sie ebenfalls. Öffne
 die Anschaffung, wähle "Bearbeiten" und korrigiere die
 Anschaffungskosten. Ist schon AfA gebucht, setzt Du die Abschreibung des
 offenen Geschäftsjahres vorher zurück (siehe "Korrektur"). Ist für die Anlage AfA in einem abgeschlossenen Jahr
 festgeschrieben oder die Anlage schon abgegangen, klärst Du die
-Korrektur mit Deiner Steuerberatung, ebenso wenn das Anschaffungsdatum
-in einem Jahr mit anderem Steuerstatus als das Belegdatum liegt. Eine
-Vorsteuerberichtigung nach §15a UStG für Anlagen aus früheren Jahren
-(der Wechsel gilt dort als Änderung der Verhältnisse) berechnet
-Klein.Buch nicht; klär sie mit Deiner Steuerberatung.
+Korrektur mit Deiner Steuerberatung, ebenso wenn am Anschaffungsdatum
+ein anderer Steuerstatus gilt als am Belegdatum. Für Anlagen aus
+früheren Jahren kann der Wechsel eine Vorsteuerberichtigung nach §15a
+UStG auslösen; dazu gibt es eine Übersicht (nächster Abschnitt).
+
+### Vorsteuerberichtigung nach §15a UStG (Übersicht)
+
+Nutzt Du eine Anlage weiter, die Du unter dem anderen Steuerstatus
+angeschafft hast, ändern sich die Verhältnisse für den Vorsteuerabzug.
+Für fünf Jahre ab der ersten Verwendung wird die Vorsteuer dann je Jahr
+zu einem Fünftel berichtigt (§15a Abs. 1 und 5 UStG): Wechselst Du zur
+Regelbesteuerung, bekommst Du einen Teil der Vorsteuer nachträglich
+(zugunsten); kehrst Du zu §19 zurück, zahlst Du einen Teil zurück
+(zulasten).
+
+Klein.Buch zeigt dafür eine Übersicht je Kalenderjahr, für alle
+Anlagen, die Du aus Kosten mit Umsatzsteuer übernommen hast. Du
+öffnest sie unter "Anschaffungen" mit **"Vorsteuerberichtigung
+(§ 15a)"** (bei schmalem Fenster im Menü "Mehr"); die Seite heißt
+**"Vorsteuerberichtigung (§ 15a UStG)"**. Dorthin führen auch der Link
+"Übersicht § 15a UStG" auf einer Anschaffung aus Kosten, der Link im
+Abschnitt "Steuerstatus" unter "Meine Firmendaten" und der Knopf
+"Öffnen" am Hinweis nach einem Statuswechsel.
+
+Oben wählst Du das **Jahr**. Darunter stehen die Anzahl der Anlagen
+mit Änderung und die Summe des Jahres, dann eine Tabelle je Anlage:
+
+- **Anschaffung:** Nummer, Bezeichnung, Steuerstatus beim Kauf und der
+  Kostenbeleg, dazu Prüfhinweise (Privatanteil, Computer).
+- **Vorsteuer:** die Umsatzsteuer auf dem Kostenbeleg.
+- **Zeitraum:** Beginn und Ende des Berichtigungszeitraums und seine
+  Monate; "Alle Jahre" klappt den ganzen Zeitplan mit dem Ergebnis je
+  Jahr auf.
+- **Anteil:** wie viele Monate des Jahres unter dem geänderten Status
+  liegen, z. B. "7 von 12 Monaten geändert".
+- **Betrag:** der zu berichtigende Betrag des Jahres mit der Richtung
+  (zugunsten oder zulasten). Greift eine Grenze nach §44 UStDV, steht
+  0,00 € dort und darunter der rechnerische Betrag.
+- **Grenze und Erklärung:** die Grenze, die greift, sonst wohin die
+  Berichtigung gehört (Jahreserklärung oder Voranmeldung).
+
+Jahre nach dem laufenden sind mit "vorausgerechnet" markiert: Sie
+gelten unter dem heute eingetragenen Steuerstatus. Anlagen im
+Zeitraum ohne Änderung im gewählten Jahr stehen darunter unter "Ohne
+Änderung", Anlagen ohne bekannte Vorsteuer unter "Nicht gerechnet".
+Auf dem Smartphone erscheint jede Anlage als Karte. Ändern sich nach
+einem Statuswechsel bei einer Anlage die Verhältnisse im Zeitraum, legt
+Klein.Buch unter "Hinweise" einen Hinweis mit den betroffenen Anlagen
+an, der auf die Übersicht verweist. So rechnet Klein.Buch:
+
+- **Beginn** ist das Anschaffungsdatum, weil Klein.Buch den Tag der
+  ersten Verwendung nicht kennt. Fünf Jahre enden am Tag vor dem
+  gleichen Datum (§108 AO mit §§187 Abs. 2, 188 Abs. 2 BGB); ein Monat,
+  in dem der Zeitraum vor dem 16. endet, zählt nicht (§45 UStDV).
+  Beginnt der Zeitraum bis zum 16. eines Monats, zählt der Monat
+  deshalb mit, sonst beginnt er im Folgemonat. Beispiel: Beginn am
+  16.03.2024, Ende am 15.03.2029, gerechnet wird März 2024 bis Februar
+  2029. Ist die Nutzungsdauer der linearen AfA kürzer als fünf Jahre,
+  ist der Zeitraum kürzer (§15a Abs. 5 Satz 2 UStG).
+- **Monate:** Ein Wechsel bis zum 16. eines Monats zählt für den ganzen
+  Monat, so wird auch ein Wechsel mitten im Jahr anteilig gerechnet.
+- **Grenzen nach §44 UStDV:** Beträgt die Vorsteuer der Anlage höchstens
+  1.000 €, entfällt die Berichtigung (Abs. 1). Ändern sich die
+  Verhältnisse in einem Jahr um weniger als 10 Prozentpunkte, entfällt
+  sie für dieses Jahr, solange der Betrag höchstens 1.000 € ist (Abs. 2).
+  Bis 6.000 € je Jahr gehört sie in die Jahreserklärung, darüber in die
+  Voranmeldung (Abs. 3).
+- **Abgang:** Nach einem Verkauf oder einer Entnahme zählt der Rest des
+  Zeitraums so, wie der Verkauf bzw. die Entnahme zu behandeln ist
+  (§15a Abs. 8 und 9 UStG); nach einer Verschrottung zählen die Monate
+  danach nicht mehr.
+
+Anlagen ohne Kostenbeleg, mit Reverse-Charge (§13b UStG) oder ohne
+Umsatzsteuer auf dem Beleg rechnet Klein.Buch nicht, sondern listet sie
+mit dem Grund. Hat eine Anlage einen Privatanteil oder ist sie ein
+Computer mit einem Jahr Nutzungsdauer, steht ein Prüfhinweis dabei.
+
+Die Übersicht ist nur eine Hilfe für die Umsatzsteuererklärung:
+Klein.Buch bucht die Berichtigung nicht und ändert keine Anlage. Kläre
+die Beträge mit Deiner Steuerberatung.
 
 **Wegfall von §19 beim Überschreiten der 100.000-€-Grenze.** Überschreitet
 Dein Umsatz im laufenden Jahr 100.000 €, endet §19 mitten im Jahr (§19
 Abs. 1 UStG); Kosten, die Du vor dem Überschreiten bezogen hast, bleiben
-beim Brutto-Betrag ohne Vorsteuer. Klein.Buch kennt den Steuerstatus nur
-je Kalenderjahr: Legst Du den Schalter um, gilt die Regelbesteuerung für
-das ganze Jahr, und der Hinweis nennt Deine bisher brutto übernommenen
-Anlagen als abweichend. **Korrigiere sie in diesem Fall nicht** — der
-Brutto-Betrag ist für Anlagen, die Du vor dem Überschreiten bekommen hast,
-richtig. Klär die Erfassung des Jahres mit Deiner Steuerberatung; mehr dazu
-im Kapitel "Kleinunternehmer-Regelung".
+beim Brutto-Betrag ohne Vorsteuer. Trägst Du den Wegfall mit dem
+Leistungsdatum der Rechnung ein, mit der Du die Grenze überschritten
+hast, gilt die Regelbesteuerung erst ab diesem Tag: Anlagen mit einem
+früheren Belegdatum bleiben brutto richtig und erscheinen nicht als
+abweichend. Mehr dazu im Kapitel "Kleinunternehmer-Regelung".
 
 Anlagen mit abweichendem Betrag (etwa aus einer älteren Version) ändert
 Klein.Buch nicht von selbst; die EÜR-Ausfüllhilfe nennt die betroffenen
@@ -345,4 +421,4 @@ reinen Cash-Basis und steht ausdrücklich in §4 Abs. 3 Satz 3 EStG.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

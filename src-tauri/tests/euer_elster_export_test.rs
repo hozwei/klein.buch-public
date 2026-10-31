@@ -40,8 +40,8 @@ async fn setup_pool() -> (SqlitePool, tempfile::TempDir) {
     (pool, dir)
 }
 
-/// Verzicht auf §19 ab `since` (Lauf F8d: Kosten tragen ihren Status bei
-/// Leistungsbezug aus dem Profil; ohne Profil gilt §19).
+/// Verzicht auf §19 ab `since` (1. Januar; Lauf F8d: Kosten tragen ihren Status
+/// bei Leistungsbezug aus der Statushistorie, ADR 0042; ohne Eintrag gilt §19).
 async fn waive_paragraph_19_since(pool: &SqlitePool, since: &str) {
     let input = klein_buch_lib::db::repo::seller_profile::SellerProfileInput {
         name: "Beispiel IT-Service".into(),
@@ -57,19 +57,28 @@ async fn waive_paragraph_19_since(pool: &SqlitePool, since: &str) {
         iban: None,
         bic: None,
         logo_filename: None,
-        is_kleinunternehmer: true,
+        is_kleinunternehmer: None,
         default_pdf_template: Some("default".into()),
         default_currency: Some("EUR".into()),
-        confirm_waive_paragraph_19: None,
     };
     klein_buch_lib::db::repo::seller_profile::upsert(pool, &input)
         .await
         .unwrap();
-    sqlx::query(
-        "UPDATE seller_profile SET is_kleinunternehmer = 0, waived_paragraph_19_since = ? WHERE id = 1",
+    use klein_buch_lib::db::repo::tax_status;
+    use klein_buch_lib::domain::tax_status::{verzicht_binding_until, ChangeReason, TaxStatus};
+    let since = NaiveDate::parse_from_str(since, "%Y-%m-%d").unwrap();
+    tax_status::insert(
+        pool,
+        &tax_status::NewEntry {
+            effective_from: since,
+            status: TaxStatus::Regelbesteuerung,
+            reason: ChangeReason::Verzicht,
+            binding_until: Some(verzicht_binding_until(since)),
+            trigger_document: None,
+            note: None,
+        },
+        klein_buch_lib::clock::today_berlin(),
     )
-    .bind(since)
-    .execute(pool)
     .await
     .unwrap();
 }
@@ -146,6 +155,9 @@ async fn mk_locked_invoice(
     is_storno_for: Option<String>,
 ) -> String {
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: None,
@@ -379,6 +391,7 @@ async fn build_form(
         expenses: &expenses,
         capitalized: &capitalized,
         is_kleinunternehmer: klein,
+        status_change: None,
     })
 }
 
@@ -528,12 +541,13 @@ async fn datev_export_end_to_end() {
         fiscal_year: 2026,
         skr: datev_csv::Skr::Skr03,
         generated_at: "20260521120000000".into(),
-        consultant_number: None,
-        client_number: None,
+        consultant_number: 1001,
+        client_number: 1,
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.starts_with("\"EXTF\";700;21;"));
+    assert!(text.contains(";1001;1;20260101;4;")); // ADR 0042 Nr. 15
     assert!(text.contains("8195")); // §19-Erlöskonto
     assert!(text.contains("3200")); // Wareneingang
     assert!(text.contains("4830")); // AfA-Aufwand

@@ -109,10 +109,9 @@ async fn setup_env() -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: Some(true),
         },
     )
     .await
@@ -163,6 +162,9 @@ async fn create_locked_invoice(env: &Env) -> (String, String) {
     .id;
 
     let input = InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 20).unwrap(),
         delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 20).unwrap()),

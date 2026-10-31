@@ -11,6 +11,10 @@
   // U4 (design.md §4.5, U3-030): Listen stehen immer in diesem Baustein (weiße
   // Karte mit Lineatur), nie frei auf dem Seitenhintergrund und nicht zusätzlich in
   // einer Card. Belegnummern in Zellen über DocNo, Beträge mit `.kb-num`.
+  // V3-12 (ADR 0042 Nr. 16): In der Kartenansicht tragen `td.kb-card-head` (Nummer bzw.
+  // Name), `td.kb-card-status` (Badge neben dem Kopf) und `td.kb-card-figure`
+  // (Hauptbetrag) die Karte; `td.kb-card-omit` blendet leere Nebenangaben („—“) aus.
+  // Die Klassen setzt die Seite an die Zellen (tokens.css, design.md §4.5).
   // U4 (V2-02/V4-07): `busy` setzt `aria-busy` am Bereich, solange er nachlädt
   // (z. B. neuer Filter); die Statusmeldung steht daneben (LoadingState).
   import type { Snippet } from "svelte";

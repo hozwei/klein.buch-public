@@ -14,8 +14,8 @@
 //! [`crate::domain::dsgvo`].
 
 use crate::db::models::{
-    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoiceRow, QuoteItemRow,
-    QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
+    AssetRow, ContactRow, EmailLogRow, ExpenseRow, InvoiceItemRow, InvoicePaymentRow, InvoiceRow,
+    QuoteItemRow, QuoteRow, RecurringInvoiceItemRow, RecurringInvoiceRow, RecurringSubscriptionRow,
 };
 use crate::domain::dsgvo::{RawAudit, RawDocument};
 use crate::error::Result;
@@ -27,6 +27,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub struct Gathered {
     pub contact: ContactRow,
     pub invoices: Vec<(InvoiceRow, Vec<InvoiceItemRow>)>,
+    /// Zahlungsbuch der Rechnungen je Rechnungs-ID (Migration 0034).
+    pub invoice_payments: HashMap<String, Vec<InvoicePaymentRow>>,
     pub quotes: Vec<(QuoteRow, Vec<QuoteItemRow>)>,
     pub expenses: Vec<ExpenseRow>,
     /// Abo-Rechnungs-Vorlagen an den Kontakt samt Positionen (Lauf F2c).
@@ -97,6 +99,22 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
             (inv, items)
         })
         .collect();
+    let payment_rows: Vec<InvoicePaymentRow> = sqlx::query_as(
+        "SELECT p.* FROM invoice_payments p
+           JOIN invoices i ON i.id = p.invoice_id
+          WHERE i.contact_id = ?
+          ORDER BY p.invoice_id, p.seq",
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+    let mut invoice_payments: HashMap<String, Vec<InvoicePaymentRow>> = HashMap::new();
+    for p in payment_rows {
+        invoice_payments
+            .entry(p.invoice_id.clone())
+            .or_default()
+            .push(p);
+    }
 
     // ---- Angebote + Positionen ----
     let quote_rows: Vec<QuoteRow> = sqlx::query_as(
@@ -351,6 +369,7 @@ pub async fn gather(pool: &SqlitePool, contact_id: &str) -> Result<Option<Gather
     Ok(Some(Gathered {
         contact,
         invoices,
+        invoice_payments,
         quotes,
         expenses,
         recurring_invoices,

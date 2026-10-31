@@ -140,8 +140,8 @@
         <th>Nummer</th>
         <th class="kb-col-opt2">Datum</th>
         <th>Empfänger</th>
-        <th class="right">Brutto</th>
-        <th class="right kb-col-opt1">Bezahlt</th>
+        <th class="kb-num">Brutto</th>
+        <th class="kb-num kb-col-opt1">Bezahlt</th>
         <th>Status</th>
         <th>Fällig</th>
         <th><span class="kb-visually-hidden">Aktionen</span></th>
@@ -152,7 +152,7 @@
         {@const gone = r.status === "canceled" || !!r.voidedAt}
         {@const st = invoiceStatusView(r, todayIso)}
         <tr class:canceled={gone}>
-          <td data-label="Nummer">
+          <td class="kb-card-head" data-label="Nummer">
             <span class="nr">
               <DocNo value={r.invoiceNumber} href={`/invoices/${r.id}`} muted={gone} />
               <!-- V2-05/V2-14, V3-08: Belegart als Merkmal (kind="tag", ohne Punkt), keine Warnfläche. -->
@@ -161,11 +161,11 @@
           </td>
           <td class="kb-col-opt2" data-label="Datum">{date(r.invoiceDate)}</td>
           <td data-label="Empfänger">{r.contactName}</td>
-          <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
-          <td class="right kb-col-opt1" data-label="Bezahlt">{euro(r.paidAmountCents)}</td>
-          <td data-label="Status"><Badge tone={st.tone} strike={st.strike}>{st.label}</Badge></td>
-          <td data-label="Fällig">{date(r.dueDate)}</td>
-          <td class="right"><Button variant="secondary" href={`/invoices/${r.id}`} ariaLabel={`${r.isStornoFor ? "Storno-Beleg" : "Rechnung"} ${r.invoiceNumber} öffnen`}>Öffnen</Button></td>
+          <td class="kb-num kb-card-figure" data-label="Brutto">{euro(r.grossAmountCents)}</td>
+          <td class="kb-num kb-col-opt1" data-label="Bezahlt">{euro(r.paidAmountCents)}</td>
+          <td class="kb-card-status" data-label="Status"><Badge tone={st.tone} strike={st.strike}>{st.label}</Badge></td>
+          <td class:kb-card-omit={!r.dueDate} data-label="Fällig">{date(r.dueDate)}</td>
+          <td class="actions"><Button variant="secondary" href={`/invoices/${r.id}`} ariaLabel={`${r.isStornoFor ? "Storno-Beleg" : "Rechnung"} ${r.invoiceNumber} öffnen`}>Öffnen</Button></td>
         </tr>
       {/each}
     </tbody>
@@ -180,7 +180,7 @@
   .nr { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
   .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); min-height: 1.4em; }
   .empty { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; margin: 0 0 var(--sp-3); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  td.actions { text-align: right; }
   /* Storniert/verworfen: gedämpft; der Status steht durchgestrichen im Badge (design.md §4.9). */
   tr.canceled td { color: var(--text-muted); }
 </style>

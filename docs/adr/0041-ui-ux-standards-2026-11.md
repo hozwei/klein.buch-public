@@ -3,6 +3,8 @@
 **Status:** Akzeptiert · 2026-10-27 · Lauf 2026.11 (begonnen 2026-10-25). Keine Migration.
 Ergänzt ADR 0039 (Web-/Docker-Betrieb) und ADR 0040 (Dauerbetrieb) für die Oberfläche;
 abgelöste PRD-Stellen stehen in PRD-Revision 10 „UI/UX (2026.11)“.
+Nr. 21, 91, 220 und 251 (§19-Wechseldialog, Leitweg-ID erst beim Ausstellen) sind durch ADR 0042
+(Lauf 2026.11.1, Nr. 1–6, 12, 17) abgelöst; die Einträge bleiben als Historie stehen.
 
 ## Kontext
 

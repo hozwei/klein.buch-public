@@ -9,8 +9,8 @@
 //
 // Abgrenzung: Dies ist der generische Bestätigungs-Dialog für folgenreiche, aber
 // gewöhnliche Aktionen (archivieren, stornieren, löschen, wiederherstellen,
-// ausstellen). Der §19→Regelbesteuerung-Warn-Dialog in settings/seller bleibt ein
-// eigener, bewusst gestalteter Modal (5-Jahres-Bindung) und nutzt dies NICHT.
+// ausstellen). Der Dialog „Statuswechsel eintragen“ in settings/seller (Steuerstatus,
+// ADR 0042) ist ein eigener Gefahr-Dialog mit Formular und nutzt dies NICHT.
 
 export interface ConfirmOptions {
   title: string;

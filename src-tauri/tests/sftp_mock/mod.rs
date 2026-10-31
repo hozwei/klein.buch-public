@@ -2,13 +2,16 @@
 //! erzeugten Ed25519-Host-Schlüssel, Passwort-Login für genau einen Benutzer
 //! und Dateien unter einem Temp-Verzeichnis. Kann nur, was der Backup-Upload
 //! braucht (öffnen/schreiben/schließen, Ordner anlegen, umbenennen, löschen).
+//! Auf Wunsch öffnet er nach der Anmeldung einen Agent-Kanal
+//! (OpenSSH-Kanaltyp `auth-agent`) zum Client und hält das Ergebnis fest
+//! (SEC-2026.11.1-02: der Client lehnt ihn ab).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::keys::ssh_key::private::Ed25519Keypair;
@@ -26,11 +29,33 @@ pub struct SftpMock {
     pub fingerprint: String,
     /// Anzahl angenommener TCP-Verbindungen (für „ohne Verbindungsaufbau“).
     pub connections: Arc<AtomicUsize>,
+    /// Anzahl der Passwort-Anmeldeversuche (ADR 0042 V3c: nach abgelehntem
+    /// Host-Key darf keine Anmeldung stattfinden).
+    pub auth_attempts: Arc<AtomicUsize>,
+    /// Ergebnis des Agent-Kanals, den der Server nach der Anmeldung öffnet
+    /// (nur mit [`start_with_agent_probe`]): `accepted`, `rejected:<Grund>`
+    /// oder `error:<Fehler>`; `None` = (noch) keins.
+    pub agent_open: Arc<Mutex<Option<String>>>,
 }
 
 impl SftpMock {
     pub fn connection_count(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
+    }
+
+    pub fn auth_attempt_count(&self) -> usize {
+        self.auth_attempts.load(Ordering::SeqCst)
+    }
+
+    /// Ergebnis des Agent-Kanals; wartet bis zu fünf Sekunden darauf.
+    pub async fn agent_open_result(&self) -> Option<String> {
+        for _ in 0..100 {
+            if let Some(r) = self.agent_open.lock().unwrap().clone() {
+                return Some(r);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        None
     }
 }
 
@@ -40,7 +65,23 @@ pub async fn start(root: PathBuf, user: &str, password: &str) -> SftpMock {
     start_on("127.0.0.1:0", root, user, password).await
 }
 
+/// Wie [`start`]; nach jeder erfolgreichen Anmeldung öffnet der Server einen
+/// Agent-Kanal zum Client (SEC-2026.11.1-02).
+pub async fn start_with_agent_probe(root: PathBuf, user: &str, password: &str) -> SftpMock {
+    start_inner("127.0.0.1:0", root, user, password, true).await
+}
+
 pub async fn start_on(addr: &str, root: PathBuf, user: &str, password: &str) -> SftpMock {
+    start_inner(addr, root, user, password, false).await
+}
+
+async fn start_inner(
+    addr: &str,
+    root: PathBuf,
+    user: &str,
+    password: &str,
+    open_agent: bool,
+) -> SftpMock {
     std::fs::create_dir_all(&root).unwrap();
     let seed: [u8; 32] = rand::random();
     let key = PrivateKey::from(Ed25519Keypair::from_seed(&seed));
@@ -54,11 +95,16 @@ pub async fn start_on(addr: &str, root: PathBuf, user: &str, password: &str) -> 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let connections = Arc::new(AtomicUsize::new(0));
+    let auth_attempts = Arc::new(AtomicUsize::new(0));
+    let agent_open = Arc::new(Mutex::new(None));
     let mut server = MockServer {
         root: Arc::new(root.clone()),
         user: Arc::new(user.to_string()),
         password: Arc::new(password.to_string()),
         connections: connections.clone(),
+        auth_attempts: auth_attempts.clone(),
+        open_agent,
+        agent_open: agent_open.clone(),
     };
     tokio::spawn(async move {
         let _ = server.run_on_socket(config, &listener).await;
@@ -68,6 +114,8 @@ pub async fn start_on(addr: &str, root: PathBuf, user: &str, password: &str) -> 
         root,
         fingerprint,
         connections,
+        auth_attempts,
+        agent_open,
     }
 }
 
@@ -77,6 +125,9 @@ struct MockServer {
     user: Arc<String>,
     password: Arc<String>,
     connections: Arc<AtomicUsize>,
+    auth_attempts: Arc<AtomicUsize>,
+    open_agent: bool,
+    agent_open: Arc<Mutex<Option<String>>>,
 }
 
 impl russh::server::Server for MockServer {
@@ -100,11 +151,33 @@ impl russh::server::Handler for MockSession {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
+        self.server.auth_attempts.fetch_add(1, Ordering::SeqCst);
         if user == self.server.user.as_str() && password == self.server.password.as_str() {
             Ok(Auth::Accept)
         } else {
             Ok(Auth::reject())
         }
+    }
+
+    /// SEC-2026.11.1-02: Agent-Kanal zum Client öffnen. Im eigenen Task, weil
+    /// die Antwort des Clients erst die Sitzungsschleife verarbeitet, die hier
+    /// nicht warten darf.
+    async fn auth_succeeded(&mut self, session: &mut Session) -> Result<(), Self::Error> {
+        if self.server.open_agent {
+            let handle = session.handle();
+            let result = self.server.agent_open.clone();
+            tokio::spawn(async move {
+                let r = match handle.channel_open_agent().await {
+                    Ok(_) => "accepted".to_string(),
+                    Err(russh::Error::ChannelOpenFailure(reason)) => {
+                        format!("rejected:{reason:?}")
+                    }
+                    Err(e) => format!("error:{e:?}"),
+                };
+                *result.lock().unwrap() = Some(r);
+            });
+        }
+        Ok(())
     }
 
     async fn channel_open_session(

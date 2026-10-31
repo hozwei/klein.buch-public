@@ -244,7 +244,7 @@
   <tbody>
     {#each rows as r (r.nr ?? r.kunde)}
       <tr>
-        <td data-label="Nummer">
+        <td class="kb-card-head" data-label="Nummer">
           <span class="nr">
             <DocNo value={r.nr} href={r.nr ? "/design" : undefined} placeholder="Entwurf" />
             {#if r.nr?.startsWith("ST-")}<Badge kind="tag">Storno-Beleg</Badge>{/if}
@@ -252,8 +252,8 @@
         </td>
         <td data-label="Kunde">{r.kunde}</td>
         <td data-label="Datum" class="kb-muted">{r.datum}</td>
-        <td data-label="Brutto" class="kb-num">{euro(r.cents)}</td>
-        <td data-label="Status"><Badge tone={r.tone} strike={r.strike}>{r.status}</Badge></td>
+        <td data-label="Brutto" class="kb-num kb-card-figure">{euro(r.cents)}</td>
+        <td class="kb-card-status" data-label="Status"><Badge tone={r.tone} strike={r.strike}>{r.status}</Badge></td>
       </tr>
     {/each}
   </tbody>

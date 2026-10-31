@@ -2,6 +2,8 @@
   import { openPdfPreview } from "#lib/pdfPreviewModal.svelte.ts";
   import { pdfTemplateLabel, unitLabel } from "#lib/labels.ts";
   import { todayBerlin } from "#lib/date.ts";
+  import { relevantTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
   import { onMount, tick } from "svelte";
   import { page } from "$app/state";
   import {
@@ -19,7 +21,6 @@
     saveArchiveFile,
     uploadFile,
     emailLogFor,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
   import type {
     QuoteDetail,
@@ -27,17 +28,17 @@
     ValidationIssueDto,
     EmailLogEntry,
   } from "#lib/types.ts";
-  import { euro, date, dateTime, percent } from "#lib/format.ts";
+  import { euro, date, dateTimeShort, percent } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
   import Banner from "#lib/Banner.svelte";
   import Badge from "#lib/Badge.svelte";
   import Button from "#lib/Button.svelte";
-  import DocNo from "#lib/DocNo.svelte";
   import PageBar from "#lib/PageBar.svelte";
   import type { ActionMenuItem } from "#lib/ActionMenu.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
-  import { quoteStatusView } from "../quoteStatus.ts";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
+  import { canEditQuote, quoteStatusView } from "../quoteStatus.ts";
   import {
     isTechnicalError,
     issueReasons,
@@ -78,9 +79,21 @@
   let cancelReasonEl: HTMLTextAreaElement | undefined = $state();
   // Annahmedatum: nicht vor dem Angebotsdatum, nicht in der Zukunft (domain::quote).
   const today = todayBerlin();
+  // ADR 0042 Nr. 3 (V1-R06): Ein Entwurf zeigt den Steuerstatus seines
+  // Angebotsdatums wie der Editor; eingefroren gilt erst der Wert beim
+  // Fertigstellen. Verworfene Entwürfe behalten den gespeicherten Wert.
+  const draftTaxDate = $derived.by(() => {
+    const q = detail?.quote;
+    if (!q || q.lockedAt || q.status !== "draft") return "";
+    return relevantTaxDate(null, q.quoteDate, today);
+  });
+  const draftTaxAt = taxStatusAtDate(() => draftTaxDate);
+  let isKlein = $derived(
+    draftTaxDate && draftTaxAt.date === draftTaxDate && draftTaxAt.isKlein !== null
+      ? draftTaxAt.isKlein
+      : detail?.quote.isKleinunternehmer !== 0,
+  );
   let acceptError = $state("");
-  // Warteliste (8): Entwurf nach einer Wiederherstellung vorgemerkt.
-  let restoreFlagged = $state(false);
 
   function closePanels() {
     showAccept = false;
@@ -103,7 +116,6 @@
         error = "Angebot nicht gefunden.";
       }
       else if (detail.quote.lockedAt) await loadBindings();
-      else await loadRestoreFlag();
       try {
         sendLog = await emailLogFor("quote", id);
       } catch {
@@ -123,18 +135,6 @@
       bindings = await quotesLegalBindings(detail.quote.id);
     } catch {
       // Bindungen sind optional fürs Anzeigen — Fehler hier nicht hochziehen.
-    }
-  }
-
-  // Nur lesen; ein Fehler heißt „nicht vorgemerkt“ (der Server prüft beim Fertigstellen).
-  async function loadRestoreFlag() {
-    restoreFlagged = false;
-    if (!detail || detail.quote.status !== "draft") return;
-    try {
-      const qid = detail.quote.id;
-      restoreFlagged = (await numberingRestoredDraftsList()).some((c) => c.kind === "quote" && c.id === qid);
-    } catch {
-      restoreFlagged = false;
     }
   }
 
@@ -209,6 +209,8 @@
     // U6-005: nach dem Speichern der Firmendaten zurück zu diesem Angebot.
     if (t === "seller") return { href: `/settings/seller?next=/quotes/${id}`, label: "Firmendaten ergänzen" };
     if (t === "buyer") return { href: `/contacts/${contactId}`, label: "Kontakt ergänzen" };
+    // ADR 0042 Nr. 13: Gründe im Entwurf selbst (Positionen, Daten) dort beheben.
+    if (detail && canEditQuote(detail.quote)) return { href: `/quotes/${id}/edit`, label: "Entwurf bearbeiten" };
     return null;
   }
 
@@ -333,6 +335,8 @@
     const secondary: ActionMenuItem[] = [];
     const more: ActionMenuItem[] = [];
     if (!q.lockedAt) {
+      // ADR 0042 Nr. 13: offene Entwürfe lassen sich bearbeiten (wie Rechnungs-Entwürfe).
+      if (canEditQuote(q)) secondary.push({ label: "Bearbeiten", href: `/quotes/${q.id}/edit` });
       // Während der Prüfung nicht gesperrt (Fokus bleibt); check() wartet.
       secondary.push({ label: validating ? "Prüfe …" : "Prüfen", onSelect: runValidation });
     } else {
@@ -373,7 +377,7 @@
     return () => ro.disconnect();
   });
   // 6 Spalten (§19) passen ab rund 35rem, 8 Spalten (Regelbesteuerung) ab 45rem.
-  let itemsAsCards = $derived(itemsWidth < (detail?.quote.isKleinunternehmer === 0 ? 720 : 560));
+  let itemsAsCards = $derived(itemsWidth < (!isKlein ? 720 : 560));
 
   function fmtBytes(n: number): string {
     if (n < 1024) return `${n} B`;
@@ -445,13 +449,9 @@
     <span class="meta">gültig bis {date(q.validUntil)}</span>
   </p>
 
-  {#if restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <DocNo value={q.quoteNumber} inline /> war vor der Wiederherstellung schon
-      festgeschrieben. Fertigstellen geht erst, wenn du unter
-      <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) bestätigt hast, dass der Entwurf dem versandten Original entspricht.
-    </Banner>
+  {#if canEditQuote(q)}
+    <!-- Warteliste (8), ADR 0042 Nr. 16: aus dem Lesefeld des Entwurfs. -->
+    <RestoreConflictBanner conflict={detail.restoreConflict} number={q.quoteNumber} doc="quote" where="detail" editHref={`/quotes/${q.id}/edit`} />
   {/if}
 
   {#if showAccept}
@@ -605,7 +605,7 @@
         {#if q.sellerTaxNumber}<small>StNr: {q.sellerTaxNumber}</small><br/>{/if}
         {#if q.sellerVatId}<small>USt-IdNr: {q.sellerVatId}</small>{/if}
       </p>
-      {#if q.isKleinunternehmer === 1}
+      {#if isKlein}
         <p class="klein-note">Kleinunternehmer (§19) — es wird keine Umsatzsteuer ausgewiesen.</p>
       {/if}
     </section>
@@ -645,7 +645,7 @@
           <dd>
             {date(q.convertedAt)}
             {#if q.convertedInvoiceId}
-              · <a class="kb-link tgt" href={`/invoices/${q.convertedInvoiceId}`}>zur Rechnung</a>
+              · <a class="kb-link kb-target" href={`/invoices/${q.convertedInvoiceId}`}>zur Rechnung</a>
             {/if}
           </dd>
         {/if}
@@ -662,14 +662,14 @@
         <tr>
           <th>#</th>
           <th>Beschreibung</th>
-          <th class="right">Menge</th>
+          <th class="kb-num">Menge</th>
           <th>Einheit</th>
-          <th class="right">Einzelpreis</th>
-          {#if q.isKleinunternehmer === 0}
-            <th class="right">USt %</th>
+          <th class="kb-num">Einzelpreis</th>
+          {#if !isKlein}
+            <th class="kb-num">USt %</th>
             <th>USt-Art</th>
           {/if}
-          <th class="right">Netto</th>
+          <th class="kb-num">Netto</th>
         </tr>
       </thead>
       <tbody>
@@ -677,27 +677,27 @@
           <tr>
             <td data-label="Pos.">{it.position}</td>
             <td class="cards-full desc" data-label="Beschreibung">{it.description}</td>
-            <td class="right" data-label="Menge">{formatQuantity(it.quantity)}</td>
+            <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity)}</td>
             <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
-            <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
-            {#if q.isKleinunternehmer === 0}
-              <td class="right" data-label="USt %">{percent(it.taxRatePercent)}</td>
+            <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents)}</td>
+            {#if !isKlein}
+              <td class="kb-num" data-label="USt %">{percent(it.taxRatePercent)}</td>
               <td data-label="USt-Art">{it.taxCategoryCode}</td>
             {/if}
-            <td class="right" data-label="Netto">{euro(it.netAmountCents)}</td>
+            <td class="kb-num" data-label="Netto">{euro(it.netAmountCents)}</td>
           </tr>
         {/each}
       </tbody>
       <tfoot>
-        <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">Netto</td>
-            <td class="right" data-label="Netto">{euro(q.netAmountCents)}</td></tr>
+        <tr><td colspan={isKlein ? 5 : 7} class="sum-label">Netto</td>
+            <td class="kb-num" data-label="Netto">{euro(q.netAmountCents)}</td></tr>
         {#if q.taxAmountCents !== 0}
-          <tr><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">USt</td>
-              <td class="right" data-label="USt">{euro(q.taxAmountCents)}</td></tr>
+          <tr><td colspan={isKlein ? 5 : 7} class="sum-label">USt</td>
+              <td class="kb-num" data-label="USt">{euro(q.taxAmountCents)}</td></tr>
         {/if}
-        <tr class="kb-sum"><td colspan={q.isKleinunternehmer === 1 ? 5 : 7} class="right sum-label">
+        <tr class="kb-sum"><td colspan={isKlein ? 5 : 7} class="sum-label">
               <strong>Brutto</strong></td>
-            <td class="right" data-label="Brutto"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
+            <td class="kb-num" data-label="Brutto"><strong>{euro(q.grossAmountCents)}</strong></td></tr>
       </tfoot>
     </table>
     </div>
@@ -768,8 +768,8 @@
         <tbody>
           {#each sendLog as e (e.id)}
             <tr>
-              <td data-label="Zeitpunkt">{dateTime(e.createdAt)}</td>
-              <td data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
+              <td class="kb-card-head" data-label="Zeitpunkt">{dateTimeShort(e.createdAt)}</td>
+              <td class="kb-card-status" data-label="Status">{#if e.status === "success"}<Badge tone="info">Versendet</Badge>{:else}<Badge tone="danger">Fehlgeschlagen</Badge>{/if}</td>
               <td data-label="Empfänger">{e.toEmail}</td>
               <td data-label="Kanal">{e.channel === "graph" ? "Microsoft 365" : "SMTP"}</td>
               <td class="cards-full" data-label="Antwort des Anbieters">
@@ -822,7 +822,6 @@
   .issue-err:focus-visible { outline: var(--focus-width) solid var(--focus-ring); outline-offset: var(--focus-offset); border-radius: var(--radius-control); }
   .reasons { margin: var(--sp-1) 0 0; padding-left: 1.25rem; }
   .fix-link { display: inline-block; margin: var(--sp-2) var(--sp-3) 0 0; }
-  .tgt { display: inline-flex; align-items: center; min-height: var(--target); }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
   .actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
   /* Labelspalte so breit wie das längste Label (U3-037). */
@@ -830,11 +829,12 @@
   dt { color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
   dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   /* Beträge und Mengen in der Tabelle nicht umbrechen; die Beschreibung bricht. */
-  .items-table td.right { white-space: nowrap; }
+  .items-table td.kb-num { white-space: nowrap; }
   .items-table:not(.cards) td.desc { overflow-wrap: break-word; hyphens: auto; }
   .klein-note { color: var(--status-info-fg); font-size: var(--fs-sm); }
   .att { list-style: none; padding: 0; margin: 0; }

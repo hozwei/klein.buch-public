@@ -104,6 +104,10 @@ pub fn test_server_with_paths(
     // riskant (glibc-Umgebung ohne Sperre für nativen Code).
     static MOCK_ENV: std::sync::Once = std::sync::Once::new();
     MOCK_ENV.call_once(|| std::env::set_var("KLEIN_BUCH_SIDECAR_MOCK", "1"));
+    // ADR 0042 Nr. 16 (V6-R01): Die Integrationstests binden die Bibliothek
+    // ohne `cfg(test)`; das Pool-Zeitlimit wie in den Unit-Tests anheben (unter
+    // Last leitet jede neue SQLCipher-Verbindung den Schlüssel neu ab).
+    klein_buch_lib::db::set_acquire_timeout_for_tests(std::time::Duration::from_secs(120));
     let dir = tempfile::tempdir().unwrap();
     let mut paths = prepare_dirs(dir.path());
     adjust_paths(&mut paths);
@@ -536,10 +540,9 @@ pub async fn draft_invoice(srv: &TestServer) -> String {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: None,
         },
     )
     .await
@@ -564,6 +567,9 @@ pub async fn draft_invoice(srv: &TestServer) -> String {
     .id;
     let today = klein_buch_lib::clock::today_berlin();
     let input = klein_buch_lib::domain::invoice::InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: klein_buch_lib::domain::invoice::InvoiceDirection::Issued,
         invoice_date: today,
         delivery_date: Some(today),

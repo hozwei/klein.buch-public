@@ -38,7 +38,6 @@ fn seller_kleinunternehmer() -> SellerView<'static> {
         iban: Some("DE02120300000000202051"),
         bic: Some("BYLADEM1001"),
         is_kleinunternehmer: true,
-        waived_since: None,
     }
 }
 
@@ -56,6 +55,9 @@ fn buyer_simple() -> BuyerView<'static> {
 
 fn invoice_minimal(currency: &str, notes: Option<String>) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
         delivery_date: NaiveDate::from_ymd_opt(2026, 5, 1),

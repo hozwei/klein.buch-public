@@ -3,7 +3,7 @@ slug: glossar
 title: Glossar
 category: glossar
 order: 10
-keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, einheit]
+keywords: [glossar, fachbegriffe, definitionen, abkürzungen, kleinunternehmer, §19, gobd, eür, afa, xrechnung, zugferd, passphrase, daten-passwort, app-code, totp, container, instanz, sidecar, rechnungseingang, roh-xml, zugferd-profil, anschaffung, verwerfen, storno-beleg, firmendaten, e-mail-protokoll, aktion bestätigen, leitweg-id, leistungszeitraum, vorausrechnung, einheit, gegenbuchung, zahlungsbuch, zahlung stornieren, rückstand, nachholen, vorgemerkter entwurf, abgleich]
 ---
 
 # Glossar
@@ -102,9 +102,10 @@ Einmal-Codes. Jeder davon ersetzt genau einmal den App-Code.
 ## Aufbewahrungsfrist
 
 Die gesetzliche Pflicht, bestimmte Belege eine Mindestzeit
-aufzuheben. Für Rechnungen und alle steuerlich relevanten Belege
-sind das in Deutschland 10 Jahre nach Ende des jeweiligen
-Geschäftsjahres. Klein.Buch hat absichtlich keine Lösch-Funktion
+aufzuheben: in Deutschland 10 Jahre für Bücher und Aufzeichnungen,
+seit 2025 8 Jahre für Buchungsbelege wie Rechnungen, 6 Jahre für
+Geschäftsbriefe, jeweils ab Ende des Kalenderjahres. Klein.Buch
+bewahrt alles einheitlich 10 Jahre auf. Klein.Buch hat absichtlich keine Lösch-Funktion
 für festgeschriebene Belege, damit Du diese Pflicht nicht
 versehentlich brichst. Gesetzliche Grundlage: §147 AO.
 
@@ -175,11 +176,11 @@ bist meist Du selbst.
 
 Ein Daten-Format, das praktisch jeder Steuerberater versteht.
 Klein.Buch erzeugt Dir auf Knopfdruck einen DATEV-Stapel mit allen
-Buchungen des Geschäftsjahres, den Dein Steuerberater direkt in
-sein System importieren kann. Standard-Kontenrahmen ist SKR03. Die
-Berater- und die Mandantennummer, die Dir Dein Steuerberater nennt,
-trägst Du im EÜR-Export ein; Dein Browser merkt sie sich (sie stehen
-nicht in der Datenbank und nicht im Backup).
+Buchungen des Geschäftsjahres (Datei `EXTF_Buchungsstapel_…csv`), den
+Dein Steuerberater in sein System importiert. Standard-Kontenrahmen ist
+SKR03. Die Berater- und die Mandantennummer, die Dir Dein Steuerberater
+nennt, sind Pflicht; Du trägst sie im EÜR-Export ein, und Dein Browser
+merkt sie sich (sie stehen nicht in der Datenbank und nicht im Backup).
 
 ## DSGVO (Datenschutz-Grundverordnung)
 
@@ -243,6 +244,31 @@ Erfassen festgeschrieben; deshalb heißen die Knöpfe dort "Kosten
 festschreiben" und "Privatbewegung festschreiben" und fragen vorher
 nach.
 
+## Gegenbuchung
+
+Die Buchung, mit der Klein.Buch eine falsch erfasste Zahlung
+storniert: derselbe Betrag mit umgekehrtem Vorzeichen, mit Datum und
+Konto der falschen Zahlung, dazu ein Grund. Sie steht im Zahlungsbuch
+der Rechnung als "Gegenbuchung" mit dem Vermerk "Storno der Zahlung
+vom …"; die Zahlung selbst bleibt stehen und trägt den Vermerk
+"Storniert". Du startest sie in der Karte "Zahlungen" der Rechnung über
+"Mehr" und "Zahlung stornieren …". Sie wirkt am ursprünglichen
+Zahldatum, weil die falsche Zahlung nie ein Zufluss war (§ 11 EStG).
+Eine Rückzahlung an den Kunden ist keine Gegenbuchung, sondern gehört
+zum Storno der Rechnung (siehe Storno).
+
+## Gesamtumsatz
+
+Die Summe Deiner Umsätze in einem Kalenderjahr, nach der sich die
+Grenzen der Kleinunternehmer-Regelung richten (§ 19 Abs. 2 UStG):
+nach vereinnahmten Entgelten, also nach Zahlungseingang, netto und ohne
+Umsätze mit Anlagevermögen. Klein.Buch zeigt den Gesamtumsatz des
+Vorjahres und des laufenden Jahres im Abschnitt "Steuerstatus" unter
+Einstellungen → "Meine Firmendaten" und meldet, wenn eine Grenze
+erreicht oder überschritten ist. Es zählt nur die in Klein.Buch
+erfassten Zahlungen; eine stornierte Zahlung und ihre Gegenbuchung
+zählen beide nicht.
+
 ## Geschäftsjahr
 
 In Klein.Buch immer das Kalenderjahr (1. Januar bis 31. Dezember).
@@ -263,8 +289,10 @@ Abschlussprotokoll.
 
 Die Regeln, nach denen das Finanzamt Buchhaltungs-Software
 akzeptiert. Die wichtigsten Punkte: Belege sind nach der
-Festschreibung unveränderlich, Storno ersetzt Löschung, alles wird
-10 Jahre aufbewahrt, jede Änderung ist nachvollziehbar.
+Festschreibung unveränderlich, Storno ersetzt Löschung, Unterlagen
+werden aufbewahrt (Bücher 10, Buchungsbelege wie Rechnungen 8,
+Geschäftsbriefe 6 Jahre; Klein.Buch hält alles einheitlich 10 Jahre
+vor), jede Änderung ist nachvollziehbar.
 Klein.Buch erzwingt diese Regeln direkt im Code; Du kannst sie
 nicht aus Versehen brechen.
 
@@ -297,6 +325,8 @@ die 100.000 € im laufenden Jahr überschreitet, verliert §19 ab diesem
 Umsatz). Wer Kleinunternehmer ist, weist auf Rechnungen
 keine Umsatzsteuer aus, darf aber auch keine Vorsteuer abziehen.
 Gesetzliche Grundlage: §19 UStG.
+Ob Du an einem Tag Kleinunternehmer bist, steht in Klein.Buch im
+Verlauf des Steuerstatus (siehe "Steuerstatus").
 
 ## Korrigiert neu erfassen
 
@@ -322,20 +352,39 @@ direkt; er meldet sich nur, wenn etwas nicht passt.
 
 ## Leistungsdatum
 
-Der Zeitpunkt oder Zeitraum, an dem Du die Leistung tatsächlich
-erbracht hast. Pflichtangabe auf jeder Rechnung. Wenn Du die
-Leistung am gleichen Tag erbringst und abrechnest, sind
-Leistungs- und Belegdatum gleich; Klein.Buch belegt das Feld deshalb
-mit dem Rechnungsdatum vor, bis Du es änderst. Bei Monats-Arbeiten
-(zum Beispiel "Beratung im April 2026") ist es ein Zeitraum; den
-nennst Du in der Beschreibung der Position.
+Der Zeitpunkt, an dem Du die Leistung erbringst. Pflichtangabe auf
+der Rechnung (§14 UStG). Wenn Du die Leistung am gleichen Tag
+erbringst und abrechnest, sind Leistungs- und Belegdatum gleich;
+Klein.Buch belegt das Feld deshalb mit dem Rechnungsdatum vor, bis Du
+es änderst. Bei laufenden Arbeiten gibst Du statt dessen einen
+Leistungszeitraum an (siehe dort). Liegt das Datum nach dem
+Rechnungsdatum, ist es eine Vorausrechnung (siehe dort). Nach dem
+Leistungsdatum, bei einem Zeitraum nach dessen Ende, richtet sich
+auch der Steuerstatus der Rechnung (siehe "Steuerstatus").
+
+## Leistungszeitraum
+
+Die Zeitspanne, in der Du eine Leistung erbringst, mit Beginn und
+Ende (zum Beispiel "Beratung vom 01.04.2026 bis 30.04.2026"). Du
+wählst im Rechnungs-Formular unter "Leistung" entweder "Datum" oder
+"Zeitraum (von–bis)", nie beides. Das Ende darf nicht vor dem Beginn
+liegen; für einen ganzen Kalendermonat genügt der Erste bis Letzte
+des Monats (§ 31 Abs. 4 UStDV). Auf dem PDF steht "Leistungszeitraum:
+TT.MM.JJJJ – TT.MM.JJJJ", in der E-Rechnung der Rechnungszeitraum
+(BG-14). Abo-Rechnungen tragen den Abrechnungszeitraum automatisch,
+ein Storno-Beleg den Zeitraum der Original-Rechnung. Nach dem
+Ausstellen ist er unveränderlich.
 
 ## Leitweg-ID
 
 Die Kennung, mit der eine Behörde E-Rechnungen an die richtige
 Stelle leitet. Nur Rechnungen an öffentliche Auftraggeber brauchen
-sie. Du trägst sie beim Ausstellen in der Karte "Ausstellen" ein;
-bei allen anderen Kunden bleibt das Feld leer.
+sie. Sie besteht aus Grobadressierung, optional Feinadressierung und
+einer zweistelligen Prüfziffer, durch Bindestriche getrennt (zum
+Beispiel 04011000-1234512345-06). Du trägst sie im Entwurf ein (Feld
+"Leitweg-ID (optional)"), der Entwurf speichert sie, beim Ausstellen
+kommt sie als Käuferreferenz in die E-Rechnung; danach ist sie
+unveränderlich. Bei allen anderen Kunden bleibt das Feld leer.
 
 ## Menü "Mehr"
 
@@ -434,9 +483,10 @@ Umsatzsteuer aus, führt sie ans Finanzamt ab und darf gezahlte
 Umsatzsteuer aus Eingangsrechnungen als Vorsteuer abziehen. Wenn
 Du als Kleinunternehmer freiwillig regelbesteuert sein willst,
 heißt das "Verzicht auf §19". Die Bindung an die Regelbesteuerung
-beträgt dann mindestens 5 Jahre. Fällt §19 weg, weil Dein Umsatz im
-laufenden Jahr 100.000 € übersteigt, ist das kein Verzicht und
-bindet nicht.
+beträgt dann fünf Kalenderjahre einschließlich des Wirkungsjahres.
+Fällt §19 weg, weil Dein Umsatz eine Grenze überschreitet (über
+25.000 € im Vorjahr, über 100.000 € im laufenden Jahr), ist das kein
+Verzicht und bindet nicht.
 
 ## Wiederherstellen (Restore)
 
@@ -464,6 +514,17 @@ die als Anhang im PDF steckt. Klein.Buch zeigt Dir das Roh-XML auf
 der Detailseite einer empfangenen Rechnung über den Button "Roh-XML
 anzeigen". Praktisch für den Steuerberater oder eine
 Betriebsprüfung, um die maschinenlesbaren Felder zu prüfen.
+
+## Rückstand (Abo)
+
+Termine einer Abo-Rechnung oder eines Kosten-Abos, die ausgefallen
+sind, weil Klein.Buch gesperrt war, der Container nicht lief oder das
+Abo pausiert war. Bei mehr als drei offenen Terminen und beim
+Fortsetzen einer pausierten Reihe fragst Du über "Rückstand …":
+"Nachholen" (höchstens 24 Termine) oder "Ab heute fortsetzen". Der
+Dialog nennt Anzahl und Daten der offenen Termine und, womit es nach
+"Ab heute fortsetzen" weitergeht; bei mehr als 24 Terminen gibt es nur
+"Ab heute fortsetzen".
 
 ## SFTP
 
@@ -508,6 +569,21 @@ Umsatzsteuer-Identifikations-Nummer hast (USt-IdNr, für Geschäfte
 mit Kunden im EU-Ausland), darfst Du sie zusätzlich oder
 alternativ angeben.
 
+## Steuerstatus
+
+Ob Du an einem Tag Kleinunternehmer nach §19 UStG oder
+regelbesteuert bist. Klein.Buch führt ihn als Verlauf unter
+Einstellungen → "Meine Firmendaten", Abschnitt "Steuerstatus": Jeder
+Eintrag hat ein Wirkungsdatum und einen Grund (Stand zu Beginn,
+Verzicht auf §19, Wegfall durch eine Umsatzgrenze, Rückkehr). Ohne
+Eintrag gilt die Kleinunternehmer-Regelung. Einträge werden nie
+gelöscht oder geändert; ein irrtümlicher Eintrag wird mit Grund
+widerrufen. Jeder Beleg zählt mit dem Status seines Datums
+(Rechnungen: Leistungsdatum bzw. Ende des Leistungszeitraums, Kosten:
+Belegdatum), beim Festschreiben
+bleibt der Status einer Rechnung unverändert. Mehr im Kapitel
+"Kleinunternehmer-Regelung".
+
 ## Storno
 
 Eine Gegenrechnung. Sie neutralisiert eine bereits ausgestellte
@@ -521,7 +597,9 @@ zulässige Weg, einen Fehler zu korrigieren. Kosten stornierst Du
 ebenfalls über "Mehr" und "Stornieren", mit Grund; sie stehen danach
 als "Storniert" in der Liste, ein eigener Beleg entsteht dabei nicht.
 Einen noch nicht ausgestellten Entwurf stornierst Du nicht, Du
-verwirfst ihn (siehe Verwerfen).
+verwirfst ihn (siehe Verwerfen). Eine falsch erfasste Zahlung
+stornierst Du nicht über die Rechnung, sondern einzeln mit "Zahlung
+stornieren …" (siehe Gegenbuchung); die Rechnung bleibt dabei gültig.
 
 ## Verkäuferprofil
 
@@ -545,13 +623,37 @@ verbraucht. "Stornieren" gibt es nur für festgeschriebene Belege.
 ## Verzicht auf §19 (Option zur Regelbesteuerung)
 
 Die freiwillige Entscheidung, kein Kleinunternehmer mehr zu sein
-und stattdessen normal Umsatzsteuer auszuweisen und abzuführen. Du
-bindest Dich damit für mindestens 5 Jahre an die Regelbesteuerung
-und kannst in dieser Zeit nicht zurück auf §19 wechseln.
-Klein.Buch warnt Dich vor dieser Folge ausdrücklich: Wenn Du den
-Schalter ausschaltest und speicherst, erklärt der Dialog "Zur
-Regelbesteuerung wechseln?" den freiwilligen Verzicht und den
-Wegfall durch die 100.000-€-Grenze, der nicht bindet.
+und stattdessen normal Umsatzsteuer auszuweisen und abzuführen
+(§ 19 Abs. 3 UStG). Der Verzicht wirkt ab dem 1. Januar des Jahres,
+für das er gilt, und bindet Dich fünf Kalenderjahre einschließlich
+dieses Jahres; in dieser Zeit kannst Du nicht zurück auf §19
+wechseln (Verzicht ab 2026: Rückkehr frühestens zum 01.01.2031).
+Du trägst ihn im Abschnitt "Steuerstatus" mit "Statuswechsel
+eintragen …" ein; der Dialog nennt das Ende der Bindung, bevor Du
+bestätigst. Ein Wegfall durch eine Umsatzgrenze ist kein Verzicht und
+bindet nicht.
+
+## Vorausrechnung
+
+Eine Rechnung, die Du stellst, bevor Du die Leistung erbringst: Das
+Leistungsdatum oder das Ende des Leistungszeitraums liegt nach dem
+Rechnungsdatum. Das ist erlaubt (§14 Abs. 4 Satz 1 Nr. 6 UStG); Du
+gibst den voraussichtlichen Leistungszeitpunkt an. Klein.Buch zeigt
+dann am Feld den Hinweis "Rechnung vor der Leistung", speichert und
+stellt die Rechnung aber ganz normal aus. Das Rechnungsdatum selbst
+darf nicht in der Zukunft liegen. Für den Steuerstatus zählt der
+angegebene Leistungszeitpunkt.
+
+## Vorgemerkter Entwurf
+
+Ein Rechnungs- oder Angebots-Entwurf aus einem wiederhergestellten
+Backup, dessen Nummer vor der Wiederherstellung schon festgeschrieben
+war. Er ist ein älterer Stand eines Belegs, den Du schon verschickt
+hast. Du passt ihn an das Original an ("Bearbeiten") und bestätigst den
+Abgleich unter "Einstellungen" → "Backups" → "Nummernkreise"; erst
+dann lässt er sich ausstellen bzw. fertigstellen. Änderst Du ihn nach
+der Bestätigung, ist er wieder vorgemerkt; darauf weist der Editor vor
+dem Speichern hin.
 
 ## XRechnung
 
@@ -560,6 +662,15 @@ XRechnung ist kein PDF, sondern eine maschinenlesbare XML-Datei.
 Behörden und größere Kunden verlangen sie seit 2025. Klein.Buch
 erzeugt in einem Arbeitsschritt beides: ein PDF zum Anschauen und
 die XRechnung-Datei zum Verschicken.
+
+## Zahlungsbuch
+
+Die Liste aller Buchungen auf eine Rechnung: Zahlungen und
+Gegenbuchungen, jede mit Zahldatum, Betrag, Konto und Notiz bzw. Grund.
+Klein.Buch hängt nur an; eine Buchung wird nie geändert oder gelöscht
+(GoBD). "Bezahlt", "Offen" und der Status der Rechnung ("Teilbezahlt",
+"Bezahlt") ergeben sich aus der Summe des Zahlungsbuchs. Du siehst es
+in der Karte "Zahlungen" der Rechnung.
 
 ## ZUGFeRD
 
@@ -635,10 +746,19 @@ Pflichtangaben.
 
 ### §147 AO
 
-Schreibt die Aufbewahrungsfristen für Buchhaltungs-Unterlagen vor.
-Für Rechnungen und alle steuerlich relevanten Belege gilt eine
-Frist von 10 Jahren nach Ende des jeweiligen Geschäftsjahres.
+Schreibt die Aufbewahrungsfristen für Buchhaltungs-Unterlagen vor:
+10 Jahre für Bücher und Aufzeichnungen, seit 2025 8 Jahre für
+Buchungsbelege wie Rechnungen, 6 Jahre für Geschäftsbriefe, jeweils
+ab Ende des Kalenderjahres.
+
+### §153 AO
+
+Verlangt, eine abgegebene Steuererklärung zu berichtigen, wenn Du
+nachträglich erkennst, dass sie unrichtig ist und dadurch zu wenig
+Steuer festgesetzt werden kann. Klein.Buch verweist darauf, wenn eine
+falsch erfasste Zahlung in einem schon abgeschlossenen Geschäftsjahr
+liegt und sich deshalb nicht mehr stornieren lässt.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

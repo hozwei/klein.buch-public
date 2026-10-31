@@ -31,6 +31,16 @@ pub struct TemplateMeta {
     /// ([`storno_fallback_name`]); sonst `None`.
     #[serde(default)]
     pub storno_fallback: Option<String>,
+    /// Zeigt die Vorlage einen Leistungszeitraum (nutzt
+    /// `data.invoice.service_period_start`/`_end`, ADR 0042 Nr. 10; erkannt wie
+    /// die Storno-Darstellung)?
+    #[serde(default)]
+    pub supports_service_period: bool,
+    /// Ohne Leistungszeitraum: Name der eingebauten Vorlage, mit der die
+    /// Rechnungs-Pipeline Rechnungen mit Zeitraum stattdessen erzeugt (dieselbe
+    /// wie für Stornos, [`storno_fallback_name`]); sonst `None`.
+    #[serde(default)]
+    pub service_period_fallback: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -650,6 +660,12 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
       [*Netto*], [#format_euro(inv.netAmountCents)], [*Brutto*], [#format_euro(inv.grossAmountCents)],
       [*Bezahlt*], [#format_euro(inv.paidAmountCents) (#format_date(inv.paidAt))], [*Versandt*], [#format_date(inv.sentAt)],
     )
+    #if inv.at("servicePeriodStart", default: none) != none [
+      #text(size: 8.5pt, fill: muted)[Leistungszeitraum: #format_date(inv.servicePeriodStart) – #format_date(inv.servicePeriodEnd)]
+    ]
+    #if inv.at("buyerReference", default: none) != none [
+      #text(size: 8.5pt, fill: muted)[Leitweg-ID / Käuferreferenz: #inv.buyerReference]
+    ]
     #if inv.at("voidedAt", default: none) != none [
       #text(size: 8.5pt, fill: muted)[Verworfen am #format_date(inv.voidedAt), nie ausgestellt. Grund: #dash(inv.voidReason)]
     ]
@@ -664,6 +680,23 @@ pub const DEFAULT_DSGVO_TEMPLATE: &str = r##"// Klein.Buch — DSGVO-Auskunft na
         table.header([Pos.], [Beschreibung], [Menge], [Einzel], [Netto]),
         ..inv.items.map(it => (
           [#it.position], [#it.description], [#it.quantity #it.unitCode], [#format_euro(it.unitPriceCents)], [#format_euro(it.netAmountCents)],
+        )).flatten()
+      )
+    ]
+    // Zahlungsbuch (ADR 0042 Nr. 7): Zahlungen und Gegenbuchungen samt Notiz
+    // bzw. Grund — Art. 15 Abs. 3 DSGVO, Kopie in lesbarer Form.
+    #if inv.at("payments", default: ()).len() > 0 [
+      #text(weight: "bold")[Zahlungen]
+      #table(
+        columns: (auto, auto, auto, 1fr),
+        align: (left, left, right, left),
+        inset: 3pt,
+        table.header([Zahldatum], [Art], [Betrag], [Notiz bzw. Grund]),
+        ..inv.payments.map(p => (
+          [#format_date(p.paidDate)],
+          [#if p.kind == "reversal" [Gegenbuchung] else [Zahlung]],
+          [#format_euro(p.amountCents)],
+          [#if p.kind == "reversal" [#dash(p.at("reason", default: none))] else [#dash(p.at("note", default: none))]],
         )).flatten()
       )
     ]
@@ -1068,7 +1101,7 @@ pub const TEMPLATE_MODERN: &str = r##"// Klein.Buch — Built-in-Vorlage „Mode
       #if is_invoice [
         Rechnungsdatum: #format_date(doc.date) \
         #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
-        #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
+        #if doc.at("service_period_start", default: none) != none and doc.at("service_period_end", default: none) != none [Leistungszeitraum: #format_date(doc.service_period_start) – #format_date(doc.service_period_end) \ ] else if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
         #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
       ] else [
         Angebotsdatum: #format_date(doc.date) \
@@ -1268,7 +1301,7 @@ pub const TEMPLATE_KLASSISCH: &str = r##"// Klein.Buch — Built-in-Vorlage „K
 ]
 #if is_invoice [
   #align(right)[
-    #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
+    #if doc.at("service_period_start", default: none) != none and doc.at("service_period_end", default: none) != none [Leistungszeitraum: #format_date(doc.service_period_start) – #format_date(doc.service_period_end) \ ] else if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
     #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
   ]
 ] else [
@@ -1451,7 +1484,7 @@ pub const TEMPLATE_MINIMAL: &str = r##"// Klein.Buch — Built-in-Vorlage „Min
     #if is_invoice [
       Rechnungsdatum: #format_date(doc.date) \
       #if storno_of != none [Storno zur Rechnung *#storno_of.number* vom #format_date(storno_of.date) \ ]
-      #if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
+      #if doc.at("service_period_start", default: none) != none and doc.at("service_period_end", default: none) != none [Leistungszeitraum: #format_date(doc.service_period_start) – #format_date(doc.service_period_end) \ ] else if doc.at("delivery_date", default: none) != none [Leistungsdatum: #format_date(doc.delivery_date) \ ] else if doc.at("delivery_date_fallback", default: none) != none [Leistungsdatum #doc.delivery_date_fallback \ ]
       #if doc.at("due_date", default: none) != none [Fällig am: #format_date(doc.due_date)]
     ] else [
       Angebotsdatum: #format_date(doc.date) \
@@ -1582,9 +1615,11 @@ pub fn storno_fallback_name(name: &str) -> &'static str {
         .unwrap_or("klassisch")
 }
 
-/// Metadaten einer Vorlage aus ihrem Quelltext (§19-Marker, Storno-Darstellung).
+/// Metadaten einer Vorlage aus ihrem Quelltext (§19-Marker, Storno-Darstellung,
+/// Leistungszeitraum).
 fn template_meta(name: &str, path: PathBuf, source: &str, builtin: bool) -> TemplateMeta {
     let supports_storno = crate::pdf::klausel_check::supports_storno(source);
+    let supports_service_period = crate::pdf::klausel_check::supports_service_period(source);
     TemplateMeta {
         name: name.to_string(),
         path,
@@ -1592,6 +1627,9 @@ fn template_meta(name: &str, path: PathBuf, source: &str, builtin: bool) -> Temp
         builtin,
         supports_storno,
         storno_fallback: (!supports_storno).then(|| storno_fallback_name(name).to_string()),
+        supports_service_period,
+        service_period_fallback: (!supports_service_period)
+            .then(|| storno_fallback_name(name).to_string()),
     }
 }
 
@@ -1807,6 +1845,48 @@ mod tests {
         let json = serde_json::to_value(without).unwrap();
         assert_eq!(json["supportsStorno"], false);
         assert_eq!(json["stornoFallback"], "klassisch");
+    }
+
+    // ADR 0042 Nr. 10 (V3-R03): Die Vorlagenliste sagt auch, ob eine Vorlage den
+    // Leistungszeitraum zeigt, und nennt sonst die Ersatzvorlage der Pipeline.
+    #[test]
+    fn list_templates_reports_service_period_support_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates = dir.path().join("pdf-templates");
+        std::fs::create_dir(&templates).unwrap();
+        std::fs::write(
+            templates.join("mit-zeitraum.typ"),
+            "#data.invoice.at(\"service_period_start\", default: none)",
+        )
+        .unwrap();
+        std::fs::write(templates.join("ohne-zeitraum.typ"), "#text[Rechnung]").unwrap();
+        // Überschreibt eine eingebaute Vorlage: Ersatz ist die eingebaute gleichen Namens.
+        std::fs::write(templates.join("minimal.typ"), "#text[Rechnung]").unwrap();
+
+        let list = list_templates(dir.path()).unwrap();
+        for name in ["modern", "klassisch"] {
+            let m = list.iter().find(|m| m.name == name).unwrap();
+            assert!(m.supports_service_period, "{name}");
+            assert_eq!(m.service_period_fallback, None, "{name}");
+        }
+        let with = list.iter().find(|m| m.name == "mit-zeitraum").unwrap();
+        assert!(with.supports_service_period);
+        assert_eq!(with.service_period_fallback, None);
+        let without = list.iter().find(|m| m.name == "ohne-zeitraum").unwrap();
+        assert!(!without.supports_service_period);
+        assert_eq!(
+            without.service_period_fallback.as_deref(),
+            Some("klassisch")
+        );
+        let minimal = list.iter().find(|m| m.name == "minimal").unwrap();
+        assert!(!minimal.supports_service_period);
+        assert_eq!(minimal.service_period_fallback.as_deref(), Some("minimal"));
+        assert!(crate::pdf::klausel_check::supports_service_period(
+            storno_fallback_template("ohne-zeitraum")
+        ));
+        let json = serde_json::to_value(without).unwrap();
+        assert_eq!(json["supportsServicePeriod"], false);
+        assert_eq!(json["servicePeriodFallback"], "klassisch");
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod dsgvo;
 pub mod email_log;
 pub mod euer;
 pub mod expenses;
+pub mod invoice_payments;
 pub mod invoices;
 pub mod legal_documents;
 pub mod mail_accounts;
@@ -24,6 +25,7 @@ pub mod quotes;
 pub mod recurring;
 pub mod recurring_invoice;
 pub mod seller_profile;
+pub mod tax_status;
 
 #[cfg(test)]
 mod tests {

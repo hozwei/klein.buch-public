@@ -103,10 +103,22 @@ Bereits ausgestellte Rechnungen, Storno-Belege und Angebote, die zum
 Zeitpunkt der Festschreibung die Kunden-Adresse als Kopie in den Beleg
 geschrieben hatten, bleiben mit dieser alten Adresse erhalten, ebenso
 ihre PDF- und XML-Dateien im Archiv, das E-Mail-Protokoll und das
-Audit-Protokoll. Das ist gesetzliche Pflicht laut §147 AO und der GoBD.
-Klein.Buch kann diese Daten nicht löschen, ohne Deine Buchführung zu
-zerstören, auch nicht nach Ablauf der Aufbewahrungsfrist (Kapitel
-"Aufbewahrung 10 Jahre").
+Audit-Protokoll. Das ist gesetzliche Pflicht laut §147 AO und der GoBD:
+Bücher und Aufzeichnungen 10 Jahre, Buchungsbelege einschließlich
+Rechnungen 8 Jahre (auch §14b UStG), Handels- und Geschäftsbriefe wie
+Angebote 6 Jahre, jeweils ab Ende des Kalenderjahres (§147 Abs. 3 und
+4 AO). Klein.Buch hält alles einheitlich 10 Jahre vor und kann diese
+Daten nicht löschen, ohne Deine Buchführung zu zerstören, auch nicht
+nach Ablauf der jeweiligen Frist (Kapitel "Aufbewahrung 10 Jahre").
+
+Die Auskunft nennt die Speicherdauer genau so (Art. 15 Abs. 1 lit. d
+DSGVO): die gesetzlichen Fristen, innerhalb derer eine Löschung
+ausgeschlossen ist, und die einheitliche Vorhaltedauer von 10 Jahren.
+Verlangt eine Person nach Ablauf der gesetzlichen Frist einer
+Unterlage (etwa einer Rechnung nach 8 Jahren) deren Löschung, kannst
+Du das in Klein.Buch nicht umsetzen. Kläre mit Deiner
+Datenschutz- oder Steuerberatung, wie Du damit umgehst, etwa mit einer
+Einschränkung der Verarbeitung (Art. 18 DSGVO).
 
 Eine Funktion, die alle Daten auf einmal löscht, gibt es in
 Klein.Buch nicht. Eine vollständige Löschung beträfe ohnehin die
@@ -139,4 +151,4 @@ die das Gesetz selbst ausdrücklich vorsieht.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

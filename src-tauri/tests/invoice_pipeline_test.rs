@@ -38,7 +38,6 @@ fn seller_klein() -> SellerView<'static> {
         iban: None,
         bic: None,
         is_kleinunternehmer: true,
-        waived_since: None,
     }
 }
 
@@ -56,6 +55,9 @@ fn buyer() -> BuyerView<'static> {
 
 fn invoice() -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: NaiveDate::from_ymd_opt(2026, 5, 19).unwrap(),
         delivery_date: Some(NaiveDate::from_ymd_opt(2026, 5, 19).unwrap()),
@@ -179,6 +181,9 @@ fn storno_pattern_yields_valid_negative_invoice() {
         invoice_number: "RE-2026-0001",
         currency_code: "EUR",
         pdf_template: "default",
+        service_period: None,
+        delivery_date: None,
+        invoice_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 2).unwrap(),
         items: vec![OriginalItemView {
             position: 1,
             description: "Beratung",

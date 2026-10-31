@@ -22,6 +22,7 @@
   } from "#lib/types.ts";
   import { EXPENSE_CATEGORIES, einvoiceSourceLabel } from "#lib/labels.ts";
   import { date, euro } from "#lib/format.ts";
+  import { formatServicePeriod } from "#lib/serviceDate.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
   import Banner from "#lib/Banner.svelte";
@@ -310,11 +311,11 @@
     </div>
   </section>
 {:else}
-  <p class="caveat">
+  <Banner kind="warning">
     Bitte die übernommenen Werte prüfen. Mit „Kosten festschreiben“ wird die Kostenposition
     <strong>unveränderlich</strong> — die Original-Datei wird unverändert archiviert
     (gesetzliche Aufbewahrung). Vertippt? Dann später stornieren und neu erfassen.
-  </p>
+  </Banner>
 
   <!-- Validierungs-Befund (beratend — blockiert nie) -->
   {#if validation === null}
@@ -353,6 +354,10 @@
     Erkannt: <strong>{einvoiceSourceLabel(sourceFormat)}</strong>
     {#if parsed?.buyerName}
       · Empfänger laut Rechnung: {parsed.buyerName}
+    {/if}
+    {#if parsed?.servicePeriodStart && parsed.servicePeriodEnd}
+      <!-- ADR 0042 Nr. 10: BG-14 der Eingangsrechnung; steht auch in der Notiz. -->
+      · Leistungszeitraum: {formatServicePeriod(parsed.servicePeriodStart, parsed.servicePeriodEnd)}
     {/if}
   </p>
 
@@ -473,18 +478,21 @@
           <label for="imp-gross">Brutto</label>
           <output id="imp-gross" class="kb-input ro kb-num kb-w-amount">{euro(grossCents)}</output>
         </div>
-        <p class="info-banner span2">
-          Netto und USt wurden aus der E-Rechnung übernommen. Stimmen sie nicht mit
-          dem Beleg überein, hier korrigieren — der Brutto-Betrag rechnet sich neu.
-        </p>
+        <div class="span2">
+          <Banner kind="info" flush>
+            Netto und USt wurden aus der E-Rechnung übernommen. Stimmen sie nicht mit
+            dem Beleg überein, hier korrigieren — der Brutto-Betrag rechnet sich neu.
+          </Banner>
+        </div>
         {#if intraCommunity}
-          <div class="caveat span2" role="note">
-            <strong>Steuerkategorie K (für dich ein innergemeinschaftlicher Erwerb):</strong>
-            Der Lieferant aus dem EU-Ausland berechnet seine innergemeinschaftliche Lieferung ohne
-            Umsatzsteuer. Für dich
-            kann auch mit §19 Erwerbsteuer anfallen — abhängig von der Erwerbsschwelle und
-            davon, ob du deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das prüfst
-            du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung.
+          <div class="span2">
+            <Banner kind="warning" title="Steuerkategorie K (für dich ein innergemeinschaftlicher Erwerb):" flush>
+              Der Lieferant aus dem EU-Ausland berechnet seine innergemeinschaftliche Lieferung ohne
+              Umsatzsteuer. Für dich
+              kann auch mit §19 Erwerbsteuer anfallen — abhängig von der Erwerbsschwelle und
+              davon, ob du deine USt-IdNr. verwendet hast (§1a Abs. 3 und 4 UStG). Das prüfst
+              du selbst; Klein.Buch erfasst nur den Betrag laut Rechnung.
+            </Banner>
           </div>
         {/if}
         <div class="field">
@@ -504,9 +512,11 @@
           <span>§13b Reverse-Charge (Steuerschuldnerschaft des Leistungsempfängers)</span>
         </label>
         {#if reverseCharge13b}
-          <div id="imp-rc-hint" class="info-banner span2 rc-hint">
-            <strong>§13b aktiv:</strong> {REVERSE_CHARGE_13B_HINT}
-            <span class="rc-facts">USt-Betrag 0 · Brutto = Netto ({euro(netCents ?? 0)})</span>
+          <div class="span2">
+            <Banner kind="info" id="imp-rc-hint" title="§13b aktiv:" flush>
+              {REVERSE_CHARGE_13B_HINT}
+              <span class="rc-facts">USt-Betrag 0 · Brutto = Netto ({euro(netCents ?? 0)})</span>
+            </Banner>
           </div>
         {/if}
         <div class="field span2">
@@ -530,7 +540,7 @@
 
 <style>
   .muted { color: var(--text-muted); }
-  /* .caveat / .card / .info-banner / .kb-input: globale Definitionen aus tokens.css. */
+  /* .card / .kb-input: globale Definitionen aus tokens.css; Hinweise über Banner (V3-18). */
   .src { font-size: var(--fs-sm); color: var(--text-muted); margin: var(--sp-1) 0 var(--sp-3); overflow-wrap: anywhere; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); align-items: start; }
   @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
@@ -547,8 +557,6 @@
   label.chk { display: flex; flex-direction: row; align-items: center; gap: var(--sp-2); min-height: var(--target); font-size: var(--fs-base); color: var(--text); }
   .chk-inline { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--target); font-size: var(--fs-sm); color: var(--text-muted); }
   .ro { background: var(--surface-sunken); font-weight: 600; display: block; }
-  .info-banner, .caveat { margin: 0; }
-  .rc-hint strong { margin-right: var(--sp-1); }
   .rc-facts { display: block; margin-top: var(--sp-1); font-weight: 600; font-variant-numeric: tabular-nums; }
   .grid :global(.money-field.with-label), .grid :global(.contact-select.with-label) { margin-bottom: 0; }
   .grid :global(.money-field label), .grid :global(.contact-select label) { color: var(--text); }

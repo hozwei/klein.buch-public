@@ -60,25 +60,25 @@
 {:else}
   <Table caption="Privatentnahmen und -einlagen" cards cardGrid>
     <thead>
-      <tr><th>Nummer</th><th>Datum</th><th>Art</th><th class="kb-col-opt1">Konto</th><th>Beschreibung</th><th class="num">Betrag</th><th><span class="kb-visually-hidden">Aktion</span></th></tr>
+      <tr><th>Nummer</th><th>Datum</th><th>Art</th><th class="kb-col-opt1">Konto</th><th>Beschreibung</th><th class="kb-num">Betrag</th><th><span class="kb-visually-hidden">Aktion</span></th></tr>
     </thead>
     <tbody>
       {#each items as m (m.id)}
         <tr>
           <!-- U4 (F6): Nummer führt zur Detailseite (Beleg, Notiz, Erfassungszeit). -->
-          <td data-label="Nummer"><DocNo value={m.movementNumber} href={`/private-movements/${m.id}`} /></td>
+          <td class="kb-card-head" data-label="Nummer"><DocNo value={m.movementNumber} href={`/private-movements/${m.id}`} /></td>
           <td data-label="Datum">{date(m.movementDate)}</td>
           <!-- U4 (V2-05): Die Art ist kein Status — neutrales Badge, der Text trägt sie;
                der Betrag zeigt die Richtung mit Vorzeichen. -->
-          <td data-label="Art">
+          <td class="kb-card-status" data-label="Art">
             <Badge kind="tag">{movementTypeLabel(m.movementType)}</Badge>
           </td>
-          <td class="kb-col-opt1" data-label="Konto">{m.accountLabel ?? "—"}</td>
+          <td class="kb-col-opt1" class:kb-card-omit={!m.accountLabel} data-label="Konto">{m.accountLabel ?? "—"}</td>
           <td class="cards-full wrap" data-label="Beschreibung">{m.description}</td>
-          <td class="num kb-num" data-label="Betrag">
+          <td class="kb-num kb-card-figure" data-label="Betrag">
             {m.movementType === "entnahme" ? "−" : "+"}{euro(m.amountCents)}
           </td>
-          <td class="right">
+          <td class="actions">
             <Button variant="secondary" size="sm" href={`/private-movements/${m.id}`} ariaLabel={`Privatbewegung ${m.movementNumber} öffnen`}>Öffnen</Button>
           </td>
         </tr>
@@ -88,9 +88,7 @@
 {/if}
 
 <style>
-  .num { text-align: right; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.right { text-align: right; }
+  td.actions { text-align: right; }
   /* U2-Regel (ADR 0041 Nr. 44): Beschreibungen brechen mit Silbentrennung, nicht mitten im Wort. */
   td.wrap { overflow-wrap: break-word; hyphens: auto; }
   .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }

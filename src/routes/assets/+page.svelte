@@ -9,6 +9,7 @@
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import { assetStatusView } from "./assetStatus.ts";
+  import { VAT_ADJUSTMENT_URL } from "./vatAdjustment.ts";
   import DocNo from "#lib/DocNo.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
@@ -143,10 +144,14 @@
 
 </script>
 
-<!-- U4 (design.md §4.2): „Abschreibung buchen“ als Nebenaktion (bis 600 px im Menü). -->
+<!-- U4 (design.md §4.2): „Abschreibung buchen“ als Nebenaktion (bis 600 px im Menü);
+     ADR 0042 Nr. 14: daneben die Übersicht der Vorsteuerberichtigung (liest nur). -->
 <PageBar
   title="Anschaffungen"
-  secondary={[{ label: "Abschreibung buchen", onSelect: () => (showAccrue = !showAccrue) }]}
+  secondary={[
+    { label: "Abschreibung buchen", onSelect: () => (showAccrue = !showAccrue) },
+    { label: "Vorsteuerberichtigung (§ 15a)", href: VAT_ADJUSTMENT_URL },
+  ]}
 >
   {#snippet actions()}
     <Button variant="primary" href="/assets/new">+ Neue Anschaffung</Button>
@@ -273,9 +278,9 @@
           <th>Nummer</th>
           <th>Bezeichnung</th>
           <th class="kb-col-opt2">Angeschafft</th>
-          <th class="num">Anschaffung</th>
+          <th class="kb-num">Anschaffung</th>
           <th class="kb-col-opt1">Abschreibung</th>
-          <th class="num">Restbuchwert</th>
+          <th class="kb-num">Restbuchwert</th>
           <th>Status</th>
           <th><span class="kb-visually-hidden">Aktion</span></th>
         </tr>
@@ -284,19 +289,19 @@
         {#each items as a (a.id)}
           {@const b = assetStatusView(a)}
           <tr class={a.disposed === 1 ? "disposed" : ""}>
-            <td data-label="Nummer"><DocNo value={a.assetNumber} href={`/assets/${a.id}`} muted={a.disposed === 1} /></td>
+            <td class="kb-card-head" data-label="Nummer"><DocNo value={a.assetNumber} href={`/assets/${a.id}`} muted={a.disposed === 1} /></td>
             <td class="wrap" data-label="Bezeichnung">{a.label}</td>
             <td class="kb-col-opt2" data-label="Angeschafft">{date(a.acquisitionDate)}</td>
-            <td class="num kb-num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
+            <td class="kb-num" data-label="Anschaffung">{euro(a.acquisitionCostCents)}</td>
             <td class="kb-col-opt1" data-label="Abschreibung">
               <span class="cat">
                 {depreciationMethodShort(a.depreciationMethod)}
                 {#if a.businessSharePercent < 100}<Badge kind="tag">{percent(a.businessSharePercent)} betrieblich</Badge>{/if}
               </span>
             </td>
-            <td class="num kb-num" data-label="Restbuchwert">{euro(a.bookValueCents)}</td>
-            <td data-label="Status"><Badge tone={b.tone}>{b.label}</Badge></td>
-            <td class="right">
+            <td class="kb-num kb-card-figure" data-label="Restbuchwert">{euro(a.bookValueCents)}</td>
+            <td class="kb-card-status" data-label="Status"><Badge tone={b.tone}>{b.label}</Badge></td>
+            <td class="actions">
               <Button variant="secondary" size="sm" href={`/assets/${a.id}`} ariaLabel={`Anschaffung ${a.assetNumber} öffnen`}>Öffnen</Button>
             </td>
           </tr>
@@ -320,9 +325,7 @@
   .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); }
   .empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; }
   .empty p { margin: 0; }
-  .num { text-align: right; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.right { text-align: right; }
+  td.actions { text-align: right; }
   /* U2 (U1-063): nicht mitten im Wort trennen („Arbeitsplatzrec/hner“) — `anywhere` lässt
      die Spalte im Tabellenmodus unter die Wortbreite schrumpfen; Silbentrennung (lang="de"). */
   td.wrap { overflow-wrap: break-word; hyphens: auto; }

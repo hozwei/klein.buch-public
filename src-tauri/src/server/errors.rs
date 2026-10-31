@@ -364,6 +364,56 @@ pub fn constraint_message(raw: &str) -> &'static str {
             "fiscal_year_locks",
             "Ein abgeschlossenes Geschäftsjahr ist unveränderlich.",
         ),
+        // ADR 0042 Nr. 7–8: Zahlungsbuch (Migration 0034).
+        (
+            "invoice_payments ist append-only",
+            "Gebuchte Zahlungen sind unveränderlich; eine falsche Zahlung wird mit einer Gegenbuchung storniert.",
+        ),
+        (
+            "invoice_payments: nur auf festgeschriebene",
+            "Zahlungen lassen sich nur auf festgeschriebene, nicht stornierte Rechnungen buchen.",
+        ),
+        (
+            "invoice_payments: das Geschäftsjahr",
+            "Das Geschäftsjahr des Zahldatums ist abgeschlossen; dort lässt sich keine Zahlung mehr buchen oder stornieren.",
+        ),
+        (
+            "invoice_payments: die Zahlung ist bereits storniert",
+            "Die Zahlung ist bereits storniert.",
+        ),
+        (
+            "invoice_payments: Gegenbuchung passt nicht",
+            "Die Gegenbuchung passt nicht zur Zahlung, oder zur Rechnung gibt es einen offenen Storno-Entwurf.",
+        ),
+        (
+            "invoice_payments: laufende Nummer",
+            "Die Zahlung konnte nicht gebucht werden (Reihenfolge im Zahlungsbuch). Bitte erneut versuchen.",
+        ),
+        (
+            "invoice_payments: Summe",
+            "Die Summe der Zahlungen darf den Rechnungsbetrag nicht übersteigen.",
+        ),
+        (
+            "invoices.payment_history_json",
+            "Die frühere Zahlungshistorie ist unveränderlich; Zahlungen stehen im Zahlungsbuch.",
+        ),
+        (
+            "invoices: Zahlungen nur über invoice_payments",
+            "Eine neue Rechnung beginnt ohne Zahlung; Zahlungen werden nach dem Festschreiben gebucht.",
+        ),
+        (
+            "invoices: Zahlungsstand",
+            "Der Zahlungsstand einer Rechnung folgt dem Zahlungsbuch und lässt sich nicht direkt ändern.",
+        ),
+        // ADR 0042 Nr. 1: Statushistorie nach § 19 UStG (Migration 0033).
+        (
+            "tax_status_changes: nur ein Widerruf",
+            "Einträge des Steuerstatus sind unveränderlich; ein irrtümlicher Eintrag wird einmal mit Grund widerrufen.",
+        ),
+        (
+            "tax_status_changes",
+            "Einträge des Steuerstatus werden nie gelöscht; ein irrtümlicher Eintrag wird mit Grund widerrufen.",
+        ),
         (
             "legal_documents",
             "Rechtstexte sind versioniert und unveränderlich; eine Änderung legt eine neue Version an.",

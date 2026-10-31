@@ -79,7 +79,8 @@ auf "Steuer (EÜR)", dann auf "Für die Steuererklärung exportieren →"
 und bei "Steuerberater-Paket (ZIP, alles in einem)" auf "Paket
 herunterladen". Im Abschnitt "Für die Steuerberatung" kannst Du
 vorher Kontenrahmen, Beraternummer und Mandantennummer für den
-DATEV-Stapel eintragen. Klein.Buch merkt sie sich in Deinem Browser,
+DATEV-Stapel eintragen; ohne die beiden Nummern enthält das Paket keinen
+DATEV-Stapel. Klein.Buch merkt sie sich in Deinem Browser,
 nicht auf dem Server; auf einem anderen Gerät oder in einem anderen
 Browser trägst Du sie neu ein. Vor dem Herunterladen fragt Klein.Buch
 noch einmal Dein Daten-Passwort und den App-Code ab. Dein Browser speichert dann ein
@@ -93,8 +94,9 @@ Kapitel "EÜR-Export".
 Nein. Wenn Du es trotzdem tust, schuldest Du die ausgewiesene
 Umsatzsteuer dem Finanzamt, auch wenn Du gar nicht
 umsatzsteuerpflichtig bist (§14c UStG). Klein.Buch sperrt aus
-diesem Grund alle Umsatzsteuer-Felder, solange der
-Kleinunternehmer-Schalter angeschaltet ist.
+diesem Grund alle Umsatzsteuer-Felder, solange am Datum des Belegs
+die Kleinunternehmer-Regelung gilt (Abschnitt "Steuerstatus" unter
+Einstellungen → "Meine Firmendaten").
 
 ## Muss ich als Kleinunternehmer jemals Umsatzsteuer zahlen?
 
@@ -296,7 +298,8 @@ diese Form: PDF, XML, DATEV-CSV und Inhalts-Übersicht.
 ## Was, wenn der Steuerberater eine andere Software nutzt?
 
 Fast alle Steuerberater nutzen DATEV-kompatible Software. Der
-DATEV-Stapel aus Klein.Buch funktioniert dort direkt. Wenn Dein
+DATEV-Stapel aus Klein.Buch folgt der DATEV-Formatbeschreibung; ob der
+Import bei Deiner Steuerberatung klappt, zeigt deren Importprotokoll. Wenn Dein
 Berater eine andere Software hat, frag ihn nach dem akzeptierten
 Format. Klein.Buch unterstützt derzeit keine weiteren
 Format-Adapter, aber die Roh-PDFs und XMLs aus dem ZIP kann jede
@@ -314,4 +317,4 @@ Steuerberater ab.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

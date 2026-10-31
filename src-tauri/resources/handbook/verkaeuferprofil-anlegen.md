@@ -68,25 +68,23 @@ das bewusst nicht, dort geht es um Daten Dritter.
 
 ## Kleinunternehmer-Status
 
-Im Profil gibt es einen Schalter **"Kleinunternehmer nach §19
-UStG"**. Bei einem frischen Profil ist er an. Solange er
-an ist, sperrt Klein.Buch alle Felder, die Umsatzsteuer
-ausweisen würden, und druckt automatisch den Pflicht-Hinweis
-"Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen." auf jede
-Rechnung.
+Den Steuerstatus pflegst Du nicht als Feld des Profils, sondern im
+Abschnitt **"Steuerstatus"** unter dem Formular. Ohne Eintrag gilt die
+Kleinunternehmer-Regelung: Klein.Buch blendet dann alle Felder aus, die
+Umsatzsteuer ausweisen würden, und druckt automatisch den
+Pflicht-Hinweis "Gemäß §19 UStG wird keine Umsatzsteuer ausgewiesen."
+auf jede Rechnung.
 
-Wenn Du regelbesteuert bist oder das vorhast, lies vor dem Umlegen
-des Schalters das Kapitel "Kleinunternehmer-Regelung" in der
-Kategorie "Recht und Steuern". Schaltest Du ihn aus und speicherst,
-fragt Klein.Buch "Zur Regelbesteuerung wechseln?" und erklärt drei
-Fälle: Der freiwillige Verzicht gilt ab Beginn des Kalenderjahres und
-bindet Dich mindestens 5 Kalenderjahre an die Regelbesteuerung
-(§ 19 Abs. 3 UStG). Das ist keine Klein.Buch-Regel, sondern das Gesetz.
-Fällt die Regelung dagegen weg, weil Dein Umsatz im Vorjahr über
-25.000 € lag (Regelbesteuerung ab 1. Januar) oder im laufenden Jahr
-100.000 € überschreitet (ab diesem Umsatz), gilt diese Bindung nicht.
-"Zur Regelbesteuerung wechseln" bestätigt den Wechsel, "Abbrechen"
-stellt den Schalter zurück und ändert nichts.
+Bist Du schon regelbesteuert, trag das vor der ersten Rechnung ein:
+"Statuswechsel eintragen …", Grund "Stand zu Beginn:
+Regelbesteuerung". Einen späteren Wechsel (Verzicht auf §19, Wegfall
+durch eine Umsatzgrenze, Rückkehr) trägst Du mit Grund und
+Wirkungsdatum im selben Dialog ein. Der freiwillige Verzicht bindet
+Dich fünf Kalenderjahre einschließlich des Wirkungsjahres an die
+Regelbesteuerung (§ 19 Abs. 3 UStG), ein Wegfall durch eine
+Umsatzgrenze nicht. Das ist keine Klein.Buch-Regel, sondern das
+Gesetz. Lies vorher das Kapitel "Kleinunternehmer-Regelung" in der
+Kategorie "Recht und Steuern".
 
 ## Logo hochladen
 
@@ -105,9 +103,10 @@ oben.
 
 Geh nach dem Entsperren auf "Einstellungen" und dann auf "Meine
 Firmendaten". Trage Name, Anschrift, Steuernummer oder USt-IdNr.,
-E-Mail und Telefon ein. Lass den Schalter "Kleinunternehmer nach §19
-UStG" eingeschaltet, wenn Du Kleinunternehmer bist. Klick auf
-"Speichern" (oben oder am Ende des Formulars). Lege danach unter
+E-Mail und Telefon ein. Klick auf "Speichern" (oben oder am Ende des
+Formulars). Bist Du Kleinunternehmer, ist beim Steuerstatus nichts zu
+tun; bist Du regelbesteuert, trag im Abschnitt "Steuerstatus" den
+"Stand zu Beginn: Regelbesteuerung" ein. Lege danach unter
 "Einstellungen → Konten" Deine Bankverbindung an und lade unter
 "Einstellungen → Rechnungs-Layout" optional Dein Logo.
 
@@ -122,11 +121,11 @@ und nennt in der Meldung, was für die E-Rechnung noch fehlt.
 ## Spätere Änderungen
 
 Spätere Änderungen am Profil machst Du in "Einstellungen → Meine
-Firmendaten". Änderst Du dabei den Kleinunternehmer-Status,
-bestätigst Du das mit Daten-Passwort und App-Code (direkt nach der
-Anmeldung entfällt die Rückfrage für fünf Minuten). Der Dialog nennt
-die Aktion: "Aktion bestätigen: Bankverbindung oder
-Kleinunternehmer-Status ändern". "Abbrechen" ändert nichts. Dieselbe
+Firmendaten". Name, Anschrift und die übrigen Angaben speicherst Du
+ohne Rückfrage. Einen Wechsel des Steuerstatus bestätigst Du mit
+Daten-Passwort und App-Code (direkt nach der Anmeldung entfällt die
+Rückfrage für fünf Minuten); der Dialog nennt die Aktion: "Aktion
+bestätigen: Steuerstatus ändern". "Abbrechen" ändert nichts. Dieselbe
 Bestätigung verlangt Klein.Buch, wenn Du unter "Einstellungen →
 Konten" ein Konto anlegst, änderst oder deaktivierst. So kann niemand
 über ein offenes Browserfenster Zahlungen auf ein fremdes Konto
@@ -146,4 +145,4 @@ Gewerbe.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

@@ -8,6 +8,9 @@
   // stehendes Banner über dem Formular (mehrere Gründe, ADR 0041 Nr. 22) statt als
   // Toast. Client-Prüfungen bilden nur Server-Regeln nach (Geschäftsjahr der
   // Nummer, Empfänger eines Entwurfs aus einem Angebot).
+  //
+  // ADR 0042 Nr. 10–12: Leistungsdatum oder Leistungszeitraum (ServiceDateFields),
+  // Vorausrechnung erlaubt (nur Hinweis), Leitweg-ID am Entwurf.
   import { todayBerlin, addDaysIso, yearOfIsoDate } from "#lib/date.ts";
   import { onMount, tick } from "svelte";
   import PageBar from "#lib/PageBar.svelte";
@@ -21,7 +24,6 @@
     pdfTemplatesList,
     sellerProfileGet,
     documentTermsGet,
-    numberingRestoredDraftsList,
   } from "#lib/api.ts";
   import type {
     Contact,
@@ -32,6 +34,7 @@
     TaxCategoryCode,
     TravelLine,
     MaterializedPackageItem,
+    RestoreConflictState,
   } from "#lib/types.ts";
   import { date, euro } from "#lib/format.ts";
   import { formatQuantity } from "#lib/money.ts";
@@ -46,6 +49,21 @@
   import MoneyInput from "#lib/MoneyInput.svelte";
   import QuantityInput from "#lib/QuantityInput.svelte";
   import { flash } from "#lib/toast.svelte.ts";
+  import TaxStatusNotice from "#lib/TaxStatusNotice.svelte";
+  import { invoiceTaxDate } from "#lib/taxStatus.ts";
+  import { taxStatusAtDate } from "#lib/taxStatusAt.svelte.ts";
+  import ServiceDateFields from "#lib/ServiceDateFields.svelte";
+  import BuyerReferenceField from "#lib/BuyerReferenceField.svelte";
+  import RestoreConflictBanner from "#lib/RestoreConflictBanner.svelte";
+  import { restoreSaveFlash } from "#lib/restoreConflict.ts";
+  import {
+    buyerReferenceError,
+    normalizeBuyerReference,
+    serviceDateInvalid,
+    serviceDateModeOf,
+    serviceDatePayload,
+    type ServiceDateMode,
+  } from "#lib/serviceDate.ts";
 
   let { editId = null }: { editId?: string | null } = $props();
 
@@ -100,9 +118,10 @@
   let editNumber = $state<string | null>(null);
   let draftFiscalYear = $state<number | null>(null);
   let fromQuote = $state(false);
-  // Warteliste (8): nach einer Wiederherstellung vorgemerkt (Nummer war schon
-  // festgeschrieben); nach dem Speichern erneut geprüft.
-  let restoreFlagged = $state(false);
+  // Warteliste (8), ADR 0042 Nr. 16: Restore-Vormerkung aus dem Lesefeld des
+  // Entwurfs — `flagged` (vor dem Ausstellen abgleichen) oder `confirmed`
+  // (Speichern merkt ihn wieder vor; Hinweis schon vor dem Speichern).
+  let restoreConflict = $state<RestoreConflictState | null>(null);
 
   // Ablehnung des Servers: Gründe als Banner, einzelne Gründe am Feld (nur,
   // solange das Feld den abgelehnten Wert hat).
@@ -111,19 +130,25 @@
   let serverContactErr = $state<{ value: string; msg: string } | null>(null);
   let serverBannerEl: HTMLDivElement | undefined = $state();
 
-  // Heute (Europe/Berlin) — Obergrenze für Rechnungs- und Leistungsdatum:
-  // beide dürfen nicht in der Zukunft liegen (domain::invoice).
+  // Heute (Europe/Berlin) — Obergrenze für das Rechnungsdatum (domain::invoice).
+  // Das Leistungsdatum darf danach liegen (Vorausrechnung, ADR 0042 Nr. 11).
   const today = todayBerlin();
   let contactId = $state("");
   let invoiceDate = $state(today);
-  // U1: Leistungsdatum (Pflicht, §14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
+  // U1: Leistungsdatum (§14 Abs. 4 Nr. 6 UStG) mit dem Rechnungsdatum
   // vorbelegt — sichtbar und änderbar; es folgt dem Rechnungsdatum, bis es von
   // Hand geändert wird (Angebote tragen kein eigenes Leistungsdatum).
+  // ADR 0042 Nr. 10: alternativ ein Leistungszeitraum von–bis.
+  let serviceMode = $state<ServiceDateMode>("date");
   let deliveryDate = $state(today);
   let deliveryDateTouched = $state(false);
   $effect(() => {
     if (!deliveryDateTouched) deliveryDate = invoiceDate;
   });
+  let periodStart = $state("");
+  let periodEnd = $state("");
+  // ADR 0042 Nr. 12: Leitweg-ID am Entwurf (revidiert ADR 0041 Nr. 91).
+  let buyerReference = $state("");
   let dueDate = $state("");
   // V1-04: Klein.Buch rechnet nur in Euro (domain::invoice, CurrencyUnsupported) —
   // kein Freitextfeld mehr. Ein älterer Entwurf mit anderer Währung wird beim
@@ -180,11 +205,24 @@
   }
 
   // ---- §19-Hardline: bei is_kleinunternehmer USt-Felder sperren ----
-  let isKlein = $derived(seller?.isKleinunternehmer === 1);
+  // ADR 0042 Nr. 3: maßgeblich ist der Status am Leistungsdatum (sonst
+  // Rechnungsdatum), nicht der von heute. Bis er für das aktuelle Datum geladen
+  // ist, zeigt die Seite den zuletzt bekannten Wert.
+  // Bei einem Zeitraum gilt dessen Ende (ADR 0042 Nr. 10).
+  let serviceFields = $derived(serviceDatePayload(serviceMode, deliveryDate, periodStart, periodEnd));
+  let taxDate = $derived(invoiceTaxDate({ ...serviceFields, invoiceDate }, today));
+  const taxAt = taxStatusAtDate(() => taxDate);
+  let todayKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
+  let isKlein = $derived(taxAt.isKlein ?? todayKlein === true);
   // §19: E/0 erzwingen; Regelbesteuerung: E wird S 19 % (KB-0014). In place
-  // (lib/tax.ts) — eine neue Array-Identität triggerte den Effect endlos.
+  // (lib/tax.ts) — eine neue Array-Identität triggerte den Effect endlos. Nur mit
+  // dem Status genau dieses Datums, sonst schriebe ein veralteter Wert die Sätze
+  // eines geladenen Entwurfs um.
   $effect(() => {
-    applyTaxRules(items as unknown as InvoiceItemInput[], seller ? isKlein : null);
+    applyTaxRules(
+      items as unknown as InvoiceItemInput[],
+      seller && taxAt.date === taxDate ? taxAt.isKlein : null,
+    );
   });
 
   // ---- Totals (live, wie der Server: USt je Steuergruppe) ----
@@ -201,13 +239,9 @@
           ? `Das Rechnungsdatum muss im Geschäftsjahr ${draftFiscalYear} bleiben — die Nummer ${editNumber ?? ""} gehört zu dessen Nummernkreis. Für ein anderes Jahr den Entwurf verwerfen und neu anlegen.`
           : "",
   );
-  let errDeliveryDate = $derived(
-    !deliveryDate
-      ? "Bitte das Leistungsdatum angeben."
-      : deliveryDate > (invoiceDate || today)
-        ? "Das Leistungsdatum darf nicht nach dem Rechnungsdatum liegen."
-        : "",
-  );
+  // Leistungsdatum bzw. -zeitraum: Meldungen stehen am Feld (ServiceDateFields).
+  let errServiceDate = $derived(serviceDateInvalid(serviceMode, deliveryDate, periodStart, periodEnd));
+  let errBuyerReference = $derived(buyerReferenceError(buyerReference));
   // V1-04: Fälligkeit ist Pflicht für die E-Rechnung (domain::invoice, XRechnungDueDateMissing
   // bei offenem Betrag) — Meldung schon beim Speichern statt erst beim Ausstellen.
   let errDueDate = $derived(
@@ -258,21 +292,14 @@
         const terms = await documentTermsGet();
         dueDate = addDays(invoiceDate, terms.invoiceDueDays);
       }
+      // Status am Belegdatum vor dem ersten Zeichnen (kein Springen der Spalten).
+      await taxAt.load(taxDate).catch(() => {});
     } catch (e) {
       flash(String(e), "error");
     } finally {
       loading = false;
     }
   });
-
-  /** Ist der Entwurf nach einer Wiederherstellung vorgemerkt? (nur lesen; Fehler = nein) */
-  async function isRestoreFlagged(id: string): Promise<boolean> {
-    try {
-      return (await numberingRestoredDraftsList()).some((c) => c.kind === "invoice" && c.id === id);
-    } catch {
-      return false;
-    }
-  }
 
   // Übernimmt einen gespeicherten Entwurf ins Formular. Nur offene Entwürfe
   // (keine Stornos, nicht festgeschrieben, nicht verworfen) — sonst zurück zur
@@ -297,6 +324,10 @@
     deliveryDateTouched = true; // gespeicherten Wert nicht überschreiben
     invoiceDate = inv.invoiceDate.slice(0, 10);
     deliveryDate = inv.deliveryDate?.slice(0, 10) ?? "";
+    serviceMode = serviceDateModeOf(inv);
+    periodStart = inv.servicePeriodStart?.slice(0, 10) ?? "";
+    periodEnd = inv.servicePeriodEnd?.slice(0, 10) ?? "";
+    buyerReference = inv.buyerReference ?? "";
     dueDate = inv.dueDate?.slice(0, 10) ?? "";
     currency = inv.currencyCode;
     pdfTemplate = inv.pdfTemplate;
@@ -317,7 +348,7 @@
       sourcePackageRevision: it.sourcePackageRevision,
     }));
     if (items.length === 0) items = [emptyItem(1)];
-    restoreFlagged = await isRestoreFlagged(id);
+    restoreConflict = d.restoreConflict ?? null;
   }
 
   function addItem() {
@@ -432,7 +463,7 @@
     if (saving) return;
     submitted = true;
     if (
-      errContact || errInvoiceDate || errDeliveryDate || errDueDate ||
+      errContact || errInvoiceDate || errServiceDate || errBuyerReference || errDueDate ||
       items.some(itemInvalid)
     ) {
       await focusFirstInvalid();
@@ -451,13 +482,13 @@
     try {
       const args: CreateDraftArgs = {
         contactId,
-        // Die Käuferreferenz (Leitweg-ID, BT-10) gibst du beim Ausstellen an;
-        // der Entwurf speichert sie nicht.
-        buyerReference: "N/A",
         input: {
           direction: "issued",
           invoiceDate,
-          deliveryDate: deliveryDate || null,
+          // ADR 0042 Nr. 10: Leistungsdatum ODER Zeitraum, nie beides.
+          ...serviceFields,
+          // ADR 0042 Nr. 12: Leitweg-ID am Entwurf; leer = keine.
+          buyerReference: normalizeBuyerReference(buyerReference),
           dueDate: dueDate || null,
           currencyCode: "EUR",
           items: items.map(toInput),
@@ -471,15 +502,9 @@
       const detail = editId ? await invoicesUpdateDraft(editId, args) : await invoicesCreateDraft(args);
       // Warteliste (8): Ein nach der Wiederherstellung schon abgeglichener Entwurf
       // ist nach jeder Änderung wieder vorgemerkt (Server, Lauf F8).
-      if (editId && !restoreFlagged && (await isRestoreFlagged(editId))) {
-        flash(
-          "Entwurf geändert. Er war nach der Wiederherstellung schon abgeglichen und ist jetzt wieder " +
-            "vorgemerkt — bestätige den Abgleich vor dem Ausstellen erneut (Einstellungen → Backups).",
-          "warning",
-        );
-      } else {
-        flash(editId ? "Entwurf geändert." : "Entwurf gespeichert.");
-      }
+      // Der Hinweis stand schon vor dem Speichern (RestoreConflictBanner).
+      const done = restoreSaveFlash(restoreConflict, "invoice", !!editId);
+      flash(done.msg, done.kind);
       goto(`/invoices/${detail.invoice.id}`);
     } catch (e) {
       await showServerError(e);
@@ -520,20 +545,11 @@
     Deine Firmendaten fehlen. <a class="kb-link" href="/settings/seller?next=/invoices/new">Jetzt ausfüllen</a>.
   </Banner>
 {:else}
-  {#if isKlein}
-    <Banner kind="info">
-      Du bist als Kleinunternehmer (§19) eingestellt — auf der Rechnung wird keine
-      Umsatzsteuer ausgewiesen. Die USt-Felder sind deshalb ausgeblendet.
-    </Banner>
-  {/if}
-  {#if editId && restoreFlagged}
-    <Banner kind="warning" title="Nach der Wiederherstellung vorgemerkt.">
-      Die Nummer <span class="kb-docno">{editNumber}</span> war vor der Wiederherstellung schon
-      festgeschrieben. Pass den Entwurf an das versandte Original an und bestätige danach den
-      Abgleich unter <a class="kb-link" href="/settings/backup#bk-numbering-h">Einstellungen → Backups</a>
-      (Nummernkreise) — erst dann lässt er sich ausstellen. Jede spätere Änderung verlangt einen
-      neuen Abgleich.
-    </Banner>
+  <TaxStatusNotice isKlein={taxAt.isKlein} day={taxAt.date} {todayKlein}
+    dateLabel={serviceFields.servicePeriodEnd ? "Ende des Leistungszeitraums" : serviceFields.deliveryDate ? "Leistungsdatum" : "Rechnungsdatum"} noun="auf der Rechnung"
+    error={taxAt.error} checkedWhen="beim Speichern und Ausstellen" />
+  {#if editId && editNumber}
+    <RestoreConflictBanner conflict={restoreConflict} number={editNumber} doc="invoice" where="editor" />
   {/if}
 
   <form id="invoice-form" onsubmit={(e) => { e.preventDefault(); save(); }} novalidate>
@@ -586,20 +602,6 @@
           {/if}
         </label>
         <label>
-          <span>Leistungsdatum <span class="req" aria-hidden="true">*</span></span>
-          <input
-            type="date"
-            class="kb-w-date"
-            bind:value={deliveryDate}
-            oninput={() => (deliveryDateTouched = true)}
-            max={invoiceDate || today}
-            required
-            aria-invalid={submitted && errDeliveryDate ? "true" : undefined}
-            aria-describedby={submitted && errDeliveryDate ? "err-delivery-date" : undefined}
-          />
-          {#if submitted && errDeliveryDate}<span id="err-delivery-date" class="field-err">{errDeliveryDate}</span>{/if}
-        </label>
-        <label>
           <span>Fälligkeit <span class="req" aria-hidden="true">*</span></span>
           <input
             type="date"
@@ -616,6 +618,19 @@
             <span id="hint-due-date" class="field-hint">Pflicht für die E-Rechnung.</span>
           {/if}
         </label>
+        <!-- ADR 0042 Nr. 10/11: Leistungsdatum oder -zeitraum; Vorausrechnung erlaubt (Hinweis). -->
+        <div class="span-all">
+          <ServiceDateFields
+            bind:mode={serviceMode}
+            bind:deliveryDate
+            bind:periodStart
+            bind:periodEnd
+            {invoiceDate}
+            showErrors={submitted}
+            idPrefix="inv-svc"
+            ondeliveryinput={() => (deliveryDateTouched = true)}
+          />
+        </div>
         <!-- V1-04: Währung fest (nur Euro), kein Eingabefeld. -->
         <div class="fixed-field">
           <span class="fixed-lbl">Währung</span>
@@ -637,6 +652,8 @@
           </select>
           {#if stornoHint}<span id="hint-pdf-template" class="field-hint">{stornoHint}</span>{/if}
         </label>
+        <!-- ADR 0042 Nr. 12: Leitweg-ID am Entwurf (revidiert ADR 0041 Nr. 91), beim Ausstellen übernommen. -->
+        <BuyerReferenceField bind:value={buyerReference} id="inv-buyer-ref" showErrors={submitted} class="span-all" />
       </div>
     </section>
 
@@ -652,14 +669,14 @@
             <th scope="col">#</th>
             <!-- V4-15: Pflichtspalten mit * (aria-hidden; die Felder tragen aria-required). -->
             <th scope="col">Beschreibung <span class="req" aria-hidden="true">*</span></th>
-            <th scope="col" class="right">Menge <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Menge <span class="req" aria-hidden="true">*</span></th>
             <th scope="col">Einheit</th>
-            <th scope="col" class="right">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
+            <th scope="col" class="kb-num">Einzelpreis <span class="req" aria-hidden="true">*</span></th>
             {#if !isKlein}
-              <th scope="col" class="right">USt-Satz <span class="req" aria-hidden="true">*</span></th>
+              <th scope="col" class="kb-num">USt-Satz <span class="req" aria-hidden="true">*</span></th>
               <th scope="col">USt-Art</th>
             {/if}
-            <th scope="col" class="right">Netto</th>
+            <th scope="col" class="kb-num">Netto</th>
             <th scope="col"><span class="kb-visually-hidden">Aktionen</span></th>
           </tr>
         </thead>
@@ -692,7 +709,7 @@
                   {/if}
                 </td>
                 {#if linked}
-                  <td class="right" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
+                  <td class="kb-num" data-label="Menge">{formatQuantity(it.quantity ?? 0)}</td>
                   {#if unitErr}
                     <td class="c-unit" data-label="Einheit">
                       <select
@@ -710,7 +727,7 @@
                   {:else}
                     <td data-label="Einheit">{unitLabel(it.unitCode)}</td>
                   {/if}
-                  <td class="right" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
+                  <td class="kb-num" data-label="Einzelpreis">{euro(it.unitPriceCents ?? 0)}</td>
                 {:else}
                   <td class="c-qty" data-label="Menge *">
                     <QuantityInput bind:value={it.quantity} ariaLabel={`Menge, Position ${n}`} required showErrors={submitted} />
@@ -743,7 +760,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if linked || items.length > 1}
                   <td class="c-actions">
                     <div class="kb-actions">
@@ -817,7 +834,7 @@
                     </select>
                   </td>
                 {/if}
-                <td class="right" data-label="Netto">{euro(lineNet(it))}</td>
+                <td class="kb-num" data-label="Netto">{euro(lineNet(it))}</td>
                 {#if items.length > 1}
                   <td class="c-actions">
                     <button type="button" class="btn-danger" onclick={() => removeItem(i)} aria-label={`Position ${n} entfernen`}>×</button>
@@ -831,26 +848,26 @@
         </tbody>
         <tfoot>
           <tr>
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Netto</strong></td>
-            <td class="right" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Netto</strong></td>
+            <td class="kb-num" data-label="Netto"><strong>{euro(totals.net)}</strong></td>
             <td class="c-actions"></td>
           </tr>
           {#if !isKlein}
             <tr>
-              <td colspan="7" class="right sum-label">USt</td>
-              <td class="right" data-label="USt">{euro(totals.tax)}</td>
+              <td colspan="7" class="sum-label">USt</td>
+              <td class="kb-num" data-label="USt">{euro(totals.tax)}</td>
               <td class="c-actions"></td>
             </tr>
           {/if}
           <tr class="kb-sum">
-            <td colspan={isKlein ? 5 : 7} class="right sum-label"><strong>Brutto</strong></td>
-            <td class="right" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
+            <td colspan={isKlein ? 5 : 7} class="sum-label"><strong>Brutto</strong></td>
+            <td class="kb-num" data-label="Brutto"><strong>{euro(totals.gross)}</strong></td>
             <td class="c-actions"></td>
           </tr>
         </tfoot>
       </table>
       <TravelLineAdder onAdd={addTravelLine} />
-      <PackageItemAdder onAdd={addPackage} />
+      <PackageItemAdder onAdd={addPackage} documentDate={taxDate} />
     </section>
 
     <section class="card">
@@ -915,9 +932,10 @@
   }
   textarea { resize: vertical; width: 100%; box-sizing: border-box; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 0.4rem; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th, td { padding: 0.4rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { background: var(--surface-sunken); font-weight: 600; font-size: var(--fs-sm); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Beträge über `.kb-num` (V3-10, ADR 0042 Nr. 16); Summen-Bezeichnung rechts davor. */
+  td.sum-label { text-align: right; }
   td.c-qty { width: 7.5rem; }
   /* Einheit im Klartext (U1-060): Platz für „Pauschale“, „Kilometer“ samt Pfeil. */
   td.c-unit { width: 9rem; }

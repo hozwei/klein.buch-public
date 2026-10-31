@@ -159,8 +159,30 @@ und dem Grund:
   als einen festgeschriebenen Storno-Beleg": Das Update hätte eine Regel
   eingeführt, gegen die Deine Daten schon verstoßen. Festgeschriebene
   Belege ändert Klein.Buch nie, auch nicht zur Reparatur.
+- "Migration 0034 abgebrochen": Ab Version 2026.11.1 stehen die
+  Zahlungen auf Rechnungen in einem eigenen Zahlungsbuch. Die
+  Umstellung übernimmt die bisherige Zahlungshistorie nur, wenn sie
+  stimmig ist. Der Grund in der Meldung ist einer von vier:
+  - "Die Zahlungshistorie mindestens einer Rechnung ist nicht lesbar":
+    Ein Eintrag hat keinen ganzzahligen Betrag, kein Datum im Format
+    JJJJ-MM-TT oder ist kein gültiger Eintrag;
+  - "… ergibt die Zahlungshistorie nicht den gezahlten Betrag": Die
+    Summe der Einträge weicht vom gezahlten Betrag der Rechnung ab;
+  - "… ist bezahlt, hat aber weder Zahlungshistorie noch Zahldatum";
+  - "… verweist auf ein unbekanntes Zahlungskonto".
 
-Nach einem Update prüft Klein.Buch beides, bevor es die Datenbank auf das
+  Die Zeilen davor im Log nennen die betroffenen Rechnungsnummern
+  (höchstens 20, keine Beträge), etwa "Zahlungshistorie nicht
+  übernehmbar (vor der Umstellung von Schema 33): Rechnung RE-2026-0009".
+  Solche Zustände entstehen nur durch eine Bearbeitung der Datenbank
+  außerhalb der App. Klein.Buch repariert die Historie nicht selbst, weil
+  sie Grundlage der Einnahmen in der EÜR ist. Setz das vorige Image ein
+  (siehe unten) und lass den Datenstand dieser Rechnungen prüfen, etwa
+  von Deiner Steuerberatung anhand der Kontoauszüge. Dieselbe Prüfung
+  lehnt den Restore eines Backups mit Schema unter 34 ab ("Diese Version
+  könnte die Datenbank im Backup nicht umstellen (Migration 0034)").
+
+Nach einem Update prüft Klein.Buch all das, bevor es die Datenbank auf das
 neue Format umstellt, und auch vor dem Backup, das jeder Umstellung
 vorausgeht. Steht in der Meldung "Die Datenbank steht unverändert auf
 Schema …", ist also nichts umgestellt. Dann gilt: Setz wieder das Image
@@ -271,4 +293,4 @@ Firewall nicht. Bei iptables gehört sie dann in die Kette `DOCKER-USER`
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

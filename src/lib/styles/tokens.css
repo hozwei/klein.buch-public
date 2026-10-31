@@ -602,7 +602,7 @@ input[type="checkbox"]:not([role="switch"]):disabled {
  * (Hintergrund, Schriftgröße, Innenabstand, z. B. Positions-Editoren, Einstellungen);
  * ohne !important zerfiele die einheitliche Lineatur. Abbau, wenn die Seiten ihre
  * lokalen th/td-Regeln entfernt haben (Phase 2 des U4-Laufs). text-align bleibt
- * frei, damit .num/.right (rechtsbündige Beträge) weiter greifen. */
+ * frei, damit `.kb-num` (rechtsbündige Beträge) weiter greift. */
 table { width: 100%; border-collapse: collapse; }
 th {
   font-size: var(--type-caption) !important; font-weight: 600 !important;
@@ -664,19 +664,8 @@ td { padding: 11px 12px !important; border-bottom: var(--rule) !important; }
   max-width: 72ch; /* U3: wie Fließtext (vorher 56rem ≈ 110 Zeichen je Zeile) */
 }
 
-/* ---- Banner-Boxen (Inline-Hinweise; neue Stellen nutzen Banner.svelte) ---- */
-.caveat, .danger-banner, .info-banner {
-  padding: var(--sp-3) var(--sp-4);
-  border-radius: var(--radius-control);
-  font-size: var(--type-small);
-  line-height: 1.5;
-  margin: 0 0 var(--sp-4);
-  border: 1px solid;
-  border-left-width: 4px;
-}
-.caveat { background: var(--status-warning-bg); border-color: var(--status-warning-line); color: var(--status-warning-fg); }
-.danger-banner { background: var(--status-danger-bg); border-color: var(--status-danger-line); color: var(--status-danger-fg); }
-.info-banner { background: var(--status-info-bg); border-color: var(--status-info-line); color: var(--status-info-fg); }
+/* Hinweisflächen: nur über den Baustein Banner.svelte (design.md §4.10). Die Altklassen
+ * `.caveat`, `.danger-banner` und `.info-banner` sind entfernt (V3-18, ADR 0042 Nr. 16). */
 
 /* ---- Dialoge (U1): gemeinsamer Rahmen für alle Modals ----------------------
  * Markup: <div class="kb-backdrop"><div class="kb-dialog" role="dialog" …>
@@ -874,7 +863,8 @@ td { padding: 11px 12px !important; border-bottom: var(--rule) !important; }
 :where(#main-content p) { max-width: 72ch; }
 
 /* Spaltenköpfe linksbündig wie der Inhalt (der Browser zentriert `th`); Seiten
- * setzen Betragsspalten weiter mit .num/.right rechtsbündig. */
+ * setzen Betragsspalten mit `.kb-num` rechtsbündig (V3-10: auch im Kopf; die
+ * seiteneigenen `.num`/`.right` sind ersetzt, ADR 0042 Nr. 16). */
 :where(th) { text-align: left; }
 /* Summenzeilen abgesetzt: Linie über der ersten Fußzeile (Tabellenmodus und Druck;
  * Karten unter 820 px haben eigene Rahmen), tabellarische Ziffern. */
@@ -998,6 +988,55 @@ table:not(.cards) tr.kb-sum > :is(td, th) { border-top: var(--rule-sum); }
   table.cards td.cards-full input:not([type="checkbox"]):not([type="radio"]),
   table.cards td.cards-full select, table.cards td.cards-full textarea { width: 100%; max-width: 100%; }
   table.cards tbody tr:hover td { background: transparent; }
+
+  /* Hierarchie in der Kartenansicht (V3-12, ADR 0042 Nr. 16; design.md §4.5): Nummer bzw.
+     Name, Status und Hauptbetrag tragen die Karte, Nebenangaben bleiben „LABEL … Wert“.
+     - `td.kb-card-head`: Kopfzeile links in --type-heading (DocNo bzw. Name).
+     - `td.kb-card-status`: rechts neben dem Kopf (Badge); ohne Status reicht der Kopf
+       über die volle Breite. Nur die Anzeige rückt nach oben — Fokus- und Lesereihenfolge
+       bleiben die des DOM (die Statuszelle enthält nichts Fokussierbares).
+     - `td.kb-card-figure`: Hauptbetrag in --type-heading, fett, tabellarische Ziffern.
+     - `td.kb-card-omit`: Nebenangabe ohne Wert („—“) entfällt in der Karte.
+     Die Labels von Kopf und Status sind nur für Screenreader sichtbar (der Wert erklärt
+     sich selbst: Belegnummer, Name, Statuswort). */
+  table.cards tr:has(> td.kb-card-head) {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  }
+  /* :where — die Grundregel darf die Plätze von Kopf und Status nicht überstimmen. */
+  :where(table.cards tr:has(> td.kb-card-head)) > td { grid-column: 1 / -1; min-width: 0; }
+  table.cards tr > td.kb-card-head {
+    grid-column: 1; grid-row: 1; text-align: left;
+    font-size: var(--type-heading); font-weight: 700; line-height: var(--lh-snug);
+  }
+  table.cards tr:not(:has(> td.kb-card-status)) > td.kb-card-head { grid-column: 1 / -1; }
+  table.cards tr > td.kb-card-status {
+    grid-column: 2; grid-row: 1; text-align: right; align-items: flex-end;
+    padding-left: var(--sp-3) !important;
+  }
+  /* Kopf und Status gleich hoch (Raster dehnt), Inhalt senkrecht mittig; eine durchgehende
+     Linie unter beiden (Abstand als Innenabstand des Status, keine Rasterlücke). */
+  table.cards tr > td:is(.kb-card-head, .kb-card-status) {
+    position: relative; border-bottom: var(--rule) !important;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  table.cards tr > td.kb-card-head { align-items: flex-start; }
+  /* Steht der Status zuletzt im DOM, trägt die letzte sichtbare Zeile keine Linie. */
+  table.cards tr:has(> td.kb-card-status:last-child) > td:nth-last-child(2):not(.kb-card-head) {
+    border-bottom: 0 !important;
+  }
+  table.cards td:is(.kb-card-head, .kb-card-status)[data-label]::before {
+    position: absolute; left: 0; top: 0; float: none; margin: 0;
+    width: 1px; height: 1px; max-width: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  table.cards td.kb-card-head .kb-docno { font-weight: 600; }
+  table.cards td.kb-card-figure {
+    font-size: var(--type-heading); font-weight: 700; line-height: 1.4;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Label auf die Zeilenhöhe des größeren Werts (18 px × 1,4 ≈ 12 px × 2,1). */
+  table.cards td.kb-card-figure[data-label]::before { line-height: 2.1; }
+  table.cards td.kb-card-omit { display: none; }
 }
 /* Tablet hoch (U2, Plan §5 „Tablet nutzt die Fläche“): Listen mit `.kb-card-grid`
  * stellen ihre Karten zweispaltig, sobald zwei Karten à 20rem nebeneinander passen
@@ -1072,7 +1111,7 @@ table:not(.cards) tr.kb-sum > :is(td, th) { border-top: var(--rule-sum); }
   /* Tabellen passen auf A4 (≈ 718 CSS-px Satzbreite): schmalere Zellränder, Umbruch erlaubt —
      Belegnummern bleiben ungebrochen (U4, PRINT-CLIP). */
   html body table th, html body table td { padding: 3pt 4pt !important; white-space: normal !important; }
-  html body table :is(.doc-no, .docno, .kb-docno, .num, .kb-num) { white-space: nowrap !important; }
+  html body table :is(.doc-no, .docno, .kb-docno, .kb-num) { white-space: nowrap !important; }
   html body table { width: 100% !important; table-layout: auto !important; }
   /* Spalte „Aktion(en)“ (Kopf nur für Screenreader) samt ihren Zellen */
   table:has(> thead > tr > th:last-child > .kb-visually-hidden:only-child)

@@ -34,7 +34,9 @@ normalen Rechnung. Setze unter "Frequenz" den Rhythmus:
 **monatlich**, **vierteljährlich**, **halbjährlich** oder
 **jährlich**, dazu den "Stichtag (Tag im Monat, 1–31)" und das
 "Zahlungsziel" in Tagen. Trage die "Nächste Fälligkeit" ein und
-optional ein "Laufzeit-Ende". Die erste Fälligkeit darf nicht in der
+optional ein "Laufzeit-Ende". Schreibst Du an eine Behörde, trägst
+Du die "Leitweg-ID (optional)" ein; jede Rechnung aus der Vorlage
+bekommt sie. Die erste Fälligkeit darf nicht in der
 Vergangenheit liegen; Rechnungen für zurückliegende Zeiträume legst
 Du einzeln an. Danach schreibt Klein.Buch die Fälligkeit selbst fort;
 beim Bearbeiten lässt sie sich nicht mehr ändern.
@@ -55,9 +57,21 @@ falsch), bleibt die Rechnung ausgestellt liegen und Klein.Buch legt
 einen Eintrag unter "Hinweise" an. Du kannst die Rechnung dann
 manuell verschicken.
 
-Mit dem Schalter "Leistungszeitraum automatisch auf die Rechnung
-schreiben" steht auf jeder erzeugten Rechnung der Zeitraum, zum
-Beispiel "Leistungszeitraum: Mai 2026".
+Jede erzeugte Rechnung trägt den Abrechnungszeitraum als
+Leistungszeitraum: vom Stichtag bis zum Tag vor dem nächsten Stichtag,
+bei einem quartalsweisen Abo ab 01.04.2026 also 01.04.2026 – 30.06.2026
+(im PDF und als Rechnungszeitraum in der E-Rechnung). Das Formular
+zeigt unter dem Schalter, welchen Zeitraum die nächste Rechnung
+trägt. Mit dem Schalter "Leistungszeitraum zusätzlich in Position 1
+nennen" steht er auch im Text der ersten Position, zum Beispiel
+"Leistungszeitraum: Mai 2026" bei einem ganzen Monat; ohne Schalter
+fehlt nur dieser Text, der Zeitraum selbst bleibt auf der Rechnung.
+Eine Leitweg-ID der Vorlage bekommt jede erzeugte Rechnung.
+
+Für den Steuerstatus (§19 oder Regelbesteuerung) zählt bei
+Abo-Rechnungen das Ende des Abrechnungszeitraums. Der Hinweis über dem
+Formular nennt deshalb den Status am Ende des nächsten
+Abrechnungszeitraums.
 
 Klick auf "Abo-Vorlage anlegen". Die Liste zeigt danach die nächste
 Fälligkeit.
@@ -112,9 +126,32 @@ Terminen fortsetzt. Eine Bestätigung zum Nachholen gilt für die Termine
 bis zu dem Tag, an dem Du sie gibst; kommen danach wieder mehr als drei
 Termine zusammen, fragt Klein.Buch erneut.
 
+Der Dialog nennt, wie viele Termine offen sind, und ihre Daten (die
+ersten sechs, danach "und N weitere"), dazu, wie viele Termine "Ab heute
+fortsetzen" auslässt und mit welchem Termin es weitergeht. Endet die
+Laufzeit der Abo-Vorlage vorher, sagt er das. Sind mehr als 24 Termine
+offen, bietet er "Nachholen" nicht an: So viele Rechnungen holt
+Klein.Buch nicht auf einmal nach. Dann bleibt "Ab heute fortsetzen";
+vergangene Zeiträume rechnest Du bei Bedarf einzeln ab. Weil sich das
+Auslassen nicht zurücknehmen lässt, steht der Fokus dann auf
+"Abbrechen", und ein Klick neben den Dialog schließt ihn nicht. Der Dialog zeigt
+den Stand beim Öffnen; Klein.Buch prüft bei Deiner Wahl noch einmal.
+
 Klein.Buch überspringt eine Abo-Vorlage mit Hinweis, statt eine Rechnung
 anzulegen, wenn der Kunde archiviert oder anonymisiert ist oder wenn
-eine Position trotz Kleinunternehmer-Regelung Umsatzsteuer ausweist.
+die Positionen nicht zum Steuerstatus passen: eine Position mit
+Umsatzsteuer, obwohl die Kleinunternehmer-Regelung gilt, oder eine
+steuerbefreite Position (Steuerart E), obwohl die Regelbesteuerung
+gilt. Maßgeblich ist der Status am Ende des Abrechnungszeitraums des
+Termins (Tag vor dem nächsten Termin), nicht der von heute und nicht der
+am Termin selbst; das Formular zeigt den Status am Ende des ersten bzw.
+nächsten Abrechnungszeitraums. Reicht ein Abrechnungszeitraum über den
+Jahreswechsel und fällt die Kleinunternehmer-Regelung zum 1. Januar
+weg, trag den Wegfall schon im alten Jahr ein (Kapitel
+"Kleinunternehmer-Regelung", "Wenn Dein Umsatz schon im laufenden Jahr
+über 25.000 € liegt").
+Trägst Du einen Wechsel ein, nennt Klein.Buch die betroffenen
+Abo-Vorlagen (Kapitel "Kleinunternehmer-Regelung").
 
 ## Angehaltene Abo-Läufe
 
@@ -168,4 +205,4 @@ E-Mail-Versand".
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

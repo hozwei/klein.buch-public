@@ -153,11 +153,16 @@ Buchhaltungs-Beleg an und vergibt keine Nummer.
 
 ## §19 in Paketen und Anfahrt
 
-Solange Du Kleinunternehmer bist, sind Paket-Preise und der
-Kilometer-Satz Netto-Beträge ohne Umsatzsteuer. Klein.Buch setzt
-die Steuer-Kategorie automatisch als steuerfrei nach §19 UStG und
-druckt den §19-Hinweis auf das fertige PDF.
+Paket-Preise und der Kilometer-Satz sind Netto-Beträge. Fügst Du ein
+Paket oder eine Anfahrt in einen Beleg ein, bekommt die Position die
+Steuerart, die am Datum dieses Belegs gilt (Leistungsdatum bzw. Ende
+des Leistungszeitraums der Rechnung, Datum des Angebots, Ende des
+Abrechnungszeitraums der Abo-Vorlage): Gilt dort die
+Kleinunternehmer-Regelung, setzt Klein.Buch die Steuer-Kategorie
+automatisch als steuerfrei nach §19 UStG und druckt den §19-Hinweis
+auf das fertige PDF. Eine schon eingefügte Position ändert sich nicht,
+wenn das Paket später eine neue Version bekommt.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

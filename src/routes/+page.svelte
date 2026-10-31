@@ -199,7 +199,7 @@
     fyOverview !== null && fyOverview.currentYear === currentYear,
   );
 
-  // §19-Modus aus seller_profile (Singleton; isKleinunternehmer ist 0|1).
+  // §19-Status heute (Firmendaten liefern ihn aus der Statushistorie, ADR 0042; 0|1).
   const isKlein = $derived(seller ? seller.isKleinunternehmer === 1 : null);
 
   // Offene Ausgangsrechnungen (status != canceled, kein Storno-Beleg, paid < gross).

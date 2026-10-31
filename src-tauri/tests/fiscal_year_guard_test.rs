@@ -92,10 +92,9 @@ async fn setup() -> Env {
             iban: None,
             bic: None,
             logo_filename: None,
-            is_kleinunternehmer: true,
+            is_kleinunternehmer: None,
             default_pdf_template: Some("default".into()),
             default_currency: Some("EUR".into()),
-            confirm_waive_paragraph_19: None,
         },
     )
     .await
@@ -173,6 +172,9 @@ fn asset_input(date: NaiveDate) -> AssetInput {
 
 fn invoice_input(date: NaiveDate) -> InvoiceInput {
     InvoiceInput {
+        service_period_start: None,
+        service_period_end: None,
+        buyer_reference: None,
         direction: InvoiceDirection::Issued,
         invoice_date: date,
         delivery_date: Some(date),

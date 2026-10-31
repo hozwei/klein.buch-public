@@ -59,6 +59,18 @@ pub fn supports_storno(template_source: &str) -> bool {
     template_source.contains(STORNO_FIELD_REFERENCE)
 }
 
+/// Datenfeld, über das eine Rechnungsvorlage den Leistungszeitraum zeigt
+/// (`data.invoice.service_period_start`/`_end`, ADR 0042 Nr. 10).
+pub const SERVICE_PERIOD_FIELD_REFERENCE: &str = "service_period_start";
+
+/// Zeigt die Vorlage einen Leistungszeitraum? Alle mitgelieferten Vorlagen tun
+/// es; eine eigene Vorlage aus der Zeit davor zeigte bei einer Rechnung mit
+/// Zeitraum gar keinen Leistungszeitpunkt (§ 14 Abs. 4 Satz 1 Nr. 6 UStG). Die
+/// Rechnungs-Pipeline nimmt dann die eingebaute Vorlage, wie beim Storno.
+pub fn supports_service_period(template_source: &str) -> bool {
+    template_source.contains(SERVICE_PERIOD_FIELD_REFERENCE)
+}
+
 /// Toleranter Check für Settings-UI / Template-Browser. Gibt sowohl
 /// Marker- als auch Feld-Status getrennt zurück, damit das UI sagen
 /// kann: "Marker da, aber Feld fehlt — Template-Autor hat vergessen

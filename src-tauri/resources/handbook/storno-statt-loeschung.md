@@ -45,6 +45,15 @@ rückgängig machen, die Rechnung selbst bleibt erhalten. Erst
    Überschrift „Stornorechnung“ — auch in der E-Rechnung (XML)
 5. Der Leitweg-ID der Original-Rechnung in der E-Rechnung, falls die
    Rechnung eine hatte (Rechnung an eine Behörde)
+6. Dem Leistungszeitpunkt der Original-Rechnung: ihrem Leistungszeitraum
+   bzw. Leistungsdatum, ohne beides ihrem Rechnungsdatum. Der Storno
+   korrigiert die ursprüngliche Leistung (§ 31 Abs. 5 UStDV); das
+   Storno-Datum ist das Datum des Belegs, nicht das einer Leistung
+
+Die Karte "Original-Rechnung" auf der Storno-Seite zeigt Leistungsdatum
+bzw. Leistungszeitraum und, falls vorhanden, die Leitweg-ID der
+Rechnung, damit Du vor dem Stornieren siehst, was der Storno-Beleg
+übernimmt.
 
 Das Storno-Datum liegt zwischen dem Rechnungsdatum und heute. Ist die
 Rechnung schon (ganz oder teilweise) bezahlt, frühestens am Tag des letzten
@@ -114,8 +123,8 @@ Storno allein.
 2. Falscher Betrag, falsche Menge.
 3. Falsches Leistungsdatum.
 4. Aus Versehen Umsatzsteuer auf der Rechnung gestanden. In
-   Klein.Buch ist das technisch nicht möglich, solange der
-   §19-Schalter an ist: §14c UStG würde sonst dazu führen, dass
+   Klein.Buch ist das technisch nicht möglich, solange am
+   Leistungsdatum die Kleinunternehmer-Regelung gilt: §14c UStG würde sonst dazu führen, dass
    Du die ausgewiesene Umsatzsteuer tatsächlich ans Finanzamt
    abführen musst, obwohl Du als Kleinunternehmer keine schuldest.
 5. Die Leistung wurde gar nicht erbracht.
@@ -143,4 +152,4 @@ Erinnern weißt, was passiert ist.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

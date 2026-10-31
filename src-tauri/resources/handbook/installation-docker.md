@@ -81,7 +81,7 @@ services:
 ## Was die Zeilen bedeuten
 
 `image` nennt das Image samt Version. Ersetze `VERSION` durch die
-Nummer einer Veröffentlichung, zum Beispiel `2026.11.0`. Die
+Nummer einer Veröffentlichung, zum Beispiel `2026.11.1`. Die
 Versionen findest Du unter "Releases" im öffentlichen Projekt. Ein
 Image mit dem Namen `latest` gibt es absichtlich nicht: Ein
 wandernder Name würde bei jedem Herunterladen unbemerkt eine neue
@@ -269,4 +269,4 @@ Navigation.
 
 ---
 
-*Letzte Aktualisierung: 27.10.2026 · Klein.Buch 2026.11*
+*Letzte Aktualisierung: 31.10.2026 · Klein.Buch 2026.11*

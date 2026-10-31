@@ -128,7 +128,7 @@
         <th class="kb-col-opt2">Datum</th>
         <th>Gültig bis</th>
         <th>Empfänger</th>
-        <th class="right">Brutto</th>
+        <th class="kb-num">Brutto</th>
         <th>Status</th>
         <th><span class="kb-visually-hidden">Aktionen</span></th>
       </tr>
@@ -138,13 +138,13 @@
         {@const inactive = r.status === "canceled" || r.status === "rejected"}
         {@const st = quoteStatusView(r)}
         <tr class:canceled={inactive}>
-          <td data-label="Nummer"><DocNo value={r.quoteNumber} href={`/quotes/${r.id}`} muted={inactive} /></td>
+          <td class="kb-card-head" data-label="Nummer"><DocNo value={r.quoteNumber} href={`/quotes/${r.id}`} muted={inactive} /></td>
           <td class="kb-col-opt2" data-label="Datum">{date(r.quoteDate)}</td>
-          <td data-label="Gültig bis">{date(r.validUntil)}</td>
+          <td class:kb-card-omit={!r.validUntil} data-label="Gültig bis">{date(r.validUntil)}</td>
           <td data-label="Empfänger">{r.contactName}</td>
-          <td class="right" data-label="Brutto">{euro(r.grossAmountCents)}</td>
-          <td data-label="Status"><Badge tone={st.tone} strike={st.strike}>{st.label}</Badge></td>
-          <td class="right"><Button variant="secondary" href={`/quotes/${r.id}`} ariaLabel={`Angebot ${r.quoteNumber} öffnen`}>Öffnen</Button></td>
+          <td class="kb-num kb-card-figure" data-label="Brutto">{euro(r.grossAmountCents)}</td>
+          <td class="kb-card-status" data-label="Status"><Badge tone={st.tone} strike={st.strike}>{st.label}</Badge></td>
+          <td class="actions"><Button variant="secondary" href={`/quotes/${r.id}`} ariaLabel={`Angebot ${r.quoteNumber} öffnen`}>Öffnen</Button></td>
         </tr>
       {/each}
     </tbody>
@@ -158,6 +158,6 @@
   .chk { flex-direction: row !important; align-items: center; gap: 0.4rem; min-height: var(--target); font-weight: 400 !important; }
   .result-info { color: var(--text-muted); font-size: var(--fs-sm); margin: var(--sp-1) 0 var(--sp-2); min-height: 1.4em; }
   .empty { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; margin: 0 0 var(--sp-3); }
-  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  td.actions { text-align: right; }
   tr.canceled td { color: var(--text-muted); }
 </style>

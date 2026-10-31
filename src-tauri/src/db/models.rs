@@ -60,8 +60,8 @@ pub struct SellerProfileRow {
     pub iban: Option<String>,
     pub bic: Option<String>,
     pub logo_filename: Option<String>,
-    pub is_kleinunternehmer: i64,
-    pub waived_paragraph_19_since: Option<String>,
+    // `is_kleinunternehmer` und das Verzichtsdatum sind seit Migration 0033 nur
+    // Spiegel der Statushistorie und hier bewusst nicht gemappt (ADR 0042 Nr. 1).
     pub default_pdf_template: String,
     pub default_currency: String,
     pub updated_at: String,
@@ -211,6 +211,11 @@ pub struct InvoiceRow {
     // Grund. Die Nummer bleibt verbraucht; status bleibt 'draft'.
     pub voided_at: Option<String>,
     pub void_reason: Option<String>,
+    // Leistungszeitraum (BG-14, JJJJ-MM-TT) und Leitweg-ID bzw. Käuferreferenz
+    // (BT-10; `None` = „N/A“) — Migration 0035, ADR 0042 Nr. 10–12.
+    pub service_period_start: Option<String>,
+    pub service_period_end: Option<String>,
+    pub buyer_reference: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -242,6 +247,61 @@ pub struct InvoiceDetail {
     pub invoice: InvoiceRow,
     pub items: Vec<InvoiceItemRow>,
     pub buyer: Option<ContactRow>,
+    /// Zahlungsbuch der Rechnung mit Gegenbuchungen und Verweisen
+    /// (Migration 0034, ADR 0042 Nr. 7–8), in der Reihenfolge der Erfassung.
+    #[serde(default)]
+    pub payments: Vec<InvoicePaymentView>,
+    /// Restore-Vormerkung des Entwurfs (ADR 0042 Nr. 16, Warteliste 8); nur
+    /// `invoices_get` füllt sie, und nur für offene Entwürfe.
+    #[serde(default)]
+    pub restore_conflict: Option<RestoreConflictState>,
+}
+
+/// Stand eines wiederhergestellten Entwurfs, dessen Nummer vor dem Restore
+/// schon festgeschrieben war (Lauf F1d/F8; ADR 0042 Nr. 16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestoreConflictState {
+    /// Vorgemerkt: Festschreiben erst nach Bestätigung.
+    Flagged,
+    /// Bestätigt: das nächste Speichern merkt ihn wieder vor.
+    Confirmed,
+}
+
+/// Eine Zeile des Zahlungsbuchs `invoice_payments` (Migration 0034, ADR 0042
+/// Nr. 7): Zahlung (`kind = 'payment'`, Betrag > 0) oder Gegenbuchung
+/// (`'reversal'`, Betrag < 0, Verweis auf die stornierte Zahlung, Grund).
+/// Append-only.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicePaymentRow {
+    pub id: String,
+    pub invoice_id: String,
+    pub seq: i64,
+    pub kind: String,
+    pub amount_cents: i64,
+    pub paid_date: String,
+    pub account_id: Option<String>,
+    pub note: Option<String>,
+    pub reverses_payment_id: Option<String>,
+    pub reason: Option<String>,
+    pub created_at: String,
+}
+
+/// Lesemodell einer Buchung für die Detailansicht (ADR 0042 Nr. 8): die Zeile
+/// samt Verweis auf ihre Gegenbuchung und der Angabe, ob „Zahlung stornieren“
+/// möglich ist (sonst mit Grund).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InvoicePaymentView {
+    #[serde(flatten)]
+    pub row: InvoicePaymentRow,
+    /// ID der Gegenbuchung, wenn diese Zahlung storniert ist.
+    pub reversed_by_id: Option<String>,
+    /// „Zahlung stornieren“ ist möglich.
+    pub reversible: bool,
+    /// Warum nicht (nur bei Zahlungen, die sich nicht stornieren lassen).
+    pub not_reversible_reason: Option<String>,
 }
 
 /// Kondensierter Listen-Eintrag — nur die Felder, die das UI in der
@@ -343,6 +403,10 @@ pub struct QuoteDetail {
     pub items: Vec<QuoteItemRow>,
     pub buyer: Option<ContactRow>,
     pub attachments: Vec<AttachmentView>,
+    /// Restore-Vormerkung des Entwurfs (ADR 0042 Nr. 16, Warteliste 8); nur
+    /// `quotes_get` füllt sie, und nur für offene Entwürfe.
+    #[serde(default)]
+    pub restore_conflict: Option<RestoreConflictState>,
 }
 
 // ---- Packages (Block P2, Migration 0019) -----------------------------------
@@ -644,6 +708,9 @@ pub struct RecurringInvoiceRow {
     pub notes: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung
+    /// (Migration 0035, ADR 0042 Nr. 12). `None` = „N/A“.
+    pub buyer_reference: Option<String>,
 }
 
 /// Eine Position einer Abo-Rechnungs-Vorlage. Spiegelt [`InvoiceItemRow`]

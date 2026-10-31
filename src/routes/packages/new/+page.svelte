@@ -199,7 +199,9 @@
           id="pkg-price"
           label="Netto-Preis"
           required
-          hint={isKlein ? "§19: Preis ist netto, es wird keine Umsatzsteuer ausgewiesen." : undefined}
+          hint={isKlein
+            ? "§19: Preis ist netto, es wird keine Umsatzsteuer ausgewiesen. Beim Einfügen in einen Beleg gilt der Steuerstatus am Datum dieses Belegs."
+            : "Beim Einfügen in einen Beleg gilt der Steuerstatus am Datum dieses Belegs."}
         />
         <div class="field">
           <label for="pkg-unit">Einheit</label>

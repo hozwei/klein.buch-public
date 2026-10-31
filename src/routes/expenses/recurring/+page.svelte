@@ -126,7 +126,7 @@
     // Server die Wahl „nachholen“ oder „ab heute fortsetzen“ (W14-026).
     let resumeMode: ResumeMode | undefined;
     if (s.active !== 1 && hasBacklog(s)) {
-      const choice = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+      const choice = await askBacklogChoice("expense", s, reviewIds.has(s.id));
       if (!choice) return;
       resumeMode = choice;
     }
@@ -194,7 +194,7 @@
   // Rückstand eines aktiven Auto-Abos (Hinweis „Entscheidung nötig“ bzw.
   // Termin im abgeschlossenen Geschäftsjahr, W14-026/-034).
   async function resolveBacklog(s: RecurringSubscription) {
-    const mode = await askBacklogChoice("expense", s.label, s.nextDueDate, reviewIds.has(s.id));
+    const mode = await askBacklogChoice("expense", s, reviewIds.has(s.id));
     if (!mode) return;
     busyId = s.id;
     try {
@@ -287,7 +287,7 @@
         <th>Abo</th>
         <th>Rhythmus</th>
         <th>Nächste Fälligkeit</th>
-        <th class="num">Betrag</th>
+        <th class="kb-num">Betrag</th>
         <th>Modus</th>
         <th class="actions-col"><span class="kb-visually-hidden">Aktionen</span></th>
       </tr>
@@ -297,7 +297,7 @@
         {@const due = dueBadge(s)}
         {@const act = rowActions(s)}
         <tr class:paused={s.active !== 1} class:is-due={isDue(s)}>
-          <td class="cards-full" data-label="Abo">
+          <td class="kb-card-head" data-label="Abo">
             <div class="abo-name">{s.label}</div>
             <div class="abo-meta">
               {expenseCategoryLabel(s.category)}
@@ -317,7 +317,7 @@
               <span class="muted-cell">—</span>
             {/if}
           </td>
-          <td class="num kb-num" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
+          <td class="kb-num kb-card-figure" data-label="Betrag">{euro(s.expectedAmountCents)}</td>
           <td data-label="Modus">
             <!-- U4 (V3-08): Ein Modus ist kein Status (ADR 0041 Nr. 177). -->
             {#if s.autoCreateExpense === 1}
@@ -347,12 +347,11 @@
   .toolbar { display: flex; align-items: center; gap: var(--sp-4); margin: var(--sp-2) 0 var(--sp-1); flex-wrap: wrap; }
   .toolbar-hint { font-size: var(--fs-sm); color: var(--text-muted); margin: 0 0 var(--sp-3); }
   .chk { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: var(--target); color: var(--text-muted); }
-  .num { text-align: right; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .actions-col { text-align: right; }
   /* U2: nicht mitten im Wort trennen („Betriebshaftpfli/cht“), Silbentrennung (lang="de"). */
   .abo-name { font-weight: 600; color: var(--text); overflow-wrap: break-word; hyphens: auto; }
-  .abo-meta { font-size: var(--fs-sm); color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+  /* UI-13: eigenes Gewicht, sonst erbt die Nebenzeile in der Kartenansicht 700 von td.kb-card-head (tokens.css). */
+  .abo-meta { font-size: var(--fs-sm); font-weight: 400; color: var(--text-muted); margin-top: 0.15rem; display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
   .due-cell { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
   .muted-cell { color: var(--text-muted); }
   /* Pausiert: Badge „pausiert“ trägt den Zustand; keine Deckkraft-Absenkung (Kontrast 1.4.3). */

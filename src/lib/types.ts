@@ -108,7 +108,7 @@ export interface SellerProfile {
   iban: string | null;
   bic: string | null;
   logoFilename: string | null;
-  isKleinunternehmer: number;          // 0|1
+  isKleinunternehmer: number;          // 0|1, Status heute aus der Historie (ADR 0042); Belege: Status am Belegdatum
   waivedParagraph19Since: string | null;
   defaultPdfTemplate: string;
   defaultCurrency: string;
@@ -129,11 +129,10 @@ export interface SellerProfileInput {
   iban: string | null;
   bic: string | null;
   logoFilename: string | null;
-  isKleinunternehmer: boolean;
   defaultPdfTemplate: string | null;
   defaultCurrency: string | null;
-  /** Pflicht-`true` beim Wechsel §19 → Regelbesteuerung (5-Jahres-Bindung). */
-  confirmWaiveParagraph19: boolean | null;
+  // Kein Steuerstatus mehr (ADR 0042 Nr. 1): Wechsel nur über
+  // `taxStatusChangeAdd`; ein abweichender `isKleinunternehmer` würde abgelehnt.
 }
 
 /** §19-Kompatibilität einer PDF-Vorlage (Block 17a). */
@@ -155,11 +154,18 @@ export interface PdfTemplateMeta {
   /** Ohne Storno-Darstellung: eingebaute Vorlage, mit der Stornos entstehen
    *  (z. B. "klassisch"); sonst null. */
   stornoFallback: string | null;
+  /** Zeigt die Vorlage einen Leistungszeitraum (`service_period_start`/`_end`,
+   *  ADR 0042 Nr. 10)? */
+  supportsServicePeriod: boolean;
+  /** Ohne Leistungszeitraum: eingebaute Vorlage, mit der Rechnungen mit
+   *  Zeitraum entstehen; sonst null. */
+  servicePeriodFallback: string | null;
 }
 
 export interface Paragraph19Info {
   hinweisText: string;
-  /** Wenn aktuell verzichtet wurde: das früheste Rückkehr-Datum (YYYY-MM-DD). */
+  /** Bei Regelbesteuerung heute: das früheste Rückkehr-Datum (YYYY-MM-DD) aus
+   *  der Statushistorie (nach einem Verzicht das Bindungsende, ADR 0042). */
   returnDateAfterWaiver: string | null;
 }
 
@@ -192,8 +198,11 @@ export interface Invoice {
   pdfTemplate: string;
   status: InvoiceStatus;
   sentAt: Iso8601 | null;
+  /** Cache des Zahlungsbuchs: Summe aller Buchungen (ADR 0042 Nr. 7). */
   paidAmountCents: Cents;
+  /** Cache: jüngstes Zahldatum der nicht stornierten Zahlungen. */
   paidAt: Iso8601 | null;
+  /** Eingefroren seit Migration 0034 (Altbestand); Anzeige über `InvoiceDetail.payments`. */
   paymentHistoryJson: string | null;
   canceledAt: Iso8601 | null;
   canceledByStornoId: Uuid | null;
@@ -225,6 +234,11 @@ export interface Invoice {
   /** Verworfener Entwurf (Migration 0032): Zeitpunkt (UTC) und Grund; die Nummer bleibt verbraucht. */
   voidedAt: Iso8601 | null;
   voidReason: string | null;
+  /** Leistungszeitraum (BG-14, JJJJ-MM-TT) statt Leistungsdatum (Migration 0035, ADR 0042 Nr. 10). */
+  servicePeriodStart: Iso8601 | null;
+  servicePeriodEnd: Iso8601 | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10), am Entwurf gespeichert; `null` = „N/A“ (ADR 0042 Nr. 12). */
+  buyerReference: string | null;
 }
 
 export interface InvoiceItem {
@@ -249,6 +263,41 @@ export interface InvoiceDetail {
   invoice: Invoice;
   items: InvoiceItem[];
   buyer: Contact | null;
+  /** Zahlungsbuch mit Gegenbuchungen (Migration 0034, ADR 0042 Nr. 7–8). */
+  payments: InvoicePayment[];
+  /** Restore-Vormerkung des offenen Entwurfs (ADR 0042 Nr. 16); sonst `null`. */
+  restoreConflict: RestoreConflictState | null;
+}
+
+/**
+ * Stand eines wiederhergestellten Entwurfs mit vor dem Restore festgeschriebener
+ * Nummer: `flagged` = Fertigstellen erst nach Bestätigung, `confirmed` = das
+ * nächste Speichern merkt ihn wieder vor (ADR 0042 Nr. 16, Warteliste 8).
+ */
+export type RestoreConflictState = "flagged" | "confirmed";
+
+/** Eine Buchung des Zahlungsbuchs (`InvoicePaymentView` in Rust). */
+export interface InvoicePayment {
+  id: Uuid;
+  invoiceId: Uuid;
+  seq: number;
+  /** `payment` (Betrag > 0) oder `reversal` (Gegenbuchung, Betrag < 0). */
+  kind: "payment" | "reversal";
+  amountCents: Cents;
+  paidDate: string;
+  accountId: Uuid | null;
+  note: string | null;
+  /** Gegenbuchung: die stornierte Zahlung. */
+  reversesPaymentId: Uuid | null;
+  /** Gegenbuchung: Grund. */
+  reason: string | null;
+  createdAt: string;
+  /** Zahlung: ihre Gegenbuchung, falls storniert. */
+  reversedById: Uuid | null;
+  /** „Zahlung stornieren“ möglich. */
+  reversible: boolean;
+  /** Warum nicht (Zahlung, die sich nicht stornieren lässt). */
+  notReversibleReason: string | null;
 }
 
 export interface InvoiceListItem {
@@ -297,6 +346,11 @@ export interface InvoiceInputDto {
   direction: InvoiceDirection;
   invoiceDate: string;     // YYYY-MM-DD
   deliveryDate: string | null;
+  /** Leistungszeitraum statt Leistungsdatum: beide Grenzen oder keine, nie zugleich mit `deliveryDate` (ADR 0042 Nr. 10). */
+  servicePeriodStart?: string | null;
+  servicePeriodEnd?: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10); hat Vorrang vor `CreateDraftArgs.buyerReference` (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   dueDate: string | null;
   currencyCode: string;
   items: InvoiceItemInput[];
@@ -310,7 +364,8 @@ export interface InvoiceInputDto {
 
 export interface CreateDraftArgs {
   contactId: Uuid;
-  buyerReference: string | null;
+  /** Ältere Form der Leitweg-ID; `input.buyerReference` hat Vorrang (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   input: InvoiceInputDto;
 }
 
@@ -347,6 +402,14 @@ export interface RecordPaymentArgs {
   /** Zahlungskonto des Eingangs (DATEV-Geldkonto, R2-011). */
   accountId?: Uuid | null;
 }
+
+/** Argumente von `invoices_reverse_payment` (ADR 0042 Nr. 8). */
+export type ReversePaymentArgs = {
+  invoiceId: Uuid;
+  paymentId: Uuid;
+  /** Grund, mindestens 10 Zeichen. */
+  reason: string;
+};
 
 // ---- Mail (Block 5) --------------------------------------------------------
 
@@ -538,6 +601,8 @@ export interface QuoteDetail {
   items: QuoteItem[];
   buyer: Contact | null;
   attachments: AttachmentView[];
+  /** Restore-Vormerkung des offenen Entwurfs (ADR 0042 Nr. 16); sonst `null`. */
+  restoreConflict: RestoreConflictState | null;
 }
 
 export interface QuoteListItem {
@@ -621,6 +686,11 @@ export interface QuoteConvertArgs {
   /** Rechnungsdatum (YYYY-MM-DD). Bestimmt auch das Geschäftsjahr. */
   invoiceDate: string;
   deliveryDate: string | null;
+  /** Leistungszeitraum statt Leistungsdatum (ADR 0042 Nr. 10), beide oder keiner. */
+  servicePeriodStart?: string | null;
+  servicePeriodEnd?: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) der Rechnung (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   dueDate: string | null;
   /** null → Template des Angebots übernehmen. */
   pdfTemplate: string | null;
@@ -948,6 +1018,9 @@ export interface ParsedEInvoice {
   typeCode: string | null;
   invoiceDate: Iso8601 | null;
   dueDate: Iso8601 | null;
+  /** BG-14 — Rechnungszeitraum auf Kopfebene (ADR 0042 Nr. 10). */
+  servicePeriodStart?: Iso8601 | null;
+  servicePeriodEnd?: Iso8601 | null;
   currencyCode: string | null;
   sellerName: string | null;
   sellerVatId: string | null;
@@ -1133,6 +1206,8 @@ export interface RecurringInvoiceRow {
   notes: string | null;
   createdAt: Iso8601;
   updatedAt: Iso8601;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung; `null` = „N/A“ (Migration 0035). */
+  buyerReference: string | null;
 }
 
 /** Korrespondiert zu `RecurringInvoiceItemRow` in Rust. */
@@ -1172,8 +1247,11 @@ export interface RecurringInvoiceInputDto {
   autoMode: RecurringInvoiceMode;
   paymentTermsDays: number;
   pdfTemplate: string;
+  /** Nur noch der Klartext in Position 1; den Abrechnungszeitraum (BG-14) trägt jede Abo-Rechnung (ADR 0042 Nr. 10). */
   servicePeriodNote: boolean;
   notes: string | null;
+  /** Leitweg-ID bzw. Käuferreferenz (BT-10) für jede erzeugte Rechnung (ADR 0042 Nr. 12). */
+  buyerReference?: string | null;
   items: InvoiceItemInput[];
 }
 
@@ -1393,9 +1471,13 @@ export interface EuerReport {
   disposalGainLossCents: Cents;
   // Ergebnis
   surplusCents: Cents;
-  /** §19 im Jahr aktiv (period-aware wie die Exporte); false = Regelbesteuerung
-   *  (Verzicht ab diesem Jahr). Lauf 2026.11 U4. */
+  /** §19 das ganze Jahr (wie die Exporte); false = Regelbesteuerung oder
+   *  Wechsel im Jahr. Lauf 2026.11 U4, ADR 0042. */
   isKleinunternehmer: boolean;
+  /** Status des Jahres dreiwertig (ADR 0042 Nr. 3). */
+  yearStatus: YearStatus;
+  /** Wechsel im Jahr als Text; null = einheitlicher Status. */
+  statusChange: string | null;
   /** Abgleich mit dem Festschreibungs-Snapshot; null = Jahr offen (U4). */
   snapshotCheck: SnapshotCheck | null;
 }
@@ -1417,7 +1499,10 @@ export interface ElsterLine {
 /** ELSTER-Ausfüllhilfe eines Geschäftsjahres (`euer::elster_csv::ElsterForm`). */
 export interface ElsterForm {
   fiscalYear: number;
+  /** §19 das ganze Jahr; false bei Regelbesteuerung oder Wechsel im Jahr. */
   isKleinunternehmer: boolean;
+  /** Wechsel des Steuerstatus im Jahr als Text (ADR 0042); fehlt sonst. */
+  statusChange?: string | null;
   /** Jahr des Vordrucks, dem die Zeilennummern folgen. */
   formYear: number;
   /** true = Zeilennummern am Vordruck genau dieses Jahres geprüft. */
@@ -1454,7 +1539,12 @@ export interface EuerIncomeItem {
   invoiceNumber: string;
   customer: string;
   description: string;
+  /** Mit Vorzeichen: eine Gegenbuchung ist negativ (ADR 0042 Nr. 9). */
   amountCents: Cents;
+  /** Gegenbuchung einer storniert erfassten Zahlung (am ursprünglichen Zahldatum). */
+  isReversal?: boolean;
+  /** Diese Zahlung ist durch eine Gegenbuchung storniert. */
+  reversed?: boolean;
 }
 
 /** Eine Storno-Erstattung (`euer::detail::StornoItem`). */
@@ -1561,8 +1651,10 @@ export interface EuerPdfExport {
   snapshotCheck: SnapshotCheck | null;
 }
 
-/** Optionale Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer
- *  1001–9999999, Mandantennummer 1–99999 (Lauf F5, Durchreichen U4). */
+/** Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer 1001–9999999,
+ *  Mandantennummer 1–99999. Für den DATEV-Export Pflicht, im
+ *  Steuerberater-Paket nur zusammen (ADR 0042 Nr. 15); `null` reicht der Client
+ *  durch, damit der Server die Meldung am Feld liefert. */
 export interface DatevHeaderNumbers {
   consultantNumber?: number | null;
   clientNumber?: number | null;
@@ -1736,4 +1828,196 @@ export interface UpdateCheckSettings {
   enabled: boolean;
   /** Letzte Abfrage (RFC 3339, UTC) oder `null`. */
   lastCheckAt: string | null;
+}
+
+// ---- Steuerstatus nach § 19 UStG (ADR 0042 Nr. 1–6) ------------------------
+
+export type TaxStatus = "kleinunternehmer" | "regelbesteuerung";
+export type TaxStatusReason =
+  | "initial"
+  | "verzicht"
+  | "wegfall_vorjahr"
+  | "wegfall_laufend"
+  | "wegfall_gruendungsjahr"
+  | "rueckkehr"
+  | "legacy";
+/** Status eines Geschäftsjahres; `wechsel` = Wechsel im Jahr. */
+export type YearStatus = "kleinunternehmer" | "regelbesteuerung" | "wechsel";
+
+/** Eintrag der Statushistorie (append-only, Widerruf statt Löschen). */
+export interface TaxStatusChange {
+  id: string;
+  /** YYYY-MM-DD; „0001-01-01“ = seit Beginn. */
+  effectiveFrom: string;
+  status: TaxStatus;
+  reason: TaxStatusReason;
+  /** Nach einem Verzicht: erster Tag der möglichen Rückkehr. */
+  bindingUntil: string | null;
+  triggerDocument: string | null;
+  note: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  revokeReason: string | null;
+}
+
+/** Hinweis zu einer Umsatzgrenze (§ 19 Abs. 1/2 UStG). */
+export interface TaxThresholdHint {
+  /** `folgejahr`: Umsatz des laufenden Jahres über 25.000 € → Wegfall zum 1. Januar des Folgejahres. */
+  kind: "vorjahr" | "laufend" | "gruendungsjahr" | "folgejahr";
+  year: number;
+  turnoverCents: Cents;
+  limitCents: Cents;
+  /** true = überschritten, false = genau erreicht. */
+  exceeded: boolean;
+  triggerDocument: string | null;
+  /** Jahr der Leistung des auslösenden Belegs; vor `year` bleibt er unter dem Status seines Jahres (V8a-R-02). */
+  triggerServiceYear: number | null;
+  suggestedEffectiveFrom: string | null;
+  suggestedReason: TaxStatusReason;
+  /** true = Gründungsjahr nur vermutet. */
+  presumed: boolean;
+}
+
+export interface TaxStatusOverview {
+  entries: TaxStatusChange[];
+  today: string;
+  currentStatus: TaxStatus;
+  bindingUntil: string | null;
+  earliestReturn: string | null;
+  /** Nur der jüngste gültige Eintrag lässt sich widerrufen. */
+  revocableId: string | null;
+  turnover: {
+    previousYear: number;
+    previousYearCents: Cents;
+    currentYear: number;
+    currentYearCents: Cents;
+    /** Gründungsjahr vermutet (kein früherer Umsatz in Klein.Buch): Grenze 25.000 € (UI-08). */
+    presumedFoundingYear: boolean;
+  };
+  thresholdHints: TaxThresholdHint[];
+  hinweisText: string;
+}
+
+export interface TaxStatusAt {
+  date: string;
+  status: TaxStatus;
+  isKleinunternehmer: boolean;
+}
+
+export interface TaxStatusChangeInput {
+  /** Pflicht außer beim Anfangsstand (`initial`, seit Beginn). */
+  effectiveFrom: string | null;
+  status: TaxStatus;
+  reason: TaxStatusReason;
+  triggerDocument?: string | null;
+  note?: string | null;
+}
+
+export interface TaxStatusAffectedInvoice {
+  id: string;
+  number: string;
+  documentDate: string;
+  lockedAsKleinunternehmer: boolean;
+  nowKleinunternehmer: boolean;
+}
+
+export interface TaxStatusConsequences {
+  firstDifference: string | null;
+  affectedInvoices: TaxStatusAffectedInvoice[];
+  affectedDrafts: string[];
+  recurringTemplates: string[];
+  capitalizedAssets: string[];
+  reexportYears: number[];
+}
+
+export interface TaxStatusChangePreview {
+  ok: boolean;
+  errors: string[];
+  /** Hinweise, die den Eintrag nicht sperren (Erklärungsfrist des Verzichts, Vorjahresumsatz vor einer Rückkehr). */
+  warnings: string[];
+  bindingUntil: string | null;
+  consequences: TaxStatusConsequences;
+}
+
+export interface TaxStatusChangeResult {
+  entry: TaxStatusChange;
+  consequences: TaxStatusConsequences;
+}
+
+// ---- Vorsteuerberichtigung § 15a UStG (ADR 0042 Nr. 14) --------------------
+
+/** Richtung: zugunsten (Wechsel zur Regelbesteuerung) oder zulasten (Rückkehr zu § 19). */
+export type VatAdjustmentDirection = "zugunsten" | "zulasten";
+/** Grenze nach § 44 UStDV: Vorsteuer bis 1.000 € (Abs. 1) bzw. unter 10 Prozentpunkten
+ *  und höchstens 1.000 € (Abs. 2). */
+export type VatAdjustmentExemption = "input_tax_bagatelle" | "below_ten_points";
+/** § 44 Abs. 3 UStDV: Jahreserklärung (bis 6.000 €), Voranmeldung (darüber) bzw.
+ *  Voranmeldung der Lieferung bei Verkauf oder Entnahme. */
+export type VatAdjustmentFiling = "annual_return" | "advance_return" | "advance_return_of_disposal";
+
+export interface VatAdjustmentPeriod {
+  /** Erster Tag des ersten berücksichtigten Monats (YYYY-MM-DD). */
+  from: string;
+  /** Letzter Tag des letzten berücksichtigten Monats. */
+  to: string;
+  months: number;
+}
+
+export interface VatAdjustmentYear {
+  year: number;
+  months: number;
+  monthsRegular: number;
+  monthsChanged: number;
+  changePoints: number;
+  /** Rechnerisch (Cent): positiv zugunsten, negativ zulasten. */
+  amountCents: number;
+  /** Nach § 44 UStDV zu berichtigen (0 bei einer Ausnahme). */
+  adjustmentCents: number;
+  direction: VatAdjustmentDirection | null;
+  exemption: VatAdjustmentExemption | null;
+  filing: VatAdjustmentFiling | null;
+  /** Jahr nach dem laufenden: unter dem heute bekannten Status vorausgerechnet. */
+  projected: boolean;
+}
+
+export interface VatAdjustmentAssetResult {
+  period: VatAdjustmentPeriod;
+  inputTaxCents: number;
+  originalKlein: boolean;
+  inputTaxBagatelle: boolean;
+  years: VatAdjustmentYear[];
+  totalAdjustmentCents: number;
+}
+
+export interface VatAdjustmentAsset {
+  assetId: string;
+  assetNumber: string;
+  label: string;
+  expenseNumber: string;
+  /** Beginn (ersatzweise Anschaffungsdatum, YYYY-MM-DD). */
+  firstUse: string;
+  depreciationMethod: string;
+  adjustment: VatAdjustmentAssetResult;
+  yearShare: VatAdjustmentYear | null;
+  hasChange: boolean;
+  hints: string[];
+}
+
+export interface VatAdjustmentUnknown {
+  assetId: string;
+  assetNumber: string;
+  label: string;
+  reason: "no_expense" | "reverse_charge" | "no_input_tax";
+  message: string;
+}
+
+/** Ergebnis von `vat_adjustment_overview`. */
+export interface VatAdjustmentOverview {
+  year: number;
+  /** Hinweis „nur Übersicht, keine Buchung, Steuerberatung“. */
+  notice: string;
+  assets: VatAdjustmentAsset[];
+  unknown: VatAdjustmentUnknown[];
+  /** Summe des Jahres (Cent, positiv zugunsten). */
+  totalAdjustmentCents: number;
 }

@@ -1,20 +1,23 @@
-# §13b UStG — Reverse-Charge
+# §13b UStG — Steuerschuldnerschaft des Leistungsempfängers
 
 Quelle: https://www.gesetze-im-internet.de/ustg_1980/__13b.html
 
-Steuerschuldnerschaft des Leistungsempfängers — der Empfänger
-führt die Umsatzsteuer ab statt des Leistenden. Relevant u.a. bei:
+Bei bestimmten Leistungen schuldet nicht der Leistende, sondern der Empfänger die
+Umsatzsteuer. Relevant u. a. bei:
 
-- Bauleistungen zwischen Bauunternehmen.
-- Auslandsdienstleistungen aus dem EU-Ausland (Reverse-Charge auf
-  Empfängerseite).
-- Lieferungen von Edelmetallen, Mobilfunkgeräten ab bestimmten Schwellen.
+- sonstigen Leistungen eines im übrigen Gemeinschaftsgebiet ansässigen Unternehmers
+  (§ 13b Abs. 1), z. B. Software-Abos oder Werbung aus dem EU-Ausland;
+- Werklieferungen und sonstigen Leistungen eines im Ausland ansässigen Unternehmers
+  (§ 13b Abs. 2 Nr. 1);
+- Bauleistungen, Gebäudereinigung, Lieferungen von Mobilfunkgeräten u. a.
+  (§ 13b Abs. 2, unter den dort genannten Voraussetzungen).
 
-**Für §19-Kleinunternehmer:** Reverse-Charge auf der Eingangsseite ist
-relevant (Empfang einer §13b-Rechnung). Auf der Ausgangsseite tritt
-§13b für Kleinunternehmer selten auf — sie schulden keine USt.
+**Auch Kleinunternehmer schulden diese Steuer** (§ 13b Abs. 5 Satz 1 und Abs. 8 UStG:
+§ 19 ist bei der Berechnung nicht anzuwenden). Sie melden sie in der Voranmeldung für den
+betreffenden Zeitraum an (§ 18 Abs. 4a UStG) und haben keinen Vorsteuerabzug. Die an das
+Finanzamt gezahlte Steuer ist Betriebsausgabe im Jahr der Zahlung (§ 11 Abs. 2 EStG).
 
-Klein.Buch (Phase 2B, Block 9): Eingangs-Rechnungen mit Reverse-Charge
-bekommen ein Checkbox-Flag `is_reverse_charge`. EÜR-Aggregation
-berücksichtigt diese korrekt — der Empfänger hat zwar USt zu erheben
-(bei Regelbesteuerung), aber bei §19-Status ist auch das gegenstandslos.
+Klein.Buch: Kosten tragen das Kennzeichen `reverse_charge_13b`. Die Rechnung des Lieferanten
+weist keine Umsatzsteuer aus; Klein.Buch lehnt §13b-Kosten mit Umsatzsteuerbetrag ab
+(Netto = Brutto). Die selbst geschuldete Steuer berechnet Klein.Buch nicht (PRD G16); das
+Handbuch beschreibt Anmeldung und Zahlung. Einzelheiten: ADR 0039 Nr. 143.

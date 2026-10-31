@@ -11,6 +11,24 @@
 
 use chrono::{Datelike, NaiveDate};
 
+/// Kleinstes Geschäftsjahr, das Commands annehmen (Tippfehler-Schutz).
+pub const MIN_YEAR: i32 = 1900;
+/// Größtes Geschäftsjahr: vierstellig wie die Datums-CHECKs der Datenbank
+/// (`date(x) IS x`); darüber liefen Jahresgrenzen aus dem Bereich von
+/// `NaiveDate` (SEC-2026.11.1-01).
+pub const MAX_YEAR: i32 = 9999;
+
+/// Geschäftsjahr aus einer Anfrage, geprüft gegen [`MIN_YEAR`]..=[`MAX_YEAR`];
+/// sonst eine Meldung für den Nutzer (SEC-2026.11.1-01).
+pub fn checked_year(year: i64) -> Result<i32, String> {
+    i32::try_from(year)
+        .ok()
+        .filter(|y| (MIN_YEAR..=MAX_YEAR).contains(y))
+        .ok_or_else(|| {
+            format!("Das Geschäftsjahr {year} liegt außerhalb von {MIN_YEAR} bis {MAX_YEAR}.")
+        })
+}
+
 pub fn fiscal_year_for(date: &NaiveDate) -> i32 {
     date.year()
 }
@@ -49,6 +67,16 @@ mod tests {
             soft_lock_deadline(2026),
             NaiveDate::from_ymd_opt(2027, 5, 31).unwrap()
         );
+    }
+
+    #[test]
+    fn checked_year_accepts_four_digit_years_only() {
+        assert_eq!(checked_year(2026), Ok(2026));
+        assert_eq!(checked_year(1900), Ok(1900));
+        assert_eq!(checked_year(9999), Ok(9999));
+        for y in [1899, 10_000, 300_000, -1, i64::MAX, i64::MIN] {
+            assert!(checked_year(y).unwrap_err().contains("außerhalb"), "{y}");
+        }
     }
 
     #[test]

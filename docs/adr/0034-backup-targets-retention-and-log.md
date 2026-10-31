@@ -292,3 +292,9 @@ ed25519-dalek 3). `sha2` teilt Klein.Buch seit Lauf F6b mit russh (0.11, dazu hm
 sha1 0.11; ADR 0039 Nr. 139); die SHA-256-Hexwerte von Backup-Manifest und -Historie sind
 per Known-Answer-Test bit-genau gleich geblieben. Semver-getrennt bleibt nur `aes-gcm 0.10`
 der Backup-Hülle (ADR 0009) neben `aes-gcm 0.11` im SSH-Transport.
+
+## Amendment 2026-10-31 — russh 0.65 (Lauf 2026.11.1, Block V3c)
+
+russh 0.65 (CVE-2026-116794 in 0.64) mit ausdrücklich gewählten Features, ohne SSH-Agent;
+Agent-Weiterleitung wird abgelehnt. Ein Test prüft, dass ein fremder Host-Schlüssel vor der
+Anmeldung abgewiesen wird. CHANGELOG [2026.11.1].
