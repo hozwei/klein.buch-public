@@ -211,9 +211,14 @@ Der Wechsel kann eine Vorsteuerberichtigung nach §15a UStG auslösen,
 wenn Du Anlagen weiter nutzt, die Du unter dem anderen Status
 angeschafft hast: Der Übergang zwischen Kleinunternehmer-Regelung und
 Regelbesteuerung gilt dort als Änderung der Verhältnisse. Klein.Buch
-berechnet diese Berichtigung nicht; kläre sie mit Deiner
-Steuerberatung. Die Hinweise in Klein.Buch ersetzen keine
-Steuerberatung.
+zeigt dafür die Übersicht **"Vorsteuerberichtigung (§ 15a UStG)"**
+(Zeitraum, Jahresanteil, Grenzen nach §44 UStDV): unter "Anschaffungen"
+über "Vorsteuerberichtigung (§ 15a)" oder über den Link im Abschnitt
+"Steuerstatus" unter "Meine Firmendaten". Nach dem Wechsel legt
+Klein.Buch einen Hinweis an, der darauf verweist; gebucht wird nichts
+(Kapitel "Anschaffungen und AfA").
+Kläre die Beträge mit Deiner Steuerberatung. Die Hinweise in Klein.Buch
+ersetzen keine Steuerberatung.
 
 ### Wenn Du die 100.000 €-Grenze mitten im Jahr überschreitest
 

@@ -24,6 +24,7 @@
   import { date, euro } from "#lib/format.ts";
   import { flash } from "#lib/toast.svelte.ts";
   import { REAUTH_CANCELED } from "#lib/transport.ts";
+  import { VAT_ADJUSTMENT_URL } from "../../assets/vatAdjustment.ts";
   import {
     taxStatusOverview,
     taxStatusChangePreview,
@@ -440,6 +441,12 @@
         Einträge werden nie gelöscht oder geändert. Einen irrtümlichen Eintrag widerrufst du mit
         Grund; widerrufen lässt sich nur der jüngste.
       </p>
+      <!-- ADR 0042 Nr. 14: Folgen eines Wechsels für weiter genutzte Anlagen (liest nur). -->
+      <p class="kb-muted small">
+        Nutzt du Anlagen weiter, die du unter dem anderen Steuerstatus gekauft hast, zeigt die
+        <a class="kb-link" href={VAT_ADJUSTMENT_URL}>Übersicht der Vorsteuerberichtigung (§ 15a UStG)</a>
+        Zeitraum und Jahresanteile; gebucht wird nichts.
+      </p>
     {/if}
 
     <div class="kb-actions kb-start">
@@ -581,16 +588,19 @@
           </ul>
           <p>
             Nutzt du Anlagen weiter, die du als Kleinunternehmer angeschafft hast, kann der Wechsel
-            eine Berichtigung der Vorsteuer nach § 15a UStG auslösen. Klein.Buch berechnet sie
-            nicht; kläre das mit deiner Steuerberatung. Die Umsatzsteuer-Voranmeldung, Zahlungen an
+            eine Berichtigung der Vorsteuer nach § 15a UStG auslösen (zu deinen Gunsten). Klein.Buch
+            zeigt sie unter „Anschaffungen“ in der Übersicht „Vorsteuerberichtigung (§ 15a)“ und
+            legt nach dem Eintrag einen Hinweis an; gebucht wird nichts. Kläre die Beträge mit
+            deiner Steuerberatung. Die Umsatzsteuer-Voranmeldung, Zahlungen an
             und Erstattungen vom Finanzamt sowie die Umsatzsteuer auf Anlagenverkäufe bildet
             Klein.Buch nicht ab.
           </p>
         {:else if reason === "rueckkehr"}
           <p>
             Ab dem Wirkungsdatum weisen neue Rechnungen keine Umsatzsteuer aus. Auch die Rückkehr
-            kann bei weiter genutzten Anlagen eine Berichtigung nach § 15a UStG auslösen; kläre das
-            mit deiner Steuerberatung.
+            kann bei weiter genutzten Anlagen eine Berichtigung nach § 15a UStG auslösen (zu deinen
+            Lasten); die Übersicht „Vorsteuerberichtigung (§ 15a)“ unter „Anschaffungen“ zeigt sie.
+            Kläre die Beträge mit deiner Steuerberatung.
           </p>
         {/if}
         <p>

@@ -2600,6 +2600,7 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "data-encoding",
+ "fancy-regex",
  "futures-util",
  "hmac 0.13.0",
  "http-body-util",

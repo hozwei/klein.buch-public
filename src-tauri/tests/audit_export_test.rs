@@ -169,7 +169,10 @@ async fn exports_are_audited_and_flag_snapshot_mismatch() {
     .unwrap();
     env.ctx.session.clear();
     let y = serde_json::json!({ "fiscalYear": closed });
-    let ys = serde_json::json!({ "fiscalYear": closed, "skr": "SKR03" });
+    // ADR 0042 Nr. 15: Berater- und Mandantennummer sind Pflicht.
+    let ys = serde_json::json!({
+        "fiscalYear": closed, "skr": "SKR03", "consultantNumber": 1001, "clientNumber": 1
+    });
 
     // Abgeschlossenes Jahr ohne Abweichung: je Export genau ein Eintrag.
     let elster = euer_cmd::euer_export_elster(&env.ctx, args(y.clone()))
@@ -191,7 +194,10 @@ async fn exports_are_audited_and_flag_snapshot_mismatch() {
         .unwrap();
     for (action, file) in [
         ("euer.elster_export", format!("EUER-{closed}-ELSTER.csv")),
-        ("euer.datev_export", format!("DATEV-{closed}-SKR03.csv")),
+        (
+            "euer.datev_export",
+            format!("EXTF_Buchungsstapel_{closed}_SKR03.csv"),
+        ),
         (
             "euer.detail_export",
             format!("EUER-{closed}-Einzelaufstellung.zip"),

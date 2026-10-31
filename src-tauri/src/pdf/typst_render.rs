@@ -1662,7 +1662,7 @@ mod tests {
             "contents": [
                 "00-deckblatt.pdf — dieses Deckblatt",
                 "anlage-euer-2026.pdf — Anlage EÜR",
-                "datev-buchungsstapel.csv — DATEV (SKR03)",
+                "EXTF_Buchungsstapel_2026_SKR03.csv — DATEV (SKR03)",
             ],
         });
         let s = serde_json::to_string(&data).unwrap();

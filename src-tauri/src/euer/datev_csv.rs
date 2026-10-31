@@ -9,15 +9,23 @@
 //!
 //! ## Format (DATEV-Format, Formatbeschreibung „Buchungsstapel“, Version 700)
 //!
+//! - **Dateiname:** `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv` ([`file_name`]); die
+//!   Formatbeschreibung verlangt das Präfix `EXTF_` (ADR 0042 Nr. 15).
 //! - **Kopf (Vorlauf):** `"EXTF";700;21;"Buchungsstapel";12;…` — Datenkategorie
-//!   21, Formatversion 12, 31 Felder. Feld 27 trägt den Sachkontenrahmen
-//!   (`"03"`/`"04"`). Berater- (Feld 11) und Mandantennummer (Feld 12) sind
-//!   optional übergebbar; leer übernimmt DATEV beim Import über die
-//!   Stapelverarbeitung den geöffneten Mandanten (vom Steuerberater bestätigt).
+//!   21, Formatversion 12 (laut Anhang „Formatkategorie/-name/-version“ neben 13
+//!   zulässig), 31 Felder. Feld 27 trägt den Sachkontenrahmen (`"03"`/`"04"`).
+//!   Berater- (Feld 11) und Mandantennummer (Feld 12) sind Pflicht, die Regeln
+//!   lassen kein Leerfeld zu (ADR 0042 Nr. 15). Leere Textfelder stehen als `""`
+//!   (Felder mit `^["]…["]$`), reine Leerfelder (`^[]$`) bleiben leer.
 //! - **Spaltenüberschrift + Buchungszeilen:** die führenden Standard-Spalten des
 //!   Buchungsstapels (Umsatz, S/H-Kennzeichen, WKZ, Kurs, Basis-Umsatz, WKZ-Basis,
 //!   Konto, Gegenkonto, BU-Schlüssel, Belegdatum, Belegfeld 1+2, Skonto,
-//!   Buchungstext). DATEV liest positionsbasiert.
+//!   Buchungstext), Überschrift ohne Anführungszeichen wie in der Musterdatei der
+//!   Formatbeschreibung. DATEV liest positionsbasiert. Leere Textfelder der
+//!   Buchungszeile ebenfalls als `""`, leere Zahlenfelder leer (Musterdatei).
+//! - **Prüfung:** Der Test `format_rules` prüft Kopf und Buchungsfelder 1–14 gegen
+//!   die regulären Ausdrücke der Formatbeschreibung. Ein Import in DATEV ist damit
+//!   nicht belegt; er gilt als ungeprüft, bis ein Prüfprotokoll vorliegt.
 //! - **Kodierung:** Windows-1252 (vollständige Tabelle, nicht darstellbare
 //!   Zeichen und C1-Steuerzeichen werden `?`), CRLF-Zeilenenden, Dezimal-Komma.
 //!   Steuerzeichen (Zeilenumbrüche) in Textfeldern werden zu Leerzeichen.
@@ -275,14 +283,29 @@ pub struct DatevHeader {
     pub skr: Skr,
     /// Zeitstempel „Erzeugt am" im Format `YYYYMMDDHHMMSSFFF` (von der Shell).
     pub generated_at: String,
-    /// Beraternummer (Feld 11, 1001–9999999) — optional.
-    pub consultant_number: Option<u32>,
-    /// Mandantennummer (Feld 12, 1–99999) — optional.
-    pub client_number: Option<u32>,
+    /// Beraternummer (Feld 11, 1001–9999999) — Pflicht (ADR 0042 Nr. 15).
+    pub consultant_number: u32,
+    /// Mandantennummer (Feld 12, 1–99999) — Pflicht (ADR 0042 Nr. 15).
+    pub client_number: u32,
 }
 
-/// Prüft Berater- und Mandantennummer gegen die Wertebereiche der
-/// DATEV-Formatbeschreibung (Berater 1001–9999999, Mandant 1–99999).
+/// Dateiname des Buchungsstapels mit dem Präfix `EXTF_` aus der
+/// Formatbeschreibung (ADR 0042 Nr. 15), z. B. `EXTF_Buchungsstapel_2026_SKR03.csv`.
+pub fn file_name(fiscal_year: i32, skr: Skr) -> String {
+    format!("EXTF_Buchungsstapel_{fiscal_year}_{}.csv", skr.code())
+}
+
+/// Meldung, wenn eine Nummer fehlt (fester Anfang „Beraternummer“ bzw.
+/// „Mandantennummer“, damit die Oberfläche sie dem Feld zuordnet).
+pub const CONSULTANT_MISSING: &str =
+    "Beraternummer fehlt: Der DATEV-Buchungsstapel braucht Berater- und Mandantennummer (Kopf, Feld 11).";
+/// Siehe [`CONSULTANT_MISSING`].
+pub const CLIENT_MISSING: &str =
+    "Mandantennummer fehlt: Der DATEV-Buchungsstapel braucht Berater- und Mandantennummer (Kopf, Feld 12).";
+
+/// Prüft eine übergebene Nummer gegen die Wertebereiche der
+/// DATEV-Formatbeschreibung (Berater 1001–9999999, Mandant 1–99999); fehlende
+/// Nummern prüft erst [`require_header_numbers`].
 pub fn validate_header_numbers(
     consultant: Option<u32>,
     client: Option<u32>,
@@ -298,6 +321,22 @@ pub fn validate_header_numbers(
         }
     }
     Ok(())
+}
+
+/// Berater- und Mandantennummer sind Pflicht (Kopf Feld 11
+/// `^(\d{4,6}|\d{7})$`, Feld 12 `^\d{1,5}$`, kein Leerfeld; ADR 0042 Nr. 15):
+/// beide vorhanden und im Wertebereich, sonst eine Meldung mit dem Feldnamen
+/// am Anfang.
+pub fn require_header_numbers(
+    consultant: Option<u32>,
+    client: Option<u32>,
+) -> std::result::Result<(u32, u32), String> {
+    validate_header_numbers(consultant, client)?;
+    match (consultant, client) {
+        (Some(c), Some(m)) => Ok((c, m)),
+        (None, _) => Err(CONSULTANT_MISSING.into()),
+        (Some(_), None) => Err(CLIENT_MISSING.into()),
+    }
 }
 
 /// Eingaben für [`build_bookings`] (Einzelposten eines Geschäftsjahres).
@@ -326,6 +365,24 @@ fn parse_iso(s: &str) -> Option<NaiveDate> {
 fn truncate(s: &str, max: usize) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
+        .take(max)
+        .collect()
+}
+
+/// Belegfeld 1/2: nur `[a-zA-Z0-9_$&%*+-/]` (Formatbeschreibung Buchungsstapel,
+/// Feld 11/12: „Andere Zeichen sind unzulässig (insbesondere Leerzeichen,
+/// Umlaute, Punkt, Komma, Semikolon und Doppelpunkt)“); andere Zeichen werden
+/// `_`. Die Nummern aus `domain::numbering` erfüllen das ohnehin
+/// (ADR 0042 Nr. 15).
+fn belegfeld(s: &str, max: usize) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "_$&%*+-/".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(max)
         .collect()
 }
@@ -365,8 +422,8 @@ fn revenue_bookings(
             gegenkonto: revenue,
             bu_schluessel: String::new(),
             belegdatum: date,
-            belegfeld1: truncate(belegfeld1, 36),
-            belegfeld2: truncate(belegfeld2, 12),
+            belegfeld1: belegfeld(belegfeld1, 36),
+            belegfeld2: belegfeld(belegfeld2, 12),
             buchungstext: truncate(text.trim(), 60),
         });
     };
@@ -433,7 +490,7 @@ fn expense_bookings(
         gegenkonto,
         bu_schluessel: bu.to_string(),
         belegdatum: date,
-        belegfeld1: truncate(&e.expense_number, 36),
+        belegfeld1: belegfeld(&e.expense_number, 36),
         belegfeld2: String::new(),
         buchungstext: truncate(text.trim(), 60),
     };
@@ -559,7 +616,7 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
                 gegenkonto: skr.revenue_disposal(gain),
                 bu_schluessel: String::new(),
                 belegdatum: date,
-                belegfeld1: truncate(&d.asset_number, 36),
+                belegfeld1: belegfeld(&d.asset_number, 36),
                 belegfeld2: String::new(),
                 buchungstext: truncate(
                     &format!(
@@ -579,7 +636,7 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
                 gegenkonto: skr.asset_account_for(&d.depreciation_method),
                 bu_schluessel: String::new(),
                 belegdatum: date,
-                belegfeld1: truncate(&d.asset_number, 36),
+                belegfeld1: belegfeld(&d.asset_number, 36),
                 belegfeld2: String::new(),
                 buchungstext: truncate(&format!("Restbuchwert {}", d.label), 60),
             });
@@ -604,7 +661,7 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
                 gegenkonto: skr.asset_account_for(&a.depreciation_method),
                 bu_schluessel: String::new(),
                 belegdatum: year_end,
-                belegfeld1: truncate(&a.asset_number, 36),
+                belegfeld1: belegfeld(&a.asset_number, 36),
                 belegfeld2: String::new(),
                 buchungstext: truncate(&format!("AfA {}", a.label), 60),
             });
@@ -636,7 +693,7 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
             gegenkonto,
             bu_schluessel: String::new(),
             belegdatum: date,
-            belegfeld1: truncate(&p.movement_number, 36),
+            belegfeld1: belegfeld(&p.movement_number, 36),
             belegfeld2: String::new(),
             buchungstext: truncate(format!("{prefix} {}", p.description).trim_end(), 60),
         });
@@ -649,8 +706,10 @@ pub fn build_bookings(skr: Skr, fiscal_year: i32, inp: &DatevInputs<'_>) -> Vec<
 // Serialisierung (DATEV-Format, CP1252)
 // ============================================================================
 
-/// Standard-Spaltenüberschrift (führende Buchungsstapel-Spalten).
-const COLUMN_HEADER: &str = "\"Umsatz (ohne Soll/Haben-Kz)\";\"Soll/Haben-Kennzeichen\";\"WKZ Umsatz\";\"Kurs\";\"Basis-Umsatz\";\"WKZ Basis-Umsatz\";\"Konto\";\"Gegenkonto (ohne BU-Schlüssel)\";\"BU-Schlüssel\";\"Belegdatum\";\"Belegfeld 1\";\"Belegfeld 2\";\"Skonto\";\"Buchungstext\"";
+/// Standard-Spaltenüberschrift (führende Buchungsstapel-Spalten), Namen und
+/// Schreibweise ohne Anführungszeichen wie in der Musterdatei der
+/// Formatbeschreibung („Einstieg“, `EXTF_Buchungsstapel.csv`; ADR 0042 Nr. 15).
+const COLUMN_HEADER: &str = "Umsatz (ohne Soll/Haben-Kz);Soll/Haben-Kennzeichen;WKZ Umsatz;Kurs;Basis-Umsatz;WKZ Basis-Umsatz;Konto;Gegenkonto (ohne BU-Schlüssel);BU-Schlüssel;Belegdatum;Belegfeld 1;Belegfeld 2;Skonto;Buchungstext";
 
 /// DATEV-Textfeld: in Anführungszeichen, eingebettete `"` verdoppelt,
 /// Steuerzeichen als Leerzeichen.
@@ -679,40 +738,43 @@ fn build_header_line(header: &DatevHeader) -> String {
     let wj = format!("{year}0101");
     let von = format!("{year}0101");
     let bis = format!("{year}1231");
-    let bez = format!("EÜR {year}");
-    let num = |n: Option<u32>| n.map(|v| v.to_string()).unwrap_or_default();
+    // Feld 17 erlaubt nur `[\w.-/ ]`, `\w` = [a-zA-Z0-9_] (Anhang „Notation“):
+    // kein Umlaut, daher „EUER“ statt „EÜR“ (ADR 0042 Nr. 15).
+    let bez = format!("EUER {year}");
+    // Leere Textfelder (`^["]…["]$`) als `""`, reine Leerfelder (`^[]$`)
+    // ohne Inhalt (ADR 0042 Nr. 15).
     let fields: Vec<String> = vec![
-        q("EXTF"),                     // 1 Kennzeichen
-        "700".into(),                  // 2 Versionsnummer
-        "21".into(),                   // 3 Datenkategorie (Buchungsstapel)
-        q("Buchungsstapel"),           // 4 Formatname
-        "12".into(),                   // 5 Formatversion
-        header.generated_at.clone(),   // 6 Erzeugt am (YYYYMMDDHHMMSSFFF)
-        String::new(),                 // 7 Importiert
-        String::new(),                 // 8 Herkunft
-        String::new(),                 // 9 Exportiert von
-        String::new(),                 // 10 Importiert von
-        num(header.consultant_number), // 11 Beraternummer (optional)
-        num(header.client_number),     // 12 Mandantennummer (optional)
-        wj,                            // 13 WJ-Beginn
-        "4".into(),                    // 14 Sachkontenlänge
-        von,                           // 15 Datum von
-        bis,                           // 16 Datum bis
-        q(&bez),                       // 17 Bezeichnung
-        String::new(),                 // 18 Diktatkürzel
-        "1".into(),                    // 19 Buchungstyp (1 = Finanzbuchführung)
-        "0".into(),                    // 20 Rechnungslegungszweck
-        "0".into(),                    // 21 Festschreibung (0 = nicht festgeschrieben)
-        q("EUR"),                      // 22 WKZ
-        String::new(),                 // 23 reserviert
-        String::new(),                 // 24 Derivatskennzeichen
-        String::new(),                 // 25 reserviert
-        String::new(),                 // 26 reserviert
-        q(header.skr.header_code()),   // 27 Sachkontenrahmen
-        String::new(),                 // 28 ID der Branchenlösung
-        String::new(),                 // 29 reserviert
-        String::new(),                 // 30 reserviert
-        String::new(),                 // 31 Anwendungsinformation
+        q("EXTF"),                            // 1 Kennzeichen
+        "700".into(),                         // 2 Versionsnummer
+        "21".into(),                          // 3 Datenkategorie (Buchungsstapel)
+        q("Buchungsstapel"),                  // 4 Formatname
+        "12".into(),                          // 5 Formatversion
+        header.generated_at.clone(),          // 6 Erzeugt am (YYYYMMDDHHMMSSFFF)
+        String::new(),                        // 7 Importiert (^[]$)
+        q(""),                                // 8 Herkunft
+        q(""),                                // 9 Exportiert von
+        q(""),                                // 10 Importiert von
+        header.consultant_number.to_string(), // 11 Beraternummer (Pflicht)
+        header.client_number.to_string(),     // 12 Mandantennummer (Pflicht)
+        wj,                                   // 13 WJ-Beginn
+        "4".into(),                           // 14 Sachkontenlänge
+        von,                                  // 15 Datum von
+        bis,                                  // 16 Datum bis
+        q(&bez),                              // 17 Bezeichnung
+        q(""),                                // 18 Diktatkürzel
+        "1".into(),                           // 19 Buchungstyp (1 = Finanzbuchführung)
+        "0".into(),                           // 20 Rechnungslegungszweck
+        "0".into(),                           // 21 Festschreibung (0 = nicht festgeschrieben)
+        q("EUR"),                             // 22 WKZ
+        String::new(),                        // 23 reserviert
+        q(""),                                // 24 Derivatskennzeichen
+        String::new(),                        // 25 reserviert
+        String::new(),                        // 26 reserviert
+        q(header.skr.header_code()),          // 27 Sachkontenrahmen
+        String::new(),                        // 28 ID der Branchenlösung
+        String::new(),                        // 29 reserviert
+        q(""),                                // 30 reserviert (^["]["]$)
+        q(""),                                // 31 Anwendungsinformation
     ];
     fields.join(";")
 }
@@ -724,24 +786,16 @@ fn build_booking_line(b: &DatevBooking) -> String {
         q("EUR"),                     // 3 WKZ Umsatz
         String::new(),                // 4 Kurs
         String::new(),                // 5 Basis-Umsatz
-        String::new(),                // 6 WKZ Basis-Umsatz
+        q(""),                        // 6 WKZ Basis-Umsatz (Textfeld, Musterdatei)
         // 7/8 Konto/Gegenkonto: Sachkontenlänge 4 (DATEV-Header Feld 14).
         // `{:04}` padded 3-stellige Anlagekonten (SKR03 420/480, SKR04 650/670)
         // mit führender 0 (R2-001).
         format!("{:04}", b.konto),
         format!("{:04}", b.gegenkonto),
-        if b.bu_schluessel.is_empty() {
-            String::new()
-        } else {
-            q(&b.bu_schluessel)
-        }, // 9 BU-Schlüssel
+        q(&b.bu_schluessel),          // 9 BU-Schlüssel (leer: "")
         fmt_belegdatum(b.belegdatum), // 10 Belegdatum (TTMM)
         q(&b.belegfeld1),             // 11 Belegfeld 1
-        if b.belegfeld2.is_empty() {
-            String::new()
-        } else {
-            q(&b.belegfeld2)
-        }, // 12 Belegfeld 2 (R2-010: Original-Nummer bei Storno)
+        q(&b.belegfeld2),             // 12 Belegfeld 2 (R2-010: Original-Nummer bei Storno)
         String::new(),                // 13 Skonto
         q(&b.buchungstext),           // 14 Buchungstext
     ];
@@ -823,8 +877,8 @@ mod tests {
             fiscal_year: 2026,
             skr,
             generated_at: "20260521120000000".into(),
-            consultant_number: None,
-            client_number: None,
+            consultant_number: 1001,
+            client_number: 1,
         }
     }
 
@@ -928,25 +982,30 @@ mod tests {
         assert_eq!(fmt_belegdatum(d(2026, 12, 31)), "3112");
     }
 
-    /// R2-S2-DATEV-HEADER: 31 Felder, Feld 27 = Sachkontenrahmen, Berater- und
-    /// Mandantennummer optional.
+    /// R2-S2-DATEV-HEADER: 31 Felder, Feld 27 = Sachkontenrahmen; ADR 0042
+    /// Nr. 15: Berater- und Mandantennummer Pflicht, leere Textfelder `""`.
     #[test]
-    fn header_line_has_extf_markers_skr_and_optional_numbers() {
+    fn header_line_has_extf_markers_skr_and_numbers() {
         let line = build_header_line(&header(Skr::Skr03));
         assert!(line.starts_with("\"EXTF\";700;21;\"Buchungsstapel\";12;"));
         let cols: Vec<&str> = line.split(';').collect();
         assert_eq!(cols.len(), 31);
-        assert_eq!(cols[10], "");
-        assert_eq!(cols[11], "");
+        assert_eq!(cols[6], "", "Feld 7 ^[]$");
+        assert_eq!(cols[7], "\"\"", "Feld 8 Herkunft");
+        assert_eq!(cols[10], "1001");
+        assert_eq!(cols[11], "1");
         assert_eq!(cols[12], "20260101");
         assert_eq!(cols[15], "20261231");
-        assert_eq!(cols[16], "\"EÜR 2026\"");
+        assert_eq!(cols[16], "\"EUER 2026\"");
+        assert_eq!(cols[17], "\"\"", "Feld 18 Diktatkürzel");
         assert_eq!(cols[21], "\"EUR\"");
+        assert_eq!(cols[23], "\"\"", "Feld 24 Derivatskennzeichen");
         assert_eq!(cols[26], "\"03\"");
+        assert_eq!(&cols[28..], &["", "\"\"", "\"\""]);
 
         let mut h = header(Skr::Skr04);
-        h.consultant_number = Some(29098);
-        h.client_number = Some(55003);
+        h.consultant_number = 29098;
+        h.client_number = 55003;
         let cols_line = build_header_line(&h);
         let cols: Vec<&str> = cols_line.split(';').collect();
         assert_eq!(cols[10], "29098");
@@ -965,6 +1024,34 @@ mod tests {
         assert!(validate_header_numbers(None, Some(100_000)).is_err());
     }
 
+    /// ADR 0042 Nr. 15: ohne Berater- oder Mandantennummer kein Stapel; die
+    /// Meldung beginnt mit dem Feldnamen.
+    #[test]
+    fn header_numbers_are_required() {
+        assert_eq!(require_header_numbers(Some(1001), Some(1)), Ok((1001, 1)));
+        let e = require_header_numbers(None, None).unwrap_err();
+        assert!(e.starts_with("Beraternummer fehlt"), "{e}");
+        let e = require_header_numbers(None, Some(1)).unwrap_err();
+        assert!(e.starts_with("Beraternummer fehlt"), "{e}");
+        let e = require_header_numbers(Some(1001), None).unwrap_err();
+        assert!(e.starts_with("Mandantennummer fehlt"), "{e}");
+        // Wertebereich vor dem Fehlen: eine falsche Nummer wird benannt.
+        let e = require_header_numbers(Some(12), None).unwrap_err();
+        assert!(e.starts_with("Beraternummer muss"), "{e}");
+    }
+
+    #[test]
+    fn file_name_has_extf_prefix() {
+        assert_eq!(
+            file_name(2026, Skr::Skr03),
+            "EXTF_Buchungsstapel_2026_SKR03.csv"
+        );
+        assert_eq!(
+            file_name(2025, Skr::Skr04),
+            "EXTF_Buchungsstapel_2025_SKR04.csv"
+        );
+    }
+
     #[test]
     fn booking_line_field_layout() {
         let line = build_booking_line(&booking(1200, 8195));
@@ -973,11 +1060,14 @@ mod tests {
         assert_eq!(cols[0], "1000,00"); // Umsatz
         assert_eq!(cols[1], "\"S\""); // S/H
         assert_eq!(cols[6], "1200"); // Konto
+        assert_eq!(cols[3], ""); // Kurs (Zahl) leer
+        assert_eq!(cols[5], "\"\""); // WKZ Basis-Umsatz (Text) leer
         assert_eq!(cols[7], "8195"); // Gegenkonto
-        assert_eq!(cols[8], ""); // BU-Schlüssel leer
+        assert_eq!(cols[8], "\"\""); // BU-Schlüssel leer (Textfeld)
         assert_eq!(cols[9], "0103"); // Belegdatum TTMM
         assert_eq!(cols[10], "\"RE-2026-0001\""); // Belegfeld 1
-        assert_eq!(cols[11], ""); // Belegfeld 2 leer
+        assert_eq!(cols[11], "\"\""); // Belegfeld 2 leer (Textfeld)
+        assert_eq!(cols[12], ""); // Skonto (Zahl) leer
         assert_eq!(cols[13], "\"ACME Beratung\""); // Buchungstext
 
         let mut b = booking(4930, 1200);
@@ -1517,7 +1607,8 @@ mod tests {
         let lines: Vec<&str> = text.split("\r\n").filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 3); // Vorlauf + Spaltenkopf + 1 Buchung
         assert!(lines[0].starts_with("\"EXTF\";700;21;"));
-        assert!(lines[1].starts_with("\"Umsatz (ohne Soll/Haben-Kz)\";"));
+        assert!(lines[1].starts_with("Umsatz (ohne Soll/Haben-Kz);Soll/Haben-Kennzeichen;"));
+        assert_eq!(lines[1].split(';').count(), 14);
         assert!(lines[2].starts_with("1000,00;"));
     }
 
@@ -1601,6 +1692,599 @@ mod tests {
             assert_eq!(b[k].gegenkonto, b[half + k].gegenkonto);
             assert_eq!(b[k].amount_cents, b[half + k].amount_cents);
             assert_ne!(b[k].soll_haben, b[half + k].soll_haben);
+        }
+    }
+}
+
+/// ADR 0042 Nr. 15: Prüfung von Kopf (31 Felder) und Buchungsfeldern 1–14 gegen
+/// die regulären Ausdrücke der DATEV-Formatbeschreibung.
+///
+/// Fundstelle: DATEV Developer Portal, „DATEV-Format“ (Stand der Abfrage
+/// 31.10.2026, Changelog „März 2025 … Improved a few regular expressions“),
+/// Seiten „Formatbeschreibung → Header“ (Satzaufbau, Spalte „Ausdruck“) und
+/// „Formatbeschreibung → Buchungsstapel“ (Felder 1–14); Notation nach „Anhang →
+/// Notation für Ausdrücke“. Die Ausdrücke stehen hier als Konstanten, nichts
+/// wird zur Laufzeit geladen. Übertragung in Rust-Syntax:
+/// - `\w` ist nach der Notation „Zahlen und Buchstaben [a-zA-Z0-9_]“ (ASCII,
+///   ohne Umlaute) und steht hier ausgeschrieben.
+/// - `^[]$` („Leerfeld“) ist in Rust kein gültiger Ausdruck und steht als `^$`.
+///
+/// Bewusste Abweichungen (ADR 0042 Nr. 15, Formatversion 12 bleibt):
+/// - Kopf Feld 5: Der Header-Ausdruck nennt für den Buchungsstapel nur `13`;
+///   der Anhang „Formatkategorie/-name/-version“ führt für Datenkategorie 21
+///   die Versionen 13, 12, 11 und 10. Geprüft wird gegen den Anhang.
+/// - Buchung Feld 9 (BU-Schlüssel): Formatversion 13 verlangt `^(["]\d{4}["])$`;
+///   Klein.Buch schreibt bei Version 12 die einstelligen Schlüssel `"9"`/`"8"`
+///   („Die bisherigen BU-Schlüssel können weiterhin verwendet werden“, Seite
+///   „Wiederkehrende Buchungen“). Geprüft wird `^(["]\d{1,4}["])$`.
+///
+/// Leere Felder der Buchungszeile: Die Ausdrücke beschreiben gefüllte Felder.
+/// Ein nicht genutztes Feld steht wie in der Musterdatei der Formatbeschreibung
+/// („Einstieg“, `EXTF_Buchungsstapel.csv`): Zahlenfeld leer, Textfeld `""`.
+#[cfg(test)]
+mod format_rules {
+    use super::*;
+    use crate::euer::detail::{split_payment, InvoiceTaxGroup};
+    use fancy_regex::Regex;
+
+    /// Kopf: (Feld, Überschrift, Ausdruck).
+    const HEADER_RULES: [(usize, &str, &str); 31] = [
+        (1, "Kennzeichen", r#"^["](EXTF|DTVF)["]$"#),
+        (2, "Versionsnummer", r"^(700)$"),
+        (3, "Formatkategorie", r"^(16|20|21|46|48|65)$"),
+        (
+            4,
+            "Formatname",
+            r#"^["](Buchungsstapel|Wiederkehrende Buchungen|Debitoren/Kreditoren|Kontenbeschriftungen|Zahlungsbedingungen|Diverse Adressen)["]$"#,
+        ),
+        // Abweichung: Anhang „Formatkategorie/-name/-version“, Kategorie 21.
+        (5, "Formatversion", r"^(13|12|11|10)$"),
+        (
+            6,
+            "Erzeugt am",
+            r"^([2])([0])([0-9]{2})(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])(2[0-3]|[01][0-9])([0-5][0-9])([0-5][0-9][0-9][0-9][0-9])$",
+        ),
+        (7, "Importiert", r"^$"),
+        (8, "Herkunft", r#"^["][a-zA-Z0-9_]{0,2}["]$"#),
+        (9, "Exportiert von", r#"^["][a-zA-Z0-9_]{0,25}["]$"#),
+        (10, "Importiert von", r#"^["][a-zA-Z0-9_]{0,25}["]$"#),
+        (11, "Beraternummer", r"^(\d{4,6}|\d{7})$"),
+        (12, "Mandantennummer", r"^\d{1,5}$"),
+        (
+            13,
+            "WJ-Beginn",
+            r"^([2])([0])([0-9]{2})(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])$",
+        ),
+        (14, "Sachkontenlänge", r"^[4-8]$"),
+        (
+            15,
+            "Datum von",
+            r"^([2])([0])([0-9]{2})(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])$",
+        ),
+        (
+            16,
+            "Datum bis",
+            r"^([2])([0])([0-9]{2})(0[1-9]|1[0-2])(0[1-9]|[1-2][0-9]|3[0-1])$",
+        ),
+        (17, "Bezeichnung", r#"^["][a-zA-Z0-9_.-/ ]{0,30}["]$"#),
+        (18, "Diktatkürzel", r#"^["]([A-Z]{2}){0,2}["]$"#),
+        (19, "Buchungstyp", r"^[1-2]$"),
+        (20, "Rechnungslegungszweck", r"^(0|30|40|50|64)$"),
+        (21, "Festschreibung", r"^(0|1)$"),
+        (22, "WKZ", r#"^["]([A-Z]{3})["]$"#),
+        (23, "Reserviert", r"^$"),
+        (24, "Derivatskennzeichen", r#"^["]["]$"#),
+        (25, "Reserviert", r"^$"),
+        (26, "Reserviert", r"^$"),
+        (27, "Sachkontenrahmen", r#"^["](\d{2}){0,2}["]$"#),
+        (28, "ID der Branchenlösung", r"^\d{0,4}$"),
+        (29, "Reserviert", r"^$"),
+        (30, "Reserviert", r#"^["]["]$"#),
+        (31, "Anwendungsinformation", r#"^["].{0,16}["]$"#),
+    ];
+
+    /// Leerwert eines nicht genutzten Buchungsfelds (Musterdatei).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Empty {
+        /// Pflichtfeld, nie leer.
+        No,
+        /// Zahlenfeld: leer.
+        Number,
+        /// Textfeld: `""`.
+        Text,
+    }
+
+    /// Buchungsstapel, Felder 1–14: (Feld, Überschrift, Ausdruck, Leerwert).
+    const BOOKING_RULES: [(usize, &str, &str, Empty); 14] = [
+        (1, "Umsatz", r"^(?!0{1,10}\,00)\d{1,10}\,\d{2}$", Empty::No),
+        (2, "Soll-/Haben-Kennzeichen", r#"^["](S|H)["]$"#, Empty::No),
+        (3, "WKZ Umsatz", r#"^["]([A-Z]{3})["]$"#, Empty::Text),
+        (4, "Kurs", r"^([1-9]\d{0,3}[,]\d{2,6})$", Empty::Number),
+        (
+            5,
+            "Basisumsatz",
+            r"^(?!0{1,10}\,00)\d{1,10}\,\d{2}$",
+            Empty::Number,
+        ),
+        // Ohne Ausdruck in der Formatbeschreibung; ISO-Code wie Feld 3.
+        (6, "WKZ Basisumsatz", r#"^["]([A-Z]{3})["]$"#, Empty::Text),
+        (7, "Konto", r"^(?!0{1,9}$)(\d{1,9})$", Empty::No),
+        (
+            8,
+            "Gegenkonto (ohne BU-Schlüssel)",
+            r"^(?!0{1,9}$)(\d{1,9})$",
+            Empty::No,
+        ),
+        // Abweichung: Formatversion 12, einstellige Schlüssel (siehe oben).
+        (9, "BU-Schlüssel", r#"^(["]\d{1,4}["])$"#, Empty::Text),
+        (10, "Belegdatum", r"^(\d{4})$", Empty::No),
+        (
+            11,
+            "Belegfeld 1",
+            r#"^(["][a-zA-Z0-9_$&%*+\-\/]{0,36}["])$"#,
+            Empty::No,
+        ),
+        (
+            12,
+            "Belegfeld 2",
+            r#"^(["][a-zA-Z0-9_$&%*+\-\/]{0,36}["])$"#,
+            Empty::Text,
+        ),
+        (13, "Skonto", r"^([1-9]\d{0,7}[,]\d{2})$", Empty::Number),
+        (14, "Buchungstext", r#"^(["].{0,60}["])$"#, Empty::No),
+    ];
+
+    /// Teilt eine Zeile an `;` außerhalb von Anführungszeichen (verdoppelte
+    /// `""` im Text schalten zweimal um und bleiben im Feld).
+    fn split_fields(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut quoted = false;
+        for c in line.chars() {
+            match c {
+                '"' => {
+                    quoted = !quoted;
+                    cur.push(c);
+                }
+                ';' if !quoted => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(c),
+            }
+        }
+        out.push(cur);
+        out
+    }
+
+    /// CP1252-Bytes als Text; für die Ausdrücke genügt Byte = Zeichen (`\w`
+    /// ist ASCII, `.` passt auf jedes Zeichen).
+    fn decode(bytes: &[u8]) -> String {
+        bytes.iter().map(|&b| b as char).collect()
+    }
+
+    fn rx(expr: &str) -> Regex {
+        Regex::new(expr).unwrap_or_else(|e| panic!("Ausdruck {expr}: {e}"))
+    }
+
+    /// Prüft eine fertige Datei; liefert alle Verstöße als Text.
+    fn violations(bytes: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            out.push("BOM vorhanden (CP1252 ohne BOM erwartet)".into());
+        }
+        let text = decode(bytes);
+        if !text.ends_with("\r\n") {
+            out.push("letzte Zeile ohne CR/LF".into());
+        }
+        let body = text.strip_suffix("\r\n").unwrap_or(&text);
+        if body
+            .split("\r\n")
+            .any(|l| l.contains('\n') || l.contains('\r'))
+        {
+            out.push("Zeilenende ohne CR/LF".into());
+        }
+        let lines: Vec<&str> = body.split("\r\n").collect();
+        let head = split_fields(lines[0]);
+        if head.len() != HEADER_RULES.len() {
+            out.push(format!("Kopf: {} statt 31 Felder", head.len()));
+        }
+        for ((nr, name, expr), value) in HEADER_RULES.iter().zip(&head) {
+            if !rx(expr).is_match(value).unwrap() {
+                out.push(format!(
+                    "Kopf Feld {nr} {name}: {value:?} passt nicht auf {expr}"
+                ));
+            }
+        }
+        // Feld 11/12: Wertebereich laut Spalte „Beschreibung“.
+        if let Ok(c) = head[10].parse::<u32>() {
+            if !(1001..=9_999_999).contains(&c) {
+                out.push(format!("Kopf Feld 11: {c} außerhalb 1001–9999999"));
+            }
+        }
+        if let Ok(m) = head[11].parse::<u32>() {
+            if !(1..=99_999).contains(&m) {
+                out.push(format!("Kopf Feld 12: {m} außerhalb 1–99999"));
+            }
+        }
+        let columns = split_fields(lines[1]);
+        if columns.len() != BOOKING_RULES.len() || columns[0] != "Umsatz (ohne Soll/Haben-Kz)" {
+            out.push(format!("Spaltenüberschrift: {:?}", lines[1]));
+        }
+        for (i, line) in lines.iter().enumerate().skip(2) {
+            let fields = split_fields(line);
+            if fields.len() != BOOKING_RULES.len() {
+                out.push(format!("Zeile {}: {} statt 14 Felder", i + 1, fields.len()));
+                continue;
+            }
+            for ((nr, name, expr, empty), value) in BOOKING_RULES.iter().zip(&fields) {
+                let ok = match (empty, value.as_str()) {
+                    (Empty::Number, "") | (Empty::Text, "\"\"") => true,
+                    _ => rx(expr).is_match(value).unwrap(),
+                };
+                if !ok {
+                    out.push(format!(
+                        "Zeile {} Feld {nr} {name}: {value:?} passt nicht auf {expr}",
+                        i + 1
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    fn header_for(skr: Skr, consultant: u32, client: u32) -> DatevHeader {
+        DatevHeader {
+            fiscal_year: 2026,
+            skr,
+            generated_at: "20261031120000000".into(),
+            consultant_number: consultant,
+            client_number: client,
+        }
+    }
+
+    fn income(date: &str, nr: &str, cents: i64, klein: bool, acct: Option<&str>) -> IncomeItem {
+        IncomeItem {
+            paid_date: date.into(),
+            invoice_number: nr.into(),
+            customer: "Beispiel Kundin; Musterweg".into(),
+            description: "Fotoshooting \"Familie\" Größe M".into(),
+            amount_cents: cents,
+            is_kleinunternehmer: klein,
+            account_type: acct.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cost(
+        date: &str,
+        nr: &str,
+        cat: &str,
+        gross: i64,
+        tax: i64,
+        klein: bool,
+        acct: Option<&str>,
+        method: Option<&str>,
+    ) -> ExpenseItem {
+        ExpenseItem {
+            paid_date: date.into(),
+            expense_number: nr.into(),
+            vendor: "Lieferant Beispiel".into(),
+            category: cat.into(),
+            description: "Bürobedarf & Zubehör".into(),
+            gross_cents: gross,
+            net_cents: gross - tax,
+            tax_cents: tax,
+            is_kleinunternehmer: klein,
+            account_type: acct.map(str::to_string),
+            capitalized_asset_method: method.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// Demodaten eines Jahres mit Wechsel zur Regelbesteuerung ab 01.07.:
+    /// jede Bewegungsart des Stapels mindestens einmal (Zahlung §19 und
+    /// Regelbesteuerung mit 19 %, 7 % und einem Satz ohne Automatikkonto,
+    /// Gegenbuchung einer Zahlung, Storno-Erstattung, Kosten mit und ohne
+    /// Vorsteuer, aktivierte Kosten, Verkauf mit Buchgewinn und -verlust,
+    /// Entnahme einer Anlage, AfA linear und GWG, Privatentnahme und -einlage,
+    /// alle Zahlungskonto-Arten). Keine echten Personen oder Firmen.
+    fn demo_bookings(skr: Skr) -> Vec<DatevBooking> {
+        let groups = vec![
+            InvoiceTaxGroup {
+                category_code: "S".into(),
+                rate_basis_points: 1900,
+                net_cents: 100_000,
+                tax_cents: 19_000,
+            },
+            InvoiceTaxGroup {
+                category_code: "S".into(),
+                rate_basis_points: 700,
+                net_cents: 20_000,
+                tax_cents: 1_400,
+            },
+            InvoiceTaxGroup {
+                category_code: "S".into(),
+                rate_basis_points: 1600,
+                net_cents: 10_000,
+                tax_cents: 1_600,
+            },
+        ];
+        let gross: i64 = 152_000;
+        let mut wrong = income("2026-03-02", "RE-2026-0002", 30_000, true, Some("cash"));
+        wrong.reversed = true;
+        let mut reversal = income("2026-03-02", "RE-2026-0002", -30_000, true, Some("cash"));
+        reversal.is_reversal = true;
+        let regel = IncomeItem {
+            shares: split_payment(&groups, gross),
+            ..income("2026-08-03", "RE-2026-0010", gross, false, Some("bank"))
+        };
+        let incomes = vec![
+            income("2026-02-01", "RE-2026-0001", 100_000, true, None),
+            wrong,
+            reversal,
+            income("2026-03-05", "RE-2026-0002", 25_000, true, Some("cash")),
+            income("2026-04-10", "RE-2026-0003", 12_345, true, Some("paypal")),
+            income("2026-05-11", "RE-2026-0004", 9_900, true, Some("stripe")),
+            income("2026-06-12", "RE-2026-0005", 4_200, true, Some("other")),
+            regel,
+        ];
+        let storno = vec![
+            StornoItem {
+                storno_date: "2026-06-20".into(),
+                storno_number: "ST-2026-0001".into(),
+                original_number: "RE-2026-0001".into(),
+                refunded_cents: 20_000,
+                is_kleinunternehmer: true,
+                shares: Vec::new(),
+                account_type: None,
+            },
+            StornoItem {
+                storno_date: "2026-09-20".into(),
+                storno_number: "ST-2026-0002".into(),
+                original_number: "RE-2026-0010".into(),
+                refunded_cents: 11_900,
+                is_kleinunternehmer: false,
+                shares: split_payment(&groups[..1], 11_900),
+                account_type: Some("bank".into()),
+            },
+        ];
+        let expenses = vec![
+            cost(
+                "2026-01-15",
+                "KO-2026-0001",
+                "office",
+                4_990,
+                0,
+                true,
+                None,
+                None,
+            ),
+            cost(
+                "2026-02-15",
+                "KO-2026-0002",
+                "software",
+                11_900,
+                0,
+                true,
+                Some("paypal"),
+                None,
+            ),
+            cost(
+                "2026-07-15",
+                "KO-2026-0003",
+                "office",
+                11_900,
+                1_900,
+                false,
+                None,
+                None,
+            ),
+            cost(
+                "2026-08-15",
+                "KO-2026-0004",
+                "goods",
+                10_700,
+                700,
+                false,
+                Some("cash"),
+                None,
+            ),
+            cost(
+                "2026-09-15",
+                "KO-2026-0005",
+                "travel",
+                11_000,
+                1_000,
+                false,
+                None,
+                None,
+            ),
+            cost(
+                "2026-10-15",
+                "KO-2026-0006",
+                "unbekannt",
+                2_500,
+                0,
+                false,
+                Some("other"),
+                None,
+            ),
+        ];
+        let capitalized = vec![
+            cost(
+                "2026-03-20",
+                "KO-2026-0007",
+                "hardware",
+                150_000,
+                0,
+                true,
+                None,
+                Some("linear"),
+            ),
+            cost(
+                "2026-03-21",
+                "KO-2026-0008",
+                "hardware",
+                59_900,
+                0,
+                true,
+                None,
+                Some("gwg_sofort"),
+            ),
+            cost(
+                "2026-07-21",
+                "KO-2026-0009",
+                "hardware",
+                238_000,
+                38_000,
+                false,
+                None,
+                Some("linear"),
+            ),
+        ];
+        let disposal = |nr: &str, kind: &str, proceeds: i64, residual: i64| DisposalItem {
+            disposal_date: "2026-11-02".into(),
+            asset_number: nr.into(),
+            label: "Kamera Beispiel".into(),
+            proceeds_cents: proceeds,
+            residual_book_value_cents: residual,
+            gain_loss_cents: proceeds - residual,
+            depreciation_method: "linear".into(),
+            disposal_type: kind.into(),
+        };
+        let disposals = vec![
+            disposal("AV-2024-0001", "sale", 50_000, 30_000),
+            disposal("AV-2024-0002", "sale", 10_000, 40_000),
+            disposal("AV-2025-0001", "given_away", 20_000, 15_000),
+            disposal("AV-2025-0002", "scrap", 0, 5_000),
+        ];
+        let asset = |nr: &str, method: &str, afa: i64| AveeurItem {
+            asset_number: nr.into(),
+            label: "Notebook Beispiel".into(),
+            acquisition_date: "2026-03-20".into(),
+            acquisition_cost_cents: 150_000,
+            depreciation_method: method.into(),
+            useful_life_years: Some(3.0),
+            business_share_percent: 100.0,
+            afa_year_cents: afa,
+            book_value_start_cents: 150_000,
+            book_value_end_cents: 150_000 - afa,
+            disposed_in_year: false,
+            disposal_date: None,
+            disposal_proceeds_cents: None,
+        };
+        let assets = vec![
+            asset("AV-2026-0001", "linear", 41_667),
+            asset("AV-2026-0002", "gwg_sofort", 59_900),
+            asset("AV-2026-0003", "computer_special_2021", 200_000),
+        ];
+        let private = vec![
+            PrivateMovementItem {
+                movement_date: "2026-05-30".into(),
+                movement_number: "PV-2026-0001".into(),
+                movement_type: "entnahme".into(),
+                description: "Lebenshaltung".into(),
+                amount_cents: 80_000,
+                account_type: None,
+            },
+            PrivateMovementItem {
+                movement_date: "2026-06-30".into(),
+                movement_number: "PV-2026-0002".into(),
+                movement_type: "einlage".into(),
+                description: "Einlage bar".into(),
+                amount_cents: 10_000,
+                account_type: Some("cash".into()),
+            },
+        ];
+        build_bookings(
+            skr,
+            2026,
+            &DatevInputs {
+                income: &incomes,
+                storno: &storno,
+                expenses: &expenses,
+                capitalized: &capitalized,
+                disposals: &disposals,
+                assets: &assets,
+                private_movements: &private,
+            },
+        )
+    }
+
+    /// Die Ausdrücke selbst: Gegenproben, damit ein zu weiter Ausdruck nicht
+    /// still alles durchlässt.
+    #[test]
+    fn rules_reject_known_bad_values() {
+        let head = |nr: usize| rx(HEADER_RULES[nr - 1].2);
+        let booking = |nr: usize| rx(BOOKING_RULES[nr - 1].2);
+        assert!(!head(11).is_match("").unwrap(), "Beraternummer leer");
+        assert!(!head(12).is_match("").unwrap(), "Mandantennummer leer");
+        assert!(
+            !head(8).is_match("").unwrap(),
+            "Herkunft ohne Anführungszeichen"
+        );
+        assert!(!head(24).is_match("").unwrap(), "Derivatskennzeichen leer");
+        assert!(
+            !head(7).is_match("\"\"").unwrap(),
+            "Importiert mit Anführungszeichen"
+        );
+        assert!(
+            !head(17).is_match("\"EÜR 2026\"").unwrap(),
+            "Umlaut in der Bezeichnung"
+        );
+        assert!(!head(5).is_match("14").unwrap());
+        assert!(!booking(1).is_match("0,00").unwrap(), "Umsatz 0,00");
+        assert!(!booking(1).is_match("-1,00").unwrap(), "negativer Umsatz");
+        assert!(!booking(1).is_match("1.000,00").unwrap(), "Tausenderpunkt");
+        assert!(!booking(7).is_match("0000").unwrap(), "Konto 0");
+        assert!(
+            !booking(11).is_match("\"RE 2026\"").unwrap(),
+            "Leerzeichen im Belegfeld"
+        );
+        assert!(
+            !booking(11).is_match("\"RE.2026\"").unwrap(),
+            "Punkt im Belegfeld"
+        );
+        assert!(booking(1).is_match("1234,56").unwrap());
+        assert!(booking(7).is_match("0420").unwrap());
+        assert!(booking(11).is_match("\"RE-2026-0001\"").unwrap());
+    }
+
+    /// Kopf und alle Buchungszeilen der Demodaten passen auf die Regeln, für
+    /// SKR03 und SKR04 und die Grenzen der Berater- und Mandantennummer.
+    #[test]
+    fn demo_batch_matches_format_description() {
+        for skr in [Skr::Skr03, Skr::Skr04] {
+            let bookings = demo_bookings(skr);
+            assert!(bookings.len() >= 30, "{}", bookings.len());
+            for (consultant, client) in [(1001, 1), (29098, 55003), (9_999_999, 99_999)] {
+                let bytes = to_datev(&header_for(skr, consultant, client), &bookings);
+                let v = violations(&bytes);
+                assert!(v.is_empty(), "{}:\n{}", skr.code(), v.join("\n"));
+            }
+        }
+    }
+
+    /// Belegfelder mit unzulässigen Zeichen werden bereinigt, nicht abgelehnt.
+    #[test]
+    fn belegfeld_replaces_disallowed_characters() {
+        assert_eq!(belegfeld("RE-2026-0001", 36), "RE-2026-0001");
+        assert_eq!(belegfeld("RE 2026.1;Ü", 36), "RE_2026_1__");
+        assert_eq!(belegfeld(&"A".repeat(40), 36).len(), 36);
+    }
+
+    /// Schreibt den Demo-Stapel für das DATEV-Prüfprogramm (Manuel, ADR 0042
+    /// Nr. 15), nur wenn `KB_DATEV_DEMO_DIR` gesetzt ist — nie ins Repo.
+    #[test]
+    fn write_demo_batches_when_requested() {
+        let Some(dir) = std::env::var_os("KB_DATEV_DEMO_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for skr in [Skr::Skr03, Skr::Skr04] {
+            let bytes = to_datev(&header_for(skr, 29098, 55003), &demo_bookings(skr));
+            assert!(violations(&bytes).is_empty());
+            std::fs::write(dir.join(file_name(2026, skr)), bytes).unwrap();
         }
     }
 }

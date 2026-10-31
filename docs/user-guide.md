@@ -224,8 +224,10 @@ auf Cash-Basis, mit einem Hinweis, wenn in dem Jahr die Regelbesteuerung galt,
 und einer Warnung, wenn ein abgeschlossenes Jahr vom festgeschriebenen Stand
 abweicht. **Für die Steuererklärung exportieren** erzeugt die
 ELSTER-Ausfüllhilfe mit „Anlage EÜR"-PDF, den DATEV-Buchungsstapel (SKR03,
-umschaltbar auf SKR04; Berater- und Mandantennummer optional, beides merkt sich
-dein Browser) und das Steuerberater-Paket (ZIP). Alle Exporte kommen als
+umschaltbar auf SKR04, Datei `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`; Berater- und
+Mandantennummer sind dafür Pflicht, ohne beide entsteht das Steuerberater-Paket
+ohne DATEV-Stapel; beides merkt sich dein Browser) und das Steuerberater-Paket
+(ZIP). Alle Exporte kommen als
 Download in den Browser; jede Datei lässt sich nur einmal abrufen. Die
 Konten-Zuordnung im DATEV-Export ist ein Vorschlag und vom Steuerberater zu
 prüfen.

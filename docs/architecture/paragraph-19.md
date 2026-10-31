@@ -237,6 +237,27 @@ Jahr“ (`YearStatus::Wechsel`) mit den Abschnitten; Einnahmen folgen dem
 eingefrorenen Status jeder Rechnung, Kosten dem Status am Belegdatum (vor dem
 Stichtag brutto, danach netto mit Vorsteuer, auch im DATEV-Stapel).
 
+**Vorsteuerberichtigung nach § 15a UStG (ADR 0042 Nr. 14).** Für Anlagen, die
+weiter genutzt werden, ändert der Wechsel die für den ursprünglichen Abzug
+maßgebenden Verhältnisse (seit 2025 sind die Umsätze nach § 19 Abs. 1 UStG
+steuerfrei und schließen den Abzug aus, § 15 Abs. 2 Nr. 1 UStG). Klein.Buch
+rechnet dafür nur eine **Übersicht** (`domain::vat_adjustment`, Command
+`vat_adjustment_overview {year}`): Anlagen aus Kosten mit Umsatzsteuer, Zeitraum
+fünf Jahre ab Anschaffung (Ersatz für die erste Verwendung) bzw. kürzere
+Verwendungsdauer, Monatsregel § 45 UStDV (Beginn bis zum 16. zählt den Monat,
+denn das Ende fällt dann vor den 16.; § 108 AO, §§ 187 Abs. 2, 188 Abs. 2 BGB),
+je Monat der Status am 16., Anteil 1/5 je Jahr, Richtung (zugunsten/zulasten), Abgang nach § 15a Abs. 8/9,
+Grenzen § 44 Abs. 1–3 UStDV. Anlagen ohne (gültigen) Kostenbeleg, mit § 13b oder ohne
+Umsatzsteuer weist sie mit Grund aus. Gebucht wird nichts, keine Anlage und
+keine Kosten ändern sich; nach jedem Eintrag oder Widerruf verweist ein
+Inbox-Hinweis (`vat_adjustment:{add|revoke}:{id}`) auf die Übersicht, sofern sich
+bei einer Anlage die Verhältnisse im Zeitraum ändern. Die Seite
+`/assets/vat-adjustment` („Vorsteuerberichtigung (§ 15a UStG)“, Texte in
+`routes/assets/vatAdjustment.ts`) zeigt je Jahr die Anlagen mit Änderung als Tabelle
+(bis 820 px Karten), darunter die ohne Änderung und die nicht gerechneten; Links aus
+„Anschaffungen“ (Nebenaktion), der Anschaffung aus Kosten und dem Abschnitt
+„Steuerstatus“.
+
 ---
 
 ## 8. Edge-Cases

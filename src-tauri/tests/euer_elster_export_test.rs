@@ -541,12 +541,13 @@ async fn datev_export_end_to_end() {
         fiscal_year: 2026,
         skr: datev_csv::Skr::Skr03,
         generated_at: "20260521120000000".into(),
-        consultant_number: None,
-        client_number: None,
+        consultant_number: 1001,
+        client_number: 1,
     };
     let bytes = datev_csv::to_datev(&header, &bookings);
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.starts_with("\"EXTF\";700;21;"));
+    assert!(text.contains(";1001;1;20260101;4;")); // ADR 0042 Nr. 15
     assert!(text.contains("8195")); // §19-Erlöskonto
     assert!(text.contains("3200")); // Wareneingang
     assert!(text.contains("4830")); // AfA-Aufwand

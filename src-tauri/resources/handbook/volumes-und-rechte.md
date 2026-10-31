@@ -46,7 +46,8 @@ Start, dass beide wirklich eingebunden sind.
 Drei Einstellungen liegen nicht auf dem Server, sondern im Browser: den
 Kontenrahmen sowie die Berater- und Mandantennummer für den
 DATEV-Export merkt sich jeder Browser selbst. Sie stehen deshalb in
-keinem Backup. In einem anderen Browser, auf einem anderen Gerät oder
+keinem Backup. Ohne die beiden Nummern startet der DATEV-Export nicht,
+und das Steuerberater-Paket entsteht ohne DATEV-Stapel. In einem anderen Browser, auf einem anderen Gerät oder
 nach einem Wechsel der Adresse in `KLEIN_BUCH_PUBLIC_URL` trägst Du sie
 auf der Seite "EÜR-Export" einmal neu ein.
 

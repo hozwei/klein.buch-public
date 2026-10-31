@@ -220,7 +220,9 @@ async fn all_exports_are_downloads_and_leave_nothing_behind() {
         ("euer_export_pdf", serde_json::json!({ "fiscalYear": y })),
         (
             "euer_export_datev",
-            serde_json::json!({ "fiscalYear": y, "skr": "SKR03" }),
+            serde_json::json!({
+                "fiscalYear": y, "skr": "SKR03", "consultantNumber": 1001, "clientNumber": 1
+            }),
         ),
         (
             "euer_export_stb_zip",

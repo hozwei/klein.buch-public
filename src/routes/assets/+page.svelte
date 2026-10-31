@@ -9,6 +9,7 @@
   import Button from "#lib/Button.svelte";
   import Badge from "#lib/Badge.svelte";
   import { assetStatusView } from "./assetStatus.ts";
+  import { VAT_ADJUSTMENT_URL } from "./vatAdjustment.ts";
   import DocNo from "#lib/DocNo.svelte";
   import HelpAnchor from "#lib/HelpAnchor.svelte";
   import PageBar from "#lib/PageBar.svelte";
@@ -143,10 +144,14 @@
 
 </script>
 
-<!-- U4 (design.md §4.2): „Abschreibung buchen“ als Nebenaktion (bis 600 px im Menü). -->
+<!-- U4 (design.md §4.2): „Abschreibung buchen“ als Nebenaktion (bis 600 px im Menü);
+     ADR 0042 Nr. 14: daneben die Übersicht der Vorsteuerberichtigung (liest nur). -->
 <PageBar
   title="Anschaffungen"
-  secondary={[{ label: "Abschreibung buchen", onSelect: () => (showAccrue = !showAccrue) }]}
+  secondary={[
+    { label: "Abschreibung buchen", onSelect: () => (showAccrue = !showAccrue) },
+    { label: "Vorsteuerberichtigung (§ 15a)", href: VAT_ADJUSTMENT_URL },
+  ]}
 >
   {#snippet actions()}
     <Button variant="primary" href="/assets/new">+ Neue Anschaffung</Button>

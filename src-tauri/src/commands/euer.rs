@@ -619,10 +619,12 @@ pub struct DatevExport {
 pub struct EuerExportDatevArgs {
     pub fiscal_year: i64,
     pub skr: String,
-    /// Beraternummer für den DATEV-Kopf (optional, 1001–9999999).
+    /// Beraternummer für den DATEV-Kopf (Pflicht, 1001–9999999; ADR 0042
+    /// Nr. 15). `Option` nur, damit ein fehlender Wert eine klare Meldung
+    /// bekommt statt eines Formatfehlers.
     #[serde(default)]
     pub consultant_number: Option<u32>,
-    /// Mandantennummer für den DATEV-Kopf (optional, 1–99999).
+    /// Mandantennummer für den DATEV-Kopf (Pflicht, 1–99999; ADR 0042 Nr. 15).
     #[serde(default)]
     pub client_number: Option<u32>,
 }
@@ -633,11 +635,9 @@ async fn build_datev_bytes(
     pool: &SqlitePool,
     fiscal_year: i32,
     skr: Skr,
-    consultant_number: Option<u32>,
-    client_number: Option<u32>,
+    consultant_number: u32,
+    client_number: u32,
 ) -> Result<(Vec<u8>, usize)> {
-    datev_csv::validate_header_numbers(consultant_number, client_number)
-        .map_err(crate::error::Error::Domain)?;
     let income = euer_repo::income_detail(pool, fiscal_year).await?;
     let storno = euer_repo::storno_detail(pool, fiscal_year).await?;
     let expenses = euer_repo::expense_detail(pool, fiscal_year).await?;
@@ -691,6 +691,10 @@ pub async fn euer_export_datev(
 
     let pool = &pool;
     let skr_enum = Skr::from_code(&skr);
+    // ADR 0042 Nr. 15: ohne Berater- und Mandantennummer kein Stapel.
+    let (consultant_number, client_number) =
+        datev_csv::require_header_numbers(consultant_number, client_number)
+            .map_err(crate::error::Error::Domain)?;
     let (bytes, booking_count) = build_datev_bytes(
         pool,
         fiscal_year as i32,
@@ -700,10 +704,10 @@ pub async fn euer_export_datev(
     )
     .await?;
 
-    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner.
-    let (download_id, download_path) = ctx
-        .downloads
-        .prepare(&format!("DATEV-{fiscal_year}-{skr}.csv"))?;
+    // Plan W7: kein Pfad vom Client — Datei im Download-Ordner. ADR 0042
+    // Nr. 15: Präfix `EXTF_`, Kontenrahmen aus dem Enum (nicht der Rohwert).
+    let file_name = datev_csv::file_name(fiscal_year as i32, skr_enum);
+    let (download_id, download_path) = ctx.downloads.prepare(&file_name)?;
     let path = download_path.as_path();
     std::fs::write(path, &bytes)?;
 
@@ -713,7 +717,7 @@ pub async fn euer_export_datev(
         "euer.datev_export",
         fiscal_year,
         json!({
-            "file_name": format!("DATEV-{fiscal_year}-{skr}.csv"),
+            "file_name": file_name,
             "skr": skr_enum.code(),
             "bookings": booking_count,
         }),
@@ -748,10 +752,11 @@ pub struct StbExport {
 pub struct EuerExportStbZipArgs {
     pub fiscal_year: i64,
     pub skr: String,
-    /// Beraternummer für den DATEV-Kopf (optional, 1001–9999999).
+    /// Beraternummer für den DATEV-Kopf (1001–9999999). Ohne beide Nummern
+    /// enthält das Paket keinen DATEV-Stapel (ADR 0042 Nr. 15).
     #[serde(default)]
     pub consultant_number: Option<u32>,
-    /// Mandantennummer für den DATEV-Kopf (optional, 1–99999).
+    /// Mandantennummer für den DATEV-Kopf (1–99999), siehe oben.
     #[serde(default)]
     pub client_number: Option<u32>,
 }
@@ -795,10 +800,21 @@ pub async fn euer_export_stb_zip(
     // Hinweisen der Ausfüllhilfe).
     let is_klein = year_tax_status(pool, y).await?.0;
 
-    // DATEV-Buchungsstapel.
+    // DATEV-Buchungsstapel (ADR 0042 Nr. 15): nur mit Berater- und
+    // Mandantennummer. Ohne beide bleibt das Paket für eine Steuerberatung
+    // ohne DATEV erzeugbar, der Stapel fehlt und LIESMICH nennt den Grund; nur
+    // eine Nummer oder eine Nummer außerhalb des Wertebereichs ist ein
+    // Eingabefehler.
     let skr_enum = Skr::from_code(&skr);
-    let (datev_bytes, _) =
-        build_datev_bytes(pool, y, skr_enum, consultant_number, client_number).await?;
+    let datev_file = datev_csv::file_name(y, skr_enum);
+    let datev_bytes = match (consultant_number, client_number) {
+        (None, None) => None,
+        (c, m) => {
+            let (c, m) =
+                datev_csv::require_header_numbers(c, m).map_err(crate::error::Error::Domain)?;
+            Some(build_datev_bytes(pool, y, skr_enum, c, m).await?.0)
+        }
+    };
 
     // ELSTER-Ausfüllhilfe (R2-015).
     let elster_csv_bytes =
@@ -853,7 +869,11 @@ pub async fn euer_export_stb_zip(
             "00-deckblatt.pdf — dieses Deckblatt",
             "LIESMICH.txt — §19-Klausel, Disclaimer, Inhaltsverzeichnis",
             format!("anlage-euer-{y}.pdf — Anlage EÜR, Anlageverzeichnis, Einzelaufstellung"),
-            format!("datev-buchungsstapel.csv — DATEV-Buchungsstapel ({})", skr_enum.code()),
+            if datev_bytes.is_some() {
+                format!("{datev_file} — DATEV-Buchungsstapel ({})", skr_enum.code())
+            } else {
+                "DATEV-Buchungsstapel nicht enthalten (ohne Berater- und Mandantennummer, siehe LIESMICH)".to_string()
+            },
             "elster-ausfuellhilfe.csv — ELSTER-Anlage-EÜR-Felder (Eintipphilfe)",
             "einnahmen.csv / ausgaben.csv / anlageverzeichnis.csv — Einzelaufstellung",
             format!("{UNISSUED_NUMBERS_FILE} — Rechnungs- und Storno-Nummern ohne festgeschriebenen Beleg (verworfen oder offen)"),
@@ -886,7 +906,7 @@ pub async fn euer_export_stb_zip(
         form.status_change.as_deref(),
         skr_enum,
         &unissued,
-        consultant_number.is_some() && client_number.is_some(),
+        datev_bytes.is_some().then_some(datev_file.as_str()),
         &form.notes,
     );
     if let Some(c) = check.as_ref().filter(|c| !c.matches) {
@@ -929,7 +949,9 @@ pub async fn euer_export_stb_zip(
         add(&mut zw, "00-deckblatt.pdf", &cover_pdf)?;
         add(&mut zw, "LIESMICH.txt", liesmich.as_bytes())?;
         add(&mut zw, &format!("anlage-euer-{y}.pdf"), &euer_pdf)?;
-        add(&mut zw, "datev-buchungsstapel.csv", &datev_bytes)?;
+        if let Some(bytes) = datev_bytes.as_deref() {
+            add(&mut zw, &datev_file, bytes)?;
+        }
         add(&mut zw, "elster-ausfuellhilfe.csv", &elster_csv_bytes)?;
         add(&mut zw, "einnahmen.csv", income_csv.as_bytes())?;
         add(&mut zw, "ausgaben.csv", expenses_csv.as_bytes())?;
@@ -1045,7 +1067,7 @@ fn build_stb_readme(
     status_change: Option<&str>,
     skr: Skr,
     unissued: &[detail::UnissuedNumberItem],
-    datev_numbers_set: bool,
+    datev_file: Option<&str>,
     elster_notes: &[String],
 ) -> String {
     let mut s = String::new();
@@ -1072,10 +1094,13 @@ fn build_stb_readme(
     s.push_str(&format!(
         "    anlage-euer-{fiscal_year}.pdf  — Anlage EÜR + Anlageverzeichnis + Einzelaufstellung\n"
     ));
-    s.push_str(&format!(
-        "    datev-buchungsstapel.csv  — DATEV-Buchungsstapel ({})\n",
-        skr.code()
-    ));
+    match datev_file {
+        Some(name) => s.push_str(&format!(
+            "    {name} — DATEV-Buchungsstapel ({})\n",
+            skr.code()
+        )),
+        None => s.push_str("    (kein DATEV-Buchungsstapel, siehe unten)\n"),
+    }
     s.push_str("    elster-ausfuellhilfe.csv  — ELSTER-Anlage-EÜR-Eintipphilfe\n");
     s.push_str("    einnahmen.csv             — Einzelne Zahlungseingänge (Cash-Basis)\n");
     s.push_str("    ausgaben.csv              — Einzelne Kostenbelege\n");
@@ -1090,21 +1115,28 @@ fn build_stb_readme(
     // Lauf F5b (R2-011, R2-S2-DATEV-HEADER, R2-S2-DATEV-MAPPING): Grenzen des
     // DATEV-Stapels, die der Steuerberater beim Import kennen muss.
     s.push_str("DATEV-Buchungsstapel:\n");
-    s.push_str("    Die Konten sind ein Vorschlag nach dem gewählten Kontenrahmen und\n");
-    s.push_str("    vor der Verbuchung zu prüfen. Geldkonto je hinterlegtem Zahlungskonto:\n");
-    s.push_str("    Bank 1200/1800, Kasse 1000/1600, PayPal/Stripe/sonstige 1360/1460\n");
-    s.push_str("    (Geldtransit). Zahlungen ohne hinterlegtes Konto laufen über Bank.\n");
-    // ADR 0042 Nr. 9: Gegenbuchungen und Doppelimport.
-    s.push_str("    Eine stornierte Zahlung (Fehlbuchung) steht als Gegenbuchung mit\n");
-    s.push_str("    umgekehrtem Soll/Haben, Belegdatum und Belegfeld 1 der Zahlung und\n");
-    s.push_str("    dem Buchungstext \"Storno Zahlung ...\". Der Stapel enthält immer das\n");
-    s.push_str("    ganze Jahr; wurde ein früherer Stapel schon importiert, nicht doppelt\n");
-    s.push_str("    importieren.\n");
-    if datev_numbers_set {
-        s.push_str("    Berater- und Mandantennummer stehen im Kopf der Datei.\n\n");
+    // ADR 0042 Nr. 15: ohne Berater- und Mandantennummer kein Stapel.
+    if datev_file.is_none() {
+        s.push_str("    Nicht enthalten: Beim Erzeugen des Pakets fehlten Berater- und\n");
+        s.push_str("    Mandantennummer. Die DATEV-Formatbeschreibung verlangt beide im\n");
+        s.push_str("    Kopf der Datei (Feld 11 und 12, kein Leerfeld). Mit beiden Nummern\n");
+        s.push_str("    das Paket neu erzeugen oder den Stapel einzeln exportieren.\n\n");
     } else {
-        s.push_str("    Berater- und Mandantennummer sind leer; beim Import über die\n");
-        s.push_str("    Stapelverarbeitung gilt der geöffnete Mandant.\n\n");
+        s.push_str("    Die Konten sind ein Vorschlag nach dem gewählten Kontenrahmen und\n");
+        s.push_str("    vor der Verbuchung zu prüfen. Geldkonto je hinterlegtem Zahlungskonto:\n");
+        s.push_str("    Bank 1200/1800, Kasse 1000/1600, PayPal/Stripe/sonstige 1360/1460\n");
+        s.push_str("    (Geldtransit). Zahlungen ohne hinterlegtes Konto laufen über Bank.\n");
+        // ADR 0042 Nr. 9: Gegenbuchungen und Doppelimport.
+        s.push_str("    Eine stornierte Zahlung (Fehlbuchung) steht als Gegenbuchung mit\n");
+        s.push_str("    umgekehrtem Soll/Haben, Belegdatum und Belegfeld 1 der Zahlung und\n");
+        s.push_str("    dem Buchungstext \"Storno Zahlung ...\". Der Stapel enthält immer das\n");
+        s.push_str("    ganze Jahr; wurde ein früherer Stapel schon importiert, nicht doppelt\n");
+        s.push_str("    importieren.\n");
+        // ADR 0042 Nr. 15: Format nach der Formatbeschreibung, Import ungeprüft.
+        s.push_str("    Berater- und Mandantennummer stehen im Kopf der Datei. Format nach\n");
+        s.push_str("    der DATEV-Formatbeschreibung (Buchungsstapel, Formatversion 12,\n");
+        s.push_str("    Sachkontenlänge 4, CP1252); ein Import in DATEV ist nicht vorab\n");
+        s.push_str("    geprüft, bitte das Importprotokoll ansehen.\n\n");
     }
     if !elster_notes.is_empty() {
         s.push_str("Hinweise zur ELSTER-Ausfüllhilfe:\n");
@@ -1378,14 +1410,20 @@ mod tests {
             None,
             Skr::Skr03,
             &[],
-            false,
+            None,
             &["Hinweis A".into()],
         );
-        assert!(r.contains("Kasse 1000/1600"));
-        assert!(r.contains("Berater- und Mandantennummer sind leer"));
+        // ADR 0042 Nr. 15: ohne Nummern kein Stapel, Grund im LIESMICH.
+        assert!(r.contains("Nicht enthalten: Beim Erzeugen des Pakets fehlten Berater- und"));
+        assert!(!r.contains("EXTF_"));
+        assert!(!r.contains("Kasse 1000/1600"));
         assert!(r.contains("- Hinweis A"));
-        let r = build_stb_readme(2026, true, None, Skr::Skr03, &[], true, &[]);
+        let name = datev_csv::file_name(2026, Skr::Skr03);
+        let r = build_stb_readme(2026, true, None, Skr::Skr03, &[], Some(&name), &[]);
+        assert!(r.contains("EXTF_Buchungsstapel_2026_SKR03.csv — DATEV-Buchungsstapel (SKR03)"));
+        assert!(r.contains("Kasse 1000/1600"));
         assert!(r.contains("Berater- und Mandantennummer stehen im Kopf"));
+        assert!(!r.contains("geöffnete Mandant"));
         assert!(!r.contains("Hinweise zur ELSTER-Ausfüllhilfe"));
     }
 }

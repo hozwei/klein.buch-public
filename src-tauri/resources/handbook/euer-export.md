@@ -80,26 +80,39 @@ legst Du vorher fest, was für den DATEV-Stapel und das
 Steuerberater-Paket gilt:
 
 1. **Kontenrahmen:** SKR03 (Standard) oder SKR04
-2. **Beraternummer** (optional, 1001 bis 9999999)
-3. **Mandantennummer** (optional, 1 bis 99999)
+2. **Beraternummer** (1001 bis 9999999)
+3. **Mandantennummer** (1 bis 99999)
 
 Berater- und Mandantennummer bekommst Du von Deiner Steuerberatung; sie
-stehen dann im Kopf des DATEV-Stapels. Liegt eine Nummer außerhalb des
-Bereichs, steht die Meldung am Feld, und der Export startet nicht.
+stehen im Kopf des DATEV-Stapels. Die DATEV-Formatbeschreibung verlangt
+beide, deshalb startet der DATEV-Export ohne sie nicht. Unter jedem Feld
+steht der erlaubte Bereich. Fehlt eine Nummer oder liegt sie außerhalb
+des Bereichs, steht die Meldung beim Klick auf den Knopf am Feld, und
+der Cursor springt dorthin.
 Kontenrahmen und Nummern merkt sich Dein Browser für den nächsten
 Export; ein anderer Browser oder ein anderes Gerät kennt sie nicht.
 Klick dann bei **"DATEV-Buchungsstapel (Steuerberater)"** auf
 **"DATEV herunterladen"**.
 
 Klein.Buch erzeugt eine CSV-Datei im DATEV-Format mit allen
-Buchungen des Geschäftsjahres. Die Konto-Zuordnung ist ein
+Buchungen des Geschäftsjahres, zum Beispiel
+`EXTF_Buchungsstapel_2026_SKR03.csv` (das Präfix `EXTF_` verlangt die
+DATEV-Formatbeschreibung). Den Namen siehst Du schon vor dem Download
+unter "DATEV-Buchungsstapel (Steuerberater)", nach dem Download hinter
+"Heruntergeladen". Die Datei ist im Zeichensatz Windows-1252
+gespeichert, wie DATEV ihn erwartet. Die Konto-Zuordnung ist ein
 Vorschlag, den Dein Steuerberater vor dem Import in sein System
 prüfen sollte. Als Geldkonto nimmt Klein.Buch das Zahlungskonto, das Du
 bei der Zahlung angegeben hast: Bank, Kasse oder für PayPal, Stripe und
 Sonstiges das Geldtransit-Konto. Ohne Angabe bucht es auf die Bank.
-Lässt Du Berater- und Mandantennummer leer, importiert Dein
-Steuerberater den Stapel in den gerade geöffneten Mandanten. Sende die
-CSV per E-Mail oder Daten-Übergabe-Dienst.
+Sende die CSV per E-Mail oder Daten-Übergabe-Dienst.
+
+Klein.Buch prüft den Aufbau der Datei gegen die Regeln der
+DATEV-Formatbeschreibung. Ob der Import in DATEV klappt, ist damit noch
+nicht geprüft: Bitte Deine Steuerberatung beim ersten Mal, das
+Importprotokoll anzusehen. Vorab hilft das kostenlose
+DATEV-Prüfprogramm (Windows, auf developer.datev.de): Es prüft eine
+Datei gegen die Formatbeschreibung, ohne sie zu importieren.
 
 ## Steuerberater-Paket (ZIP)
 
@@ -107,6 +120,11 @@ Der dritte Export ist das komplette Steuerberater-Paket. Du findest
 es im selben Abschnitt "Für die Steuerberatung" unter
 **"Steuerberater-Paket (ZIP, alles in einem)"**. Kontenrahmen,
 Berater- und Mandantennummer gelten auch für den DATEV-Stapel im Paket.
+Ohne beide Nummern entsteht das Paket trotzdem, dann aber ohne
+DATEV-Stapel; die `LIESMICH.txt` nennt den Grund, und unter dem Knopf
+steht das schon vorher. Trägst Du nur eine der beiden Nummern ein,
+meldet das leere Feld einen Fehler: entweder beide oder keine. So
+bekommt auch eine Steuerberatung ohne DATEV alle Unterlagen.
 Klick auf **"Paket herunterladen"**. Weil das Paket
 alle Belege enthält, fragt Klein.Buch vorher noch einmal Dein
 Daten-Passwort und den App-Code aus Deiner Authenticator-App ab; die
@@ -114,7 +132,8 @@ Bestätigung gilt fünf Minuten. Klein.Buch packt:
 
 1. ein Deckblatt-PDF und eine `LIESMICH.txt`
 2. die Anlage-EÜR als PDF
-3. den DATEV-Buchungsstapel als CSV
+3. den DATEV-Buchungsstapel als CSV (nur mit Berater- und
+   Mandantennummer)
 4. die ELSTER-Ausfüllhilfe als CSV
 5. Einzelaufstellungen (Einnahmen, Ausgaben, Anlagenverzeichnis)
    als CSV

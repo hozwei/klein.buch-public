@@ -414,8 +414,10 @@ pub async fn notify_capitalized_status_change(pool: &sqlx::SqlitePool) {
          (Belegdatum der Kosten): als Kleinunternehmer der Bruttobetrag, bei \
          Regelbesteuerung der Nettobetrag (§ 9b Abs. 1 EStG, § 15 Abs. 1 UStG). Klein.Buch \
          bestimmt den Status taggenau aus der Steuerstatus-Historie (ADR 0042 Nr. 3), auch \
-         bei einem Wechsel mitten im Jahr. {} Eine Vorsteuerberichtigung nach § 15a UStG \
-         für Anlagen aus früheren Jahren berechnet Klein.Buch nicht.",
+         bei einem Wechsel mitten im Jahr. {} Ob für Anlagen aus früheren Jahren eine \
+         Vorsteuerberichtigung nach § 15a UStG anfällt, zeigt die Übersicht „Vorsteuerberichtigung \
+         (§ 15a)“ unter Anschaffungen \
+         (nur Übersicht, keine Buchung).",
         lines.join(" ")
     );
     let numbers: Vec<&str> = list.iter().map(|m| m.asset_number.as_str()).collect();

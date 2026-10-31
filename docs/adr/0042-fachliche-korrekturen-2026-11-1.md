@@ -169,6 +169,20 @@ nennt ihre Fundstelle. Festgeschriebene Belege bleiben unverändert (GoBD-Hardli
     von 24); oberhalb der Grenze ist „Ab heute fortsetzen“ ein Gefahr-Dialog mit Fokus auf
     „Abbrechen“, weil das Überspringen nicht umkehrbar ist.
 
+### Umsetzung V5 (Ergänzungen zu Nr. 14 und 15)
+
+28. **Steuerberater-Paket ohne Nummern:** Das Paket entsteht weiter; ohne Berater- und
+    Mandantennummer fehlt nur der DATEV-Stapel, das LIESMICH nennt den Grund. Eine Steuerberatung
+    ohne DATEV bekommt so trotzdem alle Belege. Der Einzel-Export lehnt ohne beide Nummern ab.
+29. **Bezeichnung im DATEV-Kopf** (Feld 17) ohne Umlaut („EUER 2026“), weil die Feldregel nur
+    `[a-zA-Z0-9_.-/ ]` zulässt; Belegfelder ersetzen unzulässige Zeichen durch `_`. Leere
+    Textfelder auch in den Buchungszeilen als `""`, Spaltenüberschrift ohne Anführungszeichen wie
+    in der DATEV-Musterdatei.
+30. **§ 15a-Übersicht** rechnet den Berichtigungszeitraum monatsgenau nach § 45 UStDV (Beginn bzw.
+    Ende vor dem 16. eines Monats zählt diesen Monat nicht mit bzw. mit), verkürzt ihn bei kürzerer
+    Verwendungsdauer (§ 15a Abs. 5 Satz 2) und nimmt nur Anlagen aus nicht stornierten Kosten mit
+    bekannter Vorsteuer.
+
 ## Konsequenzen
 
 - Schema 35. Ein Image 2026.11.0 kann eine Datenbank oder ein Backup mit Schema 35 nicht öffnen;

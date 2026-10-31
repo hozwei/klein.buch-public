@@ -147,7 +147,7 @@ fn allowlist_is_exactly_plan_point_2() {
     assert_eq!(REGISTRY.len(), frontend.len(), "keine doppelten Namen");
     assert_eq!(
         REGISTRY.len(),
-        186,
+        187,
         "183 (W4) + 3 Backup-Ziel-Commands (W7) + 2 Tests gespeicherter Ziele (W8) \
          - 5 Reset-/Drop-Folder-Commands (W11) + 2 Versionsprüfung (W12) \
          + 2 Rückstand + 2 Pause - payment_accounts_ensure_defaults (Lauf F1a) \
@@ -157,7 +157,8 @@ fn allowlist_is_exactly_plan_point_2() {
          + Entwurf bearbeiten (Lauf F5a) - 18 gesperrte Desktop-Commands - 2 doppelte Leser (Lauf F6) \
          + Abgangs-Vorschau der Anlagen (Lauf 2026.11 U4) \
          + 5 Steuerstatus-Commands + Zahlung stornieren (ADR 0042) \
-         + Angebots-Entwurf bearbeiten + Rückstand-Vorschau (ADR 0042 Nr. 13/16)"
+         + Angebots-Entwurf bearbeiten + Rückstand-Vorschau (ADR 0042 Nr. 13/16) \
+         + Übersicht § 15a (ADR 0042 Nr. 14)"
     );
     for gone in REMOVED_IN_F6 {
         assert!(find(gone).is_none(), "{gone} entfällt seit Lauf F6");
@@ -668,12 +669,13 @@ fn every_command_has_an_explicit_kind() {
     let writes = REGISTRY.iter().filter(|c| c.kind == Kind::Write).count();
     assert_eq!(
         (reads, writes, JOBS.len()),
-        (76, 97, 13),
+        (77, 97, 13),
         "Einstufung wie vor W14-012 (Lauf F4b), + invoices_update_draft (Write, Lauf F5a), \
          Lauf F6: − 4 Leser (Restore-Vorschau, OAuth-Status, zwei doppelte), − 16 gesperrte \
          Schreiber; Lauf 2026.11 U4: + assets_disposal_preview (Read); \
          Lauf 2026.11.1 V1: + tax_status_overview/_at/_change_preview (Read), \
          + tax_status_change_add/_revoke (Write); V2: + invoices_reverse_payment (Write); \
-         V4: + recurring_backlog_preview (Read), + quotes_update_draft (Write)"
+         V4: + recurring_backlog_preview (Read), + quotes_update_draft (Write); \
+         V5: + vat_adjustment_overview (Read)"
     );
 }

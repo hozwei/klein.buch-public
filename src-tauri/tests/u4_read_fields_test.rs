@@ -2,7 +2,8 @@
 //! (TASKS.md „Lauf 2026.11 – Stand“, Offene Punkte 1, 3, 5, 9, 13), gegen eine
 //! Tempfile-SQLite mit dem echten `MIGRATOR`:
 //!
-//!   * DATEV-/Steuerberater-Export nehmen Berater- und Mandantennummer an (1);
+//!   * DATEV-/Steuerberater-Export nehmen Berater- und Mandantennummer an (1;
+//!     seit ADR 0042 Nr. 15 Pflicht für den DATEV-Stapel);
 //!   * `euer_compute_report` trägt §19-Status des Jahres und Snapshot-Abgleich (3);
 //!   * `assets_disposal_preview` rechnet wie `assets_dispose`, ohne zu buchen (5);
 //!   * `QuoteListItem.lockedAt` trennt verworfene Entwürfe von zurückgezogenen
@@ -92,12 +93,33 @@ async fn datev_export_takes_consultant_and_client_number() {
         head.contains("29098") && head.contains("55003"),
         "DATEV-Kopf: {head}"
     );
+    assert_eq!(out.download.file_name, "EXTF_Buchungsstapel_2026_SKR03.csv");
+    assert_eq!(entry.mime, "text/csv; charset=windows-1252");
 
     let args: euer::EuerExportStbZipArgs = serde_json::from_value(serde_json::json!({
         "fiscalYear": 2026, "skr": "SKR03", "consultantNumber": null, "clientNumber": null
     }))
     .unwrap();
     assert_eq!((args.consultant_number, args.client_number), (None, None));
+
+    // ADR 0042 Nr. 15: ohne Nummern (null oder fehlend) kein Stapel, Meldung
+    // mit dem Feldnamen am Anfang.
+    for v in [
+        serde_json::json!({ "fiscalYear": 2026, "skr": "SKR03" }),
+        serde_json::json!({
+            "fiscalYear": 2026, "skr": "SKR03", "consultantNumber": null, "clientNumber": 55003
+        }),
+    ] {
+        let args: euer::EuerExportDatevArgs = serde_json::from_value(v).unwrap();
+        let err = euer::euer_export_datev(&ctx, args).await.unwrap_err();
+        assert!(err.to_string().contains("Beraternummer fehlt"), "{err}");
+    }
+    let args: euer::EuerExportDatevArgs = serde_json::from_value(serde_json::json!({
+        "fiscalYear": 2026, "skr": "SKR03", "consultantNumber": 29098
+    }))
+    .unwrap();
+    let err = euer::euer_export_datev(&ctx, args).await.unwrap_err();
+    assert!(err.to_string().contains("Mandantennummer fehlt"), "{err}");
 
     // Außerhalb der DATEV-Wertebereiche → klare Ablehnung.
     let args: euer::EuerExportDatevArgs = serde_json::from_value(serde_json::json!({

@@ -44,6 +44,15 @@ offenen Punkte aus Lauf 2026.11.
   lässt sich unter „Bearbeiten“ ändern; Nummer und Geschäftsjahr bleiben. Rechnungs- und
   Angebots-Editor zeigen einen Restore-Abgleich schon vor dem Speichern. Der Rückstand-Dialog der
   Abo-Rechnungen und Kosten-Abos nennt Anzahl und Daten der offenen Termine.
+- **DATEV-Buchungsstapel nach der Formatbeschreibung** (ADR 0042 Nr. 15, 28, 29): Dateiname
+  `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`, Berater- und Mandantennummer Pflicht (ohne sie enthält
+  das Steuerberater-Paket keinen Stapel), Textfelder nach den Feldregeln; ein Test prüft alle
+  Kopf- und Buchungsfelder gegen die Regeln der DATEV-Formatbeschreibung. Der Import in DATEV ist
+  ungeprüft, bis ein Prüfprotokoll vorliegt (DATEV stellt dafür ein kostenloses Prüfprogramm bereit).
+- **Übersicht zur Vorsteuerberichtigung nach § 15a UStG** (ADR 0042 Nr. 14, 30): Unter
+  Anschaffungen zeigt Klein.Buch nach einem Wechsel des Steuerstatus je Anlage den
+  Berichtigungszeitraum, den Anteil je Jahr und die Vereinfachungen nach § 44 UStDV — als
+  Übersicht für die Erklärung, ohne Buchung.
 - **Sicherheit:** Die ZIP-Bibliothek ist von 2.4 auf 9.1 gehoben (CVE-2026-115905, kritisch, und
   CVE-2026-115909, hoch; betrifft auch 2026.11.0). Der Restore prüft die Pfade in einem
   Backup-Archiv jetzt selbst und strenger (keine absoluten Pfade, kein `..`, `.`, `\`, `:`

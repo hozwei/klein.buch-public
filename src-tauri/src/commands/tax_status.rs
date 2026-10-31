@@ -679,6 +679,13 @@ async fn notify_after_change(
     }
 
     crate::commands::assets::notify_capitalized_status_change(pool).await;
+    // ADR 0042 Nr. 14: Verweis auf die Übersicht § 15a UStG.
+    crate::commands::vat_adjustment::notify_after_status_change(
+        pool,
+        &format!("vat_adjustment:{}:{entry_id}", action.as_str()),
+        today,
+    )
+    .await;
     if let Err(e) = notify_thresholds(pool, today).await {
         tracing::warn!("Grenzprüfung nach §19-Wechsel fehlgeschlagen: {e}");
     }

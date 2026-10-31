@@ -1651,8 +1651,10 @@ export interface EuerPdfExport {
   snapshotCheck: SnapshotCheck | null;
 }
 
-/** Optionale Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer
- *  1001–9999999, Mandantennummer 1–99999 (Lauf F5, Durchreichen U4). */
+/** Kopf-Nummern des DATEV-Stapels (Feld 11/12): Beraternummer 1001–9999999,
+ *  Mandantennummer 1–99999. Für den DATEV-Export Pflicht, im
+ *  Steuerberater-Paket nur zusammen (ADR 0042 Nr. 15); `null` reicht der Client
+ *  durch, damit der Server die Meldung am Feld liefert. */
 export interface DatevHeaderNumbers {
   consultantNumber?: number | null;
   clientNumber?: number | null;
@@ -1935,4 +1937,82 @@ export interface TaxStatusChangePreview {
 export interface TaxStatusChangeResult {
   entry: TaxStatusChange;
   consequences: TaxStatusConsequences;
+}
+
+// ---- Vorsteuerberichtigung § 15a UStG (ADR 0042 Nr. 14) --------------------
+
+/** Richtung: zugunsten (Wechsel zur Regelbesteuerung) oder zulasten (Rückkehr zu § 19). */
+export type VatAdjustmentDirection = "zugunsten" | "zulasten";
+/** Grenze nach § 44 UStDV: Vorsteuer bis 1.000 € (Abs. 1) bzw. unter 10 Prozentpunkten
+ *  und höchstens 1.000 € (Abs. 2). */
+export type VatAdjustmentExemption = "input_tax_bagatelle" | "below_ten_points";
+/** § 44 Abs. 3 UStDV: Jahreserklärung (bis 6.000 €), Voranmeldung (darüber) bzw.
+ *  Voranmeldung der Lieferung bei Verkauf oder Entnahme. */
+export type VatAdjustmentFiling = "annual_return" | "advance_return" | "advance_return_of_disposal";
+
+export interface VatAdjustmentPeriod {
+  /** Erster Tag des ersten berücksichtigten Monats (YYYY-MM-DD). */
+  from: string;
+  /** Letzter Tag des letzten berücksichtigten Monats. */
+  to: string;
+  months: number;
+}
+
+export interface VatAdjustmentYear {
+  year: number;
+  months: number;
+  monthsRegular: number;
+  monthsChanged: number;
+  changePoints: number;
+  /** Rechnerisch (Cent): positiv zugunsten, negativ zulasten. */
+  amountCents: number;
+  /** Nach § 44 UStDV zu berichtigen (0 bei einer Ausnahme). */
+  adjustmentCents: number;
+  direction: VatAdjustmentDirection | null;
+  exemption: VatAdjustmentExemption | null;
+  filing: VatAdjustmentFiling | null;
+  /** Jahr nach dem laufenden: unter dem heute bekannten Status vorausgerechnet. */
+  projected: boolean;
+}
+
+export interface VatAdjustmentAssetResult {
+  period: VatAdjustmentPeriod;
+  inputTaxCents: number;
+  originalKlein: boolean;
+  inputTaxBagatelle: boolean;
+  years: VatAdjustmentYear[];
+  totalAdjustmentCents: number;
+}
+
+export interface VatAdjustmentAsset {
+  assetId: string;
+  assetNumber: string;
+  label: string;
+  expenseNumber: string;
+  /** Beginn (ersatzweise Anschaffungsdatum, YYYY-MM-DD). */
+  firstUse: string;
+  depreciationMethod: string;
+  adjustment: VatAdjustmentAssetResult;
+  yearShare: VatAdjustmentYear | null;
+  hasChange: boolean;
+  hints: string[];
+}
+
+export interface VatAdjustmentUnknown {
+  assetId: string;
+  assetNumber: string;
+  label: string;
+  reason: "no_expense" | "reverse_charge" | "no_input_tax";
+  message: string;
+}
+
+/** Ergebnis von `vat_adjustment_overview`. */
+export interface VatAdjustmentOverview {
+  year: number;
+  /** Hinweis „nur Übersicht, keine Buchung, Steuerberatung“. */
+  notice: string;
+  assets: VatAdjustmentAsset[];
+  unknown: VatAdjustmentUnknown[];
+  /** Summe des Jahres (Cent, positiv zugunsten). */
+  totalAdjustmentCents: number;
 }

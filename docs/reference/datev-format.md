@@ -2,30 +2,61 @@
 
 Referenz für den DATEV-Export (`euer::datev_csv`). Zielgruppe: die **Übergabe an
 den Steuerberater**, der den Buchungsstapel in DATEV Rechnungswesen über die
-Stapelverarbeitung importiert. Stand: Lauf F5b, 25.10.2026 (ADR 0039 Nr. 135).
+Stapelverarbeitung importiert. Stand: Lauf 2026.11.1, Block V5, 31.10.2026
+(ADR 0039 Nr. 135, ADR 0042 Nr. 15).
 
 > **Steuerberater-Caveat:** Alle Konten sind ein **Vorschlag** und vor der
 > Verbuchung zu prüfen/anzupassen. Klein.Buch ist ein Werkzeug, kein
-> Steuerberater. Der Buchungsstapel sollte vom Steuerberater einmal **testweise
-> importiert** werden (DATEV ist die maßgebliche Validierung).
+> Steuerberater. **Der Import in DATEV ist ungeprüft**, bis ein Protokoll des
+> DATEV-Prüfprogramms bzw. ein Importprotokoll des Steuerberaters vorliegt
+> (ADR 0042 Nr. 15). Geprüft ist nur das Format gegen die Regeln der
+> Formatbeschreibung (Test unten).
 
 ## Format (DATEV-Formatbeschreibung „Buchungsstapel“, Version 700)
 
-- **Vorlauf (Kopfzeile, 31 Felder):** `"EXTF";700;21;"Buchungsstapel";12;<Erzeugt am>;…`
+- **Dateiname:** `EXTF_Buchungsstapel_{Jahr}_{SKR}.csv` (z. B.
+  `EXTF_Buchungsstapel_2026_SKR03.csv`), im Steuerberater-Paket unter
+  `EUER-{Jahr}/`. Die Formatbeschreibung verlangt das Präfix `EXTF_`
+  („CSV-Datei mit einem festen Dateinamens-Präfix (EXTF_....CSV)“). Download als
+  `text/csv; charset=windows-1252`.
+- **Vorlauf (Kopfzeile, 31 Felder):**
+  `"EXTF";700;21;"Buchungsstapel";12;<Erzeugt am>;;"";"";"";<Berater>;<Mandant>;{Jahr}0101;4;{Jahr}0101;{Jahr}1231;"EUER {Jahr}";"";1;0;0;"EUR";;"";;;"03";;;"";""`
   - Kennzeichen `EXTF` (Export aus Fremdsoftware), Versionsnummer `700`,
     Datenkategorie `21` (Buchungsstapel), Formatname `Buchungsstapel`,
-    Formatversion `12` (vom Steuerberater importiert).
-  - Feld 11/12 **Berater-/Mandantennummer:** standardmäßig leer — beim Import
-    über die Stapelverarbeitung gilt der geöffnete Mandant. Optional über die
-    Export-Commands (`consultantNumber` 1001–9999999, `clientNumber` 1–99999;
-    andere Werte werden abgelehnt).
+    Formatversion `12`. Der Header-Ausdruck nennt nur `13`; der Anhang
+    „Formatkategorie/-name/-version“ führt für den Buchungsstapel 13, 12, 11 und 10.
+    Klein.Buch bleibt bei 12, weil Fremdprogramme (z. B. Lexware) nur bis 12
+    lesen und Version 13 nur Feld 125 ergänzt (ADR 0042 Nr. 15).
+  - Feld 11/12 **Berater-/Mandantennummer: Pflicht** (Feld 11
+    `^(\d{4,6}|\d{7})$`, Bereich 1001–9999999; Feld 12 `^\d{1,5}$`, Bereich
+    1–99999; kein Leerfeld). Der Export ohne beide Nummern wird mit einer Meldung
+    abgelehnt, die mit „Beraternummer“ bzw. „Mandantennummer“ beginnt. Das
+    Steuerberater-Paket entsteht auch ohne Nummern, dann **ohne** DATEV-Stapel
+    (Grund im LIESMICH); nur eine der beiden Nummern ist ein Eingabefehler.
+  - Leere Textfelder nach den Feldregeln als `""` (Felder 8, 9, 10, 18, 24,
+    30, 31 mit `^["]…["]$`), reine Leerfelder (`^[]$`: 7, 23, 25, 26, 29)
+    und Feld 28 bleiben leer.
+  - Feld 17 **Bezeichnung** `"EUER {Jahr}"`: Der Ausdruck `^["][\w.-/ ]{0,30}["]$`
+    lässt nach der Notation (`\w` = `[a-zA-Z0-9_]`) keine Umlaute zu.
   - WJ-Beginn = `{Jahr}0101`, Datum von/bis = `{Jahr}0101`/`{Jahr}1231`,
     Sachkontenlänge `4`, Buchungstyp `1`, Festschreibung `0`, WKZ `EUR`.
   - Feld 27 **Sachkontenrahmen** `"03"` bzw. `"04"`.
 - **Spaltenüberschrift + Buchungszeilen:** die führenden Standard-Spalten
-  (positionsbasiert): Umsatz (ohne S/H-Kz), Soll/Haben-Kennzeichen, WKZ Umsatz,
-  Kurs, Basis-Umsatz, WKZ Basis-Umsatz, Konto, Gegenkonto, BU-Schlüssel,
-  Belegdatum, Belegfeld 1, Belegfeld 2, Skonto, Buchungstext.
+  (positionsbasiert): Umsatz (ohne Soll/Haben-Kz), Soll/Haben-Kennzeichen, WKZ
+  Umsatz, Kurs, Basis-Umsatz, WKZ Basis-Umsatz, Konto, Gegenkonto (ohne
+  BU-Schlüssel), BU-Schlüssel, Belegdatum, Belegfeld 1, Belegfeld 2, Skonto,
+  Buchungstext. Die Überschrift steht wie in der Musterdatei der
+  Formatbeschreibung ohne Anführungszeichen. In den Buchungszeilen stehen leere
+  Textfelder (WKZ Basis-Umsatz, BU-Schlüssel, Belegfeld 2) als `""`, leere
+  Zahlenfelder (Kurs, Basis-Umsatz, Skonto) leer, wie in der Musterdatei.
+- **BU-Schlüssel** einstellig (`"9"` = 19 %, `"8"` = 7 % Vorsteuer). Formatversion
+  13 verlangt vier Stellen (`^(["]\d{4}["])$`); bei Version 12 bleiben die
+  bisherigen Schlüssel („Die bisherigen BU-Schlüssel können weiterhin verwendet
+  werden“, Seite „Wiederkehrende Buchungen“), bis Prüfprogramm oder Import
+  etwas anderes zeigen.
+- **Belegfeld 1/2** nur `[a-zA-Z0-9_$&%*+-/]` („Andere Zeichen sind unzulässig“);
+  andere Zeichen ersetzt Klein.Buch durch `_`. Die Nummern aus
+  `domain::numbering` (`RE-/ST-/KO-/AV-/PV-JJJJ-NNNN`) erfüllen das.
 - **Kodierung:** CP1252 (Codepage 1252) mit vollständiger Tabelle (27 belegte Zeichen in
   0x80–0x9F nach WHATWG „windows-1252“); C1-Steuerzeichen und nicht darstellbare
   Zeichen werden `?`. CRLF-Zeilenenden, Dezimal-**Komma**, kein Tausendertrenner.
@@ -61,9 +92,23 @@ Kennzeichen ausgegeben, nicht weggelassen; die Summe der Geldkonto-Bewegungen
 einer Zahlung ist damit gleich dem Zahlungsbetrag (Bankabstimmung). Nullanteile
 entfallen.
 
-Ein Importtest beim Steuerberater (DATEV Kanzlei-Rechnungswesen bzw. dessen
-Prüfprogramm) mit einer Beispieldatei steht aus; bis dahin gilt die Zuordnung
-als Vorschlag wie die Kontenwahl.
+Ein Importtest beim Steuerberater (DATEV Kanzlei-Rechnungswesen) bzw. ein
+Lauf des DATEV-Prüfprogramms mit einer Beispieldatei steht aus; bis dahin gilt
+der Import als ungeprüft und die Zuordnung als Vorschlag wie die Kontenwahl.
+
+## Prüfung gegen die Formatbeschreibung (ADR 0042 Nr. 15)
+
+Der Test `euer::datev_csv::format_rules` prüft Kopf (31 Felder) und
+Buchungsfelder 1–14 eines Demo-Stapels mit allen Bewegungsarten (SKR03 und
+SKR04, Grenzwerte der Berater- und Mandantennummer) gegen die regulären
+Ausdrücke der Formatbeschreibung. Die Ausdrücke stehen als Konstanten im Test
+(Fundstelle im Testkommentar), nichts wird zur Laufzeit geladen. Übertragung:
+`\w` als `[a-zA-Z0-9_]` (Anhang „Notation“), `^[]$` als `^$`. Bewusste
+Abweichungen: Feld 5 des Kopfs gegen den Anhang (13|12|11|10), BU-Schlüssel mit
+1–4 Stellen (Formatversion 12). Dazu: CP1252 ohne BOM, CR/LF, keine
+Steuerzeichen. Mit `KB_DATEV_DEMO_DIR=<Ordner>` schreibt der Test den
+Demo-Stapel als Dateien, z. B. für das DATEV-Prüfprogramm (Windows); die Dateien
+gehören nicht ins Repo.
 
 ## Geldkonten (R2-011)
 
@@ -150,7 +195,8 @@ werden für §19 nicht verwendet.
 
 ## Quellen
 
-- DATEV-Format, Header + Buchungsstapel:
+- DATEV-Format, Einstieg (Dateiname, Musterdatei), Header, Buchungsstapel,
+  Anhang (Formatversionen, Notation), Changelog (abgefragt am 31.10.2026):
   <https://developer.datev.de/de/file-format/details/datev-format/format-description/header>
 - WHATWG Encoding Standard, Index „windows-1252“:
   <https://encoding.spec.whatwg.org/index-windows-1252.txt>

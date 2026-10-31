@@ -38,6 +38,7 @@ Filesystem; alle Effekte fließen über Argumente rein und Rückgabewerte raus.
 | `domain::contact` | Kontakt-Validierung | `validate`, `validate_vat_id` |
 | `domain::kleinunternehmer` | §19-Hinweistext (wortgleich), USt-Sperre je Position | `HINWEIS_TEXT`, `assert_no_vat` |
 | `domain::tax_status` | Steuerstatus nach § 19 UStG als Historie (ADR 0042): Status an einem Datum und je Jahr, Prüfung neuer Einträge und Widerrufe (Grund, Wirkungsdatum, Bindung, abgeschlossene Jahre), Gesamtumsatz und Grenzprüfung | `TaxStatusHistory`, `validate_change`, `validate_revoke`, `gesamtumsatz`, `grenzpruefung` |
+| `domain::vat_adjustment` | Übersicht der Vorsteuerberichtigung nach § 15a UStG (ADR 0042 Nr. 14): Berichtigungszeitraum (60 Monate bzw. kürzere Verwendungsdauer, Monatsregel § 45 UStDV), Jahresanteil, Richtung, Status je Monat aus der Historie, Abgang (§ 15a Abs. 8/9), Grenzen § 44 UStDV; keine Buchung | `period`, `compute`, `AssetAdjustment`, `YearShare` |
 | `domain::kleinbetragsrechnung` | §33 UStDV — vereinfachte Pflichtangaben bei ≤ 250 € Brutto | `KLEINBETRAG_THRESHOLD_CENTS`, `is_applicable` |
 | `domain::storno` | Storno-Beleg aus dem Original ableiten (Einzelpreise negiert, Storno-Präfix mit Original-Nummer); Geschäftsjahr aus dem Storno-Datum, Bezug aufs Original (Nummer, Datum) für XML und PDF (Lauf E) | `build_storno_input`, `storno_fiscal_year`, `PrecedingInvoice` |
 | `domain::numbering` | Doc-Number-Format `{TYP}-{YYYY}-{NNNN}` (ADR 0012) | `DocType`, `format`, `format_invoice`, `format_storno`, `format_quote`, `format_expense` |
@@ -392,7 +393,7 @@ ADRs: 0025.
 |---|---|---|
 | `euer::aggregate` | Core | `aggregate(fiscal_year, inputs)`: EÜR-Aggregation Cash-Basis §11 EStG (ADR 0022); Storno als negative Einnahme zum Storno-Datum (kein paid_amount-Netting möglich). Die Eingaben lädt `db::repo::euer::load_inputs`. |
 | `euer::elster_csv` | Core | `build_form`, `to_csv`: Ausfüllhilfe nach Kennzahl und Zeile des amtlichen Vordrucks je Jahr (`Pos`, `Layout`; 2024/2025, 2026), §19 brutto bzw. Regelbesteuerung netto/USt, Storno-Überhang als Betriebsausgabe (ADR 0039 Nr. 135) |
-| `euer::datev_csv` | Core | `build_bookings`, `to_datev`: DATEV-EXTF-Buchungsstapel (SKR03-Default, SKR04 wählbar), Geldkonto je Zahlungskonto, Erlöse je Steuergruppe, BU-Schlüssel, vollständiges CP1252 |
+| `euer::datev_csv` | Core | `build_bookings`, `to_datev`, `file_name`, `require_header_numbers`: DATEV-EXTF-Buchungsstapel (`EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`, SKR03-Default, SKR04 wählbar), Berater- und Mandantennummer Pflicht, leere Textfelder `""`, Geldkonto je Zahlungskonto, Erlöse je Steuergruppe, BU-Schlüssel, vollständiges CP1252; Test `format_rules` gegen die Ausdrücke der Formatbeschreibung (ADR 0042 Nr. 15) |
 | `euer::detail` | Core | Einzelposten mit Steuergruppen (`split_payment`), Zahlungskonto und Aktivierung; Einzelaufstellungen als CSV (`income_csv`, `expenses_csv`, `aveeur_csv`), `de_date` |
 
 Das Steuerberater-ZIP (Deckblatt, Anlage-EÜR-PDF, DATEV-CSV, ELSTER-CSV,
@@ -406,8 +407,14 @@ Statushistorie, ADR 0042) und `snapshot_check` (Abgleich mit dem
 Festschreibungs-Snapshot, `None` bei offenem Jahr). Die Ansicht liest nur:
 weder Audit noch Hinweis (ADR 0041 Nr. 80). DATEV-Berater- und Mandantennummer
 übergibt die Oberfläche je Export (`consultantNumber`/`clientNumber`; der Browser
-merkt sie sich in `localStorage` wie den Kontenrahmen), die Grenzen prüft der
-Server (`datev_csv::validate_header_numbers`, ADR 0041 Nr. 113).
+merkt sie sich in `localStorage` wie den Kontenrahmen); Pflicht und Grenzen prüft
+der Server (`datev_csv::require_header_numbers`, ADR 0041 Nr. 113, ADR 0042
+Nr. 15). Das Steuerberater-Paket entsteht ohne beide Nummern ohne DATEV-Stapel
+(Grund im LIESMICH); nur eine Nummer lehnt der Server ab. Download des Stapels
+als `text/csv; charset=windows-1252` (`downloads::mime_for`). Die Oberfläche
+(`routes/euer/export/datevNumbers.ts`) bildet die Pflicht nur nach: Meldung am Feld
+beim Klick, Server-Meldungen „Beraternummer …“/„Mandantennummer …“ ebenfalls ans
+Feld (`serverErrorField`), Dateiname vor dem Download (`datevFileName`).
 
 **Cash-Basis.** Einnahmen am `paid_at`, Ausgaben am `paid_date`, Privatbewegungen
 EÜR-neutral. Teilzahlung pro Zahlungsjahr separat.

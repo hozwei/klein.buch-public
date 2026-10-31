@@ -86,13 +86,17 @@ pub fn safe_file_name(name: &str, fallback: &str) -> String {
     }
 }
 
-/// MIME-Typ nach Endung (nur für selbst erzeugte Dateien).
+/// MIME-Typ nach Endung (nur für selbst erzeugte Dateien). Der
+/// DATEV-Buchungsstapel (`EXTF_…csv`) ist CP1252 kodiert, alle übrigen CSV
+/// UTF-8 (ADR 0042 Nr. 15).
 pub fn mime_for(file_name: &str) -> &'static str {
     let lower = file_name.to_ascii_lowercase();
     if lower.ends_with(".pdf") {
         "application/pdf"
     } else if lower.ends_with(".zip") {
         "application/zip"
+    } else if lower.ends_with(".csv") && lower.starts_with("extf_") {
+        "text/csv; charset=windows-1252"
     } else if lower.ends_with(".csv") {
         "text/csv; charset=utf-8"
     } else if lower.ends_with(".json") {
@@ -268,6 +272,21 @@ impl DownloadStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR 0042 Nr. 15: der DATEV-Stapel ist CP1252, die übrigen CSV UTF-8.
+    #[test]
+    fn mime_declares_cp1252_for_datev_batch() {
+        assert_eq!(
+            mime_for("EXTF_Buchungsstapel_2026_SKR03.csv"),
+            "text/csv; charset=windows-1252"
+        );
+        assert_eq!(mime_for("EUER-2026-ELSTER.csv"), "text/csv; charset=utf-8");
+        assert_eq!(mime_for("Steuerberater-2026.zip"), "application/zip");
+        assert_eq!(
+            crate::server::files::allowed_content_type(mime_for("EXTF_x.csv")),
+            "text/csv; charset=windows-1252"
+        );
+    }
 
     #[test]
     fn export_is_single_use_preview_is_not() {

@@ -86,6 +86,7 @@ const ROUTE_TITLES: Record<string, string> = {
   "/assets/new": "Neue Anschaffung",
   "/assets/[id]": "Anschaffung",
   "/assets/[id]/dispose": "Abgang buchen",
+  "/assets/vat-adjustment": "Vorsteuerberichtigung (§ 15a UStG)",
   "/private-movements": "Privatbewegungen",
   "/private-movements/new": "Neue Privatbewegung",
   "/private-movements/[id]": "Privatbewegung",

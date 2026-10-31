@@ -203,9 +203,12 @@ async fn stb_zip_contains_receipts_readme_and_matching_manifest() {
     assert!(readme.contains(HINWEIS_TEXT), "{readme}");
     assert!(readme.contains("Berater- und Mandantennummer stehen im Kopf"));
 
-    // DATEV-Kopf mit Berater, Mandant und Sachkontenrahmen.
-    let datev =
-        String::from_utf8_lossy(&files[&format!("{root}datev-buchungsstapel.csv")]).to_string();
+    // DATEV-Kopf mit Berater, Mandant und Sachkontenrahmen; ADR 0042 Nr. 15:
+    // Dateiname mit dem Präfix EXTF_, im LIESMICH und auf dem Deckblatt genannt.
+    let datev_name = format!("{root}EXTF_Buchungsstapel_{year}_SKR04.csv");
+    assert!(files.contains_key(&datev_name), "{:?}", files.keys());
+    assert!(readme.contains(&format!("EXTF_Buchungsstapel_{year}_SKR04.csv")));
+    let datev = String::from_utf8_lossy(&files[&datev_name]).to_string();
     let head: Vec<&str> = datev.lines().next().unwrap().split(';').collect();
     assert_eq!((head[10], head[11], head[26]), ("29098", "55003", "\"04\""));
     assert!(datev.contains(";4185;")); // §19-Erlöse SKR04
@@ -233,6 +236,49 @@ async fn stb_zip_contains_receipts_readme_and_matching_manifest() {
             .unwrap();
     assert_eq!(audits.len(), 1);
     assert!(!audits[0].contains("Papier"));
+
+    // ADR 0042 Nr. 15: ohne beide Nummern entsteht das Paket ohne DATEV-Stapel,
+    // LIESMICH nennt den Grund; nur eine Nummer ist ein Eingabefehler.
+    let without = euer_cmd::euer_export_stb_zip(
+        &ctx,
+        serde_json::from_value(serde_json::json!({ "fiscalYear": year, "skr": "SKR03" })).unwrap(),
+    )
+    .await
+    .unwrap();
+    let entry = ctx
+        .downloads
+        .take(&without.download.download_id)
+        .expect("Download");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&entry.path).unwrap()).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
+        .collect();
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("EXTF_") || n.contains("datev")),
+        "{names:?}"
+    );
+    assert_eq!(names.len(), files.len() - 1, "nur der DATEV-Stapel fehlt");
+    let mut readme = String::new();
+    zip.by_name(&format!("{root}LIESMICH.txt"))
+        .unwrap()
+        .read_to_string(&mut readme)
+        .unwrap();
+    assert!(
+        readme.contains("Nicht enthalten: Beim Erzeugen des Pakets fehlten Berater- und"),
+        "{readme}"
+    );
+    let err = euer_cmd::euer_export_stb_zip(
+        &ctx,
+        serde_json::from_value(serde_json::json!({
+            "fiscalYear": year, "skr": "SKR03", "consultantNumber": 29098
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("Mandantennummer fehlt"), "{err}");
 
     // Ungültige Beraternummer wird abgelehnt.
     let err = euer_cmd::euer_export_datev(

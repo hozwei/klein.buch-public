@@ -57,6 +57,7 @@ import type {
   TaxStatusChangePreview,
   TaxStatusChangeResult,
   TaxStatusOverview,
+  VatAdjustmentOverview,
   PdfTemplateMeta,
   TravelSettings,
   TravelLine,
@@ -252,6 +253,12 @@ export function taxStatusChangeAdd(input: TaxStatusChangeInput): Promise<TaxStat
 /** Widerruft den jüngsten gültigen Eintrag mit Grund (frische Re-Auth). */
 export function taxStatusChangeRevoke(id: string, reason: string): Promise<TaxStatusChangeResult> {
   return invoke<TaxStatusChangeResult>("tax_status_change_revoke", { id, reason });
+}
+
+/** Übersicht der Vorsteuerberichtigung nach § 15a UStG für ein Kalenderjahr
+ *  (ADR 0042 Nr. 14): nur Übersicht, keine Buchung. */
+export function vatAdjustmentOverview(year: number): Promise<VatAdjustmentOverview> {
+  return invoke<VatAdjustmentOverview>("vat_adjustment_overview", { year });
 }
 
 /** Logo aus einem Upload der Art `logo` (Plan W7). */
@@ -1000,13 +1007,15 @@ export function euerExportPdf(fiscalYear: number): Promise<EuerPdfExport> {
   return invoke<EuerPdfExport>("euer_export_pdf", { fiscalYear });
 }
 
-/** Erzeugt den DATEV-Buchungsstapel (EXTF) für die Steuerberater-Übergabe.
- *  Berater- und Mandantennummer sind optional (Feld 11/12 des DATEV-Kopfs;
- *  1001–9999999 bzw. 1–99999, sonst lehnt der Server ab — F5, U4). */
+/** Erzeugt den DATEV-Buchungsstapel (`EXTF_Buchungsstapel_{Jahr}_{SKR}.csv`,
+ *  CP1252) für die Steuerberater-Übergabe. Berater- und Mandantennummer sind
+ *  Pflicht (Feld 11/12 des DATEV-Kopfs; 1001–9999999 bzw. 1–99999). Fehlt eine
+ *  oder liegt sie außerhalb, lehnt der Server mit einer Meldung ab, die mit
+ *  „Beraternummer“ bzw. „Mandantennummer“ beginnt (ADR 0042 Nr. 15). */
 export function euerExportDatev(
   fiscalYear: number,
   skr: string,
-  numbers: DatevHeaderNumbers = {},
+  numbers: DatevHeaderNumbers,
 ): Promise<DatevExport> {
   return invoke<DatevExport>("euer_export_datev", {
     fiscalYear,
@@ -1016,8 +1025,9 @@ export function euerExportDatev(
   });
 }
 
-/** Erzeugt das komplette Steuerberater-Paket (ZIP); Nummern wie bei
- *  `euerExportDatev` (gehen in den DATEV-Stapel im Paket). */
+/** Erzeugt das komplette Steuerberater-Paket (ZIP). Mit beiden Nummern liegt
+ *  der DATEV-Stapel im Paket; ohne beide fehlt er und LIESMICH nennt den Grund;
+ *  nur eine Nummer lehnt der Server ab (ADR 0042 Nr. 15). */
 export function euerExportStbZip(
   fiscalYear: number,
   skr: string,

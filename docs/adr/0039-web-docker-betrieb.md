@@ -1927,11 +1927,10 @@ Nachgetragen aus W0–W2 und fortlaufend ab W4, je mit Begründung.
     Zahlungsseite, Standardkonto vorbelegt; ein unbekanntes oder deaktiviertes Konto wird
     abgelehnt); die Storno-Erstattung nimmt das Konto des letzten Eingangs. (6) **DATEV-Kopf
     (R2-S2-DATEV-HEADER):** Feld 27 trägt den Sachkontenrahmen (`"03"`/`"04"`). Berater-
-    und Mandantennummer (Felder 11/12) bleiben standardmäßig leer — der Import über die
-    Stapelverarbeitung in den geöffneten Mandanten ist vom Steuerberater bestätigt; die
-    Export-Commands nehmen sie optional an (`consultantNumber` 1001–9999999,
-    `clientNumber` 1–99999, sonst abgelehnt). Formatversion bleibt 12 (vom Steuerberater
-    importiert). (7) **CP1252 (R2-S2-CP1252):** vollständige Tabelle der 27 belegten
+    und Mandantennummer (Felder 11/12) blieben standardmäßig leer (die Begründung „vom Steuerberater bestätigt“
+    war unbelegt) — *abgelöst durch ADR 0042 Nr. 15:* beide Nummern Pflicht für den Stapel
+    (`consultantNumber` 1001–9999999, `clientNumber` 1–99999), Dateiname `EXTF_…`, Import
+    ungeprüft bis zu einem Prüfprotokoll. Formatversion bleibt 12. (7) **CP1252 (R2-S2-CP1252):** vollständige Tabelle der 27 belegten
     Zeichen in 0x80–0x9F (WHATWG „windows-1252“), C1-Steuerzeichen und nicht darstellbare
     Zeichen werden `?`; Steuerzeichen in Textfeldern (Zeilenumbrüche aus
     Positionsbeschreibungen) werden Leerzeichen, damit keine Buchungszeile umbricht.

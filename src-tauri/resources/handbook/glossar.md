@@ -175,11 +175,11 @@ bist meist Du selbst.
 
 Ein Daten-Format, das praktisch jeder Steuerberater versteht.
 Klein.Buch erzeugt Dir auf Knopfdruck einen DATEV-Stapel mit allen
-Buchungen des Geschäftsjahres, den Dein Steuerberater direkt in
-sein System importieren kann. Standard-Kontenrahmen ist SKR03. Die
-Berater- und die Mandantennummer, die Dir Dein Steuerberater nennt,
-trägst Du im EÜR-Export ein; Dein Browser merkt sie sich (sie stehen
-nicht in der Datenbank und nicht im Backup).
+Buchungen des Geschäftsjahres (Datei `EXTF_Buchungsstapel_…csv`), den
+Dein Steuerberater in sein System importiert. Standard-Kontenrahmen ist
+SKR03. Die Berater- und die Mandantennummer, die Dir Dein Steuerberater
+nennt, sind Pflicht; Du trägst sie im EÜR-Export ein, und Dein Browser
+merkt sie sich (sie stehen nicht in der Datenbank und nicht im Backup).
 
 ## DSGVO (Datenschutz-Grundverordnung)
 

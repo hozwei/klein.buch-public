@@ -257,6 +257,8 @@ pub fn classified_kind(name: &str) -> Option<Kind> {
         | "tax_status_at"
         | "tax_status_change_preview"
         | "tax_status_overview"
+        // ADR 0042 Nr. 14: Übersicht § 15a UStG, keine Buchung.
+        | "vat_adjustment_overview"
         | "payment_accounts_list"
         | "pdf_template_preview"
         | "pdf_templates_list"
@@ -633,6 +635,7 @@ static ENTRIES: &[(&str, Handler)] = &[
     ("tax_status_change_preview", h::tax_status_change_preview),
     ("tax_status_change_add", h::tax_status_change_add),
     ("tax_status_change_revoke", h::tax_status_change_revoke),
+    ("vat_adjustment_overview", h::vat_adjustment_overview),
     ("travel_settings_get", h::travel_settings_get),
     ("travel_settings_set", h::travel_settings_set),
     ("travel_compute", h::travel_compute),
@@ -2142,6 +2145,15 @@ mod h {
             let args: crate::commands::settings::Paragraph19InfoArgs = parse(v)?;
             Ok(serde_json::to_value(
                 crate::commands::settings::paragraph_19_info(&ctx, args).await?,
+            )?)
+        })
+    }
+
+    pub fn vat_adjustment_overview(ctx: Arc<AppCtx>, v: Value) -> HandlerFuture {
+        Box::pin(async move {
+            let args: crate::commands::vat_adjustment::VatAdjustmentOverviewArgs = parse(v)?;
+            Ok(serde_json::to_value(
+                crate::commands::vat_adjustment::vat_adjustment_overview(&ctx, args).await?,
             )?)
         })
     }

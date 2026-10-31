@@ -12,6 +12,7 @@
   import PageBar from "#lib/PageBar.svelte";
   import Badge from "#lib/Badge.svelte";
   import { assetStatusView } from "../assetStatus.ts";
+  import { VAT_ADJUSTMENT_URL } from "../vatAdjustment.ts";
   import Table from "#lib/Table.svelte";
   import { flash } from "#lib/toast.svelte.ts";
   import { confirmDialog } from "#lib/confirm.svelte.ts";
@@ -177,6 +178,13 @@
               <DocNo value={detail.sourceExpenseNumber} />
             {/if}
           </dd>
+        </div>
+      {/if}
+      {#if a.expenseId}
+        <!-- ADR 0042 Nr. 14: Anlagen aus Kosten erscheinen in der Übersicht § 15a. -->
+        <div>
+          <dt>Vorsteuerberichtigung</dt>
+          <dd><a class="kb-link" href={VAT_ADJUSTMENT_URL}>Übersicht § 15a UStG</a></dd>
         </div>
       {/if}
       {#if a.notes}<div class="span2"><dt>Notiz</dt><dd class="pre">{a.notes}</dd></div>{/if}
