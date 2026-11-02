@@ -23,7 +23,7 @@
   "license": "AGPL-3.0-or-later",
   "repository": "https://github.com/hozwei/klein.buch-public",
   "dependencies": {
-    "marked": "^15.0.7",
+    "marked": "^18.1.2",
     "minisearch": "^7.1.2"
   },
   "devDependencies": {
