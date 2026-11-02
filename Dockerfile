@@ -26,7 +26,7 @@
 # ---------------------------------------------------------------------------
 # SPA
 # ---------------------------------------------------------------------------
-FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS web
+FROM node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS web
 WORKDIR /src
 ENV CI=true \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -47,7 +47,7 @@ RUN pnpm build \
 # ---------------------------------------------------------------------------
 # Server
 # ---------------------------------------------------------------------------
-FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS server
+FROM rust:1.99.1-trixie@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137 AS server
 RUN apt-get update \
  && apt-get install -y --no-install-recommends pkg-config perl make \
  && rm -rf /var/lib/apt/lists/*
@@ -70,7 +70,7 @@ RUN cargo auditable build --release --locked --bin klein-buch-server \
 # ---------------------------------------------------------------------------
 # Java-Laufzeit (jlink) für KoSIT-Validator und Mustang
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:21.0.12_8-jdk@sha256:92a2a4d7a928d057e7bd999c418d66c26a34eb9a0442f3ab67721c3f88110b2d AS jre
+FROM eclipse-temurin:21.0.13_9-jdk@sha256:ebfbb18d11ff163ee83b21258acf12248af48d22a0fdfdc68fa1a1516c05976a AS jre
 COPY src-tauri/sidecar/versions.json /tmp/versions.json
 RUN MODULES=$(sed -n 's/.*"jlink_modules": *"\([^"]*\)".*/\1/p' /tmp/versions.json) \
  && test -n "$MODULES" \
@@ -80,14 +80,14 @@ RUN MODULES=$(sed -n 's/.*"jlink_modules": *"\([^"]*\)".*/\1/p' /tmp/versions.js
 # ---------------------------------------------------------------------------
 # Werkzeug für die Lizenzseite (parallel zum Server-Build)
 # ---------------------------------------------------------------------------
-FROM rust:1.99.1-trixie@sha256:931c2c0531a8b143e044f0f3914dfe802f15bb3d1955f0b657e9359327ac2ffc AS legal-tools
+FROM rust:1.99.1-trixie@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137 AS legal-tools
 RUN cargo install cargo-about --locked --version 0.9.2 --features cli
 
 # ---------------------------------------------------------------------------
 # Laufzeit-Basis: Pakete + Paketliste. Danach kein apt-get install mehr,
 # sonst stimmt debian-pakete.tsv nicht.
 # ---------------------------------------------------------------------------
-FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad AS runtime-base
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runtime-base
 # `upgrade`: Sicherheitsupdates seit dem Basis-Digest (sonst meldet der Scan sie
 # als behoben); das Quellarchiv holt die Quellen zum Build-Zeitpunkt.
 RUN apt-get update \
